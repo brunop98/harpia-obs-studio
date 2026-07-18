@@ -9,6 +9,10 @@ const char *formatToString(RecordingFormat format)
 		return "mp4";
 	case RecordingFormat::MKV:
 		return "mkv";
+	case RecordingFormat::MOV:
+		return "mov";
+	case RecordingFormat::AVI:
+		return "avi";
 	case RecordingFormat::GIF:
 		return "gif";
 	}
@@ -21,8 +25,50 @@ RecordingFormat formatFromString(const std::string &value, RecordingFormat fallb
 		return RecordingFormat::MP4;
 	if (value == "mkv")
 		return RecordingFormat::MKV;
+	if (value == "mov")
+		return RecordingFormat::MOV;
+	if (value == "avi")
+		return RecordingFormat::AVI;
 	if (value == "gif")
 		return RecordingFormat::GIF;
+	return fallback;
+}
+
+const char *codecToString(VideoCodec codec)
+{
+	switch (codec) {
+	case VideoCodec::H264:
+		return "h264";
+	case VideoCodec::HEVC:
+		return "hevc";
+	case VideoCodec::AV1:
+		return "av1";
+	}
+	return "h264";
+}
+
+VideoCodec codecFromString(const std::string &value, VideoCodec fallback)
+{
+	if (value == "h264")
+		return VideoCodec::H264;
+	if (value == "hevc")
+		return VideoCodec::HEVC;
+	if (value == "av1")
+		return VideoCodec::AV1;
+	return fallback;
+}
+
+const char *frameRateModeToString(FrameRateMode mode)
+{
+	return mode == FrameRateMode::VFR ? "vfr" : "cfr";
+}
+
+FrameRateMode frameRateModeFromString(const std::string &value, FrameRateMode fallback)
+{
+	if (value == "vfr")
+		return FrameRateMode::VFR;
+	if (value == "cfr")
+		return FrameRateMode::CFR;
 	return fallback;
 }
 

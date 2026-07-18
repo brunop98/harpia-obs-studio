@@ -8,6 +8,7 @@ class QLineEdit;
 class QComboBox;
 class QCheckBox;
 class QSpinBox;
+class QLabel;
 
 namespace harpia {
 
@@ -23,7 +24,8 @@ public:
 
 private slots:
 	void browseFolder();
-	void onResolutionModeChanged();
+	void onResolutionChanged();
+	void updateValidation();
 	void accept() override;
 
 private:
@@ -31,7 +33,10 @@ private:
 
 	QLineEdit *nameEdit_ = nullptr;
 	QComboBox *formatCombo_ = nullptr;
+	QComboBox *codecCombo_ = nullptr;
 	QComboBox *fpsCombo_ = nullptr;
+	QComboBox *frameRateModeCombo_ = nullptr;
+	QSpinBox *bitrateSpin_ = nullptr;
 	QComboBox *resolutionCombo_ = nullptr;
 	QSpinBox *widthSpin_ = nullptr;
 	QSpinBox *heightSpin_ = nullptr;
@@ -40,6 +45,7 @@ private:
 	QCheckBox *gpuCheck_ = nullptr;
 	QSpinBox *idleSpin_ = nullptr;
 	QLineEdit *templateEdit_ = nullptr;
+	QLabel *validationLabel_ = nullptr;
 };
 
 } // namespace harpia

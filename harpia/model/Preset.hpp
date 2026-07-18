@@ -5,14 +5,30 @@
 
 namespace harpia {
 
-// Container / codec family the recording is written as. Kept as a small,
-// explicit enum so new formats slot in by extending this + EncoderFactory and
-// the format<->extension helpers below. MP4 and MKV go through OBS's
-// `ffmpeg_muxer`; GIF goes through `ffmpeg_output` (see EncoderFactory).
+// Container the recording is written as. MP4/MKV/MOV/AVI go through OBS's
+// `ffmpeg_muxer` (container chosen by file extension); GIF goes through
+// `ffmpeg_output` (see EncoderFactory).
 enum class RecordingFormat {
 	MP4,
 	MKV,
+	MOV,
+	AVI,
 	GIF,
+};
+
+// Video codec family. The concrete encoder id is resolved by EncoderFactory
+// from (codec, gpuCompression), preferring hardware when available.
+enum class VideoCodec {
+	H264,
+	HEVC,
+	AV1,
+};
+
+// Frame-rate handling. OBS records constant frame rate natively; VFR is a hint
+// applied where the backend supports it.
+enum class FrameRateMode {
+	CFR,
+	VFR,
 };
 
 // How the output resolution relates to the captured display.
@@ -31,8 +47,10 @@ struct Preset {
 	std::string name;  // human-facing label
 
 	RecordingFormat format = RecordingFormat::MP4;
+	VideoCodec codec = VideoCodec::H264;
+	FrameRateMode frameRateMode = FrameRateMode::CFR;
 
-	int fps = 30;  // 5 / 10 / 30 / 60 or any custom value
+	int fps = 30;  // 24 / 30 / 60 / 120 or any custom value
 
 	ResolutionMode resolutionMode = ResolutionMode::Native;
 	int width = 0;   // used when resolutionMode != Native
@@ -78,5 +96,11 @@ const char *formatExtension(RecordingFormat format);
 
 const char *resolutionModeToString(ResolutionMode mode);
 ResolutionMode resolutionModeFromString(const std::string &value, ResolutionMode fallback = ResolutionMode::Native);
+
+const char *codecToString(VideoCodec codec);
+VideoCodec codecFromString(const std::string &value, VideoCodec fallback = VideoCodec::H264);
+
+const char *frameRateModeToString(FrameRateMode mode);
+FrameRateMode frameRateModeFromString(const std::string &value, FrameRateMode fallback = FrameRateMode::CFR);
 
 } // namespace harpia

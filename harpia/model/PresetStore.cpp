@@ -28,6 +28,8 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_string(d, "id", p.id.c_str());
 	obs_data_set_string(d, "name", p.name.c_str());
 	obs_data_set_string(d, "format", formatToString(p.format));
+	obs_data_set_string(d, "codec", codecToString(p.codec));
+	obs_data_set_string(d, "frame_rate_mode", frameRateModeToString(p.frameRateMode));
 	obs_data_set_int(d, "fps", p.fps);
 	obs_data_set_string(d, "resolution_mode", resolutionModeToString(p.resolutionMode));
 	obs_data_set_int(d, "width", p.width);
@@ -59,6 +61,8 @@ Preset presetFromData(obs_data_t *d)
 	p.id = obs_data_get_string(d, "id");
 	p.name = obs_data_get_string(d, "name");
 	p.format = formatFromString(obs_data_get_string(d, "format"));
+	p.codec = codecFromString(obs_data_get_string(d, "codec"));
+	p.frameRateMode = frameRateModeFromString(obs_data_get_string(d, "frame_rate_mode"));
 	p.fps = (int)obs_data_get_int(d, "fps");
 	p.resolutionMode = resolutionModeFromString(obs_data_get_string(d, "resolution_mode"));
 	p.width = (int)obs_data_get_int(d, "width");

@@ -106,8 +106,10 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 		// No audio track for GIF.
 		obs_output_set_media(output_, obs_get_video(), nullptr);
 	} else {
-		// MP4 / MKV: encoded muxer recording (supports pause/resume).
-		const std::string vid = EncoderFactory::videoEncoderId(preset);
+		// MP4 / MKV / MOV / AVI: encoded muxer recording (supports pause).
+		std::string vid = EncoderFactory::videoEncoderId(preset);
+		if (vid.empty())
+			vid = "obs_x264"; // last-resort baseline
 		const std::string aid = EncoderFactory::audioEncoderId(preset);
 
 		obs_data_t *vsettings = obs_data_create();

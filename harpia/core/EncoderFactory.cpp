@@ -16,25 +16,110 @@ bool EncoderFactory::encoderAvailable(const char *id)
 	return false;
 }
 
+namespace {
+
+// Encoder id candidates per codec, hardware first then software, in preference
+// order. The first that is registered wins.
+const char *const *hardwareIds(VideoCodec codec, size_t &count)
+{
+	static const char *h264[] = {"obs_nvenc_h264_tex", "ffmpeg_nvenc", "h264_texture_amf",
+				     "obs_qsv11_v2", "ffmpeg_vaapi"};
+	static const char *hevc[] = {"obs_nvenc_hevc_tex", "ffmpeg_hevc_nvenc", "h265_texture_amf",
+				     "obs_qsv11_hevc", "hevc_ffmpeg_vaapi"};
+	static const char *av1[] = {"obs_nvenc_av1_tex", "av1_texture_amf", "obs_qsv11_av1",
+				    "av1_ffmpeg_vaapi"};
+	switch (codec) {
+	case VideoCodec::H264:
+		count = sizeof(h264) / sizeof(*h264);
+		return h264;
+	case VideoCodec::HEVC:
+		count = sizeof(hevc) / sizeof(*hevc);
+		return hevc;
+	case VideoCodec::AV1:
+		count = sizeof(av1) / sizeof(*av1);
+		return av1;
+	}
+	count = 0;
+	return nullptr;
+}
+
+const char *const *softwareIds(VideoCodec codec, size_t &count)
+{
+	static const char *h264[] = {"obs_x264"};
+	static const char *av1[] = {"ffmpeg_svt_av1", "ffmpeg_aom_av1"};
+	switch (codec) {
+	case VideoCodec::H264:
+		count = sizeof(h264) / sizeof(*h264);
+		return h264;
+	case VideoCodec::HEVC:
+		count = 0; // no software HEVC encoder in this build
+		return nullptr;
+	case VideoCodec::AV1:
+		count = sizeof(av1) / sizeof(*av1);
+		return av1;
+	}
+	count = 0;
+	return nullptr;
+}
+
+} // namespace
+
 std::string EncoderFactory::videoEncoderId(const Preset &preset)
 {
+	size_t n = 0;
+
 	if (preset.gpuCompression) {
-		// Prefer hardware H.264 texture encoders, in the same priority the
-		// OBS simple-output path uses. Each does GPU-side encoding during
-		// capture, so there is no separate encode pass afterwards.
-		if (encoderAvailable("obs_nvenc_h264_tex"))
-			return "obs_nvenc_h264_tex";
-		if (encoderAvailable("ffmpeg_nvenc"))
-			return "ffmpeg_nvenc";
-		if (encoderAvailable("h264_texture_amf"))
-			return "h264_texture_amf";
-		if (encoderAvailable("obs_qsv11_v2"))
-			return "obs_qsv11_v2";
-		if (encoderAvailable("ffmpeg_vaapi"))
-			return "ffmpeg_vaapi";
-		// No hardware encoder present — fall through to software.
+		const char *const *hw = hardwareIds(preset.codec, n);
+		for (size_t i = 0; i < n; i++) {
+			if (encoderAvailable(hw[i]))
+				return hw[i];
+		}
 	}
-	return "obs_x264";
+	const char *const *sw = softwareIds(preset.codec, n);
+	for (size_t i = 0; i < n; i++) {
+		if (encoderAvailable(sw[i]))
+			return sw[i];
+	}
+	// If GPU wasn't requested but only a hardware encoder exists (e.g. HEVC),
+	// use it rather than failing.
+	const char *const *hw = hardwareIds(preset.codec, n);
+	for (size_t i = 0; i < n; i++) {
+		if (encoderAvailable(hw[i]))
+			return hw[i];
+	}
+	return {};
+}
+
+bool EncoderFactory::codecAvailable(VideoCodec codec, bool gpuOnly)
+{
+	size_t n = 0;
+	const char *const *hw = hardwareIds(codec, n);
+	for (size_t i = 0; i < n; i++) {
+		if (encoderAvailable(hw[i]))
+			return true;
+	}
+	if (gpuOnly)
+		return false;
+	const char *const *sw = softwareIds(codec, n);
+	for (size_t i = 0; i < n; i++) {
+		if (encoderAvailable(sw[i]))
+			return true;
+	}
+	return false;
+}
+
+std::vector<VideoCodec> EncoderFactory::availableCodecs(bool gpuOnly)
+{
+	std::vector<VideoCodec> out;
+	for (VideoCodec c : {VideoCodec::H264, VideoCodec::HEVC, VideoCodec::AV1}) {
+		if (codecAvailable(c, gpuOnly))
+			out.push_back(c);
+	}
+	// Always offer H.264 as a baseline even if the probe came up empty
+	// (obs_x264 is always built), so the editor is never left with no codec.
+	if (out.empty())
+		out.push_back(VideoCodec::H264);
+	return out;
 }
 
 std::string EncoderFactory::audioEncoderId(const Preset &preset)

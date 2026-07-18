@@ -3,6 +3,7 @@
 #include "model/Preset.hpp"
 
 #include <string>
+#include <vector>
 
 namespace harpia {
 
@@ -12,11 +13,19 @@ namespace harpia {
 // here (and Preset).
 class EncoderFactory {
 public:
-	// The video encoder id to use for `preset`. When gpuCompression is on,
-	// prefers an available hardware (GPU) encoder — NVENC, then AMF, then QSV —
-	// and falls back to software x264. Mirrors the frontend's
-	// get_simple_output_encoder mapping.
+	// The video encoder id to use for `preset` (codec + gpuCompression). When
+	// GPU is on, prefers hardware (NVENC → AMF → QSV → VAAPI) and falls back to
+	// the best software encoder for the codec. Empty if the codec has no
+	// available encoder at all.
 	static std::string videoEncoderId(const Preset &preset);
+
+	// Codecs that currently have at least one registered encoder (optionally
+	// restricted to hardware when `gpuOnly`). Drives the editor's codec list so
+	// unsupported codecs are hidden.
+	static std::vector<VideoCodec> availableCodecs(bool gpuOnly);
+
+	// Whether `codec` has any encoder available (hardware or software).
+	static bool codecAvailable(VideoCodec codec, bool gpuOnly);
 
 	// The audio encoder id (AAC for MP4/MKV).
 	static std::string audioEncoderId(const Preset &preset);

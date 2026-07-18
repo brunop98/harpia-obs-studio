@@ -4,7 +4,9 @@
 #include <util/platform.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <string>
+#include <vector>
 
 // Graphics module file names injected by CMake (see harpia/CMakeLists.txt),
 // mirroring how the OBS frontend resolves its renderer.
@@ -133,6 +135,53 @@ bool ObsContext::resetAudio()
 	if (!ok)
 		blog(LOG_ERROR, "[harpia] obs_reset_audio2 failed");
 	return ok;
+}
+
+namespace {
+
+bool typeInEnum(bool (*enumFn)(size_t, const char **), const char *id)
+{
+	const char *cur = nullptr;
+	for (size_t i = 0; enumFn(i, &cur); i++) {
+		if (cur && std::strcmp(cur, id) == 0)
+			return true;
+	}
+	return false;
+}
+
+} // namespace
+
+std::vector<std::string> ObsContext::missingDependencies() const
+{
+	std::vector<std::string> missing;
+
+	// A screen-capture source for this platform (any of the accepted ids).
+#if defined(_WIN32)
+	const char *captureIds[] = {"monitor_capture"};
+	const char *capturePlugin = "win-capture";
+#elif defined(__APPLE__)
+	const char *captureIds[] = {"screen_capture", "display_capture"};
+	const char *capturePlugin = "mac-capture";
+#else
+	const char *captureIds[] = {"xshm_input", "pipewire-screen-capture-source"};
+	const char *capturePlugin = "linux-capture / linux-pipewire";
+#endif
+	bool haveCapture = false;
+	for (const char *id : captureIds) {
+		if (typeInEnum(obs_enum_input_types, id))
+			haveCapture = true;
+	}
+	if (!haveCapture)
+		missing.push_back(std::string("screen capture plugin (") + capturePlugin + ")");
+
+	if (!typeInEnum(obs_enum_encoder_types, "obs_x264"))
+		missing.push_back("H.264 video encoder (obs-x264)");
+	if (!typeInEnum(obs_enum_encoder_types, "ffmpeg_aac"))
+		missing.push_back("AAC audio encoder (obs-ffmpeg)");
+	if (!typeInEnum(obs_enum_output_types, "ffmpeg_muxer"))
+		missing.push_back("recording output (obs-ffmpeg: ffmpeg_muxer)");
+
+	return missing;
 }
 
 void ObsContext::shutdown()

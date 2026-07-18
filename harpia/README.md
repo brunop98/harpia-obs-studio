@@ -52,6 +52,29 @@ cmake --build --preset windows-x64 --config RelWithDebInfo --target harpia-recor
 The binary lands at
 `build_x64\rundir\RelWithDebInfo\bin\64bit\harpia.exe`.
 
+### Runtime dependencies (do they auto-install?)
+
+- **At build time**, the prebuilt libraries (Qt6, FFmpeg, obs-deps) are downloaded
+  automatically by CMake's `buildspec` — you don't install them by hand. The
+  toolchain (CMake, VS2022) is the only thing you install yourself.
+- **At run time**, nothing auto-installs. `harpia.exe` needs its DLLs, the OBS
+  plugins, and the Visual C++ runtime present. Running from the build `rundir`
+  works because everything is already there.
+- **On first launch**, Harpia runs a **dependency self-check**: if a required
+  plugin (screen capture, x264, AAC, ffmpeg muxer) didn't load, it shows a clear
+  message and logs it — instead of failing cryptically only when you hit Record.
+
+### Making a distributable (run on another machine)
+
+```powershell
+.\harpia\scripts\Build-Harpia.ps1 -Package
+```
+
+This builds, then assembles `build_x64\dist\Harpia\` containing everything needed:
+`bin\64bit` (the exe, all DLLs, the `obs-ffmpeg-mux` helper, Qt `platforms\`),
+`obs-plugins\64bit`, and `data\`, plus the Visual C++ runtime bundled next to the
+exe. Zip that folder to share it.
+
 The recorder needs the OBS plugins (capture/encoders/ffmpeg muxer) available at
 runtime. Because it builds inside the OBS tree, the plugins are produced
 alongside it; `ObsContext` adds the standard OBS `obs-plugins/64bit` search

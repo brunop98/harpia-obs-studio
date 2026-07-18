@@ -14,6 +14,7 @@
 #include <QStandardPaths>
 #include <QStyleFactory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -106,6 +107,30 @@ int main(int argc, char *argv[])
 	obs.resetAudio();
 	obs.resetVideo(1920, 1080, 30);
 	obs.loadModules();
+
+	// Dependency self-check: if required backend plugins didn't load (missing or
+	// blocked libraries), report it clearly and log it, rather than failing with a
+	// cryptic error only at record time. Non-fatal so the user can still open the
+	// Error Logs to see details.
+	{
+		const std::vector<std::string> missing = obs.missingDependencies();
+		if (!missing.empty()) {
+			QString list;
+			std::string logLine = "Missing required components:";
+			for (const std::string &m : missing) {
+				list += QStringLiteral("  •  %1\n").arg(QString::fromStdString(m));
+				logLine += " " + m + ";";
+			}
+			harpia::Logger::instance().log(harpia::LogLevel::Error, logLine);
+			QMessageBox::warning(
+				nullptr, QStringLiteral("Harpia Recorder — missing components"),
+				QStringLiteral(
+					"Some required components did not load, so recording may not work:\n\n%1\n"
+					"This usually means plugin libraries are missing from the install, or "
+					"were blocked by antivirus/security software. See Error Logs for details.")
+					.arg(list));
+		}
+	}
 
 	// Default recordings folder: <Movies>/Harpia (falls back to home).
 	QString base = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);

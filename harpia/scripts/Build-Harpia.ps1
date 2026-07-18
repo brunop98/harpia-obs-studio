@@ -35,7 +35,11 @@ param(
     [ValidateSet('Debug', 'RelWithDebInfo', 'Release', 'MinSizeRel')]
     [string] $Configuration = 'RelWithDebInfo',
     [string] $Target = 'harpia-recorder',
-    [switch] $Reconfigure
+    [switch] $Reconfigure,
+    # After building, assemble a self-contained distributable folder
+    # (build_x64/dist/Harpia) with the exe, all runtime DLLs, the OBS plugins +
+    # data, and the Microsoft Visual C++ runtime, so it runs on a clean machine.
+    [switch] $Package
 )
 
 $ErrorActionPreference = 'Stop'
@@ -95,6 +99,49 @@ try {
         Write-Host "    Look for harpia.exe under: $(Join-Path $BuildDir "rundir/$Configuration/bin/64bit")"
     }
     Write-Host '    (Run from that folder so the OBS plugins next to it are found.)'
+
+    if ($Package) {
+        Write-Host ''
+        Write-Host '==> Packaging a self-contained distributable...' -ForegroundColor Cyan
+
+        $runDir = Join-Path $BuildDir "rundir/$Configuration"
+        if (-not (Test-Path (Join-Path $runDir 'bin/64bit/harpia.exe'))) {
+            throw "rundir not found or incomplete: $runDir"
+        }
+
+        $dist = Join-Path $BuildDir 'dist/Harpia'
+        if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
+        New-Item -ItemType Directory -Force -Path $dist | Out-Null
+
+        # The rundir already has the correct OBS layout: bin/64bit (exe + libobs +
+        # Qt/FFmpeg DLLs + the obs-ffmpeg-mux helper + platforms/), obs-plugins/64bit,
+        # and data/. Copy it wholesale.
+        Copy-Item -Recurse -Force -Path (Join-Path $runDir '*') -Destination $dist
+
+        # Bundle the Microsoft Visual C++ runtime app-locally (next to the exe) so
+        # no separate redistributable install is required on the target machine.
+        $binDir = Join-Path $dist 'bin/64bit'
+        $vcDlls = @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'concrt140.dll')
+        $vcCopied = 0
+        foreach ($dll in $vcDlls) {
+            $src = Join-Path $env:SystemRoot "System32/$dll"
+            if (Test-Path $src) {
+                Copy-Item -Force -Path $src -Destination $binDir
+                $vcCopied++
+            }
+        }
+
+        Write-Host "==> Distributable ready: $dist" -ForegroundColor Green
+        Write-Host "    Contents: bin/64bit (harpia.exe + all DLLs + obs-ffmpeg-mux), obs-plugins/64bit, data/"
+        if ($vcCopied -gt 0) {
+            Write-Host "    Bundled the Visual C++ runtime ($vcCopied DLLs) next to the exe."
+        }
+        else {
+            Write-Host "    NOTE: VC++ runtime DLLs were not found in System32 — install the" -ForegroundColor Yellow
+            Write-Host "    'Microsoft Visual C++ 2015-2022 Redistributable (x64)' on the target machine." -ForegroundColor Yellow
+        }
+        Write-Host "    Zip the '$dist' folder to share it; run bin/64bit/harpia.exe on the other machine."
+    }
 }
 finally {
     Pop-Location

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace harpia {
 
@@ -42,6 +43,13 @@ public:
 
 	// Configure the audio graph (48kHz stereo). Returns true on success.
 	bool resetAudio();
+
+	// After loadModules(): human-readable names of REQUIRED backend components
+	// (screen capture source, H.264 encoder, AAC encoder, ffmpeg muxer output)
+	// that failed to register — i.e. missing/blocked plugin libraries. Empty when
+	// everything needed is present. Lets the app report a clear message instead
+	// of failing cryptically at record time.
+	std::vector<std::string> missingDependencies() const;
 
 	// Tear down libobs. Safe to call multiple times.
 	void shutdown();

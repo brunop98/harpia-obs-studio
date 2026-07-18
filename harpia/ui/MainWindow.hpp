@@ -3,6 +3,7 @@
 #include "core/AudioManager.hpp"
 #include "core/CaptureManager.hpp"
 #include "core/RecordingController.hpp"
+#include "core/WebcamRecorder.hpp"
 #include "library/ClipLibrary.hpp"
 #include "library/ThumbnailCache.hpp"
 #include "model/FileNameTemplate.hpp"
@@ -99,6 +100,7 @@ private:
 	PresetStore &presets_;
 	CaptureManager capture_;
 	RecordingController recorder_;
+	WebcamRecorder webcam_;
 	AudioManager audio_;
 	FileNameTemplate nameTemplate_;
 	std::unique_ptr<IdleMonitor> idle_;

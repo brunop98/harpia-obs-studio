@@ -3,6 +3,8 @@
 #include "MousePreview.hpp"
 #include "core/CaptureManager.hpp"
 #include "core/EncoderFactory.hpp"
+#include "core/WebcamRecorder.hpp"
+#include "core/AudioManager.hpp" // AudioDevice
 
 #include <QCheckBox>
 #include <QColorDialog>
@@ -229,6 +231,71 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	connect(mouseClicksCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::updateMousePreview);
 	connect(highlightSizeSlider_, &QSlider::valueChanged, this, &PresetEditorDialog::updateMousePreview);
 
+	// ---- Webcam section (recorded as a separate synchronized file) ------
+	form->addRow(new QLabel(QStringLiteral("<b>Webcam</b>"), this));
+
+	webcamCheck_ = new QCheckBox(QStringLiteral("Record webcam as a separate video file"), this);
+	webcamCheck_->setChecked(preset.webcamEnabled);
+	form->addRow(QString(), webcamCheck_);
+
+	webcamDeviceCombo_ = new QComboBox(this);
+	for (const AudioDevice &cam : WebcamRecorder::cameras())
+		webcamDeviceCombo_->addItem(QString::fromStdString(cam.name), QString::fromStdString(cam.id));
+	if (webcamDeviceCombo_->count() == 0)
+		webcamDeviceCombo_->addItem(QStringLiteral("(no camera detected)"), QString());
+	{
+		const int di = webcamDeviceCombo_->findData(QString::fromStdString(preset.webcamDeviceId));
+		if (di >= 0)
+			webcamDeviceCombo_->setCurrentIndex(di);
+	}
+	form->addRow(QStringLiteral("Camera"), webcamDeviceCombo_);
+
+	webcamResCombo_ = new QComboBox(this);
+	for (const char *r : {"1920x1080", "1280x720", "640x480"})
+		webcamResCombo_->addItem(QString::fromUtf8(r), QString::fromUtf8(r));
+	{
+		const QString wres = QStringLiteral("%1x%2").arg(preset.webcamWidth).arg(preset.webcamHeight);
+		int ri = webcamResCombo_->findData(wres);
+		if (ri < 0) {
+			webcamResCombo_->addItem(wres, wres);
+			ri = webcamResCombo_->count() - 1;
+		}
+		webcamResCombo_->setCurrentIndex(ri);
+	}
+	form->addRow(QStringLiteral("Webcam resolution"), webcamResCombo_);
+
+	webcamFpsCombo_ = new QComboBox(this);
+	webcamFpsCombo_->setEditable(true);
+	webcamFpsCombo_->setValidator(new QIntValidator(1, 240, webcamFpsCombo_));
+	for (int v : {24, 30, 60})
+		webcamFpsCombo_->addItem(QString::number(v));
+	webcamFpsCombo_->setCurrentText(QString::number(preset.webcamFps > 0 ? preset.webcamFps : 30));
+	form->addRow(QStringLiteral("Webcam frame rate"), webcamFpsCombo_);
+
+	webcamCustomFolderCheck_ = new QCheckBox(QStringLiteral("Use a custom folder for the webcam file"), this);
+	webcamCustomFolderCheck_->setChecked(preset.webcamUseCustomFolder);
+	form->addRow(QString(), webcamCustomFolderCheck_);
+
+	webcamFolderEdit_ = new QLineEdit(QString::fromStdString(preset.webcamFolder), this);
+	auto *wcBrowse = new QPushButton(QStringLiteral("Browse…"), this);
+	connect(wcBrowse, &QPushButton::clicked, this, [this]() {
+		const QString dir =
+			QFileDialog::getExistingDirectory(this, QStringLiteral("Webcam output folder"),
+							  webcamFolderEdit_->text());
+		if (!dir.isEmpty())
+			webcamFolderEdit_->setText(dir);
+	});
+	auto *wcFolderRow = new QHBoxLayout;
+	wcFolderRow->addWidget(webcamFolderEdit_, 1);
+	wcFolderRow->addWidget(wcBrowse);
+	form->addRow(QStringLiteral("Webcam folder"), wcFolderRow);
+
+	auto syncWebcamFolder = [this]() {
+		webcamFolderEdit_->setEnabled(webcamCustomFolderCheck_->isChecked());
+	};
+	connect(webcamCustomFolderCheck_, &QCheckBox::toggled, this, syncWebcamFolder);
+	syncWebcamFolder();
+
 	auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
 	connect(buttons, &QDialogButtonBox::accepted, this, &PresetEditorDialog::accept);
 	connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -361,6 +428,17 @@ void PresetEditorDialog::accept()
 	result_.recordMouseClicks = mouseClicksCheck_->isChecked();
 	result_.leftClickColor = leftColor_.name().toStdString();
 	result_.rightClickColor = rightColor_.name().toStdString();
+
+	result_.webcamEnabled = webcamCheck_->isChecked();
+	result_.webcamDeviceId = webcamDeviceCombo_->currentData().toString().toStdString();
+	{
+		const QStringList wh = webcamResCombo_->currentData().toString().split(QLatin1Char('x'));
+		result_.webcamWidth = wh.value(0).toInt();
+		result_.webcamHeight = wh.value(1).toInt();
+	}
+	result_.webcamFps = qMax(1, webcamFpsCombo_->currentText().toInt());
+	result_.webcamUseCustomFolder = webcamCustomFolderCheck_->isChecked();
+	result_.webcamFolder = webcamFolderEdit_->text().trimmed().toStdString();
 
 	QDialog::accept();
 }

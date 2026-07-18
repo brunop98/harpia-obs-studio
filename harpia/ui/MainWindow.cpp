@@ -273,6 +273,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 MainWindow::~MainWindow()
 {
+	webcam_.stop();
 	if (recorder_.isRecording())
 		recorder_.stop();
 }
@@ -384,10 +385,33 @@ void MainWindow::startRecording()
 	capture_.startCapture(preset.monitorIndex, preset.showMouseCursor);
 	capture_.setRegion(currentRegion_);
 
-	const QString path = buildOutputPath(preset);
-	if (!recorder_.start(preset, path.toStdString())) {
+	// Expand the filename once so the screen and webcam files share a base name.
+	const QString baseName = QString::fromStdString(nameTemplate_.expand(preset.filenameTemplate));
+	QDir dir(QString::fromStdString(preset.outputFolder));
+	dir.mkpath(QStringLiteral("."));
+	const QString screenPath =
+		dir.filePath(baseName + QLatin1Char('.') + QString::fromStdString(preset.extension()));
+	if (!recorder_.start(preset, screenPath.toStdString())) {
 		timerLabel_->setText(QStringLiteral("error"));
 		return;
+	}
+
+	// Webcam as a separate synchronized file (never composited).
+	if (preset.webcamEnabled) {
+		QString wcFolder = (preset.webcamUseCustomFolder && !preset.webcamFolder.empty())
+					   ? QString::fromStdString(preset.webcamFolder)
+					   : QString::fromStdString(preset.outputFolder);
+		QDir wdir(wcFolder);
+		wdir.mkpath(QStringLiteral("."));
+		const QString webcamPath = wdir.filePath(baseName + QStringLiteral("_webcam.mp4"));
+		if (!webcam_.start(preset.webcamDeviceId, preset.webcamWidth, preset.webcamHeight, preset.webcamFps,
+				   webcamPath.toStdString())) {
+			// No camera / failed to start — keep the screen recording going.
+			QMessageBox::warning(
+				this, QStringLiteral("Webcam"),
+				QStringLiteral("Webcam recording could not start (no camera available?).\n"
+					       "The screen recording continues without it."));
+		}
 	}
 
 	recStartMs_ = QDateTime::currentMSecsSinceEpoch();
@@ -514,6 +538,7 @@ void MainWindow::refreshReadiness()
 		QString message;
 		std::function<void()> fix;
 		QString fixLabel;
+		bool blocking = true; // false = caution only, recording still allowed
 	};
 	std::vector<Warning> warnings;
 
@@ -537,7 +562,7 @@ void MainWindow::refreshReadiness()
 			if (storage.isValid() && storage.bytesAvailable() > 0 &&
 			    storage.bytesAvailable() < 500LL * 1024 * 1024) {
 				warnings.push_back({QStringLiteral("Low disk space (< 500 MB) on the output drive."),
-						    nullptr, QString()});
+						    nullptr, QString(), /*blocking=*/false});
 			}
 		}
 	}
@@ -573,6 +598,14 @@ void MainWindow::refreshReadiness()
 				break;
 			}
 		}
+	}
+
+	// --- Webcam --- (non-blocking: the screen recording proceeds without it)
+	if (p.webcamEnabled && WebcamRecorder::cameras().empty()) {
+		warnings.push_back({QStringLiteral("Webcam is enabled but no camera is available — it will be "
+						   "skipped for this recording."),
+				    [this]() { editActivePreset(); }, QStringLiteral("Fix webcam"),
+				    /*blocking=*/false});
 	}
 
 	// --- Codec / video settings ---
@@ -614,9 +647,14 @@ void MainWindow::refreshReadiness()
 		warningsLayout_->addWidget(row);
 	}
 
-	recordingBlocked_ = !warnings.empty();
-	warningsBox_->setVisible(recordingBlocked_);
-	readyLabel_->setVisible(!recordingBlocked_ && !recorder_.isRecording());
+	bool anyBlocking = false;
+	for (const Warning &w : warnings) {
+		if (w.blocking)
+			anyBlocking = true;
+	}
+	recordingBlocked_ = anyBlocking;
+	warningsBox_->setVisible(!warnings.empty());
+	readyLabel_->setVisible(warnings.empty() && !recorder_.isRecording());
 	updateButtons();
 }
 
@@ -912,6 +950,7 @@ void MainWindow::tickState()
 			updateRegionToolVisibility(); // leave recording mode
 			if (mouseFx_)
 				mouseFx_->stop();
+			webcam_.stop();
 		}
 		timerLabel_->setText(QStringLiteral("00:00:00"));
 		updateButtons();

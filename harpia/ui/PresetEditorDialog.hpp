@@ -68,6 +68,14 @@ private:
 	QColor highlightColor_;
 	QColor leftColor_;
 	QColor rightColor_;
+
+	// Webcam section
+	QCheckBox *webcamCheck_ = nullptr;
+	QComboBox *webcamDeviceCombo_ = nullptr;
+	QComboBox *webcamResCombo_ = nullptr;
+	QComboBox *webcamFpsCombo_ = nullptr;
+	QCheckBox *webcamCustomFolderCheck_ = nullptr;
+	QLineEdit *webcamFolderEdit_ = nullptr;
 };
 
 } // namespace harpia

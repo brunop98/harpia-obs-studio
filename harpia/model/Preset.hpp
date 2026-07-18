@@ -82,6 +82,16 @@ struct Preset {
 	std::string leftClickColor = "#4a90e2";
 	std::string rightClickColor = "#e2534a";
 
+	// Webcam: recorded as a SEPARATE synchronized video file (never composited),
+	// at its own resolution/fps.
+	bool webcamEnabled = false;
+	std::string webcamDeviceId;                      // camera device id ("" = default/first)
+	int webcamWidth = 1280;
+	int webcamHeight = 720;
+	int webcamFps = 30;
+	bool webcamUseCustomFolder = false;              // else same folder as the screen recording
+	std::string webcamFolder;
+
 	// Token-based filename template, e.g.
 	// "Tutorial_{Year}-{Month}-{Day}_{Hour}-{Minute}-{Second}".
 	// Expanded by FileNameTemplate at record time.

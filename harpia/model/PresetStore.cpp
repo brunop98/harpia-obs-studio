@@ -58,6 +58,13 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_bool(d, "record_mouse_clicks", p.recordMouseClicks);
 	obs_data_set_string(d, "left_click_color", p.leftClickColor.c_str());
 	obs_data_set_string(d, "right_click_color", p.rightClickColor.c_str());
+	obs_data_set_bool(d, "webcam_enabled", p.webcamEnabled);
+	obs_data_set_string(d, "webcam_device_id", p.webcamDeviceId.c_str());
+	obs_data_set_int(d, "webcam_width", p.webcamWidth);
+	obs_data_set_int(d, "webcam_height", p.webcamHeight);
+	obs_data_set_int(d, "webcam_fps", p.webcamFps);
+	obs_data_set_bool(d, "webcam_use_custom_folder", p.webcamUseCustomFolder);
+	obs_data_set_string(d, "webcam_folder", p.webcamFolder.c_str());
 	return d;
 }
 
@@ -104,6 +111,17 @@ Preset presetFromData(obs_data_t *d)
 	p.recordMouseClicks = obs_data_get_bool(d, "record_mouse_clicks");
 	p.leftClickColor = obs_data_get_string(d, "left_click_color");
 	p.rightClickColor = obs_data_get_string(d, "right_click_color");
+
+	obs_data_set_default_int(d, "webcam_width", 1280);
+	obs_data_set_default_int(d, "webcam_height", 720);
+	obs_data_set_default_int(d, "webcam_fps", 30);
+	p.webcamEnabled = obs_data_get_bool(d, "webcam_enabled");
+	p.webcamDeviceId = obs_data_get_string(d, "webcam_device_id");
+	p.webcamWidth = (int)obs_data_get_int(d, "webcam_width");
+	p.webcamHeight = (int)obs_data_get_int(d, "webcam_height");
+	p.webcamFps = (int)obs_data_get_int(d, "webcam_fps");
+	p.webcamUseCustomFolder = obs_data_get_bool(d, "webcam_use_custom_folder");
+	p.webcamFolder = obs_data_get_string(d, "webcam_folder");
 	return p;
 }
 

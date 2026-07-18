@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/AudioManager.hpp"
 #include "core/CaptureManager.hpp"
 #include "core/RecordingController.hpp"
 #include "library/ClipLibrary.hpp"
@@ -29,6 +30,7 @@ class ObsContext;
 class PresetStore;
 class ClipLibraryWindow;
 class RegionOverlay;
+class AudioPanel;
 
 // The PowerRec-inspired main window: a wide, compact, dark surface optimized for
 // starting/stopping recordings in one or two clicks.
@@ -56,6 +58,7 @@ private slots:
 	void onSelectRegion();
 	void onClearRegion();
 	void onIdleSettingChanged();
+	void onAudioChanged();
 	void onPresetChanged();
 	void refreshRecentList();
 	void reloadPresetCombo();
@@ -81,6 +84,7 @@ private:
 	PresetStore &presets_;
 	CaptureManager capture_;
 	RecordingController recorder_;
+	AudioManager audio_;
 	FileNameTemplate nameTemplate_;
 	std::unique_ptr<IdleMonitor> idle_;
 
@@ -104,8 +108,11 @@ private:
 	ThumbnailCache thumbnails_;
 	QHash<QString, QListWidgetItem *> itemByPath_;
 
+	AudioPanel *audioPanel_ = nullptr;
+
 	QTimer *stateTimer_ = nullptr;
 	QTimer *idleTimer_ = nullptr;
+	QTimer *meterTimer_ = nullptr;
 
 	std::unique_ptr<ClipLibraryWindow> clipWindow_;
 	std::unique_ptr<RegionOverlay> regionOverlay_;

@@ -73,10 +73,15 @@ int main(int argc, char *argv[])
 	harpia::PresetStore presets;
 	presets.load(outputFolder.toStdString());
 
-	harpia::MainWindow win(obs, presets, outputFolder);
-	win.show();
-
-	const int rc = app.exec();
+	// Scope the window so it (and the obs sources/outputs its members own) is
+	// destroyed BEFORE obs_shutdown() — releasing obs objects after shutdown
+	// would crash.
+	int rc;
+	{
+		harpia::MainWindow win(obs, presets, outputFolder);
+		win.show();
+		rc = app.exec();
+	}
 
 	obs.shutdown();
 	return rc;

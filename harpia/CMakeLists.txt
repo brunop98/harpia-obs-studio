@@ -58,6 +58,8 @@ target_sources(
     main.cpp
     core/ObsContext.cpp
     core/ObsContext.hpp
+    core/AudioManager.cpp
+    core/AudioManager.hpp
     core/CaptureManager.cpp
     core/CaptureManager.hpp
     core/EncoderFactory.cpp
@@ -77,6 +79,8 @@ target_sources(
     library/ThumbnailCache.hpp
     ui/MainWindow.cpp
     ui/MainWindow.hpp
+    ui/AudioPanel.cpp
+    ui/AudioPanel.hpp
     ui/RecentListWidget.hpp
     ui/PresetEditorDialog.cpp
     ui/PresetEditorDialog.hpp

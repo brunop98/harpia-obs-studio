@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace harpia {
 
@@ -48,6 +49,11 @@ struct Preset {
 
 	int videoBitrateKbps = 0;  // 0 => EncoderFactory picks a sane default
 	int audioBitrateKbps = 160;
+
+	// Audio capture: system/desktop ("PC") audio, and the set of microphone/
+	// input device ids to record. Empty micDeviceIds means no mic.
+	bool recordDesktopAudio = false;
+	std::vector<std::string> micDeviceIds;
 
 	// Token-based filename template, e.g.
 	// "Tutorial_{Year}-{Month}-{Day}_{Hour}-{Minute}-{Second}".

@@ -1,5 +1,6 @@
 #include "MainWindow.hpp"
 
+#include "AudioPanel.hpp"
 #include "ClipLibraryWindow.hpp"
 #include "PresetEditorDialog.hpp"
 #include "RecentListWidget.hpp"
@@ -19,6 +20,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QFont>
+#include <QGroupBox>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -137,6 +139,14 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	root->addStretch(1);
 
+	// ---- Audio (live levels) -------------------------------------------
+	auto *audioGroup = new QGroupBox(QStringLiteral("Audio"), central);
+	auto *audioGroupLayout = new QVBoxLayout(audioGroup);
+	audioGroupLayout->setContentsMargins(10, 6, 10, 6);
+	audioPanel_ = new AudioPanel(audio_, audioGroup);
+	audioGroupLayout->addWidget(audioPanel_);
+	root->addWidget(audioGroup);
+
 	// ---- Recent recordings strip ---------------------------------------
 	auto *stripHeader = new QHBoxLayout;
 	stripHeader->addWidget(new QLabel(QStringLiteral("Recent recordings"), central));
@@ -161,8 +171,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	setCentralWidget(central);
 
-	// Wide, PowerRec-like proportions (~10:4).
-	resize(940, 376);
+	// Wide, PowerRec-like proportions; a bit taller to fit the audio meters.
+	resize(940, 470);
 
 	// ---- Wiring ---------------------------------------------------------
 	connect(primaryButton_, &QPushButton::clicked, this, &MainWindow::onPrimaryButton);
@@ -184,6 +194,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(recentStrip_, &QListWidget::customContextMenuRequested, this,
 		&MainWindow::showStripContextMenu);
 	connect(&thumbnails_, &ThumbnailCache::ready, this, &MainWindow::onThumbnailReady);
+	connect(audioPanel_, &AudioPanel::changed, this, &MainWindow::onAudioChanged);
 
 	recorder_.onFinished = [this](const std::string &) {
 		QMetaObject::invokeMethod(this, "refreshRecentList", Qt::QueuedConnection);
@@ -207,8 +218,15 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(idleTimer_, &QTimer::timeout, this, &MainWindow::tickIdle);
 	idleTimer_->start();
 
+	// Live audio meters refresh often for a responsive VU bar.
+	meterTimer_ = new QTimer(this);
+	meterTimer_->setInterval(80);
+	connect(meterTimer_, &QTimer::timeout, audioPanel_, &AudioPanel::updateMeters);
+	meterTimer_->start();
+
 	reloadPresetCombo();
 	syncIdleControls();
+	audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds);
 	refreshRecentList();
 	updateButtons();
 }
@@ -472,12 +490,24 @@ void MainWindow::onIdleSettingChanged()
 		presets_.upsert(updated);
 }
 
+void MainWindow::onAudioChanged()
+{
+	const Preset *cur = presets_.find(activePresetId_);
+	if (!cur)
+		return;
+	Preset updated = *cur;
+	updated.recordDesktopAudio = audioPanel_->desktopOn();
+	updated.micDeviceIds = audioPanel_->enabledMicIds();
+	presets_.upsert(updated);
+}
+
 void MainWindow::onPresetChanged()
 {
 	const QString id = presetCombo_->currentData().toString();
 	if (!id.isEmpty())
 		activePresetId_ = id.toStdString();
 	syncIdleControls();
+	audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds);
 
 	// Switch the live capture to the new preset's display (unless recording).
 	// The previous region was chosen on a possibly-different monitor, so reset

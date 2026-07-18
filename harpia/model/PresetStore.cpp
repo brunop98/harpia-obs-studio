@@ -39,6 +39,16 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_int(d, "audio_bitrate_kbps", p.audioBitrateKbps);
 	obs_data_set_string(d, "filename_template", p.filenameTemplate.c_str());
 	obs_data_set_int(d, "idle_timeout_seconds", p.idleTimeoutSeconds);
+	obs_data_set_bool(d, "record_desktop_audio", p.recordDesktopAudio);
+	obs_data_array_t *mics = obs_data_array_create();
+	for (const std::string &id : p.micDeviceIds) {
+		obs_data_t *item = obs_data_create();
+		obs_data_set_string(item, "id", id.c_str());
+		obs_data_array_push_back(mics, item);
+		obs_data_release(item);
+	}
+	obs_data_set_array(d, "mic_device_ids", mics);
+	obs_data_array_release(mics);
 	return d;
 }
 
@@ -60,6 +70,15 @@ Preset presetFromData(obs_data_t *d)
 	p.audioBitrateKbps = (int)obs_data_get_int(d, "audio_bitrate_kbps");
 	p.filenameTemplate = obs_data_get_string(d, "filename_template");
 	p.idleTimeoutSeconds = (int)obs_data_get_int(d, "idle_timeout_seconds");
+	p.recordDesktopAudio = obs_data_get_bool(d, "record_desktop_audio");
+	obs_data_array_t *mics = obs_data_get_array(d, "mic_device_ids");
+	const size_t micCount = mics ? obs_data_array_count(mics) : 0;
+	for (size_t i = 0; i < micCount; i++) {
+		obs_data_t *item = obs_data_array_item(mics, i);
+		p.micDeviceIds.emplace_back(obs_data_get_string(item, "id"));
+		obs_data_release(item);
+	}
+	obs_data_array_release(mics);
 	return p;
 }
 

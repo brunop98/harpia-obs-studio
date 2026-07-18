@@ -3,6 +3,7 @@
 #include "library/ClipLibrary.hpp"
 #include "library/ThumbnailCache.hpp"
 
+#include <QHash>
 #include <QWidget>
 
 class QListWidget;
@@ -34,6 +35,7 @@ private slots:
 	void copySelected();
 	void renameSelected();
 	void deleteSelected();
+	void onThumbnailReady(const QString &path);
 
 private:
 	QStringList folders() const;
@@ -43,6 +45,7 @@ private:
 	PresetStore &store_;
 	QListWidget *grid_ = nullptr;
 	ThumbnailCache thumbnails_;
+	QHash<QString, QListWidgetItem *> itemByPath_;
 };
 
 } // namespace harpia

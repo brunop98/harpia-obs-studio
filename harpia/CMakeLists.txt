@@ -6,6 +6,9 @@ cmake_minimum_required(VERSION 3.28...3.30)
 
 find_package(Qt6 REQUIRED Widgets Gui)
 
+# FFmpeg (bundled with OBS deps) is used to extract clip thumbnails.
+find_package(FFmpeg REQUIRED COMPONENTS avcodec avformat avutil swscale)
+
 if(NOT TARGET OBS::libobs)
   add_subdirectory("${CMAKE_SOURCE_DIR}/libobs" libobs)
 endif()
@@ -13,7 +16,17 @@ endif()
 add_executable(harpia-recorder)
 add_executable(OBS::harpia ALIAS harpia-recorder)
 
-target_link_libraries(harpia-recorder PRIVATE OBS::libobs Qt::Widgets Qt::Gui)
+target_link_libraries(
+  harpia-recorder
+  PRIVATE
+    OBS::libobs
+    Qt::Widgets
+    Qt::Gui
+    FFmpeg::avcodec
+    FFmpeg::avformat
+    FFmpeg::avutil
+    FFmpeg::swscale
+)
 
 set_target_properties(
   harpia-recorder
@@ -60,14 +73,13 @@ target_sources(
     platform/IdleMonitor.hpp
     library/ClipLibrary.cpp
     library/ClipLibrary.hpp
+    library/ThumbnailCache.cpp
     library/ThumbnailCache.hpp
     ui/MainWindow.cpp
     ui/MainWindow.hpp
     ui/RecentListWidget.hpp
     ui/PresetEditorDialog.cpp
     ui/PresetEditorDialog.hpp
-    ui/PresetManagerDialog.cpp
-    ui/PresetManagerDialog.hpp
     ui/ClipLibraryWindow.cpp
     ui/ClipLibraryWindow.hpp
     ui/RegionOverlay.cpp

@@ -69,9 +69,11 @@ harpia/
     ClipLibrary             scan folders -> clip metadata (size, age, preset)
     ThumbnailCache          preview thumbnails (stub; Clip Library window)
   ui/
-    MainWindow              record/pause button, recent-10 drag-out list
+    MainWindow              PowerRec-style wide window: toolbar + big controls + strip
+    PresetEditorDialog      edit one preset (format, fps, resolution, folder, …)
+    ClipLibraryWindow       full grid of all clips with context actions
     RecentListWidget        list items draggable into other apps as files
-    RegionOverlay           region select + overlay (stub)
+    RegionOverlay           region drag-select + on-screen overlay
 ```
 
 ### Reused OBS backend APIs
@@ -87,26 +89,31 @@ harpia/
 
 ## Implemented
 
+- **PowerRec-style window**: wide (~10:4), compact, dark. Top toolbar (preset
+  dropdown, New Preset, "only record while using the computer" toggle + timeout,
+  Open Preset Folder); large centered **Record / Pause / Stop** with a live
+  **recording timer**; bottom **horizontal thumbnail strip** of recent clips.
 - One-click **Record / Pause / Resume / Stop** (H.264 → MP4 via `ffmpeg_muxer`)
 - Full-monitor capture at the primary screen's native resolution
 - **GPU compression** option: prefers NVENC/AMF/QSV when enabled, else x264
-- **Presets**: create / edit / duplicate / delete, persisted as JSON. Each preset
-  sets format, fps, resolution mode, output folder, GPU compression, idle timeout,
-  and filename template. Selectable from the main window.
+- **Presets**: create / edit (right-click the dropdown) / duplicate / delete,
+  persisted as JSON. Each preset sets format, fps, resolution mode, output folder,
+  GPU compression, idle timeout, and filename template.
 - **Filename templates** with date/time tokens
-- **Recent 10 recordings**, draggable straight into other applications
+- **Real thumbnails**: decoded from each clip with FFmpeg on a background thread,
+  cached to disk (instant on later loads). Shown in the strip and Clip Library.
+- **Recent recordings strip**: click to open; right-click for Open / Open
+  containing folder / Copy file path; drag straight into other apps
 - **Clip Library window**: grid of every recording on disk with "5 minutes ago",
   size, and originating preset; right-click **Open / Copy / Rename / Delete**;
-  **Delete** key removes selected clips; drag-out into other apps
+  **Delete** key removes selected clips
 - **Region selection**: drag-to-select a screen region (applied via `crop_filter`)
   with an always-on-top overlay outlining the captured area
-- **Idle auto-pause** driven by the active preset's timeout (Windows via
-  `GetLastInputInfo`)
+- **Idle auto-pause** driven by the toolbar toggle + the active preset's timeout
+  (Windows via `GetLastInputInfo`)
 
 ## Planned follow-ups (interfaces already defined)
 
-- Real video **thumbnails** in the Clip Library (currently a file-type icon;
-  `ThumbnailCache` interface is in place)
 - **GIF** output path polish and full resolution-scaling matrix
 - Multi-monitor selection in capture and region picker
 - macOS / Linux idle-detection backends

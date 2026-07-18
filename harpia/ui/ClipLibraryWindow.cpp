@@ -49,6 +49,7 @@ ClipLibraryWindow::ClipLibraryWindow(PresetStore &store, QWidget *parent)
 
 	connect(grid_, &QListWidget::customContextMenuRequested, this, &ClipLibraryWindow::showContextMenu);
 	connect(grid_, &QListWidget::itemActivated, this, &ClipLibraryWindow::openSelected);
+	connect(&thumbnails_, &ThumbnailCache::ready, this, &ClipLibraryWindow::onThumbnailReady);
 
 	auto *refreshBtn = new QPushButton(QStringLiteral("Refresh"), this);
 	connect(refreshBtn, &QPushButton::clicked, this, &ClipLibraryWindow::refresh);
@@ -93,6 +94,7 @@ ClipLibrary::PresetByFolder ClipLibraryWindow::presetByFolder() const
 void ClipLibraryWindow::refresh()
 {
 	grid_->clear();
+	itemByPath_.clear();
 
 	QFileIconProvider iconProvider;
 	const QVector<ClipInfo> clips = ClipLibrary::scan(folders(), presetByFolder());
@@ -107,16 +109,29 @@ void ClipLibraryWindow::refresh()
 		item->setToolTip(clip.filePath);
 		item->setTextAlignment(Qt::AlignHCenter | Qt::AlignTop);
 
-		// Prefer a real thumbnail; fall back to the platform's file icon until
-		// thumbnail generation lands.
-		const QImage thumb = thumbnails_.thumbnailFor(clip.filePath, kThumbSize);
-		if (!thumb.isNull())
+		// Use a ready thumbnail if we have one; otherwise show the platform
+		// file icon and kick off async generation (onThumbnailReady updates it).
+		const QImage thumb = thumbnails_.cached(clip.filePath, kThumbSize);
+		if (!thumb.isNull()) {
 			item->setIcon(QIcon(QPixmap::fromImage(thumb)));
-		else
+		} else {
 			item->setIcon(iconProvider.icon(QFileInfo(clip.filePath)));
+			thumbnails_.ensure(clip.filePath, kThumbSize);
+		}
 
+		itemByPath_.insert(clip.filePath, item);
 		grid_->addItem(item);
 	}
+}
+
+void ClipLibraryWindow::onThumbnailReady(const QString &path)
+{
+	QListWidgetItem *item = itemByPath_.value(path, nullptr);
+	if (!item)
+		return;
+	const QImage thumb = thumbnails_.cached(path, kThumbSize);
+	if (!thumb.isNull())
+		item->setIcon(QIcon(QPixmap::fromImage(thumb)));
 }
 
 QStringList ClipLibraryWindow::selectedPaths() const

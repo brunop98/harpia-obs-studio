@@ -23,6 +23,7 @@ class QSpinBox;
 class QLabel;
 class QTimer;
 class QScreen;
+class QVBoxLayout;
 
 namespace harpia {
 
@@ -69,6 +70,7 @@ private slots:
 	void onThumbnailReady(const QString &path);
 	void tickState(); // recording/paused state + timer
 	void tickIdle();  // auto-pause/resume based on idle time
+	void refreshReadiness(); // validate settings, update warnings + Record button
 
 private:
 	const Preset &activePreset() const;
@@ -79,6 +81,7 @@ private:
 	QString buildOutputPath(const Preset &preset) const;
 	void startRecording();
 	void updateButtons();
+	void editActivePreset(); // open the editor for the active preset + persist
 	void syncIdleControls();     // load idle toggle/spin from the active preset
 	void applyDarkTheme();
 	QString elapsedString() const;
@@ -112,6 +115,13 @@ private:
 	QPushButton *primaryButton_ = nullptr;
 	QPushButton *stopButton_ = nullptr;
 	QLabel *timerLabel_ = nullptr;
+
+	// Recording readiness
+	QWidget *warningsBox_ = nullptr;
+	QVBoxLayout *warningsLayout_ = nullptr;
+	QLabel *readyLabel_ = nullptr;
+	QTimer *readinessTimer_ = nullptr;
+	bool recordingBlocked_ = false;
 
 	// Recent strip
 	QPushButton *libraryButton_ = nullptr;

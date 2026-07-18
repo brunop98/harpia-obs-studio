@@ -22,6 +22,10 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QEvent>
+#include <QLayoutItem>
+
+#include <algorithm>
+#include <functional>
 #include <QFileInfo>
 #include <QFont>
 #include <QGroupBox>
@@ -38,6 +42,7 @@
 #include <QScreen>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QStorageInfo>
 #include <QTime>
 #include <QTimer>
 #include <QUrl>
@@ -106,6 +111,19 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	toolbar->addWidget(openFolderButton_);
 
 	root->addLayout(toolbar);
+
+	// ---- Recording readiness --------------------------------------------
+	warningsBox_ = new QWidget(central);
+	warningsLayout_ = new QVBoxLayout(warningsBox_);
+	warningsLayout_->setContentsMargins(0, 0, 0, 0);
+	warningsLayout_->setSpacing(3);
+	warningsBox_->setVisible(false);
+	root->addWidget(warningsBox_);
+
+	readyLabel_ = new QLabel(QStringLiteral("✓ Ready to Record"), central);
+	readyLabel_->setStyleSheet(QStringLiteral("color:#3fb950; font-weight:bold;"));
+	readyLabel_->setAlignment(Qt::AlignCenter);
+	root->addWidget(readyLabel_);
 
 	// ---- Center controls ------------------------------------------------
 	root->addStretch(1);
@@ -238,10 +256,18 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(meterTimer_, &QTimer::timeout, audioPanel_, &AudioPanel::updateMeters);
 	meterTimer_->start();
 
+	// Re-validate readiness periodically to catch hardware changes (a monitor
+	// disconnected, a webcam/mic unplugged) without a restart.
+	readinessTimer_ = new QTimer(this);
+	readinessTimer_->setInterval(1500);
+	connect(readinessTimer_, &QTimer::timeout, this, &MainWindow::refreshReadiness);
+	readinessTimer_->start();
+
 	reloadPresetCombo();
 	syncIdleControls();
 	audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds);
 	refreshRecentList();
+	refreshReadiness();
 	updateButtons();
 }
 
@@ -330,6 +356,11 @@ QString MainWindow::buildOutputPath(const Preset &preset) const
 
 void MainWindow::startRecording()
 {
+	// Readiness gate: never start while blocking warnings exist.
+	refreshReadiness();
+	if (recordingBlocked_)
+		return;
+
 	const Preset &preset = activePreset();
 
 	// Size the canvas to the display this preset captures.
@@ -437,13 +468,7 @@ void MainWindow::showPresetMenu(const QPoint &pos)
 		return;
 
 	if (chosen == editAct) {
-		PresetEditorDialog dlg(*cur, this);
-		if (dlg.exec() == QDialog::Accepted) {
-			presets_.upsert(dlg.result());
-			reloadPresetCombo();
-			syncIdleControls();
-			refreshRecentList();
-		}
+		editActivePreset();
 	} else if (chosen == dupAct) {
 		Preset copy = *cur;
 		copy.id = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
@@ -465,6 +490,134 @@ void MainWindow::showPresetMenu(const QPoint &pos)
 		syncIdleControls();
 		refreshRecentList();
 	}
+}
+
+void MainWindow::editActivePreset()
+{
+	const Preset *cur = presets_.find(activePresetId_);
+	if (!cur)
+		return;
+	PresetEditorDialog dlg(*cur, this);
+	if (dlg.exec() == QDialog::Accepted) {
+		presets_.upsert(dlg.result());
+		reloadPresetCombo();
+		syncIdleControls();
+		audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds);
+		refreshRecentList();
+		refreshReadiness();
+	}
+}
+
+void MainWindow::refreshReadiness()
+{
+	struct Warning {
+		QString message;
+		std::function<void()> fix;
+		QString fixLabel;
+	};
+	std::vector<Warning> warnings;
+
+	const Preset &p = activePreset();
+
+	// --- Output folder ---
+	const QString folder = QString::fromStdString(p.outputFolder);
+	if (folder.isEmpty()) {
+		warnings.push_back({QStringLiteral("No output folder is set."), [this]() { editActivePreset(); },
+				    QStringLiteral("Set folder")});
+	} else {
+		QDir dir(folder);
+		if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
+			warnings.push_back({QStringLiteral("Output folder does not exist and can't be created."),
+					    [this]() { editActivePreset(); }, QStringLiteral("Fix folder")});
+		} else if (dir.exists() && !QFileInfo(folder).isWritable()) {
+			warnings.push_back({QStringLiteral("Output folder is not writable."),
+					    [this]() { editActivePreset(); }, QStringLiteral("Fix folder")});
+		} else {
+			const QStorageInfo storage(folder);
+			if (storage.isValid() && storage.bytesAvailable() > 0 &&
+			    storage.bytesAvailable() < 500LL * 1024 * 1024) {
+				warnings.push_back({QStringLiteral("Low disk space (< 500 MB) on the output drive."),
+						    nullptr, QString()});
+			}
+		}
+	}
+
+	// --- Display / region ---
+	const int monitorCount = (int)CaptureManager::enumerateMonitors().size();
+	if (monitorCount > 0 && p.monitorIndex >= monitorCount) {
+		warnings.push_back({QStringLiteral("The selected monitor is no longer available."),
+				    [this]() { editActivePreset(); }, QStringLiteral("Choose display")});
+	}
+	if (captureMode_ == CaptureMode::Region) {
+		if (!currentRegion_.enabled) {
+			warnings.push_back({QStringLiteral("No capture region is selected."),
+					    [this]() { captureModeCombo_->setCurrentIndex(int(CaptureMode::Region)); },
+					    QStringLiteral("Select region")});
+		} else if (currentRegion_.width < 16 || currentRegion_.height < 16) {
+			warnings.push_back({QStringLiteral("The capture region is too small."), nullptr, QString()});
+		}
+	}
+
+	// --- Microphones ---
+	if (!p.micDeviceIds.empty()) {
+		std::vector<std::string> available;
+		for (const AudioDevice &d : AudioManager::inputDevices())
+			available.push_back(d.id);
+		for (const std::string &id : p.micDeviceIds) {
+			const bool present = id == "default" ||
+					     std::find(available.begin(), available.end(), id) != available.end();
+			if (!present) {
+				warnings.push_back(
+					{QStringLiteral("A selected microphone is no longer available."), nullptr,
+					 QString()});
+				break;
+			}
+		}
+	}
+
+	// --- Codec / video settings ---
+	if (p.format != RecordingFormat::GIF && EncoderFactory::videoEncoderId(p).empty()) {
+		warnings.push_back({QStringLiteral("The selected codec has no available encoder."),
+				    [this]() { editActivePreset(); }, QStringLiteral("Change codec")});
+	}
+	if (p.fps <= 0 ||
+	    ((p.resolutionMode == ResolutionMode::Custom || p.resolutionMode == ResolutionMode::Scaled) &&
+	     (p.width < 16 || p.height < 16))) {
+		warnings.push_back({QStringLiteral("Invalid video settings (frame rate or resolution)."),
+				    [this]() { editActivePreset(); }, QStringLiteral("Fix video")});
+	}
+
+	// --- Rebuild the warnings UI ---
+	QLayoutItem *item;
+	while ((item = warningsLayout_->takeAt(0)) != nullptr) {
+		if (item->widget())
+			item->widget()->deleteLater();
+		delete item;
+	}
+
+	for (const Warning &w : warnings) {
+		auto *row = new QWidget(warningsBox_);
+		auto *rl = new QHBoxLayout(row);
+		rl->setContentsMargins(0, 0, 0, 0);
+		auto *icon = new QLabel(QStringLiteral("⚠"), row);
+		icon->setStyleSheet(QStringLiteral("color:#d29922;"));
+		auto *msg = new QLabel(w.message, row);
+		msg->setWordWrap(true);
+		rl->addWidget(icon);
+		rl->addWidget(msg, 1);
+		if (w.fix) {
+			auto *fix = new QPushButton(w.fixLabel, row);
+			auto action = w.fix;
+			connect(fix, &QPushButton::clicked, this, [action]() { action(); });
+			rl->addWidget(fix);
+		}
+		warningsLayout_->addWidget(row);
+	}
+
+	recordingBlocked_ = !warnings.empty();
+	warningsBox_->setVisible(recordingBlocked_);
+	readyLabel_->setVisible(!recordingBlocked_ && !recorder_.isRecording());
+	updateButtons();
 }
 
 void MainWindow::onOpenPresetFolder()
@@ -521,6 +674,7 @@ void MainWindow::onCaptureModeChanged()
 	}
 	updateRegionToolVisibility();
 	updateButtons();
+	refreshReadiness();
 }
 
 void MainWindow::onRegionChanged(const CaptureRegion &region)
@@ -528,6 +682,7 @@ void MainWindow::onRegionChanged(const CaptureRegion &region)
 	currentRegion_ = region;
 	// Live update — crop_filter applies immediately, even while recording.
 	capture_.setRegion(region);
+	refreshReadiness();
 }
 
 void MainWindow::updateRegionToolVisibility()
@@ -580,6 +735,7 @@ void MainWindow::onAudioChanged()
 	updated.recordDesktopAudio = audioPanel_->desktopOn();
 	updated.micDeviceIds = audioPanel_->enabledMicIds();
 	presets_.upsert(updated);
+	refreshReadiness();
 }
 
 void MainWindow::onPresetChanged()
@@ -601,6 +757,7 @@ void MainWindow::onPresetChanged()
 		capture_.setRegion(currentRegion_);
 		updateRegionToolVisibility();
 	}
+	refreshReadiness();
 }
 
 void MainWindow::syncIdleControls()
@@ -718,6 +875,11 @@ void MainWindow::updateButtons()
 	if (!recording) {
 		primaryButton_->setText(QStringLiteral("●  Record"));
 		primaryButton_->setStyleSheet(QString());
+		// Block recording while readiness warnings exist.
+		primaryButton_->setEnabled(!recordingBlocked_);
+		primaryButton_->setToolTip(recordingBlocked_
+						   ? QStringLiteral("Resolve the warnings above before recording")
+						   : QString());
 	} else if (paused) {
 		primaryButton_->setText(QStringLiteral("▶  Resume"));
 		primaryButton_->setStyleSheet(
@@ -726,6 +888,10 @@ void MainWindow::updateButtons()
 		primaryButton_->setText(QStringLiteral("⏸  Pause"));
 		primaryButton_->setStyleSheet(
 			QStringLiteral("background:#d29922;border:none;color:white;border-radius:10px;"));
+	}
+	if (recording) {
+		primaryButton_->setEnabled(true); // pause/resume always allowed
+		primaryButton_->setToolTip(QString());
 	}
 
 	stopButton_->setEnabled(recording);

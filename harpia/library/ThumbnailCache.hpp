@@ -17,7 +17,17 @@ class ThumbnailCache {
 public:
 	// Returns a cached/generated thumbnail, or a null QImage if not yet
 	// available (the UI can show a placeholder until generation completes).
-	QImage thumbnailFor(const QString &videoPath, const QSize &target);
+	//
+	// Stub for now: always returns a null image so callers fall back to a
+	// generic file icon. The signature is fixed so the real implementation
+	// (decode one frame via libobs media source or a bundled ffmpeg, scale,
+	// cache to disk) drops in without touching callers.
+	QImage thumbnailFor(const QString &videoPath, const QSize &target)
+	{
+		Q_UNUSED(videoPath);
+		Q_UNUSED(target);
+		return QImage();
+	}
 
 	// TODO(follow-up): async generation with a signal on completion, disk cache,
 	// and eviction. Kept minimal here so the interface is fixed.

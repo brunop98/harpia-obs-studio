@@ -54,11 +54,16 @@ QStringList ClipLibrary::videoExtensions()
 	return {QStringLiteral("mp4"), QStringLiteral("mkv"), QStringLiteral("mov"), QStringLiteral("gif")};
 }
 
-QVector<ClipInfo> ClipLibrary::scan(const QStringList &folders)
+QVector<ClipInfo> ClipLibrary::scan(const QStringList &folders, const PresetByFolder &presetByFolder)
 {
 	QStringList nameFilters;
 	for (const QString &ext : videoExtensions())
 		nameFilters << QStringLiteral("*.%1").arg(ext);
+
+	// Normalize the preset-folder keys to absolute paths for reliable matching.
+	PresetByFolder presetByAbsFolder;
+	for (auto it = presetByFolder.constBegin(); it != presetByFolder.constEnd(); ++it)
+		presetByAbsFolder.insert(QDir(it.key()).absolutePath(), it.value());
 
 	// De-duplicate by absolute path in case folders overlap.
 	QVector<ClipInfo> clips;
@@ -70,6 +75,9 @@ QVector<ClipInfo> ClipLibrary::scan(const QStringList &folders)
 		QDir dir(folder);
 		if (!dir.exists())
 			continue;
+
+		const QString folderKey = dir.absolutePath();
+		const QString presetName = presetByAbsFolder.value(folderKey);
 
 		const QFileInfoList entries =
 			dir.entryInfoList(nameFilters, QDir::Files | QDir::NoSymLinks, QDir::Time);
@@ -84,6 +92,7 @@ QVector<ClipInfo> ClipLibrary::scan(const QStringList &folders)
 			info.fileName = fi.fileName();
 			info.sizeBytes = fi.size();
 			info.modified = fi.lastModified();
+			info.presetName = presetName;
 			clips.push_back(info);
 		}
 	}
@@ -93,9 +102,9 @@ QVector<ClipInfo> ClipLibrary::scan(const QStringList &folders)
 	return clips;
 }
 
-QVector<ClipInfo> ClipLibrary::recent(const QStringList &folders, int count)
+QVector<ClipInfo> ClipLibrary::recent(const QStringList &folders, int count, const PresetByFolder &presetByFolder)
 {
-	QVector<ClipInfo> all = scan(folders);
+	QVector<ClipInfo> all = scan(folders, presetByFolder);
 	if (all.size() > count)
 		all.resize(count);
 	return all;

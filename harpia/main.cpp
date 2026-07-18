@@ -39,7 +39,7 @@ int main(int argc, char *argv[])
 	harpia::PresetStore presets;
 	presets.load(outputFolder.toStdString());
 
-	harpia::MainWindow win(obs, presets);
+	harpia::MainWindow win(obs, presets, outputFolder);
 	win.show();
 
 	const int rc = app.exec();

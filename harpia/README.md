@@ -85,21 +85,28 @@ harpia/
   `obs_output_create("ffmpeg_muxer")` → `obs_output_start/stop`
 - Pause: `obs_output_pause` / `obs_output_paused`
 
-## Implemented (MVP)
+## Implemented
 
 - One-click **Record / Pause / Resume / Stop** (H.264 → MP4 via `ffmpeg_muxer`)
 - Full-monitor capture at the primary screen's native resolution
 - **GPU compression** option: prefers NVENC/AMF/QSV when enabled, else x264
-- **Presets** persisted as JSON; a default preset is created on first run
+- **Presets**: create / edit / duplicate / delete, persisted as JSON. Each preset
+  sets format, fps, resolution mode, output folder, GPU compression, idle timeout,
+  and filename template. Selectable from the main window.
 - **Filename templates** with date/time tokens
 - **Recent 10 recordings**, draggable straight into other applications
-- **Idle auto-pause** scaffolding (active on Windows via `GetLastInputInfo`)
+- **Clip Library window**: grid of every recording on disk with "5 minutes ago",
+  size, and originating preset; right-click **Open / Copy / Rename / Delete**;
+  **Delete** key removes selected clips; drag-out into other apps
+- **Region selection**: drag-to-select a screen region (applied via `crop_filter`)
+  with an always-on-top overlay outlining the captured area
+- **Idle auto-pause** driven by the active preset's timeout (Windows via
+  `GetLastInputInfo`)
 
 ## Planned follow-ups (interfaces already defined)
 
-- Clip Library window: thumbnail grid, "5 minutes ago", size, preset;
-  right-click Open/Copy/Rename/Delete; Delete key
-- Region selection UI + on-screen capture-region overlay
-- Preset editor UI (format incl. GIF, fps, resolution scaling, folder, idle
-  timeout, naming template)
+- Real video **thumbnails** in the Clip Library (currently a file-type icon;
+  `ThumbnailCache` interface is in place)
+- **GIF** output path polish and full resolution-scaling matrix
+- Multi-monitor selection in capture and region picker
 - macOS / Linux idle-detection backends

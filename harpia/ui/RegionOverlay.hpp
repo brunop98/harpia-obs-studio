@@ -2,31 +2,58 @@
 
 #include "core/CaptureManager.hpp"
 
+#include <QDialog>
 #include <QRect>
-#include <functional>
+#include <QWidget>
 
 namespace harpia {
 
-// Deferred feature: an always-on-top, click-through translucent overlay that
-// outlines the region currently being recorded, plus an interactive
-// drag-to-select mode for choosing that region.
-//
-// Planned implementation:
-//   - RegionSelector: a fullscreen frameless dimmed window; user drags a
-//     rectangle; on release emits the chosen CaptureRegion. The drag/handle math
-//     can be adapted from frontend/widgets/OBSBasicPreview.cpp (CropItem and the
-//     stretch-handle logic).
-//   - RegionOverlay: a frameless, WA_TransparentForMouseEvents,
-//     Qt::WindowStaysOnTopHint window sized to the region, painting only a
-//     colored border so the user can verify the capture area at a glance.
-//
-// Declared now so MainWindow/CaptureManager can be wired to region selection
-// without changing their interfaces when this lands.
-class RegionSelector {
+// Fullscreen drag-to-select picker. Exec it; on Accepted, region() holds the
+// chosen rectangle in device pixels (matching the capture canvas). The drag/
+// rubber-band interaction is the desktop-region analogue of the crop handles in
+// frontend/widgets/OBSBasicPreview.cpp.
+class RegionSelectDialog : public QDialog {
+	Q_OBJECT
 public:
-	// Show fullscreen selection UI; call `onSelected` with the picked region
-	// (region.enabled == false if the user cancelled).
-	static void pick(std::function<void(const CaptureRegion &)> onSelected);
+	explicit RegionSelectDialog(QWidget *parent = nullptr);
+
+	// Selected region in device pixels (enabled == false if nothing picked).
+	CaptureRegion region() const { return region_; }
+
+protected:
+	void paintEvent(QPaintEvent *event) override;
+	void mousePressEvent(QMouseEvent *event) override;
+	void mouseMoveEvent(QMouseEvent *event) override;
+	void mouseReleaseEvent(QMouseEvent *event) override;
+	void keyPressEvent(QKeyEvent *event) override;
+
+private:
+	QRect selectionRectLogical() const;
+
+	QPoint origin_;
+	QPoint current_;
+	bool selecting_ = false;
+	qreal dpr_ = 1.0;
+	CaptureRegion region_;
+};
+
+// A frameless, click-through, always-on-top window that outlines the region
+// currently being recorded so the user can verify the capture area at a glance.
+// setRegion() takes device-pixel coordinates (as produced by RegionSelectDialog)
+// and positions itself accordingly.
+class RegionOverlay : public QWidget {
+	Q_OBJECT
+public:
+	explicit RegionOverlay(QWidget *parent = nullptr);
+
+	// Show the outline for `region` (device pixels). A disabled region hides it.
+	void setRegion(const CaptureRegion &region);
+
+protected:
+	void paintEvent(QPaintEvent *event) override;
+
+private:
+	qreal dpr_ = 1.0;
 };
 
 } // namespace harpia

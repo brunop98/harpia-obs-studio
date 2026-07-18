@@ -64,6 +64,13 @@ target_sources(
     ui/MainWindow.cpp
     ui/MainWindow.hpp
     ui/RecentListWidget.hpp
+    ui/PresetEditorDialog.cpp
+    ui/PresetEditorDialog.hpp
+    ui/PresetManagerDialog.cpp
+    ui/PresetManagerDialog.hpp
+    ui/ClipLibraryWindow.cpp
+    ui/ClipLibraryWindow.hpp
+    ui/RegionOverlay.cpp
     ui/RegionOverlay.hpp
 )
 

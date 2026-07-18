@@ -123,3 +123,36 @@ set_target_properties_obs(
   harpia-recorder
   PROPERTIES FOLDER harpia OUTPUT_NAME "$<IF:$<PLATFORM_ID:Windows>,harpia,harpia-recorder>"
 )
+
+# The recorder loads these plugins at RUNTIME (via the module loader) and the
+# ffmpeg muxer spawns the obs-ffmpeg-mux helper EXECUTABLE as a child process.
+# None of them are link dependencies, so building only the harpia-recorder target
+# would leave them (especially obs-ffmpeg-mux.exe) missing from the rundir — which
+# makes recording fail with "Unable to start the recording helper process"
+# (CreateProcessW error 2 = file not found). Depend on every runtime piece that
+# exists so a build of harpia-recorder always populates the rundir completely.
+set(_harpia_runtime_targets
+    # obs-ffmpeg-mux is the muxer helper process — the critical one.
+    obs-ffmpeg
+    obs-ffmpeg-mux
+    obs-filters
+    obs-x264
+    obs-nvenc
+    obs-qsv11
+    win-capture
+    win-wasapi
+    win-dshow
+    mac-capture
+    mac-avcapture
+    mac-videotoolbox
+    linux-capture
+    linux-pipewire
+    linux-pulseaudio
+    linux-alsa
+    linux-v4l2
+)
+foreach(_dep IN LISTS _harpia_runtime_targets)
+  if(TARGET ${_dep})
+    add_dependencies(harpia-recorder ${_dep})
+  endif()
+endforeach()

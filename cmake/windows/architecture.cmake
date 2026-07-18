@@ -106,7 +106,6 @@ else()
   add_subdirectory(plugins/win-capture/get-graphics-offsets)
   add_subdirectory(plugins/win-capture/graphics-hook)
   add_subdirectory(plugins/win-capture/inject-helper)
-  add_subdirectory(plugins/win-dshow/virtualcam-module)
 
   return()
 endif()

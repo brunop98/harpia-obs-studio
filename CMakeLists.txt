@@ -15,9 +15,11 @@ include(compilerconfig)
 include(defaults)
 include(helpers)
 
-option(ENABLE_FRONTEND "Enable building with UI (requires Qt)" ON)
-option(ENABLE_SCRIPTING "Enable scripting support" ON)
-option(ENABLE_HEVC "Enable HEVC encoders" ON)
+# This tree is slimmed down to build only the Harpia recorder (harpia/) on top
+# of libobs and a minimal plugin set. The stock OBS Studio frontend, scripting,
+# and streaming stack have been removed; the options below default off.
+option(ENABLE_SCRIPTING "Enable scripting support" OFF)
+option(ENABLE_HEVC "Enable HEVC encoders" OFF)
 option(ENABLE_HARPIA "Enable building the Harpia recorder (minimal screen recorder on libobs)" ON)
 
 add_subdirectory(libobs)
@@ -30,10 +32,6 @@ if(OS_MACOS)
   add_subdirectory(libobs-metal)
 endif()
 add_subdirectory(plugins)
-
-add_subdirectory(test/test-input)
-
-add_subdirectory(frontend)
 
 if(ENABLE_HARPIA)
   add_subdirectory(harpia)

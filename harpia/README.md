@@ -20,8 +20,16 @@ Harpia builds as part of the OBS Studio CMake project. It is enabled by the
 - **CMake ≥ 3.28** — `winget install Kitware.CMake`, then **reopen the terminal**
 - **Git**
 
-You do *not* need to install Qt6/CEF/obs-deps manually — the CMake configure step
+You do *not* need to install Qt6/obs-deps manually — the CMake configure step
 downloads the prebuilt dependencies from `buildspec.json` automatically.
+
+> **Slimmed tree:** this repo has been trimmed to build only the recorder. The
+> stock OBS Studio frontend, scripting, streaming stack, and unused plugins
+> (capture cards, cameras, browser, websocket, VST, transitions, …) are removed.
+> Only `libobs` + a minimal plugin set (screen/audio capture, x264/NVENC/QSV/AMF/
+> VideoToolbox encoders, ffmpeg muxer/output, crop filter) is built. As a result
+> **stock `obs-studio` no longer builds from this tree** — recover it from git
+> history if ever needed.
 
 ### Quick build (recommended)
 

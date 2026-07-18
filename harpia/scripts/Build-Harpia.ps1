@@ -66,8 +66,11 @@ try {
     $cacheExists = Test-Path (Join-Path $BuildDir 'CMakeCache.txt')
 
     if ($Reconfigure -or -not $cacheExists) {
-        Write-Host '==> Configuring (downloads Qt6/CEF/obs-deps on first run)...' -ForegroundColor Cyan
-        & cmake --preset windows-x64
+        Write-Host '==> Configuring (downloads Qt6/obs-deps on first run)...' -ForegroundColor Cyan
+        # The tree is slimmed to the recorder: no OBS UI/scripting/HEVC, and the
+        # kept obs-ffmpeg drops its SRT/RIST (mpegts) streaming path.
+        # ENABLE_BROWSER=OFF stops the preset from downloading CEF (no browser plugin).
+        & cmake --preset windows-x64 -DENABLE_NEW_MPEGTS_OUTPUT=OFF -DENABLE_BROWSER=OFF
         if ($LASTEXITCODE -ne 0) { throw "CMake configure failed ($LASTEXITCODE)" }
     }
     else {

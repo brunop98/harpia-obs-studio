@@ -39,19 +39,6 @@ const char *codecLabel(VideoCodec c)
 	return "H.264";
 }
 
-// Resolution presets offered in the dropdown. An empty QSize means "Original"
-// (match the display); a null "custom" marker is handled separately.
-struct ResOption {
-	const char *label;
-	const char *code; // "original" | "WxH" | "custom"
-};
-const ResOption kResOptions[] = {
-	{"Original (match display)", "original"}, {"4K (3840×2160)", "3840x2160"},
-	{"1440p (2560×1440)", "2560x1440"},       {"1080p (1920×1080)", "1920x1080"},
-	{"720p (1280×720)", "1280x720"},          {"480p (854×480)", "854x480"},
-	{"Custom", "custom"},
-};
-
 // Paint a color-swatch button with the given color.
 void setButtonColor(QPushButton *b, const QColor &c)
 {
@@ -93,22 +80,11 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	codecCombo_->setCurrentIndex(codecIdx >= 0 ? codecIdx : 0);
 	form->addRow(QStringLiteral("Codec"), codecCombo_);
 
-	resolutionCombo_ = new QComboBox(this);
-	for (const ResOption &r : kResOptions)
-		resolutionCombo_->addItem(QString::fromUtf8(r.label), QString::fromUtf8(r.code));
-	form->addRow(QStringLiteral("Resolution"), resolutionCombo_);
-
-	widthSpin_ = new QSpinBox(this);
-	widthSpin_->setRange(16, 15360);
-	widthSpin_->setValue(preset.width > 0 ? preset.width : 1920);
-	heightSpin_ = new QSpinBox(this);
-	heightSpin_->setRange(16, 8640);
-	heightSpin_->setValue(preset.height > 0 ? preset.height : 1080);
-	auto *sizeRow = new QHBoxLayout;
-	sizeRow->addWidget(widthSpin_);
-	sizeRow->addWidget(new QLabel(QStringLiteral("×"), this));
-	sizeRow->addWidget(heightSpin_);
-	form->addRow(QStringLiteral("Custom size"), sizeRow);
+	// Resolution is always native — the full display, or the selected capture
+	// region — so there is no size control here.
+	auto *resNote = new QLabel(QStringLiteral("Records at the screen / region resolution"), this);
+	resNote->setStyleSheet(QStringLiteral("color: gray;"));
+	form->addRow(QStringLiteral("Resolution"), resNote);
 
 	fpsCombo_ = new QComboBox(this);
 	fpsCombo_->setEditable(true);
@@ -304,22 +280,8 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	layout->addLayout(form);
 	layout->addWidget(buttons);
 
-	// Select the resolution entry matching the preset.
-	QString resCode = QStringLiteral("original");
-	if (preset.resolutionMode == ResolutionMode::Custom) {
-		resCode = QStringLiteral("custom");
-	} else if (preset.resolutionMode == ResolutionMode::Scaled && preset.width > 0) {
-		resCode = QStringLiteral("%1x%2").arg(preset.width).arg(preset.height);
-		if (resolutionCombo_->findData(resCode) < 0)
-			resCode = QStringLiteral("custom");
-	}
-	resolutionCombo_->setCurrentIndex(resolutionCombo_->findData(resCode));
-
-	connect(resolutionCombo_, &QComboBox::currentIndexChanged, this,
-		&PresetEditorDialog::onResolutionChanged);
 	connect(formatCombo_, &QComboBox::currentIndexChanged, this, &PresetEditorDialog::updateValidation);
 	connect(codecCombo_, &QComboBox::currentIndexChanged, this, &PresetEditorDialog::updateValidation);
-	onResolutionChanged();
 	updateValidation();
 	updateMousePreview();
 	resize(480, sizeHint().height());
@@ -349,13 +311,6 @@ void PresetEditorDialog::browseFolder()
 							      folderEdit_->text());
 	if (!dir.isEmpty())
 		folderEdit_->setText(dir);
-}
-
-void PresetEditorDialog::onResolutionChanged()
-{
-	const bool custom = resolutionCombo_->currentData().toString() == QStringLiteral("custom");
-	widthSpin_->setEnabled(custom);
-	heightSpin_->setEnabled(custom);
 }
 
 void PresetEditorDialog::updateValidation()
@@ -400,20 +355,8 @@ void PresetEditorDialog::accept()
 	result_.fps = qMax(1, fpsCombo_->currentText().toInt());
 	result_.videoBitrateKbps = bitrateSpin_->value();
 
-	// Resolution: map the dropdown selection back to mode + size.
-	const QString resCode = resolutionCombo_->currentData().toString();
-	if (resCode == QStringLiteral("original")) {
-		result_.resolutionMode = ResolutionMode::Native;
-	} else if (resCode == QStringLiteral("custom")) {
-		result_.resolutionMode = ResolutionMode::Custom;
-		result_.width = widthSpin_->value();
-		result_.height = heightSpin_->value();
-	} else {
-		const QStringList wh = resCode.split(QLatin1Char('x'));
-		result_.resolutionMode = ResolutionMode::Scaled;
-		result_.width = wh.value(0).toInt();
-		result_.height = wh.value(1).toInt();
-	}
+	// Resolution is always native (screen or region) — no scaling.
+	result_.resolutionMode = ResolutionMode::Native;
 
 	result_.outputFolder = folderEdit_->text().trimmed().toStdString();
 	result_.monitorIndex = monitorCombo_->currentData().toInt();

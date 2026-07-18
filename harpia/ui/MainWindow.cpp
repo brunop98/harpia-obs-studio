@@ -365,14 +365,18 @@ void MainWindow::startRecording()
 
 	const Preset &preset = activePreset();
 
-	// Size the canvas to the display this preset captures.
+	// Always record at the native resolution of what's being captured: the exact
+	// region size in Region mode, otherwise the full display resolution. No
+	// scaling / custom sizes.
 	canvasSize_ = canvasForActivePreset();
-	uint32_t baseW = canvasSize_.width();
-	uint32_t baseH = canvasSize_.height();
-	uint32_t outW = baseW, outH = baseH;
-	if (preset.resolutionMode != ResolutionMode::Native && preset.width > 0 && preset.height > 0) {
-		outW = (uint32_t)preset.width;
-		outH = (uint32_t)preset.height;
+	uint32_t baseW, baseH;
+	if (captureMode_ == CaptureMode::Region && currentRegion_.enabled && currentRegion_.width >= 16 &&
+	    currentRegion_.height >= 16) {
+		baseW = (uint32_t)currentRegion_.width;
+		baseH = (uint32_t)currentRegion_.height;
+	} else {
+		baseW = canvasSize_.width();
+		baseH = canvasSize_.height();
 	}
 
 	// GIF is meant for short clips — cap the frame rate so files stay small.
@@ -380,7 +384,8 @@ void MainWindow::startRecording()
 	if (preset.format == RecordingFormat::GIF)
 		fps = qMin(fps, 15);
 
-	obs_.resetVideo(baseW, baseH, fps, outW, outH);
+	// Output size == base size (native, no downscale).
+	obs_.resetVideo(baseW, baseH, fps, baseW, baseH);
 
 	// Ensure we're capturing this preset's display, then re-apply any region.
 	capture_.startCapture(preset.monitorIndex, preset.showMouseCursor);
@@ -614,11 +619,9 @@ void MainWindow::refreshReadiness()
 		warnings.push_back({QStringLiteral("The selected codec has no available encoder."),
 				    [this]() { editActivePreset(); }, QStringLiteral("Change codec")});
 	}
-	if (p.fps <= 0 ||
-	    ((p.resolutionMode == ResolutionMode::Custom || p.resolutionMode == ResolutionMode::Scaled) &&
-	     (p.width < 16 || p.height < 16))) {
-		warnings.push_back({QStringLiteral("Invalid video settings (frame rate or resolution)."),
-				    [this]() { editActivePreset(); }, QStringLiteral("Fix video")});
+	if (p.fps <= 0) {
+		warnings.push_back({QStringLiteral("Invalid frame rate."), [this]() { editActivePreset(); },
+				    QStringLiteral("Fix video")});
 	}
 
 	// --- Rebuild the warnings UI ---

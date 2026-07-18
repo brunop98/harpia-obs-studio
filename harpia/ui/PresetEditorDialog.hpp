@@ -29,7 +29,6 @@ public:
 
 private slots:
 	void browseFolder();
-	void onResolutionChanged();
 	void updateValidation();
 	void updateMousePreview();
 	void accept() override;
@@ -46,9 +45,6 @@ private:
 	QComboBox *fpsCombo_ = nullptr;
 	QComboBox *frameRateModeCombo_ = nullptr;
 	QSpinBox *bitrateSpin_ = nullptr;
-	QComboBox *resolutionCombo_ = nullptr;
-	QSpinBox *widthSpin_ = nullptr;
-	QSpinBox *heightSpin_ = nullptr;
 	QComboBox *monitorCombo_ = nullptr;
 	QLineEdit *folderEdit_ = nullptr;
 	QCheckBox *gpuCheck_ = nullptr;

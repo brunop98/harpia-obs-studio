@@ -33,6 +33,7 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_int(d, "width", p.width);
 	obs_data_set_int(d, "height", p.height);
 	obs_data_set_string(d, "output_folder", p.outputFolder.c_str());
+	obs_data_set_int(d, "monitor_index", p.monitorIndex);
 	obs_data_set_bool(d, "gpu_compression", p.gpuCompression);
 	obs_data_set_int(d, "video_bitrate_kbps", p.videoBitrateKbps);
 	obs_data_set_int(d, "audio_bitrate_kbps", p.audioBitrateKbps);
@@ -53,6 +54,7 @@ Preset presetFromData(obs_data_t *d)
 	p.width = (int)obs_data_get_int(d, "width");
 	p.height = (int)obs_data_get_int(d, "height");
 	p.outputFolder = obs_data_get_string(d, "output_folder");
+	p.monitorIndex = (int)obs_data_get_int(d, "monitor_index");
 	p.gpuCompression = obs_data_get_bool(d, "gpu_compression");
 	p.videoBitrateKbps = (int)obs_data_get_int(d, "video_bitrate_kbps");
 	p.audioBitrateKbps = (int)obs_data_get_int(d, "audio_bitrate_kbps");

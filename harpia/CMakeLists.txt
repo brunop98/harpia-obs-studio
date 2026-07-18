@@ -91,8 +91,11 @@ if(OS_WINDOWS)
   target_sources(harpia-recorder PRIVATE platform/win/WinIdleMonitor.cpp)
 elseif(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
   target_sources(harpia-recorder PRIVATE platform/nix/NixIdleMonitor.cpp)
+  # X11/Xss are loaded at runtime via dlopen; only libdl is needed at link time.
+  target_link_libraries(harpia-recorder PRIVATE ${CMAKE_DL_LIBS})
 elseif(OS_MACOS)
   target_sources(harpia-recorder PRIVATE platform/mac/MacIdleMonitor.cpp)
+  target_link_libraries(harpia-recorder PRIVATE "-framework CoreGraphics")
 endif()
 
 if(OS_WINDOWS)

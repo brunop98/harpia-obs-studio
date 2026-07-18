@@ -1,15 +1,20 @@
 #include "platform/IdleMonitor.hpp"
 
+#include <CoreGraphics/CoreGraphics.h>
+
 namespace harpia {
 
 namespace {
 
-// Stub for macOS. A full implementation would use
-// CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateCombinedSessionState,
-// kCGAnyInputEventType). Returning 0 disables idle auto-pause for now.
+// System-wide idle time on macOS via CoreGraphics. Reports seconds since the
+// last input event of any kind across the whole session.
 class MacIdleMonitor : public IdleMonitor {
 public:
-	double currentIdleSeconds() const override { return 0.0; }
+	double currentIdleSeconds() const override
+	{
+		return CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateCombinedSessionState,
+							      kCGAnyInputEventType);
+	}
 };
 
 } // namespace

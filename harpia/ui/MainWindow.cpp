@@ -201,7 +201,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	// Bring up the capture source now so the first record is instant.
 	obs_.resetVideo(canvasSize_.width(), canvasSize_.height(), activePreset().fps);
-	capture_.startCapture(0);
+	capture_.startCapture(activePreset().monitorIndex);
 
 	stateTimer_ = new QTimer(this);
 	stateTimer_->setInterval(250);
@@ -291,7 +291,16 @@ void MainWindow::startRecording()
 		outW = (uint32_t)preset.width;
 		outH = (uint32_t)preset.height;
 	}
-	obs_.resetVideo(baseW, baseH, preset.fps, outW, outH);
+
+	// GIF is meant for short clips — cap the frame rate so files stay small.
+	int fps = preset.fps;
+	if (preset.format == RecordingFormat::GIF)
+		fps = qMin(fps, 15);
+
+	obs_.resetVideo(baseW, baseH, fps, outW, outH);
+
+	// Ensure we're capturing this preset's display, then re-apply any region.
+	capture_.startCapture(preset.monitorIndex);
 	capture_.setRegion(currentRegion_);
 
 	const QString path = buildOutputPath(preset);
@@ -450,6 +459,12 @@ void MainWindow::onPresetChanged()
 	if (!id.isEmpty())
 		activePresetId_ = id.toStdString();
 	syncIdleControls();
+
+	// Switch the live capture to the new preset's display (unless recording).
+	if (!recorder_.isRecording()) {
+		capture_.startCapture(activePreset().monitorIndex);
+		capture_.setRegion(currentRegion_);
+	}
 }
 
 void MainWindow::syncIdleControls()

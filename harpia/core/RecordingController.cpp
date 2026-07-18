@@ -79,10 +79,32 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 		obs_data_set_string(settings, "url", fullFilePath.c_str());
 		obs_data_set_string(settings, "format_name", formatToString(preset.format));
 		obs_data_set_string(settings, "video_encoder", "gif");
+
+		// GIFs are for short clips: downscale to keep the file sane. Scale the
+		// canvas down so the longest edge is at most 640px, preserving aspect.
+		struct obs_video_info ovi;
+		if (obs_get_video_info(&ovi) && ovi.output_width > 0 && ovi.output_height > 0) {
+			const uint32_t maxEdge = 640;
+			uint32_t w = ovi.output_width;
+			uint32_t h = ovi.output_height;
+			if (w > maxEdge || h > maxEdge) {
+				if (w >= h) {
+					h = (uint32_t)((uint64_t)h * maxEdge / w);
+					w = maxEdge;
+				} else {
+					w = (uint32_t)((uint64_t)w * maxEdge / h);
+					h = maxEdge;
+				}
+			}
+			obs_data_set_int(settings, "scale_width", w & ~1u);
+			obs_data_set_int(settings, "scale_height", h & ~1u);
+		}
+
 		obs_output_update(output_, settings);
 		obs_data_release(settings);
 
-		obs_output_set_media(output_, obs_get_video(), obs_get_audio());
+		// No audio track for GIF.
+		obs_output_set_media(output_, obs_get_video(), nullptr);
 	} else {
 		// MP4 / MKV: encoded muxer recording (supports pause/resume).
 		const std::string vid = EncoderFactory::videoEncoderId(preset);

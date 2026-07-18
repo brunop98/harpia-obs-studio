@@ -35,6 +35,7 @@ private:
 	QComboBox *resolutionCombo_ = nullptr;
 	QSpinBox *widthSpin_ = nullptr;
 	QSpinBox *heightSpin_ = nullptr;
+	QComboBox *monitorCombo_ = nullptr;
 	QLineEdit *folderEdit_ = nullptr;
 	QCheckBox *gpuCheck_ = nullptr;
 	QSpinBox *idleSpin_ = nullptr;

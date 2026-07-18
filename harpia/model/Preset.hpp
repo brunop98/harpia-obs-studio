@@ -39,6 +39,8 @@ struct Preset {
 
 	std::string outputFolder;  // where recordings are written
 
+	int monitorIndex = 0;  // which display to capture (0 = primary/first)
+
 	// When true, prefer a hardware ("GPU") encoder (NVENC/AMF/QSV) so
 	// compression happens during capture with no separate encode pass.
 	// Falls back to x264 if no hardware encoder is available.

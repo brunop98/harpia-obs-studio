@@ -21,6 +21,50 @@ const char *CaptureManager::platformCaptureId()
 #endif
 }
 
+// Candidate settings keys used by the various platform capture sources to pick
+// a display. We probe these in order and use whichever the source exposes.
+static const char *findMonitorKey(obs_properties_t *props)
+{
+	for (const char *k : {"monitor_id", "monitor", "screen", "display"}) {
+		if (obs_properties_get(props, k))
+			return k;
+	}
+	return nullptr;
+}
+
+std::vector<MonitorOption> CaptureManager::enumerateMonitors()
+{
+	std::vector<MonitorOption> out;
+
+	obs_properties_t *props = obs_get_source_properties(platformCaptureId());
+	if (!props)
+		return out;
+
+	const char *key = findMonitorKey(props);
+	if (key) {
+		obs_property_t *p = obs_properties_get(props, key);
+		const enum obs_combo_format fmt = obs_property_list_format(p);
+		const size_t count = obs_property_list_item_count(p);
+		for (size_t i = 0; i < count; i++) {
+			MonitorOption m;
+			const char *name = obs_property_list_item_name(p, i);
+			m.name = name ? name : "";
+			m.key = key;
+			m.isString = (fmt == OBS_COMBO_FORMAT_STRING);
+			if (m.isString) {
+				const char *v = obs_property_list_item_string(p, i);
+				m.strValue = v ? v : "";
+			} else {
+				m.intValue = obs_property_list_item_int(p, i);
+			}
+			out.push_back(std::move(m));
+		}
+	}
+
+	obs_properties_destroy(props);
+	return out;
+}
+
 CaptureManager::~CaptureManager()
 {
 	stopCapture();
@@ -32,14 +76,18 @@ bool CaptureManager::startCapture(int monitorIndex)
 
 	const char *id = platformCaptureId();
 
-	// Default settings capture the primary display. Selecting a specific
-	// monitor by index is a follow-up: enumerate the source's "monitor_id"
-	// property list and set the chosen entry. `monitorIndex` is accepted now
-	// so callers don't change when that lands.
-	(void)monitorIndex;
-
 	obs_data_t *settings = obs_data_create();
 	obs_data_set_bool(settings, "capture_cursor", true);
+
+	// Apply the chosen display if the source supports selection.
+	const std::vector<MonitorOption> monitors = enumerateMonitors();
+	if (monitorIndex >= 0 && (size_t)monitorIndex < monitors.size()) {
+		const MonitorOption &m = monitors[monitorIndex];
+		if (m.isString)
+			obs_data_set_string(settings, m.key.c_str(), m.strValue.c_str());
+		else
+			obs_data_set_int(settings, m.key.c_str(), m.intValue);
+	}
 
 	source_ = obs_source_create(id, "harpia_display_capture", settings, nullptr);
 	obs_data_release(settings);

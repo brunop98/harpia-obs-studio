@@ -1,5 +1,7 @@
 #include "PresetEditorDialog.hpp"
 
+#include "core/CaptureManager.hpp"
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -61,6 +63,22 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	sizeRow->addWidget(new QLabel(QStringLiteral("×"), this));
 	sizeRow->addWidget(heightSpin_);
 	form->addRow(QStringLiteral("Width × Height"), sizeRow);
+
+	// Display selection. Enumerate what the platform capture source offers;
+	// always provide at least a "Primary display" fallback so the field works
+	// even before modules report a monitor list.
+	monitorCombo_ = new QComboBox(this);
+	const std::vector<MonitorOption> monitors = CaptureManager::enumerateMonitors();
+	if (monitors.empty()) {
+		monitorCombo_->addItem(QStringLiteral("Primary display"), 0);
+	} else {
+		int idx = 0;
+		for (const MonitorOption &m : monitors)
+			monitorCombo_->addItem(QString::fromStdString(m.name), idx++);
+	}
+	if (preset.monitorIndex >= 0 && preset.monitorIndex < monitorCombo_->count())
+		monitorCombo_->setCurrentIndex(preset.monitorIndex);
+	form->addRow(QStringLiteral("Display"), monitorCombo_);
 
 	folderEdit_ = new QLineEdit(QString::fromStdString(preset.outputFolder), this);
 	auto *browse = new QPushButton(QStringLiteral("Browse…"), this);
@@ -137,6 +155,7 @@ void PresetEditorDialog::accept()
 	result_.width = widthSpin_->value();
 	result_.height = heightSpin_->value();
 	result_.outputFolder = folderEdit_->text().trimmed().toStdString();
+	result_.monitorIndex = monitorCombo_->currentData().toInt();
 	result_.gpuCompression = gpuCheck_->isChecked();
 	result_.idleTimeoutSeconds = idleSpin_->value();
 	result_.filenameTemplate = templateEdit_->text().trimmed().toStdString();

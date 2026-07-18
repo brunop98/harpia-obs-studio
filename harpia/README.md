@@ -109,11 +109,16 @@ harpia/
   **Delete** key removes selected clips
 - **Region selection**: drag-to-select a screen region (applied via `crop_filter`)
   with an always-on-top overlay outlining the captured area
-- **Idle auto-pause** driven by the toolbar toggle + the active preset's timeout
-  (Windows via `GetLastInputInfo`)
+- **Multi-monitor**: each preset picks which display to capture (enumerated from
+  the platform capture source)
+- **GIF** output: recorded via `ffmpeg_output`, auto-downscaled (≤640px long edge)
+  and fps-capped (≤15) with no audio track for reasonable file sizes
+- **Idle auto-pause** driven by the toolbar toggle + the active preset's timeout,
+  on **all three platforms** — Windows (`GetLastInputInfo`), Linux (X11
+  XScreenSaver via dlopen), macOS (CoreGraphics)
 
 ## Planned follow-ups (interfaces already defined)
 
-- **GIF** output path polish and full resolution-scaling matrix
-- Multi-monitor selection in capture and region picker
-- macOS / Linux idle-detection backends
+- Full palette-based (2-pass) GIF quality and a broader resolution-scaling matrix
+- Multi-monitor selection inside the region picker (currently primary screen)
+- Wayland idle detection (Linux idle currently uses X11 XScreenSaver)

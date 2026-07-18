@@ -13,3 +13,16 @@ set_target_properties(
     VS_DEBUGGER_COMMAND "${CMAKE_BINARY_DIR}/rundir/$<CONFIG>/bin/64bit/$<TARGET_FILE_NAME:harpia-recorder>"
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/rundir/$<CONFIG>/bin/64bit"
 )
+
+set(_harpia_runtime_dir "${CMAKE_BINARY_DIR}/rundir/$<CONFIG>/bin/64bit")
+
+add_custom_command(
+  TARGET harpia-recorder
+  POST_BUILD
+  COMMAND "${CMAKE_COMMAND}" -E copy_directory "$<TARGET_FILE_DIR:Qt6::Core>" "${_harpia_runtime_dir}"
+  COMMAND "${CMAKE_COMMAND}" -E copy_directory "$<TARGET_FILE_DIR:FFmpeg::avcodec>" "${_harpia_runtime_dir}"
+  COMMAND
+    "${CMAKE_COMMAND}" -E copy_directory "$<TARGET_FILE_DIR:Qt6::Core>/../plugins/platforms"
+    "${_harpia_runtime_dir}/platforms"
+  VERBATIM
+)

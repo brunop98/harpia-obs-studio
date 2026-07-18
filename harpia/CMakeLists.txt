@@ -84,6 +84,10 @@ target_sources(
     ui/RecentListWidget.hpp
     ui/PresetEditorDialog.cpp
     ui/PresetEditorDialog.hpp
+    ui/MousePreview.cpp
+    ui/MousePreview.hpp
+    ui/MouseFxOverlay.cpp
+    ui/MouseFxOverlay.hpp
     ui/ClipLibraryWindow.cpp
     ui/ClipLibraryWindow.hpp
     ui/RegionTool.cpp

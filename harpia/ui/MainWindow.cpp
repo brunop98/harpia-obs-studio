@@ -2,6 +2,7 @@
 
 #include "AudioPanel.hpp"
 #include "ClipLibraryWindow.hpp"
+#include "MouseFxOverlay.hpp"
 #include "PresetEditorDialog.hpp"
 #include "RecentListWidget.hpp"
 #include "RegionTool.hpp"
@@ -201,6 +202,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		QMetaObject::invokeMethod(this, "refreshRecentList", Qt::QueuedConnection);
 	};
 
+	mouseFx_ = std::make_unique<MouseFxOverlay>();
+
 	regionTool_ = std::make_unique<RegionTool>();
 	connect(regionTool_.get(), &RegionTool::regionChanged, this, &MainWindow::onRegionChanged);
 	connect(regionTool_.get(), &RegionTool::cancelled, this, [this]() {
@@ -212,7 +215,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	// Bring up the capture source now so the first record is instant.
 	obs_.resetVideo(canvasSize_.width(), canvasSize_.height(), activePreset().fps);
-	capture_.startCapture(activePreset().monitorIndex);
+	capture_.startCapture(activePreset().monitorIndex, activePreset().showMouseCursor);
 
 	stateTimer_ = new QTimer(this);
 	stateTimer_->setInterval(250);
@@ -342,7 +345,7 @@ void MainWindow::startRecording()
 	obs_.resetVideo(baseW, baseH, fps, outW, outH);
 
 	// Ensure we're capturing this preset's display, then re-apply any region.
-	capture_.startCapture(preset.monitorIndex);
+	capture_.startCapture(preset.monitorIndex, preset.showMouseCursor);
 	capture_.setRegion(currentRegion_);
 
 	const QString path = buildOutputPath(preset);
@@ -358,6 +361,20 @@ void MainWindow::startRecording()
 	autoPaused_ = false;
 	updateButtons();
 	updateRegionToolVisibility(); // dim the region tool into recording mode
+
+	// Mouse effects overlay (highlight + click ripples) — captured by the screen.
+	if (preset.showMouseArea || preset.recordMouseClicks) {
+		MouseFxOverlay::Config cfg;
+		cfg.showArea = preset.showMouseArea;
+		cfg.areaColor = QColor(QString::fromStdString(preset.mouseHighlightColor));
+		cfg.areaSize = preset.mouseHighlightSize;
+		cfg.showClicks = preset.recordMouseClicks;
+		cfg.leftColor = QColor(QString::fromStdString(preset.leftClickColor));
+		cfg.rightColor = QColor(QString::fromStdString(preset.rightClickColor));
+		mouseFx_->configure(cfg);
+		mouseFx_->setScreen(screenForActivePreset());
+		mouseFx_->start();
+	}
 }
 
 void MainWindow::onPrimaryButton()
@@ -565,7 +582,7 @@ void MainWindow::onPresetChanged()
 		canvasSize_ = canvasForActivePreset();
 		currentRegion_ = CaptureRegion{};
 		captureModeCombo_->setCurrentIndex(int(CaptureMode::Monitor));
-		capture_.startCapture(activePreset().monitorIndex);
+		capture_.startCapture(activePreset().monitorIndex, activePreset().showMouseCursor);
 		capture_.setRegion(currentRegion_);
 		updateRegionToolVisibility();
 	}
@@ -712,6 +729,8 @@ void MainWindow::tickState()
 			pauseStartMs_ = 0;
 			wasPaused_ = false;
 			updateRegionToolVisibility(); // leave recording mode
+			if (mouseFx_)
+				mouseFx_->stop();
 		}
 		timerLabel_->setText(QStringLiteral("00:00:00"));
 		updateButtons();

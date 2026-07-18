@@ -73,6 +73,15 @@ struct Preset {
 	bool recordDesktopAudio = false;
 	std::vector<std::string> micDeviceIds;
 
+	// Mouse recording (drawn onto the desktop so the screen capture records it).
+	bool showMouseCursor = true;                    // record the OS cursor
+	bool showMouseArea = false;                      // highlight around the cursor
+	std::string mouseHighlightColor = "#ffd54a";    // highlight color (hex)
+	int mouseHighlightSize = 60;                     // highlight diameter (px)
+	bool recordMouseClicks = false;                  // click ripple animations
+	std::string leftClickColor = "#4a90e2";
+	std::string rightClickColor = "#e2534a";
+
 	// Token-based filename template, e.g.
 	// "Tutorial_{Year}-{Month}-{Day}_{Hour}-{Minute}-{Second}".
 	// Expanded by FileNameTemplate at record time.

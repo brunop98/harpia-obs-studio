@@ -31,6 +31,7 @@ class PresetStore;
 class ClipLibraryWindow;
 class RegionTool;
 class AudioPanel;
+class MouseFxOverlay;
 
 // The PowerRec-inspired main window: a wide, compact, dark surface optimized for
 // starting/stopping recordings in one or two clicks.
@@ -124,6 +125,7 @@ private:
 
 	std::unique_ptr<ClipLibraryWindow> clipWindow_;
 	std::unique_ptr<RegionTool> regionTool_;
+	std::unique_ptr<MouseFxOverlay> mouseFx_;
 
 	std::string activePresetId_;
 	CaptureRegion currentRegion_;

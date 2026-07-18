@@ -51,6 +51,13 @@ obs_data_t *presetToData(const Preset &p)
 	}
 	obs_data_set_array(d, "mic_device_ids", mics);
 	obs_data_array_release(mics);
+	obs_data_set_bool(d, "show_mouse_cursor", p.showMouseCursor);
+	obs_data_set_bool(d, "show_mouse_area", p.showMouseArea);
+	obs_data_set_string(d, "mouse_highlight_color", p.mouseHighlightColor.c_str());
+	obs_data_set_int(d, "mouse_highlight_size", p.mouseHighlightSize);
+	obs_data_set_bool(d, "record_mouse_clicks", p.recordMouseClicks);
+	obs_data_set_string(d, "left_click_color", p.leftClickColor.c_str());
+	obs_data_set_string(d, "right_click_color", p.rightClickColor.c_str());
 	return d;
 }
 
@@ -83,6 +90,20 @@ Preset presetFromData(obs_data_t *d)
 		obs_data_release(item);
 	}
 	obs_data_array_release(mics);
+
+	// Defaults so presets saved before these fields keep sensible values.
+	obs_data_set_default_bool(d, "show_mouse_cursor", true);
+	obs_data_set_default_int(d, "mouse_highlight_size", 60);
+	obs_data_set_default_string(d, "mouse_highlight_color", "#ffd54a");
+	obs_data_set_default_string(d, "left_click_color", "#4a90e2");
+	obs_data_set_default_string(d, "right_click_color", "#e2534a");
+	p.showMouseCursor = obs_data_get_bool(d, "show_mouse_cursor");
+	p.showMouseArea = obs_data_get_bool(d, "show_mouse_area");
+	p.mouseHighlightColor = obs_data_get_string(d, "mouse_highlight_color");
+	p.mouseHighlightSize = (int)obs_data_get_int(d, "mouse_highlight_size");
+	p.recordMouseClicks = obs_data_get_bool(d, "record_mouse_clicks");
+	p.leftClickColor = obs_data_get_string(d, "left_click_color");
+	p.rightClickColor = obs_data_get_string(d, "right_click_color");
 	return p;
 }
 

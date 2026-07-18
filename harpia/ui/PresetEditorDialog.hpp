@@ -2,6 +2,7 @@
 
 #include "model/Preset.hpp"
 
+#include <QColor>
 #include <QDialog>
 
 class QLineEdit;
@@ -9,8 +10,12 @@ class QComboBox;
 class QCheckBox;
 class QSpinBox;
 class QLabel;
+class QSlider;
+class QPushButton;
 
 namespace harpia {
+
+class MousePreview;
 
 // Modal editor for a single recording Preset. Construct with the preset to edit
 // (or a fresh default for "new"), exec(), and on Accepted read back result().
@@ -26,7 +31,11 @@ private slots:
 	void browseFolder();
 	void onResolutionChanged();
 	void updateValidation();
+	void updateMousePreview();
 	void accept() override;
+
+private:
+	void pickColor(QColor &target, QPushButton *button);
 
 private:
 	Preset result_; // seeded from the input; updated on accept
@@ -46,6 +55,19 @@ private:
 	QSpinBox *idleSpin_ = nullptr;
 	QLineEdit *templateEdit_ = nullptr;
 	QLabel *validationLabel_ = nullptr;
+
+	// Mouse section
+	QCheckBox *mouseCursorCheck_ = nullptr;
+	QCheckBox *mouseAreaCheck_ = nullptr;
+	QPushButton *highlightColorBtn_ = nullptr;
+	QSlider *highlightSizeSlider_ = nullptr;
+	QCheckBox *mouseClicksCheck_ = nullptr;
+	QPushButton *leftColorBtn_ = nullptr;
+	QPushButton *rightColorBtn_ = nullptr;
+	MousePreview *mousePreview_ = nullptr;
+	QColor highlightColor_;
+	QColor leftColor_;
+	QColor rightColor_;
 };
 
 } // namespace harpia

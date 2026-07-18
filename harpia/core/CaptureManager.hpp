@@ -47,9 +47,10 @@ public:
 	CaptureManager &operator=(const CaptureManager &) = delete;
 
 	// Create the display capture source and bind it to output channel 0.
-	// `monitorIndex` selects which display (0 = primary). Returns false if the
-	// capture plugin for this platform is unavailable.
-	bool startCapture(int monitorIndex = 0);
+	// `monitorIndex` selects which display (0 = primary); `captureCursor`
+	// controls whether the OS cursor is drawn into the capture. Returns false if
+	// the capture plugin for this platform is unavailable.
+	bool startCapture(int monitorIndex = 0, bool captureCursor = true);
 
 	// Apply (or clear) a recording region via crop_filter. Safe to call while
 	// capturing; pass an empty/disabled region to record the full display.

@@ -70,14 +70,14 @@ CaptureManager::~CaptureManager()
 	stopCapture();
 }
 
-bool CaptureManager::startCapture(int monitorIndex)
+bool CaptureManager::startCapture(int monitorIndex, bool captureCursor)
 {
 	stopCapture();
 
 	const char *id = platformCaptureId();
 
 	obs_data_t *settings = obs_data_create();
-	obs_data_set_bool(settings, "capture_cursor", true);
+	obs_data_set_bool(settings, "capture_cursor", captureCursor);
 
 	// Apply the chosen display if the source supports selection.
 	const std::vector<MonitorOption> monitors = enumerateMonitors();

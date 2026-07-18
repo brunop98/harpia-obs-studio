@@ -1,9 +1,11 @@
 #include "PresetEditorDialog.hpp"
 
+#include "MousePreview.hpp"
 #include "core/CaptureManager.hpp"
 #include "core/EncoderFactory.hpp"
 
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFileDialog>
@@ -14,6 +16,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSlider>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
@@ -46,6 +49,14 @@ const ResOption kResOptions[] = {
 	{"720p (1280×720)", "1280x720"},          {"480p (854×480)", "854x480"},
 	{"Custom", "custom"},
 };
+
+// Paint a color-swatch button with the given color.
+void setButtonColor(QPushButton *b, const QColor &c)
+{
+	b->setStyleSheet(QStringLiteral("background:%1; border:1px solid #555; border-radius:4px;")
+				 .arg(c.name()));
+	b->setText(c.name());
+}
 
 } // namespace
 
@@ -166,6 +177,58 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	tokenHelp->setStyleSheet(QStringLiteral("color: gray;"));
 	form->addRow(QString(), tokenHelp);
 
+	// ---- Mouse section --------------------------------------------------
+	form->addRow(new QLabel(QStringLiteral("<b>Mouse</b>"), this));
+
+	mouseCursorCheck_ = new QCheckBox(QStringLiteral("Show mouse cursor"), this);
+	mouseCursorCheck_->setChecked(preset.showMouseCursor);
+	form->addRow(QString(), mouseCursorCheck_);
+
+	mouseAreaCheck_ = new QCheckBox(QStringLiteral("Show mouse area (highlight around cursor)"), this);
+	mouseAreaCheck_->setChecked(preset.showMouseArea);
+	form->addRow(QString(), mouseAreaCheck_);
+
+	highlightColor_ = QColor(QString::fromStdString(preset.mouseHighlightColor));
+	if (!highlightColor_.isValid())
+		highlightColor_ = QColor(0xff, 0xd5, 0x4a);
+	highlightColorBtn_ = new QPushButton(this);
+	setButtonColor(highlightColorBtn_, highlightColor_);
+	connect(highlightColorBtn_, &QPushButton::clicked, this,
+		[this]() { pickColor(highlightColor_, highlightColorBtn_); });
+	form->addRow(QStringLiteral("Highlight color"), highlightColorBtn_);
+
+	highlightSizeSlider_ = new QSlider(Qt::Horizontal, this);
+	highlightSizeSlider_->setRange(10, 200);
+	highlightSizeSlider_->setValue(preset.mouseHighlightSize > 0 ? preset.mouseHighlightSize : 60);
+	form->addRow(QStringLiteral("Highlight size"), highlightSizeSlider_);
+
+	mouseClicksCheck_ = new QCheckBox(QStringLiteral("Record mouse clicks (click animations)"), this);
+	mouseClicksCheck_->setChecked(preset.recordMouseClicks);
+	form->addRow(QString(), mouseClicksCheck_);
+
+	leftColor_ = QColor(QString::fromStdString(preset.leftClickColor));
+	if (!leftColor_.isValid())
+		leftColor_ = QColor(0x4a, 0x90, 0xe2);
+	leftColorBtn_ = new QPushButton(this);
+	setButtonColor(leftColorBtn_, leftColor_);
+	connect(leftColorBtn_, &QPushButton::clicked, this, [this]() { pickColor(leftColor_, leftColorBtn_); });
+	form->addRow(QStringLiteral("Left click color"), leftColorBtn_);
+
+	rightColor_ = QColor(QString::fromStdString(preset.rightClickColor));
+	if (!rightColor_.isValid())
+		rightColor_ = QColor(0xe2, 0x53, 0x4a);
+	rightColorBtn_ = new QPushButton(this);
+	setButtonColor(rightColorBtn_, rightColor_);
+	connect(rightColorBtn_, &QPushButton::clicked, this, [this]() { pickColor(rightColor_, rightColorBtn_); });
+	form->addRow(QStringLiteral("Right click color"), rightColorBtn_);
+
+	mousePreview_ = new MousePreview(this);
+	form->addRow(QStringLiteral("Preview"), mousePreview_);
+
+	connect(mouseAreaCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::updateMousePreview);
+	connect(mouseClicksCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::updateMousePreview);
+	connect(highlightSizeSlider_, &QSlider::valueChanged, this, &PresetEditorDialog::updateMousePreview);
+
 	auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
 	connect(buttons, &QDialogButtonBox::accepted, this, &PresetEditorDialog::accept);
 	connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -191,7 +254,26 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	connect(codecCombo_, &QComboBox::currentIndexChanged, this, &PresetEditorDialog::updateValidation);
 	onResolutionChanged();
 	updateValidation();
+	updateMousePreview();
 	resize(480, sizeHint().height());
+}
+
+void PresetEditorDialog::pickColor(QColor &target, QPushButton *button)
+{
+	const QColor c = QColorDialog::getColor(target, this, QStringLiteral("Choose color"));
+	if (c.isValid()) {
+		target = c;
+		setButtonColor(button, c);
+		updateMousePreview();
+	}
+}
+
+void PresetEditorDialog::updateMousePreview()
+{
+	if (!mousePreview_)
+		return;
+	mousePreview_->configure(mouseAreaCheck_->isChecked(), highlightColor_, highlightSizeSlider_->value(),
+				 mouseClicksCheck_->isChecked(), leftColor_);
 }
 
 void PresetEditorDialog::browseFolder()
@@ -271,6 +353,14 @@ void PresetEditorDialog::accept()
 	result_.gpuCompression = gpuCheck_->isChecked();
 	result_.idleTimeoutSeconds = idleSpin_->value();
 	result_.filenameTemplate = templateEdit_->text().trimmed().toStdString();
+
+	result_.showMouseCursor = mouseCursorCheck_->isChecked();
+	result_.showMouseArea = mouseAreaCheck_->isChecked();
+	result_.mouseHighlightColor = highlightColor_.name().toStdString();
+	result_.mouseHighlightSize = highlightSizeSlider_->value();
+	result_.recordMouseClicks = mouseClicksCheck_->isChecked();
+	result_.leftClickColor = leftColor_.name().toStdString();
+	result_.rightClickColor = rightColor_.name().toStdString();
 
 	QDialog::accept();
 }

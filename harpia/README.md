@@ -49,9 +49,19 @@ then prints the path to `harpia.exe`. Options: `-Configuration Release`,
 
 ### Manual build
 
+The repo's `windows-x64` **preset pins a specific Visual Studio generator and
+Windows SDK** that may not match your install, so configure `build_x64` directly
+and let CMake pick your VS (this is what `Build-Harpia.ps1` does):
+
 ```powershell
-cmake --preset windows-x64                 # configure + auto-download deps
-cmake --build --preset windows-x64 --config RelWithDebInfo --target harpia-recorder
+# Fresh configure (auto-download deps). -A x64; add -G "Visual Studio 17 2022" if
+# CMake picks the wrong VS.
+cmake -S . -B build_x64 -A x64 -DENABLE_NEW_MPEGTS_OUTPUT=OFF -DENABLE_BROWSER=OFF
+
+# Reconfigure an existing tree (reuses the cache's generator — omit -G/-A):
+cmake -S . -B build_x64
+
+cmake --build build_x64 --config RelWithDebInfo --target harpia-recorder
 ```
 
 The binary lands at

@@ -36,6 +36,10 @@ param(
     [string] $Configuration = 'RelWithDebInfo',
     [string] $Target = 'harpia-recorder',
     [switch] $Reconfigure,
+    # CMake generator for a FRESH configure (e.g. "Visual Studio 17 2022").
+    # Empty = let CMake auto-detect the installed Visual Studio. Ignored on
+    # reconfigure (the existing cache's generator is reused).
+    [string] $Generator = '',
     # After building, assemble a self-contained distributable folder
     # (build_x64/dist/Harpia) with the exe, all runtime DLLs, the OBS plugins +
     # data, and the Microsoft Visual C++ runtime, so it runs on a clean machine.
@@ -71,10 +75,23 @@ try {
 
     if ($Reconfigure -or -not $cacheExists) {
         Write-Host '==> Configuring (downloads Qt6/obs-deps on first run)...' -ForegroundColor Cyan
-        # The tree is slimmed to the recorder: no OBS UI/scripting/HEVC, and the
-        # kept obs-ffmpeg drops its SRT/RIST (mpegts) streaming path.
-        # ENABLE_BROWSER=OFF stops the preset from downloading CEF (no browser plugin).
-        & cmake --preset windows-x64 -DENABLE_NEW_MPEGTS_OUTPUT=OFF -DENABLE_BROWSER=OFF
+        # NOTE: we deliberately do NOT use `--preset windows-x64` for configure —
+        # that preset pins a specific Visual Studio generator + Windows SDK version
+        # that may not be installed. Instead we configure build_x64 directly so the
+        # generator matches whatever VS you have.
+        #   - The tree is slimmed (no OBS UI/scripting), and obs-ffmpeg drops its
+        #     SRT/RIST (mpegts) path; ENABLE_BROWSER=OFF skips the CEF download.
+        $cfgArgs = @('-S', '.', '-B', $BuildDir,
+                     '-DENABLE_NEW_MPEGTS_OUTPUT=OFF', '-DENABLE_BROWSER=OFF')
+        if (-not $cacheExists) {
+            # Fresh tree: target x64 and let CMake auto-detect the installed Visual
+            # Studio (override with -Generator "Visual Studio 17 2022" if needed).
+            $cfgArgs += @('-A', 'x64')
+            if ($Generator) { $cfgArgs += @('-G', $Generator) }
+        }
+        # else (reconfigure): omit -G/-A so CMake reuses the existing cache's
+        # generator — this is what makes -Reconfigure work regardless of the preset.
+        & cmake @cfgArgs
         if ($LASTEXITCODE -ne 0) { throw "CMake configure failed ($LASTEXITCODE)" }
     }
     else {
@@ -82,7 +99,9 @@ try {
     }
 
     Write-Host "==> Building target '$Target' ($Configuration)..." -ForegroundColor Cyan
-    $buildArgs = @('--build', '--preset', 'windows-x64', '--config', $Configuration, '--parallel')
+    # Build the tree directly (not via the build preset) so we don't depend on the
+    # pinned-generator configure preset.
+    $buildArgs = @('--build', $BuildDir, '--config', $Configuration, '--parallel')
     if ($Target -and $Target -ne 'all') {
         $buildArgs += @('--target', $Target)
     }

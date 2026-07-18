@@ -81,7 +81,7 @@ harpia/
     PresetEditorDialog      edit one preset (format, fps, resolution, folder, …)
     ClipLibraryWindow       full grid of all clips with context actions
     RecentListWidget        list items draggable into other apps as files
-    RegionOverlay           region drag-select + on-screen overlay
+    RegionTool              interactive resizable region overlay (handles/snap)
 ```
 
 ### Reused OBS backend APIs

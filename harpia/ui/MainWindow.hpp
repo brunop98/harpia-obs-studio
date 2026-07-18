@@ -29,7 +29,7 @@ namespace harpia {
 class ObsContext;
 class PresetStore;
 class ClipLibraryWindow;
-class RegionOverlay;
+class RegionTool;
 class AudioPanel;
 
 // The PowerRec-inspired main window: a wide, compact, dark surface optimized for
@@ -55,8 +55,8 @@ private slots:
 	void showPresetMenu(const QPoint &pos); // right-click combo: edit/delete
 	void onOpenPresetFolder();
 	void onOpenClipLibrary();
-	void onSelectRegion();
-	void onClearRegion();
+	void onCaptureModeChanged();
+	void onRegionChanged(const CaptureRegion &region);
 	void onIdleSettingChanged();
 	void onAudioChanged();
 	void onPresetChanged();
@@ -79,6 +79,15 @@ private:
 	void syncIdleControls();     // load idle toggle/spin from the active preset
 	void applyDarkTheme();
 	QString elapsedString() const;
+	void updateRegionToolVisibility(); // focus/record-driven overlay visibility
+
+protected:
+	void changeEvent(QEvent *event) override; // track window activation
+
+private:
+	// How the screen is captured (a global tool, not part of a preset).
+	enum class CaptureMode { Monitor, Region };
+	CaptureMode captureMode_ = CaptureMode::Monitor;
 
 	ObsContext &obs_;
 	PresetStore &presets_;
@@ -91,8 +100,7 @@ private:
 	// Toolbar
 	QComboBox *presetCombo_ = nullptr;
 	QPushButton *newPresetButton_ = nullptr;
-	QPushButton *regionButton_ = nullptr;
-	QPushButton *fullScreenButton_ = nullptr;
+	QComboBox *captureModeCombo_ = nullptr;
 	QCheckBox *idleToggle_ = nullptr;
 	QSpinBox *idleSpin_ = nullptr;
 	QPushButton *openFolderButton_ = nullptr;
@@ -115,7 +123,7 @@ private:
 	QTimer *meterTimer_ = nullptr;
 
 	std::unique_ptr<ClipLibraryWindow> clipWindow_;
-	std::unique_ptr<RegionOverlay> regionOverlay_;
+	std::unique_ptr<RegionTool> regionTool_;
 
 	std::string activePresetId_;
 	CaptureRegion currentRegion_;

@@ -4,7 +4,7 @@
 #include "ClipLibraryWindow.hpp"
 #include "PresetEditorDialog.hpp"
 #include "RecentListWidget.hpp"
-#include "RegionOverlay.hpp"
+#include "RegionTool.hpp"
 #include "core/ObsContext.hpp"
 #include "library/ClipLibrary.hpp"
 #include "model/PresetStore.hpp"
@@ -18,6 +18,7 @@
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
+#include <QEvent>
 #include <QFileInfo>
 #include <QFont>
 #include <QGroupBox>
@@ -83,10 +84,11 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	toolbar->addStretch(1);
 
-	regionButton_ = new QPushButton(QStringLiteral("Region…"), central);
-	fullScreenButton_ = new QPushButton(QStringLiteral("Full screen"), central);
-	toolbar->addWidget(regionButton_);
-	toolbar->addWidget(fullScreenButton_);
+	toolbar->addWidget(new QLabel(QStringLiteral("Capture"), central));
+	captureModeCombo_ = new QComboBox(central);
+	captureModeCombo_->addItem(QStringLiteral("Entire Monitor"), int(CaptureMode::Monitor));
+	captureModeCombo_->addItem(QStringLiteral("Custom Region"), int(CaptureMode::Region));
+	toolbar->addWidget(captureModeCombo_);
 
 	idleToggle_ = new QCheckBox(QStringLiteral("Only record while using the computer"), central);
 	toolbar->addWidget(idleToggle_);
@@ -180,8 +182,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
 	connect(openFolderButton_, &QPushButton::clicked, this, &MainWindow::onOpenPresetFolder);
 	connect(libraryButton_, &QPushButton::clicked, this, &MainWindow::onOpenClipLibrary);
-	connect(regionButton_, &QPushButton::clicked, this, &MainWindow::onSelectRegion);
-	connect(fullScreenButton_, &QPushButton::clicked, this, &MainWindow::onClearRegion);
+	connect(captureModeCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onCaptureModeChanged);
 	connect(idleToggle_, &QCheckBox::toggled, this, &MainWindow::onIdleSettingChanged);
 	connect(idleSpin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::onIdleSettingChanged);
 	connect(presetCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onPresetChanged);
@@ -200,7 +201,12 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		QMetaObject::invokeMethod(this, "refreshRecentList", Qt::QueuedConnection);
 	};
 
-	regionOverlay_ = std::make_unique<RegionOverlay>();
+	regionTool_ = std::make_unique<RegionTool>();
+	connect(regionTool_.get(), &RegionTool::regionChanged, this, &MainWindow::onRegionChanged);
+	connect(regionTool_.get(), &RegionTool::cancelled, this, [this]() {
+		// Esc: revert to full-monitor capture.
+		captureModeCombo_->setCurrentIndex(int(CaptureMode::Monitor));
+	});
 
 	applyDarkTheme();
 
@@ -351,6 +357,7 @@ void MainWindow::startRecording()
 	wasPaused_ = false;
 	autoPaused_ = false;
 	updateButtons();
+	updateRegionToolVisibility(); // dim the region tool into recording mode
 }
 
 void MainWindow::onPrimaryButton()
@@ -455,24 +462,66 @@ void MainWindow::onOpenClipLibrary()
 	clipWindow_->refresh();
 }
 
-void MainWindow::onSelectRegion()
+void MainWindow::onCaptureModeChanged()
 {
+	captureMode_ = CaptureMode(captureModeCombo_->currentData().toInt());
 	QScreen *screen = screenForActivePreset();
-	RegionSelectDialog dlg(screen, this);
-	if (dlg.exec() == QDialog::Accepted) {
-		currentRegion_ = dlg.region();
+
+	if (captureMode_ == CaptureMode::Region) {
+		// Seed a default region (centered, ~2/3 of the screen) the first time.
+		if (!currentRegion_.enabled || currentRegion_.width <= 0) {
+			const QSize canvas = canvasForActivePreset();
+			CaptureRegion r;
+			r.enabled = true;
+			r.width = canvas.width() * 2 / 3;
+			r.height = canvas.height() * 2 / 3;
+			r.x = (canvas.width() - r.width) / 2;
+			r.y = (canvas.height() - r.height) / 2;
+			currentRegion_ = r;
+		}
+		regionTool_->setScreen(screen);
+		regionTool_->setRegionDevicePx(
+			QRect(currentRegion_.x, currentRegion_.y, currentRegion_.width, currentRegion_.height));
 		capture_.setRegion(currentRegion_);
-		regionOverlay_->setRegion(currentRegion_, screen);
-		updateButtons();
+	} else {
+		currentRegion_ = CaptureRegion{};
+		capture_.setRegion(currentRegion_);
 	}
+	updateRegionToolVisibility();
+	updateButtons();
 }
 
-void MainWindow::onClearRegion()
+void MainWindow::onRegionChanged(const CaptureRegion &region)
 {
-	currentRegion_ = CaptureRegion{};
-	capture_.setRegion(currentRegion_);
-	regionOverlay_->setRegion(currentRegion_, screenForActivePreset());
-	updateButtons();
+	currentRegion_ = region;
+	// Live update — crop_filter applies immediately, even while recording.
+	capture_.setRegion(region);
+}
+
+void MainWindow::updateRegionToolVisibility()
+{
+	if (!regionTool_)
+		return;
+	if (captureMode_ != CaptureMode::Region) {
+		regionTool_->hide();
+		return;
+	}
+	const bool recording = recorder_.isRecording();
+	regionTool_->setRecordingMode(recording);
+	// Visible while recording (subtle indicator) or while the app (main window or
+	// the tool itself) is focused; hidden when unfocused and not recording.
+	const bool focused = isActiveWindow() || regionTool_->isActiveWindow();
+	if (recording || focused)
+		regionTool_->show();
+	else
+		regionTool_->hide();
+}
+
+void MainWindow::changeEvent(QEvent *event)
+{
+	QMainWindow::changeEvent(event);
+	if (event->type() == QEvent::ActivationChange)
+		updateRegionToolVisibility();
 }
 
 void MainWindow::onIdleSettingChanged()
@@ -511,13 +560,14 @@ void MainWindow::onPresetChanged()
 
 	// Switch the live capture to the new preset's display (unless recording).
 	// The previous region was chosen on a possibly-different monitor, so reset
-	// to full-screen to avoid an out-of-bounds crop.
+	// to full-monitor capture to avoid an out-of-bounds crop.
 	if (!recorder_.isRecording()) {
 		canvasSize_ = canvasForActivePreset();
 		currentRegion_ = CaptureRegion{};
-		regionOverlay_->setRegion(currentRegion_, screenForActivePreset());
+		captureModeCombo_->setCurrentIndex(int(CaptureMode::Monitor));
 		capture_.startCapture(activePreset().monitorIndex);
 		capture_.setRegion(currentRegion_);
+		updateRegionToolVisibility();
 	}
 }
 
@@ -649,8 +699,7 @@ void MainWindow::updateButtons()
 	stopButton_->setEnabled(recording);
 	presetCombo_->setEnabled(!recording);
 	newPresetButton_->setEnabled(!recording);
-	regionButton_->setEnabled(!recording);
-	fullScreenButton_->setEnabled(!recording);
+	captureModeCombo_->setEnabled(!recording);
 }
 
 void MainWindow::tickState()
@@ -662,6 +711,7 @@ void MainWindow::tickState()
 			pausedAccumMs_ = 0;
 			pauseStartMs_ = 0;
 			wasPaused_ = false;
+			updateRegionToolVisibility(); // leave recording mode
 		}
 		timerLabel_->setText(QStringLiteral("00:00:00"));
 		updateButtons();

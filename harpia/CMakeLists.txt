@@ -86,8 +86,8 @@ target_sources(
     ui/PresetEditorDialog.hpp
     ui/ClipLibraryWindow.cpp
     ui/ClipLibraryWindow.hpp
-    ui/RegionOverlay.cpp
-    ui/RegionOverlay.hpp
+    ui/RegionTool.cpp
+    ui/RegionTool.hpp
 )
 
 # Platform-specific idle detection backend.

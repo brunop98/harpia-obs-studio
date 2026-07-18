@@ -8,6 +8,7 @@
 #include "PresetEditorDialog.hpp"
 #include "RecentListWidget.hpp"
 #include "RegionTool.hpp"
+#include "core/EncoderFactory.hpp"
 #include "core/ObsContext.hpp"
 #include "library/ClipLibrary.hpp"
 #include "model/PresetStore.hpp"

@@ -4,6 +4,7 @@
 #include "model/PresetStore.hpp"
 #include "ui/MainWindow.hpp"
 
+#include <util/bmem.h>
 #include <util/platform.h>
 
 #include <QApplication>

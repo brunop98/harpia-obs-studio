@@ -6,16 +6,20 @@
 #include <QRect>
 #include <QWidget>
 
+class QScreen;
+
 namespace harpia {
 
-// Fullscreen drag-to-select picker. Exec it; on Accepted, region() holds the
-// chosen rectangle in device pixels (matching the capture canvas). The drag/
-// rubber-band interaction is the desktop-region analogue of the crop handles in
-// frontend/widgets/OBSBasicPreview.cpp.
+// Fullscreen drag-to-select picker that covers a specific screen. Exec it; on
+// Accepted, region() holds the chosen rectangle in device pixels relative to
+// that screen's top-left — matching the capture source (monitor) coordinate
+// space used by crop_filter. The drag/rubber-band interaction is the desktop-
+// region analogue of the crop handles in frontend/widgets/OBSBasicPreview.cpp.
 class RegionSelectDialog : public QDialog {
 	Q_OBJECT
 public:
-	explicit RegionSelectDialog(QWidget *parent = nullptr);
+	// `screen` is the display to select on (defaults to the primary screen).
+	explicit RegionSelectDialog(QScreen *screen = nullptr, QWidget *parent = nullptr);
 
 	// Selected region in device pixels (enabled == false if nothing picked).
 	CaptureRegion region() const { return region_; }
@@ -46,14 +50,12 @@ class RegionOverlay : public QWidget {
 public:
 	explicit RegionOverlay(QWidget *parent = nullptr);
 
-	// Show the outline for `region` (device pixels). A disabled region hides it.
-	void setRegion(const CaptureRegion &region);
+	// Show the outline for `region` (device pixels, relative to `screen`'s
+	// top-left). A disabled region — or a null screen — hides it.
+	void setRegion(const CaptureRegion &region, QScreen *screen);
 
 protected:
 	void paintEvent(QPaintEvent *event) override;
-
-private:
-	qreal dpr_ = 1.0;
 };
 
 } // namespace harpia

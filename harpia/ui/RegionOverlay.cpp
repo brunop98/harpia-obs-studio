@@ -10,14 +10,17 @@ namespace harpia {
 
 // ------------------------- RegionSelectDialog -------------------------
 
-RegionSelectDialog::RegionSelectDialog(QWidget *parent) : QDialog(parent)
+RegionSelectDialog::RegionSelectDialog(QScreen *screen, QWidget *parent) : QDialog(parent)
 {
 	setWindowFlags(Qt::Window | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
 	setCursor(Qt::CrossCursor);
 
-	// Cover the primary screen. (Multi-monitor selection is a follow-up.)
-	if (QScreen *screen = QGuiApplication::primaryScreen()) {
+	if (!screen)
+		screen = QGuiApplication::primaryScreen();
+	if (screen) {
 		dpr_ = screen->devicePixelRatio();
+		// Position/size the dialog to exactly cover the chosen screen; event
+		// coordinates are then relative to that screen's top-left.
 		setGeometry(screen->geometry());
 	}
 }
@@ -111,24 +114,25 @@ RegionOverlay::RegionOverlay(QWidget *parent) : QWidget(parent)
 		       Qt::WindowTransparentForInput);
 	setAttribute(Qt::WA_TranslucentBackground);
 	setAttribute(Qt::WA_TransparentForMouseEvents);
-	if (QScreen *screen = QGuiApplication::primaryScreen())
-		dpr_ = screen->devicePixelRatio();
 }
 
-void RegionOverlay::setRegion(const CaptureRegion &region)
+void RegionOverlay::setRegion(const CaptureRegion &region, QScreen *screen)
 {
-	if (!region.enabled || region.width <= 0 || region.height <= 0) {
+	if (!region.enabled || region.width <= 0 || region.height <= 0 || !screen) {
 		hide();
 		return;
 	}
 
-	// Device pixels -> logical coordinates for window placement, with a small
-	// margin so the border sits just outside the captured area.
+	const qreal dpr = screen->devicePixelRatio();
+	const QPoint origin = screen->geometry().topLeft(); // logical global coords
+
+	// Device pixels (relative to the screen) -> logical global coordinates, with
+	// a small margin so the border sits just outside the captured area.
 	const int margin = 2;
-	const int x = int(region.x / dpr_) - margin;
-	const int y = int(region.y / dpr_) - margin;
-	const int w = int(region.width / dpr_) + margin * 2;
-	const int h = int(region.height / dpr_) + margin * 2;
+	const int x = origin.x() + int(region.x / dpr) - margin;
+	const int y = origin.y() + int(region.y / dpr) - margin;
+	const int w = int(region.width / dpr) + margin * 2;
+	const int h = int(region.height / dpr) + margin * 2;
 	setGeometry(x, y, w, h);
 	show();
 	update();

@@ -107,18 +107,22 @@ harpia/
 - **Clip Library window**: grid of every recording on disk with "5 minutes ago",
   size, and originating preset; right-click **Open / Copy / Rename / Delete**;
   **Delete** key removes selected clips
-- **Region selection**: drag-to-select a screen region (applied via `crop_filter`)
-  with an always-on-top overlay outlining the captured area
+- **Region selection**: drag-to-select a screen region on the captured display
+  (applied via `crop_filter`) with an always-on-top overlay outlining the area
 - **Multi-monitor**: each preset picks which display to capture (enumerated from
-  the platform capture source)
+  the platform capture source); the picker, overlay, and canvas all follow it
 - **GIF** output: recorded via `ffmpeg_output`, auto-downscaled (≤640px long edge)
   and fps-capped (≤15) with no audio track for reasonable file sizes
 - **Idle auto-pause** driven by the toolbar toggle + the active preset's timeout,
-  on **all three platforms** — Windows (`GetLastInputInfo`), Linux (X11
-  XScreenSaver via dlopen), macOS (CoreGraphics)
+  on **all three platforms** — Windows (`GetLastInputInfo`), macOS (CoreGraphics),
+  Linux (GNOME **Mutter IdleMonitor** over D-Bus for Wayland, falling back to X11
+  **XScreenSaver** via dlopen)
 
-## Planned follow-ups (interfaces already defined)
+## Planned follow-ups
 
-- Full palette-based (2-pass) GIF quality and a broader resolution-scaling matrix
-- Multi-monitor selection inside the region picker (currently primary screen)
-- Wayland idle detection (Linux idle currently uses X11 XScreenSaver)
+- Full palette-based (2-pass) GIF quality. This needs a post-recording transcode
+  (record an intermediate, then `palettegen`/`paletteuse` via libavfilter) rather
+  than the current single-pass live encode; slated for after the first green build
+  so it can be validated in isolation.
+- Broader resolution-scaling matrix (per-encoder scaled sizes)
+- KDE/Wayland idle (currently GNOME Wayland + any X11)

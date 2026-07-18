@@ -55,16 +55,10 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 {
 	setWindowTitle(QStringLiteral("Harpia Recorder"));
 
-	if (QScreen *screen = QGuiApplication::primaryScreen()) {
-		const QSize logical = screen->size();
-		const qreal dpr = screen->devicePixelRatio();
-		canvasSize_ = QSize(int(logical.width() * dpr), int(logical.height() * dpr));
-	} else {
-		canvasSize_ = QSize(1920, 1080);
-	}
-
 	if (!presets_.presets().empty())
 		activePresetId_ = presets_.presets().front().id;
+
+	canvasSize_ = canvasForActivePreset();
 
 	auto *central = new QWidget(this);
 	auto *root = new QVBoxLayout(central);
@@ -250,6 +244,28 @@ const Preset &MainWindow::activePreset() const
 	return presets_.presets().front();
 }
 
+QScreen *MainWindow::screenForActivePreset() const
+{
+	const QList<QScreen *> screens = QGuiApplication::screens();
+	if (screens.isEmpty())
+		return nullptr;
+	// Best-effort: map the preset's monitor index onto Qt's screen order.
+	int idx = activePreset().monitorIndex;
+	if (idx < 0 || idx >= screens.size())
+		idx = 0;
+	return screens.at(idx);
+}
+
+QSize MainWindow::canvasForActivePreset() const
+{
+	QScreen *screen = screenForActivePreset();
+	if (!screen)
+		return QSize(1920, 1080);
+	const QSize logical = screen->size();
+	const qreal dpr = screen->devicePixelRatio();
+	return QSize(int(logical.width() * dpr), int(logical.height() * dpr));
+}
+
 QStringList MainWindow::presetFolders() const
 {
 	QStringList folders;
@@ -284,6 +300,8 @@ void MainWindow::startRecording()
 {
 	const Preset &preset = activePreset();
 
+	// Size the canvas to the display this preset captures.
+	canvasSize_ = canvasForActivePreset();
 	uint32_t baseW = canvasSize_.width();
 	uint32_t baseH = canvasSize_.height();
 	uint32_t outW = baseW, outH = baseH;
@@ -421,11 +439,12 @@ void MainWindow::onOpenClipLibrary()
 
 void MainWindow::onSelectRegion()
 {
-	RegionSelectDialog dlg(this);
+	QScreen *screen = screenForActivePreset();
+	RegionSelectDialog dlg(screen, this);
 	if (dlg.exec() == QDialog::Accepted) {
 		currentRegion_ = dlg.region();
 		capture_.setRegion(currentRegion_);
-		regionOverlay_->setRegion(currentRegion_);
+		regionOverlay_->setRegion(currentRegion_, screen);
 		updateButtons();
 	}
 }
@@ -434,7 +453,7 @@ void MainWindow::onClearRegion()
 {
 	currentRegion_ = CaptureRegion{};
 	capture_.setRegion(currentRegion_);
-	regionOverlay_->setRegion(currentRegion_);
+	regionOverlay_->setRegion(currentRegion_, screenForActivePreset());
 	updateButtons();
 }
 
@@ -461,7 +480,12 @@ void MainWindow::onPresetChanged()
 	syncIdleControls();
 
 	// Switch the live capture to the new preset's display (unless recording).
+	// The previous region was chosen on a possibly-different monitor, so reset
+	// to full-screen to avoid an out-of-bounds crop.
 	if (!recorder_.isRecording()) {
+		canvasSize_ = canvasForActivePreset();
+		currentRegion_ = CaptureRegion{};
+		regionOverlay_->setRegion(currentRegion_, screenForActivePreset());
 		capture_.startCapture(activePreset().monitorIndex);
 		capture_.setRegion(currentRegion_);
 	}

@@ -21,6 +21,7 @@ class QCheckBox;
 class QSpinBox;
 class QLabel;
 class QTimer;
+class QScreen;
 
 namespace harpia {
 
@@ -65,6 +66,8 @@ private slots:
 
 private:
 	const Preset &activePreset() const;
+	QScreen *screenForActivePreset() const; // display the active preset captures
+	QSize canvasForActivePreset() const;    // that display's size in device px
 	QStringList presetFolders() const;
 	ClipLibrary::PresetByFolder presetFolderMap() const;
 	QString buildOutputPath(const Preset &preset) const;

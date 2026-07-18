@@ -1,10 +1,33 @@
 #include "platform/IdleMonitor.hpp"
 
+#include <QDBusConnection>
+#include <QDBusInterface>
+#include <QDBusReply>
+#include <QtGlobal>
+
 #include <dlfcn.h>
+#include <memory>
 
 namespace harpia {
 
 namespace {
+
+// GNOME Mutter's IdleMonitor works on both X11 and Wayland and reports idle time
+// in milliseconds. Available on GNOME sessions; returns a negative value if the
+// service/method isn't there so we can fall back to X11.
+double mutterIdleSeconds()
+{
+	static QDBusInterface iface(QStringLiteral("org.gnome.Mutter.IdleMonitor"),
+				    QStringLiteral("/org/gnome/Mutter/IdleMonitor/Core"),
+				    QStringLiteral("org.gnome.Mutter.IdleMonitor"),
+				    QDBusConnection::sessionBus());
+	if (!iface.isValid())
+		return -1.0;
+	QDBusReply<qulonglong> reply = iface.call(QStringLiteral("GetIdletime"));
+	if (!reply.isValid())
+		return -1.0;
+	return (double)reply.value() / 1000.0;
+}
 
 // System-wide idle time on X11 via the XScreenSaver extension. We load X11 and
 // Xss at runtime with dlopen so the app needs no X development packages at build
@@ -56,6 +79,11 @@ public:
 
 	double currentIdleSeconds() const override
 	{
+		// Prefer Mutter (works under Wayland); fall back to X11 XScreenSaver.
+		const double mutter = mutterIdleSeconds();
+		if (mutter >= 0.0)
+			return mutter;
+
 		if (!display_ || !info_ || !queryInfo_)
 			return 0.0;
 		if (queryInfo_(display_, root_, info_) == 0)

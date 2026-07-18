@@ -14,11 +14,35 @@ without refactoring.
 Harpia builds as part of the OBS Studio CMake project. It is enabled by the
 `ENABLE_HARPIA` option (ON by default).
 
-```sh
-# From the repo root, using the platform preset (Windows is the primary target):
-cmake --preset windows-x64
-cmake --build --preset windows-x64 --target harpia-recorder
+### Prerequisites (Windows, install once)
+
+- **Visual Studio 2022** with the **Desktop development with C++** workload
+- **CMake ≥ 3.28** — `winget install Kitware.CMake`, then **reopen the terminal**
+- **Git**
+
+You do *not* need to install Qt6/CEF/obs-deps manually — the CMake configure step
+downloads the prebuilt dependencies from `buildspec.json` automatically.
+
+### Quick build (recommended)
+
+```powershell
+# From the repo root, in PowerShell:
+.\harpia\scripts\Build-Harpia.ps1
 ```
+
+This configures (fetching deps on first run) and builds just `harpia-recorder`,
+then prints the path to `harpia.exe`. Options: `-Configuration Release`,
+`-Reconfigure`, `-Target all` (whole solution).
+
+### Manual build
+
+```powershell
+cmake --preset windows-x64                 # configure + auto-download deps
+cmake --build --preset windows-x64 --config RelWithDebInfo --target harpia-recorder
+```
+
+The binary lands at
+`build_x64\rundir\RelWithDebInfo\bin\64bit\harpia.exe`.
 
 The recorder needs the OBS plugins (capture/encoders/ffmpeg muxer) available at
 runtime. Because it builds inside the OBS tree, the plugins are produced

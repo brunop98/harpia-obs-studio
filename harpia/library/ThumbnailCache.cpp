@@ -22,6 +22,30 @@ namespace harpia {
 
 namespace {
 
+// Mean brightness (0-255) of an already-RGB888 QImage. Used to reject the
+// black lead-in frames that screen recordings typically open with.
+double meanBrightness(const QImage &img)
+{
+	if (img.isNull())
+		return 0.0;
+
+	// Sample on a coarse grid so this stays cheap even for large frames.
+	const int stepX = std::max(1, img.width() / 32);
+	const int stepY = std::max(1, img.height() / 32);
+	quint64 sum = 0;
+	quint64 count = 0;
+	for (int y = 0; y < img.height(); y += stepY) {
+		const uchar *line = img.constScanLine(y);
+		for (int x = 0; x < img.width(); x += stepX) {
+			const uchar *px = line + x * 3; // RGB888: 3 bytes/pixel
+			// Rec. 601 luma approximation.
+			sum += (quint64)(px[0] * 77 + px[1] * 150 + px[2] * 29) >> 8;
+			++count;
+		}
+	}
+	return count ? (double)sum / (double)count : 0.0;
+}
+
 // Convert a decoded frame to an RGB QImage scaled to fit `target` (aspect
 // preserved). Returns null on failure.
 QImage frameToImage(AVFrame *frame, const QSize &target)
@@ -165,10 +189,11 @@ QImage ThumbnailCache::extractFrame(const QString &videoPath, const QSize &targe
 		if (avcodec_open2(ctx, dec, nullptr) < 0)
 			break;
 
-		// Seek a little way in (10% or 1s, whichever is smaller) to avoid
-		// black lead-in frames.
+		// Seek ~20% in (capped at 3s) to skip the black lead-in frames that
+		// screen recordings typically open with.
 		if (fmt->duration > 0) {
-			int64_t seekTarget = std::min<int64_t>(AV_TIME_BASE, fmt->duration / 10);
+			int64_t seekTarget =
+				std::min<int64_t>(3 * AV_TIME_BASE, fmt->duration / 5);
 			if (seekTarget > 0) {
 				av_seek_frame(fmt, -1, seekTarget, AVSEEK_FLAG_BACKWARD);
 				avcodec_flush_buffers(ctx);
@@ -180,17 +205,43 @@ QImage ThumbnailCache::extractFrame(const QString &videoPath, const QSize &targe
 		if (!pkt || !frame)
 			break;
 
-		while (av_read_frame(fmt, pkt) >= 0) {
-			if (pkt->stream_index == stream) {
-				if (avcodec_send_packet(ctx, pkt) == 0 &&
-				    avcodec_receive_frame(ctx, frame) == 0) {
-					result = frameToImage(frame, target);
-					av_packet_unref(pkt);
-					break;
+		// A single seek can still land on a black keyframe, so decode a
+		// bounded run of frames and keep the first that's clearly not black
+		// (mean luma above a small threshold). Fall back to the brightest
+		// frame seen if every candidate is dark.
+		constexpr double kBlackThreshold = 16.0; // 0-255 mean luma
+		constexpr int kMaxFrames = 60;
+		QImage best;
+		double bestBrightness = -1.0;
+		int decoded = 0;
+
+		while (decoded < kMaxFrames && av_read_frame(fmt, pkt) >= 0) {
+			if (pkt->stream_index == stream &&
+			    avcodec_send_packet(ctx, pkt) == 0) {
+				while (avcodec_receive_frame(ctx, frame) == 0) {
+					++decoded;
+					QImage img = frameToImage(frame, target);
+					av_frame_unref(frame);
+					if (img.isNull())
+						continue;
+					const double b = meanBrightness(img);
+					if (b > bestBrightness) {
+						bestBrightness = b;
+						best = img;
+					}
+					if (b >= kBlackThreshold) {
+						result = img;
+						break;
+					}
 				}
 			}
 			av_packet_unref(pkt);
+			if (!result.isNull())
+				break;
 		}
+
+		if (result.isNull())
+			result = best; // all dark - best-effort brightest frame
 	} while (false);
 
 	if (frame)

@@ -1,6 +1,10 @@
+#include "Version.hpp"
+#include "core/Logger.hpp"
 #include "core/ObsContext.hpp"
 #include "model/PresetStore.hpp"
 #include "ui/MainWindow.hpp"
+
+#include <util/platform.h>
 
 #include <QApplication>
 #include <QDir>
@@ -8,6 +12,7 @@
 #include <QPalette>
 #include <QStandardPaths>
 #include <QStyleFactory>
+#include <string>
 
 namespace {
 
@@ -38,6 +43,37 @@ void applyDarkPalette(QApplication &app)
 	app.setPalette(p);
 }
 
+// Resolve the log directory (created before obs starts so early logs are kept).
+std::string resolveLogDir()
+{
+	char *path = os_get_config_path_ptr("harpia-recorder/logs");
+	std::string dir = path ? path : "";
+	bfree(path);
+	return dir;
+}
+
+// Route Qt's own messages into the same session log.
+void qtMessageToLogger(QtMsgType type, const QMessageLogContext &, const QString &msg)
+{
+	harpia::LogLevel level = harpia::LogLevel::Info;
+	switch (type) {
+	case QtDebugMsg:
+		level = harpia::LogLevel::Debug;
+		break;
+	case QtInfoMsg:
+		level = harpia::LogLevel::Info;
+		break;
+	case QtWarningMsg:
+		level = harpia::LogLevel::Warning;
+		break;
+	case QtCriticalMsg:
+	case QtFatalMsg:
+		level = harpia::LogLevel::Error;
+		break;
+	}
+	harpia::Logger::instance().log(level, ("Qt: " + msg).toStdString());
+}
+
 } // namespace
 
 // Entry point for the Harpia recorder. Brings up the libobs backend in the
@@ -49,6 +85,13 @@ int main(int argc, char *argv[])
 	QApplication::setApplicationName(QStringLiteral("Harpia Recorder"));
 	QApplication::setOrganizationName(QStringLiteral("Harpia"));
 	applyDarkPalette(app);
+
+	// Start logging before anything else so startup and any early crash are
+	// captured to disk (flushed per line).
+	harpia::Logger::instance().init(resolveLogDir());
+	qInstallMessageHandler(qtMessageToLogger);
+	harpia::Logger::instance().log(harpia::LogLevel::Info,
+				       std::string("Harpia Recorder v") + HARPIA_VERSION_STRING + " starting");
 
 	harpia::ObsContext obs;
 	if (!obs.startup()) {
@@ -84,5 +127,6 @@ int main(int argc, char *argv[])
 	}
 
 	obs.shutdown();
+	harpia::Logger::instance().shutdown();
 	return rc;
 }

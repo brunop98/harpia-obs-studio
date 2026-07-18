@@ -56,6 +56,9 @@ target_sources(
   harpia-recorder
   PRIVATE
     main.cpp
+    Version.hpp
+    core/Logger.cpp
+    core/Logger.hpp
     core/ObsContext.cpp
     core/ObsContext.hpp
     core/AudioManager.cpp
@@ -90,6 +93,8 @@ target_sources(
     ui/MouseFxOverlay.hpp
     ui/ClipLibraryWindow.cpp
     ui/ClipLibraryWindow.hpp
+    ui/ErrorLogsPanel.cpp
+    ui/ErrorLogsPanel.hpp
     ui/RegionTool.cpp
     ui/RegionTool.hpp
 )

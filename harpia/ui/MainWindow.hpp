@@ -32,6 +32,7 @@ class ClipLibraryWindow;
 class RegionTool;
 class AudioPanel;
 class MouseFxOverlay;
+class ErrorLogsPanel;
 
 // The PowerRec-inspired main window: a wide, compact, dark surface optimized for
 // starting/stopping recordings in one or two clicks.
@@ -56,6 +57,7 @@ private slots:
 	void showPresetMenu(const QPoint &pos); // right-click combo: edit/delete
 	void onOpenPresetFolder();
 	void onOpenClipLibrary();
+	void onOpenErrorLogs();
 	void onCaptureModeChanged();
 	void onRegionChanged(const CaptureRegion &region);
 	void onIdleSettingChanged();
@@ -113,6 +115,7 @@ private:
 
 	// Recent strip
 	QPushButton *libraryButton_ = nullptr;
+	QPushButton *errorLogsButton_ = nullptr;
 	QListWidget *recentStrip_ = nullptr;
 	ThumbnailCache thumbnails_;
 	QHash<QString, QListWidgetItem *> itemByPath_;
@@ -124,6 +127,7 @@ private:
 	QTimer *meterTimer_ = nullptr;
 
 	std::unique_ptr<ClipLibraryWindow> clipWindow_;
+	std::unique_ptr<ErrorLogsPanel> errorLogsPanel_;
 	std::unique_ptr<RegionTool> regionTool_;
 	std::unique_ptr<MouseFxOverlay> mouseFx_;
 

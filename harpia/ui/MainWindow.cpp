@@ -2,7 +2,9 @@
 
 #include "AudioPanel.hpp"
 #include "ClipLibraryWindow.hpp"
+#include "ErrorLogsPanel.hpp"
 #include "MouseFxOverlay.hpp"
+#include "Version.hpp"
 #include "PresetEditorDialog.hpp"
 #include "RecentListWidget.hpp"
 #include "RegionTool.hpp"
@@ -57,7 +59,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	  idle_(IdleMonitor::create()),
 	  defaultFolder_(std::move(defaultFolder))
 {
-	setWindowTitle(QStringLiteral("Harpia Recorder"));
+	setWindowTitle(QStringLiteral("Harpia Recorder  v%1").arg(QString::fromUtf8(appVersion())));
 
 	if (!presets_.presets().empty())
 		activePresetId_ = presets_.presets().front().id;
@@ -154,6 +156,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	auto *stripHeader = new QHBoxLayout;
 	stripHeader->addWidget(new QLabel(QStringLiteral("Recent recordings"), central));
 	stripHeader->addStretch(1);
+	errorLogsButton_ = new QPushButton(QStringLiteral("Error Logs"), central);
+	stripHeader->addWidget(errorLogsButton_);
 	libraryButton_ = new QPushButton(QStringLiteral("Open Clip Library…"), central);
 	stripHeader->addWidget(libraryButton_);
 	root->addLayout(stripHeader);
@@ -183,6 +187,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
 	connect(openFolderButton_, &QPushButton::clicked, this, &MainWindow::onOpenPresetFolder);
 	connect(libraryButton_, &QPushButton::clicked, this, &MainWindow::onOpenClipLibrary);
+	connect(errorLogsButton_, &QPushButton::clicked, this, &MainWindow::onOpenErrorLogs);
 	connect(captureModeCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onCaptureModeChanged);
 	connect(idleToggle_, &QCheckBox::toggled, this, &MainWindow::onIdleSettingChanged);
 	connect(idleSpin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::onIdleSettingChanged);
@@ -477,6 +482,16 @@ void MainWindow::onOpenClipLibrary()
 	clipWindow_->raise();
 	clipWindow_->activateWindow();
 	clipWindow_->refresh();
+}
+
+void MainWindow::onOpenErrorLogs()
+{
+	if (!errorLogsPanel_)
+		errorLogsPanel_ = std::make_unique<ErrorLogsPanel>();
+	errorLogsPanel_->show();
+	errorLogsPanel_->raise();
+	errorLogsPanel_->activateWindow();
+	errorLogsPanel_->refresh();
 }
 
 void MainWindow::onCaptureModeChanged()

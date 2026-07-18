@@ -8,6 +8,7 @@
 !/deps
 !/docs
 !/frontend
+!/harpia
 !/libobs*
 !/plugins
 !/shared

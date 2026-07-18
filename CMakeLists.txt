@@ -18,6 +18,7 @@ include(helpers)
 option(ENABLE_FRONTEND "Enable building with UI (requires Qt)" ON)
 option(ENABLE_SCRIPTING "Enable scripting support" ON)
 option(ENABLE_HEVC "Enable HEVC encoders" ON)
+option(ENABLE_HARPIA "Enable building the Harpia recorder (minimal screen recorder on libobs)" ON)
 
 add_subdirectory(libobs)
 if(OS_WINDOWS)
@@ -33,5 +34,9 @@ add_subdirectory(plugins)
 add_subdirectory(test/test-input)
 
 add_subdirectory(frontend)
+
+if(ENABLE_HARPIA)
+  add_subdirectory(harpia)
+endif()
 
 message_configuration()

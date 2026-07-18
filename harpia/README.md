@@ -19,6 +19,11 @@ Harpia builds as part of the OBS Studio CMake project. It is enabled by the
 - **Visual Studio 2022** with the **Desktop development with C++** workload
 - **CMake ≥ 3.28** — `winget install Kitware.CMake`, then **reopen the terminal**
 - **Git**
+- *Optional, for webcam + Intel QSV:* the **C++ ATL for latest v143 build tools
+  (x86 & x64)** VS component. `win-dshow` (webcam) and `obs-qsv11` (QSV encoder)
+  require ATL; without it the build **auto-skips just those two** and everything
+  else still builds (screen recording works, webcam/QSV are unavailable until you
+  install ATL and reconfigure).
 
 You do *not* need to install Qt6/obs-deps manually — the CMake configure step
 downloads the prebuilt dependencies from `buildspec.json` automatically.

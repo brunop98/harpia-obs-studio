@@ -26,3 +26,19 @@ add_custom_command(
     "${_harpia_runtime_dir}/platforms"
   VERBATIM
 )
+
+# The ffmpeg_muxer recording output spawns the obs-ffmpeg-mux helper EXECUTABLE
+# as a child process, resolved as "<dir of harpia.exe>/obs-ffmpeg-mux.exe". Copy
+# the freshly built helper right next to harpia.exe so recording can start it —
+# independent of the OBS install/bundle machinery (which only runs for the
+# obs-studio target). harpia-recorder depends on this target (see CMakeLists.txt),
+# so it is always built before this copy runs.
+if(TARGET obs-ffmpeg-mux)
+  add_custom_command(
+    TARGET harpia-recorder
+    POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:obs-ffmpeg-mux>" "${_harpia_runtime_dir}"
+    COMMENT "Copying obs-ffmpeg-mux helper next to harpia.exe"
+    VERBATIM
+  )
+endif()

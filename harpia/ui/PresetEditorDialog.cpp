@@ -261,7 +261,16 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	for (VideoCodec c : EncoderFactory::availableCodecs(/*gpuOnly=*/false))
 		codecCombo_->addItem(QString::fromUtf8(codecLabel(c)), int(c));
 	int codecIdx = codecCombo_->findData(int(preset.codec));
-	codecCombo_->setCurrentIndex(codecIdx >= 0 ? codecIdx : 0);
+	if (codecIdx < 0) {
+		// Keep a saved codec this machine can't encode right now visible and
+		// selected — falling back to index 0 would silently overwrite the
+		// preset's stored choice as soon as the dialog is saved.
+		codecCombo_->addItem(QString::fromUtf8(codecLabel(preset.codec)) +
+					     QStringLiteral(" (not available on this PC)"),
+				     int(preset.codec));
+		codecIdx = codecCombo_->count() - 1;
+	}
+	codecCombo_->setCurrentIndex(codecIdx);
 	addField(v, QStringLiteral("Codec"),
 		 QStringLiteral("How video is compressed. H.264 plays everywhere; HEVC/AV1 give smaller "
 				"files at the same quality but need newer players. Only codecs your PC "
@@ -459,7 +468,14 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	if (webcamDeviceCombo_->count() == 0)
 		webcamDeviceCombo_->addItem(QStringLiteral("(no camera detected)"), QString());
 	{
-		const int di = webcamDeviceCombo_->findData(QString::fromStdString(preset.webcamDeviceId));
+		// Keep a saved camera that isn't connected right now selected instead
+		// of silently switching (and re-saving) the first list entry.
+		const QString savedId = QString::fromStdString(preset.webcamDeviceId);
+		int di = webcamDeviceCombo_->findData(savedId);
+		if (di < 0 && !savedId.isEmpty()) {
+			webcamDeviceCombo_->addItem(QStringLiteral("(saved camera — not connected)"), savedId);
+			di = webcamDeviceCombo_->count() - 1;
+		}
 		if (di >= 0)
 			webcamDeviceCombo_->setCurrentIndex(di);
 	}
@@ -768,6 +784,10 @@ void PresetEditorDialog::accept()
 	result_.screenBorderColor = borderColor_.name().toStdString();
 	result_.screenBorderThickness = borderThicknessSpin_->value();
 	result_.filenameTemplate = templateEdit_->text().trimmed().toStdString();
+	// An empty template would expand to an extension-only (hidden) filename
+	// like ".mp4" — restore the default naming instead of saving it.
+	if (result_.filenameTemplate.empty())
+		result_.filenameTemplate = Preset::makeDefault("").filenameTemplate;
 
 	result_.recordDesktopAudio = desktopAudioCheck_->isChecked();
 	result_.micDeviceIds.clear();

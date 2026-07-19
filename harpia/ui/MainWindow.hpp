@@ -63,7 +63,6 @@ private slots:
 	void onPauseButton();   // pause/resume while recording
 	void onNewPreset();
 	void showPresetMenu(const QPoint &pos); // right-click combo: edit/delete
-	void onOpenPresetFolder();
 	void onOpenClipLibrary();
 	void onOpenErrorLogs();
 	void onCaptureModeChanged();
@@ -224,7 +223,8 @@ private:
 	// button shows Starting…/Stopping… and can't be clicked repeatedly.
 	bool starting_ = false;
 	bool stopping_ = false;
-	int spinPhase_ = 0; // animated spinner frame index
+	int spinPhase_ = 0;         // animated spinner frame index
+	int lastPauseUiState_ = -1; // 0 idle / 1 recording / 2 paused — restyle only on change
 
 	// Deferred-close bookkeeping: the user confirmed closing while a recording
 	// (or its finalize/remux) was still in flight; close as soon as it's done.

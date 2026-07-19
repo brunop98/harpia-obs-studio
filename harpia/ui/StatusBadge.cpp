@@ -27,6 +27,9 @@ StatusBadge::StatusBadge(QWidget *parent) : QWidget(parent)
 
 void StatusBadge::setStatus(const QString &text, const QColor &color, bool pulse)
 {
+	// Called every UI tick — skip the relayout/repaint when nothing changed.
+	if (text == text_ && color == color_ && pulse == pulse_)
+		return;
 	text_ = text;
 	color_ = color;
 	pulse_ = pulse;
@@ -41,7 +44,11 @@ void StatusBadge::setStatus(const QString &text, const QColor &color, bool pulse
 QSize StatusBadge::sizeHint() const
 {
 	const QFontMetrics fm(font());
-	const int w = kPadX + (kDotRadius * 2) + kGap + fm.horizontalAdvance(text_) + kPadX;
+	// Reserve at least the widest routine label so flipping between states
+	// (Ready → Recording → Stopping…) doesn't shift the centered control row.
+	const int textW = std::max(fm.horizontalAdvance(text_),
+				   fm.horizontalAdvance(QStringLiteral("Starting in 10s")));
+	const int w = kPadX + (kDotRadius * 2) + kGap + textW + kPadX;
 	const int h = std::max(22, fm.height() + 6);
 	return QSize(w, h);
 }

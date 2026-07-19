@@ -59,6 +59,7 @@
 #include <QPushButton>
 #include <QRunnable>
 #include <QScreen>
+#include <QShortcut>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStatusBar>
@@ -124,16 +125,21 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	captureModeCombo_ = new QComboBox(central);
 	captureModeCombo_->addItem(QStringLiteral("Entire Monitor"), int(CaptureMode::Monitor));
 	captureModeCombo_->addItem(QStringLiteral("Custom Region"), int(CaptureMode::Region));
+	captureModeCombo_->setToolTip(
+		QStringLiteral("What to record: the whole monitor, or a custom region you drag on screen"));
 	row1->addWidget(captureModeCombo_);
 
 	row1->addSpacing(12);
 	idleToggle_ = new QCheckBox(QStringLiteral("Only record while using the computer"), central);
+	idleToggle_->setToolTip(
+		QStringLiteral("Auto-pause the recording after the idle time below, resume on input"));
 	row1->addWidget(idleToggle_);
 	idleSpin_ = new QSpinBox(central);
 	idleSpin_->setRange(1, 3600);
 	idleSpin_->setSuffix(QStringLiteral(" s"));
 	idleSpin_->setValue(10);
 	idleSpin_->setMaximumWidth(80);
+	idleSpin_->setToolTip(QStringLiteral("Seconds without mouse/keyboard input before auto-pausing"));
 	row1->addWidget(idleSpin_);
 	row1->addStretch(1);
 	root->addLayout(row1);
@@ -148,10 +154,13 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	appCombo_ = new QComboBox(central);
 	appCombo_->setMinimumWidth(220);
 	appCombo_->setEnabled(false);
+	appCombo_->setToolTip(QStringLiteral("The application window to record"));
 	row2->addWidget(appCombo_);
 
 	row2->addSpacing(16);
 	webcamEnableToggle_ = new QCheckBox(QStringLiteral("Enable webcam"), central);
+	webcamEnableToggle_->setToolTip(
+		QStringLiteral("Record the camera to its own file alongside the screen recording"));
 	row2->addWidget(webcamEnableToggle_);
 	webcamCombo_ = new QComboBox(central);
 	webcamCombo_->setMinimumWidth(220);
@@ -202,6 +211,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	primaryButton_->setObjectName(QStringLiteral("primaryButton"));
 	primaryButton_->setMinimumSize(130, 46);
 	primaryButton_->setFont(btnFont);
+	primaryButton_->setToolTip(QStringLiteral("Start/stop recording (F9)"));
 	controls->addWidget(primaryButton_, 0, Qt::AlignVCenter);
 
 	// Pause/Resume: only shown while recording.
@@ -210,6 +220,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	pauseButton_->setMinimumSize(104, 46);
 	pauseButton_->setFont(btnFont);
 	pauseButton_->setVisible(false);
+	pauseButton_->setToolTip(QStringLiteral("Pause/resume the recording (F10)"));
 	controls->addWidget(pauseButton_, 0, Qt::AlignVCenter);
 
 	controls->addWidget(makeSep(), 0, Qt::AlignVCenter);
@@ -291,11 +302,19 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	statusBar()->setStyleSheet(QStringLiteral("QStatusBar{background:transparent;} QStatusBar::item{border:none;}"));
 
 	// Wide, PowerRec-like proportions; a bit taller to fit the audio meters.
+	// The minimum keeps both toolbar rows and the control bar from clipping.
+	setMinimumSize(800, 440);
 	resize(940, 470);
 
 	// ---- Wiring ---------------------------------------------------------
 	connect(primaryButton_, &QPushButton::clicked, this, &MainWindow::onPrimaryButton);
 	connect(pauseButton_, &QPushButton::clicked, this, &MainWindow::onPauseButton);
+
+	// Keyboard shortcuts (also shown in the buttons' tooltips).
+	auto *recordShortcut = new QShortcut(QKeySequence(Qt::Key_F9), this);
+	connect(recordShortcut, &QShortcut::activated, this, &MainWindow::onPrimaryButton);
+	auto *pauseShortcut = new QShortcut(QKeySequence(Qt::Key_F10), this);
+	connect(pauseShortcut, &QShortcut::activated, this, &MainWindow::onPauseButton);
 	connect(editPresetButton_, &QPushButton::clicked, this, [this]() { editActivePreset(); });
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
 	connect(webcamCombo_, &QComboBox::activated, this, &MainWindow::onWebcamDeviceChanged);
@@ -402,10 +421,13 @@ void MainWindow::applyDarkTheme()
 		QPushButton { background: #2b2d31; border: 1px solid #3a3d42; border-radius: 6px; padding: 6px 12px; }
 		QPushButton:hover { background: #34373c; }
 		QPushButton:disabled { color: #6b6f76; }
-		QPushButton#primaryButton { background: #e5484d; border: none; color: white; border-radius: 10px; }
+		QPushButton:focus { border: 1px solid #00aeef; }
+		QPushButton#primaryButton { background: #e5484d; border: 1px solid transparent; color: white; border-radius: 10px; }
 		QPushButton#primaryButton:hover { background: #f05a5f; }
-		QPushButton#stopButton { border-radius: 10px; }
+		QPushButton#primaryButton:focus { border: 1px solid #ffd9da; }
+		QPushButton#primaryButton:disabled { background: #5a3a3b; color: #9a7a7b; }
 		QComboBox, QSpinBox { background: #2b2d31; border: 1px solid #3a3d42; border-radius: 6px; padding: 4px 8px; }
+		QComboBox:focus, QSpinBox:focus { border: 1px solid #00aeef; }
 		QListWidget { background: #202225; border: 1px solid #303338; border-radius: 8px; }
 		QListWidget::item:selected { background: #3a3d42; }
 	)"));
@@ -566,7 +588,10 @@ void MainWindow::startRecording()
 	}
 
 	if (!recorder_.start(preset, recordPath.toStdString())) {
-		timerLabel_->setText(QStringLiteral("error"));
+		// The timer label gets overwritten by the next tick — the status bar
+		// keeps the failure visible (details are in the Error Logs).
+		statusBar()->showMessage(
+			QStringLiteral("Could not start the recording — see Error Logs for details"), 10000);
 		starting_ = false;
 		updateButtons();
 		return;
@@ -1227,13 +1252,6 @@ void MainWindow::refreshReadiness()
 	updateButtons();
 }
 
-void MainWindow::onOpenPresetFolder()
-{
-	const QString dir = QString::fromStdString(presets_.configDir());
-	if (!dir.isEmpty())
-		QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
-}
-
 void MainWindow::onOpenClipLibrary()
 {
 	if (!clipWindow_)
@@ -1352,13 +1370,15 @@ void MainWindow::updateRegionToolVisibility()
 	}
 	const bool recording = recorder_.isRecording();
 	regionTool_->setRecordingMode(recording);
-	// Visible while recording (subtle indicator) or while the app (main window or
-	// the tool itself) is focused; hidden when unfocused and not recording.
-	const bool focused = isActiveWindow() || regionTool_->isActiveWindow();
-	if (recording || focused)
-		regionTool_->show();
-	else
-		regionTool_->hide();
+	// Always visible in Region mode — hiding it whenever the app lost focus
+	// removed the boundary exactly while the user clicked into the app being
+	// framed. Instead, dim it when unfocused (setRecordingMode already dims to
+	// 0.28 while recording; don't fight that).
+	regionTool_->show();
+	if (!recording) {
+		const bool focused = isActiveWindow() || regionTool_->isActiveWindow();
+		regionTool_->setWindowOpacity(focused ? 1.0 : 0.55);
+	}
 }
 
 void MainWindow::changeEvent(QEvent *event)
@@ -1653,10 +1673,16 @@ void MainWindow::updateButtons()
 	if (regionTool_)
 		regionTool_->setPaused(recording && paused);
 
+	// Pause-dependent styling (pause button + monitor border color) runs every
+	// tick — only re-apply the stylesheets/colors when the state actually flips.
+	const int pauseUiState = !recording ? 0 : (paused ? 2 : 1);
+	const bool pauseUiChanged = (pauseUiState != lastPauseUiState_);
+	lastPauseUiState_ = pauseUiState;
+
 	// The full-screen monitor border follows the same convention: it turns yellow
 	// while paused and back to the preset's recording color when resumed. (It's
 	// only shown during recording, so there's no idle/green state here.)
-	if (screenBorder_ && recording && captureMode_ == CaptureMode::Monitor &&
+	if (pauseUiChanged && screenBorder_ && recording && captureMode_ == CaptureMode::Monitor &&
 	    activePreset().showScreenBorder) {
 		if (paused) {
 			screenBorder_->setColor(QColor(0xd2, 0x99, 0x22)); // yellow — paused
@@ -1701,7 +1727,7 @@ void MainWindow::updateButtons()
 
 	// Pause/Resume: only present while actively recording (hidden while stopping).
 	pauseButton_->setVisible(recording && !stopping_);
-	if (recording) {
+	if (recording && pauseUiChanged) {
 		if (paused) {
 			pauseButton_->setText(QStringLiteral("▶  Resume"));
 			pauseButton_->setStyleSheet(QStringLiteral(

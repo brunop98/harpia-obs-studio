@@ -110,6 +110,10 @@ struct Preset {
 	// recording that uses it so files number 0001, 0002, … across sessions.
 	int recordingCounter = 1;
 
+	// Seconds to count down (on-screen) before recording actually starts.
+	// 0 = disabled (start immediately). 1..10 supported.
+	int countdownSeconds = 0;
+
 	// File extension (without the dot) for the current format.
 	std::string extension() const;
 

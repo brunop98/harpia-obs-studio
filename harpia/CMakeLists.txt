@@ -93,6 +93,8 @@ target_sources(
     ui/MousePreview.hpp
     ui/StatusBadge.cpp
     ui/StatusBadge.hpp
+    ui/CountdownOverlay.cpp
+    ui/CountdownOverlay.hpp
     ui/WebcamPreview.cpp
     ui/WebcamPreview.hpp
     ui/MouseFxOverlay.cpp

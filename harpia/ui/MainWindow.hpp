@@ -33,6 +33,7 @@ class ObsContext;
 class PresetStore;
 class ClipLibraryWindow;
 class RegionTool;
+class CountdownOverlay;
 class AudioPanel;
 class MouseFxOverlay;
 class ErrorLogsPanel;
@@ -87,6 +88,9 @@ private:
 	ClipLibrary::PresetByFolder presetFolderMap() const;
 	QString buildOutputPath(const Preset &preset) const;
 	void startRecording();
+	void beginRecordFlow(); // readiness gate -> countdown or immediate start
+	void beginStart();      // enter Starting… and kick off the recording
+	void beginStop();       // enter Stopping… and request finalize
 	void updateButtons();
 	// Open the editor for the active preset + persist. If initialPage is given
 	// (e.g. "Webcam"), the editor opens with that settings page selected.
@@ -174,6 +178,17 @@ private:
 	bool wasPaused_ = false;
 	bool autoPaused_ = false;  // paused by the idle monitor (vs. manually)
 	bool focusPaused_ = false; // paused because the target app lost focus
+
+	// Transitional UI states while the async output starts/finalizes, so the
+	// button shows Starting…/Stopping… and can't be clicked repeatedly.
+	bool starting_ = false;
+	bool stopping_ = false;
+	int spinPhase_ = 0; // animated spinner frame index
+
+	// Pre-recording countdown state.
+	bool countingDown_ = false;
+	int countdownRemaining_ = 0;
+	std::unique_ptr<CountdownOverlay> countdownOverlay_;
 
 	// Focus auto-pause: the process that owned the foreground window when
 	// recording started (its child windows/dialogs share this id), and the

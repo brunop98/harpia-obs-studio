@@ -7,6 +7,7 @@
 #include "Version.hpp"
 #include "PresetEditorDialog.hpp"
 #include "RecentListWidget.hpp"
+#include "CountdownOverlay.hpp"
 #include "RegionTool.hpp"
 #include "StatusBadge.hpp"
 #include "WebcamPreview.hpp"
@@ -298,6 +299,20 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	mouseFx_ = std::make_unique<MouseFxOverlay>();
 
+	countdownOverlay_ = std::make_unique<CountdownOverlay>();
+	connect(countdownOverlay_.get(), &CountdownOverlay::tick, this, [this](int remaining) {
+		countdownRemaining_ = remaining;
+		updateButtons();
+	});
+	connect(countdownOverlay_.get(), &CountdownOverlay::finished, this, [this]() {
+		countingDown_ = false;
+		beginStart();
+	});
+	connect(countdownOverlay_.get(), &CountdownOverlay::cancelled, this, [this]() {
+		countingDown_ = false;
+		updateButtons();
+	});
+
 	regionTool_ = std::make_unique<RegionTool>();
 	connect(regionTool_.get(), &RegionTool::regionChanged, this, &MainWindow::onRegionChanged);
 	connect(regionTool_.get(), &RegionTool::cancelled, this, [this]() {
@@ -431,8 +446,11 @@ void MainWindow::startRecording()
 {
 	// Readiness gate: never start while blocking warnings exist.
 	refreshReadiness();
-	if (recordingBlocked_)
+	if (recordingBlocked_) {
+		starting_ = false;
+		updateButtons();
 		return;
+	}
 
 	const Preset &preset = activePreset();
 
@@ -487,6 +505,8 @@ void MainWindow::startRecording()
 		dir.filePath(baseName + QLatin1Char('.') + QString::fromStdString(preset.extension()));
 	if (!recorder_.start(preset, screenPath.toStdString())) {
 		timerLabel_->setText(QStringLiteral("error"));
+		starting_ = false;
+		updateButtons();
 		return;
 	}
 
@@ -546,11 +566,47 @@ void MainWindow::startRecording()
 
 void MainWindow::onPrimaryButton()
 {
-	// Single toggle: start when idle, stop when recording.
+	// Ignore clicks while a transition is in flight (the button is disabled then
+	// anyway, but guard against races).
+	if (starting_ || stopping_ || countingDown_)
+		return;
+
 	if (recorder_.isRecording())
-		recorder_.stop();
+		beginStop();
 	else
-		startRecording();
+		beginRecordFlow();
+}
+
+void MainWindow::beginRecordFlow()
+{
+	// Gate on readiness before showing any countdown.
+	refreshReadiness();
+	if (recordingBlocked_)
+		return;
+
+	const int cd = activePreset().countdownSeconds;
+	if (cd > 0 && countdownOverlay_) {
+		countingDown_ = true;
+		countdownRemaining_ = cd;
+		countdownOverlay_->start(cd, screenForActivePreset());
+		updateButtons();
+		return;
+	}
+	beginStart();
+}
+
+void MainWindow::beginStart()
+{
+	starting_ = true;
+	updateButtons();
+	startRecording(); // clears starting_ itself on failure; success clears in tickState
+}
+
+void MainWindow::beginStop()
+{
+	stopping_ = true;
+	updateButtons();
+	recorder_.stop(); // async; tickState clears stopping_ once finalized
 }
 
 void MainWindow::onPauseButton()
@@ -1163,10 +1219,28 @@ void MainWindow::updateButtons()
 {
 	const bool recording = recorder_.isRecording();
 	const bool paused = recorder_.isPaused();
+	const bool transitioning = starting_ || stopping_ || countingDown_;
 
-	// Single Record/Stop toggle. Record is blocked by readiness warnings; Stop
-	// is always available once recording.
-	if (recording) {
+	// Braille spinner frames for the in-progress states.
+	static const char *kSpin[] = {"\xE2\xA0\x8B", "\xE2\xA0\x99", "\xE2\xA0\xB9", "\xE2\xA0\xB8",
+				      "\xE2\xA0\xBC", "\xE2\xA0\xB4", "\xE2\xA0\xA6", "\xE2\xA0\xA7",
+				      "\xE2\xA0\x87", "\xE2\xA0\x8F"};
+	const QString spin = QString::fromUtf8(kSpin[((spinPhase_ % 10) + 10) % 10]);
+
+	// Single Record/Stop toggle, with transitional Starting…/Stopping… states.
+	if (countingDown_) {
+		primaryButton_->setText(QStringLiteral("Starting in %1…").arg(countdownRemaining_));
+		primaryButton_->setEnabled(false);
+		primaryButton_->setToolTip(QStringLiteral("Press Esc on the countdown to cancel"));
+	} else if (starting_) {
+		primaryButton_->setText(QStringLiteral("%1  Starting…").arg(spin));
+		primaryButton_->setEnabled(false);
+		primaryButton_->setToolTip(QString());
+	} else if (stopping_) {
+		primaryButton_->setText(QStringLiteral("%1  Stopping…").arg(spin));
+		primaryButton_->setEnabled(false);
+		primaryButton_->setToolTip(QString());
+	} else if (recording) {
 		primaryButton_->setText(QStringLiteral("■  Stop"));
 		primaryButton_->setEnabled(true);
 		primaryButton_->setToolTip(QString());
@@ -1178,8 +1252,8 @@ void MainWindow::updateButtons()
 						   : QString());
 	}
 
-	// Pause/Resume: only present while recording.
-	pauseButton_->setVisible(recording);
+	// Pause/Resume: only present while actively recording (hidden while stopping).
+	pauseButton_->setVisible(recording && !stopping_);
 	if (recording) {
 		if (paused) {
 			pauseButton_->setText(QStringLiteral("▶  Resume"));
@@ -1192,12 +1266,13 @@ void MainWindow::updateButtons()
 		}
 	}
 
-	presetCombo_->setEnabled(!recording);
-	editPresetButton_->setEnabled(!recording);
-	newPresetButton_->setEnabled(!recording);
+	const bool locked = recording || transitioning;
+	presetCombo_->setEnabled(!locked);
+	editPresetButton_->setEnabled(!locked);
+	newPresetButton_->setEnabled(!locked);
 	if (webcamSettingsButton_)
-		webcamSettingsButton_->setEnabled(!recording);
-	captureModeCombo_->setEnabled(!recording);
+		webcamSettingsButton_->setEnabled(!locked);
+	captureModeCombo_->setEnabled(!locked);
 
 	updateStatusChip();
 }
@@ -1212,7 +1287,19 @@ void MainWindow::updateStatusChip()
 	bool pulse = false;
 	QString tip;
 
-	if (recorder_.isRecording()) {
+	if (countingDown_) {
+		text = QStringLiteral("Starting in %1s").arg(countdownRemaining_);
+		color = QColor(0xd2, 0x99, 0x22);
+		pulse = true;
+	} else if (starting_) {
+		text = QStringLiteral("Starting");
+		color = QColor(0xd2, 0x99, 0x22);
+		pulse = true;
+	} else if (stopping_) {
+		text = QStringLiteral("Stopping");
+		color = QColor(0xd2, 0x99, 0x22);
+		pulse = true;
+	} else if (recorder_.isRecording()) {
 		if (recorder_.isPaused()) {
 			text = QStringLiteral("Paused");
 			color = QColor(0xd2, 0x99, 0x22);
@@ -1241,6 +1328,8 @@ void MainWindow::updateStatusChip()
 
 void MainWindow::tickState()
 {
+	++spinPhase_; // drive the Starting…/Stopping… spinner
+
 	if (!recorder_.isRecording()) {
 		if (recStartMs_ != 0) {
 			// Recording just ended — reset the timer accounting.
@@ -1255,11 +1344,14 @@ void MainWindow::tickState()
 			focusPaused_ = false;
 			targetPid_ = 0;
 			markersPath_.clear();
+			stopping_ = false; // finalize complete
 		}
 		timerLabel_->setText(QStringLiteral("00:00:00"));
 		updateButtons();
 		return;
 	}
+
+	starting_ = false; // output is now active
 
 	tickFocus(); // pause/resume on target-app focus changes
 

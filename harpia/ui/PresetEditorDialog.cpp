@@ -181,6 +181,19 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 				"mouse/keyboard activity. Set to Disabled to always keep recording."),
 		 idleSpin_);
 
+	countdownCombo_ = new QComboBox(this);
+	countdownCombo_->addItem(QStringLiteral("Disabled"), 0);
+	for (int s = 1; s <= 10; ++s)
+		countdownCombo_->addItem(QStringLiteral("%1 second%2").arg(s).arg(s == 1 ? "" : "s"), s);
+	{
+		int ci = countdownCombo_->findData(preset.countdownSeconds);
+		countdownCombo_->setCurrentIndex(ci >= 0 ? ci : 0);
+	}
+	addField(v, QStringLiteral("Countdown before recording"),
+		 QStringLiteral("Show a large countdown on screen before recording starts, so you can get "
+				"ready. The countdown itself is never part of the recording."),
+		 countdownCombo_);
+
 	pauseFocusCheck_ = new QCheckBox(QStringLiteral("Auto-pause when the target application loses focus"),
 					this);
 	pauseFocusCheck_->setChecked(preset.pauseOnFocusLoss);
@@ -709,6 +722,7 @@ void PresetEditorDialog::accept()
 	result_.monitorIndex = monitorCombo_->currentData().toInt();
 	result_.gpuCompression = gpuCheck_->isChecked();
 	result_.idleTimeoutSeconds = idleSpin_->value();
+	result_.countdownSeconds = countdownCombo_->currentData().toInt();
 	result_.pauseOnFocusLoss = pauseFocusCheck_->isChecked();
 	result_.filenameTemplate = templateEdit_->text().trimmed().toStdString();
 

@@ -58,6 +58,7 @@ private:
 	QLineEdit *folderEdit_ = nullptr;
 	QCheckBox *gpuCheck_ = nullptr;
 	QSpinBox *idleSpin_ = nullptr;
+	QComboBox *countdownCombo_ = nullptr;
 	QCheckBox *pauseFocusCheck_ = nullptr;
 	QLineEdit *templateEdit_ = nullptr;
 	QLabel *templatePreview_ = nullptr;

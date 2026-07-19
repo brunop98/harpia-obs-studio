@@ -43,6 +43,7 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_int(d, "idle_timeout_seconds", p.idleTimeoutSeconds);
 	obs_data_set_bool(d, "pause_on_focus_loss", p.pauseOnFocusLoss);
 	obs_data_set_int(d, "recording_counter", p.recordingCounter);
+	obs_data_set_int(d, "countdown_seconds", p.countdownSeconds);
 	obs_data_set_bool(d, "record_desktop_audio", p.recordDesktopAudio);
 	obs_data_array_t *mics = obs_data_array_create();
 	for (const std::string &id : p.micDeviceIds) {
@@ -93,6 +94,7 @@ Preset presetFromData(obs_data_t *d)
 	p.pauseOnFocusLoss = obs_data_get_bool(d, "pause_on_focus_loss");
 	if (obs_data_has_user_value(d, "recording_counter"))
 		p.recordingCounter = (int)obs_data_get_int(d, "recording_counter");
+	p.countdownSeconds = (int)obs_data_get_int(d, "countdown_seconds");
 	p.recordDesktopAudio = obs_data_get_bool(d, "record_desktop_audio");
 	obs_data_array_t *mics = obs_data_get_array(d, "mic_device_ids");
 	const size_t micCount = mics ? obs_data_array_count(mics) : 0;

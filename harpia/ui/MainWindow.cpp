@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <map>
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
@@ -438,8 +439,25 @@ void MainWindow::startRecording()
 	capture_.startCapture(preset.monitorIndex, preset.showMouseCursor);
 	capture_.setRegion(currentRegion_);
 
-	// Expand the filename once so the screen and webcam files share a base name.
-	const QString baseName = QString::fromStdString(nameTemplate_.expand(preset.filenameTemplate));
+	// Build the context tokens the clock can't supply, then expand once so the
+	// screen and webcam files share a base name.
+	std::map<std::string, std::string> vars;
+	vars["Preset"] = preset.name;
+	vars["Resolution"] = std::to_string(baseW) + "x" + std::to_string(baseH);
+	vars["FPS"] = std::to_string(preset.fps) + "fps";
+	vars["Codec"] = QString::fromUtf8(codecToString(preset.codec)).toUpper().toStdString();
+	vars["Counter"] = QStringLiteral("%1").arg(preset.recordingCounter, 4, 10, QLatin1Char('0')).toStdString();
+
+	const QString baseName = QString::fromStdString(nameTemplate_.expand(preset.filenameTemplate, vars));
+
+	// Advance the persistent counter if the template consumed it.
+	if (preset.filenameTemplate.find("{Counter}") != std::string::npos) {
+		if (Preset *cur = const_cast<Preset *>(presets_.find(activePresetId_))) {
+			cur->recordingCounter += 1;
+			presets_.upsert(*cur);
+		}
+	}
+
 	QDir dir(QString::fromStdString(preset.outputFolder));
 	dir.mkpath(QStringLiteral("."));
 	const QString screenPath =

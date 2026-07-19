@@ -33,6 +33,7 @@ private slots:
 	void browseFolder();
 	void updateValidation();
 	void updateMousePreview();
+	void updateFilenamePreview();
 	void accept() override;
 
 private:
@@ -53,6 +54,7 @@ private:
 	QCheckBox *gpuCheck_ = nullptr;
 	QSpinBox *idleSpin_ = nullptr;
 	QLineEdit *templateEdit_ = nullptr;
+	QLabel *templatePreview_ = nullptr;
 	QLabel *validationLabel_ = nullptr;
 
 	// Audio page

@@ -34,6 +34,13 @@ public:
 	// are illegal in filenames on the target platforms.
 	std::string expand(const std::string &tmpl, std::time_t when = std::time(nullptr)) const;
 
+	// As above, but `vars` supplies context tokens the clock can't
+	// ({Preset}, {Resolution}, {FPS}, {Codec}, {Counter}, …). A token present in
+	// `vars` wins over a registered time token. {Random} is generated when not
+	// provided.
+	std::string expand(const std::string &tmpl, const std::map<std::string, std::string> &vars,
+			   std::time_t when = std::time(nullptr)) const;
+
 private:
 	std::map<std::string, Resolver> tokens_;
 };

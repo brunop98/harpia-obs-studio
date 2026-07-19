@@ -5,6 +5,9 @@
 #include "core/EncoderFactory.hpp"
 #include "core/WebcamRecorder.hpp"
 #include "core/AudioManager.hpp" // AudioDevice
+#include "model/FileNameTemplate.hpp"
+
+#include <map>
 
 #include <algorithm>
 
@@ -15,6 +18,7 @@
 #include <QFileDialog>
 #include <QFont>
 #include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QIntValidator>
 #include <QLabel>
@@ -271,8 +275,55 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 
 	templateEdit_ = new QLineEdit(QString::fromStdString(preset.filenameTemplate), this);
 	addField(v, QStringLiteral("Filename template"),
-		 QStringLiteral("Names each file. Tokens: {Year} {Month} {Day} {Hour} {Minute} {Second}."),
+		 QStringLiteral("Names each file. Click a token below to insert it at the cursor."),
 		 templateEdit_);
+
+	// Quick-insert token buttons — no need to remember token names.
+	struct Tok {
+		const char *label;
+		const char *token;
+	};
+	const Tok toks[] = {
+		{"Year", "{Year}"},         {"Month", "{Month}"},   {"Month (Jul)", "{MonthShort}"},
+		{"Month (July)", "{MonthLong}"}, {"Day", "{Day}"},  {"Hour", "{Hour}"},
+		{"Minute", "{Minute}"},     {"Second", "{Second}"}, {"Counter", "{Counter}"},
+		{"Preset", "{Preset}"},     {"Resolution", "{Resolution}"}, {"FPS", "{FPS}"},
+		{"Codec", "{Codec}"},       {"Random", "{Random}"},
+	};
+	auto *tokGridHost = new QWidget(this);
+	auto *tokGrid = new QGridLayout(tokGridHost);
+	tokGrid->setContentsMargins(0, 0, 0, 0);
+	tokGrid->setSpacing(4);
+	int col = 0, rowN = 0;
+	for (const Tok &t : toks) {
+		auto *b = new QPushButton(QString::fromUtf8(t.label), this);
+		b->setToolTip(QString::fromUtf8(t.token));
+		const QString token = QString::fromUtf8(t.token);
+		connect(b, &QPushButton::clicked, this, [this, token]() {
+			templateEdit_->insert(token); // inserts at the cursor
+			templateEdit_->setFocus();
+			updateFilenamePreview();
+		});
+		tokGrid->addWidget(b, rowN, col);
+		if (++col == 4) {
+			col = 0;
+			++rowN;
+		}
+	}
+	v->addWidget(tokGridHost);
+	v->addSpacing(8);
+
+	templatePreview_ = new QLabel(this);
+	templatePreview_->setWordWrap(true);
+	templatePreview_->setStyleSheet(QStringLiteral("color:#8a8f98;"));
+	v->addWidget(templatePreview_);
+
+	connect(templateEdit_, &QLineEdit::textChanged, this, &PresetEditorDialog::updateFilenamePreview);
+	connect(nameEdit_, &QLineEdit::textChanged, this, &PresetEditorDialog::updateFilenamePreview);
+	connect(fpsCombo_, &QComboBox::currentTextChanged, this, &PresetEditorDialog::updateFilenamePreview);
+	connect(codecCombo_, &QComboBox::currentIndexChanged, this, &PresetEditorDialog::updateFilenamePreview);
+	connect(formatCombo_, &QComboBox::currentIndexChanged, this, &PresetEditorDialog::updateFilenamePreview);
+
 	v->addStretch(1);
 	addPage(QStringLiteral("Output"), outputPage);
 
@@ -487,6 +538,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	connect(codecCombo_, &QComboBox::currentIndexChanged, this, &PresetEditorDialog::updateValidation);
 	updateValidation();
 	updateMousePreview();
+	updateFilenamePreview();
 	resize(620, 520);
 }
 
@@ -506,6 +558,32 @@ void PresetEditorDialog::updateMousePreview()
 		return;
 	mousePreview_->configure(mouseAreaCheck_->isChecked(), highlightColor_, highlightSizeSlider_->value(),
 				 mouseClicksCheck_->isChecked(), leftColor_);
+}
+
+void PresetEditorDialog::updateFilenamePreview()
+{
+	if (!templatePreview_)
+		return;
+
+	FileNameTemplate t;
+	std::map<std::string, std::string> vars;
+	vars["Preset"] = nameEdit_->text().trimmed().toStdString();
+	vars["Resolution"] = "1920x1080"; // sample; the real size is known at record time
+	QString fpsText = fpsCombo_->currentText().trimmed();
+	if (fpsText.isEmpty())
+		fpsText = QStringLiteral("30");
+	vars["FPS"] = (fpsText + QStringLiteral("fps")).toStdString();
+	vars["Codec"] = QString::fromUtf8(codecToString(VideoCodec(codecCombo_->currentData().toInt())))
+				.toUpper()
+				.toStdString();
+	vars["Counter"] =
+		QStringLiteral("%1").arg(result_.recordingCounter, 4, 10, QLatin1Char('0')).toStdString();
+
+	const std::string base = t.expand(templateEdit_->text().toStdString(), vars);
+	const auto fmt = RecordingFormat(formatCombo_->currentData().toInt());
+	const QString ext = QString::fromUtf8(formatExtension(fmt));
+	templatePreview_->setText(
+		QStringLiteral("Preview: %1.%2").arg(QString::fromStdString(base), ext));
 }
 
 void PresetEditorDialog::browseFolder()

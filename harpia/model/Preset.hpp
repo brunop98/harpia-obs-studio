@@ -101,6 +101,10 @@ struct Preset {
 	// 0 disables the idle auto-pause behavior for this preset.
 	int idleTimeoutSeconds = 0;
 
+	// Next value for the {Counter} filename token; incremented after each
+	// recording that uses it so files number 0001, 0002, … across sessions.
+	int recordingCounter = 1;
+
 	// File extension (without the dot) for the current format.
 	std::string extension() const;
 

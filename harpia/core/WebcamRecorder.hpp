@@ -38,6 +38,11 @@ public:
 	// Available camera devices (id + human name). Requires modules loaded.
 	static std::vector<AudioDevice> cameras();
 
+	// Whether the platform camera source is registered at all. False means the
+	// capture plugin (e.g. win-dshow) wasn't built/loaded — distinct from "a
+	// camera plugin is present but no device is plugged in".
+	static bool supported();
+
 	// The platform camera source id (dshow_input / macos-avcapture / v4l2_input).
 	static const char *platformCameraId();
 

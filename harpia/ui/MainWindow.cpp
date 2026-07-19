@@ -114,6 +114,10 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	captureModeCombo_->addItem(QStringLiteral("Custom Region"), int(CaptureMode::Region));
 	toolbar->addWidget(captureModeCombo_);
 
+	webcamSettingsButton_ = new QPushButton(QStringLiteral("Webcam"), central);
+	webcamSettingsButton_->setToolTip(QStringLiteral("Configure the webcam for this preset"));
+	toolbar->addWidget(webcamSettingsButton_);
+
 	idleToggle_ = new QCheckBox(QStringLiteral("Only record while using the computer"), central);
 	toolbar->addWidget(idleToggle_);
 	idleSpin_ = new QSpinBox(central);
@@ -264,8 +268,10 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// ---- Wiring ---------------------------------------------------------
 	connect(primaryButton_, &QPushButton::clicked, this, &MainWindow::onPrimaryButton);
 	connect(pauseButton_, &QPushButton::clicked, this, &MainWindow::onPauseButton);
-	connect(editPresetButton_, &QPushButton::clicked, this, &MainWindow::editActivePreset);
+	connect(editPresetButton_, &QPushButton::clicked, this, [this]() { editActivePreset(); });
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
+	connect(webcamSettingsButton_, &QPushButton::clicked, this,
+		[this]() { editActivePreset(QStringLiteral("Webcam")); });
 	connect(webcamCombo_, &QComboBox::activated, this, &MainWindow::onWebcamDeviceChanged);
 	connect(openFolderButton_, &QPushButton::clicked, this, &MainWindow::onOpenPresetFolder);
 	connect(libraryButton_, &QPushButton::clicked, this, &MainWindow::onOpenClipLibrary);
@@ -618,12 +624,14 @@ void MainWindow::showPresetMenu(const QPoint &pos)
 	}
 }
 
-void MainWindow::editActivePreset()
+void MainWindow::editActivePreset(const QString &initialPage)
 {
 	const Preset *cur = presets_.find(activePresetId_);
 	if (!cur)
 		return;
 	PresetEditorDialog dlg(*cur, this);
+	if (!initialPage.isEmpty())
+		dlg.showPage(initialPage);
 	if (dlg.exec() == QDialog::Accepted) {
 		presets_.upsert(dlg.result());
 		reloadPresetCombo();
@@ -663,8 +671,15 @@ void MainWindow::refreshWebcamRow()
 
 	webcamBox_->setVisible(true);
 	if (cams.empty()) {
-		// Preset wants a webcam but none are present.
-		webcamWarn_->setText(QStringLiteral("Webcam not found"));
+		// Distinguish "capture plugin not built" from "no camera plugged in".
+		webcamWarn_->setText(WebcamRecorder::supported()
+					     ? QStringLiteral("Webcam not found")
+					     : QStringLiteral("Webcam capture unavailable in this build"));
+		webcamWarn_->setToolTip(WebcamRecorder::supported()
+						? QString()
+						: QStringLiteral("The camera plugin (win-dshow) isn't loaded. "
+								 "Install the Visual Studio 'C++ ATL' component "
+								 "and rebuild to enable webcam capture."));
 		webcamWarn_->setVisible(true);
 		webcamPreview_->clearDevice();
 		return;
@@ -772,7 +787,8 @@ void MainWindow::refreshReadiness()
 	if (p.webcamEnabled && WebcamRecorder::cameras().empty()) {
 		warnings.push_back({QStringLiteral("Webcam is enabled but no camera is available — it will be "
 						   "skipped for this recording."),
-				    [this]() { editActivePreset(); }, QStringLiteral("Fix webcam"),
+				    [this]() { editActivePreset(QStringLiteral("Webcam")); },
+				    QStringLiteral("Fix webcam"),
 				    /*blocking=*/false});
 	}
 
@@ -1169,6 +1185,8 @@ void MainWindow::updateButtons()
 	presetCombo_->setEnabled(!recording);
 	editPresetButton_->setEnabled(!recording);
 	newPresetButton_->setEnabled(!recording);
+	if (webcamSettingsButton_)
+		webcamSettingsButton_->setEnabled(!recording);
 	captureModeCombo_->setEnabled(!recording);
 
 	updateStatusChip();

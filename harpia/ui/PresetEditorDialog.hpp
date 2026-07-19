@@ -14,6 +14,7 @@ class QSpinBox;
 class QLabel;
 class QSlider;
 class QPushButton;
+class QListWidget;
 
 namespace harpia {
 
@@ -29,6 +30,9 @@ public:
 	// The edited preset (valid after the dialog is accepted).
 	Preset result() const { return result_; }
 
+	// Select a settings page by its nav title (e.g. "Webcam"). No-op if unknown.
+	void showPage(const QString &title);
+
 private slots:
 	void browseFolder();
 	void updateValidation();
@@ -42,6 +46,7 @@ private:
 private:
 	Preset result_; // seeded from the input; updated on accept
 
+	QListWidget *nav_ = nullptr; // page selector, for showPage()
 	QLineEdit *nameEdit_ = nullptr;
 	QComboBox *formatCombo_ = nullptr;
 	QComboBox *codecCombo_ = nullptr;

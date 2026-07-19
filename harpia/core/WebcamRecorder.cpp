@@ -35,27 +35,58 @@ static const char *deviceKey(obs_properties_t *props)
 	return nullptr;
 }
 
+bool WebcamRecorder::supported()
+{
+	// Creating a private source of an unregistered type returns null, so this
+	// cleanly reports whether the camera capture plugin is loaded at all.
+	obs_source_t *probe = obs_source_create_private(platformCameraId(), "harpia_cam_supported", nullptr);
+	if (!probe)
+		return false;
+	obs_source_release(probe);
+	return true;
+}
+
 std::vector<AudioDevice> WebcamRecorder::cameras()
 {
 	std::vector<AudioDevice> out;
-	obs_properties_t *props = obs_get_source_properties(platformCameraId());
-	if (!props)
+	const char *id = platformCameraId();
+
+	// Enumerate from a real (private) source instance rather than the static
+	// properties: the device list is populated most reliably that way, and it
+	// avoids opening any device (no video_device_id is set). A null instance
+	// means the capture plugin (e.g. win-dshow) isn't loaded.
+	obs_source_t *probe = obs_source_create_private(id, "harpia_cam_probe", nullptr);
+	obs_properties_t *props = probe ? obs_source_properties(probe) : obs_get_source_properties(id);
+	if (!props) {
+		blog(LOG_WARNING,
+		     "[harpia] camera source '%s' is not available — is the capture plugin "
+		     "(win-dshow needs ATL) loaded?",
+		     id);
+		if (probe)
+			obs_source_release(probe);
 		return out;
+	}
+
 	const char *key = deviceKey(props);
 	if (key) {
 		obs_property_t *p = obs_properties_get(props, key);
 		const size_t count = obs_property_list_item_count(p);
 		for (size_t i = 0; i < count; i++) {
-			AudioDevice d;
 			const char *name = obs_property_list_item_name(p, i);
-			const char *id = obs_property_list_item_string(p, i);
-			d.name = name ? name : "";
-			d.id = id ? id : "";
-			if (!d.id.empty())
-				out.push_back(std::move(d));
+			const char *devId = obs_property_list_item_string(p, i);
+			if (!devId || !*devId)
+				continue; // skip empty/placeholder rows
+			AudioDevice d;
+			d.name = name ? name : devId;
+			d.id = devId;
+			out.push_back(std::move(d));
 		}
 	}
 	obs_properties_destroy(props);
+	if (probe)
+		obs_source_release(probe);
+
+	blog(LOG_INFO, "[harpia] webcam enumeration found %zu device(s) via '%s'", out.size(), id);
 	return out;
 }
 

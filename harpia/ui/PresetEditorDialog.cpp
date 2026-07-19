@@ -134,13 +134,13 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	header->addWidget(nameEdit_);
 
 	// ---- Left navigation + stacked pages --------------------------------
-	auto *nav = new QListWidget(this);
-	nav->setFixedWidth(150);
-	nav->setSpacing(2);
+	nav_ = new QListWidget(this);
+	nav_->setFixedWidth(150);
+	nav_->setSpacing(2);
 	auto *stack = new QStackedWidget(this);
 
 	auto addPage = [&](const QString &title, QWidget *page) {
-		nav->addItem(title);
+		nav_->addItem(title);
 		stack->addWidget(page);
 	};
 
@@ -526,11 +526,11 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	addPage(QStringLiteral("Advanced"), advancedPage);
 
 	// ---- Assemble: header on top, nav | pages, buttons at the bottom ----
-	connect(nav, &QListWidget::currentRowChanged, stack, &QStackedWidget::setCurrentIndex);
-	nav->setCurrentRow(0);
+	connect(nav_, &QListWidget::currentRowChanged, stack, &QStackedWidget::setCurrentIndex);
+	nav_->setCurrentRow(0);
 
 	auto *body = new QHBoxLayout;
-	body->addWidget(nav);
+	body->addWidget(nav_);
 	body->addWidget(stack, 1);
 
 	auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
@@ -548,6 +548,18 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	updateMousePreview();
 	updateFilenamePreview();
 	resize(620, 520);
+}
+
+void PresetEditorDialog::showPage(const QString &title)
+{
+	if (!nav_)
+		return;
+	for (int i = 0; i < nav_->count(); ++i) {
+		if (nav_->item(i)->text() == title) {
+			nav_->setCurrentRow(i);
+			return;
+		}
+	}
 }
 
 void PresetEditorDialog::pickColor(QColor &target, QPushButton *button)

@@ -88,7 +88,9 @@ private:
 	QString buildOutputPath(const Preset &preset) const;
 	void startRecording();
 	void updateButtons();
-	void editActivePreset(); // open the editor for the active preset + persist
+	// Open the editor for the active preset + persist. If initialPage is given
+	// (e.g. "Webcam"), the editor opens with that settings page selected.
+	void editActivePreset(const QString &initialPage = QString());
 	void syncIdleControls();     // load idle toggle/spin from the active preset
 	void updateStatusChip();     // reflect ready/recording/paused/warning in the chip
 	void applyDarkTheme();
@@ -118,6 +120,7 @@ private:
 	QPushButton *editPresetButton_ = nullptr;
 	QPushButton *newPresetButton_ = nullptr;
 	QComboBox *captureModeCombo_ = nullptr;
+	QPushButton *webcamSettingsButton_ = nullptr;
 	QCheckBox *idleToggle_ = nullptr;
 	QSpinBox *idleSpin_ = nullptr;
 	QPushButton *openFolderButton_ = nullptr;

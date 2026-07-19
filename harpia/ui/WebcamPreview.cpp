@@ -1,5 +1,6 @@
 #include "WebcamPreview.hpp"
 
+#include "core/AudioManager.hpp" // full AudioDevice definition ({id, name})
 #include "core/WebcamRecorder.hpp"
 
 #include <obs.h>

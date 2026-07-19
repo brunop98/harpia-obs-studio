@@ -599,10 +599,16 @@ void MainWindow::startRecording()
 
 	// Focus auto-pause: remember the app that's in the foreground now as the
 	// target, and prepare a sidecar file for Auto Paused/Resumed markers.
+	//
+	// This only makes sense in single-application capture mode: when capturing a
+	// whole monitor or a region, what's recorded doesn't depend on which window is
+	// focused, so pausing on focus loss would (wrongly) pause the instant Harpia's
+	// own window is foreground — and re-pause every time you click Resume. Gate it
+	// to app-capture so full-screen recording never auto-pauses on focus.
 	focusPaused_ = false;
 	targetPid_ = 0;
 	markersPath_.clear();
-	if (preset.pauseOnFocusLoss) {
+	if (preset.pauseOnFocusLoss && appCaptureEnabled_) {
 		// Target the app you were using just before pressing Record — NOT Harpia
 		// itself (which is foreground now). If we never saw another app, leave the
 		// target unset so the feature stays inactive rather than misbehaving.
@@ -1744,7 +1750,11 @@ void MainWindow::tickIdle()
 
 void MainWindow::tickFocus(uint64_t foregroundPid)
 {
-	if (!recorder_.isRecording() || !activePreset().pauseOnFocusLoss || targetPid_ == 0)
+	// Focus-driven pause applies only to single-application capture (see
+	// startRecording). targetPid_ is left 0 for monitor/region capture, so this
+	// guard also keeps full-screen recordings from ever auto-pausing on focus.
+	if (!recorder_.isRecording() || !activePreset().pauseOnFocusLoss || !appCaptureEnabled_ ||
+	    targetPid_ == 0)
 		return;
 
 	const uint64_t fg = foregroundPid;

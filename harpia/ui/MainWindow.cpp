@@ -129,59 +129,48 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	warningsBox_->setVisible(false);
 	root->addWidget(warningsBox_);
 
-	// Status chip: a centered rounded pill that reflects the current state
-	// (ready / recording / paused / warning / error). Styled in updateStatusChip().
-	auto *statusRow = new QHBoxLayout;
-	statusRow->addStretch(1);
-	statusChip_ = new QLabel(central);
-	statusChip_->setAlignment(Qt::AlignCenter);
-	statusRow->addWidget(statusChip_);
-	statusRow->addStretch(1);
-	root->addLayout(statusRow);
-
-	// ---- Center controls ------------------------------------------------
+	// ---- Center controls: one horizontal row --------------------------------
+	//   [ 🟢 Ready ]  [ ● Record / ■ Stop ]  [ ⏸ Pause ]  [ 00:00:00 ]
+	// Everything the user needs to see and press lives on a single line.
 	root->addStretch(1);
 
-	auto *controls = new QHBoxLayout;
-	controls->setSpacing(18);
-	controls->addStretch(1);
-
-	primaryButton_ = new QPushButton(QStringLiteral("●  Record"), central);
-	primaryButton_->setObjectName(QStringLiteral("primaryButton"));
-	primaryButton_->setMinimumSize(240, 96);
-	QFont bigFont = primaryButton_->font();
+	QFont bigFont;
 	bigFont.setPointSize(bigFont.pointSize() + 8);
 	bigFont.setBold(true);
+
+	auto *controls = new QHBoxLayout;
+	controls->setSpacing(16);
+	controls->addStretch(1);
+
+	// Status chip (colored indicator) — left of the controls.
+	statusChip_ = new QLabel(central);
+	statusChip_->setAlignment(Qt::AlignCenter);
+	controls->addWidget(statusChip_);
+
+	// Single Record/Stop toggle: shows Record when idle, Stop while recording.
+	primaryButton_ = new QPushButton(QStringLiteral("●  Record"), central);
+	primaryButton_->setObjectName(QStringLiteral("primaryButton"));
+	primaryButton_->setMinimumSize(200, 84);
 	primaryButton_->setFont(bigFont);
+	controls->addWidget(primaryButton_);
 
-	// Record button with the timer centered directly beneath it.
-	auto *recordCol = new QVBoxLayout;
-	recordCol->setSpacing(8);
-	recordCol->addWidget(primaryButton_, 0, Qt::AlignHCenter);
+	// Pause/Resume: only shown while recording.
+	pauseButton_ = new QPushButton(QStringLiteral("⏸  Pause"), central);
+	pauseButton_->setObjectName(QStringLiteral("pauseButton"));
+	pauseButton_->setMinimumSize(130, 84);
+	pauseButton_->setFont(bigFont);
+	pauseButton_->setVisible(false);
+	controls->addWidget(pauseButton_);
 
+	// Elapsed time — large, monospaced, always visible.
 	timerLabel_ = new QLabel(QStringLiteral("00:00:00"), central);
 	timerLabel_->setObjectName(QStringLiteral("timerLabel"));
 	timerLabel_->setAlignment(Qt::AlignCenter);
 	QFont timerFont(QStringLiteral("monospace"));
 	timerFont.setStyleHint(QFont::Monospace);
-	timerFont.setPointSize(bigFont.pointSize() + 6);
+	timerFont.setPointSize(bigFont.pointSize() + 8);
 	timerLabel_->setFont(timerFont);
-	recordCol->addWidget(timerLabel_, 0, Qt::AlignHCenter);
-	controls->addLayout(recordCol);
-
-	// Pause/Resume: only shown while recording.
-	pauseButton_ = new QPushButton(QStringLiteral("⏸  Pause"), central);
-	pauseButton_->setObjectName(QStringLiteral("pauseButton"));
-	pauseButton_->setMinimumSize(130, 96);
-	pauseButton_->setFont(bigFont);
-	pauseButton_->setVisible(false);
-	controls->addWidget(pauseButton_);
-
-	stopButton_ = new QPushButton(QStringLiteral("■  Stop"), central);
-	stopButton_->setObjectName(QStringLiteral("stopButton"));
-	stopButton_->setMinimumSize(130, 96);
-	stopButton_->setFont(bigFont);
-	controls->addWidget(stopButton_);
+	controls->addWidget(timerLabel_);
 
 	controls->addStretch(1);
 	root->addLayout(controls);
@@ -228,7 +217,6 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// ---- Wiring ---------------------------------------------------------
 	connect(primaryButton_, &QPushButton::clicked, this, &MainWindow::onPrimaryButton);
 	connect(pauseButton_, &QPushButton::clicked, this, &MainWindow::onPauseButton);
-	connect(stopButton_, &QPushButton::clicked, this, &MainWindow::onStopButton);
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
 	connect(openFolderButton_, &QPushButton::clicked, this, &MainWindow::onOpenPresetFolder);
 	connect(libraryButton_, &QPushButton::clicked, this, &MainWindow::onOpenClipLibrary);
@@ -471,7 +459,10 @@ void MainWindow::startRecording()
 
 void MainWindow::onPrimaryButton()
 {
-	if (!recorder_.isRecording())
+	// Single toggle: start when idle, stop when recording.
+	if (recorder_.isRecording())
+		recorder_.stop();
+	else
 		startRecording();
 }
 
@@ -482,12 +473,6 @@ void MainWindow::onPauseButton()
 	recorder_.togglePause();
 	autoPaused_ = false; // manual action overrides the idle state machine
 	updateButtons();
-}
-
-void MainWindow::onStopButton()
-{
-	if (recorder_.isRecording())
-		recorder_.stop();
 }
 
 void MainWindow::onNewPreset()
@@ -1005,12 +990,19 @@ void MainWindow::updateButtons()
 	const bool recording = recorder_.isRecording();
 	const bool paused = recorder_.isPaused();
 
-	// Record: starts a recording; disabled while one is in progress or while
-	// readiness warnings block recording.
-	primaryButton_->setEnabled(!recording && !recordingBlocked_);
-	primaryButton_->setToolTip((!recording && recordingBlocked_)
-					   ? QStringLiteral("Resolve the warnings above before recording")
-					   : QString());
+	// Single Record/Stop toggle. Record is blocked by readiness warnings; Stop
+	// is always available once recording.
+	if (recording) {
+		primaryButton_->setText(QStringLiteral("■  Stop"));
+		primaryButton_->setEnabled(true);
+		primaryButton_->setToolTip(QString());
+	} else {
+		primaryButton_->setText(QStringLiteral("●  Record"));
+		primaryButton_->setEnabled(!recordingBlocked_);
+		primaryButton_->setToolTip(recordingBlocked_
+						   ? QStringLiteral("Resolve the warnings above before recording")
+						   : QString());
+	}
 
 	// Pause/Resume: only present while recording.
 	pauseButton_->setVisible(recording);
@@ -1026,8 +1018,6 @@ void MainWindow::updateButtons()
 		}
 	}
 
-	// Stop: only enabled while recording.
-	stopButton_->setEnabled(recording);
 	presetCombo_->setEnabled(!recording);
 	newPresetButton_->setEnabled(!recording);
 	captureModeCombo_->setEnabled(!recording);

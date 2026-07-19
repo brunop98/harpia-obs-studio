@@ -53,9 +53,8 @@ public:
 	~MainWindow() override;
 
 private slots:
-	void onPrimaryButton(); // start recording
+	void onPrimaryButton(); // Record/Stop toggle
 	void onPauseButton();   // pause/resume while recording
-	void onStopButton();
 	void onNewPreset();
 	void showPresetMenu(const QPoint &pos); // right-click combo: edit/delete
 	void onOpenPresetFolder();
@@ -116,9 +115,8 @@ private:
 	QPushButton *openFolderButton_ = nullptr;
 
 	// Center controls
-	QPushButton *primaryButton_ = nullptr;
+	QPushButton *primaryButton_ = nullptr; // Record/Stop toggle
 	QPushButton *pauseButton_ = nullptr;
-	QPushButton *stopButton_ = nullptr;
 	QLabel *timerLabel_ = nullptr;
 
 	// Recording readiness

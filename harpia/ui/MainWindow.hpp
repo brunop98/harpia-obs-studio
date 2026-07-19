@@ -76,6 +76,7 @@ private slots:
 	void onAudioChanged();
 	void onPresetChanged();
 	void refreshRecentList();
+	void refreshClipViews(); // recent strip + open Clip Library window
 	void reloadPresetCombo();
 	void showStripContextMenu(const QPoint &pos);
 	void onThumbnailReady(const QString &path);

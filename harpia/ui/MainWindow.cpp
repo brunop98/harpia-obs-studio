@@ -753,7 +753,7 @@ void MainWindow::finalizeStopped(const QString &recordedPath, const QString &fin
 	if (needsRemux) {
 		remuxInBackground(recordedPath, finalPath);
 	} else {
-		refreshRecentList();
+		refreshClipViews();
 		if (closePending_)
 			close();
 	}
@@ -790,7 +790,7 @@ bool MainWindow::discardShortRecording(const QString &recordedPath, const QStrin
 	// Tidy the temp dir if this was a to-be-remuxed .mkv.
 	QDir().rmdir(QFileInfo(recordedPath).absolutePath());
 	blog(LOG_INFO, "[harpia] discarded short recording (%d s < %d s minimum)", secs, minSeconds);
-	refreshRecentList();
+	refreshClipViews();
 	return true;
 }
 
@@ -850,7 +850,7 @@ void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Pat
 							QStringLiteral("Could not finalize MP4 — recording "
 								       "kept as MKV"),
 							10000);
-					guard->refreshRecentList();
+					guard->refreshClipViews();
 					if (guard->closePending_)
 						guard->close();
 				}
@@ -1561,6 +1561,16 @@ void MainWindow::refreshRecentList()
 	}
 }
 
+void MainWindow::refreshClipViews()
+{
+	// Refresh the recent strip and, if the Clip Library window is open, its grid
+	// too — so newly finished recordings and optimized (_shared) copies appear in
+	// both places live, without reopening the library.
+	refreshRecentList();
+	if (clipWindow_)
+		clipWindow_->refresh();
+}
+
 void MainWindow::onThumbnailReady(const QString &path)
 {
 	QListWidgetItem *item = itemByPath_.value(path, nullptr);
@@ -1611,13 +1621,13 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 
 	if (chosen == optLowAct) {
 		ShareExportDialog::runModal(path, ShareExporter::Level::Low, this);
-		refreshRecentList();
+		refreshClipViews();
 	} else if (chosen == optBalAct) {
 		ShareExportDialog::runModal(path, ShareExporter::Level::Balanced, this);
-		refreshRecentList();
+		refreshClipViews();
 	} else if (chosen == optHighAct) {
 		ShareExportDialog::runModal(path, ShareExporter::Level::High, this);
-		refreshRecentList();
+		refreshClipViews();
 	} else if (chosen == openAct) {
 		QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 	} else if (chosen == folderAct) {

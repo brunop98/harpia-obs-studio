@@ -109,11 +109,13 @@ target_sources(
 if(OS_WINDOWS)
   target_sources(harpia-recorder PRIVATE
     platform/win/WinIdleMonitor.cpp
-    platform/win/WinForegroundWatcher.cpp)
+    platform/win/WinForegroundWatcher.cpp
+    platform/win/WinCameraAccess.cpp)
 elseif(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
   target_sources(harpia-recorder PRIVATE
     platform/nix/NixIdleMonitor.cpp
-    platform/nix/NixForegroundWatcher.cpp)
+    platform/nix/NixForegroundWatcher.cpp
+    platform/nix/NixCameraAccess.cpp)
   # Wayland/GNOME idle uses the Mutter IdleMonitor over D-Bus (Qt::DBus); X11/Xss
   # are loaded at runtime via dlopen, so only libdl is needed at link time.
   find_package(Qt6 REQUIRED DBus)
@@ -121,7 +123,8 @@ elseif(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
 elseif(OS_MACOS)
   target_sources(harpia-recorder PRIVATE
     platform/mac/MacIdleMonitor.cpp
-    platform/mac/MacForegroundWatcher.cpp)
+    platform/mac/MacForegroundWatcher.cpp
+    platform/mac/MacCameraAccess.cpp)
   target_link_libraries(harpia-recorder PRIVATE "-framework CoreGraphics")
 endif()
 

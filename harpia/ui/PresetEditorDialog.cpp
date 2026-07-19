@@ -6,6 +6,7 @@
 #include "core/WebcamRecorder.hpp"
 #include "core/AudioManager.hpp" // AudioDevice
 #include "model/FileNameTemplate.hpp"
+#include "platform/CameraAccess.hpp"
 
 #include <map>
 
@@ -399,8 +400,9 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		 QStringLiteral("Save the camera to its own file alongside the screen recording, kept in "
 				"sync. It is never composited onto the screen video."));
 
+	const std::vector<AudioDevice> cams = WebcamRecorder::cameras();
 	webcamDeviceCombo_ = new QComboBox(this);
-	for (const AudioDevice &cam : WebcamRecorder::cameras())
+	for (const AudioDevice &cam : cams)
 		webcamDeviceCombo_->addItem(QString::fromStdString(cam.name), QString::fromStdString(cam.id));
 	if (webcamDeviceCombo_->count() == 0)
 		webcamDeviceCombo_->addItem(QStringLiteral("(no camera detected)"), QString());
@@ -410,6 +412,41 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 			webcamDeviceCombo_->setCurrentIndex(di);
 	}
 	addField(v, QStringLiteral("Camera"), QStringLiteral("Which webcam to record."), webcamDeviceCombo_);
+
+	// Diagnostic status line: explain an empty list (plugin missing / privacy /
+	// not connected) or confirm success.
+	auto *camStatus = new QLabel(this);
+	camStatus->setWordWrap(true);
+	QString statusText;
+	QString statusColor;
+	if (!WebcamRecorder::supported()) {
+		statusText = QStringLiteral(
+			"Webcam capture is not available in this build. Install the Visual Studio "
+			"\"C++ ATL for latest v143 build tools\" component and rebuild to enable it.");
+		statusColor = QStringLiteral("#e5484d");
+	} else if (!cams.empty()) {
+		statusText = cams.size() == 1
+				     ? QStringLiteral("Camera detected: %1")
+					       .arg(QString::fromStdString(cams.front().name))
+				     : QStringLiteral("%1 cameras detected.").arg(cams.size());
+		statusColor = QStringLiteral("#3fb950");
+	} else if (cameraAccessStatus() == CameraAccess::DeniedByPrivacy) {
+		statusText = QStringLiteral(
+			"No cameras detected. This may be because camera access is disabled for desktop "
+			"applications. Check your Windows Privacy & Security > Camera settings and ensure "
+			"\"Let desktop apps access your camera\" is enabled.");
+		statusColor = QStringLiteral("#e5484d");
+	} else {
+		statusText = QStringLiteral(
+			"No cameras detected. Make sure a camera is connected and not already in use by "
+			"another application. If it still doesn't appear, check Windows Privacy & Security "
+			"> Camera settings and ensure desktop apps are allowed to access the camera.");
+		statusColor = QStringLiteral("#d29922");
+	}
+	camStatus->setText(statusText);
+	camStatus->setStyleSheet(QStringLiteral("color:%1;").arg(statusColor));
+	v->addWidget(camStatus);
+	v->addSpacing(8);
 
 	webcamResCombo_ = new QComboBox(this);
 	for (const char *r : {"1920x1080", "1280x720", "640x480"})

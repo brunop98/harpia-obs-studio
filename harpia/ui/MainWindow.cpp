@@ -11,6 +11,7 @@
 #include "StatusBadge.hpp"
 #include "WebcamPreview.hpp"
 #include "core/EncoderFactory.hpp"
+#include "platform/CameraAccess.hpp"
 #include "platform/ForegroundWatcher.hpp"
 #include "core/ObsContext.hpp"
 #include "library/ClipLibrary.hpp"
@@ -671,15 +672,24 @@ void MainWindow::refreshWebcamRow()
 
 	webcamBox_->setVisible(true);
 	if (cams.empty()) {
-		// Distinguish "capture plugin not built" from "no camera plugged in".
-		webcamWarn_->setText(WebcamRecorder::supported()
-					     ? QStringLiteral("Webcam not found")
-					     : QStringLiteral("Webcam capture unavailable in this build"));
-		webcamWarn_->setToolTip(WebcamRecorder::supported()
-						? QString()
-						: QStringLiteral("The camera plugin (win-dshow) isn't loaded. "
-								 "Install the Visual Studio 'C++ ATL' component "
-								 "and rebuild to enable webcam capture."));
+		// Explain *why* there are no cameras: plugin missing / privacy / none.
+		QString warn;
+		QString tip;
+		if (!WebcamRecorder::supported()) {
+			warn = QStringLiteral("Webcam capture unavailable in this build");
+			tip = QStringLiteral("The camera plugin (win-dshow) isn't loaded. Install the "
+					     "Visual Studio 'C++ ATL' component and rebuild.");
+		} else if (cameraAccessStatus() == CameraAccess::DeniedByPrivacy) {
+			warn = QStringLiteral("Camera access blocked by Windows");
+			tip = QStringLiteral("Enable Windows Privacy & Security > Camera > "
+					     "'Let desktop apps access your camera'.");
+		} else {
+			warn = QStringLiteral("Webcam not found");
+			tip = QStringLiteral("Connect a camera that isn't already in use by another app. "
+					     "If it still doesn't appear, check Windows camera privacy settings.");
+		}
+		webcamWarn_->setText(warn);
+		webcamWarn_->setToolTip(tip);
 		webcamWarn_->setVisible(true);
 		webcamPreview_->clearDevice();
 		return;

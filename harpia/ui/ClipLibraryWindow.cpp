@@ -1,5 +1,7 @@
 #include "ClipLibraryWindow.hpp"
 
+#include "ShareExportDialog.hpp"
+
 #include "RecentListWidget.hpp"
 #include "model/PresetStore.hpp"
 
@@ -462,6 +464,20 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 						: QStringLiteral("Add to favorites"));
 	QAction *copyAct = menu.addAction(QStringLiteral("Copy"));
 	QAction *renameAct = menu.addAction(QStringLiteral("Rename…"));
+
+	// Internet-sharing copy — one video clip at a time (not GIFs).
+	QAction *optLowAct = nullptr;
+	QAction *optBalAct = nullptr;
+	QAction *optHighAct = nullptr;
+	const bool oneVideo = sel.size() == 1 && !sel.front().endsWith(QStringLiteral(".gif"), Qt::CaseInsensitive);
+	if (oneVideo) {
+		menu.addSeparator();
+		QMenu *opt = menu.addMenu(QStringLiteral("Optimize for sharing"));
+		optLowAct = opt->addAction(QStringLiteral("Low — smallest file"));
+		optBalAct = opt->addAction(QStringLiteral("Balanced (Default)"));
+		optHighAct = opt->addAction(QStringLiteral("High — best quality"));
+	}
+
 	menu.addSeparator();
 	QAction *deleteAct = menu.addAction(QStringLiteral("Delete"));
 
@@ -476,6 +492,13 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 		renameSelected();
 	else if (chosen == deleteAct)
 		deleteSelected();
+	else if (oneVideo && (chosen == optLowAct || chosen == optBalAct || chosen == optHighAct)) {
+		const auto level = chosen == optLowAct    ? ShareExporter::Level::Low
+				   : chosen == optHighAct ? ShareExporter::Level::High
+							  : ShareExporter::Level::Balanced;
+		ShareExportDialog::runModal(sel.front(), level, this);
+		refresh();
+	}
 }
 
 void ClipLibraryWindow::toggleFavoriteSelected()

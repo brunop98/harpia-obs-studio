@@ -10,6 +10,7 @@
 #include "CountdownOverlay.hpp"
 #include "RegionTool.hpp"
 #include "ScreenBorderOverlay.hpp"
+#include "ShareExportDialog.hpp"
 #include "StatusBadge.hpp"
 #include "WebcamPreview.hpp"
 #include "core/EncoderFactory.hpp"
@@ -1587,6 +1588,19 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 	menu.addSeparator();
 	QAction *copyAct = menu.addAction(QStringLiteral("Copy"));
 	QAction *copyPathAct = menu.addAction(QStringLiteral("Copy Path"));
+
+	// Internet-sharing (WhatsApp-optimized) copy — offered for real videos only.
+	QAction *optLowAct = nullptr;
+	QAction *optBalAct = nullptr;
+	QAction *optHighAct = nullptr;
+	if (!path.endsWith(QStringLiteral(".gif"), Qt::CaseInsensitive)) {
+		menu.addSeparator();
+		QMenu *opt = menu.addMenu(QStringLiteral("Optimize for sharing"));
+		optLowAct = opt->addAction(QStringLiteral("Low — smallest file"));
+		optBalAct = opt->addAction(QStringLiteral("Balanced (Default)"));
+		optHighAct = opt->addAction(QStringLiteral("High — best quality"));
+	}
+
 	menu.addSeparator();
 	QAction *renameAct = menu.addAction(QStringLiteral("Rename…"));
 	QAction *deleteAct = menu.addAction(QStringLiteral("Delete"));
@@ -1595,7 +1609,16 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 	if (!chosen)
 		return;
 
-	if (chosen == openAct) {
+	if (chosen == optLowAct) {
+		ShareExportDialog::runModal(path, ShareExporter::Level::Low, this);
+		refreshRecentList();
+	} else if (chosen == optBalAct) {
+		ShareExportDialog::runModal(path, ShareExporter::Level::Balanced, this);
+		refreshRecentList();
+	} else if (chosen == optHighAct) {
+		ShareExportDialog::runModal(path, ShareExporter::Level::High, this);
+		refreshRecentList();
+	} else if (chosen == openAct) {
 		QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 	} else if (chosen == folderAct) {
 		// On Windows, reveal the file selected in Explorer; elsewhere open the

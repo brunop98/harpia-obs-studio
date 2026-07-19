@@ -7,7 +7,7 @@ cmake_minimum_required(VERSION 3.28...3.30)
 find_package(Qt6 REQUIRED Widgets Gui)
 
 # FFmpeg (bundled with OBS deps) is used to extract clip thumbnails.
-find_package(FFmpeg REQUIRED COMPONENTS avcodec avformat avutil swscale)
+find_package(FFmpeg REQUIRED COMPONENTS avcodec avformat avutil swscale swresample)
 
 if(NOT TARGET OBS::libobs)
   add_subdirectory("${CMAKE_SOURCE_DIR}/libobs" libobs)
@@ -26,6 +26,7 @@ target_link_libraries(
     FFmpeg::avformat
     FFmpeg::avutil
     FFmpeg::swscale
+    FFmpeg::swresample
 )
 
 set_target_properties(
@@ -73,6 +74,8 @@ target_sources(
     core/RecordingController.hpp
     core/Remuxer.cpp
     core/Remuxer.hpp
+    core/ShareExporter.cpp
+    core/ShareExporter.hpp
     core/WebcamRecorder.cpp
     core/WebcamRecorder.hpp
     model/Preset.cpp
@@ -101,6 +104,8 @@ target_sources(
     ui/CountdownOverlay.hpp
     ui/ScreenBorderOverlay.cpp
     ui/ScreenBorderOverlay.hpp
+    ui/ShareExportDialog.cpp
+    ui/ShareExportDialog.hpp
     ui/WebcamPreview.cpp
     ui/WebcamPreview.hpp
     ui/MouseFxOverlay.cpp

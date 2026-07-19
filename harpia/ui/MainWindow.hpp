@@ -12,6 +12,7 @@
 #include <QHash>
 #include <QMainWindow>
 #include <QSize>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -72,8 +73,9 @@ private slots:
 	void reloadPresetCombo();
 	void showStripContextMenu(const QPoint &pos);
 	void onThumbnailReady(const QString &path);
-	void tickState(); // recording/paused state + timer
-	void tickIdle();  // auto-pause/resume based on idle time
+	void tickState();  // recording/paused state + timer
+	void tickIdle();   // auto-pause/resume based on idle time
+	void tickFocus();  // auto-pause/resume based on target-app focus
 	void refreshReadiness(); // validate settings, update warnings + Record button
 
 private:
@@ -91,6 +93,7 @@ private:
 	void applyDarkTheme();
 	QString elapsedString() const;
 	void updateRegionToolVisibility(); // focus/record-driven overlay visibility
+	void writeMarker(const QString &label); // append an Auto Paused/Resumed marker
 
 protected:
 	void changeEvent(QEvent *event) override; // track window activation
@@ -165,7 +168,14 @@ private:
 	qint64 pausedAccumMs_ = 0;
 	qint64 pauseStartMs_ = 0;
 	bool wasPaused_ = false;
-	bool autoPaused_ = false; // paused by the idle monitor (vs. manually)
+	bool autoPaused_ = false;  // paused by the idle monitor (vs. manually)
+	bool focusPaused_ = false; // paused because the target app lost focus
+
+	// Focus auto-pause: the process that owned the foreground window when
+	// recording started (its child windows/dialogs share this id), and the
+	// sidecar file where Auto Paused/Resumed markers are written.
+	uint64_t targetPid_ = 0;
+	QString markersPath_;
 };
 
 } // namespace harpia

@@ -41,6 +41,7 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_int(d, "audio_bitrate_kbps", p.audioBitrateKbps);
 	obs_data_set_string(d, "filename_template", p.filenameTemplate.c_str());
 	obs_data_set_int(d, "idle_timeout_seconds", p.idleTimeoutSeconds);
+	obs_data_set_bool(d, "pause_on_focus_loss", p.pauseOnFocusLoss);
 	obs_data_set_int(d, "recording_counter", p.recordingCounter);
 	obs_data_set_bool(d, "record_desktop_audio", p.recordDesktopAudio);
 	obs_data_array_t *mics = obs_data_array_create();
@@ -89,6 +90,7 @@ Preset presetFromData(obs_data_t *d)
 	p.audioBitrateKbps = (int)obs_data_get_int(d, "audio_bitrate_kbps");
 	p.filenameTemplate = obs_data_get_string(d, "filename_template");
 	p.idleTimeoutSeconds = (int)obs_data_get_int(d, "idle_timeout_seconds");
+	p.pauseOnFocusLoss = obs_data_get_bool(d, "pause_on_focus_loss");
 	if (obs_data_has_user_value(d, "recording_counter"))
 		p.recordingCounter = (int)obs_data_get_int(d, "recording_counter");
 	p.recordDesktopAudio = obs_data_get_bool(d, "record_desktop_audio");

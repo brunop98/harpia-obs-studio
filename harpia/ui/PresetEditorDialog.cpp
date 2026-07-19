@@ -179,6 +179,14 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		 QStringLiteral("Pause recording automatically after this many seconds of no "
 				"mouse/keyboard activity. Set to Disabled to always keep recording."),
 		 idleSpin_);
+
+	pauseFocusCheck_ = new QCheckBox(QStringLiteral("Auto-pause when the target application loses focus"),
+					this);
+	pauseFocusCheck_->setChecked(preset.pauseOnFocusLoss);
+	addCheck(v, pauseFocusCheck_,
+		 QStringLiteral("Remembers the app in the foreground when you hit Record and pauses whenever "
+				"it isn't the active window (its dialogs and pickers still count as focused), "
+				"resuming when you return. Great for Unity/Photoshop/Blender. Windows only."));
 	v->addStretch(1);
 	addPage(QStringLiteral("General"), generalPage);
 
@@ -652,6 +660,7 @@ void PresetEditorDialog::accept()
 	result_.monitorIndex = monitorCombo_->currentData().toInt();
 	result_.gpuCompression = gpuCheck_->isChecked();
 	result_.idleTimeoutSeconds = idleSpin_->value();
+	result_.pauseOnFocusLoss = pauseFocusCheck_->isChecked();
 	result_.filenameTemplate = templateEdit_->text().trimmed().toStdString();
 
 	result_.recordDesktopAudio = desktopAudioCheck_->isChecked();

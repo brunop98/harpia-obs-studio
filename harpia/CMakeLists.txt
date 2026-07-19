@@ -103,17 +103,23 @@ target_sources(
     ui/RegionTool.hpp
 )
 
-# Platform-specific idle detection backend.
+# Platform-specific idle detection + foreground-window backends.
 if(OS_WINDOWS)
-  target_sources(harpia-recorder PRIVATE platform/win/WinIdleMonitor.cpp)
+  target_sources(harpia-recorder PRIVATE
+    platform/win/WinIdleMonitor.cpp
+    platform/win/WinForegroundWatcher.cpp)
 elseif(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
-  target_sources(harpia-recorder PRIVATE platform/nix/NixIdleMonitor.cpp)
+  target_sources(harpia-recorder PRIVATE
+    platform/nix/NixIdleMonitor.cpp
+    platform/nix/NixForegroundWatcher.cpp)
   # Wayland/GNOME idle uses the Mutter IdleMonitor over D-Bus (Qt::DBus); X11/Xss
   # are loaded at runtime via dlopen, so only libdl is needed at link time.
   find_package(Qt6 REQUIRED DBus)
   target_link_libraries(harpia-recorder PRIVATE Qt::DBus ${CMAKE_DL_LIBS})
 elseif(OS_MACOS)
-  target_sources(harpia-recorder PRIVATE platform/mac/MacIdleMonitor.cpp)
+  target_sources(harpia-recorder PRIVATE
+    platform/mac/MacIdleMonitor.cpp
+    platform/mac/MacForegroundWatcher.cpp)
   target_link_libraries(harpia-recorder PRIVATE "-framework CoreGraphics")
 endif()
 

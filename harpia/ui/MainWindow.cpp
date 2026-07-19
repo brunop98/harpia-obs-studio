@@ -10,6 +10,7 @@
 #include "RegionTool.hpp"
 #include "WebcamPreview.hpp"
 #include "core/EncoderFactory.hpp"
+#include "platform/ForegroundWatcher.hpp"
 #include "core/ObsContext.hpp"
 #include "library/ClipLibrary.hpp"
 #include "model/PresetStore.hpp"
@@ -488,6 +489,16 @@ void MainWindow::startRecording()
 		}
 	}
 
+	// Focus auto-pause: remember the app that's in the foreground now as the
+	// target, and prepare a sidecar file for Auto Paused/Resumed markers.
+	focusPaused_ = false;
+	targetPid_ = 0;
+	markersPath_.clear();
+	if (preset.pauseOnFocusLoss) {
+		targetPid_ = ForegroundWatcher::foregroundProcessId();
+		markersPath_ = screenPath + QStringLiteral(".markers.txt");
+	}
+
 	recStartMs_ = QDateTime::currentMSecsSinceEpoch();
 	pausedAccumMs_ = 0;
 	pauseStartMs_ = 0;
@@ -525,7 +536,8 @@ void MainWindow::onPauseButton()
 	if (!recorder_.isRecording())
 		return;
 	recorder_.togglePause();
-	autoPaused_ = false; // manual action overrides the idle state machine
+	autoPaused_ = false;  // manual action overrides the idle state machine
+	focusPaused_ = false; // and the focus state machine
 	updateButtons();
 }
 
@@ -1156,7 +1168,8 @@ void MainWindow::updateStatusChip()
 	QString bg;
 	if (recorder_.isRecording()) {
 		if (recorder_.isPaused()) {
-			text = QStringLiteral("⏸  Paused");
+			text = focusPaused_ ? QStringLiteral("⏸  Paused — target app not focused")
+					    : QStringLiteral("⏸  Paused");
 			bg = QStringLiteral("#d29922");
 		} else {
 			text = QStringLiteral("🔴  Recording");
@@ -1195,11 +1208,16 @@ void MainWindow::tickState()
 			if (mouseFx_)
 				mouseFx_->stop();
 			webcam_.stop();
+			focusPaused_ = false;
+			targetPid_ = 0;
+			markersPath_.clear();
 		}
 		timerLabel_->setText(QStringLiteral("00:00:00"));
 		updateButtons();
 		return;
 	}
+
+	tickFocus(); // pause/resume on target-app focus changes
 
 	// Track pause transitions to keep the timer accurate regardless of what
 	// triggered the pause (button or idle monitor).
@@ -1236,6 +1254,44 @@ void MainWindow::tickIdle()
 		recorder_.pause(false);
 		autoPaused_ = false;
 		updateButtons();
+	}
+}
+
+void MainWindow::tickFocus()
+{
+	if (!recorder_.isRecording() || !activePreset().pauseOnFocusLoss || targetPid_ == 0)
+		return;
+
+	const uint64_t fg = ForegroundWatcher::foregroundProcessId();
+	if (fg == 0)
+		return; // unknown/unsupported — don't change state
+
+	// Child windows, dialogs, and file pickers of the target belong to the same
+	// process, so a plain process-id match treats them as still focused.
+	const bool focused = (fg == targetPid_);
+
+	if (!focused && !recorder_.isPaused()) {
+		if (recorder_.pause(true)) {
+			focusPaused_ = true;
+			writeMarker(QStringLiteral("Auto Paused (Application Lost Focus)"));
+			updateButtons();
+		}
+	} else if (focused && focusPaused_ && recorder_.isPaused()) {
+		recorder_.pause(false);
+		focusPaused_ = false;
+		writeMarker(QStringLiteral("Auto Resumed (Application Regained Focus)"));
+		updateButtons();
+	}
+}
+
+void MainWindow::writeMarker(const QString &label)
+{
+	if (markersPath_.isEmpty())
+		return;
+	QFile f(markersPath_);
+	if (f.open(QIODevice::Append | QIODevice::Text)) {
+		const QString line = QStringLiteral("%1  %2\n").arg(elapsedString(), label);
+		f.write(line.toUtf8());
 	}
 }
 

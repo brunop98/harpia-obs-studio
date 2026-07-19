@@ -101,6 +101,11 @@ struct Preset {
 	// 0 disables the idle auto-pause behavior for this preset.
 	int idleTimeoutSeconds = 0;
 
+	// Auto-pause recording whenever the target application (the app that was in
+	// the foreground when recording started) loses focus, and resume when it
+	// regains focus. Child windows/dialogs of that app count as still focused.
+	bool pauseOnFocusLoss = false;
+
 	// Next value for the {Counter} filename token; incremented after each
 	// recording that uses it so files number 0001, 0002, … across sessions.
 	int recordingCounter = 1;

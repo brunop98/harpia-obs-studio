@@ -26,7 +26,7 @@ if /I "%~2"=="run" set "DORUN=1"
 
 REM --- Repo root = two levels up from this script (harpia\scripts) ----------
 set "SCRIPT_DIR=%~dp0"
-pushd "%SCRIPT_DIR%..\.." || ( echo ERROR: cannot cd to repo root & exit /b 1 )
+pushd "%SCRIPT_DIR%..\.." || ( echo ERROR: cannot cd to repo root & pause & exit /b 1 )
 set "REPO=%CD%"
 set "BUILD=%REPO%\build_x64"
 
@@ -35,7 +35,7 @@ where cmake >nul 2>&1
 if errorlevel 1 (
   echo ERROR: cmake not on PATH.  Install it ^(winget install Kitware.CMake^)
   echo        and open a new terminal so PATH refreshes.
-  popd & exit /b 1
+  goto :fail
 )
 
 REM --- Free the rundir: a running harpia.exe locks the DLL copy step --------
@@ -50,12 +50,12 @@ if exist "%BUILD%\CMakeCache.txt" (
   cmake -S "%REPO%" -B "%BUILD%" -G "Visual Studio 17 2022" -A x64 ^
     -DENABLE_NEW_MPEGTS_OUTPUT=OFF -DENABLE_BROWSER=OFF
 )
-if errorlevel 1 ( echo ERROR: CMake configure failed. & popd & exit /b 1 )
+if errorlevel 1 ( echo ERROR: CMake configure failed. & goto :fail )
 
 REM --- Build --------------------------------------------------------------
 echo ==^> Building harpia-recorder ^(%CONFIG%^) ...
 cmake --build "%BUILD%" --target harpia-recorder --config %CONFIG% --parallel
-if errorlevel 1 ( echo ERROR: build failed. & popd & exit /b 1 )
+if errorlevel 1 ( echo ERROR: build failed. & goto :fail )
 
 set "BIN=%BUILD%\rundir\%CONFIG%\bin\64bit"
 echo.
@@ -71,3 +71,14 @@ if "%DORUN%"=="1" (
 
 popd
 endlocal
+exit /b 0
+
+:fail
+echo.
+echo ***************************************************************************
+echo  BUILD FAILED - window kept open.  Scroll up to copy the error above.
+echo ***************************************************************************
+popd
+endlocal
+pause
+exit /b 1

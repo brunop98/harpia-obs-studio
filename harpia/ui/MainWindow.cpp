@@ -787,6 +787,7 @@ void MainWindow::editActivePreset(const QString &initialPage)
 		syncIdleControls();
 		audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds);
 		refreshRecentList();
+		hwProbeMs_ = 0; // settings may have changed monitor/mic/webcam use
 		refreshReadiness();
 		refreshWebcamRow();
 	}
@@ -896,6 +897,20 @@ void MainWindow::refreshReadiness()
 
 	const Preset &p = activePreset();
 
+	// Hardware enumeration (monitors / mics / cameras) is expensive — each call
+	// builds obs source properties, and the camera probe even creates a source.
+	// Re-probe at most every few seconds instead of on every 1.5s readiness tick.
+	const qint64 now = QDateTime::currentMSecsSinceEpoch();
+	if (hwProbeMs_ == 0 || now - hwProbeMs_ > 4000) {
+		hwProbeMs_ = now;
+		hwMonitorCount_ = (int)CaptureManager::enumerateMonitors().size();
+		hwInputIds_.clear();
+		if (!p.micDeviceIds.empty())
+			for (const AudioDevice &d : AudioManager::inputDevices())
+				hwInputIds_.push_back(d.id);
+		hwCameraPresent_ = p.webcamEnabled ? !WebcamRecorder::cameras().empty() : true;
+	}
+
 	// --- Output folder ---
 	const QString folder = QString::fromStdString(p.outputFolder);
 	if (folder.isEmpty()) {
@@ -920,7 +935,7 @@ void MainWindow::refreshReadiness()
 	}
 
 	// --- Display / region ---
-	const int monitorCount = (int)CaptureManager::enumerateMonitors().size();
+	const int monitorCount = hwMonitorCount_;
 	if (monitorCount > 0 && p.monitorIndex >= monitorCount) {
 		warnings.push_back({QStringLiteral("The selected monitor is no longer available."),
 				    [this]() { editActivePreset(); }, QStringLiteral("Choose display")});
@@ -937,9 +952,7 @@ void MainWindow::refreshReadiness()
 
 	// --- Microphones ---
 	if (!p.micDeviceIds.empty()) {
-		std::vector<std::string> available;
-		for (const AudioDevice &d : AudioManager::inputDevices())
-			available.push_back(d.id);
+		const std::vector<std::string> &available = hwInputIds_;
 		for (const std::string &id : p.micDeviceIds) {
 			const bool present = id == "default" ||
 					     std::find(available.begin(), available.end(), id) != available.end();
@@ -953,7 +966,7 @@ void MainWindow::refreshReadiness()
 	}
 
 	// --- Webcam --- (non-blocking: the screen recording proceeds without it)
-	if (p.webcamEnabled && WebcamRecorder::cameras().empty()) {
+	if (p.webcamEnabled && !hwCameraPresent_) {
 		warnings.push_back({QStringLiteral("Webcam is enabled but no camera is available — it will be "
 						   "skipped for this recording."),
 				    [this]() { editActivePreset(QStringLiteral("Webcam")); },
@@ -971,33 +984,7 @@ void MainWindow::refreshReadiness()
 				    QStringLiteral("Fix video")});
 	}
 
-	// --- Rebuild the warnings UI ---
-	QLayoutItem *item;
-	while ((item = warningsLayout_->takeAt(0)) != nullptr) {
-		if (item->widget())
-			item->widget()->deleteLater();
-		delete item;
-	}
-
-	for (const Warning &w : warnings) {
-		auto *row = new QWidget(warningsBox_);
-		auto *rl = new QHBoxLayout(row);
-		rl->setContentsMargins(0, 0, 0, 0);
-		auto *icon = new QLabel(QStringLiteral("⚠"), row);
-		icon->setStyleSheet(QStringLiteral("color:#d29922;"));
-		auto *msg = new QLabel(w.message, row);
-		msg->setWordWrap(true);
-		rl->addWidget(icon);
-		rl->addWidget(msg, 1);
-		if (w.fix) {
-			auto *fix = new QPushButton(w.fixLabel, row);
-			auto action = w.fix;
-			connect(fix, &QPushButton::clicked, this, [action]() { action(); });
-			rl->addWidget(fix);
-		}
-		warningsLayout_->addWidget(row);
-	}
-
+	// Recompute the blocking state + status headline (cheap, always).
 	bool anyBlocking = false;
 	for (const Warning &w : warnings) {
 		if (w.blocking)
@@ -1005,8 +992,6 @@ void MainWindow::refreshReadiness()
 	}
 	recordingBlocked_ = anyBlocking;
 
-	// Headline for the status chip: prefer the first blocking issue, else the
-	// first caution.
 	firstIssue_.clear();
 	for (const Warning &w : warnings) {
 		if (w.blocking) {
@@ -1017,7 +1002,43 @@ void MainWindow::refreshReadiness()
 	if (firstIssue_.isEmpty() && !warnings.empty())
 		firstIssue_ = warnings.front().message;
 
-	warningsBox_->setVisible(!warnings.empty());
+	// Only tear down and rebuild the warnings widgets when the set actually
+	// changed — otherwise this churned QWidgets every 1.5s for no visible change.
+	QStringList sig;
+	sig.reserve((int)warnings.size());
+	for (const Warning &w : warnings)
+		sig << (w.blocking ? QLatin1Char('!') : QLatin1Char('-')) + w.message + w.fixLabel;
+
+	if (sig != lastWarningSig_) {
+		lastWarningSig_ = sig;
+
+		QLayoutItem *item;
+		while ((item = warningsLayout_->takeAt(0)) != nullptr) {
+			if (item->widget())
+				item->widget()->deleteLater();
+			delete item;
+		}
+		for (const Warning &w : warnings) {
+			auto *row = new QWidget(warningsBox_);
+			auto *rl = new QHBoxLayout(row);
+			rl->setContentsMargins(0, 0, 0, 0);
+			auto *icon = new QLabel(QStringLiteral("⚠"), row);
+			icon->setStyleSheet(QStringLiteral("color:#d29922;"));
+			auto *msg = new QLabel(w.message, row);
+			msg->setWordWrap(true);
+			rl->addWidget(icon);
+			rl->addWidget(msg, 1);
+			if (w.fix) {
+				auto *fix = new QPushButton(w.fixLabel, row);
+				auto action = w.fix;
+				connect(fix, &QPushButton::clicked, this, [action]() { action(); });
+				rl->addWidget(fix);
+			}
+			warningsLayout_->addWidget(row);
+		}
+		warningsBox_->setVisible(!warnings.empty());
+	}
+
 	updateButtons();
 }
 
@@ -1123,6 +1144,7 @@ void MainWindow::onWebcamEnableToggled(bool on)
 		cur->webcamEnabled = on;
 		presets_.upsert(*cur);
 	}
+	hwProbeMs_ = 0; // re-probe hardware now that webcam use changed
 	refreshWebcamRow();
 	refreshReadiness();
 }
@@ -1207,6 +1229,7 @@ void MainWindow::onPresetChanged()
 		}
 		applyLiveCapture();
 	}
+	hwProbeMs_ = 0; // preset changed — re-probe hardware for accurate readiness
 	refreshReadiness();
 	refreshWebcamRow();
 }
@@ -1488,13 +1511,12 @@ void MainWindow::tickState()
 {
 	++spinPhase_; // drive the Starting…/Stopping… spinner
 
-	// Continuously remember the last real (non-Harpia) foreground app, so focus
-	// auto-pause can target the app you were using before you clicked Record.
-	{
-		const uint64_t fg = ForegroundWatcher::foregroundProcessId();
-		if (fg != 0 && fg != ownPid_)
-			lastForegroundPid_ = fg;
-	}
+	// One foreground query per tick, reused below. Continuously remember the last
+	// real (non-Harpia) foreground app, so focus auto-pause can target the app you
+	// were using before you clicked Record.
+	const uint64_t fg = ForegroundWatcher::foregroundProcessId();
+	if (fg != 0 && fg != ownPid_)
+		lastForegroundPid_ = fg;
 
 	if (!recorder_.isRecording()) {
 		if (recStartMs_ != 0) {
@@ -1537,7 +1559,7 @@ void MainWindow::tickState()
 
 	starting_ = false; // output is now active
 
-	tickFocus(); // pause/resume on target-app focus changes
+	tickFocus(fg); // pause/resume on target-app focus changes
 
 	// Track pause transitions to keep the timer accurate regardless of what
 	// triggered the pause (button or idle monitor).
@@ -1577,12 +1599,12 @@ void MainWindow::tickIdle()
 	}
 }
 
-void MainWindow::tickFocus()
+void MainWindow::tickFocus(uint64_t foregroundPid)
 {
 	if (!recorder_.isRecording() || !activePreset().pauseOnFocusLoss || targetPid_ == 0)
 		return;
 
-	const uint64_t fg = ForegroundWatcher::foregroundProcessId();
+	const uint64_t fg = foregroundPid;
 	if (fg == 0)
 		return; // unknown/unsupported — don't change state
 

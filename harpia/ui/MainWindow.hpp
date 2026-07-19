@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 class QListWidget;
 class QListWidgetItem;
@@ -81,7 +82,7 @@ private slots:
 	void onThumbnailReady(const QString &path);
 	void tickState();  // recording/paused state + timer
 	void tickIdle();   // auto-pause/resume based on idle time
-	void tickFocus();  // auto-pause/resume based on target-app focus
+	void tickFocus(uint64_t foregroundPid); // auto-pause/resume based on target-app focus
 	void refreshReadiness(); // validate settings, update warnings + Record button
 
 private:
@@ -163,6 +164,15 @@ private:
 	QTimer *readinessTimer_ = nullptr;
 	bool recordingBlocked_ = false;
 	QString firstIssue_; // headline warning/error message shown in the chip
+
+	// Readiness caches: hardware enumeration is expensive (it creates obs source
+	// properties/instances), so probe it on a TTL instead of every tick, and only
+	// rebuild the warnings UI when the set of warnings actually changes.
+	qint64 hwProbeMs_ = 0;
+	int hwMonitorCount_ = 0;
+	bool hwCameraPresent_ = false;
+	std::vector<std::string> hwInputIds_;
+	QStringList lastWarningSig_;
 
 	// Recent strip
 	QPushButton *libraryButton_ = nullptr;

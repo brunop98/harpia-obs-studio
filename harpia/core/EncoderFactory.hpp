@@ -5,6 +5,9 @@
 #include <string>
 #include <vector>
 
+struct obs_data;
+typedef struct obs_data obs_data_t;
+
 namespace harpia {
 
 // Resolves a Preset's format + GPU-compression choice into concrete libobs
@@ -41,6 +44,12 @@ public:
 
 	// Whether the given encoder id is currently registered/available.
 	static bool encoderAvailable(const char *id);
+
+	// Apply recording-oriented settings to video encoder settings: a 2 s
+	// keyframe interval plus quality-based encoding (CRF/CQP, like OBS's
+	// Simple-mode recording) when bitrateKbps == 0 ("Auto"), or CBR at the
+	// explicit bitrate otherwise. Knows the per-encoder setting keys.
+	static void applyRecordingQuality(obs_data_t *settings, const std::string &encoderId, int bitrateKbps);
 };
 
 } // namespace harpia

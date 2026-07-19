@@ -140,4 +140,35 @@ std::string EncoderFactory::outputId(const Preset &preset)
 	return usesFfmpegOutput(preset) ? "ffmpeg_output" : "ffmpeg_muxer";
 }
 
+void EncoderFactory::applyRecordingQuality(obs_data_t *settings, const std::string &encoderId, int bitrateKbps)
+{
+	// A keyframe every 2 s keeps files seekable without bloating them.
+	obs_data_set_int(settings, "keyint_sec", 2);
+
+	if (bitrateKbps > 0) {
+		// The user picked an explicit bitrate — honor it as CBR.
+		obs_data_set_string(settings, "rate_control", "CBR");
+		obs_data_set_int(settings, "bitrate", bitrateKbps);
+		return;
+	}
+
+	// "Auto" = constant-quality encoding (what OBS Simple mode uses for
+	// recordings): better quality per megabyte than CBR, and the file size
+	// scales with how much actually changes on screen. Each encoder family
+	// names its quality knob differently.
+	const bool av1 = encoderId.find("av1") != std::string::npos;
+	const int q = av1 ? 30 : 23; // AV1's qp scale runs higher than H.264/HEVC
+	if (encoderId == "obs_x264") {
+		obs_data_set_string(settings, "rate_control", "CRF");
+		obs_data_set_int(settings, "crf", q);
+	} else if (encoderId.find("vaapi") != std::string::npos) {
+		obs_data_set_string(settings, "rate_control", "CQP");
+		obs_data_set_int(settings, "qp", q);
+	} else {
+		// NVENC / QSV / AMF / ffmpeg AV1 all take CQP via "cqp".
+		obs_data_set_string(settings, "rate_control", "CQP");
+		obs_data_set_int(settings, "cqp", q);
+	}
+}
+
 } // namespace harpia

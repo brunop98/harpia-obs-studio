@@ -1,5 +1,7 @@
 #pragma once
 
+#include "model/Preset.hpp"
+
 #include <string>
 #include <vector>
 
@@ -47,14 +49,15 @@ public:
 	static const char *platformCameraId();
 
 	// Start recording the given camera to `filePath`. deviceId "" uses the first
-	// device. Returns false if no camera is available or setup fails.
+	// device. Returns false if no camera is available or setup fails. `preset`
+	// supplies the codec/GPU-encoder choice for the webcam track.
 	//
 	// If `sharedSource` is non-null, that already-open camera source is reused
 	// (e.g. the live toolbar preview's source) instead of opening the device a
 	// second time — DirectShow cameras are typically exclusive. The recorder
 	// takes its own reference and never destroys the shared source.
-	bool start(const std::string &deviceId, int width, int height, int fps, const std::string &filePath,
-		   obs_source_t *sharedSource = nullptr);
+	bool start(const Preset &preset, const std::string &deviceId, int width, int height, int fps,
+		   const std::string &filePath, obs_source_t *sharedSource = nullptr);
 
 	// Request the recording to stop. Asynchronous: the output keeps finalizing
 	// in the background; call reap() periodically to release it once done.

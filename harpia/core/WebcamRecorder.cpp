@@ -1,6 +1,7 @@
 #include "WebcamRecorder.hpp"
 
 #include "AudioManager.hpp" // for AudioDevice {id, name}
+#include "EncoderFactory.hpp"
 
 #include <obs.h>
 
@@ -117,7 +118,7 @@ WebcamRecorder::~WebcamRecorder()
 	teardown();
 }
 
-bool WebcamRecorder::start(const std::string &deviceId, int width, int height, int fps,
+bool WebcamRecorder::start(const Preset &preset, const std::string &deviceId, int width, int height, int fps,
 			   const std::string &filePath, obs_source_t *sharedSource)
 {
 	teardown();
@@ -195,11 +196,16 @@ bool WebcamRecorder::start(const std::string &deviceId, int width, int height, i
 		return false;
 	}
 
-	// 3. Encoder bound to the webcam mix + its own muxer output.
+	// 3. Encoder bound to the webcam mix + its own muxer output. Honor the
+	// preset's codec/GPU choice (previously hardcoded x264 @ 6000 CBR) and
+	// always use quality mode — the preset's bitrate is sized for the screen,
+	// not a small camera frame.
+	std::string vid = EncoderFactory::videoEncoderId(preset);
+	if (vid.empty())
+		vid = "obs_x264";
 	obs_data_t *vs = obs_data_create();
-	obs_data_set_string(vs, "rate_control", "CBR");
-	obs_data_set_int(vs, "bitrate", 6000);
-	videoEncoder_ = obs_video_encoder_create("obs_x264", "harpia_webcam_venc", vs, nullptr);
+	EncoderFactory::applyRecordingQuality(vs, vid, 0);
+	videoEncoder_ = obs_video_encoder_create(vid.c_str(), "harpia_webcam_venc", vs, nullptr);
 	obs_data_release(vs);
 	if (!videoEncoder_) {
 		teardown();

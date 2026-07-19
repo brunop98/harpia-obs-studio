@@ -592,8 +592,8 @@ void MainWindow::startRecording()
 		// Reuse the live preview's already-open camera so the device isn't
 		// opened twice (DirectShow cameras are usually exclusive).
 		obs_source_t *shared = webcamPreview_ ? webcamPreview_->source() : nullptr;
-		if (!webcam_.start(preset.webcamDeviceId, preset.webcamWidth, preset.webcamHeight, preset.webcamFps,
-				   webcamPath.toStdString(), shared)) {
+		if (!webcam_.start(preset, preset.webcamDeviceId, preset.webcamWidth, preset.webcamHeight,
+				   preset.webcamFps, webcamPath.toStdString(), shared)) {
 			// No camera / failed to start — keep the screen recording going.
 			QMessageBox::warning(
 				this, QStringLiteral("Webcam"),

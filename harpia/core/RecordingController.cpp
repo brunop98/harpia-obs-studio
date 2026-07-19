@@ -6,46 +6,6 @@
 
 namespace harpia {
 
-namespace {
-
-// A reasonable default recording bitrate (kbps) when a preset selects "Auto"
-// (videoBitrateKbps == 0). Scales by resolution, frame rate, and codec so the
-// three inputs the user expects all move the number.
-int defaultVideoBitrate(const Preset &preset)
-{
-	if (preset.videoBitrateKbps > 0)
-		return preset.videoBitrateKbps;
-
-	long pixels = (long)(preset.width > 0 ? preset.width : 1920) * (preset.height > 0 ? preset.height : 1080);
-	if (preset.resolutionMode == ResolutionMode::Native)
-		pixels = 1920L * 1080L; // unknown until capture; assume 1080p
-
-	// Resolution baseline (kbps) tuned for ~30 fps H.264.
-	double kbps;
-	if (pixels >= 3840L * 2160L)
-		kbps = 40000.0;
-	else if (pixels >= 2560L * 1440L)
-		kbps = 20000.0;
-	else
-		kbps = 12000.0; // 1080p and below
-
-	// Frame rate: higher fps needs proportionally more bits (relative to 30).
-	const int fps = preset.fps > 0 ? preset.fps : 30;
-	kbps *= 0.6 + 0.4 * (fps / 30.0); // 30->1.0x, 60->1.4x, 120->2.2x
-
-	// Codec efficiency: HEVC/AV1 reach the same quality at a lower bitrate.
-	if (preset.codec == VideoCodec::HEVC)
-		kbps *= 0.7;
-	else if (preset.codec == VideoCodec::AV1)
-		kbps *= 0.6;
-
-	// Round to the nearest 500 kbps for tidy values.
-	int rounded = (int)((kbps + 250.0) / 500.0) * 500;
-	return rounded < 1000 ? 1000 : rounded;
-}
-
-} // namespace
-
 RecordingController::~RecordingController()
 {
 	teardown();
@@ -137,8 +97,8 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 		const std::string aid = EncoderFactory::audioEncoderId(preset);
 
 		obs_data_t *vsettings = obs_data_create();
-		obs_data_set_string(vsettings, "rate_control", "CBR");
-		obs_data_set_int(vsettings, "bitrate", defaultVideoBitrate(preset));
+		// Constant quality on "Auto" bitrate, CBR when the user set a number.
+		EncoderFactory::applyRecordingQuality(vsettings, vid, preset.videoBitrateKbps);
 		videoEncoder_ = obs_video_encoder_create(vid.c_str(), "harpia_video", vsettings, nullptr);
 		obs_data_release(vsettings);
 

@@ -93,6 +93,24 @@ void addField(QVBoxLayout *v, const QString &title, const QString &desc, QWidget
 	v->addSpacing(12);
 }
 
+// A color setting on one compact row: [ bold title ]  [ small swatch ].
+// Keeps the swatch small (not full-width) and aligns swatches across fields.
+void addColorField(QVBoxLayout *v, const QString &title, QPushButton *swatch)
+{
+	auto *row = new QWidget;
+	auto *h = new QHBoxLayout(row);
+	h->setContentsMargins(0, 0, 0, 0);
+	h->setSpacing(10);
+	auto *t = new QLabel(QStringLiteral("<b>%1</b>").arg(title));
+	t->setMinimumWidth(130); // aligns the three swatches on the Mouse page
+	swatch->setFixedWidth(130);
+	h->addWidget(t);
+	h->addWidget(swatch);
+	h->addStretch(1);
+	v->addWidget(row);
+	v->addSpacing(8);
+}
+
 // A checkbox setting: the checkbox is its own label; the description sits beneath.
 void addCheck(QVBoxLayout *v, QCheckBox *check, const QString &desc)
 {
@@ -235,7 +253,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	setButtonColor(borderColorBtn_, borderColor_);
 	connect(borderColorBtn_, &QPushButton::clicked, this,
 		[this]() { pickColor(borderColor_, borderColorBtn_); });
-	addField(v, QStringLiteral("Border color"), QString(), borderColorBtn_);
+	addColorField(v, QStringLiteral("Border color"), borderColorBtn_);
 
 	borderThicknessSpin_ = new QSpinBox(this);
 	borderThicknessSpin_->setRange(1, 10);
@@ -446,7 +464,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	setButtonColor(highlightColorBtn_, highlightColor_);
 	connect(highlightColorBtn_, &QPushButton::clicked, this,
 		[this]() { pickColor(highlightColor_, highlightColorBtn_); });
-	addField(v, QStringLiteral("Highlight color"), QString(), highlightColorBtn_);
+	addColorField(v, QStringLiteral("Highlight color"), highlightColorBtn_);
 
 	highlightSizeSlider_ = new QSlider(Qt::Horizontal, this);
 	highlightSizeSlider_->setRange(10, 200);
@@ -476,7 +494,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	leftColorBtn_ = new QPushButton(this);
 	setButtonColor(leftColorBtn_, leftColor_);
 	connect(leftColorBtn_, &QPushButton::clicked, this, [this]() { pickColor(leftColor_, leftColorBtn_); });
-	addField(v, QStringLiteral("Left click color"), QString(), leftColorBtn_);
+	addColorField(v, QStringLiteral("Left click color"), leftColorBtn_);
 
 	rightColor_ = QColor(QString::fromStdString(preset.rightClickColor));
 	if (!rightColor_.isValid())
@@ -484,7 +502,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	rightColorBtn_ = new QPushButton(this);
 	setButtonColor(rightColorBtn_, rightColor_);
 	connect(rightColorBtn_, &QPushButton::clicked, this, [this]() { pickColor(rightColor_, rightColorBtn_); });
-	addField(v, QStringLiteral("Right click color"), QString(), rightColorBtn_);
+	addColorField(v, QStringLiteral("Right click color"), rightColorBtn_);
 
 	mousePreview_ = new MousePreview(this);
 	addField(v, QStringLiteral("Preview"), QString(), mousePreview_);
@@ -531,7 +549,9 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	if (!WebcamRecorder::supported()) {
 		statusText = QStringLiteral(
 			"Webcam capture is not available in this build. Install the Visual Studio "
-			"\"C++ ATL for latest v143 build tools\" component and rebuild to enable it.");
+			"<a style=\"color:#f0a0a3;\" "
+			"href=\"https://learn.microsoft.com/cpp/build/vscpp-step-0-installation\">"
+			"\"C++ ATL for latest v143 build tools\"</a> component and rebuild to enable it.");
 		statusColor = QStringLiteral("#e5484d");
 	} else if (!cams.empty()) {
 		statusText = cams.size() == 1
@@ -554,6 +574,8 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	}
 	camStatus->setText(statusText);
 	camStatus->setStyleSheet(QStringLiteral("color:%1;").arg(statusColor));
+	camStatus->setOpenExternalLinks(true); // the ATL install link opens in the browser
+	camStatus->setTextInteractionFlags(Qt::TextBrowserInteraction);
 	v->addWidget(camStatus);
 	v->addSpacing(8);
 

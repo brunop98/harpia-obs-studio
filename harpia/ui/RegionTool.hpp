@@ -39,6 +39,10 @@ public:
 	// Recording mode: dim + interior click-through, still resizable.
 	void setRecordingMode(bool recording);
 
+	// Paused state — only meaningful while recording; drives the border color
+	// (yellow when paused, red while actively recording).
+	void setPaused(bool paused);
+
 signals:
 	void regionChanged(const CaptureRegion &region);
 	void cancelled(); // Esc pressed while not recording
@@ -65,6 +69,7 @@ private:
 	QScreen *screen_ = nullptr;
 	qreal dpr_ = 1.0;
 	bool recording_ = false;
+	bool paused_ = false;
 
 	Zone dragZone_ = Zone::None;
 	QPoint dragStartGlobal_;

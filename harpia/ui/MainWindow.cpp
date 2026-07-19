@@ -1400,6 +1400,10 @@ void MainWindow::updateButtons()
 	const bool paused = recorder_.isPaused();
 	const bool transitioning = starting_ || stopping_ || countingDown_;
 
+	// Region overlay border color follows the state (green/red/yellow).
+	if (regionTool_)
+		regionTool_->setPaused(recording && paused);
+
 	// Braille spinner frames for the in-progress states.
 	static const char *kSpin[] = {"\xE2\xA0\x8B", "\xE2\xA0\x99", "\xE2\xA0\xB9", "\xE2\xA0\xB8",
 				      "\xE2\xA0\xBC", "\xE2\xA0\xB4", "\xE2\xA0\xA6", "\xE2\xA0\xA7",

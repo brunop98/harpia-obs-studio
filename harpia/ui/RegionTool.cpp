@@ -259,9 +259,19 @@ void RegionTool::keyPressEvent(QKeyEvent *e)
 void RegionTool::setRecordingMode(bool recording)
 {
 	recording_ = recording;
+	if (!recording)
+		paused_ = false;
 	setWindowOpacity(recording ? 0.28 : 1.0);
 	rebuildMask();
 	update();
+}
+
+void RegionTool::setPaused(bool paused)
+{
+	if (paused_ == paused)
+		return;
+	paused_ = paused;
+	update(); // repaint the border in the new color immediately
 }
 
 void RegionTool::paintEvent(QPaintEvent *)
@@ -271,8 +281,15 @@ void RegionTool::paintEvent(QPaintEvent *)
 
 	const QRect inner = innerRectLocal();
 
-	// Green while idle (ready), red while recording — instant state feedback.
-	QColor border = recording_ ? QColor(0xe5, 0x48, 0x4d) : QColor(0x3f, 0xb9, 0x50);
+	// Border color reflects the recording state at a glance:
+	//   green = ready (not recording), red = recording, yellow = paused.
+	QColor border;
+	if (!recording_)
+		border = QColor(0x3f, 0xb9, 0x50); // green — ready
+	else if (paused_)
+		border = QColor(0xd2, 0x99, 0x22); // yellow — paused
+	else
+		border = QColor(0xe5, 0x48, 0x4d); // red — recording
 	p.setPen(QPen(border, 2));
 	p.setBrush(Qt::NoBrush);
 	p.drawRect(inner);

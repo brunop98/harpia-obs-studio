@@ -30,6 +30,8 @@ public:
 		setDragDropMode(QAbstractItemView::DragOnly);
 		setDefaultDropAction(Qt::CopyAction);
 		setSelectionMode(QAbstractItemView::ExtendedSelection);
+		// No Explorer-style rubber-band selection in a card library.
+		setSelectionRectVisible(false);
 	}
 
 protected:
@@ -66,21 +68,19 @@ protected:
 
 	void mouseMoveEvent(QMouseEvent *event) override
 	{
-		if (!(event->buttons() & Qt::LeftButton) || pressPos_.isNull()) {
-			QListWidget::mouseMoveEvent(event);
+		// While the left button is held after a press, we own the gesture: start
+		// a file drag once the pointer leaves an item past the threshold, and
+		// otherwise swallow the move so there's no rubber-band selection (empty
+		// space) or Explorer-style drag-extend (over items).
+		if ((event->buttons() & Qt::LeftButton) && !pressPos_.isNull()) {
+			if (itemAt(pressPos_) &&
+			    (event->pos() - pressPos_).manhattanLength() >= QApplication::startDragDistance()) {
+				startDrag(Qt::CopyAction);
+				pressPos_ = QPoint();
+			}
 			return;
 		}
-		if ((event->pos() - pressPos_).manhattanLength() < QApplication::startDragDistance()) {
-			QListWidget::mouseMoveEvent(event);
-			return;
-		}
-		// Only drag when the press landed on an item.
-		if (!itemAt(pressPos_)) {
-			QListWidget::mouseMoveEvent(event);
-			return;
-		}
-		startDrag(Qt::CopyAction);
-		pressPos_ = QPoint();
+		QListWidget::mouseMoveEvent(event);
 	}
 
 	// Explicit, robust file drag (used instead of the view's default path).

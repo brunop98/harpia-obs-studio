@@ -4,6 +4,8 @@
 
 #include <QColor>
 #include <QDialog>
+#include <QList>
+#include <QStringList>
 
 class QLineEdit;
 class QComboBox;
@@ -29,7 +31,6 @@ public:
 
 private slots:
 	void browseFolder();
-	void onResolutionChanged();
 	void updateValidation();
 	void updateMousePreview();
 	void accept() override;
@@ -46,15 +47,17 @@ private:
 	QComboBox *fpsCombo_ = nullptr;
 	QComboBox *frameRateModeCombo_ = nullptr;
 	QSpinBox *bitrateSpin_ = nullptr;
-	QComboBox *resolutionCombo_ = nullptr;
-	QSpinBox *widthSpin_ = nullptr;
-	QSpinBox *heightSpin_ = nullptr;
 	QComboBox *monitorCombo_ = nullptr;
 	QLineEdit *folderEdit_ = nullptr;
 	QCheckBox *gpuCheck_ = nullptr;
 	QSpinBox *idleSpin_ = nullptr;
 	QLineEdit *templateEdit_ = nullptr;
 	QLabel *validationLabel_ = nullptr;
+
+	// Audio page
+	QCheckBox *desktopAudioCheck_ = nullptr;
+	QList<QCheckBox *> micChecks_;
+	QStringList micIds_;
 
 	// Mouse section
 	QCheckBox *mouseCursorCheck_ = nullptr;

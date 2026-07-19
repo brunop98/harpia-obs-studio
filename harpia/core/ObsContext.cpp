@@ -1,10 +1,13 @@
 #include "ObsContext.hpp"
 
 #include <obs.h>
+#include <util/bmem.h>
 #include <util/platform.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -63,17 +66,54 @@ void ObsContext::addModulePaths()
 		obs_add_module_path(pluginsPath, dataWithModule.c_str());
 	}
 
-	// Default install layout next to the executable. obs_add_module_path
-	// resolves paths relative to the module search roots libobs already knows
-	// about (the bundle directory). These cover the common per-OS layouts.
-#if defined(_WIN32)
-	obs_add_module_path("../../obs-plugins/64bit", "../../data/obs-plugins/%module%");
-	obs_add_module_path("obs-plugins/64bit", "data/obs-plugins/%module%");
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
+	// macOS bundle layout — a single, unambiguous path.
 	obs_add_module_path("../PlugIns", "../PlugIns/%module%.plugin/Contents/Resources");
 #else
-	obs_add_module_path("../../obs-plugins/64bit", "../../data/obs-plugins/%module%");
-	obs_add_module_path("obs-plugins/64bit", "data/obs-plugins/%module%");
+	// Windows/Linux: we support two install layouts (running from the OBS
+	// rundir with the exe under bin/64bit, or with plugins beside the exe).
+	// Both candidate paths can resolve to the SAME physical folder depending on
+	// the working directory; registering that folder twice makes libobs load
+	// every module twice ("Source 'x' already exists! Duplicate library?"). So
+	// resolve each candidate to an absolute path against the executable's own
+	// directory and register each distinct folder only once.
+	namespace fs = std::filesystem;
+	std::error_code ec;
+
+	// Anchor to the executable directory (not the CWD), so paths are stable
+	// regardless of where the app was launched from.
+	char *marker = os_get_executable_path_ptr("marker");
+	fs::path exeDir = (marker && *marker) ? fs::path(marker).parent_path() : fs::current_path(ec);
+	bfree(marker);
+
+	struct Candidate {
+		const char *bin;
+		const char *dataDir;
+	};
+	const Candidate candidates[] = {
+		{"../../obs-plugins/64bit", "../../data/obs-plugins"},
+		{"obs-plugins/64bit", "data/obs-plugins"},
+	};
+
+	std::vector<std::string> registered;
+	for (const Candidate &c : candidates) {
+		const fs::path bin = fs::weakly_canonical(exeDir / c.bin, ec);
+		if (ec || !fs::exists(bin, ec))
+			continue;
+		const std::string binStr = bin.string();
+		if (std::find(registered.begin(), registered.end(), binStr) != registered.end())
+			continue; // same folder already registered — skip the duplicate load
+		registered.push_back(binStr);
+
+		const fs::path dataDir = fs::weakly_canonical(exeDir / c.dataDir, ec);
+		const std::string dataPattern = dataDir.string() + "/%module%";
+		obs_add_module_path(binStr.c_str(), dataPattern.c_str());
+	}
+
+	// Fallback for any unusual layout the candidates didn't match: keep the
+	// original relative registration (single entry, so still no duplication).
+	if (registered.empty())
+		obs_add_module_path("obs-plugins/64bit", "data/obs-plugins/%module%");
 #endif
 }
 

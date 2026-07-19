@@ -126,6 +126,7 @@ private:
 	QPushButton *newPresetButton_ = nullptr;
 	QComboBox *captureModeCombo_ = nullptr;
 	QPushButton *webcamSettingsButton_ = nullptr;
+	QPushButton *settingsButton_ = nullptr;
 	QCheckBox *idleToggle_ = nullptr;
 	QSpinBox *idleSpin_ = nullptr;
 	QPushButton *openFolderButton_ = nullptr;

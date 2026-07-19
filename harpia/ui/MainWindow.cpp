@@ -130,6 +130,10 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	idleSpin_->setMaximumWidth(80);
 	toolbar->addWidget(idleSpin_);
 
+	settingsButton_ = new QPushButton(QStringLiteral("\xE2\x9A\x99  Settings"), central);
+	settingsButton_->setToolTip(QStringLiteral("Open all settings for the selected preset"));
+	toolbar->addWidget(settingsButton_);
+
 	openFolderButton_ = new QPushButton(central);
 	openFolderButton_->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
 	openFolderButton_->setToolTip(QStringLiteral("Open preset folder"));
@@ -275,6 +279,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
 	connect(webcamSettingsButton_, &QPushButton::clicked, this,
 		[this]() { editActivePreset(QStringLiteral("Webcam")); });
+	connect(settingsButton_, &QPushButton::clicked, this, [this]() { editActivePreset(); });
 	connect(webcamCombo_, &QComboBox::activated, this, &MainWindow::onWebcamDeviceChanged);
 	connect(openFolderButton_, &QPushButton::clicked, this, &MainWindow::onOpenPresetFolder);
 	connect(libraryButton_, &QPushButton::clicked, this, &MainWindow::onOpenClipLibrary);
@@ -1284,6 +1289,8 @@ void MainWindow::updateButtons()
 	newPresetButton_->setEnabled(!locked);
 	if (webcamSettingsButton_)
 		webcamSettingsButton_->setEnabled(!locked);
+	if (settingsButton_)
+		settingsButton_->setEnabled(!locked);
 	captureModeCombo_->setEnabled(!locked);
 
 	updateStatusChip();

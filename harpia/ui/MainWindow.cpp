@@ -270,6 +270,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	recentStrip_->setMovement(QListView::Static);
 	recentStrip_->setIconSize(kStripThumb);
 	recentStrip_->setGridSize(kStripThumb + QSize(24, 44));
+	recentStrip_->setUniformItemSizes(true); // every card is one grid cell
+	recentStrip_->setResizeMode(QListView::Adjust);
 	recentStrip_->setFixedHeight(kStripThumb.height() + 60);
 	recentStrip_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 	recentStrip_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -1437,6 +1439,10 @@ void MainWindow::refreshRecentList()
 		item->setData(kClipPathRole, clip.filePath);
 		item->setToolTip(clip.fileName + QStringLiteral("\n") + clip.filePath);
 		item->setTextAlignment(Qt::AlignHCenter | Qt::AlignBottom);
+		// Pin each card to the full grid cell so its footprint is fixed even before
+		// the thumbnail loads — otherwise a late-arriving icon grows the item and
+		// the icon-mode layout leaves it overlapping its neighbor.
+		item->setSizeHint(recentStrip_->gridSize());
 
 		const QImage thumb = thumbnails_.cached(clip.filePath, kStripThumb);
 		if (!thumb.isNull())
@@ -1455,8 +1461,10 @@ void MainWindow::onThumbnailReady(const QString &path)
 	if (!item)
 		return;
 	const QImage thumb = thumbnails_.cached(path, kStripThumb);
-	if (!thumb.isNull())
+	if (!thumb.isNull()) {
 		item->setIcon(QIcon(QPixmap::fromImage(thumb)));
+		recentStrip_->doItemsLayout(); // reflow so the new icon can't overlap
+	}
 }
 
 void MainWindow::showStripContextMenu(const QPoint &pos)

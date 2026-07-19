@@ -8,6 +8,7 @@
 #include "PresetEditorDialog.hpp"
 #include "RecentListWidget.hpp"
 #include "RegionTool.hpp"
+#include "WebcamPreview.hpp"
 #include "core/EncoderFactory.hpp"
 #include "core/ObsContext.hpp"
 #include "library/ClipLibrary.hpp"
@@ -177,6 +178,30 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	timerLabel_->setFont(timerFont);
 	controls->addWidget(timerLabel_);
 
+	// Inline webcam controls: live preview + device picker, shown only when the
+	// active preset records a webcam.
+	webcamBox_ = new QWidget(central);
+	auto *wcLayout = new QHBoxLayout(webcamBox_);
+	wcLayout->setContentsMargins(0, 0, 0, 0);
+	wcLayout->setSpacing(8);
+	webcamPreview_ = new WebcamPreview(webcamBox_);
+	webcamPreview_->setFixedSize(140, 84);
+	wcLayout->addWidget(webcamPreview_);
+	auto *wcSide = new QVBoxLayout;
+	wcSide->setSpacing(4);
+	wcSide->addStretch(1);
+	webcamCombo_ = new QComboBox(webcamBox_);
+	webcamCombo_->setMinimumWidth(160);
+	wcSide->addWidget(webcamCombo_);
+	webcamWarn_ = new QLabel(QStringLiteral("Webcam not found"), webcamBox_);
+	webcamWarn_->setStyleSheet(QStringLiteral("color:#e5484d;"));
+	webcamWarn_->setVisible(false);
+	wcSide->addWidget(webcamWarn_);
+	wcSide->addStretch(1);
+	wcLayout->addLayout(wcSide);
+	webcamBox_->setVisible(false);
+	controls->addWidget(webcamBox_);
+
 	controls->addStretch(1);
 	root->addLayout(controls);
 
@@ -224,6 +249,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(pauseButton_, &QPushButton::clicked, this, &MainWindow::onPauseButton);
 	connect(editPresetButton_, &QPushButton::clicked, this, &MainWindow::editActivePreset);
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
+	connect(webcamCombo_, &QComboBox::activated, this, &MainWindow::onWebcamDeviceChanged);
 	connect(openFolderButton_, &QPushButton::clicked, this, &MainWindow::onOpenPresetFolder);
 	connect(libraryButton_, &QPushButton::clicked, this, &MainWindow::onOpenClipLibrary);
 	connect(errorLogsButton_, &QPushButton::clicked, this, &MainWindow::onOpenErrorLogs);
@@ -289,6 +315,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds);
 	refreshRecentList();
 	refreshReadiness();
+	refreshWebcamRow();
 	updateButtons();
 }
 
@@ -430,8 +457,11 @@ void MainWindow::startRecording()
 		QDir wdir(wcFolder);
 		wdir.mkpath(QStringLiteral("."));
 		const QString webcamPath = wdir.filePath(baseName + QStringLiteral("_webcam.mp4"));
+		// Reuse the live preview's already-open camera so the device isn't
+		// opened twice (DirectShow cameras are usually exclusive).
+		obs_source_t *shared = webcamPreview_ ? webcamPreview_->source() : nullptr;
 		if (!webcam_.start(preset.webcamDeviceId, preset.webcamWidth, preset.webcamHeight, preset.webcamFps,
-				   webcamPath.toStdString())) {
+				   webcamPath.toStdString(), shared)) {
 			// No camera / failed to start — keep the screen recording going.
 			QMessageBox::warning(
 				this, QStringLiteral("Webcam"),
@@ -556,6 +586,72 @@ void MainWindow::editActivePreset()
 		audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds);
 		refreshRecentList();
 		refreshReadiness();
+		refreshWebcamRow();
+	}
+}
+
+void MainWindow::refreshWebcamRow()
+{
+	const Preset &p = activePreset();
+
+	if (!p.webcamEnabled) {
+		webcamBox_->setVisible(false);
+		if (webcamPreview_)
+			webcamPreview_->clearDevice();
+		return;
+	}
+
+	// Populate the device list from currently available cameras.
+	const std::vector<AudioDevice> cams = WebcamRecorder::cameras();
+	{
+		QSignalBlocker block(webcamCombo_);
+		webcamCombo_->clear();
+		for (const AudioDevice &c : cams)
+			webcamCombo_->addItem(QString::fromStdString(c.name), QString::fromStdString(c.id));
+	}
+
+	const QString wantId = QString::fromStdString(p.webcamDeviceId);
+	int idx = wantId.isEmpty() ? 0 : webcamCombo_->findData(wantId);
+	const bool wantedMissing = !wantId.isEmpty() && idx < 0;
+	if (idx < 0)
+		idx = 0; // fall back to the first available camera
+
+	webcamBox_->setVisible(true);
+	if (cams.empty()) {
+		// Preset wants a webcam but none are present.
+		webcamWarn_->setText(QStringLiteral("Webcam not found"));
+		webcamWarn_->setVisible(true);
+		webcamPreview_->clearDevice();
+		return;
+	}
+
+	{
+		QSignalBlocker block(webcamCombo_);
+		webcamCombo_->setCurrentIndex(idx);
+	}
+	webcamWarn_->setText(QStringLiteral("Saved camera not found — using %1")
+				     .arg(webcamCombo_->currentText()));
+	webcamWarn_->setVisible(wantedMissing);
+
+	const std::string dev = webcamCombo_->currentData().toString().toStdString();
+	webcamPreview_->setDevice(dev, p.webcamWidth, p.webcamHeight, p.webcamFps);
+}
+
+void MainWindow::onWebcamDeviceChanged()
+{
+	const QString id = webcamCombo_->currentData().toString();
+	if (id.isEmpty())
+		return;
+
+	// Switch the live preview immediately, and remember the choice on the preset
+	// so it persists without opening the editor.
+	const Preset &p = activePreset();
+	webcamPreview_->setDevice(id.toStdString(), p.webcamWidth, p.webcamHeight, p.webcamFps);
+	webcamWarn_->setVisible(false);
+
+	if (Preset *cur = const_cast<Preset *>(presets_.find(activePresetId_))) {
+		cur->webcamDeviceId = id.toStdString();
+		presets_.upsert(*cur);
 	}
 }
 
@@ -833,6 +929,7 @@ void MainWindow::onPresetChanged()
 		updateRegionToolVisibility();
 	}
 	refreshReadiness();
+	refreshWebcamRow();
 }
 
 void MainWindow::syncIdleControls()

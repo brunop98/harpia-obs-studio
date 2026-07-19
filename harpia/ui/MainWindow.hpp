@@ -35,6 +35,7 @@ class RegionTool;
 class AudioPanel;
 class MouseFxOverlay;
 class ErrorLogsPanel;
+class WebcamPreview;
 
 // The PowerRec-inspired main window: a wide, compact, dark surface optimized for
 // starting/stopping recordings in one or two clicks.
@@ -61,6 +62,8 @@ private slots:
 	void onOpenClipLibrary();
 	void onOpenErrorLogs();
 	void onCaptureModeChanged();
+	void onWebcamDeviceChanged();
+	void refreshWebcamRow(); // show/populate/hide the inline webcam controls
 	void onRegionChanged(const CaptureRegion &region);
 	void onIdleSettingChanged();
 	void onAudioChanged();
@@ -119,6 +122,12 @@ private:
 	QPushButton *primaryButton_ = nullptr; // Record/Stop toggle
 	QPushButton *pauseButton_ = nullptr;
 	QLabel *timerLabel_ = nullptr;
+
+	// Inline webcam controls (shown only when the active preset uses a webcam)
+	QWidget *webcamBox_ = nullptr;
+	QComboBox *webcamCombo_ = nullptr;
+	QLabel *webcamWarn_ = nullptr;
+	WebcamPreview *webcamPreview_ = nullptr;
 
 	// Recording readiness
 	QWidget *warningsBox_ = nullptr;

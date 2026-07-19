@@ -91,6 +91,8 @@ target_sources(
     ui/PresetEditorDialog.hpp
     ui/MousePreview.cpp
     ui/MousePreview.hpp
+    ui/WebcamPreview.cpp
+    ui/WebcamPreview.hpp
     ui/MouseFxOverlay.cpp
     ui/MouseFxOverlay.hpp
     ui/ClipLibraryWindow.cpp

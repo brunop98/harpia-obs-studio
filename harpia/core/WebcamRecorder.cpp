@@ -65,7 +65,7 @@ WebcamRecorder::~WebcamRecorder()
 }
 
 bool WebcamRecorder::start(const std::string &deviceId, int width, int height, int fps,
-			   const std::string &filePath)
+			   const std::string &filePath, obs_source_t *sharedSource)
 {
 	teardown();
 
@@ -74,36 +74,44 @@ bool WebcamRecorder::start(const std::string &deviceId, int width, int height, i
 	if (fps < 1)
 		fps = 30;
 
-	// Fall back to the first available camera if none specified.
-	std::string dev = deviceId;
-	if (dev.empty()) {
-		const auto cams = cameras();
-		if (cams.empty())
-			return false; // no camera available
-		dev = cams.front().id;
-	}
+	// 1. Camera source — reuse the shared (preview) one if provided, else open it.
+	if (sharedSource) {
+		camera_ = obs_source_get_ref(sharedSource);
+		if (!camera_) {
+			blog(LOG_ERROR, "[harpia] shared webcam source is gone");
+			return false;
+		}
+	} else {
+		// Fall back to the first available camera if none specified.
+		std::string dev = deviceId;
+		if (dev.empty()) {
+			const auto cams = cameras();
+			if (cams.empty())
+				return false; // no camera available
+			dev = cams.front().id;
+		}
 
-	// 1. Camera source.
-	obs_data_t *cs = obs_data_create();
-	{
-		obs_properties_t *props = obs_get_source_properties(platformCameraId());
-		const char *key = props ? deviceKey(props) : nullptr;
-		if (key)
-			obs_data_set_string(cs, key, dev.c_str());
-		if (props)
-			obs_properties_destroy(props);
-	}
-	// DirectShow custom resolution/fps hints (ignored by other platforms; the
-	// mix below enforces the final output size regardless).
-	obs_data_set_int(cs, "res_type", 1);
-	obs_data_set_string(cs, "resolution",
-			    (std::to_string(width) + "x" + std::to_string(height)).c_str());
-	obs_data_set_int(cs, "frame_interval", 10000000LL / fps);
-	camera_ = obs_source_create(platformCameraId(), "harpia_webcam", cs, nullptr);
-	obs_data_release(cs);
-	if (!camera_) {
-		blog(LOG_ERROR, "[harpia] failed to create webcam source");
-		return false;
+		obs_data_t *cs = obs_data_create();
+		{
+			obs_properties_t *props = obs_get_source_properties(platformCameraId());
+			const char *key = props ? deviceKey(props) : nullptr;
+			if (key)
+				obs_data_set_string(cs, key, dev.c_str());
+			if (props)
+				obs_properties_destroy(props);
+		}
+		// DirectShow custom resolution/fps hints (ignored by other platforms;
+		// the mix below enforces the final output size regardless).
+		obs_data_set_int(cs, "res_type", 1);
+		obs_data_set_string(cs, "resolution",
+				    (std::to_string(width) + "x" + std::to_string(height)).c_str());
+		obs_data_set_int(cs, "frame_interval", 10000000LL / fps);
+		camera_ = obs_source_create(platformCameraId(), "harpia_webcam", cs, nullptr);
+		obs_data_release(cs);
+		if (!camera_) {
+			blog(LOG_ERROR, "[harpia] failed to create webcam source");
+			return false;
+		}
 	}
 
 	// 2. Private view + independent mix at the webcam's own resolution/fps.

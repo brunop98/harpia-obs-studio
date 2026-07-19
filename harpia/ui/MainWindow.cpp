@@ -27,23 +27,28 @@
 
 #include <algorithm>
 #include <functional>
+#include <QFile>
 #include <QFileInfo>
 #include <QFont>
 #include <QGroupBox>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QInputDialog>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListView>
 #include <QListWidget>
 #include <QMenu>
 #include <QMimeData>
 #include <QPixmap>
+#include <QProcess>
 #include <QPushButton>
 #include <QScreen>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStorageInfo>
+#include <QStyle>
 #include <QTime>
 #include <QTimer>
 #include <QUrl>
@@ -108,7 +113,10 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	idleSpin_->setMaximumWidth(80);
 	toolbar->addWidget(idleSpin_);
 
-	openFolderButton_ = new QPushButton(QStringLiteral("Open Preset Folder"), central);
+	openFolderButton_ = new QPushButton(central);
+	openFolderButton_->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
+	openFolderButton_->setToolTip(QStringLiteral("Open preset folder"));
+	openFolderButton_->setFixedWidth(40);
 	toolbar->addWidget(openFolderButton_);
 
 	root->addLayout(toolbar);
@@ -121,10 +129,15 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	warningsBox_->setVisible(false);
 	root->addWidget(warningsBox_);
 
-	readyLabel_ = new QLabel(QStringLiteral("✓ Ready to Record"), central);
-	readyLabel_->setStyleSheet(QStringLiteral("color:#3fb950; font-weight:bold;"));
-	readyLabel_->setAlignment(Qt::AlignCenter);
-	root->addWidget(readyLabel_);
+	// Status chip: a centered rounded pill that reflects the current state
+	// (ready / recording / paused / warning / error). Styled in updateStatusChip().
+	auto *statusRow = new QHBoxLayout;
+	statusRow->addStretch(1);
+	statusChip_ = new QLabel(central);
+	statusChip_->setAlignment(Qt::AlignCenter);
+	statusRow->addWidget(statusChip_);
+	statusRow->addStretch(1);
+	root->addLayout(statusRow);
 
 	// ---- Center controls ------------------------------------------------
 	root->addStretch(1);
@@ -140,23 +153,35 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	bigFont.setPointSize(bigFont.pointSize() + 8);
 	bigFont.setBold(true);
 	primaryButton_->setFont(bigFont);
-	controls->addWidget(primaryButton_);
+
+	// Record button with the timer centered directly beneath it.
+	auto *recordCol = new QVBoxLayout;
+	recordCol->setSpacing(8);
+	recordCol->addWidget(primaryButton_, 0, Qt::AlignHCenter);
+
+	timerLabel_ = new QLabel(QStringLiteral("00:00:00"), central);
+	timerLabel_->setObjectName(QStringLiteral("timerLabel"));
+	timerLabel_->setAlignment(Qt::AlignCenter);
+	QFont timerFont(QStringLiteral("monospace"));
+	timerFont.setStyleHint(QFont::Monospace);
+	timerFont.setPointSize(bigFont.pointSize() + 6);
+	timerLabel_->setFont(timerFont);
+	recordCol->addWidget(timerLabel_, 0, Qt::AlignHCenter);
+	controls->addLayout(recordCol);
+
+	// Pause/Resume: only shown while recording.
+	pauseButton_ = new QPushButton(QStringLiteral("⏸  Pause"), central);
+	pauseButton_->setObjectName(QStringLiteral("pauseButton"));
+	pauseButton_->setMinimumSize(130, 96);
+	pauseButton_->setFont(bigFont);
+	pauseButton_->setVisible(false);
+	controls->addWidget(pauseButton_);
 
 	stopButton_ = new QPushButton(QStringLiteral("■  Stop"), central);
 	stopButton_->setObjectName(QStringLiteral("stopButton"));
 	stopButton_->setMinimumSize(130, 96);
 	stopButton_->setFont(bigFont);
 	controls->addWidget(stopButton_);
-
-	controls->addSpacing(24);
-
-	timerLabel_ = new QLabel(QStringLiteral("00:00:00"), central);
-	timerLabel_->setObjectName(QStringLiteral("timerLabel"));
-	QFont timerFont(QStringLiteral("monospace"));
-	timerFont.setStyleHint(QFont::Monospace);
-	timerFont.setPointSize(bigFont.pointSize() + 10);
-	timerLabel_->setFont(timerFont);
-	controls->addWidget(timerLabel_);
 
 	controls->addStretch(1);
 	root->addLayout(controls);
@@ -202,6 +227,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	// ---- Wiring ---------------------------------------------------------
 	connect(primaryButton_, &QPushButton::clicked, this, &MainWindow::onPrimaryButton);
+	connect(pauseButton_, &QPushButton::clicked, this, &MainWindow::onPauseButton);
 	connect(stopButton_, &QPushButton::clicked, this, &MainWindow::onStopButton);
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
 	connect(openFolderButton_, &QPushButton::clicked, this, &MainWindow::onOpenPresetFolder);
@@ -445,10 +471,14 @@ void MainWindow::startRecording()
 
 void MainWindow::onPrimaryButton()
 {
-	if (!recorder_.isRecording()) {
+	if (!recorder_.isRecording())
 		startRecording();
+}
+
+void MainWindow::onPauseButton()
+{
+	if (!recorder_.isRecording())
 		return;
-	}
 	recorder_.togglePause();
 	autoPaused_ = false; // manual action overrides the idle state machine
 	updateButtons();
@@ -657,8 +687,20 @@ void MainWindow::refreshReadiness()
 			anyBlocking = true;
 	}
 	recordingBlocked_ = anyBlocking;
+
+	// Headline for the status chip: prefer the first blocking issue, else the
+	// first caution.
+	firstIssue_.clear();
+	for (const Warning &w : warnings) {
+		if (w.blocking) {
+			firstIssue_ = w.message;
+			break;
+		}
+	}
+	if (firstIssue_.isEmpty() && !warnings.empty())
+		firstIssue_ = warnings.front().message;
+
 	warningsBox_->setVisible(!warnings.empty());
-	readyLabel_->setVisible(warnings.empty() && !recorder_.isRecording());
 	updateButtons();
 }
 
@@ -874,19 +916,68 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 
 	QMenu menu(this);
 	QAction *openAct = menu.addAction(QStringLiteral("Open"));
-	QAction *folderAct = menu.addAction(QStringLiteral("Open containing folder"));
-	QAction *copyAct = menu.addAction(QStringLiteral("Copy file path"));
+	QAction *folderAct = menu.addAction(QStringLiteral("Open Folder"));
+	menu.addSeparator();
+	QAction *copyAct = menu.addAction(QStringLiteral("Copy"));
+	QAction *copyPathAct = menu.addAction(QStringLiteral("Copy Path"));
+	menu.addSeparator();
+	QAction *renameAct = menu.addAction(QStringLiteral("Rename…"));
+	QAction *deleteAct = menu.addAction(QStringLiteral("Delete"));
 
 	QAction *chosen = menu.exec(recentStrip_->viewport()->mapToGlobal(pos));
+	if (!chosen)
+		return;
+
 	if (chosen == openAct) {
 		QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 	} else if (chosen == folderAct) {
+		// On Windows, reveal the file selected in Explorer; elsewhere open the
+		// containing folder.
+#ifdef Q_OS_WIN
+		QProcess::startDetached(
+			QStringLiteral("explorer.exe"),
+			{QStringLiteral("/select,") + QDir::toNativeSeparators(path)});
+#else
 		QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+#endif
 	} else if (chosen == copyAct) {
+		// Put the file itself on the clipboard so it pastes into Explorer/Finder.
 		auto *mime = new QMimeData();
-		mime->setText(path);
 		mime->setUrls({QUrl::fromLocalFile(path)});
 		QApplication::clipboard()->setMimeData(mime);
+	} else if (chosen == copyPathAct) {
+		QApplication::clipboard()->setText(path);
+	} else if (chosen == renameAct) {
+		const QFileInfo fi(path);
+		bool ok = false;
+		const QString newBase = QInputDialog::getText(
+			this, QStringLiteral("Rename recording"), QStringLiteral("New name:"),
+			QLineEdit::Normal, fi.completeBaseName(), &ok);
+		if (!ok || newBase.trimmed().isEmpty() || newBase == fi.completeBaseName())
+			return;
+		QString suffix = fi.suffix();
+		QString target = fi.absolutePath() + QLatin1Char('/') + newBase.trimmed();
+		if (!suffix.isEmpty())
+			target += QLatin1Char('.') + suffix;
+		if (QFileInfo::exists(target)) {
+			QMessageBox::warning(this, QStringLiteral("Rename recording"),
+					     QStringLiteral("A file with that name already exists."));
+			return;
+		}
+		if (!QFile::rename(path, target))
+			QMessageBox::warning(this, QStringLiteral("Rename recording"),
+					     QStringLiteral("Could not rename the file."));
+		refreshRecentList();
+	} else if (chosen == deleteAct) {
+		if (QMessageBox::question(
+			    this, QStringLiteral("Delete recording"),
+			    QStringLiteral("Delete \"%1\"?\nThis cannot be undone.")
+				    .arg(QFileInfo(path).fileName())) != QMessageBox::Yes)
+			return;
+		if (!QFile::remove(path))
+			QMessageBox::warning(this, QStringLiteral("Delete recording"),
+					     QStringLiteral("Could not delete the file."));
+		refreshRecentList();
 	}
 }
 
@@ -914,32 +1005,69 @@ void MainWindow::updateButtons()
 	const bool recording = recorder_.isRecording();
 	const bool paused = recorder_.isPaused();
 
-	if (!recording) {
-		primaryButton_->setText(QStringLiteral("●  Record"));
-		primaryButton_->setStyleSheet(QString());
-		// Block recording while readiness warnings exist.
-		primaryButton_->setEnabled(!recordingBlocked_);
-		primaryButton_->setToolTip(recordingBlocked_
-						   ? QStringLiteral("Resolve the warnings above before recording")
-						   : QString());
-	} else if (paused) {
-		primaryButton_->setText(QStringLiteral("▶  Resume"));
-		primaryButton_->setStyleSheet(
-			QStringLiteral("background:#3fb950;border:none;color:white;border-radius:10px;"));
-	} else {
-		primaryButton_->setText(QStringLiteral("⏸  Pause"));
-		primaryButton_->setStyleSheet(
-			QStringLiteral("background:#d29922;border:none;color:white;border-radius:10px;"));
-	}
+	// Record: starts a recording; disabled while one is in progress or while
+	// readiness warnings block recording.
+	primaryButton_->setEnabled(!recording && !recordingBlocked_);
+	primaryButton_->setToolTip((!recording && recordingBlocked_)
+					   ? QStringLiteral("Resolve the warnings above before recording")
+					   : QString());
+
+	// Pause/Resume: only present while recording.
+	pauseButton_->setVisible(recording);
 	if (recording) {
-		primaryButton_->setEnabled(true); // pause/resume always allowed
-		primaryButton_->setToolTip(QString());
+		if (paused) {
+			pauseButton_->setText(QStringLiteral("▶  Resume"));
+			pauseButton_->setStyleSheet(QStringLiteral(
+				"background:#3fb950;border:none;color:white;border-radius:10px;"));
+		} else {
+			pauseButton_->setText(QStringLiteral("⏸  Pause"));
+			pauseButton_->setStyleSheet(QStringLiteral(
+				"background:#d29922;border:none;color:white;border-radius:10px;"));
+		}
 	}
 
+	// Stop: only enabled while recording.
 	stopButton_->setEnabled(recording);
 	presetCombo_->setEnabled(!recording);
 	newPresetButton_->setEnabled(!recording);
 	captureModeCombo_->setEnabled(!recording);
+
+	updateStatusChip();
+}
+
+void MainWindow::updateStatusChip()
+{
+	if (!statusChip_)
+		return;
+
+	QString text;
+	QString bg;
+	if (recorder_.isRecording()) {
+		if (recorder_.isPaused()) {
+			text = QStringLiteral("⏸  Paused");
+			bg = QStringLiteral("#d29922");
+		} else {
+			text = QStringLiteral("🔴  Recording");
+			bg = QStringLiteral("#e5484d");
+		}
+	} else if (recordingBlocked_) {
+		text = QStringLiteral("❌  %1").arg(firstIssue_.isEmpty()
+							   ? QStringLiteral("Not ready to record")
+							   : firstIssue_);
+		bg = QStringLiteral("#e5484d");
+	} else if (!firstIssue_.isEmpty()) {
+		text = QStringLiteral("⚠  %1").arg(firstIssue_);
+		bg = QStringLiteral("#9a6700");
+	} else {
+		text = QStringLiteral("🟢  Ready");
+		bg = QStringLiteral("#238636");
+	}
+
+	statusChip_->setText(text);
+	statusChip_->setStyleSheet(
+		QStringLiteral("background:%1; color:white; border-radius:11px; padding:4px 14px; "
+			       "font-weight:bold;")
+			.arg(bg));
 }
 
 void MainWindow::tickState()

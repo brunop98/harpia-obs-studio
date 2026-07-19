@@ -53,7 +53,8 @@ public:
 	~MainWindow() override;
 
 private slots:
-	void onPrimaryButton(); // start, or pause/resume when recording
+	void onPrimaryButton(); // start recording
+	void onPauseButton();   // pause/resume while recording
 	void onStopButton();
 	void onNewPreset();
 	void showPresetMenu(const QPoint &pos); // right-click combo: edit/delete
@@ -84,6 +85,7 @@ private:
 	void updateButtons();
 	void editActivePreset(); // open the editor for the active preset + persist
 	void syncIdleControls();     // load idle toggle/spin from the active preset
+	void updateStatusChip();     // reflect ready/recording/paused/warning in the chip
 	void applyDarkTheme();
 	QString elapsedString() const;
 	void updateRegionToolVisibility(); // focus/record-driven overlay visibility
@@ -115,15 +117,17 @@ private:
 
 	// Center controls
 	QPushButton *primaryButton_ = nullptr;
+	QPushButton *pauseButton_ = nullptr;
 	QPushButton *stopButton_ = nullptr;
 	QLabel *timerLabel_ = nullptr;
 
 	// Recording readiness
 	QWidget *warningsBox_ = nullptr;
 	QVBoxLayout *warningsLayout_ = nullptr;
-	QLabel *readyLabel_ = nullptr;
+	QLabel *statusChip_ = nullptr; // 🟢 Ready / 🔴 Recording / ⏸ Paused / ⚠ / ❌
 	QTimer *readinessTimer_ = nullptr;
 	bool recordingBlocked_ = false;
+	QString firstIssue_; // headline warning/error message shown in the chip
 
 	// Recent strip
 	QPushButton *libraryButton_ = nullptr;

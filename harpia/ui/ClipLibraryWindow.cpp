@@ -535,6 +535,17 @@ void ClipLibraryWindow::renameSelected()
 	if (!ok || newBase.trimmed().isEmpty())
 		return;
 
+	// Reject characters Windows filenames can't contain — QFile::rename would
+	// otherwise fail with a generic message (or nest into a subfolder via '/').
+	static const QString illegal = QStringLiteral("\\/:*?\"<>|");
+	for (const QChar &ch : newBase) {
+		if (illegal.contains(ch)) {
+			QMessageBox::warning(this, QStringLiteral("Rename"),
+					     QStringLiteral("The name can't contain any of:  %1").arg(illegal));
+			return;
+		}
+	}
+
 	QString target = fi.absolutePath() + QLatin1Char('/') + newBase.trimmed();
 	if (!fi.suffix().isEmpty())
 		target += QLatin1Char('.') + fi.suffix();

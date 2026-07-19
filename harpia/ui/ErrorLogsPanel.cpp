@@ -86,8 +86,12 @@ ErrorLogsPanel::ErrorLogsPanel(QWidget *parent) : QWidget(parent, Qt::Window)
 	filters->addWidget(warningCheck_);
 	filters->addWidget(infoCheck_);
 	filters->addStretch(1);
+	// The view only reloads on show — a Refresh button keeps it useful while
+	// the window stays open during a recording.
+	auto *refreshBtn = new QPushButton(QStringLiteral("Refresh"), this);
 	auto *copyBtn = new QPushButton(QStringLiteral("Copy to Clipboard"), this);
 	auto *clearBtn = new QPushButton(QStringLiteral("Clear Logs"), this);
+	filters->addWidget(refreshBtn);
 	filters->addWidget(copyBtn);
 	filters->addWidget(clearBtn);
 	root->addLayout(filters);
@@ -101,6 +105,7 @@ ErrorLogsPanel::ErrorLogsPanel(QWidget *parent) : QWidget(parent, Qt::Window)
 	connect(sessionCombo_, &QComboBox::currentIndexChanged, this, &ErrorLogsPanel::onSessionChanged);
 	connect(openFileBtn, &QPushButton::clicked, this, &ErrorLogsPanel::openLogFile);
 	connect(openFolderBtn, &QPushButton::clicked, this, &ErrorLogsPanel::openLogFolder);
+	connect(refreshBtn, &QPushButton::clicked, this, &ErrorLogsPanel::refresh);
 	connect(copyBtn, &QPushButton::clicked, this, &ErrorLogsPanel::copyToClipboard);
 	connect(clearBtn, &QPushButton::clicked, this, &ErrorLogsPanel::clearLogs);
 	connect(errorCheck_, &QCheckBox::toggled, this, &ErrorLogsPanel::applyFilter);

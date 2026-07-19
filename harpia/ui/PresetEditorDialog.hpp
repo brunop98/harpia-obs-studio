@@ -53,6 +53,7 @@ private:
 	QComboBox *fpsCombo_ = nullptr;
 	QComboBox *frameRateModeCombo_ = nullptr;
 	QComboBox *bitrateCombo_ = nullptr;
+	QComboBox *audioBitrateCombo_ = nullptr;
 	QSpinBox *bitrateSpin_ = nullptr;
 	QComboBox *monitorCombo_ = nullptr;
 	QLineEdit *folderEdit_ = nullptr;

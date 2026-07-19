@@ -20,19 +20,22 @@ MousePreview::MousePreview(QWidget *parent) : QWidget(parent)
 	timer_->setInterval(33);
 	connect(timer_, &QTimer::timeout, this, [this]() {
 		phase_ = (phase_ + 1) % kLoop;
+		if (phase_ == 0)
+			rippleIndex_ = (rippleIndex_ + 1) % 2; // next loop: other button's color
 		update();
 	});
 	timer_->start();
 }
 
 void MousePreview::configure(bool showArea, const QColor &areaColor, int areaSize, bool showClicks,
-			     const QColor &clickColor)
+			     const QColor &leftClickColor, const QColor &rightClickColor)
 {
 	showArea_ = showArea;
 	areaColor_ = areaColor;
 	areaSize_ = areaSize;
 	showClicks_ = showClicks;
-	clickColor_ = clickColor;
+	leftClickColor_ = leftClickColor;
+	rightClickColor_ = rightClickColor;
 	update();
 }
 
@@ -43,11 +46,11 @@ void MousePreview::paintEvent(QPaintEvent *)
 
 	const QPoint c = rect().center();
 
-	// Click ripple (looping).
+	// Click ripple (looping, alternating left/right click colors).
 	if (showClicks_) {
 		const double t = double(phase_) / kLoop;
 		const int radius = int(8 + t * 34);
-		QColor col = clickColor_;
+		QColor col = (rippleIndex_ % 2 == 0) ? leftClickColor_ : rightClickColor_;
 		col.setAlpha(int(200 * (1.0 - t)));
 		p.setBrush(Qt::NoBrush);
 		p.setPen(QPen(col, 3));

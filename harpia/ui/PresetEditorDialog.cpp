@@ -12,11 +12,14 @@
 
 #include <algorithm>
 
+#include <QAbstractButton>
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QFileDialog>
+#include <QFontMetrics>
 #include <QFont>
 #include <QFrame>
 #include <QGridLayout>
@@ -318,6 +321,10 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	v->addWidget(micDesc);
 
 	for (const AudioDevice &d : AudioManager::inputDevices()) {
+		// Skip the synthetic "default" entry, matching the main window's
+		// AudioPanel — a mic ticked here must be displayable there.
+		if (d.id == "default")
+			continue;
 		auto *c = new QCheckBox(QString::fromStdString(d.name), this);
 		const QString id = QString::fromStdString(d.id);
 		c->setChecked(std::find(preset.micDeviceIds.begin(), preset.micDeviceIds.end(), d.id) !=
@@ -331,12 +338,32 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		none->setStyleSheet(QStringLiteral("color:#8a8f98;"));
 		v->addWidget(none);
 	}
+
+	v->addSpacing(8);
+	audioBitrateCombo_ = new QComboBox(this);
+	for (int kbps : {96, 128, 160, 192, 256, 320})
+		audioBitrateCombo_->addItem(QStringLiteral("%1 kbps").arg(kbps), kbps);
+	{
+		const int saved = preset.audioBitrateKbps > 0 ? preset.audioBitrateKbps : 160;
+		int bi = audioBitrateCombo_->findData(saved);
+		if (bi < 0) {
+			audioBitrateCombo_->addItem(QStringLiteral("%1 kbps").arg(saved), saved);
+			bi = audioBitrateCombo_->count() - 1;
+		}
+		audioBitrateCombo_->setCurrentIndex(bi);
+	}
+	addField(v, QStringLiteral("Audio quality"),
+		 QStringLiteral("Bitrate of the recorded audio track. 160 kbps is transparent for voice and "
+				"desktop sound; go higher for music."),
+		 audioBitrateCombo_);
+
 	v->addStretch(1);
 	addPage(QStringLiteral("Audio"), audioPage);
 
 	// ===== Output =====
 	QWidget *outputPage = makePage(v);
 	folderEdit_ = new QLineEdit(QString::fromStdString(preset.outputFolder), this);
+	folderEdit_->setPlaceholderText(QStringLiteral("Choose a folder for recordings…"));
 	auto *browse = new QPushButton(QStringLiteral("Browse…"), this);
 	connect(browse, &QPushButton::clicked, this, &PresetEditorDialog::browseFolder);
 	addField(v, QStringLiteral("Output folder"),
@@ -344,6 +371,8 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		 folderRowWidget(folderEdit_, browse));
 
 	templateEdit_ = new QLineEdit(QString::fromStdString(preset.filenameTemplate), this);
+	templateEdit_->setPlaceholderText(
+		QStringLiteral("Recording_{Year}-{Month}-{Day}_{Hour}-{Minute}-{Second}"));
 	addField(v, QStringLiteral("Filename template"),
 		 QStringLiteral("Names each file. Click a token below to insert it at the cursor."),
 		 templateEdit_);
@@ -393,6 +422,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	connect(fpsCombo_, &QComboBox::currentTextChanged, this, &PresetEditorDialog::updateFilenamePreview);
 	connect(codecCombo_, &QComboBox::currentIndexChanged, this, &PresetEditorDialog::updateFilenamePreview);
 	connect(formatCombo_, &QComboBox::currentIndexChanged, this, &PresetEditorDialog::updateFilenamePreview);
+	connect(folderEdit_, &QLineEdit::textChanged, this, &PresetEditorDialog::updateFilenamePreview);
 
 	v->addStretch(1);
 	addPage(QStringLiteral("Output"), outputPage);
@@ -421,8 +451,19 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	highlightSizeSlider_ = new QSlider(Qt::Horizontal, this);
 	highlightSizeSlider_->setRange(10, 200);
 	highlightSizeSlider_->setValue(preset.mouseHighlightSize > 0 ? preset.mouseHighlightSize : 60);
+	// Show the exact pixel value beside the slider.
+	auto *sizeRow = new QWidget(this);
+	auto *sizeLayout = new QHBoxLayout(sizeRow);
+	sizeLayout->setContentsMargins(0, 0, 0, 0);
+	sizeLayout->setSpacing(8);
+	auto *sizeValue = new QLabel(QStringLiteral("%1 px").arg(highlightSizeSlider_->value()), this);
+	sizeValue->setMinimumWidth(48);
+	connect(highlightSizeSlider_, &QSlider::valueChanged, sizeValue,
+		[sizeValue](int px) { sizeValue->setText(QStringLiteral("%1 px").arg(px)); });
+	sizeLayout->addWidget(highlightSizeSlider_, 1);
+	sizeLayout->addWidget(sizeValue);
 	addField(v, QStringLiteral("Highlight size"),
-		 QStringLiteral("Diameter of the cursor highlight ring, in pixels."), highlightSizeSlider_);
+		 QStringLiteral("Diameter of the cursor highlight ring, in pixels."), sizeRow);
 
 	mouseClicksCheck_ = new QCheckBox(QStringLiteral("Show click animations"), this);
 	mouseClicksCheck_->setChecked(preset.recordMouseClicks);
@@ -548,6 +589,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 				"to send it elsewhere."));
 
 	webcamFolderEdit_ = new QLineEdit(QString::fromStdString(preset.webcamFolder), this);
+	webcamFolderEdit_->setPlaceholderText(QStringLiteral("Same folder as the screen recording"));
 	auto *wcBrowse = new QPushButton(QStringLiteral("Browse…"), this);
 	connect(wcBrowse, &QPushButton::clicked, this, [this]() {
 		const QString dir =
@@ -641,6 +683,14 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
 	connect(buttons, &QDialogButtonBox::accepted, this, &PresetEditorDialog::accept);
 	connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+	// Enter in a line edit (name, filename template, editable fps combos) must
+	// not trigger Save-and-close mid-edit — no default button in this dialog.
+	for (QAbstractButton *b : buttons->buttons()) {
+		if (auto *pb = qobject_cast<QPushButton *>(b)) {
+			pb->setAutoDefault(false);
+			pb->setDefault(false);
+		}
+	}
 
 	auto *layout = new QVBoxLayout(this);
 	layout->addLayout(header);
@@ -682,7 +732,7 @@ void PresetEditorDialog::updateMousePreview()
 	if (!mousePreview_)
 		return;
 	mousePreview_->configure(mouseAreaCheck_->isChecked(), highlightColor_, highlightSizeSlider_->value(),
-				 mouseClicksCheck_->isChecked(), leftColor_);
+				 mouseClicksCheck_->isChecked(), leftColor_, rightColor_);
 }
 
 void PresetEditorDialog::updateFilenamePreview()
@@ -707,8 +757,16 @@ void PresetEditorDialog::updateFilenamePreview()
 	const std::string base = t.expand(templateEdit_->text().toStdString(), vars);
 	const auto fmt = RecordingFormat(formatCombo_->currentData().toInt());
 	const QString ext = QString::fromUtf8(formatExtension(fmt));
+	// Show the full destination path (middle-elided) so the folder is visible
+	// too, not just the file name.
+	QString full = QStringLiteral("%1.%2").arg(QString::fromStdString(base), ext);
+	const QString folder = folderEdit_->text().trimmed();
+	if (!folder.isEmpty())
+		full = QDir::toNativeSeparators(QDir(folder).filePath(full));
+	const QFontMetrics fm(templatePreview_->font());
 	templatePreview_->setText(
-		QStringLiteral("Preview: %1.%2").arg(QString::fromStdString(base), ext));
+		QStringLiteral("Preview: %1").arg(fm.elidedText(full, Qt::ElideMiddle, 460)));
+	templatePreview_->setToolTip(full);
 }
 
 void PresetEditorDialog::browseFolder()
@@ -754,6 +812,23 @@ void PresetEditorDialog::accept()
 		QMessageBox::warning(this, windowTitle(), QStringLiteral("Please choose an output folder."));
 		return;
 	}
+	{
+		// Catch a typo'd folder here instead of at record time.
+		const QString folder = folderEdit_->text().trimmed();
+		if (!QDir(folder).exists()) {
+			const auto btn = QMessageBox::question(
+				this, windowTitle(),
+				QStringLiteral("The output folder does not exist:\n%1\n\nCreate it?").arg(folder),
+				QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Yes);
+			if (btn != QMessageBox::Yes)
+				return;
+			if (!QDir().mkpath(folder)) {
+				QMessageBox::warning(this, windowTitle(),
+						     QStringLiteral("Could not create the folder."));
+				return;
+			}
+		}
+	}
 
 	result_.name = name.toStdString();
 	result_.format = RecordingFormat(formatCombo_->currentData().toInt());
@@ -790,6 +865,7 @@ void PresetEditorDialog::accept()
 		result_.filenameTemplate = Preset::makeDefault("").filenameTemplate;
 
 	result_.recordDesktopAudio = desktopAudioCheck_->isChecked();
+	result_.audioBitrateKbps = audioBitrateCombo_->currentData().toInt();
 	result_.micDeviceIds.clear();
 	for (int i = 0; i < micChecks_.size(); ++i) {
 		if (micChecks_[i]->isChecked())

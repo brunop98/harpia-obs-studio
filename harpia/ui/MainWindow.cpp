@@ -923,11 +923,32 @@ void MainWindow::onNewPreset()
 	PresetEditorDialog dlg(base, this);
 	if (dlg.exec() == QDialog::Accepted) {
 		Preset created = dlg.result();
+		created.name = uniquePresetName(created.name, created.id);
 		presets_.upsert(created);
 		activePresetId_ = created.id;
 		reloadPresetCombo();
 		syncIdleControls();
 		refreshRecentList();
+	}
+}
+
+std::string MainWindow::uniquePresetName(const std::string &wanted, const std::string &selfId) const
+{
+	// Two presets with the same name are indistinguishable in the preset combo
+	// (and collide in the library's folder→preset map) — suffix "(2)", "(3)"…
+	auto taken = [this, &selfId](const std::string &name) {
+		for (const Preset &p : presets_.presets()) {
+			if (p.id != selfId && p.name == name)
+				return true;
+		}
+		return false;
+	};
+	if (!taken(wanted))
+		return wanted;
+	for (int i = 2;; ++i) {
+		const std::string candidate = wanted + " (" + std::to_string(i) + ")";
+		if (!taken(candidate))
+			return candidate;
 	}
 }
 
@@ -992,7 +1013,9 @@ void MainWindow::editActivePreset(const QString &initialPage)
 	if (!initialPage.isEmpty())
 		dlg.showPage(initialPage);
 	if (dlg.exec() == QDialog::Accepted) {
-		presets_.upsert(dlg.result());
+		Preset updated = dlg.result();
+		updated.name = uniquePresetName(updated.name, updated.id);
+		presets_.upsert(updated);
 		reloadPresetCombo();
 		syncIdleControls();
 		audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds);

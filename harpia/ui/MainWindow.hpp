@@ -91,6 +91,8 @@ private:
 	QStringList presetFolders() const;
 	ClipLibrary::PresetByFolder presetFolderMap() const;
 	QString buildOutputPath(const Preset &preset) const;
+	// De-duplicate a preset name against the other presets ("Name (2)"…).
+	std::string uniquePresetName(const std::string &wanted, const std::string &selfId) const;
 	void startRecording();
 	void applyLiveCapture(); // (re)bind the live capture to the current mode
 	void beginRecordFlow(); // readiness gate -> countdown or immediate start

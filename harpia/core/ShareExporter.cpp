@@ -228,7 +228,10 @@ void ShareExporter::run(const QString &inPath, const QString &outPath, Options o
 				t.aenc = avcodec_alloc_context3(aac);
 				t.aenc->sample_rate = t.adec->sample_rate;
 				av_channel_layout_copy(&t.aenc->ch_layout, &t.adec->ch_layout);
-				t.aenc->sample_fmt = aac->sample_fmts ? aac->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+				// The native FFmpeg AAC encoder only supports planar float;
+				// hardcoding it also sidesteps AVCodec::sample_fmts, which is
+				// deprecated in FFmpeg 7.1+ (and MSVC treats that as an error).
+				t.aenc->sample_fmt = AV_SAMPLE_FMT_FLTP;
 				t.aenc->bit_rate = (int64_t)opts.audioKbps * 1000;
 				t.aenc->time_base = {1, t.adec->sample_rate};
 				if (t.ofmt->oformat->flags & AVFMT_GLOBALHEADER)

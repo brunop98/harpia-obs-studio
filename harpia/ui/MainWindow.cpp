@@ -80,6 +80,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 {
 	setWindowTitle(QStringLiteral("Harpia Recorder  v%1").arg(QString::fromUtf8(appVersion())));
 
+	ownPid_ = (uint64_t)QCoreApplication::applicationPid();
+
 	if (!presets_.presets().empty())
 		activePresetId_ = presets_.presets().front().id;
 
@@ -572,8 +574,12 @@ void MainWindow::startRecording()
 	targetPid_ = 0;
 	markersPath_.clear();
 	if (preset.pauseOnFocusLoss) {
-		targetPid_ = ForegroundWatcher::foregroundProcessId();
-		markersPath_ = screenPath + QStringLiteral(".markers.txt");
+		// Target the app you were using just before pressing Record — NOT Harpia
+		// itself (which is foreground now). If we never saw another app, leave the
+		// target unset so the feature stays inactive rather than misbehaving.
+		targetPid_ = lastForegroundPid_;
+		if (targetPid_ != 0)
+			markersPath_ = screenPath + QStringLiteral(".markers.txt");
 	}
 
 	recStartMs_ = QDateTime::currentMSecsSinceEpoch();
@@ -1481,6 +1487,14 @@ void MainWindow::updateStatusChip()
 void MainWindow::tickState()
 {
 	++spinPhase_; // drive the Starting…/Stopping… spinner
+
+	// Continuously remember the last real (non-Harpia) foreground app, so focus
+	// auto-pause can target the app you were using before you clicked Record.
+	{
+		const uint64_t fg = ForegroundWatcher::foregroundProcessId();
+		if (fg != 0 && fg != ownPid_)
+			lastForegroundPid_ = fg;
+	}
 
 	if (!recorder_.isRecording()) {
 		if (recStartMs_ != 0) {

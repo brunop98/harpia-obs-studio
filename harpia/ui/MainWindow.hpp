@@ -207,10 +207,13 @@ private:
 	int countdownRemaining_ = 0;
 	std::unique_ptr<CountdownOverlay> countdownOverlay_;
 
-	// Focus auto-pause: the process that owned the foreground window when
-	// recording started (its child windows/dialogs share this id), and the
-	// sidecar file where Auto Paused/Resumed markers are written.
+	// Focus auto-pause: the process of the *target* application (the app that was
+	// in the foreground just before Record was pressed — never Harpia itself),
+	// plus continuous tracking of the last non-Harpia foreground process so we
+	// can pick that target. `ownPid_` is Harpia's own process id.
 	uint64_t targetPid_ = 0;
+	uint64_t ownPid_ = 0;
+	uint64_t lastForegroundPid_ = 0;
 	QString markersPath_;
 
 	// Short-recording discard: the just-finished recording's files, its content

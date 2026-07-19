@@ -15,11 +15,17 @@ struct ClipInfo {
 	qint64 sizeBytes = 0;
 	QDateTime modified;
 	QString presetName; // best-effort; empty if unknown
+	bool isGif = false; // recording is a .gif
+	qint64 durationMs = 0; // 0 = unknown (probed lazily by the UI)
 
 	// Human "time ago" string, e.g. "5 minutes ago", "3 hours ago".
 	QString relativeAge() const;
+	// Exact recorded date, e.g. "19 Jul 2026 14:35".
+	QString exactDate() const;
 	// Human file size, e.g. "12.3 MB".
 	QString humanSize() const;
+	// Duration as [H:]MM:SS from durationMs, or empty if unknown.
+	static QString durationString(qint64 ms);
 };
 
 // Scans recording output folders and returns the clips found there. Used both

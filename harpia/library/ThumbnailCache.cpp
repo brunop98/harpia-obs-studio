@@ -159,6 +159,18 @@ void ThumbnailCache::jobFinished(const QString &key, const QImage &img, const QS
 	emit ready(videoPath);
 }
 
+qint64 ThumbnailCache::probeDurationMs(const QString &videoPath)
+{
+	AVFormatContext *fmt = nullptr;
+	if (avformat_open_input(&fmt, videoPath.toUtf8().constData(), nullptr, nullptr) < 0)
+		return 0;
+	qint64 ms = 0;
+	if (avformat_find_stream_info(fmt, nullptr) >= 0 && fmt->duration > 0)
+		ms = (qint64)(fmt->duration / (AV_TIME_BASE / 1000)); // AV_TIME_BASE units -> ms
+	avformat_close_input(&fmt);
+	return ms;
+}
+
 QImage ThumbnailCache::extractFrame(const QString &videoPath, const QSize &target)
 {
 	AVFormatContext *fmt = nullptr;

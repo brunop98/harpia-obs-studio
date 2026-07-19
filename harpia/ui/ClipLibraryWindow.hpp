@@ -4,20 +4,26 @@
 #include "library/ThumbnailCache.hpp"
 
 #include <QHash>
+#include <QSet>
 #include <QWidget>
 
 class QListWidget;
 class QListWidgetItem;
+class QLabel;
+class QSlider;
+class QAbstractItemDelegate;
 
 namespace harpia {
 
 class PresetStore;
 
-// A standalone window listing every recording that still exists on disk, as a
-// thumbnail grid. Each entry shows a preview, how long ago it was recorded, its
-// size, and the preset that produced it. Right-click for Open/Copy/Rename/Delete;
-// the Delete key removes the selected clips. Clips can be dragged into other
-// applications.
+// A standalone window listing every recording that still exists on disk as a
+// grid of cards. Each card shows a 16:9 thumbnail with the duration overlaid, a
+// GIF badge for GIFs, a favorite star, a recently-viewed heart, the (elided)
+// file name, the exact date + size, and the originating preset. A header shows
+// totals; a slider scales the cards Small/Medium/Large. Multi-select with
+// Ctrl/Shift, drag out to a file manager, right-click for Open/Copy/Rename/
+// Delete, and the Delete key removes the selected clips.
 class ClipLibraryWindow : public QWidget {
 	Q_OBJECT
 public:
@@ -35,17 +41,34 @@ private slots:
 	void copySelected();
 	void renameSelected();
 	void deleteSelected();
+	void toggleFavoriteSelected();
 	void onThumbnailReady(const QString &path);
+	void onCardScaleChanged(int level);
 
 private:
 	QStringList folders() const;
 	ClipLibrary::PresetByFolder presetByFolder() const;
 	QStringList selectedPaths() const;
+	QSize thumbSize() const;    // 16:9 thumbnail at the current scale
+	void applyCardMetrics();    // push icon/grid sizes for the current scale
+	void markViewed(const QString &path);
+	void probeDurationAsync(const QString &path);
+	void loadPersistentState();
+	void savePersistentState();
 
 	PresetStore &store_;
 	QListWidget *grid_ = nullptr;
+	QAbstractItemDelegate *cardDelegate_ = nullptr; // owned by grid_; a ClipCardDelegate
+	QLabel *totalsLabel_ = nullptr;
+	QSlider *sizeSlider_ = nullptr;
 	ThumbnailCache thumbnails_;
 	QHash<QString, QListWidgetItem *> itemByPath_;
+
+	int cardScale_ = 1;                 // 0=Small, 1=Medium, 2=Large
+	QSet<QString> favorites_;           // absolute file paths
+	QSet<QString> recentlyViewed_;      // absolute file paths
+	QHash<QString, qint64> durationMs_; // path -> probed duration (ms)
+	QSet<QString> durationInFlight_;    // paths currently being probed
 };
 
 } // namespace harpia

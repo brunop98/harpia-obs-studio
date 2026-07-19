@@ -44,9 +44,32 @@ QString ClipInfo::relativeAge() const
 	return QStringLiteral("%1 year%2 ago").arg(years).arg(years == 1 ? "" : "s");
 }
 
+QString ClipInfo::exactDate() const
+{
+	if (!modified.isValid())
+		return QStringLiteral("unknown");
+	return modified.toString(QStringLiteral("d MMM yyyy HH:mm"));
+}
+
 QString ClipInfo::humanSize() const
 {
 	return QLocale().formattedDataSize(sizeBytes, 1, QLocale::DataSizeTraditionalFormat);
+}
+
+QString ClipInfo::durationString(qint64 ms)
+{
+	if (ms <= 0)
+		return {};
+	const qint64 totalSecs = ms / 1000;
+	const qint64 h = totalSecs / 3600;
+	const qint64 m = (totalSecs % 3600) / 60;
+	const qint64 s = totalSecs % 60;
+	if (h > 0)
+		return QStringLiteral("%1:%2:%3")
+			.arg(h)
+			.arg(m, 2, 10, QLatin1Char('0'))
+			.arg(s, 2, 10, QLatin1Char('0'));
+	return QStringLiteral("%1:%2").arg(m, 2, 10, QLatin1Char('0')).arg(s, 2, 10, QLatin1Char('0'));
 }
 
 QStringList ClipLibrary::videoExtensions()
@@ -93,6 +116,7 @@ QVector<ClipInfo> ClipLibrary::scan(const QStringList &folders, const PresetByFo
 			info.sizeBytes = fi.size();
 			info.modified = fi.lastModified();
 			info.presetName = presetName;
+			info.isGif = fi.suffix().compare(QStringLiteral("gif"), Qt::CaseInsensitive) == 0;
 			clips.push_back(info);
 		}
 	}

@@ -31,6 +31,10 @@ public:
 	// or a job is already in flight. Emits ready(videoPath) when it completes.
 	void ensure(const QString &videoPath, const QSize &target);
 
+	// Probe a media file's duration in milliseconds (0 if unknown). Cheap — reads
+	// the container header only. Safe to call on a worker thread.
+	static qint64 probeDurationMs(const QString &videoPath);
+
 signals:
 	void ready(const QString &videoPath);
 

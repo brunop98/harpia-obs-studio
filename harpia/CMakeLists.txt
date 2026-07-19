@@ -69,6 +69,8 @@ target_sources(
     core/EncoderFactory.hpp
     core/RecordingController.cpp
     core/RecordingController.hpp
+    core/Remuxer.cpp
+    core/Remuxer.hpp
     core/WebcamRecorder.cpp
     core/WebcamRecorder.hpp
     model/Preset.cpp

@@ -13,11 +13,14 @@
 #include "StatusBadge.hpp"
 #include "WebcamPreview.hpp"
 #include "core/EncoderFactory.hpp"
+#include "core/Remuxer.hpp"
 #include "platform/CameraAccess.hpp"
 #include "platform/ForegroundWatcher.hpp"
 #include "core/ObsContext.hpp"
 #include "library/ClipLibrary.hpp"
 #include "model/PresetStore.hpp"
+
+#include <util/base.h> // blog
 
 #include <QAction>
 #include <QApplication>
@@ -50,13 +53,16 @@
 #include <QMenu>
 #include <QMimeData>
 #include <QPixmap>
+#include <QPointer>
 #include <QProcess>
 #include <QPushButton>
+#include <QRunnable>
 #include <QScreen>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStorageInfo>
 #include <QStyle>
+#include <QThreadPool>
 #include <QTime>
 #include <QTimer>
 #include <QUrl>
@@ -532,7 +538,18 @@ void MainWindow::startRecording()
 	dir.mkpath(QStringLiteral("."));
 	const QString screenPath =
 		dir.filePath(baseName + QLatin1Char('.') + QString::fromStdString(preset.extension()));
-	if (!recorder_.start(preset, screenPath.toStdString())) {
+
+	// MP4 finalizes slowly (especially after many pauses). Record to a temp .mkv
+	// (near-instant, crash-safe stop) and losslessly remux to the .mp4 in the
+	// background afterwards. Other formats record directly.
+	QString recordPath = screenPath;
+	if (preset.format == RecordingFormat::MP4) {
+		QDir tmp(dir.filePath(QStringLiteral(".harpia_tmp")));
+		tmp.mkpath(QStringLiteral("."));
+		recordPath = tmp.filePath(baseName + QStringLiteral(".mkv"));
+	}
+
+	if (!recorder_.start(preset, recordPath.toStdString())) {
 		timerLabel_->setText(QStringLiteral("error"));
 		starting_ = false;
 		updateButtons();
@@ -540,7 +557,8 @@ void MainWindow::startRecording()
 	}
 
 	// Remember this recording's files + minimum length for the short-clip check
-	// when it finishes.
+	// and the post-stop remux.
+	lastRecordedPath_ = recordPath;
 	lastScreenPath_ = screenPath;
 	lastWebcamPath_.clear();
 	lastMinSeconds_ = preset.minRecordingSeconds;
@@ -567,6 +585,8 @@ void MainWindow::startRecording()
 					       "The screen recording continues without it."));
 		}
 	}
+
+	logRecordingStart(preset, recordPath, screenPath, lastWebcamPath_, baseW, baseH, fps);
 
 	// Focus auto-pause: remember the app that's in the foreground now as the
 	// target, and prepare a sidecar file for Auto Paused/Resumed markers.
@@ -662,11 +682,27 @@ void MainWindow::beginStop()
 	recorder_.stop(); // async; tickState clears stopping_ once finalized
 }
 
-void MainWindow::maybeDiscardShortRecording(const QString &screenPath, const QString &webcamPath,
-					    const QString &markersPath, qint64 contentMs, int minSeconds)
+void MainWindow::finalizeStopped(const QString &recordedPath, const QString &finalPath,
+				 const QString &webcamPath, const QString &markersPath, qint64 contentMs,
+				 int minSeconds, bool needsRemux)
 {
-	if (screenPath.isEmpty() || !QFileInfo::exists(screenPath))
-		return;
+	// 1) Optional short-recording discard (operates on the file OBS wrote).
+	if (minSeconds > 0 &&
+	    discardShortRecording(recordedPath, webcamPath, markersPath, contentMs, minSeconds))
+		return; // discarded — nothing to remux
+
+	// 2) Remux the temp .mkv to the final .mp4 (background), or just refresh.
+	if (needsRemux)
+		remuxInBackground(recordedPath, finalPath);
+	else
+		refreshRecentList();
+}
+
+bool MainWindow::discardShortRecording(const QString &recordedPath, const QString &webcamPath,
+				       const QString &markersPath, qint64 contentMs, int minSeconds)
+{
+	if (recordedPath.isEmpty() || !QFileInfo::exists(recordedPath))
+		return false;
 
 	const int secs = int((contentMs + 500) / 1000);
 
@@ -683,15 +719,103 @@ void MainWindow::maybeDiscardShortRecording(const QString &screenPath, const QSt
 	box.exec();
 
 	if (box.clickedButton() != discardBtn)
-		return; // keep it
+		return false; // keep it
 
-	// Permanent delete of the recording and its companion files.
-	QFile::remove(screenPath);
+	QFile::remove(recordedPath);
 	if (!webcamPath.isEmpty())
 		QFile::remove(webcamPath);
 	if (!markersPath.isEmpty())
 		QFile::remove(markersPath);
+	// Tidy the temp dir if this was a to-be-remuxed .mkv.
+	QDir().rmdir(QFileInfo(recordedPath).absolutePath());
+	blog(LOG_INFO, "[harpia] discarded short recording (%d s < %d s minimum)", secs, minSeconds);
 	refreshRecentList();
+	return true;
+}
+
+void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Path)
+{
+	const qint64 srcSize = QFileInfo(mkvPath).size();
+	blog(LOG_INFO, "[harpia] remux: %s -> %s (%lld MB, lossless stream copy)",
+	     mkvPath.toUtf8().constData(), mp4Path.toUtf8().constData(), (long long)(srcSize / (1024 * 1024)));
+
+	QPointer<MainWindow> guard(this);
+	const qint64 startMs = QDateTime::currentMSecsSinceEpoch();
+
+	QThreadPool::globalInstance()->start(QRunnable::create([guard, mkvPath, mp4Path, srcSize, startMs]() {
+		const bool ok = Remuxer::remux(mkvPath.toStdString(), mp4Path.toStdString());
+		const qint64 outSize = ok ? QFileInfo(mp4Path).size() : 0;
+		QMetaObject::invokeMethod(
+			qApp,
+			[guard, mkvPath, mp4Path, ok, srcSize, outSize, startMs]() {
+				const qint64 secs =
+					(QDateTime::currentMSecsSinceEpoch() - startMs + 500) / 1000;
+				if (ok) {
+					QFile::remove(mkvPath);
+					QDir().rmdir(QFileInfo(mkvPath).absolutePath()); // temp dir if empty
+					blog(LOG_INFO,
+					     "[harpia] remux complete: %lld MB -> %lld MB in %llds",
+					     (long long)(srcSize / (1024 * 1024)),
+					     (long long)(outSize / (1024 * 1024)), (long long)secs);
+				} else {
+					// Don't lose the recording: keep the .mkv beside the target.
+					const QString fallback =
+						QFileInfo(mp4Path).absolutePath() + QLatin1Char('/') +
+						QFileInfo(mp4Path).completeBaseName() + QStringLiteral(".mkv");
+					QFile::rename(mkvPath, fallback);
+					blog(LOG_WARNING,
+					     "[harpia] remux FAILED — kept the recording as %s",
+					     fallback.toUtf8().constData());
+				}
+				if (guard)
+					guard->refreshRecentList();
+			},
+			Qt::QueuedConnection);
+	}));
+}
+
+void MainWindow::logRecordingStart(const Preset &p, const QString &recordedPath, const QString &finalPath,
+				   const QString &webcamPath, uint32_t baseW, uint32_t baseH, int fps)
+{
+	const char *fmt = formatToString(p.format);
+	const char *codec = codecToString(p.codec);
+	const char *frMode = p.frameRateMode == FrameRateMode::VFR ? "VFR" : "CFR";
+
+	blog(LOG_INFO, "======== Harpia recording start ========");
+	blog(LOG_INFO, "[harpia] preset: '%s'", p.name.c_str());
+	blog(LOG_INFO, "[harpia] format: %s  codec: %s  %ux%u @ %d fps (%s)", fmt, codec, baseW, baseH, fps,
+	     frMode);
+	const std::string bitrate = p.videoBitrateKbps > 0 ? (std::to_string(p.videoBitrateKbps) + " kbps")
+							   : std::string("auto");
+	blog(LOG_INFO, "[harpia] bitrate: %s  gpu-encode: %s", bitrate.c_str(), p.gpuCompression ? "yes" : "no");
+	const char *captureKind = appCaptureEnabled_
+					  ? "single-application"
+					  : (captureMode_ == CaptureMode::Region ? "region" : "monitor");
+	blog(LOG_INFO, "[harpia] capture: %s  monitor#%d", captureKind, p.monitorIndex);
+	if (appCaptureEnabled_ && !appWindowValue_.isEmpty())
+		blog(LOG_INFO, "[harpia] window: %s", appWindowValue_.toUtf8().constData());
+	if (captureMode_ == CaptureMode::Region && currentRegion_.enabled)
+		blog(LOG_INFO, "[harpia] region: %dx%d at (%d,%d)", currentRegion_.width, currentRegion_.height,
+		     currentRegion_.x, currentRegion_.y);
+	blog(LOG_INFO, "[harpia] output folder: %s", p.outputFolder.c_str());
+	blog(LOG_INFO, "[harpia] recording to: %s", recordedPath.toUtf8().constData());
+	if (recordedPath != finalPath)
+		blog(LOG_INFO, "[harpia] will remux to: %s (fast-stop MKV->MP4)",
+		     finalPath.toUtf8().constData());
+	blog(LOG_INFO, "[harpia] audio: desktop=%s  mics=%zu", p.recordDesktopAudio ? "on" : "off",
+	     p.micDeviceIds.size());
+	blog(LOG_INFO, "[harpia] mouse: cursor=%s area=%s clicks=%s", p.showMouseCursor ? "on" : "off",
+	     p.showMouseArea ? "on" : "off", p.recordMouseClicks ? "on" : "off");
+	if (p.webcamEnabled)
+		blog(LOG_INFO, "[harpia] webcam: '%s' %dx%d @ %d fps -> %s", p.webcamDeviceId.c_str(),
+		     p.webcamWidth, p.webcamHeight, p.webcamFps,
+		     webcamPath.isEmpty() ? "(failed)" : webcamPath.toUtf8().constData());
+	else
+		blog(LOG_INFO, "[harpia] webcam: off");
+	blog(LOG_INFO, "[harpia] countdown: %ds  min-length: %ds  focus-pause: %s  screen-border: %s",
+	     p.countdownSeconds, p.minRecordingSeconds, p.pauseOnFocusLoss ? "on" : "off",
+	     p.showScreenBorder ? "on" : "off");
+	blog(LOG_INFO, "========================================");
 }
 
 void MainWindow::onPauseButton()
@@ -1539,19 +1663,25 @@ void MainWindow::tickState()
 			targetPid_ = 0;
 			stopping_ = false; // finalize complete
 
-			// Short-recording check: if the content was shorter than the
-			// preset's minimum, offer to discard this recording and its
-			// companion files. Deferred briefly so the muxers finish flushing
-			// their files before we (maybe) delete them.
-			if (lastMinSeconds_ > 0 && lastContentMs_ > 0 &&
-			    lastContentMs_ < (qint64)lastMinSeconds_ * 1000) {
-				const QString screen = lastScreenPath_;
+			// Post-stop handling — deferred briefly so the muxer finishes
+			// flushing before we read/delete files: (1) offer to discard a
+			// too-short recording, then (2) remux the temp .mkv to the final
+			// .mp4. Only scheduled when there's actually work to do.
+			const bool needMinCheck = (lastMinSeconds_ > 0 && lastContentMs_ > 0 &&
+						   lastContentMs_ < (qint64)lastMinSeconds_ * 1000);
+			const bool needsRemux =
+				(!lastRecordedPath_.isEmpty() && lastRecordedPath_ != lastScreenPath_);
+			if (needMinCheck || needsRemux) {
+				const QString recorded = lastRecordedPath_;
+				const QString finalP = lastScreenPath_;
 				const QString webcam = lastWebcamPath_;
 				const QString markers = markersPath_;
-				const int minS = lastMinSeconds_;
+				const int minS = needMinCheck ? lastMinSeconds_ : 0;
 				const qint64 contentMs = lastContentMs_;
-				QTimer::singleShot(700, this, [this, screen, webcam, markers, minS, contentMs]() {
-					maybeDiscardShortRecording(screen, webcam, markers, contentMs, minS);
+				QTimer::singleShot(700, this, [this, recorded, finalP, webcam, markers, minS,
+							       contentMs, needsRemux]() {
+					finalizeStopped(recorded, finalP, webcam, markers, contentMs, minS,
+							needsRemux);
 				});
 			}
 			markersPath_.clear();

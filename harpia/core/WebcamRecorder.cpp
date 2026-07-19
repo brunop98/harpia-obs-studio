@@ -240,6 +240,15 @@ bool WebcamRecorder::isRecording() const
 	return output_ && obs_output_active(output_);
 }
 
+void WebcamRecorder::pause(bool paused)
+{
+	if (!output_ || !obs_output_active(output_))
+		return;
+	if (obs_output_paused(output_) == paused)
+		return;
+	obs_output_pause(output_, paused);
+}
+
 void WebcamRecorder::teardown()
 {
 	if (output_) {

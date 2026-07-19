@@ -761,6 +761,11 @@ void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Pat
 	blog(LOG_INFO, "[harpia] remux: %s -> %s (%lld MB, lossless stream copy)",
 	     mkvPath.toUtf8().constData(), mp4Path.toUtf8().constData(), (long long)(srcSize / (1024 * 1024)));
 
+	// Visible feedback while the file is being finalized — otherwise the clip
+	// silently appears "late" in the recent strip and saving looks stuck.
+	statusBar()->showMessage(QStringLiteral("Saving recording… (finalizing MP4, %1 MB)")
+					 .arg(srcSize / (1024 * 1024)));
+
 	QPointer<MainWindow> guard(this);
 	const qint64 startMs = QDateTime::currentMSecsSinceEpoch();
 
@@ -789,8 +794,20 @@ void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Pat
 					     "[harpia] remux FAILED — kept the recording as %s",
 					     fallback.toUtf8().constData());
 				}
-				if (guard)
+				if (guard) {
+					if (ok)
+						guard->statusBar()->showMessage(
+							QStringLiteral("Recording saved (%1 MB, %2 s)")
+								.arg(outSize / (1024 * 1024))
+								.arg(secs),
+							6000);
+					else
+						guard->statusBar()->showMessage(
+							QStringLiteral("Could not finalize MP4 — recording "
+								       "kept as MKV"),
+							10000);
 					guard->refreshRecentList();
+				}
 			},
 			Qt::QueuedConnection);
 	}));
@@ -845,8 +862,9 @@ void MainWindow::onPauseButton()
 	if (!recorder_.isRecording())
 		return;
 	recorder_.togglePause();
-	autoPaused_ = false;  // manual action overrides the idle state machine
-	focusPaused_ = false; // and the focus state machine
+	webcam_.pause(recorder_.isPaused()); // keep the companion file in sync
+	autoPaused_ = false;                 // manual action overrides the idle state machine
+	focusPaused_ = false;                // and the focus state machine
 	updateButtons();
 }
 
@@ -1756,11 +1774,13 @@ void MainWindow::tickIdle()
 
 	if (!recorder_.isPaused()) {
 		if (idleSecs >= timeout && recorder_.pause(true)) {
+			webcam_.pause(true); // companion file pauses in lockstep
 			autoPaused_ = true;
 			updateButtons();
 		}
 	} else if (autoPaused_ && idleSecs < timeout) {
 		recorder_.pause(false);
+		webcam_.pause(false);
 		autoPaused_ = false;
 		updateButtons();
 	}
@@ -1796,12 +1816,14 @@ void MainWindow::tickFocus(uint64_t foregroundPid)
 
 	if (!focused && !recorder_.isPaused()) {
 		if (recorder_.pause(true)) {
+			webcam_.pause(true); // companion file pauses in lockstep
 			focusPaused_ = true;
 			writeMarker(QStringLiteral("Auto Paused (Application Lost Focus)"));
 			updateButtons();
 		}
 	} else if (focused && focusPaused_ && recorder_.isPaused()) {
 		recorder_.pause(false);
+		webcam_.pause(false);
 		focusPaused_ = false;
 		writeMarker(QStringLiteral("Auto Resumed (Application Regained Focus)"));
 		updateButtons();

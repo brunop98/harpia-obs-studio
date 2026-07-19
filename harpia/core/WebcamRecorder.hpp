@@ -59,6 +59,11 @@ public:
 	void stop();
 	bool isRecording() const;
 
+	// Pause/resume in lockstep with the screen recording, so the two files stay
+	// the same length and in sync (a paused screen file must not keep growing a
+	// webcam companion).
+	void pause(bool paused);
+
 private:
 	void teardown();
 

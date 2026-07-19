@@ -723,6 +723,7 @@ void MainWindow::showPresetMenu(const QPoint &pos)
 	QMenu menu(this);
 	QAction *editAct = menu.addAction(QStringLiteral("Edit preset…"));
 	QAction *dupAct = menu.addAction(QStringLiteral("Duplicate preset"));
+	QAction *folderAct = menu.addAction(QStringLiteral("Open recordings folder"));
 	menu.addSeparator();
 	QAction *delAct = menu.addAction(QStringLiteral("Delete preset"));
 	delAct->setEnabled(presets_.presets().size() > 1);
@@ -737,6 +738,12 @@ void MainWindow::showPresetMenu(const QPoint &pos)
 
 	if (chosen == editAct) {
 		editActivePreset();
+	} else if (chosen == folderAct) {
+		QString folder = QString::fromStdString(cur->outputFolder);
+		if (folder.isEmpty())
+			folder = defaultFolder_;
+		QDir().mkpath(folder);
+		QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
 	} else if (chosen == dupAct) {
 		Preset copy = *cur;
 		copy.id = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();

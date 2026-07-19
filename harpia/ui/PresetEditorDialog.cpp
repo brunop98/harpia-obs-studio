@@ -201,6 +201,30 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		 QStringLiteral("Remembers the app in the foreground when you hit Record and pauses whenever "
 				"it isn't the active window (its dialogs and pickers still count as focused), "
 				"resuming when you return. Great for Unity/Photoshop/Blender. Windows only."));
+
+	borderCheck_ = new QCheckBox(QStringLiteral("Show border around recorded screen (Full Screen only)"),
+				     this);
+	borderCheck_->setChecked(preset.showScreenBorder);
+	addCheck(v, borderCheck_,
+		 QStringLiteral("Outline the recorded monitor while recording so you can see which screen is "
+				"captured. The border is excluded from the video (Windows) and only appears in "
+				"Full Screen capture mode."));
+
+	borderColor_ = QColor(QString::fromStdString(preset.screenBorderColor));
+	if (!borderColor_.isValid())
+		borderColor_ = QColor(0xe5, 0x48, 0x4d);
+	borderColorBtn_ = new QPushButton(this);
+	setButtonColor(borderColorBtn_, borderColor_);
+	connect(borderColorBtn_, &QPushButton::clicked, this,
+		[this]() { pickColor(borderColor_, borderColorBtn_); });
+	addField(v, QStringLiteral("Border color"), QString(), borderColorBtn_);
+
+	borderThicknessSpin_ = new QSpinBox(this);
+	borderThicknessSpin_->setRange(1, 10);
+	borderThicknessSpin_->setSuffix(QStringLiteral(" px"));
+	borderThicknessSpin_->setValue(preset.screenBorderThickness > 0 ? preset.screenBorderThickness : 4);
+	addField(v, QStringLiteral("Border thickness"), QString(), borderThicknessSpin_);
+
 	v->addStretch(1);
 	addPage(QStringLiteral("General"), generalPage);
 
@@ -724,6 +748,9 @@ void PresetEditorDialog::accept()
 	result_.idleTimeoutSeconds = idleSpin_->value();
 	result_.countdownSeconds = countdownCombo_->currentData().toInt();
 	result_.pauseOnFocusLoss = pauseFocusCheck_->isChecked();
+	result_.showScreenBorder = borderCheck_->isChecked();
+	result_.screenBorderColor = borderColor_.name().toStdString();
+	result_.screenBorderThickness = borderThicknessSpin_->value();
 	result_.filenameTemplate = templateEdit_->text().trimmed().toStdString();
 
 	result_.recordDesktopAudio = desktopAudioCheck_->isChecked();

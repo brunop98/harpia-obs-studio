@@ -9,6 +9,7 @@
 #include "RecentListWidget.hpp"
 #include "CountdownOverlay.hpp"
 #include "RegionTool.hpp"
+#include "ScreenBorderOverlay.hpp"
 #include "StatusBadge.hpp"
 #include "WebcamPreview.hpp"
 #include "core/EncoderFactory.hpp"
@@ -298,6 +299,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	};
 
 	mouseFx_ = std::make_unique<MouseFxOverlay>();
+	screenBorder_ = std::make_unique<ScreenBorderOverlay>();
 
 	countdownOverlay_ = std::make_unique<CountdownOverlay>();
 	connect(countdownOverlay_.get(), &CountdownOverlay::tick, this, [this](int remaining) {
@@ -561,6 +563,15 @@ void MainWindow::startRecording()
 		mouseFx_->configure(cfg);
 		mouseFx_->setScreen(screenForActivePreset());
 		mouseFx_->start();
+	}
+
+	// Recording border around the monitor (Full Screen mode only). Excluded from
+	// the capture on Windows, so it isn't part of the video.
+	if (captureMode_ == CaptureMode::Monitor && preset.showScreenBorder && screenBorder_) {
+		QColor c(QString::fromStdString(preset.screenBorderColor));
+		if (!c.isValid())
+			c = QColor(0xe5, 0x48, 0x4d);
+		screenBorder_->showBorder(screenForActivePreset(), c, preset.screenBorderThickness);
 	}
 }
 
@@ -1340,6 +1351,8 @@ void MainWindow::tickState()
 			updateRegionToolVisibility(); // leave recording mode
 			if (mouseFx_)
 				mouseFx_->stop();
+			if (screenBorder_)
+				screenBorder_->hideBorder();
 			webcam_.stop();
 			focusPaused_ = false;
 			targetPid_ = 0;

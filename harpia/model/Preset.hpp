@@ -114,6 +114,12 @@ struct Preset {
 	// 0 = disabled (start immediately). 1..10 supported.
 	int countdownSeconds = 0;
 
+	// Show a colored border around the recorded monitor while recording (Full
+	// Screen capture only). The border is excluded from the recording itself.
+	bool showScreenBorder = false;
+	std::string screenBorderColor = "#e5484d"; // default red
+	int screenBorderThickness = 4;             // px, 1..10
+
 	// File extension (without the dot) for the current format.
 	std::string extension() const;
 

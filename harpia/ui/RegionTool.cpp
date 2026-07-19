@@ -271,9 +271,8 @@ void RegionTool::paintEvent(QPaintEvent *)
 
 	const QRect inner = innerRectLocal();
 
-	QColor border = kAccent;
-	if (recording_)
-		border.setAlpha(180);
+	// Green while idle (ready), red while recording — instant state feedback.
+	QColor border = recording_ ? QColor(0xe5, 0x48, 0x4d) : QColor(0x3f, 0xb9, 0x50);
 	p.setPen(QPen(border, 2));
 	p.setBrush(Qt::NoBrush);
 	p.drawRect(inner);

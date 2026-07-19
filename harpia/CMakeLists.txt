@@ -95,6 +95,8 @@ target_sources(
     ui/StatusBadge.hpp
     ui/CountdownOverlay.cpp
     ui/CountdownOverlay.hpp
+    ui/ScreenBorderOverlay.cpp
+    ui/ScreenBorderOverlay.hpp
     ui/WebcamPreview.cpp
     ui/WebcamPreview.hpp
     ui/MouseFxOverlay.cpp

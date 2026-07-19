@@ -34,6 +34,7 @@ class PresetStore;
 class ClipLibraryWindow;
 class RegionTool;
 class CountdownOverlay;
+class ScreenBorderOverlay;
 class AudioPanel;
 class MouseFxOverlay;
 class ErrorLogsPanel;
@@ -165,6 +166,7 @@ private:
 	std::unique_ptr<ErrorLogsPanel> errorLogsPanel_;
 	std::unique_ptr<RegionTool> regionTool_;
 	std::unique_ptr<MouseFxOverlay> mouseFx_;
+	std::unique_ptr<ScreenBorderOverlay> screenBorder_;
 
 	std::string activePresetId_;
 	CaptureRegion currentRegion_;

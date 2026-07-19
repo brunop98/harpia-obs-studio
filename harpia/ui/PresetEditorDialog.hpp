@@ -60,6 +60,12 @@ private:
 	QSpinBox *idleSpin_ = nullptr;
 	QComboBox *countdownCombo_ = nullptr;
 	QCheckBox *pauseFocusCheck_ = nullptr;
+
+	// Recording border (Full Screen)
+	QCheckBox *borderCheck_ = nullptr;
+	QPushButton *borderColorBtn_ = nullptr;
+	QSpinBox *borderThicknessSpin_ = nullptr;
+	QColor borderColor_;
 	QLineEdit *templateEdit_ = nullptr;
 	QLabel *templatePreview_ = nullptr;
 	QLabel *validationLabel_ = nullptr;

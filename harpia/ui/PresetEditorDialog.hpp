@@ -4,6 +4,8 @@
 
 #include <QColor>
 #include <QDialog>
+#include <QList>
+#include <QStringList>
 
 class QLineEdit;
 class QComboBox;
@@ -51,6 +53,11 @@ private:
 	QSpinBox *idleSpin_ = nullptr;
 	QLineEdit *templateEdit_ = nullptr;
 	QLabel *validationLabel_ = nullptr;
+
+	// Audio page
+	QCheckBox *desktopAudioCheck_ = nullptr;
+	QList<QCheckBox *> micChecks_;
+	QStringList micIds_;
 
 	// Mouse section
 	QCheckBox *mouseCursorCheck_ = nullptr;

@@ -6,20 +6,26 @@
 #include "core/WebcamRecorder.hpp"
 #include "core/AudioManager.hpp" // AudioDevice
 
+#include <algorithm>
+
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFileDialog>
-#include <QFormLayout>
+#include <QFont>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QIntValidator>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSlider>
 #include <QSpinBox>
+#include <QStackedWidget>
 #include <QVBoxLayout>
 
 namespace harpia {
@@ -47,71 +53,97 @@ void setButtonColor(QPushButton *b, const QColor &c)
 	b->setText(c.name());
 }
 
+// Create an empty settings page: a scrollable widget whose inner QVBoxLayout is
+// returned via `outLayout` for callers to fill with fields.
+QWidget *makePage(QVBoxLayout *&outLayout)
+{
+	auto *inner = new QWidget;
+	outLayout = new QVBoxLayout(inner);
+	outLayout->setContentsMargins(4, 4, 12, 4);
+	outLayout->setSpacing(4);
+
+	auto *scroll = new QScrollArea;
+	scroll->setWidgetResizable(true);
+	scroll->setFrameShape(QFrame::NoFrame);
+	scroll->setWidget(inner);
+	return scroll;
+}
+
+// A titled setting: bold label, a small gray description, then the control.
+// PowerRec/VS-style — every setting explains itself in one line.
+void addField(QVBoxLayout *v, const QString &title, const QString &desc, QWidget *control)
+{
+	auto *t = new QLabel(QStringLiteral("<b>%1</b>").arg(title));
+	v->addWidget(t);
+	if (!desc.isEmpty()) {
+		auto *d = new QLabel(desc);
+		d->setWordWrap(true);
+		d->setStyleSheet(QStringLiteral("color:#8a8f98;"));
+		v->addWidget(d);
+	}
+	v->addWidget(control);
+	v->addSpacing(12);
+}
+
+// A checkbox setting: the checkbox is its own label; the description sits beneath.
+void addCheck(QVBoxLayout *v, QCheckBox *check, const QString &desc)
+{
+	v->addWidget(check);
+	if (!desc.isEmpty()) {
+		auto *d = new QLabel(desc);
+		d->setWordWrap(true);
+		d->setStyleSheet(QStringLiteral("color:#8a8f98; margin-left:22px;"));
+		v->addWidget(d);
+	}
+	v->addSpacing(12);
+}
+
+// Wrap a control + trailing "Browse…" button into a single row widget.
+QWidget *folderRowWidget(QLineEdit *edit, QPushButton *browse)
+{
+	auto *w = new QWidget;
+	auto *h = new QHBoxLayout(w);
+	h->setContentsMargins(0, 0, 0, 0);
+	h->addWidget(edit, 1);
+	h->addWidget(browse);
+	return w;
+}
+
 } // namespace
 
 PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	: QDialog(parent), result_(preset)
 {
-	setWindowTitle(QStringLiteral("Edit Preset"));
+	setWindowTitle(QStringLiteral("Preset Settings"));
 	setModal(true);
 
-	auto *form = new QFormLayout;
-
+	// ---- Header: preset name (applies to every page) --------------------
 	nameEdit_ = new QLineEdit(QString::fromStdString(preset.name), this);
-	form->addRow(QStringLiteral("Name"), nameEdit_);
+	nameEdit_->setPlaceholderText(QStringLiteral("Preset name"));
+	QFont nameFont = nameEdit_->font();
+	nameFont.setPointSize(nameFont.pointSize() + 2);
+	nameEdit_->setFont(nameFont);
 
-	// ---- Video section --------------------------------------------------
-	form->addRow(new QLabel(QStringLiteral("<b>Video</b>"), this));
+	auto *header = new QVBoxLayout;
+	auto *nameCaption = new QLabel(QStringLiteral("<b>Preset Name</b>"), this);
+	header->addWidget(nameCaption);
+	header->addWidget(nameEdit_);
 
-	formatCombo_ = new QComboBox(this);
-	formatCombo_->addItem(QStringLiteral("MP4"), int(RecordingFormat::MP4));
-	formatCombo_->addItem(QStringLiteral("MKV"), int(RecordingFormat::MKV));
-	formatCombo_->addItem(QStringLiteral("MOV"), int(RecordingFormat::MOV));
-	formatCombo_->addItem(QStringLiteral("AVI"), int(RecordingFormat::AVI));
-	formatCombo_->addItem(QStringLiteral("GIF"), int(RecordingFormat::GIF));
-	formatCombo_->setCurrentIndex(formatCombo_->findData(int(preset.format)));
-	form->addRow(QStringLiteral("Format"), formatCombo_);
+	// ---- Left navigation + stacked pages --------------------------------
+	auto *nav = new QListWidget(this);
+	nav->setFixedWidth(150);
+	nav->setSpacing(2);
+	auto *stack = new QStackedWidget(this);
 
-	// Codec list shows only codecs the backend can actually encode.
-	codecCombo_ = new QComboBox(this);
-	for (VideoCodec c : EncoderFactory::availableCodecs(/*gpuOnly=*/false))
-		codecCombo_->addItem(QString::fromUtf8(codecLabel(c)), int(c));
-	int codecIdx = codecCombo_->findData(int(preset.codec));
-	codecCombo_->setCurrentIndex(codecIdx >= 0 ? codecIdx : 0);
-	form->addRow(QStringLiteral("Codec"), codecCombo_);
+	auto addPage = [&](const QString &title, QWidget *page) {
+		nav->addItem(title);
+		stack->addWidget(page);
+	};
 
-	// Resolution is always native — the full display, or the selected capture
-	// region — so there is no size control here.
-	auto *resNote = new QLabel(QStringLiteral("Records at the screen / region resolution"), this);
-	resNote->setStyleSheet(QStringLiteral("color: gray;"));
-	form->addRow(QStringLiteral("Resolution"), resNote);
+	QVBoxLayout *v = nullptr; // filled per page by makePage()
 
-	fpsCombo_ = new QComboBox(this);
-	fpsCombo_->setEditable(true);
-	fpsCombo_->setValidator(new QIntValidator(1, 240, fpsCombo_));
-	for (int v : {24, 30, 60, 120})
-		fpsCombo_->addItem(QString::number(v));
-	fpsCombo_->setCurrentText(QString::number(preset.fps));
-	form->addRow(QStringLiteral("Frame rate (fps)"), fpsCombo_);
-
-	frameRateModeCombo_ = new QComboBox(this);
-	frameRateModeCombo_->addItem(QStringLiteral("Constant (CFR)"), int(FrameRateMode::CFR));
-	frameRateModeCombo_->addItem(QStringLiteral("Variable (VFR)"), int(FrameRateMode::VFR));
-	frameRateModeCombo_->setCurrentIndex(frameRateModeCombo_->findData(int(preset.frameRateMode)));
-	form->addRow(QStringLiteral("Frame rate mode"), frameRateModeCombo_);
-
-	bitrateSpin_ = new QSpinBox(this);
-	bitrateSpin_->setRange(0, 200000);
-	bitrateSpin_->setSingleStep(500);
-	bitrateSpin_->setSuffix(QStringLiteral(" Kbps"));
-	bitrateSpin_->setSpecialValueText(QStringLiteral("Auto"));
-	bitrateSpin_->setValue(preset.videoBitrateKbps);
-	form->addRow(QStringLiteral("Bitrate"), bitrateSpin_);
-
-	gpuCheck_ = new QCheckBox(QStringLiteral("Use GPU compression while recording (NVENC/AMF/QSV)"), this);
-	gpuCheck_->setChecked(preset.gpuCompression);
-	form->addRow(QString(), gpuCheck_);
-
+	// ===== General =====
+	QWidget *generalPage = makePage(v);
 	monitorCombo_ = new QComboBox(this);
 	const std::vector<MonitorOption> monitors = CaptureManager::enumerateMonitors();
 	if (monitors.empty()) {
@@ -123,48 +155,138 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	}
 	if (preset.monitorIndex >= 0 && preset.monitorIndex < monitorCombo_->count())
 		monitorCombo_->setCurrentIndex(preset.monitorIndex);
-	form->addRow(QStringLiteral("Display"), monitorCombo_);
+	addField(v, QStringLiteral("Display"),
+		 QStringLiteral("Which monitor to capture when recording the entire screen."),
+		 monitorCombo_);
 
-	validationLabel_ = new QLabel(this);
-	validationLabel_->setWordWrap(true);
-	validationLabel_->setStyleSheet(QStringLiteral("color:#d29922;"));
-	form->addRow(QString(), validationLabel_);
-
-	// ---- Output section -------------------------------------------------
-	form->addRow(new QLabel(QStringLiteral("<b>Output</b>"), this));
-
-	folderEdit_ = new QLineEdit(QString::fromStdString(preset.outputFolder), this);
-	auto *browse = new QPushButton(QStringLiteral("Browse…"), this);
-	connect(browse, &QPushButton::clicked, this, &PresetEditorDialog::browseFolder);
-	auto *folderRow = new QHBoxLayout;
-	folderRow->addWidget(folderEdit_, 1);
-	folderRow->addWidget(browse);
-	form->addRow(QStringLiteral("Output folder"), folderRow);
+	auto *resNote = new QLabel(QStringLiteral("Recordings use the full display — or the selected "
+						  "capture region — at its native resolution."),
+				   this);
+	resNote->setWordWrap(true);
+	resNote->setStyleSheet(QStringLiteral("color:#8a8f98;"));
+	addField(v, QStringLiteral("Resolution"), QString(), resNote);
 
 	idleSpin_ = new QSpinBox(this);
 	idleSpin_->setRange(0, 3600);
 	idleSpin_->setSuffix(QStringLiteral(" s"));
 	idleSpin_->setSpecialValueText(QStringLiteral("Disabled"));
 	idleSpin_->setValue(preset.idleTimeoutSeconds);
-	form->addRow(QStringLiteral("Auto-pause after idle"), idleSpin_);
+	addField(v, QStringLiteral("Auto-pause after idle"),
+		 QStringLiteral("Pause recording automatically after this many seconds of no "
+				"mouse/keyboard activity. Set to Disabled to always keep recording."),
+		 idleSpin_);
+	v->addStretch(1);
+	addPage(QStringLiteral("General"), generalPage);
+
+	// ===== Video =====
+	QWidget *videoPage = makePage(v);
+	formatCombo_ = new QComboBox(this);
+	formatCombo_->addItem(QStringLiteral("MP4"), int(RecordingFormat::MP4));
+	formatCombo_->addItem(QStringLiteral("MKV"), int(RecordingFormat::MKV));
+	formatCombo_->addItem(QStringLiteral("MOV"), int(RecordingFormat::MOV));
+	formatCombo_->addItem(QStringLiteral("AVI"), int(RecordingFormat::AVI));
+	formatCombo_->addItem(QStringLiteral("GIF"), int(RecordingFormat::GIF));
+	formatCombo_->setCurrentIndex(formatCombo_->findData(int(preset.format)));
+	addField(v, QStringLiteral("Format"),
+		 QStringLiteral("Container/file type. MP4 is the most compatible; MKV survives crashes "
+				"best; GIF makes a short silent animation."),
+		 formatCombo_);
+
+	codecCombo_ = new QComboBox(this);
+	for (VideoCodec c : EncoderFactory::availableCodecs(/*gpuOnly=*/false))
+		codecCombo_->addItem(QString::fromUtf8(codecLabel(c)), int(c));
+	int codecIdx = codecCombo_->findData(int(preset.codec));
+	codecCombo_->setCurrentIndex(codecIdx >= 0 ? codecIdx : 0);
+	addField(v, QStringLiteral("Codec"),
+		 QStringLiteral("How video is compressed. H.264 plays everywhere; HEVC/AV1 give smaller "
+				"files at the same quality but need newer players. Only codecs your PC "
+				"can encode are listed."),
+		 codecCombo_);
+
+	fpsCombo_ = new QComboBox(this);
+	fpsCombo_->setEditable(true);
+	fpsCombo_->setValidator(new QIntValidator(1, 240, fpsCombo_));
+	for (int val : {24, 30, 60, 120})
+		fpsCombo_->addItem(QString::number(val));
+	fpsCombo_->setCurrentText(QString::number(preset.fps));
+	addField(v, QStringLiteral("Frame rate (fps)"),
+		 QStringLiteral("Frames per second. 30 is fine for most screen capture; 60 is smoother "
+				"for fast motion and games but makes larger files."),
+		 fpsCombo_);
+
+	gpuCheck_ = new QCheckBox(QStringLiteral("Use GPU compression while recording"), this);
+	gpuCheck_->setChecked(preset.gpuCompression);
+	addCheck(v, gpuCheck_,
+		 QStringLiteral("Encode with the graphics card (NVENC/AMF/QSV) instead of the CPU. Much "
+				"lighter on the system while recording; falls back to CPU if unavailable."));
+
+	validationLabel_ = new QLabel(this);
+	validationLabel_->setWordWrap(true);
+	validationLabel_->setStyleSheet(QStringLiteral("color:#d29922;"));
+	v->addWidget(validationLabel_);
+	v->addStretch(1);
+	addPage(QStringLiteral("Video"), videoPage);
+
+	// ===== Audio =====
+	QWidget *audioPage = makePage(v);
+	desktopAudioCheck_ = new QCheckBox(QStringLiteral("Record PC audio"), this);
+	desktopAudioCheck_->setChecked(preset.recordDesktopAudio);
+	addCheck(v, desktopAudioCheck_,
+		 QStringLiteral("Capture the system/desktop sound — anything you hear from the speakers."));
+
+	auto *micCaption = new QLabel(QStringLiteral("<b>Microphones</b>"), this);
+	v->addWidget(micCaption);
+	auto *micDesc = new QLabel(QStringLiteral("Tick each input device to mix into the recording. Each "
+						 "is captured live so you can watch its level on the main window."),
+				   this);
+	micDesc->setWordWrap(true);
+	micDesc->setStyleSheet(QStringLiteral("color:#8a8f98;"));
+	v->addWidget(micDesc);
+
+	for (const AudioDevice &d : AudioManager::inputDevices()) {
+		auto *c = new QCheckBox(QString::fromStdString(d.name), this);
+		const QString id = QString::fromStdString(d.id);
+		c->setChecked(std::find(preset.micDeviceIds.begin(), preset.micDeviceIds.end(), d.id) !=
+			      preset.micDeviceIds.end());
+		micChecks_.append(c);
+		micIds_.append(id);
+		v->addWidget(c);
+	}
+	if (micChecks_.isEmpty()) {
+		auto *none = new QLabel(QStringLiteral("(no microphones detected)"), this);
+		none->setStyleSheet(QStringLiteral("color:#8a8f98;"));
+		v->addWidget(none);
+	}
+	v->addStretch(1);
+	addPage(QStringLiteral("Audio"), audioPage);
+
+	// ===== Output =====
+	QWidget *outputPage = makePage(v);
+	folderEdit_ = new QLineEdit(QString::fromStdString(preset.outputFolder), this);
+	auto *browse = new QPushButton(QStringLiteral("Browse…"), this);
+	connect(browse, &QPushButton::clicked, this, &PresetEditorDialog::browseFolder);
+	addField(v, QStringLiteral("Output folder"),
+		 QStringLiteral("Where finished recordings are saved."),
+		 folderRowWidget(folderEdit_, browse));
 
 	templateEdit_ = new QLineEdit(QString::fromStdString(preset.filenameTemplate), this);
-	form->addRow(QStringLiteral("Filename template"), templateEdit_);
-	auto *tokenHelp =
-		new QLabel(QStringLiteral("Tokens: {Year} {Month} {Day} {Hour} {Minute} {Second}"), this);
-	tokenHelp->setStyleSheet(QStringLiteral("color: gray;"));
-	form->addRow(QString(), tokenHelp);
+	addField(v, QStringLiteral("Filename template"),
+		 QStringLiteral("Names each file. Tokens: {Year} {Month} {Day} {Hour} {Minute} {Second}."),
+		 templateEdit_);
+	v->addStretch(1);
+	addPage(QStringLiteral("Output"), outputPage);
 
-	// ---- Mouse section --------------------------------------------------
-	form->addRow(new QLabel(QStringLiteral("<b>Mouse</b>"), this));
-
+	// ===== Mouse =====
+	QWidget *mousePage = makePage(v);
 	mouseCursorCheck_ = new QCheckBox(QStringLiteral("Show mouse cursor"), this);
 	mouseCursorCheck_->setChecked(preset.showMouseCursor);
-	form->addRow(QString(), mouseCursorCheck_);
+	addCheck(v, mouseCursorCheck_,
+		 QStringLiteral("Include the cursor in the recording. Turn off for cursor-free captures."));
 
-	mouseAreaCheck_ = new QCheckBox(QStringLiteral("Show mouse area (highlight around cursor)"), this);
+	mouseAreaCheck_ = new QCheckBox(QStringLiteral("Highlight around cursor"), this);
 	mouseAreaCheck_->setChecked(preset.showMouseArea);
-	form->addRow(QString(), mouseAreaCheck_);
+	addCheck(v, mouseAreaCheck_,
+		 QStringLiteral("Draw a soft colored ring following the cursor so viewers can find it."));
 
 	highlightColor_ = QColor(QString::fromStdString(preset.mouseHighlightColor));
 	if (!highlightColor_.isValid())
@@ -173,16 +295,18 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	setButtonColor(highlightColorBtn_, highlightColor_);
 	connect(highlightColorBtn_, &QPushButton::clicked, this,
 		[this]() { pickColor(highlightColor_, highlightColorBtn_); });
-	form->addRow(QStringLiteral("Highlight color"), highlightColorBtn_);
+	addField(v, QStringLiteral("Highlight color"), QString(), highlightColorBtn_);
 
 	highlightSizeSlider_ = new QSlider(Qt::Horizontal, this);
 	highlightSizeSlider_->setRange(10, 200);
 	highlightSizeSlider_->setValue(preset.mouseHighlightSize > 0 ? preset.mouseHighlightSize : 60);
-	form->addRow(QStringLiteral("Highlight size"), highlightSizeSlider_);
+	addField(v, QStringLiteral("Highlight size"),
+		 QStringLiteral("Diameter of the cursor highlight ring, in pixels."), highlightSizeSlider_);
 
-	mouseClicksCheck_ = new QCheckBox(QStringLiteral("Record mouse clicks (click animations)"), this);
+	mouseClicksCheck_ = new QCheckBox(QStringLiteral("Show click animations"), this);
 	mouseClicksCheck_->setChecked(preset.recordMouseClicks);
-	form->addRow(QString(), mouseClicksCheck_);
+	addCheck(v, mouseClicksCheck_,
+		 QStringLiteral("Ripple where you click — left and right buttons use the colors below."));
 
 	leftColor_ = QColor(QString::fromStdString(preset.leftClickColor));
 	if (!leftColor_.isValid())
@@ -190,7 +314,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	leftColorBtn_ = new QPushButton(this);
 	setButtonColor(leftColorBtn_, leftColor_);
 	connect(leftColorBtn_, &QPushButton::clicked, this, [this]() { pickColor(leftColor_, leftColorBtn_); });
-	form->addRow(QStringLiteral("Left click color"), leftColorBtn_);
+	addField(v, QStringLiteral("Left click color"), QString(), leftColorBtn_);
 
 	rightColor_ = QColor(QString::fromStdString(preset.rightClickColor));
 	if (!rightColor_.isValid())
@@ -198,21 +322,23 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	rightColorBtn_ = new QPushButton(this);
 	setButtonColor(rightColorBtn_, rightColor_);
 	connect(rightColorBtn_, &QPushButton::clicked, this, [this]() { pickColor(rightColor_, rightColorBtn_); });
-	form->addRow(QStringLiteral("Right click color"), rightColorBtn_);
+	addField(v, QStringLiteral("Right click color"), QString(), rightColorBtn_);
 
 	mousePreview_ = new MousePreview(this);
-	form->addRow(QStringLiteral("Preview"), mousePreview_);
-
+	addField(v, QStringLiteral("Preview"), QString(), mousePreview_);
 	connect(mouseAreaCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::updateMousePreview);
 	connect(mouseClicksCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::updateMousePreview);
 	connect(highlightSizeSlider_, &QSlider::valueChanged, this, &PresetEditorDialog::updateMousePreview);
+	v->addStretch(1);
+	addPage(QStringLiteral("Mouse"), mousePage);
 
-	// ---- Webcam section (recorded as a separate synchronized file) ------
-	form->addRow(new QLabel(QStringLiteral("<b>Webcam</b>"), this));
-
+	// ===== Webcam (recorded as a separate synchronized file) =====
+	QWidget *webcamPage = makePage(v);
 	webcamCheck_ = new QCheckBox(QStringLiteral("Record webcam as a separate video file"), this);
 	webcamCheck_->setChecked(preset.webcamEnabled);
-	form->addRow(QString(), webcamCheck_);
+	addCheck(v, webcamCheck_,
+		 QStringLiteral("Save the camera to its own file alongside the screen recording, kept in "
+				"sync. It is never composited onto the screen video."));
 
 	webcamDeviceCombo_ = new QComboBox(this);
 	for (const AudioDevice &cam : WebcamRecorder::cameras())
@@ -224,7 +350,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		if (di >= 0)
 			webcamDeviceCombo_->setCurrentIndex(di);
 	}
-	form->addRow(QStringLiteral("Camera"), webcamDeviceCombo_);
+	addField(v, QStringLiteral("Camera"), QStringLiteral("Which webcam to record."), webcamDeviceCombo_);
 
 	webcamResCombo_ = new QComboBox(this);
 	for (const char *r : {"1920x1080", "1280x720", "640x480"})
@@ -238,19 +364,24 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		}
 		webcamResCombo_->setCurrentIndex(ri);
 	}
-	form->addRow(QStringLiteral("Webcam resolution"), webcamResCombo_);
+	addField(v, QStringLiteral("Webcam resolution"),
+		 QStringLiteral("Capture size of the camera file, independent of the screen resolution."),
+		 webcamResCombo_);
 
 	webcamFpsCombo_ = new QComboBox(this);
 	webcamFpsCombo_->setEditable(true);
 	webcamFpsCombo_->setValidator(new QIntValidator(1, 240, webcamFpsCombo_));
-	for (int v : {24, 30, 60})
-		webcamFpsCombo_->addItem(QString::number(v));
+	for (int val : {24, 30, 60})
+		webcamFpsCombo_->addItem(QString::number(val));
 	webcamFpsCombo_->setCurrentText(QString::number(preset.webcamFps > 0 ? preset.webcamFps : 30));
-	form->addRow(QStringLiteral("Webcam frame rate"), webcamFpsCombo_);
+	addField(v, QStringLiteral("Webcam frame rate"), QStringLiteral("Frames per second for the camera file."),
+		 webcamFpsCombo_);
 
 	webcamCustomFolderCheck_ = new QCheckBox(QStringLiteral("Use a custom folder for the webcam file"), this);
 	webcamCustomFolderCheck_->setChecked(preset.webcamUseCustomFolder);
-	form->addRow(QString(), webcamCustomFolderCheck_);
+	addCheck(v, webcamCustomFolderCheck_,
+		 QStringLiteral("By default the camera file sits next to the screen recording; enable this "
+				"to send it elsewhere."));
 
 	webcamFolderEdit_ = new QLineEdit(QString::fromStdString(preset.webcamFolder), this);
 	auto *wcBrowse = new QPushButton(QStringLiteral("Browse…"), this);
@@ -261,30 +392,73 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		if (!dir.isEmpty())
 			webcamFolderEdit_->setText(dir);
 	});
-	auto *wcFolderRow = new QHBoxLayout;
-	wcFolderRow->addWidget(webcamFolderEdit_, 1);
-	wcFolderRow->addWidget(wcBrowse);
-	form->addRow(QStringLiteral("Webcam folder"), wcFolderRow);
-
+	addField(v, QStringLiteral("Webcam folder"), QString(), folderRowWidget(webcamFolderEdit_, wcBrowse));
 	auto syncWebcamFolder = [this]() {
 		webcamFolderEdit_->setEnabled(webcamCustomFolderCheck_->isChecked());
 	};
 	connect(webcamCustomFolderCheck_, &QCheckBox::toggled, this, syncWebcamFolder);
 	syncWebcamFolder();
+	v->addStretch(1);
+	addPage(QStringLiteral("Webcam"), webcamPage);
 
-	auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+	// ===== Hotkeys (placeholder — no hotkey engine yet) =====
+	QWidget *hotkeysPage = makePage(v);
+	auto *hotkeysNote = new QLabel(
+		QStringLiteral("Global start/stop/pause hotkeys are coming soon. For now, use the buttons on "
+			       "the main window."),
+		this);
+	hotkeysNote->setWordWrap(true);
+	hotkeysNote->setStyleSheet(QStringLiteral("color:#8a8f98;"));
+	v->addWidget(hotkeysNote);
+	v->addStretch(1);
+	addPage(QStringLiteral("Hotkeys"), hotkeysPage);
+
+	// ===== Advanced =====
+	QWidget *advancedPage = makePage(v);
+	frameRateModeCombo_ = new QComboBox(this);
+	frameRateModeCombo_->addItem(QStringLiteral("Constant (CFR)"), int(FrameRateMode::CFR));
+	frameRateModeCombo_->addItem(QStringLiteral("Variable (VFR)"), int(FrameRateMode::VFR));
+	frameRateModeCombo_->setCurrentIndex(frameRateModeCombo_->findData(int(preset.frameRateMode)));
+	addField(v, QStringLiteral("Frame rate mode"),
+		 QStringLiteral("Constant (CFR) writes an even frame every tick — safest for editing. "
+				"Variable (VFR) saves space but some editors handle it poorly."),
+		 frameRateModeCombo_);
+
+	bitrateSpin_ = new QSpinBox(this);
+	bitrateSpin_->setRange(0, 200000);
+	bitrateSpin_->setSingleStep(500);
+	bitrateSpin_->setSuffix(QStringLiteral(" Kbps"));
+	bitrateSpin_->setSpecialValueText(QStringLiteral("Auto"));
+	bitrateSpin_->setValue(preset.videoBitrateKbps);
+	addField(v, QStringLiteral("Bitrate"),
+		 QStringLiteral("Higher bitrate = better quality and larger files. Leave on Auto to let the "
+				"encoder choose a sensible value for the resolution and frame rate."),
+		 bitrateSpin_);
+	v->addStretch(1);
+	addPage(QStringLiteral("Advanced"), advancedPage);
+
+	// ---- Assemble: header on top, nav | pages, buttons at the bottom ----
+	connect(nav, &QListWidget::currentRowChanged, stack, &QStackedWidget::setCurrentIndex);
+	nav->setCurrentRow(0);
+
+	auto *body = new QHBoxLayout;
+	body->addWidget(nav);
+	body->addWidget(stack, 1);
+
+	auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
 	connect(buttons, &QDialogButtonBox::accepted, this, &PresetEditorDialog::accept);
 	connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
 	auto *layout = new QVBoxLayout(this);
-	layout->addLayout(form);
+	layout->addLayout(header);
+	layout->addLayout(body, 1);
 	layout->addWidget(buttons);
 
 	connect(formatCombo_, &QComboBox::currentIndexChanged, this, &PresetEditorDialog::updateValidation);
 	connect(codecCombo_, &QComboBox::currentIndexChanged, this, &PresetEditorDialog::updateValidation);
 	updateValidation();
 	updateMousePreview();
-	resize(480, sizeHint().height());
+	resize(620, 520);
 }
 
 void PresetEditorDialog::pickColor(QColor &target, QPushButton *button)
@@ -363,6 +537,13 @@ void PresetEditorDialog::accept()
 	result_.gpuCompression = gpuCheck_->isChecked();
 	result_.idleTimeoutSeconds = idleSpin_->value();
 	result_.filenameTemplate = templateEdit_->text().trimmed().toStdString();
+
+	result_.recordDesktopAudio = desktopAudioCheck_->isChecked();
+	result_.micDeviceIds.clear();
+	for (int i = 0; i < micChecks_.size(); ++i) {
+		if (micChecks_[i]->isChecked())
+			result_.micDeviceIds.push_back(micIds_[i].toStdString());
+	}
 
 	result_.showMouseCursor = mouseCursorCheck_->isChecked();
 	result_.showMouseArea = mouseAreaCheck_->isChecked();

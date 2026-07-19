@@ -8,6 +8,7 @@
 #include <util/platform.h>
 
 #include <QApplication>
+#include <QIcon>
 #include <QDir>
 #include <QMessageBox>
 #include <QPalette>
@@ -86,6 +87,9 @@ int main(int argc, char *argv[])
 	QApplication app(argc, argv);
 	QApplication::setApplicationName(QStringLiteral("Harpia Recorder"));
 	QApplication::setOrganizationName(QStringLiteral("Harpia"));
+	// Window/taskbar/Alt-Tab icon (all platforms). The Windows .exe icon itself
+	// comes from resources/harpia.rc compiled into the binary.
+	QApplication::setWindowIcon(QIcon(QStringLiteral(":/harpia.png")));
 	applyDarkPalette(app);
 
 	// Start logging before anything else so startup and any early crash are

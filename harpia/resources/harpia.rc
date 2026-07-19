@@ -1,0 +1,3 @@
+// Windows application icon. The icon resource with the lowest ordinal ID is the
+// one Explorer/taskbar use for the executable.
+1 ICON "harpia.ico"

@@ -57,6 +57,8 @@ target_sources(
   PRIVATE
     main.cpp
     Version.hpp
+    # Qt resource bundle (embeds the window/taskbar icon); AUTORCC compiles it.
+    resources/resources.qrc
     core/Logger.cpp
     core/Logger.hpp
     core/ObsContext.cpp
@@ -116,7 +118,9 @@ if(OS_WINDOWS)
   target_sources(harpia-recorder PRIVATE
     platform/win/WinIdleMonitor.cpp
     platform/win/WinForegroundWatcher.cpp
-    platform/win/WinCameraAccess.cpp)
+    platform/win/WinCameraAccess.cpp
+    # Compiled into the .exe as the application icon (Explorer/taskbar).
+    resources/harpia.rc)
 elseif(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
   target_sources(harpia-recorder PRIVATE
     platform/nix/NixIdleMonitor.cpp

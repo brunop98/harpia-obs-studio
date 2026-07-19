@@ -21,6 +21,13 @@ struct MonitorOption {
 	long long intValue = 0; // when !isString
 };
 
+// One selectable top-level window, as exposed by the window-capture source's
+// "window" property. `value` is the opaque settings string to apply.
+struct WindowOption {
+	std::string name;  // human-facing title
+	std::string value; // "window" setting value
+};
+
 // Optional sub-rectangle of the captured display to record. When active, a
 // crop_filter is attached to the capture source so only this region is encoded.
 struct CaptureRegion {
@@ -52,6 +59,14 @@ public:
 	// the capture plugin for this platform is unavailable.
 	bool startCapture(int monitorIndex = 0, bool captureCursor = true);
 
+	// Capture a single application window instead of a monitor. `windowValue` is
+	// a value from enumerateWindows(). Returns false if window capture isn't
+	// available on this platform or the source fails to create.
+	bool startWindowCapture(const std::string &windowValue, bool captureCursor = true);
+
+	// Current captured content size (e.g. the window's size). False if unknown.
+	bool sourceSize(uint32_t &w, uint32_t &h) const;
+
 	// Apply (or clear) a recording region via crop_filter. Safe to call while
 	// capturing; pass an empty/disabled region to record the full display.
 	void setRegion(const CaptureRegion &region);
@@ -64,9 +79,16 @@ public:
 	// The default display-capture source id for the current platform.
 	static const char *platformCaptureId();
 
+	// The window-capture source id for the current platform, or nullptr if window
+	// capture isn't wired for it.
+	static const char *platformWindowCaptureId();
+
 	// Enumerate the displays the platform capture source can target. Requires
 	// modules to be loaded. Empty if the source exposes no monitor list.
 	static std::vector<MonitorOption> enumerateMonitors();
+
+	// Enumerate capturable top-level windows. Empty if unsupported.
+	static std::vector<WindowOption> enumerateWindows();
 
 private:
 	obs_source_t *source_ = nullptr;

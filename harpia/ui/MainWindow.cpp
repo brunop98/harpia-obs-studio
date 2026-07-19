@@ -90,57 +90,65 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	root->setContentsMargins(18, 14, 18, 14);
 	root->setSpacing(12);
 
-	// ---- Top toolbar ----------------------------------------------------
-	auto *toolbar = new QHBoxLayout;
-	toolbar->setSpacing(8);
+	// ---- Toolbar row 1: preset + capture + idle -------------------------
+	auto *row1 = new QHBoxLayout;
+	row1->setSpacing(8);
 
-	toolbar->addWidget(new QLabel(QStringLiteral("Preset"), central));
+	row1->addWidget(new QLabel(QStringLiteral("Preset"), central));
 	presetCombo_ = new QComboBox(central);
 	presetCombo_->setMinimumWidth(160);
 	presetCombo_->setContextMenuPolicy(Qt::CustomContextMenu);
 	presetCombo_->setToolTip(QStringLiteral("Right-click to edit or delete this preset"));
-	toolbar->addWidget(presetCombo_);
-
-	editPresetButton_ = new QPushButton(QStringLiteral("Edit"), central);
-	editPresetButton_->setToolTip(QStringLiteral("Edit the selected preset"));
-	toolbar->addWidget(editPresetButton_);
+	row1->addWidget(presetCombo_);
 
 	newPresetButton_ = new QPushButton(QStringLiteral("New"), central);
 	newPresetButton_->setToolTip(QStringLiteral("Create a new preset"));
-	toolbar->addWidget(newPresetButton_);
+	row1->addWidget(newPresetButton_);
 
-	toolbar->addStretch(1);
+	editPresetButton_ = new QPushButton(QStringLiteral("Edit"), central);
+	editPresetButton_->setToolTip(QStringLiteral("Edit the selected preset"));
+	row1->addWidget(editPresetButton_);
 
-	toolbar->addWidget(new QLabel(QStringLiteral("Capture"), central));
+	row1->addSpacing(12);
+	row1->addWidget(new QLabel(QStringLiteral("Capture"), central));
 	captureModeCombo_ = new QComboBox(central);
 	captureModeCombo_->addItem(QStringLiteral("Entire Monitor"), int(CaptureMode::Monitor));
 	captureModeCombo_->addItem(QStringLiteral("Custom Region"), int(CaptureMode::Region));
-	toolbar->addWidget(captureModeCombo_);
+	row1->addWidget(captureModeCombo_);
 
-	webcamSettingsButton_ = new QPushButton(QStringLiteral("Webcam"), central);
-	webcamSettingsButton_->setToolTip(QStringLiteral("Configure the webcam for this preset"));
-	toolbar->addWidget(webcamSettingsButton_);
-
+	row1->addSpacing(12);
 	idleToggle_ = new QCheckBox(QStringLiteral("Only record while using the computer"), central);
-	toolbar->addWidget(idleToggle_);
+	row1->addWidget(idleToggle_);
 	idleSpin_ = new QSpinBox(central);
 	idleSpin_->setRange(1, 3600);
 	idleSpin_->setSuffix(QStringLiteral(" s"));
 	idleSpin_->setValue(10);
 	idleSpin_->setMaximumWidth(80);
-	toolbar->addWidget(idleSpin_);
+	row1->addWidget(idleSpin_);
+	row1->addStretch(1);
+	root->addLayout(row1);
 
-	settingsButton_ = new QPushButton(QStringLiteral("\xE2\x9A\x99  Settings"), central);
-	settingsButton_->setToolTip(QStringLiteral("Open all settings for the selected preset"));
-	toolbar->addWidget(settingsButton_);
+	// ---- Toolbar row 2: single-application capture + webcam -------------
+	auto *row2 = new QHBoxLayout;
+	row2->setSpacing(8);
 
-	openFolderButton_ = new QPushButton(central);
-	openFolderButton_->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
-	openFolderButton_->setToolTip(QStringLiteral("Open preset folder"));
-	openFolderButton_->setFixedWidth(40);
-	toolbar->addWidget(openFolderButton_);
+	appCaptureToggle_ = new QCheckBox(QStringLiteral("Record only one application"), central);
+	appCaptureToggle_->setToolTip(QStringLiteral("Capture a single window instead of the monitor"));
+	row2->addWidget(appCaptureToggle_);
+	appCombo_ = new QComboBox(central);
+	appCombo_->setMinimumWidth(220);
+	appCombo_->setEnabled(false);
+	row2->addWidget(appCombo_);
 
-	root->addLayout(toolbar);
+	row2->addSpacing(16);
+	webcamEnableToggle_ = new QCheckBox(QStringLiteral("Enable webcam"), central);
+	row2->addWidget(webcamEnableToggle_);
+	webcamCombo_ = new QComboBox(central);
+	webcamCombo_->setMinimumWidth(220);
+	webcamCombo_->setEnabled(false);
+	row2->addWidget(webcamCombo_);
+	row2->addStretch(1);
+	root->addLayout(row2);
 
 	// ---- Recording readiness --------------------------------------------
 	warningsBox_ = new QWidget(central);
@@ -206,8 +214,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	timerLabel_->setFont(timerFont);
 	controls->addWidget(timerLabel_, 0, Qt::AlignVCenter);
 
-	// Inline webcam controls: live preview + device picker, shown only when the
-	// active preset records a webcam.
+	// Inline live webcam preview, shown only when the active preset records a
+	// webcam. The enable toggle + device picker live in toolbar row 2.
 	webcamBox_ = new QWidget(central);
 	auto *wcLayout = new QHBoxLayout(webcamBox_);
 	wcLayout->setContentsMargins(0, 0, 0, 0);
@@ -215,18 +223,11 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	webcamPreview_ = new WebcamPreview(webcamBox_);
 	webcamPreview_->setFixedSize(100, 56);
 	wcLayout->addWidget(webcamPreview_);
-	auto *wcSide = new QVBoxLayout;
-	wcSide->setSpacing(4);
-	wcSide->addStretch(1);
-	webcamCombo_ = new QComboBox(webcamBox_);
-	webcamCombo_->setMinimumWidth(160);
-	wcSide->addWidget(webcamCombo_);
 	webcamWarn_ = new QLabel(QStringLiteral("Webcam not found"), webcamBox_);
 	webcamWarn_->setStyleSheet(QStringLiteral("color:#e5484d;"));
 	webcamWarn_->setVisible(false);
-	wcSide->addWidget(webcamWarn_);
-	wcSide->addStretch(1);
-	wcLayout->addLayout(wcSide);
+	webcamWarn_->setWordWrap(true);
+	wcLayout->addWidget(webcamWarn_, 1);
 	webcamBox_->setVisible(false);
 	controls->addWidget(webcamBox_);
 
@@ -277,11 +278,10 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(pauseButton_, &QPushButton::clicked, this, &MainWindow::onPauseButton);
 	connect(editPresetButton_, &QPushButton::clicked, this, [this]() { editActivePreset(); });
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
-	connect(webcamSettingsButton_, &QPushButton::clicked, this,
-		[this]() { editActivePreset(QStringLiteral("Webcam")); });
-	connect(settingsButton_, &QPushButton::clicked, this, [this]() { editActivePreset(); });
 	connect(webcamCombo_, &QComboBox::activated, this, &MainWindow::onWebcamDeviceChanged);
-	connect(openFolderButton_, &QPushButton::clicked, this, &MainWindow::onOpenPresetFolder);
+	connect(webcamEnableToggle_, &QCheckBox::toggled, this, &MainWindow::onWebcamEnableToggled);
+	connect(appCaptureToggle_, &QCheckBox::toggled, this, &MainWindow::onAppCaptureToggled);
+	connect(appCombo_, &QComboBox::activated, this, &MainWindow::onAppWindowChanged);
 	connect(libraryButton_, &QPushButton::clicked, this, &MainWindow::onOpenClipLibrary);
 	connect(errorLogsButton_, &QPushButton::clicked, this, &MainWindow::onOpenErrorLogs);
 	connect(captureModeCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onCaptureModeChanged);
@@ -463,12 +463,25 @@ void MainWindow::startRecording()
 	const Preset &preset = activePreset();
 
 	// Always record at the native resolution of what's being captured: the exact
-	// region size in Region mode, otherwise the full display resolution. No
-	// scaling / custom sizes.
+	// region size in Region mode, the window size in single-application mode,
+	// otherwise the full display resolution. No scaling / custom sizes.
 	canvasSize_ = canvasForActivePreset();
 	uint32_t baseW, baseH;
-	if (captureMode_ == CaptureMode::Region && currentRegion_.enabled && currentRegion_.width >= 16 &&
-	    currentRegion_.height >= 16) {
+	const bool appCapture = appCaptureEnabled_ && !appWindowValue_.isEmpty();
+
+	if (appCapture) {
+		// The live capture is already the selected window (applyLiveCapture);
+		// size the canvas to it, falling back to the monitor if unknown yet.
+		uint32_t w = 0, h = 0;
+		if (capture_.sourceSize(w, h) && w >= 32 && h >= 32) {
+			baseW = w;
+			baseH = h;
+		} else {
+			baseW = canvasSize_.width();
+			baseH = canvasSize_.height();
+		}
+	} else if (captureMode_ == CaptureMode::Region && currentRegion_.enabled &&
+		   currentRegion_.width >= 16 && currentRegion_.height >= 16) {
 		baseW = (uint32_t)currentRegion_.width;
 		baseH = (uint32_t)currentRegion_.height;
 	} else {
@@ -484,9 +497,15 @@ void MainWindow::startRecording()
 	// Output size == base size (native, no downscale).
 	obs_.resetVideo(baseW, baseH, fps, baseW, baseH);
 
-	// Ensure we're capturing this preset's display, then re-apply any region.
-	capture_.startCapture(preset.monitorIndex, preset.showMouseCursor);
-	capture_.setRegion(currentRegion_);
+	if (appCapture) {
+		// Window capture is already bound (applyLiveCapture); just (re)start it
+		// to pick up the current cursor setting, then it renders into the canvas.
+		capture_.startWindowCapture(appWindowValue_.toStdString(), preset.showMouseCursor);
+	} else {
+		// Ensure we're capturing this preset's display, then re-apply any region.
+		capture_.startCapture(preset.monitorIndex, preset.showMouseCursor);
+		capture_.setRegion(currentRegion_);
+	}
 
 	// Build the context tokens the clock can't supply, then expand once so the
 	// screen and webcam files share a base name.
@@ -764,8 +783,19 @@ void MainWindow::refreshWebcamRow()
 {
 	const Preset &p = activePreset();
 
+	// Reflect the enable state on the toolbar toggle.
+	{
+		QSignalBlocker block(webcamEnableToggle_);
+		webcamEnableToggle_->setChecked(p.webcamEnabled);
+	}
+	webcamCombo_->setEnabled(p.webcamEnabled && !recorder_.isRecording());
+
 	if (!p.webcamEnabled) {
 		webcamBox_->setVisible(false);
+		{
+			QSignalBlocker block(webcamCombo_);
+			webcamCombo_->clear();
+		}
 		if (webcamPreview_)
 			webcamPreview_->clearDevice();
 		return;
@@ -1035,6 +1065,55 @@ void MainWindow::onCaptureModeChanged()
 	refreshReadiness();
 }
 
+void MainWindow::applyLiveCapture()
+{
+	if (recorder_.isRecording())
+		return; // don't disturb an in-progress capture
+
+	const Preset &p = activePreset();
+	if (appCaptureEnabled_ && !appWindowValue_.isEmpty()) {
+		capture_.startWindowCapture(appWindowValue_.toStdString(), p.showMouseCursor);
+	} else {
+		capture_.startCapture(p.monitorIndex, p.showMouseCursor);
+		capture_.setRegion(currentRegion_);
+	}
+	updateRegionToolVisibility();
+}
+
+void MainWindow::onAppCaptureToggled(bool on)
+{
+	appCaptureEnabled_ = on;
+	if (on) {
+		QSignalBlocker block(appCombo_);
+		appCombo_->clear();
+		for (const WindowOption &w : CaptureManager::enumerateWindows())
+			appCombo_->addItem(QString::fromStdString(w.name), QString::fromStdString(w.value));
+		if (appCombo_->count() == 0)
+			appCombo_->addItem(QStringLiteral("(no window available)"), QString());
+		appWindowValue_ = appCombo_->currentData().toString();
+	}
+	applyLiveCapture();
+	updateButtons();
+	refreshReadiness();
+}
+
+void MainWindow::onAppWindowChanged()
+{
+	appWindowValue_ = appCombo_->currentData().toString();
+	applyLiveCapture();
+	refreshReadiness();
+}
+
+void MainWindow::onWebcamEnableToggled(bool on)
+{
+	if (Preset *cur = const_cast<Preset *>(presets_.find(activePresetId_))) {
+		cur->webcamEnabled = on;
+		presets_.upsert(*cur);
+	}
+	refreshWebcamRow();
+	refreshReadiness();
+}
+
 void MainWindow::onRegionChanged(const CaptureRegion &region)
 {
 	currentRegion_ = region;
@@ -1047,7 +1126,7 @@ void MainWindow::updateRegionToolVisibility()
 {
 	if (!regionTool_)
 		return;
-	if (captureMode_ != CaptureMode::Region) {
+	if (appCaptureEnabled_ || captureMode_ != CaptureMode::Region) {
 		regionTool_->hide();
 		return;
 	}
@@ -1109,11 +1188,11 @@ void MainWindow::onPresetChanged()
 	// to full-monitor capture to avoid an out-of-bounds crop.
 	if (!recorder_.isRecording()) {
 		canvasSize_ = canvasForActivePreset();
-		currentRegion_ = CaptureRegion{};
-		captureModeCombo_->setCurrentIndex(int(CaptureMode::Monitor));
-		capture_.startCapture(activePreset().monitorIndex, activePreset().showMouseCursor);
-		capture_.setRegion(currentRegion_);
-		updateRegionToolVisibility();
+		if (!appCaptureEnabled_) {
+			currentRegion_ = CaptureRegion{};
+			captureModeCombo_->setCurrentIndex(int(CaptureMode::Monitor));
+		}
+		applyLiveCapture();
 	}
 	refreshReadiness();
 	refreshWebcamRow();
@@ -1334,11 +1413,11 @@ void MainWindow::updateButtons()
 	presetCombo_->setEnabled(!locked);
 	editPresetButton_->setEnabled(!locked);
 	newPresetButton_->setEnabled(!locked);
-	if (webcamSettingsButton_)
-		webcamSettingsButton_->setEnabled(!locked);
-	if (settingsButton_)
-		settingsButton_->setEnabled(!locked);
-	captureModeCombo_->setEnabled(!locked);
+	captureModeCombo_->setEnabled(!locked && !appCaptureEnabled_);
+	appCaptureToggle_->setEnabled(!locked);
+	appCombo_->setEnabled(!locked && appCaptureEnabled_);
+	webcamEnableToggle_->setEnabled(!locked);
+	webcamCombo_->setEnabled(!locked && activePreset().webcamEnabled);
 
 	updateStatusChip();
 }

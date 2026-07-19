@@ -66,8 +66,11 @@ private slots:
 	void onOpenClipLibrary();
 	void onOpenErrorLogs();
 	void onCaptureModeChanged();
+	void onAppCaptureToggled(bool on);       // single-application capture toggle
+	void onAppWindowChanged();               // window picked in the app dropdown
 	void onWebcamDeviceChanged();
-	void refreshWebcamRow(); // show/populate/hide the inline webcam controls
+	void onWebcamEnableToggled(bool on);     // toolbar webcam enable toggle
+	void refreshWebcamRow(); // populate/reflect the webcam toggle + device combo
 	void onRegionChanged(const CaptureRegion &region);
 	void onIdleSettingChanged();
 	void onAudioChanged();
@@ -89,6 +92,7 @@ private:
 	ClipLibrary::PresetByFolder presetFolderMap() const;
 	QString buildOutputPath(const Preset &preset) const;
 	void startRecording();
+	void applyLiveCapture(); // (re)bind the live capture to the current mode
 	void beginRecordFlow(); // readiness gate -> countdown or immediate start
 	void beginStart();      // enter Starting… and kick off the recording
 	void beginStop();       // enter Stopping… and request finalize
@@ -115,6 +119,10 @@ private:
 	enum class CaptureMode { Monitor, Region };
 	CaptureMode captureMode_ = CaptureMode::Monitor;
 
+	// Single-application (window) capture — overrides the monitor/region mode.
+	bool appCaptureEnabled_ = false;
+	QString appWindowValue_; // selected window's capture value
+
 	ObsContext &obs_;
 	PresetStore &presets_;
 	CaptureManager capture_;
@@ -129,11 +137,13 @@ private:
 	QPushButton *editPresetButton_ = nullptr;
 	QPushButton *newPresetButton_ = nullptr;
 	QComboBox *captureModeCombo_ = nullptr;
-	QPushButton *webcamSettingsButton_ = nullptr;
-	QPushButton *settingsButton_ = nullptr;
 	QCheckBox *idleToggle_ = nullptr;
 	QSpinBox *idleSpin_ = nullptr;
-	QPushButton *openFolderButton_ = nullptr;
+
+	// Toolbar row 2: single-application capture + webcam enable/device.
+	QCheckBox *appCaptureToggle_ = nullptr;
+	QComboBox *appCombo_ = nullptr;
+	QCheckBox *webcamEnableToggle_ = nullptr;
 
 	// Center controls
 	QPushButton *primaryButton_ = nullptr; // Record/Stop toggle

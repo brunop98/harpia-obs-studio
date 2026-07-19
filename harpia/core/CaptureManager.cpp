@@ -24,6 +24,16 @@ const char *CaptureManager::platformCaptureId()
 #endif
 }
 
+const char *CaptureManager::platformWindowCaptureId()
+{
+#if defined(_WIN32)
+	return "window_capture";
+#else
+	// Window capture isn't wired for macOS/Linux here.
+	return nullptr;
+#endif
+}
+
 // Candidate settings keys used by the various platform capture sources to pick
 // a display. We probe these in order and use whichever the source exposes.
 static const char *findMonitorKey(obs_properties_t *props)
@@ -68,9 +78,74 @@ std::vector<MonitorOption> CaptureManager::enumerateMonitors()
 	return out;
 }
 
+std::vector<WindowOption> CaptureManager::enumerateWindows()
+{
+	std::vector<WindowOption> out;
+	const char *id = platformWindowCaptureId();
+	if (!id)
+		return out;
+
+	obs_properties_t *props = obs_get_source_properties(id);
+	if (!props)
+		return out;
+
+	obs_property_t *p = obs_properties_get(props, "window");
+	if (p) {
+		const size_t count = obs_property_list_item_count(p);
+		for (size_t i = 0; i < count; i++) {
+			const char *name = obs_property_list_item_name(p, i);
+			const char *val = obs_property_list_item_string(p, i);
+			if (!val || !*val)
+				continue; // skip the empty placeholder row
+			out.push_back({name ? name : val, val});
+		}
+	}
+	obs_properties_destroy(props);
+	return out;
+}
+
+bool CaptureManager::sourceSize(uint32_t &w, uint32_t &h) const
+{
+	if (!source_)
+		return false;
+	w = obs_source_get_width(source_);
+	h = obs_source_get_height(source_);
+	return w > 0 && h > 0;
+}
+
 CaptureManager::~CaptureManager()
 {
 	stopCapture();
+}
+
+bool CaptureManager::startWindowCapture(const std::string &windowValue, bool captureCursor)
+{
+	stopCapture();
+
+	const char *id = platformWindowCaptureId();
+	if (!id) {
+		blog(LOG_WARNING, "[harpia] window capture is not available on this platform");
+		return false;
+	}
+
+	obs_data_t *settings = obs_data_create();
+	obs_data_set_bool(settings, "cursor", captureCursor); // window_capture uses "cursor"
+	if (!windowValue.empty())
+		obs_data_set_string(settings, "window", windowValue.c_str());
+
+	static std::atomic<uint64_t> creationCounter{0};
+	const std::string sourceName =
+		"harpia_window_capture_" + std::to_string(creationCounter.fetch_add(1));
+	source_ = obs_source_create(id, sourceName.c_str(), settings, nullptr);
+	obs_data_release(settings);
+
+	if (!source_) {
+		blog(LOG_ERROR, "[harpia] failed to create window capture source '%s'", id);
+		return false;
+	}
+
+	obs_set_output_source(kVideoChannel, source_);
+	return true;
 }
 
 bool CaptureManager::startCapture(int monitorIndex, bool captureCursor)

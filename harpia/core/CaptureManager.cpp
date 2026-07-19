@@ -2,6 +2,9 @@
 
 #include <obs.h>
 
+#include <atomic>
+#include <string>
+
 namespace harpia {
 
 // libobs output channel that the encoders read from. Channel 0 is the video
@@ -89,7 +92,15 @@ bool CaptureManager::startCapture(int monitorIndex, bool captureCursor)
 			obs_data_set_int(settings, m.key.c_str(), m.intValue);
 	}
 
-	source_ = obs_source_create(id, "harpia_display_capture", settings, nullptr);
+	// libobs destroys released sources on a later video tick, so a freshly
+	// re-created capture (mode/preset switch) can briefly coexist with the one
+	// just released. Reusing a fixed name would then trip "duplicate name" and
+	// force libobs to rename it. A unique name per creation avoids that — the
+	// name is only a registry/UI label; harpia never looks the source up by it.
+	static std::atomic<uint64_t> creationCounter{0};
+	const std::string sourceName =
+		"harpia_display_capture_" + std::to_string(creationCounter.fetch_add(1));
+	source_ = obs_source_create(id, sourceName.c_str(), settings, nullptr);
 	obs_data_release(settings);
 
 	if (!source_) {

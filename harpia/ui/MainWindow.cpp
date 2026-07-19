@@ -60,6 +60,7 @@
 #include <QScreen>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QStatusBar>
 #include <QStorageInfo>
 #include <QStyle>
 #include <QThreadPool>
@@ -277,6 +278,14 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	root->addWidget(recentStrip_);
 
 	setCentralWidget(central);
+
+	// A small, unobtrusive version number in the bottom-left corner. Bumped on
+	// every commit (see harpia/Version.hpp).
+	auto *versionLabel = new QLabel(QStringLiteral("v%1").arg(QString::fromUtf8(appVersion())), this);
+	versionLabel->setStyleSheet(QStringLiteral("color:#6b6f76; font-size:11px; padding-left:6px;"));
+	statusBar()->addWidget(versionLabel);
+	statusBar()->setSizeGripEnabled(false);
+	statusBar()->setStyleSheet(QStringLiteral("QStatusBar{background:transparent;} QStatusBar::item{border:none;}"));
 
 	// Wide, PowerRec-like proportions; a bit taller to fit the audio meters.
 	resize(940, 470);

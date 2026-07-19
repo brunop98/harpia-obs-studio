@@ -154,7 +154,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	btnFont.setPointSize(btnFont.pointSize() + 2);
 	btnFont.setBold(true);
 
-	auto *makeSep = [central]() {
+	auto makeSep = [central]() {
 		auto *line = new QFrame(central);
 		line->setFrameShape(QFrame::VLine);
 		line->setStyleSheet(QStringLiteral("color:#33373f;"));

@@ -597,8 +597,10 @@ void MainWindow::startRecording()
 
 	logRecordingStart(preset, recordPath, screenPath, lastWebcamPath_, baseW, baseH, fps);
 
-	// Focus auto-pause: remember the app that's in the foreground now as the
-	// target, and prepare a sidecar file for Auto Paused/Resumed markers.
+	// Focus auto-pause: the target is the application selected in the app
+	// dropdown — not whatever happened to be foreground before Record (with
+	// Alt-Tab the task switcher itself is often the last "foreground app", which
+	// made the old pid-based target plain wrong and the recording stay paused).
 	//
 	// This only makes sense in single-application capture mode: when capturing a
 	// whole monitor or a region, what's recorded doesn't depend on which window is
@@ -606,15 +608,20 @@ void MainWindow::startRecording()
 	// own window is foreground — and re-pause every time you click Resume. Gate it
 	// to app-capture so full-screen recording never auto-pauses on focus.
 	focusPaused_ = false;
-	targetPid_ = 0;
+	targetExe_.clear();
 	markersPath_.clear();
 	if (preset.pauseOnFocusLoss && appCaptureEnabled_) {
-		// Target the app you were using just before pressing Record — NOT Harpia
-		// itself (which is foreground now). If we never saw another app, leave the
-		// target unset so the feature stays inactive rather than misbehaving.
-		targetPid_ = lastForegroundPid_;
-		if (targetPid_ != 0)
+		// win-capture window values are "title:class:executable" with ':' inside
+		// fields encoded as "#3A". Match by executable so every window/process of
+		// the app counts as focused (browsers and Electron apps span many pids).
+		targetExe_ = appWindowValue_.section(QLatin1Char(':'), -1)
+				     .replace(QLatin1String("#3A"), QLatin1String(":"))
+				     .trimmed();
+		if (!targetExe_.isEmpty()) {
 			markersPath_ = screenPath + QStringLiteral(".markers.txt");
+			blog(LOG_INFO, "[harpia] focus auto-pause target: %s",
+			     targetExe_.toUtf8().constData());
+		}
 	}
 
 	recStartMs_ = QDateTime::currentMSecsSinceEpoch();
@@ -1669,12 +1676,8 @@ void MainWindow::tickState()
 {
 	++spinPhase_; // drive the Starting…/Stopping… spinner
 
-	// One foreground query per tick, reused below. Continuously remember the last
-	// real (non-Harpia) foreground app, so focus auto-pause can target the app you
-	// were using before you clicked Record.
+	// One foreground query per tick, consumed by tickFocus below.
 	const uint64_t fg = ForegroundWatcher::foregroundProcessId();
-	if (fg != 0 && fg != ownPid_)
-		lastForegroundPid_ = fg;
 
 	if (!recorder_.isRecording()) {
 		if (recStartMs_ != 0) {
@@ -1690,7 +1693,7 @@ void MainWindow::tickState()
 				screenBorder_->hideBorder();
 			webcam_.stop();
 			focusPaused_ = false;
-			targetPid_ = 0;
+			targetExe_.clear();
 			stopping_ = false; // finalize complete
 
 			// Post-stop handling — deferred briefly so the muxer finishes
@@ -1766,19 +1769,30 @@ void MainWindow::tickIdle()
 void MainWindow::tickFocus(uint64_t foregroundPid)
 {
 	// Focus-driven pause applies only to single-application capture (see
-	// startRecording). targetPid_ is left 0 for monitor/region capture, so this
-	// guard also keeps full-screen recordings from ever auto-pausing on focus.
+	// startRecording). targetExe_ is left empty for monitor/region capture, so
+	// this guard also keeps full-screen recordings from ever auto-pausing on focus.
 	if (!recorder_.isRecording() || !activePreset().pauseOnFocusLoss || !appCaptureEnabled_ ||
-	    targetPid_ == 0)
+	    targetExe_.isEmpty())
 		return;
 
 	const uint64_t fg = foregroundPid;
 	if (fg == 0)
 		return; // unknown/unsupported — don't change state
 
-	// Child windows, dialogs, and file pickers of the target belong to the same
-	// process, so a plain process-id match treats them as still focused.
-	const bool focused = (fg == targetPid_);
+	// Harpia's own windows are neutral: clicking Pause/Resume/Stop (or just
+	// glancing at the timer) must not count as the target losing focus —
+	// otherwise a manual Resume would instantly re-pause, since Harpia is the
+	// foreground app while you're clicking its buttons.
+	if (fg == ownPid_)
+		return;
+
+	// Match by executable name, so ANY window of ANY process of the selected app
+	// counts as focused (child windows, dialogs, file pickers, and the extra
+	// processes of multi-process apps like browsers/Electron).
+	const QString fgExe = QString::fromStdString(ForegroundWatcher::foregroundExecutable());
+	if (fgExe.isEmpty())
+		return; // can't identify the app — don't change state
+	const bool focused = (fgExe.compare(targetExe_, Qt::CaseInsensitive) == 0);
 
 	if (!focused && !recorder_.isPaused()) {
 		if (recorder_.pause(true)) {

@@ -3,18 +3,20 @@
 #include "core/AudioManager.hpp"
 
 #include <QCheckBox>
-#include <QFormLayout>
-#include <QHBoxLayout>
-#include <QLabel>
+#include <QGridLayout>
 #include <QProgressBar>
 #include <QSignalBlocker>
-#include <QVBoxLayout>
 
 #include <algorithm>
 
 namespace harpia {
 
 namespace {
+
+// Fixed width of the label column so every meter starts at the same x.
+constexpr int kLabelColumn = 210;
+// Displayed device names are capped at this many characters.
+constexpr int kMaxNameChars = 20;
 
 // A thin horizontal level bar (0..100), green fill, no text.
 QProgressBar *makeMeter(QWidget *parent)
@@ -30,42 +32,61 @@ QProgressBar *makeMeter(QWidget *parent)
 	return bar;
 }
 
+// Cap a device name at kMaxNameChars, ending with an ellipsis if trimmed.
+QString shortName(const QString &full)
+{
+	if (full.size() <= kMaxNameChars)
+		return full;
+	return full.left(kMaxNameChars - 1) + QChar(0x2026); // …
+}
+
 } // namespace
 
 AudioPanel::AudioPanel(AudioManager &audio, QWidget *parent) : QWidget(parent), audio_(audio)
 {
-	auto *layout = new QVBoxLayout(this);
-	layout->setContentsMargins(0, 0, 0, 0);
-	layout->setSpacing(4);
+	// Grid keeps the label column a fixed width and lets the meter fill the rest,
+	// so all bars line up regardless of label length.
+	auto *grid = new QGridLayout(this);
+	grid->setContentsMargins(0, 0, 0, 0);
+	grid->setHorizontalSpacing(12);
+	grid->setVerticalSpacing(2);
+	grid->setColumnMinimumWidth(0, kLabelColumn);
+	grid->setColumnStretch(1, 1);
+
+	int r = 0;
 
 	// PC (desktop/system) audio row.
-	pcCheck_ = new QCheckBox(QStringLiteral("Record PC Audio"), this);
+	pcCheck_ = new QCheckBox(QStringLiteral("PC Audio"), this);
+	pcCheck_->setFixedWidth(kLabelColumn);
+	pcCheck_->setToolTip(QStringLiteral("System / desktop audio"));
 	pcMeter_ = makeMeter(this);
-	auto *pcRow = new QHBoxLayout;
-	pcCheck_->setMinimumWidth(220);
-	pcRow->addWidget(pcCheck_);
-	pcRow->addWidget(pcMeter_, 1);
-	layout->addLayout(pcRow);
+	grid->addWidget(pcCheck_, r, 0);
+	grid->addWidget(pcMeter_, r, 1);
+	++r;
 
 	connect(pcCheck_, &QCheckBox::toggled, this, [this](bool on) {
 		audio_.setDesktopEnabled(on);
 		emit changed();
 	});
 
-	// One row per detected input (mic) device.
+	// One row per detected input (mic) device — excluding the synthetic
+	// "Default" entry so only real devices are shown.
 	const std::vector<AudioDevice> devices = AudioManager::inputDevices();
 	for (const AudioDevice &dev : devices) {
+		if (dev.id == "default")
+			continue;
+
 		MicRow row;
 		row.id = dev.id;
-		row.check = new QCheckBox(
-			QStringLiteral("Record Mic: %1").arg(QString::fromStdString(dev.name)), this);
-		row.check->setMinimumWidth(220);
+		const QString full = QString::fromStdString(dev.name);
+		row.check = new QCheckBox(QStringLiteral("Mic: %1").arg(shortName(full)), this);
+		row.check->setFixedWidth(kLabelColumn);
+		row.check->setToolTip(full); // full name on hover
 		row.meter = makeMeter(this);
 
-		auto *r = new QHBoxLayout;
-		r->addWidget(row.check);
-		r->addWidget(row.meter, 1);
-		layout->addLayout(r);
+		grid->addWidget(row.check, r, 0);
+		grid->addWidget(row.meter, r, 1);
+		++r;
 
 		const std::string id = dev.id;
 		connect(row.check, &QCheckBox::toggled, this, [this, id](bool on) {

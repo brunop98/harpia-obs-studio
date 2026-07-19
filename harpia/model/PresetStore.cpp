@@ -44,6 +44,7 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_bool(d, "pause_on_focus_loss", p.pauseOnFocusLoss);
 	obs_data_set_int(d, "recording_counter", p.recordingCounter);
 	obs_data_set_int(d, "countdown_seconds", p.countdownSeconds);
+	obs_data_set_int(d, "min_recording_seconds", p.minRecordingSeconds);
 	obs_data_set_bool(d, "show_screen_border", p.showScreenBorder);
 	obs_data_set_string(d, "screen_border_color", p.screenBorderColor.c_str());
 	obs_data_set_int(d, "screen_border_thickness", p.screenBorderThickness);
@@ -98,6 +99,7 @@ Preset presetFromData(obs_data_t *d)
 	if (obs_data_has_user_value(d, "recording_counter"))
 		p.recordingCounter = (int)obs_data_get_int(d, "recording_counter");
 	p.countdownSeconds = (int)obs_data_get_int(d, "countdown_seconds");
+	p.minRecordingSeconds = (int)obs_data_get_int(d, "min_recording_seconds");
 	p.showScreenBorder = obs_data_get_bool(d, "show_screen_border");
 	if (const char *bc = obs_data_get_string(d, "screen_border_color"); bc && *bc)
 		p.screenBorderColor = bc;

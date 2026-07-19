@@ -518,6 +518,13 @@ void MainWindow::startRecording()
 		return;
 	}
 
+	// Remember this recording's files + minimum length for the short-clip check
+	// when it finishes.
+	lastScreenPath_ = screenPath;
+	lastWebcamPath_.clear();
+	lastMinSeconds_ = preset.minRecordingSeconds;
+	lastContentMs_ = 0; // set at Stop; stays 0 if it ends without a user Stop
+
 	// Webcam as a separate synchronized file (never composited).
 	if (preset.webcamEnabled) {
 		QString wcFolder = (preset.webcamUseCustomFolder && !preset.webcamFolder.empty())
@@ -526,6 +533,7 @@ void MainWindow::startRecording()
 		QDir wdir(wcFolder);
 		wdir.mkpath(QStringLiteral("."));
 		const QString webcamPath = wdir.filePath(baseName + QStringLiteral("_webcam.mp4"));
+		lastWebcamPath_ = webcamPath;
 		// Reuse the live preview's already-open camera so the device isn't
 		// opened twice (DirectShow cameras are usually exclusive).
 		obs_source_t *shared = webcamPreview_ ? webcamPreview_->source() : nullptr;
@@ -621,9 +629,44 @@ void MainWindow::beginStart()
 
 void MainWindow::beginStop()
 {
+	// Capture the final content length now (at the user's Stop), before the async
+	// finalize adds any lag, for the short-recording check.
+	lastContentMs_ = contentElapsedMs();
 	stopping_ = true;
 	updateButtons();
 	recorder_.stop(); // async; tickState clears stopping_ once finalized
+}
+
+void MainWindow::maybeDiscardShortRecording(const QString &screenPath, const QString &webcamPath,
+					    const QString &markersPath, qint64 contentMs, int minSeconds)
+{
+	if (screenPath.isEmpty() || !QFileInfo::exists(screenPath))
+		return;
+
+	const int secs = int((contentMs + 500) / 1000);
+
+	QMessageBox box(this);
+	box.setWindowTitle(QStringLiteral("Short recording"));
+	box.setIcon(QMessageBox::Question);
+	box.setText(QStringLiteral("This recording is only %1 s — shorter than the %2 s minimum set for "
+				   "this preset.\n\nDiscard it?")
+			    .arg(secs)
+			    .arg(minSeconds));
+	QPushButton *keepBtn = box.addButton(QStringLiteral("Keep"), QMessageBox::RejectRole);
+	QPushButton *discardBtn = box.addButton(QStringLiteral("Discard"), QMessageBox::DestructiveRole);
+	box.setDefaultButton(keepBtn); // safest default
+	box.exec();
+
+	if (box.clickedButton() != discardBtn)
+		return; // keep it
+
+	// Permanent delete of the recording and its companion files.
+	QFile::remove(screenPath);
+	if (!webcamPath.isEmpty())
+		QFile::remove(webcamPath);
+	if (!markersPath.isEmpty())
+		QFile::remove(markersPath);
+	refreshRecentList();
 }
 
 void MainWindow::onPauseButton()
@@ -1213,19 +1256,23 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 	}
 }
 
+qint64 MainWindow::contentElapsedMs() const
+{
+	if (recStartMs_ == 0)
+		return 0;
+	qint64 paused = pausedAccumMs_;
+	if (recorder_.isPaused() && pauseStartMs_ > 0)
+		paused += QDateTime::currentMSecsSinceEpoch() - pauseStartMs_;
+	qint64 ms = QDateTime::currentMSecsSinceEpoch() - recStartMs_ - paused;
+	return ms < 0 ? 0 : ms;
+}
+
 QString MainWindow::elapsedString() const
 {
 	if (recStartMs_ == 0)
 		return QStringLiteral("00:00:00");
 
-	qint64 paused = pausedAccumMs_;
-	if (recorder_.isPaused() && pauseStartMs_ > 0)
-		paused += QDateTime::currentMSecsSinceEpoch() - pauseStartMs_;
-
-	qint64 elapsedMs = QDateTime::currentMSecsSinceEpoch() - recStartMs_ - paused;
-	if (elapsedMs < 0)
-		elapsedMs = 0;
-	const int totalSecs = int(elapsedMs / 1000);
+	const int totalSecs = int(contentElapsedMs() / 1000);
 	return QStringLiteral("%1:%2:%3")
 		.arg(totalSecs / 3600, 2, 10, QLatin1Char('0'))
 		.arg((totalSecs % 3600) / 60, 2, 10, QLatin1Char('0'))
@@ -1364,8 +1411,24 @@ void MainWindow::tickState()
 			webcam_.stop();
 			focusPaused_ = false;
 			targetPid_ = 0;
-			markersPath_.clear();
 			stopping_ = false; // finalize complete
+
+			// Short-recording check: if the content was shorter than the
+			// preset's minimum, offer to discard this recording and its
+			// companion files. Deferred briefly so the muxers finish flushing
+			// their files before we (maybe) delete them.
+			if (lastMinSeconds_ > 0 && lastContentMs_ > 0 &&
+			    lastContentMs_ < (qint64)lastMinSeconds_ * 1000) {
+				const QString screen = lastScreenPath_;
+				const QString webcam = lastWebcamPath_;
+				const QString markers = markersPath_;
+				const int minS = lastMinSeconds_;
+				const qint64 contentMs = lastContentMs_;
+				QTimer::singleShot(700, this, [this, screen, webcam, markers, minS, contentMs]() {
+					maybeDiscardShortRecording(screen, webcam, markers, contentMs, minS);
+				});
+			}
+			markersPath_.clear();
 		}
 		timerLabel_->setText(QStringLiteral("00:00:00"));
 		updateButtons();

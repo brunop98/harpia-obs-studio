@@ -199,6 +199,16 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 				"ready. The countdown itself is never part of the recording."),
 		 countdownCombo_);
 
+	minLengthSpin_ = new QSpinBox(this);
+	minLengthSpin_->setRange(0, 3600);
+	minLengthSpin_->setSuffix(QStringLiteral(" s"));
+	minLengthSpin_->setSpecialValueText(QStringLiteral("Disabled"));
+	minLengthSpin_->setValue(preset.minRecordingSeconds);
+	addField(v, QStringLiteral("Minimum recording length"),
+		 QStringLiteral("If a finished recording is shorter than this (excluding paused time), you'll "
+				"be asked whether to discard it — handy for throwing away accidental clips."),
+		 minLengthSpin_);
+
 	pauseFocusCheck_ = new QCheckBox(QStringLiteral("Auto-pause when the target application loses focus"),
 					this);
 	pauseFocusCheck_->setChecked(preset.pauseOnFocusLoss);
@@ -752,6 +762,7 @@ void PresetEditorDialog::accept()
 	result_.gpuCompression = gpuCheck_->isChecked();
 	result_.idleTimeoutSeconds = idleSpin_->value();
 	result_.countdownSeconds = countdownCombo_->currentData().toInt();
+	result_.minRecordingSeconds = minLengthSpin_->value();
 	result_.pauseOnFocusLoss = pauseFocusCheck_->isChecked();
 	result_.showScreenBorder = borderCheck_->isChecked();
 	result_.screenBorderColor = borderColor_.name().toStdString();

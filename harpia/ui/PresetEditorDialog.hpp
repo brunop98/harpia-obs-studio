@@ -59,6 +59,7 @@ private:
 	QCheckBox *gpuCheck_ = nullptr;
 	QSpinBox *idleSpin_ = nullptr;
 	QComboBox *countdownCombo_ = nullptr;
+	QSpinBox *minLengthSpin_ = nullptr;
 	QCheckBox *pauseFocusCheck_ = nullptr;
 
 	// Recording border (Full Screen)

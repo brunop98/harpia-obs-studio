@@ -92,6 +92,10 @@ private:
 	void beginRecordFlow(); // readiness gate -> countdown or immediate start
 	void beginStart();      // enter Starting… and kick off the recording
 	void beginStop();       // enter Stopping… and request finalize
+	qint64 contentElapsedMs() const; // recorded content length (minus paused spans)
+	// Prompt to discard a just-finished recording shorter than the preset minimum.
+	void maybeDiscardShortRecording(const QString &screenPath, const QString &webcamPath,
+					const QString &markersPath, qint64 contentMs, int minSeconds);
 	void updateButtons();
 	// Open the editor for the active preset + persist. If initialPage is given
 	// (e.g. "Webcam"), the editor opens with that settings page selected.
@@ -198,6 +202,13 @@ private:
 	// sidecar file where Auto Paused/Resumed markers are written.
 	uint64_t targetPid_ = 0;
 	QString markersPath_;
+
+	// Short-recording discard: the just-finished recording's files, its content
+	// length, and the preset's minimum, captured at Stop.
+	QString lastScreenPath_;
+	QString lastWebcamPath_;
+	qint64 lastContentMs_ = 0;
+	int lastMinSeconds_ = 0;
 };
 
 } // namespace harpia

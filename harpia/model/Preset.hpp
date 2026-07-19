@@ -114,6 +114,11 @@ struct Preset {
 	// 0 = disabled (start immediately). 1..10 supported.
 	int countdownSeconds = 0;
 
+	// Minimum recorded length (seconds, content excluding paused spans). If a
+	// finished recording is shorter than this, the user is asked whether to
+	// discard it. 0 = disabled (always keep).
+	int minRecordingSeconds = 0;
+
 	// Show a colored border around the recorded monitor while recording (Full
 	// Screen capture only). The border is excluded from the recording itself.
 	bool showScreenBorder = false;

@@ -1543,6 +1543,21 @@ void MainWindow::updateButtons()
 	if (regionTool_)
 		regionTool_->setPaused(recording && paused);
 
+	// The full-screen monitor border follows the same convention: it turns yellow
+	// while paused and back to the preset's recording color when resumed. (It's
+	// only shown during recording, so there's no idle/green state here.)
+	if (screenBorder_ && recording && captureMode_ == CaptureMode::Monitor &&
+	    activePreset().showScreenBorder) {
+		if (paused) {
+			screenBorder_->setColor(QColor(0xd2, 0x99, 0x22)); // yellow — paused
+		} else {
+			QColor c(QString::fromStdString(activePreset().screenBorderColor));
+			if (!c.isValid())
+				c = QColor(0xe5, 0x48, 0x4d); // red — recording
+			screenBorder_->setColor(c);
+		}
+	}
+
 	// Braille spinner frames for the in-progress states.
 	static const char *kSpin[] = {"\xE2\xA0\x8B", "\xE2\xA0\x99", "\xE2\xA0\xB9", "\xE2\xA0\xB8",
 				      "\xE2\xA0\xBC", "\xE2\xA0\xB4", "\xE2\xA0\xA6", "\xE2\xA0\xA7",

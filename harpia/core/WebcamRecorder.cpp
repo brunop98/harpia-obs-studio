@@ -230,9 +230,24 @@ bool WebcamRecorder::start(const std::string &deviceId, int width, int height, i
 
 void WebcamRecorder::stop()
 {
-	if (output_ && obs_output_active(output_))
-		obs_output_stop(output_);
+	// obs_output_stop is asynchronous — releasing the output before the muxer
+	// wrote its trailer truncates the file (an MP4 without its moov atom is
+	// unplayable). Request the stop here; reap() tears down once the output
+	// actually deactivated. Only when already inactive is teardown immediate.
+	if (output_ && obs_output_active(output_)) {
+		if (!stopRequested_) {
+			obs_output_stop(output_);
+			stopRequested_ = true;
+		}
+		return;
+	}
 	teardown();
+}
+
+void WebcamRecorder::reap()
+{
+	if (output_ && stopRequested_ && !obs_output_active(output_))
+		teardown();
 }
 
 bool WebcamRecorder::isRecording() const
@@ -251,6 +266,7 @@ void WebcamRecorder::pause(bool paused)
 
 void WebcamRecorder::teardown()
 {
+	stopRequested_ = false;
 	if (output_) {
 		if (obs_output_active(output_))
 			obs_output_stop(output_);

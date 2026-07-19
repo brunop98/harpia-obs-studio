@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QPointer>
 #include <QRunnable>
@@ -125,11 +126,18 @@ void ThumbnailCache::ensure(const QString &videoPath, const QSize &target)
 		return;
 
 	const QString key = keyFor(videoPath, fi.lastModified().toSecsSinceEpoch(), target);
-	if (memory_.contains(key) || QFileInfo::exists(diskPath(key)) || inFlight_.contains(key))
+	if (memory_.contains(key) || inFlight_.contains(key))
 		return;
+	const QString disk = diskPath(key);
+	if (QFileInfo::exists(disk)) {
+		// A disk file only counts if it actually loads — a PNG truncated by a
+		// crash mid-write would otherwise block regeneration forever.
+		if (!QImage(disk).isNull())
+			return;
+		QFile::remove(disk);
+	}
 
 	inFlight_.insert(key);
-	const QString disk = diskPath(key);
 
 	// Guard against this cache being destroyed while the job runs: hop back via
 	// the (always-alive) application object and only touch the cache if it's
@@ -138,8 +146,15 @@ void ThumbnailCache::ensure(const QString &videoPath, const QSize &target)
 
 	QThreadPool::globalInstance()->start(QRunnable::create([guard, videoPath, target, key, disk]() {
 		QImage img = extractFrame(videoPath, target);
-		if (!img.isNull())
-			img.save(disk, "PNG");
+		if (!img.isNull()) {
+			// Write atomically (temp + rename) so a crash mid-save can't
+			// leave a truncated PNG at the final path.
+			const QString tmp = disk + QStringLiteral(".tmp");
+			if (img.save(tmp, "PNG")) {
+				QFile::remove(disk);
+				QFile::rename(tmp, disk);
+			}
+		}
 
 		QMetaObject::invokeMethod(
 			qApp,

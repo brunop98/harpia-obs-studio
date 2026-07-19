@@ -198,8 +198,12 @@ void Logger::clearAll()
 	std::error_code ec;
 	if (!fs::exists(logDir_, ec))
 		return;
+	// Compare as normalized paths, not raw strings — filePath_ is built with
+	// '/' while directory_iterator yields native separators ('\' on Windows),
+	// so a string compare could match nothing and delete the live log.
+	const fs::path current = fs::path(filePath_).lexically_normal();
 	for (const auto &e : fs::directory_iterator(logDir_, ec)) {
-		if (e.path().extension() == ".log" && e.path().string() != filePath_)
+		if (e.path().extension() == ".log" && e.path().lexically_normal() != current)
 			fs::remove(e.path(), ec);
 	}
 }

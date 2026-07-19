@@ -799,6 +799,9 @@ void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Pat
 					     (long long)(srcSize / (1024 * 1024)),
 					     (long long)(outSize / (1024 * 1024)), (long long)secs);
 				} else {
+					// A failed remux may have written a partial header/trailer —
+					// remove the broken .mp4 so the library doesn't list it.
+					QFile::remove(mp4Path);
 					// Don't lose the recording: keep the .mkv beside the target.
 					const QString fallback =
 						QFileInfo(mp4Path).absolutePath() + QLatin1Char('/') +
@@ -1783,6 +1786,9 @@ void MainWindow::tickState()
 
 	// One foreground query per tick, consumed by tickFocus below.
 	const uint64_t fg = ForegroundWatcher::foregroundProcessId();
+
+	// Release the webcam output once its async stop finished writing the file.
+	webcam_.reap();
 
 	if (!recorder_.isRecording()) {
 		if (recStartMs_ != 0) {

@@ -94,8 +94,13 @@ std::unique_ptr<AudioManager::Meter> AudioManager::makeMeter(const char *sourceI
 	obs_set_output_source(channel, m->source);
 
 	m->volmeter = obs_volmeter_create(OBS_FADER_LOG);
-	obs_volmeter_attach_source(m->volmeter, m->source);
-	obs_volmeter_add_callback(m->volmeter, &AudioManager::volmeterCallback, m.get());
+	if (m->volmeter) {
+		obs_volmeter_attach_source(m->volmeter, m->source);
+		obs_volmeter_add_callback(m->volmeter, &AudioManager::volmeterCallback, m.get());
+	} else {
+		// The source still records fine — only the level meter is unavailable.
+		blog(LOG_WARNING, "[harpia] failed to create volmeter for '%s'", name);
+	}
 	return m;
 }
 

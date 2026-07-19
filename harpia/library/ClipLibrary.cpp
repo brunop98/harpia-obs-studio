@@ -108,6 +108,11 @@ QVector<ClipInfo> ClipLibrary::scan(const QStringList &folders, const PresetByFo
 			const QString abs = fi.absoluteFilePath();
 			if (seen.contains(abs))
 				continue;
+			// Webcam companion files (<base>_webcam.mp4) belong to a listed
+			// clip — showing them as clips of their own duplicates every
+			// webcam recording in the strip and library.
+			if (fi.completeBaseName().endsWith(QStringLiteral("_webcam"), Qt::CaseInsensitive))
+				continue;
 			seen.insert(abs);
 
 			ClipInfo info;

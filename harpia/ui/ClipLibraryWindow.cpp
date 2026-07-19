@@ -544,8 +544,19 @@ void ClipLibraryWindow::renameSelected()
 				     QStringLiteral("A file with that name already exists."));
 		return;
 	}
-	if (!QFile::rename(paths.front(), target))
+	if (!QFile::rename(paths.front(), target)) {
 		QMessageBox::warning(this, QStringLiteral("Rename"), QStringLiteral("Could not rename the file."));
+	} else {
+		// Favorites/recently-viewed are keyed by absolute path — migrate them
+		// so a starred clip keeps its star across a rename.
+		const QString oldAbs = QFileInfo(paths.front()).absoluteFilePath();
+		const QString newAbs = QFileInfo(target).absoluteFilePath();
+		if (favorites_.remove(oldAbs))
+			favorites_.insert(newAbs);
+		if (recentlyViewed_.remove(oldAbs))
+			recentlyViewed_.insert(newAbs);
+		savePersistentState();
+	}
 
 	refresh();
 }

@@ -56,7 +56,15 @@ public:
 	bool start(const std::string &deviceId, int width, int height, int fps, const std::string &filePath,
 		   obs_source_t *sharedSource = nullptr);
 
+	// Request the recording to stop. Asynchronous: the output keeps finalizing
+	// in the background; call reap() periodically to release it once done.
+	// (Only tears down immediately when the output is already inactive.)
 	void stop();
+
+	// Release the output once an async stop() has fully finished — safe to call
+	// every UI tick; does nothing while the muxer is still writing.
+	void reap();
+
 	bool isRecording() const;
 
 	// Pause/resume in lockstep with the screen recording, so the two files stay
@@ -72,6 +80,7 @@ private:
 	video_t *video_ = nullptr; // the independent mix
 	obs_encoder_t *videoEncoder_ = nullptr;
 	obs_output_t *output_ = nullptr;
+	bool stopRequested_ = false; // async stop() issued; reap() finishes it
 };
 
 } // namespace harpia

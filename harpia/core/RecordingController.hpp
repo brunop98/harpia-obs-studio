@@ -55,6 +55,12 @@ public:
 
 	const std::string &currentFilePath() const { return currentFilePath_; }
 
+	// Why the last recording stopped: 0 = clean stop (OBS_OUTPUT_SUCCESS),
+	// anything else is an output error (disk full, write failure…). Valid after
+	// the stop signal fired; reset on start().
+	int lastStopCode() const { return lastStopCode_; }
+	const std::string &lastStopError() const { return lastStopError_; }
+
 private:
 	void teardown();
 	static void onStartSignal(void *data, calldata_t *cd);
@@ -66,6 +72,8 @@ private:
 	std::string currentFilePath_;
 	Preset activePreset_;
 	bool usesFfmpegOutput_ = false;
+	int lastStopCode_ = 0;
+	std::string lastStopError_;
 };
 
 } // namespace harpia

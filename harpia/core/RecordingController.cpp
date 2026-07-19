@@ -54,6 +54,10 @@ RecordingController::~RecordingController()
 void RecordingController::teardown()
 {
 	if (output_) {
+		// Never release an output that is still writing — stop it first so the
+		// muxer finalizes the file (matters when the app quits mid-recording).
+		if (obs_output_active(output_))
+			obs_output_stop(output_);
 		signal_handler_t *sh = obs_output_get_signal_handler(output_);
 		if (sh) {
 			signal_handler_disconnect(sh, "start", &RecordingController::onStartSignal, this);
@@ -79,6 +83,8 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 
 	teardown(); // release any previous session's objects
 
+	lastStopCode_ = 0;
+	lastStopError_.clear();
 	activePreset_ = preset;
 	currentFilePath_ = fullFilePath;
 	usesFfmpegOutput_ = EncoderFactory::usesFfmpegOutput(preset);
@@ -217,9 +223,23 @@ void RecordingController::onStartSignal(void *data, calldata_t *)
 		self->onStarted();
 }
 
-void RecordingController::onStopSignal(void *data, calldata_t *)
+void RecordingController::onStopSignal(void *data, calldata_t *cd)
 {
 	auto *self = static_cast<RecordingController *>(data);
+
+	// Capture WHY the output stopped. 0 == OBS_OUTPUT_SUCCESS; anything else
+	// (disk full, write error, encoder failure) must not be reported to the
+	// user as a clean save.
+	const int code = (int)calldata_int(cd, "code");
+	self->lastStopCode_ = code;
+	self->lastStopError_.clear();
+	if (code != 0) {
+		const char *err = self->output_ ? obs_output_get_last_error(self->output_) : nullptr;
+		self->lastStopError_ = err ? err : "";
+		blog(LOG_ERROR, "[harpia] recording stopped with error code %d: %s", code,
+		     err ? err : "(no detail)");
+	}
+
 	if (self->onFinished)
 		self->onFinished(self->currentFilePath_);
 }

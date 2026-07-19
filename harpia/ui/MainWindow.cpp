@@ -26,6 +26,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
+#include <QCloseEvent>
 #include <QMessageBox>
 #include <QComboBox>
 #include <QDateTime>
@@ -414,7 +415,11 @@ const Preset &MainWindow::activePreset() const
 {
 	if (const Preset *p = presets_.find(activePresetId_))
 		return *p;
-	return presets_.presets().front();
+	// Guard the (theoretical) empty store — .front() on an empty vector is UB.
+	if (!presets_.presets().empty())
+		return presets_.presets().front();
+	static const Preset fallback = Preset::makeDefault("");
+	return fallback;
 }
 
 QScreen *MainWindow::screenForActivePreset() const
@@ -712,14 +717,20 @@ void MainWindow::finalizeStopped(const QString &recordedPath, const QString &fin
 {
 	// 1) Optional short-recording discard (operates on the file OBS wrote).
 	if (minSeconds > 0 &&
-	    discardShortRecording(recordedPath, webcamPath, markersPath, contentMs, minSeconds))
-		return; // discarded — nothing to remux
+	    discardShortRecording(recordedPath, webcamPath, markersPath, contentMs, minSeconds)) {
+		if (closePending_)
+			close(); // discarded — nothing left in flight
+		return;
+	}
 
 	// 2) Remux the temp .mkv to the final .mp4 (background), or just refresh.
-	if (needsRemux)
+	if (needsRemux) {
 		remuxInBackground(recordedPath, finalPath);
-	else
+	} else {
 		refreshRecentList();
+		if (closePending_)
+			close();
+	}
 }
 
 bool MainWindow::discardShortRecording(const QString &recordedPath, const QString &webcamPath,
@@ -767,6 +778,7 @@ void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Pat
 	// silently appears "late" in the recent strip and saving looks stuck.
 	statusBar()->showMessage(QStringLiteral("Saving recording… (finalizing MP4, %1 MB)")
 					 .arg(srcSize / (1024 * 1024)));
+	remuxActive_ = true; // a pending close must wait for this to finish
 
 	QPointer<MainWindow> guard(this);
 	const qint64 startMs = QDateTime::currentMSecsSinceEpoch();
@@ -797,6 +809,7 @@ void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Pat
 					     fallback.toUtf8().constData());
 				}
 				if (guard) {
+					guard->remuxActive_ = false;
 					if (ok)
 						guard->statusBar()->showMessage(
 							QStringLiteral("Recording saved (%1 MB, %2 s)")
@@ -809,6 +822,8 @@ void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Pat
 								       "kept as MKV"),
 							10000);
 					guard->refreshRecentList();
+					if (guard->closePending_)
+						guard->close();
 				}
 			},
 			Qt::QueuedConnection);
@@ -865,8 +880,9 @@ void MainWindow::onPauseButton()
 		return;
 	recorder_.togglePause();
 	webcam_.pause(recorder_.isPaused()); // keep the companion file in sync
-	autoPaused_ = false;                 // manual action overrides the idle state machine
-	focusPaused_ = false;                // and the focus state machine
+	notePauseTransition(recorder_.isPaused());
+	autoPaused_ = false;  // manual action overrides the idle state machine
+	focusPaused_ = false; // and the focus state machine
 	updateButtons();
 }
 
@@ -1349,6 +1365,49 @@ void MainWindow::changeEvent(QEvent *event)
 		updateRegionToolVisibility();
 }
 
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+	// A countdown hasn't recorded anything yet — cancel it and close normally.
+	if (countingDown_) {
+		if (countdownOverlay_)
+			countdownOverlay_->stop();
+		countingDown_ = false;
+	}
+
+	if (recorder_.isRecording() || starting_ || stopping_) {
+		if (!closePending_) {
+			const auto btn = QMessageBox::question(
+				this, QStringLiteral("Recording in progress"),
+				QStringLiteral("A recording is still in progress.\n\n"
+					       "Stop the recording and close?"),
+				QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+			if (btn != QMessageBox::Yes) {
+				event->ignore();
+				return;
+			}
+			closePending_ = true;
+			if (!stopping_)
+				beginStop();
+			statusBar()->showMessage(QStringLiteral("Stopping the recording before closing…"));
+		}
+		// Wait for the async stop + finalize; the finalize/remux completion
+		// paths call close() again once nothing is in flight.
+		event->ignore();
+		return;
+	}
+
+	if (remuxActive_) {
+		// The recording stopped but its MP4 is still being finalized in the
+		// background — closing now would corrupt/lose it.
+		closePending_ = true;
+		statusBar()->showMessage(QStringLiteral("Finishing the recording file before closing…"));
+		event->ignore();
+		return;
+	}
+
+	QMainWindow::closeEvent(event);
+}
+
 void MainWindow::onIdleSettingChanged()
 {
 	idleSpin_->setEnabled(idleToggle_->isChecked());
@@ -1543,6 +1602,21 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 	}
 }
 
+void MainWindow::notePauseTransition(bool paused)
+{
+	// Stamp the pause clock at the moment of the transition instead of waiting
+	// for the next tickState() tick — otherwise every pause counts up to one
+	// tick (~250 ms) of paused time as recorded content.
+	const qint64 now = QDateTime::currentMSecsSinceEpoch();
+	if (paused) {
+		if (pauseStartMs_ == 0)
+			pauseStartMs_ = now;
+	} else if (pauseStartMs_ > 0) {
+		pausedAccumMs_ += now - pauseStartMs_;
+		pauseStartMs_ = 0;
+	}
+}
+
 qint64 MainWindow::contentElapsedMs() const
 {
 	if (recStartMs_ == 0)
@@ -1645,6 +1719,11 @@ void MainWindow::updateButtons()
 	appCombo_->setEnabled(!locked && appCaptureEnabled_);
 	webcamEnableToggle_->setEnabled(!locked);
 	webcamCombo_->setEnabled(!locked && activePreset().webcamEnabled);
+	// Locking the idle controls too: unchecking the idle toggle while the
+	// recording is auto-paused would strand it paused forever (tickIdle bails on
+	// timeout <= 0 and never resumes).
+	idleToggle_->setEnabled(!locked);
+	idleSpin_->setEnabled(!locked && idleToggle_->isChecked());
 
 	updateStatusChip();
 }
@@ -1722,6 +1801,17 @@ void MainWindow::tickState()
 			targetExe_.clear();
 			stopping_ = false; // finalize complete
 
+			// Surface an unclean stop (disk full, write error…) instead of
+			// letting it look like a normal save.
+			if (recorder_.lastStopCode() != 0) {
+				const QString detail = QString::fromStdString(recorder_.lastStopError());
+				statusBar()->showMessage(
+					QStringLiteral("Recording stopped with an error%1")
+						.arg(detail.isEmpty() ? QString()
+								      : QStringLiteral(": ") + detail),
+					10000);
+			}
+
 			// Post-stop handling — deferred briefly so the muxer finishes
 			// flushing before we read/delete files: (1) offer to discard a
 			// too-short recording, then (2) remux the temp .mkv to the final
@@ -1742,6 +1832,10 @@ void MainWindow::tickState()
 					finalizeStopped(recorded, finalP, webcam, markers, contentMs, minS,
 							needsRemux);
 				});
+			} else if (closePending_) {
+				// The user asked to close mid-recording and there is no
+				// finalize work — close once the muxer has flushed.
+				QTimer::singleShot(750, this, [this]() { close(); });
 			}
 			markersPath_.clear();
 		}
@@ -1754,10 +1848,11 @@ void MainWindow::tickState()
 
 	tickFocus(fg); // pause/resume on target-app focus changes
 
-	// Track pause transitions to keep the timer accurate regardless of what
-	// triggered the pause (button or idle monitor).
+	// Track pause transitions as a fallback (the pause sites stamp the clock
+	// precisely via notePauseTransition; this only catches transitions that
+	// happened outside those sites, without clobbering an existing stamp).
 	const bool paused = recorder_.isPaused();
-	if (paused && !wasPaused_)
+	if (paused && !wasPaused_ && pauseStartMs_ == 0)
 		pauseStartMs_ = QDateTime::currentMSecsSinceEpoch();
 	else if (!paused && wasPaused_ && pauseStartMs_ > 0) {
 		pausedAccumMs_ += QDateTime::currentMSecsSinceEpoch() - pauseStartMs_;
@@ -1783,12 +1878,14 @@ void MainWindow::tickIdle()
 	if (!recorder_.isPaused()) {
 		if (idleSecs >= timeout && recorder_.pause(true)) {
 			webcam_.pause(true); // companion file pauses in lockstep
+			notePauseTransition(true);
 			autoPaused_ = true;
 			updateButtons();
 		}
 	} else if (autoPaused_ && idleSecs < timeout) {
 		recorder_.pause(false);
 		webcam_.pause(false);
+		notePauseTransition(false);
 		autoPaused_ = false;
 		updateButtons();
 	}
@@ -1825,6 +1922,7 @@ void MainWindow::tickFocus(uint64_t foregroundPid)
 	if (!focused && !recorder_.isPaused()) {
 		if (recorder_.pause(true)) {
 			webcam_.pause(true); // companion file pauses in lockstep
+			notePauseTransition(true);
 			focusPaused_ = true;
 			writeMarker(QStringLiteral("Auto Paused (Application Lost Focus)"));
 			updateButtons();
@@ -1832,6 +1930,7 @@ void MainWindow::tickFocus(uint64_t foregroundPid)
 	} else if (focused && focusPaused_ && recorder_.isPaused()) {
 		recorder_.pause(false);
 		webcam_.pause(false);
+		notePauseTransition(false);
 		focusPaused_ = false;
 		writeMarker(QStringLiteral("Auto Resumed (Application Regained Focus)"));
 		updateButtons();

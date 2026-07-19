@@ -98,6 +98,9 @@ private:
 	void beginStart();      // enter Starting… and kick off the recording
 	void beginStop();       // enter Stopping… and request finalize
 	qint64 contentElapsedMs() const; // recorded content length (minus paused spans)
+	// Stamp the pause clock exactly when a pause/resume happens (not on the
+	// next timer tick), keeping the content-length accounting accurate.
+	void notePauseTransition(bool paused);
 	// Post-stop handling: optional short-recording discard, then MKV->MP4 remux.
 	void finalizeStopped(const QString &recordedPath, const QString &finalPath,
 			     const QString &webcamPath, const QString &markersPath, qint64 contentMs,
@@ -122,6 +125,9 @@ private:
 
 protected:
 	void changeEvent(QEvent *event) override; // track window activation
+	// Guard against silently losing a recording: closing mid-recording asks for
+	// confirmation, stops cleanly, and only closes once the file is finalized.
+	void closeEvent(QCloseEvent *event) override;
 
 private:
 	// How the screen is captured (a global tool, not part of a preset).
@@ -219,6 +225,11 @@ private:
 	bool starting_ = false;
 	bool stopping_ = false;
 	int spinPhase_ = 0; // animated spinner frame index
+
+	// Deferred-close bookkeeping: the user confirmed closing while a recording
+	// (or its finalize/remux) was still in flight; close as soon as it's done.
+	bool closePending_ = false;
+	bool remuxActive_ = false;
 
 	// Pre-recording countdown state.
 	bool countingDown_ = false;

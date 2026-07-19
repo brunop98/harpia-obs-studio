@@ -424,16 +424,45 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 				"Variable (VFR) saves space but some editors handle it poorly."),
 		 frameRateModeCombo_);
 
+	// Bitrate: a dropdown of common presets, plus Auto and a Custom escape hatch
+	// that reveals the numeric field below.
+	bitrateCombo_ = new QComboBox(this);
+	bitrateCombo_->addItem(QStringLiteral("Auto (Recommended)"), 0); // 0 = let the encoder decide
+	for (int kbps : {4000, 6000, 8000, 10000, 12000, 16000, 20000, 30000, 40000, 50000, 80000, 100000})
+		bitrateCombo_->addItem(QStringLiteral("%L1 kbps").arg(kbps), kbps);
+	bitrateCombo_->addItem(QStringLiteral("Custom…"), -1);
+
 	bitrateSpin_ = new QSpinBox(this);
-	bitrateSpin_->setRange(0, 200000);
+	bitrateSpin_->setRange(500, 500000);
 	bitrateSpin_->setSingleStep(500);
-	bitrateSpin_->setSuffix(QStringLiteral(" Kbps"));
-	bitrateSpin_->setSpecialValueText(QStringLiteral("Auto"));
-	bitrateSpin_->setValue(preset.videoBitrateKbps);
+	bitrateSpin_->setSuffix(QStringLiteral(" kbps"));
+	bitrateSpin_->setValue(preset.videoBitrateKbps > 0 ? preset.videoBitrateKbps : 12000);
+
+	// Seed the dropdown from the stored value: 0 = Auto, a listed value selects
+	// it, anything else becomes Custom with the numeric field showing the value.
+	if (preset.videoBitrateKbps <= 0) {
+		bitrateCombo_->setCurrentIndex(0);
+	} else {
+		const int idx = bitrateCombo_->findData(preset.videoBitrateKbps);
+		if (idx >= 0)
+			bitrateCombo_->setCurrentIndex(idx);
+		else
+			bitrateCombo_->setCurrentIndex(bitrateCombo_->count() - 1); // Custom…
+	}
+
+	auto syncBitrate = [this]() {
+		bitrateSpin_->setVisible(bitrateCombo_->currentData().toInt() == -1);
+	};
+	connect(bitrateCombo_, &QComboBox::currentIndexChanged, this, syncBitrate);
+
 	addField(v, QStringLiteral("Bitrate"),
-		 QStringLiteral("Higher bitrate = better quality and larger files. Leave on Auto to let the "
-				"encoder choose a sensible value for the resolution and frame rate."),
-		 bitrateSpin_);
+		 QStringLiteral("Higher bitrate = better quality and larger files. Auto picks a sensible "
+				"value from the resolution, frame rate, and codec; Custom… lets you type "
+				"an exact number."),
+		 bitrateCombo_);
+	v->addWidget(bitrateSpin_);
+	v->addSpacing(12);
+	syncBitrate();
 	v->addStretch(1);
 	addPage(QStringLiteral("Advanced"), advancedPage);
 
@@ -495,6 +524,7 @@ void PresetEditorDialog::updateValidation()
 	// GIF ignores codec/bitrate/fps-mode entirely.
 	const bool isGif = (format == RecordingFormat::GIF);
 	codecCombo_->setEnabled(!isGif);
+	bitrateCombo_->setEnabled(!isGif);
 	bitrateSpin_->setEnabled(!isGif);
 	frameRateModeCombo_->setEnabled(!isGif);
 
@@ -527,7 +557,15 @@ void PresetEditorDialog::accept()
 	result_.codec = VideoCodec(codecCombo_->currentData().toInt());
 	result_.frameRateMode = FrameRateMode(frameRateModeCombo_->currentData().toInt());
 	result_.fps = qMax(1, fpsCombo_->currentText().toInt());
-	result_.videoBitrateKbps = bitrateSpin_->value();
+	{
+		const int sel = bitrateCombo_->currentData().toInt();
+		if (sel == 0)
+			result_.videoBitrateKbps = 0; // Auto
+		else if (sel == -1)
+			result_.videoBitrateKbps = bitrateSpin_->value(); // Custom
+		else
+			result_.videoBitrateKbps = sel; // a listed preset
+	}
 
 	// Resolution is always native (screen or region) — no scaling.
 	result_.resolutionMode = ResolutionMode::Native;

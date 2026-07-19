@@ -8,8 +8,9 @@ namespace harpia {
 
 namespace {
 
-// A reasonable default recording bitrate (kbps) when a preset doesn't set one,
-// scaled loosely by pixel count so 1080p and 4K both look acceptable.
+// A reasonable default recording bitrate (kbps) when a preset selects "Auto"
+// (videoBitrateKbps == 0). Scales by resolution, frame rate, and codec so the
+// three inputs the user expects all move the number.
 int defaultVideoBitrate(const Preset &preset)
 {
 	if (preset.videoBitrateKbps > 0)
@@ -19,11 +20,28 @@ int defaultVideoBitrate(const Preset &preset)
 	if (preset.resolutionMode == ResolutionMode::Native)
 		pixels = 1920L * 1080L; // unknown until capture; assume 1080p
 
+	// Resolution baseline (kbps) tuned for ~30 fps H.264.
+	double kbps;
 	if (pixels >= 3840L * 2160L)
-		return 40000;
-	if (pixels >= 2560L * 1440L)
-		return 20000;
-	return 12000; // 1080p and below
+		kbps = 40000.0;
+	else if (pixels >= 2560L * 1440L)
+		kbps = 20000.0;
+	else
+		kbps = 12000.0; // 1080p and below
+
+	// Frame rate: higher fps needs proportionally more bits (relative to 30).
+	const int fps = preset.fps > 0 ? preset.fps : 30;
+	kbps *= 0.6 + 0.4 * (fps / 30.0); // 30->1.0x, 60->1.4x, 120->2.2x
+
+	// Codec efficiency: HEVC/AV1 reach the same quality at a lower bitrate.
+	if (preset.codec == VideoCodec::HEVC)
+		kbps *= 0.7;
+	else if (preset.codec == VideoCodec::AV1)
+		kbps *= 0.6;
+
+	// Round to the nearest 500 kbps for tidy values.
+	int rounded = (int)((kbps + 250.0) / 500.0) * 500;
+	return rounded < 1000 ? 1000 : rounded;
 }
 
 } // namespace

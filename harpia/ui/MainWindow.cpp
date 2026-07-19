@@ -8,6 +8,7 @@
 #include "PresetEditorDialog.hpp"
 #include "RecentListWidget.hpp"
 #include "RegionTool.hpp"
+#include "StatusBadge.hpp"
 #include "WebcamPreview.hpp"
 #include "core/EncoderFactory.hpp"
 #include "platform/ForegroundWatcher.hpp"
@@ -33,6 +34,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
+#include <QFrame>
 #include <QGroupBox>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -137,48 +139,61 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	warningsBox_->setVisible(false);
 	root->addWidget(warningsBox_);
 
-	// ---- Center controls: one horizontal row --------------------------------
-	//   [ 🟢 Ready ]  [ ● Record / ■ Stop ]  [ ⏸ Pause ]  [ 00:00:00 ]
-	// Everything the user needs to see and press lives on a single line.
+	// ---- Center controls: one compact horizontal row ------------------------
+	//   ● Ready   |   [ ⬤ Record ]  [ ⏸ Pause ]   |   00:00:00
+	// A slim, premium bar: passive status badge, a clear red Record primary, and
+	// the timer — vertically centered, minimal padding, subtle separators.
 	root->addStretch(1);
 
-	QFont bigFont;
-	bigFont.setPointSize(bigFont.pointSize() + 8);
-	bigFont.setBold(true);
+	// Button label font — modest, not oversized.
+	QFont btnFont;
+	btnFont.setPointSize(btnFont.pointSize() + 2);
+	btnFont.setBold(true);
+
+	auto *makeSep = [central]() {
+		auto *line = new QFrame(central);
+		line->setFrameShape(QFrame::VLine);
+		line->setStyleSheet(QStringLiteral("color:#33373f;"));
+		line->setFixedHeight(28);
+		return line;
+	};
 
 	auto *controls = new QHBoxLayout;
-	controls->setSpacing(16);
+	controls->setSpacing(14);
 	controls->addStretch(1);
 
-	// Status chip (colored indicator) — left of the controls.
-	statusChip_ = new QLabel(central);
-	statusChip_->setAlignment(Qt::AlignCenter);
-	controls->addWidget(statusChip_);
+	// Passive status badge (animated dot + label) — informational, not a button.
+	statusBadge_ = new StatusBadge(central);
+	controls->addWidget(statusBadge_, 0, Qt::AlignVCenter);
 
-	// Single Record/Stop toggle: shows Record when idle, Stop while recording.
-	primaryButton_ = new QPushButton(QStringLiteral("●  Record"), central);
+	controls->addWidget(makeSep(), 0, Qt::AlignVCenter);
+
+	// Single Record/Stop toggle: Record when idle, Stop while recording.
+	primaryButton_ = new QPushButton(QStringLiteral("\xE2\x97\x8F  Record"), central);
 	primaryButton_->setObjectName(QStringLiteral("primaryButton"));
-	primaryButton_->setMinimumSize(200, 84);
-	primaryButton_->setFont(bigFont);
-	controls->addWidget(primaryButton_);
+	primaryButton_->setMinimumSize(130, 46);
+	primaryButton_->setFont(btnFont);
+	controls->addWidget(primaryButton_, 0, Qt::AlignVCenter);
 
 	// Pause/Resume: only shown while recording.
-	pauseButton_ = new QPushButton(QStringLiteral("⏸  Pause"), central);
+	pauseButton_ = new QPushButton(QStringLiteral("\xE2\x8F\xB8  Pause"), central);
 	pauseButton_->setObjectName(QStringLiteral("pauseButton"));
-	pauseButton_->setMinimumSize(130, 84);
-	pauseButton_->setFont(bigFont);
+	pauseButton_->setMinimumSize(104, 46);
+	pauseButton_->setFont(btnFont);
 	pauseButton_->setVisible(false);
-	controls->addWidget(pauseButton_);
+	controls->addWidget(pauseButton_, 0, Qt::AlignVCenter);
 
-	// Elapsed time — large, monospaced, always visible.
+	controls->addWidget(makeSep(), 0, Qt::AlignVCenter);
+
+	// Elapsed time — monospaced, readable, but not oversized.
 	timerLabel_ = new QLabel(QStringLiteral("00:00:00"), central);
 	timerLabel_->setObjectName(QStringLiteral("timerLabel"));
-	timerLabel_->setAlignment(Qt::AlignCenter);
+	timerLabel_->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
 	QFont timerFont(QStringLiteral("monospace"));
 	timerFont.setStyleHint(QFont::Monospace);
-	timerFont.setPointSize(bigFont.pointSize() + 8);
+	timerFont.setPointSize(btnFont.pointSize() + 6);
 	timerLabel_->setFont(timerFont);
-	controls->addWidget(timerLabel_);
+	controls->addWidget(timerLabel_, 0, Qt::AlignVCenter);
 
 	// Inline webcam controls: live preview + device picker, shown only when the
 	// active preset records a webcam.
@@ -187,7 +202,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	wcLayout->setContentsMargins(0, 0, 0, 0);
 	wcLayout->setSpacing(8);
 	webcamPreview_ = new WebcamPreview(webcamBox_);
-	webcamPreview_->setFixedSize(140, 84);
+	webcamPreview_->setFixedSize(100, 56);
 	wcLayout->addWidget(webcamPreview_);
 	auto *wcSide = new QVBoxLayout;
 	wcSide->setSpacing(4);
@@ -1161,38 +1176,39 @@ void MainWindow::updateButtons()
 
 void MainWindow::updateStatusChip()
 {
-	if (!statusChip_)
+	if (!statusBadge_)
 		return;
 
 	QString text;
-	QString bg;
+	QColor color;
+	bool pulse = false;
+	QString tip;
+
 	if (recorder_.isRecording()) {
 		if (recorder_.isPaused()) {
-			text = focusPaused_ ? QStringLiteral("⏸  Paused — target app not focused")
-					    : QStringLiteral("⏸  Paused");
-			bg = QStringLiteral("#d29922");
+			text = QStringLiteral("Paused");
+			color = QColor(0xd2, 0x99, 0x22);
+			if (focusPaused_)
+				tip = QStringLiteral("Paused — target app not focused");
 		} else {
-			text = QStringLiteral("🔴  Recording");
-			bg = QStringLiteral("#e5484d");
+			text = QStringLiteral("Recording");
+			color = QColor(0xe5, 0x48, 0x4d);
+			pulse = true;
 		}
 	} else if (recordingBlocked_) {
-		text = QStringLiteral("❌  %1").arg(firstIssue_.isEmpty()
-							   ? QStringLiteral("Not ready to record")
-							   : firstIssue_);
-		bg = QStringLiteral("#e5484d");
-	} else if (!firstIssue_.isEmpty()) {
-		text = QStringLiteral("⚠  %1").arg(firstIssue_);
-		bg = QStringLiteral("#9a6700");
+		text = QStringLiteral("Error");
+		color = QColor(0xe5, 0x48, 0x4d);
+		tip = firstIssue_.isEmpty() ? QStringLiteral("Not ready to record") : firstIssue_;
 	} else {
-		text = QStringLiteral("🟢  Ready");
-		bg = QStringLiteral("#238636");
+		text = QStringLiteral("Ready");
+		color = QColor(0x3f, 0xb9, 0x50);
+		pulse = true;
+		if (!firstIssue_.isEmpty())
+			tip = firstIssue_; // non-blocking caution shown on hover
 	}
 
-	statusChip_->setText(text);
-	statusChip_->setStyleSheet(
-		QStringLiteral("background:%1; color:white; border-radius:11px; padding:4px 14px; "
-			       "font-weight:bold;")
-			.arg(bg));
+	statusBadge_->setStatus(text, color, pulse);
+	statusBadge_->setToolTip(tip);
 }
 
 void MainWindow::tickState()

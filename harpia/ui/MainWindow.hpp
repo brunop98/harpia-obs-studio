@@ -37,6 +37,7 @@ class AudioPanel;
 class MouseFxOverlay;
 class ErrorLogsPanel;
 class WebcamPreview;
+class StatusBadge;
 
 // The PowerRec-inspired main window: a wide, compact, dark surface optimized for
 // starting/stopping recordings in one or two clicks.
@@ -135,7 +136,7 @@ private:
 	// Recording readiness
 	QWidget *warningsBox_ = nullptr;
 	QVBoxLayout *warningsLayout_ = nullptr;
-	QLabel *statusChip_ = nullptr; // 🟢 Ready / 🔴 Recording / ⏸ Paused / ⚠ / ❌
+	StatusBadge *statusBadge_ = nullptr; // passive Ready/Recording/Paused/Error dot
 	QTimer *readinessTimer_ = nullptr;
 	bool recordingBlocked_ = false;
 	QString firstIssue_; // headline warning/error message shown in the chip

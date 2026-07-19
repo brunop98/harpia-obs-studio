@@ -108,6 +108,7 @@ private:
 
 	// Toolbar
 	QComboBox *presetCombo_ = nullptr;
+	QPushButton *editPresetButton_ = nullptr;
 	QPushButton *newPresetButton_ = nullptr;
 	QComboBox *captureModeCombo_ = nullptr;
 	QCheckBox *idleToggle_ = nullptr;

@@ -93,7 +93,12 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	presetCombo_->setToolTip(QStringLiteral("Right-click to edit or delete this preset"));
 	toolbar->addWidget(presetCombo_);
 
-	newPresetButton_ = new QPushButton(QStringLiteral("+ New Preset"), central);
+	editPresetButton_ = new QPushButton(QStringLiteral("Edit"), central);
+	editPresetButton_->setToolTip(QStringLiteral("Edit the selected preset"));
+	toolbar->addWidget(editPresetButton_);
+
+	newPresetButton_ = new QPushButton(QStringLiteral("New"), central);
+	newPresetButton_->setToolTip(QStringLiteral("Create a new preset"));
 	toolbar->addWidget(newPresetButton_);
 
 	toolbar->addStretch(1);
@@ -217,6 +222,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// ---- Wiring ---------------------------------------------------------
 	connect(primaryButton_, &QPushButton::clicked, this, &MainWindow::onPrimaryButton);
 	connect(pauseButton_, &QPushButton::clicked, this, &MainWindow::onPauseButton);
+	connect(editPresetButton_, &QPushButton::clicked, this, &MainWindow::editActivePreset);
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
 	connect(openFolderButton_, &QPushButton::clicked, this, &MainWindow::onOpenPresetFolder);
 	connect(libraryButton_, &QPushButton::clicked, this, &MainWindow::onOpenClipLibrary);
@@ -1019,6 +1025,7 @@ void MainWindow::updateButtons()
 	}
 
 	presetCombo_->setEnabled(!recording);
+	editPresetButton_->setEnabled(!recording);
 	newPresetButton_->setEnabled(!recording);
 	captureModeCombo_->setEnabled(!recording);
 

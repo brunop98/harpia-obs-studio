@@ -181,6 +181,11 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 				"mouse/keyboard activity. Set to Disabled to always keep recording."),
 		 idleSpin_);
 
+	v->addStretch(1);
+	addPage(QStringLiteral("General"), generalPage);
+
+	// ===== Recording (behavior around start/stop) =====
+	QWidget *recordingPage = makePage(v);
 	countdownCombo_ = new QComboBox(this);
 	countdownCombo_->addItem(QStringLiteral("Disabled"), 0);
 	for (int s = 1; s <= 10; ++s)
@@ -226,7 +231,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	addField(v, QStringLiteral("Border thickness"), QString(), borderThicknessSpin_);
 
 	v->addStretch(1);
-	addPage(QStringLiteral("General"), generalPage);
+	addPage(QStringLiteral("Recording"), recordingPage);
 
 	// ===== Video =====
 	QWidget *videoPage = makePage(v);
@@ -621,7 +626,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	updateValidation();
 	updateMousePreview();
 	updateFilenamePreview();
-	resize(620, 520);
+	resize(640, 580);
 }
 
 void PresetEditorDialog::showPage(const QString &title)

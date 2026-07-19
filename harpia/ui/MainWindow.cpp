@@ -284,7 +284,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(idleSpin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::onIdleSettingChanged);
 	connect(presetCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onPresetChanged);
 	connect(presetCombo_, &QComboBox::customContextMenuRequested, this, &MainWindow::showPresetMenu);
-	connect(recentStrip_, &QListWidget::itemClicked, this, [](QListWidgetItem *item) {
+	// Single click only selects; double-click opens the recording.
+	connect(recentStrip_, &QListWidget::itemDoubleClicked, this, [](QListWidgetItem *item) {
 		const QString path = item->data(kClipPathRole).toString();
 		if (!path.isEmpty())
 			QDesktopServices::openUrl(QUrl::fromLocalFile(path));

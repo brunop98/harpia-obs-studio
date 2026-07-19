@@ -260,7 +260,8 @@ ClipLibraryWindow::ClipLibraryWindow(PresetStore &store, QWidget *parent)
 	applyCardMetrics();
 
 	connect(grid_, &QListWidget::customContextMenuRequested, this, &ClipLibraryWindow::showContextMenu);
-	connect(grid_, &QListWidget::itemActivated, this, &ClipLibraryWindow::openSelected);
+	// Single click selects; double-click (or Enter) opens the recording.
+	connect(grid_, &QListWidget::itemDoubleClicked, this, &ClipLibraryWindow::openSelected);
 	connect(&thumbnails_, &ThumbnailCache::ready, this, &ClipLibraryWindow::onThumbnailReady);
 
 	auto *refreshBtn = new QPushButton(QStringLiteral("Refresh"), this);

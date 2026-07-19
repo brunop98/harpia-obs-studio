@@ -4,6 +4,7 @@
 
 #include <obs.h>
 
+#include <cstring>
 #include <string>
 
 #ifndef DL_D3D11
@@ -37,13 +38,15 @@ static const char *deviceKey(obs_properties_t *props)
 
 bool WebcamRecorder::supported()
 {
-	// Creating a private source of an unregistered type returns null, so this
-	// cleanly reports whether the camera capture plugin is loaded at all.
-	obs_source_t *probe = obs_source_create_private(platformCameraId(), "harpia_cam_supported", nullptr);
-	if (!probe)
-		return false;
-	obs_source_release(probe);
-	return true;
+	// Check the registered input source types rather than trying to create one —
+	// creating an unregistered source logs noisy "Source ID not found" errors.
+	const char *want = platformCameraId();
+	const char *id = nullptr;
+	for (size_t i = 0; obs_enum_input_types(i, &id); ++i) {
+		if (id && std::strcmp(id, want) == 0)
+			return true;
+	}
+	return false;
 }
 
 // Pull camera devices out of a properties object into `out` (deduped by id).

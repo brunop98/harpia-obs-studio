@@ -4,6 +4,7 @@
 #include "EditorWidgets.hpp"
 #include "ExportOptionsDialog.hpp"
 #include "FrameSeeker.hpp"
+#include "TimelineThumbs.hpp"
 #include "TrackEditor.hpp"
 
 #include <QCheckBox>
@@ -45,6 +46,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	: QDialog(parent), inPath_(inPath)
 {
 	setWindowTitle(QStringLiteral("Edit — %1").arg(QFileInfo(inPath).fileName()));
+	// A real window with minimize/maximize (QDialog hides them by default), so
+	// the editor can use the full screen — the preview canvas takes the extra
+	// space and the timelines widen for finer control.
+	setWindowFlags(Qt::Window | Qt::WindowTitleHint | Qt::WindowSystemMenuHint |
+		       Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint);
+	setSizeGripEnabled(true);
 	resize(900, 680);
 
 	seeker_ = std::make_unique<FrameSeeker>();
@@ -143,6 +150,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 		canvas_->setVideoSize(seeker_->width(), seeker_->height());
 		timeline_->setDuration(seeker_->durationMs());
 		tracks_->setDuration(seeker_->durationMs());
+		// Filmstrip thumbnails decode in the background and stream in.
+		stripThumbs_ = new TimelineThumbs(this);
+		connect(stripThumbs_, &TimelineThumbs::updated, this, [this]() {
+			timeline_->setThumbs(stripThumbs_->thumbs());
+			tracks_->setThumbs(stripThumbs_->thumbs());
+		});
+		stripThumbs_->start(inPath_, 60, 128, 72);
 		baseInfo_ = QStringLiteral("%1 × %2   %3s")
 				    .arg(seeker_->width())
 				    .arg(seeker_->height())

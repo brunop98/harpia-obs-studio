@@ -21,6 +21,7 @@ class FrameSeeker;
 class PreviewCanvas;
 class Timeline;
 class TrackEditor;
+class TimelineThumbs;
 class ClipExporter;
 
 // A lightweight built-in video editor with two modes:
@@ -70,6 +71,7 @@ private:
 	bool valid_ = false;
 
 	std::unique_ptr<FrameSeeker> seeker_;
+	TimelineThumbs *stripThumbs_ = nullptr; // background filmstrip decoder
 	PreviewCanvas *canvas_ = nullptr;
 	Timeline *timeline_ = nullptr;
 	TrackEditor *tracks_ = nullptr;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QImage>
 #include <QVector>
 #include <QWidget>
 
@@ -34,6 +35,10 @@ public:
 
 	void setDuration(qint64 ms);
 
+	// Filmstrip thumbnails for the source track; entry i covers the time slice
+	// [i, i+1) * duration/count.
+	void setThumbs(const QVector<QImage> &thumbs);
+
 	const QVector<CutSegment> &segments() const { return segs_; }
 	int selectedIndex() const { return selected_; }
 	void setSegmentSpeed(int index, double speed); // repaints; no segmentsChanged
@@ -58,6 +63,7 @@ protected:
 	void mousePressEvent(QMouseEvent *) override;
 	void mouseMoveEvent(QMouseEvent *) override;
 	void mouseReleaseEvent(QMouseEvent *) override;
+	void wheelEvent(QWheelEvent *) override;
 	void keyPressEvent(QKeyEvent *) override;
 	QSize sizeHint() const override;
 	QSize minimumSizeHint() const override;
@@ -67,6 +73,8 @@ private:
 	QRect outputRect() const;
 	int msToX(qint64 ms) const;
 	qint64 xToMs(int x) const;
+	qint64 visibleMs() const; // source-track window: duration / zoom
+	void clampView();
 	QVector<QRect> segmentRects() const;
 	int segmentAt(const QPoint &p) const; // -1 = none
 	int insertSlotAt(int x) const;        // 0..count reorder slot for a drop at x
@@ -76,6 +84,11 @@ private:
 	qint64 duration_ = 0;
 	int selected_ = -1;
 	qint64 playheadOutMs_ = -1;
+
+	// Source-track zoom (Ctrl+scroll; plain scroll pans) + filmstrip.
+	double zoom_ = 1.0;
+	qint64 viewStart_ = 0;
+	QVector<QImage> thumbs_;
 
 	enum class Mode { None, CreatingCut, DraggingSegment, ResizingLeft, ResizingRight };
 	Mode mode_ = Mode::None;

@@ -4,14 +4,17 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
+#include <QWheelEvent>
 
 namespace harpia {
 
 namespace {
 constexpr int kMargin = 8;
 constexpr int kCaptionH = 16;
-constexpr int kSrcH = 26;
+constexpr int kSrcH = 34; // tall enough for the filmstrip
 constexpr int kTrackGap = 8;
+constexpr double kMaxZoom = 32.0;
 constexpr int kOutH = 40;
 constexpr int kSegGap = 4;
 constexpr int kMinSegW = 48;     // "reasonably wide" — easy to click and drag
@@ -32,6 +35,7 @@ TrackEditor::TrackEditor(QWidget *parent) : QWidget(parent)
 	setFocusPolicy(Qt::ClickFocus); // so Delete works after clicking a segment
 	setMouseTracking(true);         // cursor hints over the tracks
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+	setToolTip(QStringLiteral("Source track: Ctrl+scroll to zoom, scroll to pan"));
 }
 
 QSize TrackEditor::sizeHint() const
@@ -47,7 +51,51 @@ QSize TrackEditor::minimumSizeHint() const
 void TrackEditor::setDuration(qint64 ms)
 {
 	duration_ = std::max<qint64>(0, ms);
+	zoom_ = 1.0;
+	viewStart_ = 0;
 	update();
+}
+
+void TrackEditor::setThumbs(const QVector<QImage> &thumbs)
+{
+	thumbs_ = thumbs;
+	update();
+}
+
+qint64 TrackEditor::visibleMs() const
+{
+	return std::max<qint64>(1, qint64(duration_ / zoom_));
+}
+
+void TrackEditor::clampView()
+{
+	viewStart_ = std::clamp<qint64>(viewStart_, 0, std::max<qint64>(0, duration_ - visibleMs()));
+}
+
+void TrackEditor::wheelEvent(QWheelEvent *e)
+{
+	// Zoom/pan applies to the source track (the output track has its own scale).
+	if (duration_ <= 0 || !sourceRect().contains(e->position().toPoint())) {
+		e->ignore();
+		return;
+	}
+	const int delta = e->angleDelta().y() != 0 ? e->angleDelta().y() : e->angleDelta().x();
+	if (delta == 0)
+		return;
+	const double steps = delta / 120.0;
+	if (e->modifiers() & Qt::ControlModifier) {
+		const int x = int(e->position().x());
+		const qint64 anchor = xToMs(x);
+		const QRect r = sourceRect();
+		const double frac = std::clamp(double(x - r.x()) / std::max(1, r.width()), 0.0, 1.0);
+		zoom_ = std::clamp(zoom_ * std::pow(1.3, steps), 1.0, kMaxZoom);
+		viewStart_ = anchor - qint64(frac * visibleMs());
+	} else {
+		viewStart_ -= qint64(steps * visibleMs() * 0.15);
+	}
+	clampView();
+	update();
+	e->accept();
 }
 
 void TrackEditor::setSegmentSpeed(int index, double speed)
@@ -132,7 +180,7 @@ int TrackEditor::msToX(qint64 ms) const
 	const QRect r = sourceRect();
 	if (duration_ <= 0 || r.width() <= 0)
 		return r.x();
-	return r.x() + int(double(ms) / double(duration_) * r.width());
+	return r.x() + int(double(ms - viewStart_) / double(visibleMs()) * r.width());
 }
 
 qint64 TrackEditor::xToMs(int x) const
@@ -141,7 +189,7 @@ qint64 TrackEditor::xToMs(int x) const
 	if (duration_ <= 0 || r.width() <= 0)
 		return 0;
 	const double t = double(x - r.x()) / double(r.width());
-	return std::clamp<qint64>(qint64(std::llround(t * duration_)), 0, duration_);
+	return std::clamp<qint64>(viewStart_ + qint64(std::llround(t * visibleMs())), 0, duration_);
 }
 
 QVector<QRect> TrackEditor::segmentRects() const
@@ -227,25 +275,63 @@ void TrackEditor::paintEvent(QPaintEvent *)
 	p.setBrush(kBarBg);
 	p.drawRoundedRect(src, 5, 5);
 
-	// Existing cuts shown as translucent regions on the source.
-	for (int i = 0; i < segs_.size(); ++i) {
-		const int x1 = msToX(segs_[i].srcStartMs);
-		const int x2 = msToX(segs_[i].srcEndMs);
-		QColor fill = kAccent;
-		fill.setAlpha(i == selected_ ? 110 : 60);
-		p.setPen(Qt::NoPen);
-		p.setBrush(fill);
-		p.drawRect(QRect(QPoint(x1, src.y() + 2), QPoint(x2, src.bottom() - 2)));
+	{
+		QPainterPath clip;
+		clip.addRoundedRect(src, 5, 5);
+		p.save();
+		p.setClipPath(clip);
+
+		// Filmstrip so each part of the video is easy to recognize.
+		if (!thumbs_.isEmpty() && duration_ > 0) {
+			const int n = thumbs_.size();
+			const double sliceMs = double(duration_) / n;
+			const qint64 viewEnd = viewStart_ + visibleMs();
+			int i0 = std::clamp(int(viewStart_ / sliceMs), 0, n - 1);
+			int i1 = std::clamp(int(viewEnd / sliceMs) + 1, i0 + 1, n);
+			for (int i = i0; i < i1; ++i) {
+				if (thumbs_[i].isNull())
+					continue;
+				const int x1 = msToX(qint64(i * sliceMs));
+				const int x2 = msToX(qint64((i + 1) * sliceMs));
+				if (x2 > x1)
+					p.drawImage(QRect(x1, src.y(), x2 - x1, src.height()),
+						    thumbs_[i]);
+			}
+		}
+
+		// Existing cuts shown as translucent regions on the source.
+		for (int i = 0; i < segs_.size(); ++i) {
+			const int x1 = msToX(segs_[i].srcStartMs);
+			const int x2 = msToX(segs_[i].srcEndMs);
+			QColor fill = kAccent;
+			fill.setAlpha(i == selected_ ? 110 : 60);
+			p.setPen(Qt::NoPen);
+			p.setBrush(fill);
+			p.drawRect(QRect(QPoint(x1, src.y() + 2), QPoint(x2, src.bottom() - 2)));
+		}
+		// The in-progress drag selection.
+		if (mode_ == Mode::CreatingCut) {
+			const int x1 = msToX(std::min(dragStartMs_, dragCurMs_));
+			const int x2 = msToX(std::max(dragStartMs_, dragCurMs_));
+			QColor fill = kAccent;
+			fill.setAlpha(140);
+			p.setPen(QPen(kAccent, 1));
+			p.setBrush(fill);
+			p.drawRect(QRect(QPoint(x1, src.y() + 1), QPoint(x2, src.bottom() - 1)));
+		}
+		p.restore();
 	}
-	// The in-progress drag selection.
-	if (mode_ == Mode::CreatingCut) {
-		const int x1 = msToX(std::min(dragStartMs_, dragCurMs_));
-		const int x2 = msToX(std::max(dragStartMs_, dragCurMs_));
-		QColor fill = kAccent;
-		fill.setAlpha(140);
-		p.setPen(QPen(kAccent, 1));
-		p.setBrush(fill);
-		p.drawRect(QRect(QPoint(x1, src.y() + 1), QPoint(x2, src.bottom() - 1)));
+
+	// Zoom indicator: which part of the clip the source track is showing.
+	if (zoom_ > 1.001 && duration_ > 0) {
+		const int y = src.bottom() + 2;
+		p.setPen(Qt::NoPen);
+		p.setBrush(kBarBg);
+		p.drawRect(QRect(src.left(), y, src.width(), 2));
+		p.setBrush(kCaption);
+		const int ix = src.left() + int(double(viewStart_) / duration_ * src.width());
+		const int iw = std::max(8, int(double(visibleMs()) / duration_ * src.width()));
+		p.drawRect(QRect(ix, y, iw, 2));
 	}
 
 	// ---- Output track ----------------------------------------------------

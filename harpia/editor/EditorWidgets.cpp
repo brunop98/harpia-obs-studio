@@ -2,8 +2,11 @@
 
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
+#include <QWheelEvent>
 
 #include <algorithm>
+#include <cmath>
 
 namespace harpia {
 
@@ -219,14 +222,16 @@ void PreviewCanvas::applyWidgetCrop(const QRect &widgetRect)
 namespace {
 constexpr int kPad = 12;      // left/right margin
 constexpr int kBarTop = 14;   // bar y
-constexpr int kBarH = 20;     // bar height
+constexpr int kBarH = 36;     // bar height (tall enough for the filmstrip)
 constexpr int kHandleW = 8;   // handle grab width
+constexpr double kMaxZoom = 32.0;
 } // namespace
 
 Timeline::Timeline(QWidget *parent) : QWidget(parent)
 {
-	setMinimumHeight(56);
+	setMinimumHeight(kBarTop + kBarH + 22);
 	setMouseTracking(true);
+	setToolTip(QStringLiteral("Ctrl+scroll to zoom, scroll to pan"));
 }
 
 void Timeline::setDuration(qint64 ms)
@@ -235,7 +240,50 @@ void Timeline::setDuration(qint64 ms)
 	start_ = 0;
 	end_ = duration_;
 	playhead_ = 0;
+	zoom_ = 1.0;
+	viewStart_ = 0;
 	update();
+}
+
+void Timeline::setThumbs(const QVector<QImage> &thumbs)
+{
+	thumbs_ = thumbs;
+	update();
+}
+
+qint64 Timeline::visibleMs() const
+{
+	return std::max<qint64>(1, qint64(duration_ / zoom_));
+}
+
+void Timeline::clampView()
+{
+	viewStart_ = std::clamp<qint64>(viewStart_, 0, duration_ - visibleMs());
+}
+
+void Timeline::wheelEvent(QWheelEvent *e)
+{
+	if (duration_ <= 0)
+		return;
+	const int delta = e->angleDelta().y() != 0 ? e->angleDelta().y() : e->angleDelta().x();
+	if (delta == 0)
+		return;
+	const double steps = delta / 120.0;
+	if (e->modifiers() & Qt::ControlModifier) {
+		// Zoom around the time under the cursor.
+		const int x = int(e->position().x());
+		const qint64 anchor = xToMs(x);
+		const double frac =
+			std::clamp(double(x - kPad) / std::max(1, width() - 2 * kPad), 0.0, 1.0);
+		zoom_ = std::clamp(zoom_ * std::pow(1.3, steps), 1.0, kMaxZoom);
+		viewStart_ = anchor - qint64(frac * visibleMs());
+	} else {
+		// Plain scroll pans the zoomed view.
+		viewStart_ -= qint64(steps * visibleMs() * 0.15);
+	}
+	clampView();
+	update();
+	e->accept();
 }
 
 void Timeline::setStart(qint64 ms)
@@ -259,13 +307,14 @@ void Timeline::setPlayhead(qint64 ms)
 int Timeline::msToX(qint64 ms) const
 {
 	const int w = width() - 2 * kPad;
-	return kPad + int(double(ms) / duration_ * w);
+	return kPad + int(double(ms - viewStart_) / visibleMs() * w);
 }
 
 qint64 Timeline::xToMs(int x) const
 {
-	const int w = width() - 2 * kPad;
-	return std::clamp<qint64>(qint64(double(x - kPad) / std::max(1, w) * duration_), 0, duration_);
+	const int w = std::max(1, width() - 2 * kPad);
+	return std::clamp<qint64>(viewStart_ + qint64(double(x - kPad) / w * visibleMs()), 0,
+				  duration_);
 }
 
 void Timeline::paintEvent(QPaintEvent *)
@@ -278,10 +327,54 @@ void Timeline::paintEvent(QPaintEvent *)
 	p.setBrush(QColor(0x2b, 0x2d, 0x31));
 	p.drawRoundedRect(bar, 4, 4);
 
-	// Selected [start,end] span.
+	// Filmstrip + overlays live inside the rounded bar.
+	{
+		QPainterPath clip;
+		clip.addRoundedRect(bar, 4, 4);
+		p.save();
+		p.setClipPath(clip);
+
+		if (!thumbs_.isEmpty()) {
+			const int n = thumbs_.size();
+			const double sliceMs = double(duration_) / n;
+			const qint64 viewEnd = viewStart_ + visibleMs();
+			int i0 = std::clamp(int(viewStart_ / sliceMs), 0, n - 1);
+			int i1 = std::clamp(int(viewEnd / sliceMs) + 1, i0 + 1, n);
+			for (int i = i0; i < i1; ++i) {
+				if (thumbs_[i].isNull())
+					continue;
+				const int x1 = msToX(qint64(i * sliceMs));
+				const int x2 = msToX(qint64((i + 1) * sliceMs));
+				if (x2 > x1)
+					p.drawImage(QRect(x1, bar.top(), x2 - x1, bar.height()),
+						    thumbs_[i]);
+			}
+		}
+
+		// Selected [start,end] span (translucent, over the filmstrip) and the
+		// dimmed outside regions so the kept part reads instantly.
+		const int xs = msToX(start_), xe = msToX(end_);
+		p.setPen(Qt::NoPen);
+		p.setBrush(QColor(0, 0, 0, 110));
+		p.drawRect(QRect(bar.left(), bar.top(), xs - bar.left(), bar.height()));
+		p.drawRect(QRect(xe, bar.top(), bar.right() + 1 - xe, bar.height()));
+		p.setBrush(QColor(0x00, 0xae, 0xef, 55));
+		p.drawRect(QRect(xs, bar.top(), xe - xs, bar.height()));
+		p.restore();
+	}
 	const int xs = msToX(start_), xe = msToX(end_);
-	p.setBrush(QColor(0x00, 0xae, 0xef, 90));
-	p.drawRect(QRect(xs, bar.top(), xe - xs, bar.height()));
+
+	// Zoom indicator: which part of the clip is visible.
+	if (zoom_ > 1.001) {
+		const int y = bar.bottom() + 3;
+		p.setPen(Qt::NoPen);
+		p.setBrush(QColor(0x2b, 0x2d, 0x31));
+		p.drawRect(QRect(bar.left(), y, bar.width(), 2));
+		p.setBrush(QColor(0x9a, 0x9f, 0xa8));
+		const int ix = bar.left() + int(double(viewStart_) / duration_ * bar.width());
+		const int iw = std::max(8, int(double(visibleMs()) / duration_ * bar.width()));
+		p.drawRect(QRect(ix, y, iw, 2));
+	}
 
 	// Handles.
 	auto handle = [&](int x, const QColor &col) {

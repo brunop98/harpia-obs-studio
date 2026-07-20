@@ -2,6 +2,7 @@
 
 #include <QImage>
 #include <QRect>
+#include <QVector>
 #include <QWidget>
 
 namespace harpia {
@@ -51,7 +52,10 @@ private:
 
 // A trim timeline with start/end handles and a playhead. Dragging a handle
 // emits scrub() with the ms under it (for live preview) plus startChanged()/
-// endChanged(); clicking the bar moves the playhead and scrubs.
+// endChanged(); clicking the bar moves the playhead and scrubs. The bar shows
+// a filmstrip of thumbnails (setThumbs) so each part of the video is easy to
+// find, and supports zooming: Ctrl+scroll zooms around the cursor, plain
+// scroll pans, and a thin indicator under the bar shows the visible window.
 class Timeline : public QWidget {
 	Q_OBJECT
 public:
@@ -64,6 +68,9 @@ public:
 	qint64 start() const { return start_; }
 	qint64 end() const { return end_; }
 
+	// Filmstrip thumbnails; entry i covers time slice [i, i+1) * duration/count.
+	void setThumbs(const QVector<QImage> &thumbs);
+
 signals:
 	void startChanged(qint64 ms);
 	void endChanged(qint64 ms);
@@ -74,10 +81,13 @@ protected:
 	void mousePressEvent(QMouseEvent *) override;
 	void mouseMoveEvent(QMouseEvent *) override;
 	void mouseReleaseEvent(QMouseEvent *) override;
+	void wheelEvent(QWheelEvent *) override;
 
 private:
 	int msToX(qint64 ms) const;
 	qint64 xToMs(int x) const;
+	qint64 visibleMs() const; // duration / zoom
+	void clampView();
 
 	enum class Grab { None, Start, End, Playhead };
 	Grab grab_ = Grab::None;
@@ -86,6 +96,10 @@ private:
 	qint64 start_ = 0;
 	qint64 end_ = 0;
 	qint64 playhead_ = 0;
+
+	double zoom_ = 1.0;      // 1x = whole clip visible
+	qint64 viewStart_ = 0;   // first visible ms
+	QVector<QImage> thumbs_;
 };
 
 } // namespace harpia

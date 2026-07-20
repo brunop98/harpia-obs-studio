@@ -7,7 +7,7 @@ cmake_minimum_required(VERSION 3.28...3.30)
 find_package(Qt6 REQUIRED Widgets Gui)
 
 # FFmpeg (bundled with OBS deps) is used to extract clip thumbnails.
-find_package(FFmpeg REQUIRED COMPONENTS avcodec avformat avutil swscale swresample)
+find_package(FFmpeg REQUIRED COMPONENTS avcodec avformat avutil swscale swresample avfilter)
 
 if(NOT TARGET OBS::libobs)
   add_subdirectory("${CMAKE_SOURCE_DIR}/libobs" libobs)
@@ -27,6 +27,7 @@ target_link_libraries(
     FFmpeg::avutil
     FFmpeg::swscale
     FFmpeg::swresample
+    FFmpeg::avfilter
 )
 
 set_target_properties(
@@ -120,6 +121,19 @@ target_sources(
     ui/RegionTool.hpp
     ui/RegionDialogs.cpp
     ui/RegionDialogs.hpp
+    # Built-in trim / crop / export editor (isolated module).
+    editor/FrameSeeker.cpp
+    editor/FrameSeeker.hpp
+    editor/ClipExporter.cpp
+    editor/ClipExporter.hpp
+    editor/GifEncoder.cpp
+    editor/GifEncoder.hpp
+    editor/EditorWidgets.cpp
+    editor/EditorWidgets.hpp
+    editor/ExportOptionsDialog.cpp
+    editor/ExportOptionsDialog.hpp
+    editor/VideoEditorWindow.cpp
+    editor/VideoEditorWindow.hpp
 )
 
 # Platform-specific idle detection + foreground-window backends.

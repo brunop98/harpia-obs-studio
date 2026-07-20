@@ -1,6 +1,7 @@
 #include "ClipLibraryWindow.hpp"
 
 #include "ShareExportDialog.hpp"
+#include "editor/VideoEditorWindow.hpp"
 
 #include "RecentListWidget.hpp"
 #include "model/PresetStore.hpp"
@@ -465,13 +466,15 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 	QAction *copyAct = menu.addAction(QStringLiteral("Copy"));
 	QAction *renameAct = menu.addAction(QStringLiteral("Rename…"));
 
-	// Internet-sharing copy — one video clip at a time (not GIFs).
+	// Trim/crop editor + internet-sharing copy — one video clip at a time (not GIFs).
+	QAction *trimAct = nullptr;
 	QAction *optLowAct = nullptr;
 	QAction *optBalAct = nullptr;
 	QAction *optHighAct = nullptr;
 	const bool oneVideo = sel.size() == 1 && !sel.front().endsWith(QStringLiteral(".gif"), Qt::CaseInsensitive);
 	if (oneVideo) {
 		menu.addSeparator();
+		trimAct = menu.addAction(QStringLiteral("Trim / Crop…"));
 		QMenu *opt = menu.addMenu(QStringLiteral("Optimize for sharing"));
 		optLowAct = opt->addAction(QStringLiteral("Low — smallest file"));
 		optBalAct = opt->addAction(QStringLiteral("Balanced (Default)"));
@@ -492,7 +495,18 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 		renameSelected();
 	else if (chosen == deleteAct)
 		deleteSelected();
-	else if (oneVideo && (chosen == optLowAct || chosen == optBalAct || chosen == optHighAct)) {
+	else if (oneVideo && chosen == trimAct) {
+		auto *editor = new VideoEditorWindow(sel.front(), this);
+		if (!editor->isValid()) {
+			QMessageBox::warning(this, QStringLiteral("Trim"),
+					     QStringLiteral("Could not open this video for editing."));
+			editor->deleteLater();
+			return;
+		}
+		connect(editor, &VideoEditorWindow::exported, this, [this]() { refresh(); });
+		editor->setAttribute(Qt::WA_DeleteOnClose);
+		editor->exec();
+	} else if (oneVideo && (chosen == optLowAct || chosen == optBalAct || chosen == optHighAct)) {
 		const auto level = chosen == optLowAct    ? ShareExporter::Level::Low
 				   : chosen == optHighAct ? ShareExporter::Level::High
 							  : ShareExporter::Level::Balanced;

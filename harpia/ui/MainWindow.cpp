@@ -13,6 +13,7 @@
 #include "ScreenBorderOverlay.hpp"
 #include "ShareExportDialog.hpp"
 #include "StatusBadge.hpp"
+#include "editor/VideoEditorWindow.hpp"
 #include "WebcamPreview.hpp"
 #include "core/EncoderFactory.hpp"
 #include "core/Remuxer.hpp"
@@ -1716,12 +1717,14 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 	QAction *copyAct = menu.addAction(QStringLiteral("Copy"));
 	QAction *copyPathAct = menu.addAction(QStringLiteral("Copy Path"));
 
-	// Internet-sharing (WhatsApp-optimized) copy — offered for real videos only.
+	// Trim / crop / export (built-in editor) + internet-sharing copy — videos only.
+	QAction *trimAct = nullptr;
 	QAction *optLowAct = nullptr;
 	QAction *optBalAct = nullptr;
 	QAction *optHighAct = nullptr;
 	if (!path.endsWith(QStringLiteral(".gif"), Qt::CaseInsensitive)) {
 		menu.addSeparator();
+		trimAct = menu.addAction(QStringLiteral("Trim / Crop…"));
 		QMenu *opt = menu.addMenu(QStringLiteral("Optimize for sharing"));
 		optLowAct = opt->addAction(QStringLiteral("Low — smallest file"));
 		optBalAct = opt->addAction(QStringLiteral("Balanced (Default)"));
@@ -1736,7 +1739,18 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 	if (!chosen)
 		return;
 
-	if (chosen == optLowAct) {
+	if (chosen == trimAct) {
+		auto *editor = new VideoEditorWindow(path, this);
+		if (!editor->isValid()) {
+			QMessageBox::warning(this, QStringLiteral("Trim"),
+					     QStringLiteral("Could not open this video for editing."));
+			editor->deleteLater();
+			return;
+		}
+		connect(editor, &VideoEditorWindow::exported, this, [this]() { refreshClipViews(); });
+		editor->setAttribute(Qt::WA_DeleteOnClose);
+		editor->exec();
+	} else if (chosen == optLowAct) {
 		ShareExportDialog::runModal(path, ShareExporter::Level::Low, this);
 		refreshClipViews();
 	} else if (chosen == optBalAct) {

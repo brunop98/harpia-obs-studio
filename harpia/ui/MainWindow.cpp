@@ -184,16 +184,36 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	row1->addStretch(1);
 	root->addLayout(row1);
 
-	// ---- Toolbar row 2: focus-app auto-pause + webcam --------------------
-	// Dropdown-only: each combo's FIRST item means "off", so there are no
-	// toggles and nothing appears/disappears (no layout jumping).
-	auto *row2 = new QHBoxLayout;
-	row2->setSpacing(8);
+	// The behavior dropdowns (Focus app / Webcam / Pause when idle) live in the
+	// middle section's LEFT column — created there, below.
 
-	row2->addWidget(fieldLabel(QStringLiteral("Focus app")));
+	// ---- Recording readiness --------------------------------------------
+	warningsBox_ = new QWidget(central);
+	warningsLayout_ = new QVBoxLayout(warningsBox_);
+	warningsLayout_->setContentsMargins(0, 0, 0, 0);
+	warningsLayout_->setSpacing(3);
+	warningsBox_->setVisible(false);
+	root->addWidget(warningsBox_);
+
+	// ---- Middle: two columns --------------------------------------------
+	//   Focus app       [combo]      |
+	//   Webcam          [combo]      |   [ ⬤ Record ] [ ⏸ Pause ]  00:00:00
+	//   Pause when idle [combo]      |
+	// Left: one labelled behavior dropdown per row (first item = off; labels
+	// right-aligned so the controls line up). Right: the record controls,
+	// centered in the remaining space. Weighted stretches (2 above / 3 below)
+	// keep the section at a natural height when the Audio foldout is collapsed.
+	root->addStretch(2);
+
+	auto *middle = new QHBoxLayout;
+	middle->setSpacing(kGroupGap);
+
+	auto *behaviorCol = new QVBoxLayout;
+	behaviorCol->setSpacing(10);
+
 	appCombo_ = new QComboBox(central);
 	// Keep the app-name dropdown compact and balanced; elide long names rather
-	// than letting the control stretch the whole row.
+	// than letting the control stretch the column.
 	appCombo_->setMinimumWidth(160);
 	appCombo_->setMaximumWidth(260);
 	appCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
@@ -204,10 +224,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	appCombo_->addItem(QStringLiteral("Off"), QString());
 	// The window list is refreshed just before the popup opens (eventFilter).
 	appCombo_->installEventFilter(this);
-	row2->addWidget(appCombo_);
 
-	row2->addSpacing(kGroupGap);
-	row2->addWidget(fieldLabel(QStringLiteral("Webcam")));
 	webcamCombo_ = new QComboBox(central);
 	webcamCombo_->setMinimumWidth(160);
 	webcamCombo_->setMaximumWidth(260);
@@ -216,44 +233,35 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		"Record this camera to its own file alongside the screen recording. "
 		"First entry disables the webcam."));
 	webcamCombo_->addItem(QStringLiteral("No webcam"), QString());
-	row2->addWidget(webcamCombo_);
 
-	row2->addSpacing(kGroupGap);
-	// Idle auto-pause as one unit so it can drop out on very narrow windows.
-	// Dropdown-only, like the other behavior controls: first item = Off.
-	idleGroup_ = new QWidget(central);
-	auto *idleLayout = new QHBoxLayout(idleGroup_);
-	idleLayout->setContentsMargins(0, 0, 0, 0);
-	idleLayout->setSpacing(8);
-	idleLayout->addWidget(fieldLabel(QStringLiteral("Pause when idle")));
-	idleCombo_ = new QComboBox(idleGroup_);
+	idleCombo_ = new QComboBox(central);
 	idleCombo_->addItem(QStringLiteral("Off"), 0);
 	for (int s : {1, 2, 3, 5, 10})
 		idleCombo_->addItem(QStringLiteral("%1 s").arg(s), s);
-	idleCombo_->setMaximumWidth(80);
+	idleCombo_->setMinimumWidth(80);
 	idleCombo_->setToolTip(QStringLiteral(
 		"Auto-pause the recording after this many seconds without mouse/keyboard "
 		"input, and resume on input. Off records regardless of activity."));
-	idleLayout->addWidget(idleCombo_);
-	row2->addWidget(idleGroup_);
-	row2->addStretch(1);
-	root->addLayout(row2);
 
-	// ---- Recording readiness --------------------------------------------
-	warningsBox_ = new QWidget(central);
-	warningsLayout_ = new QVBoxLayout(warningsBox_);
-	warningsLayout_->setContentsMargins(0, 0, 0, 0);
-	warningsLayout_->setSpacing(3);
-	warningsBox_->setVisible(false);
-	root->addWidget(warningsBox_);
-
-	// ---- Center controls: one compact horizontal row ------------------------
-	//   ● Ready   |   [ ⬤ Record ]  [ ⏸ Pause ]   |   00:00:00
-	// A slim, premium bar: passive status badge, a clear red Record primary, and
-	// the timer — vertically centered, minimal padding, subtle separators.
-	// Weighted stretches (2 above / 3 below) keep the controls at a natural
-	// height even when the Audio foldout is collapsed.
-	root->addStretch(2);
+	auto behaviorRow = [&](const QString &text, QWidget *control) -> QWidget * {
+		auto *roww = new QWidget(central);
+		auto *h = new QHBoxLayout(roww);
+		h->setContentsMargins(0, 0, 0, 0);
+		h->setSpacing(8);
+		auto *l = fieldLabel(text);
+		l->setFixedWidth(110);
+		l->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+		h->addWidget(l);
+		h->addWidget(control);
+		h->addStretch(1);
+		behaviorCol->addWidget(roww);
+		return roww;
+	};
+	behaviorRow(QStringLiteral("Focus app"), appCombo_);
+	behaviorRow(QStringLiteral("Webcam"), webcamCombo_);
+	idleGroup_ = behaviorRow(QStringLiteral("Pause when idle"), idleCombo_);
+	behaviorCol->addStretch(1);
+	middle->addLayout(behaviorCol);
 
 	// Button label font — modest, not oversized.
 	QFont btnFont;
@@ -321,7 +329,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	controls->addWidget(webcamBox_);
 
 	controls->addStretch(1);
-	root->addLayout(controls);
+	middle->addLayout(controls, 1); // the record column takes the remaining width
+	root->addLayout(middle);
 
 	root->addStretch(3);
 

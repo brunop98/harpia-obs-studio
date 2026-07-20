@@ -3,7 +3,6 @@
 #include "AudioPanel.hpp"
 #include "ClipLibraryWindow.hpp"
 #include "ErrorLogsPanel.hpp"
-#include "FlowLayout.hpp"
 #include "MouseFxOverlay.hpp"
 #include "Version.hpp"
 #include "PresetEditorDialog.hpp"
@@ -63,7 +62,6 @@
 #include <QPushButton>
 #include <QRunnable>
 #include <QScreen>
-#include <QScrollArea>
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -105,183 +103,33 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	canvasSize_ = canvasForActivePreset();
 
-	// =====================================================================
-	//  Premium three-column dashboard: [ sidebar | fluid workspace ].
-	//  The workspace lives inside a QScrollArea and its cards reflow through a
-	//  FlowLayout, so controls never overlap — they resize, re-align and wrap
-	//  as the window changes size.
-	// =====================================================================
 	auto *central = new QWidget(this);
-	central->setObjectName(QStringLiteral("appRoot"));
-	auto *rootRow = new QHBoxLayout(central);
-	rootRow->setContentsMargins(0, 0, 0, 0);
-	rootRow->setSpacing(0);
+	auto *root = new QVBoxLayout(central);
+	root->setContentsMargins(18, 14, 18, 14);
+	root->setSpacing(12);
 
-	// Shared fonts.
-	QFont btnFont;
-	btnFont.setPointSize(btnFont.pointSize() + 2);
-	btnFont.setBold(true);
+	// ---- Toolbar row 1: preset + capture + idle -------------------------
+	auto *row1 = new QHBoxLayout;
+	row1->setSpacing(8);
 
-	// ---- Left sidebar ---------------------------------------------------
-	auto *sidebar = new QFrame(central);
-	sidebar->setObjectName(QStringLiteral("sidebar"));
-	sidebar->setFixedWidth(240);
-	auto *sb = new QVBoxLayout(sidebar);
-	sb->setContentsMargins(18, 20, 18, 18);
-	sb->setSpacing(6);
-
-	// Brand: logo + app name, version beneath.
-	auto *brandRow = new QHBoxLayout;
-	brandRow->setSpacing(10);
-	auto *logo = new QLabel(sidebar);
-	logo->setPixmap(QIcon(QStringLiteral(":/harpia.png")).pixmap(30, 30));
-	brandRow->addWidget(logo, 0, Qt::AlignVCenter);
-	auto *appName = new QLabel(QStringLiteral("Harpia"), sidebar);
-	appName->setObjectName(QStringLiteral("appName"));
-	brandRow->addWidget(appName, 0, Qt::AlignVCenter);
-	brandRow->addStretch(1);
-	sb->addLayout(brandRow);
-	auto *sidebarVersion =
-		new QLabel(QStringLiteral("Recorder  v%1").arg(QString::fromUtf8(appVersion())), sidebar);
-	sidebarVersion->setObjectName(QStringLiteral("sidebarVersion"));
-	sb->addWidget(sidebarVersion);
-	sb->addSpacing(18);
-
-	// Navigation. "Record" is the current page; the others route to existing
-	// windows/dialogs. A helper keeps them visually consistent.
-	auto addNav = [&](const QString &label, bool active, std::function<void()> handler) {
-		auto *b = new QPushButton(label, sidebar);
-		b->setObjectName(active ? QStringLiteral("navButtonActive")
-					: QStringLiteral("navButton"));
-		b->setCursor(Qt::PointingHandCursor);
-		b->setMinimumHeight(38);
-		if (handler)
-			connect(b, &QPushButton::clicked, this, handler);
-		sb->addWidget(b);
-		return b;
-	};
-	addNav(QStringLiteral("\xE2\x97\x8F   Record"), true, nullptr);
-	addNav(QStringLiteral("\xE2\x96\xA6   Recordings"), false,
-	       [this]() { onOpenClipLibrary(); });
-	addNav(QStringLiteral("\xE2\x97\xAB   Clip Library"), false,
-	       [this]() { onOpenClipLibrary(); });
-	addNav(QStringLiteral("\xE2\x9A\x99   Settings"), false,
-	       [this]() { editActivePreset(); });
-	addNav(QStringLiteral("\xE2\x9D\x8F   Presets"), false, [this]() { onNewPreset(); });
-	addNav(QStringLiteral("?   Help"), false, [this]() {
-		QMessageBox::about(this, QStringLiteral("About Harpia Recorder"),
-			QStringLiteral("<b>Harpia Recorder</b>  v%1<br><br>"
-				       "A minimal, premium screen recorder built on the "
-				       "libobs backend.")
-				.arg(QString::fromUtf8(appVersion())));
-	});
-
-	sb->addStretch(1);
-
-	// Status card (passive readiness indicator).
-	auto *statusCard = new QFrame(sidebar);
-	statusCard->setObjectName(QStringLiteral("sidebarCard"));
-	auto *scl = new QVBoxLayout(statusCard);
-	scl->setContentsMargins(14, 12, 14, 12);
-	scl->setSpacing(4);
-	statusBadge_ = new StatusBadge(statusCard);
-	scl->addWidget(statusBadge_);
-	auto *statusSub = new QLabel(QStringLiteral("Everything is good to go."), statusCard);
-	statusSub->setObjectName(QStringLiteral("mutedSmall"));
-	statusSub->setWordWrap(true);
-	scl->addWidget(statusSub);
-	sb->addWidget(statusCard);
-
-	// Error logs card — a single tappable row.
-	errorLogsButton_ = new QPushButton(QStringLiteral("Error Logs            \xE2\x80\xBA"), sidebar);
-	errorLogsButton_->setObjectName(QStringLiteral("errorLogsButton"));
-	errorLogsButton_->setCursor(Qt::PointingHandCursor);
-	errorLogsButton_->setMinimumHeight(40);
-	sb->addWidget(errorLogsButton_);
-
-	rootRow->addWidget(sidebar);
-
-	// ---- Right workspace (scrollable, fluid) ----------------------------
-	auto *scroll = new QScrollArea(central);
-	scroll->setObjectName(QStringLiteral("workspace"));
-	scroll->setWidgetResizable(true);
-	scroll->setFrameShape(QFrame::NoFrame);
-	scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-
-	auto *work = new QWidget;
-	work->setObjectName(QStringLiteral("workspaceInner"));
-	auto *wl = new QVBoxLayout(work);
-	wl->setContentsMargins(28, 26, 28, 26);
-	wl->setSpacing(18);
-	scroll->setWidget(work);
-
-	// A reusable card factory: rounded panel with an optional title.
-	auto newCard = [work](const QString &titleText, QFrame **cardOut) -> QVBoxLayout * {
-		auto *card = new QFrame(work);
-		card->setObjectName(QStringLiteral("card"));
-		auto *cl = new QVBoxLayout(card);
-		cl->setContentsMargins(20, 16, 20, 18);
-		cl->setSpacing(12);
-		if (!titleText.isEmpty()) {
-			auto *t = new QLabel(titleText, card);
-			t->setObjectName(QStringLiteral("cardTitle"));
-			cl->addWidget(t);
-		}
-		if (cardOut)
-			*cardOut = card;
-		return cl;
-	};
-
-	// Page header.
-	auto *pageTitle = new QLabel(QStringLiteral("Record"), work);
-	pageTitle->setObjectName(QStringLiteral("pageTitle"));
-	wl->addWidget(pageTitle);
-	auto *pageSub = new QLabel(QStringLiteral("Capture your screen, applications and audio."), work);
-	pageSub->setObjectName(QStringLiteral("pageSubtitle"));
-	wl->addWidget(pageSub);
-
-	// Readiness warnings (hidden unless something needs attention).
-	warningsBox_ = new QWidget(work);
-	warningsLayout_ = new QVBoxLayout(warningsBox_);
-	warningsLayout_->setContentsMargins(0, 0, 0, 0);
-	warningsLayout_->setSpacing(3);
-	warningsBox_->setVisible(false);
-	wl->addWidget(warningsBox_);
-
-	// Preset selector — a slim full-width card.
-	QFrame *presetCard = nullptr;
-	auto *presetLayout = newCard(QString(), &presetCard);
-	auto *presetRow = new QHBoxLayout;
-	presetRow->setSpacing(8);
-	auto *presetLbl = new QLabel(QStringLiteral("Preset"), presetCard);
-	presetLbl->setObjectName(QStringLiteral("fieldLabel"));
-	presetRow->addWidget(presetLbl);
-	presetCombo_ = new QComboBox(presetCard);
+	row1->addWidget(new QLabel(QStringLiteral("Preset"), central));
+	presetCombo_ = new QComboBox(central);
 	presetCombo_->setMinimumWidth(160);
 	presetCombo_->setContextMenuPolicy(Qt::CustomContextMenu);
 	presetCombo_->setToolTip(QStringLiteral("Right-click to edit or delete this preset"));
-	presetRow->addWidget(presetCombo_, 1);
-	newPresetButton_ = new QPushButton(QStringLiteral("New"), presetCard);
+	row1->addWidget(presetCombo_);
+
+	newPresetButton_ = new QPushButton(QStringLiteral("New"), central);
 	newPresetButton_->setToolTip(QStringLiteral("Create a new preset"));
-	presetRow->addWidget(newPresetButton_);
-	editPresetButton_ = new QPushButton(QStringLiteral("Edit"), presetCard);
+	row1->addWidget(newPresetButton_);
+
+	editPresetButton_ = new QPushButton(QStringLiteral("Edit"), central);
 	editPresetButton_->setToolTip(QStringLiteral("Edit the selected preset"));
-	presetRow->addWidget(editPresetButton_);
-	presetLayout->addLayout(presetRow);
-	wl->addWidget(presetCard);
+	row1->addWidget(editPresetButton_);
 
-	// Config row: three cards that reflow when the window is narrow.
-	auto *configRow = new QWidget(work);
-	auto *flow = new FlowLayout(configRow, 0, 16, 16);
-
-	// Card 1 — Capture Area.
-	QFrame *captureCard = nullptr;
-	auto *captureLayout = newCard(QStringLiteral("Capture Area"), &captureCard);
-	captureCard->setMinimumWidth(250);
-	auto *srcLbl = new QLabel(QStringLiteral("Source"), captureCard);
-	srcLbl->setObjectName(QStringLiteral("fieldLabel"));
-	captureLayout->addWidget(srcLbl);
-	captureModeCombo_ = new QComboBox(captureCard);
+	row1->addSpacing(12);
+	row1->addWidget(new QLabel(QStringLiteral("Capture"), central));
+	captureModeCombo_ = new QComboBox(central);
 	// Items carry a string tag in their data: "monitor", "region", "saved:<id>",
 	// or "manage". Saved regions are appended by reloadCaptureModeCombo().
 	captureModeCombo_->addItem(QStringLiteral("Entire Monitor"), QStringLiteral("monitor"));
@@ -289,82 +137,133 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	captureModeCombo_->setToolTip(
 		QStringLiteral("What to record: the whole monitor, a custom region you drag on screen, "
 			       "or a saved region. Right-click a region to save it."));
-	captureLayout->addWidget(captureModeCombo_);
-	captureLayout->addStretch(1);
-	flow->addWidget(captureCard);
+	row1->addWidget(captureModeCombo_);
 
-	// Card 2 — Recording Options.
-	QFrame *optCard = nullptr;
-	auto *optLayout = newCard(QStringLiteral("Recording Options"), &optCard);
-	optCard->setMinimumWidth(270);
-	appCaptureToggle_ = new QCheckBox(QStringLiteral("Record only one application"), optCard);
-	appCaptureToggle_->setToolTip(QStringLiteral(
-		"Auto-pause recording whenever the chosen app isn't focused (resume when it is). "
-		"Does not change what's captured — the capture mode still applies."));
-	optLayout->addWidget(appCaptureToggle_);
-	appCombo_ = new QComboBox(optCard);
-	appCombo_->setEnabled(false);
-	appCombo_->setVisible(false); // shown only when "Record only one application" is on
-	appCombo_->setToolTip(QStringLiteral("The application to watch for focus auto-pause"));
-	optLayout->addWidget(appCombo_);
-	idleToggle_ = new QCheckBox(QStringLiteral("Only record while using the computer"), optCard);
+	row1->addSpacing(12);
+	idleToggle_ = new QCheckBox(QStringLiteral("Only record while using the computer"), central);
 	idleToggle_->setToolTip(
 		QStringLiteral("Auto-pause the recording after the idle time below, resume on input"));
-	optLayout->addWidget(idleToggle_);
-	auto *idleRow = new QHBoxLayout;
-	idleRow->setSpacing(8);
-	auto *idleLbl = new QLabel(QStringLiteral("Inactivity timeout"), optCard);
-	idleLbl->setObjectName(QStringLiteral("fieldLabel"));
-	idleRow->addWidget(idleLbl);
-	idleSpin_ = new QSpinBox(optCard);
+	row1->addWidget(idleToggle_);
+	idleSpin_ = new QSpinBox(central);
 	idleSpin_->setRange(1, 3600);
 	idleSpin_->setSuffix(QStringLiteral(" s"));
 	idleSpin_->setValue(10);
-	idleSpin_->setMaximumWidth(90);
+	idleSpin_->setMaximumWidth(80);
 	idleSpin_->setToolTip(QStringLiteral("Seconds without mouse/keyboard input before auto-pausing"));
-	idleRow->addWidget(idleSpin_);
-	idleRow->addStretch(1);
-	optLayout->addLayout(idleRow);
-	webcamEnableToggle_ = new QCheckBox(QStringLiteral("Enable webcam"), optCard);
-	webcamEnableToggle_->setToolTip(
-		QStringLiteral("Record the camera to its own file alongside the screen recording"));
-	optLayout->addWidget(webcamEnableToggle_);
-	webcamCombo_ = new QComboBox(optCard);
-	webcamCombo_->setEnabled(false);
-	webcamCombo_->setVisible(false); // shown only when "Enable webcam" is on
-	optLayout->addWidget(webcamCombo_);
-	flow->addWidget(optCard);
+	row1->addWidget(idleSpin_);
 
-	// Card 3 — Countdown.
-	QFrame *countdownCard = nullptr;
-	auto *countdownLayout = newCard(QStringLiteral("Countdown"), &countdownCard);
-	countdownCard->setMinimumWidth(200);
-	countdownCombo_ = new QComboBox(countdownCard);
+	row1->addSpacing(12);
+	row1->addWidget(new QLabel(QStringLiteral("Countdown"), central));
+	countdownCombo_ = new QComboBox(central);
 	countdownCombo_->addItem(QStringLiteral("Off"), 0);
 	for (int s = 1; s <= 10; ++s)
 		countdownCombo_->addItem(QStringLiteral("%1s").arg(s), s);
+	countdownCombo_->setMaximumWidth(80);
 	countdownCombo_->setToolTip(QStringLiteral(
 		"Show an on-screen countdown before recording starts, so you can get ready. "
 		"Saved on the active preset; never part of the recording."));
-	countdownLayout->addWidget(countdownCombo_);
-	auto *countdownHint = new QLabel(QStringLiteral("A get-ready timer before capture begins."),
-					 countdownCard);
-	countdownHint->setObjectName(QStringLiteral("mutedSmall"));
-	countdownHint->setWordWrap(true);
-	countdownLayout->addWidget(countdownHint);
-	countdownLayout->addStretch(1);
-	flow->addWidget(countdownCard);
+	row1->addWidget(countdownCombo_);
+	row1->addStretch(1);
+	root->addLayout(row1);
 
-	wl->addWidget(configRow);
+	// ---- Toolbar row 2: single-application capture + webcam -------------
+	auto *row2 = new QHBoxLayout;
+	row2->setSpacing(8);
 
-	// Recording control card — audio/webcam | Record | timer.
-	QFrame *controlCard = nullptr;
-	auto *controlLayout = newCard(QString(), &controlCard);
+	appCaptureToggle_ = new QCheckBox(QStringLiteral("Record only one application"), central);
+	appCaptureToggle_->setToolTip(QStringLiteral(
+		"Auto-pause recording whenever the chosen app isn't focused (resume when it is). "
+		"Does not change what's captured — the capture mode still applies."));
+	row2->addWidget(appCaptureToggle_);
+	appCombo_ = new QComboBox(central);
+	appCombo_->setMinimumWidth(220);
+	appCombo_->setEnabled(false);
+	appCombo_->setVisible(false); // shown only when "Record only one application" is on
+	appCombo_->setToolTip(QStringLiteral("The application to watch for focus auto-pause"));
+	row2->addWidget(appCombo_);
+
+	row2->addSpacing(16);
+	webcamEnableToggle_ = new QCheckBox(QStringLiteral("Enable webcam"), central);
+	webcamEnableToggle_->setToolTip(
+		QStringLiteral("Record the camera to its own file alongside the screen recording"));
+	row2->addWidget(webcamEnableToggle_);
+	webcamCombo_ = new QComboBox(central);
+	webcamCombo_->setMinimumWidth(220);
+	webcamCombo_->setEnabled(false);
+	webcamCombo_->setVisible(false); // shown only when "Enable webcam" is on
+	row2->addWidget(webcamCombo_);
+	row2->addStretch(1);
+	root->addLayout(row2);
+
+	// ---- Recording readiness --------------------------------------------
+	warningsBox_ = new QWidget(central);
+	warningsLayout_ = new QVBoxLayout(warningsBox_);
+	warningsLayout_->setContentsMargins(0, 0, 0, 0);
+	warningsLayout_->setSpacing(3);
+	warningsBox_->setVisible(false);
+	root->addWidget(warningsBox_);
+
+	// ---- Center controls: one compact horizontal row ------------------------
+	//   ● Ready   |   [ ⬤ Record ]  [ ⏸ Pause ]   |   00:00:00
+	// A slim, premium bar: passive status badge, a clear red Record primary, and
+	// the timer — vertically centered, minimal padding, subtle separators.
+	root->addStretch(1);
+
+	// Button label font — modest, not oversized.
+	QFont btnFont;
+	btnFont.setPointSize(btnFont.pointSize() + 2);
+	btnFont.setBold(true);
+
+	auto makeSep = [central]() {
+		auto *line = new QFrame(central);
+		line->setFrameShape(QFrame::VLine);
+		line->setStyleSheet(QStringLiteral("color:#33373f;"));
+		line->setFixedHeight(28);
+		return line;
+	};
+
 	auto *controls = new QHBoxLayout;
-	controls->setSpacing(16);
+	controls->setSpacing(14);
+	controls->addStretch(1);
 
-	// Left: inline live webcam preview (shown only when the preset records one).
-	webcamBox_ = new QWidget(controlCard);
+	// Passive status badge (animated dot + label) — informational, not a button.
+	statusBadge_ = new StatusBadge(central);
+	controls->addWidget(statusBadge_, 0, Qt::AlignVCenter);
+
+	controls->addWidget(makeSep(), 0, Qt::AlignVCenter);
+
+	// Single Record/Stop toggle: Record when idle, Stop while recording.
+	primaryButton_ = new QPushButton(QStringLiteral("\xE2\x97\x8F  Record"), central);
+	primaryButton_->setObjectName(QStringLiteral("primaryButton"));
+	primaryButton_->setMinimumSize(130, 46);
+	primaryButton_->setFont(btnFont);
+	primaryButton_->setToolTip(QStringLiteral("Start/stop recording (F9)"));
+	controls->addWidget(primaryButton_, 0, Qt::AlignVCenter);
+
+	// Pause/Resume: only shown while recording.
+	pauseButton_ = new QPushButton(QStringLiteral("\xE2\x8F\xB8  Pause"), central);
+	pauseButton_->setObjectName(QStringLiteral("pauseButton"));
+	pauseButton_->setMinimumSize(104, 46);
+	pauseButton_->setFont(btnFont);
+	pauseButton_->setVisible(false);
+	pauseButton_->setToolTip(QStringLiteral("Pause/resume the recording (F10)"));
+	controls->addWidget(pauseButton_, 0, Qt::AlignVCenter);
+
+	controls->addWidget(makeSep(), 0, Qt::AlignVCenter);
+
+	// Elapsed time — monospaced, readable, but not oversized.
+	timerLabel_ = new QLabel(QStringLiteral("00:00:00"), central);
+	timerLabel_->setObjectName(QStringLiteral("timerLabel"));
+	timerLabel_->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+	QFont timerFont(QStringLiteral("monospace"));
+	timerFont.setStyleHint(QFont::Monospace);
+	timerFont.setPointSize(btnFont.pointSize() + 6);
+	timerLabel_->setFont(timerFont);
+	controls->addWidget(timerLabel_, 0, Qt::AlignVCenter);
+
+	// Inline live webcam preview, shown only when the active preset records a
+	// webcam. The enable toggle + device picker live in toolbar row 2.
+	webcamBox_ = new QWidget(central);
 	auto *wcLayout = new QHBoxLayout(webcamBox_);
 	wcLayout->setContentsMargins(0, 0, 0, 0);
 	wcLayout->setSpacing(8);
@@ -377,66 +276,32 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	webcamWarn_->setWordWrap(true);
 	wcLayout->addWidget(webcamWarn_, 1);
 	webcamBox_->setVisible(false);
-	controls->addWidget(webcamBox_, 0, Qt::AlignVCenter);
+	controls->addWidget(webcamBox_);
+
 	controls->addStretch(1);
+	root->addLayout(controls);
 
-	// Center: the big red Record primary + Pause (only while recording).
-	primaryButton_ = new QPushButton(QStringLiteral("\xE2\x97\x8F  Record"), controlCard);
-	primaryButton_->setObjectName(QStringLiteral("primaryButton"));
-	primaryButton_->setMinimumSize(150, 52);
-	primaryButton_->setFont(btnFont);
-	primaryButton_->setCursor(Qt::PointingHandCursor);
-	primaryButton_->setToolTip(QStringLiteral("Start/stop recording (F9)"));
-	controls->addWidget(primaryButton_, 0, Qt::AlignVCenter);
-	pauseButton_ = new QPushButton(QStringLiteral("\xE2\x8F\xB8  Pause"), controlCard);
-	pauseButton_->setObjectName(QStringLiteral("pauseButton"));
-	pauseButton_->setMinimumSize(110, 52);
-	pauseButton_->setFont(btnFont);
-	pauseButton_->setVisible(false);
-	pauseButton_->setCursor(Qt::PointingHandCursor);
-	pauseButton_->setToolTip(QStringLiteral("Pause/resume the recording (F10)"));
-	controls->addWidget(pauseButton_, 0, Qt::AlignVCenter);
-	controls->addStretch(1);
+	root->addStretch(1);
 
-	// Right: elapsed time + caption.
-	auto *timerCol = new QVBoxLayout;
-	timerCol->setSpacing(0);
-	timerLabel_ = new QLabel(QStringLiteral("00:00:00"), controlCard);
-	timerLabel_->setObjectName(QStringLiteral("timerLabel"));
-	timerLabel_->setAlignment(Qt::AlignVCenter | Qt::AlignRight);
-	QFont timerFont(QStringLiteral("monospace"));
-	timerFont.setStyleHint(QFont::Monospace);
-	timerFont.setPointSize(btnFont.pointSize() + 8);
-	timerLabel_->setFont(timerFont);
-	timerCol->addWidget(timerLabel_, 0, Qt::AlignRight);
-	auto *timerCap = new QLabel(QStringLiteral("Recording Time"), controlCard);
-	timerCap->setObjectName(QStringLiteral("mutedSmall"));
-	timerCol->addWidget(timerCap, 0, Qt::AlignRight);
-	controls->addLayout(timerCol);
+	// ---- Audio (live levels) -------------------------------------------
+	auto *audioGroup = new QGroupBox(QStringLiteral("Audio"), central);
+	auto *audioGroupLayout = new QVBoxLayout(audioGroup);
+	audioGroupLayout->setContentsMargins(10, 6, 10, 6);
+	audioPanel_ = new AudioPanel(audio_, audioGroup);
+	audioGroupLayout->addWidget(audioPanel_);
+	root->addWidget(audioGroup);
 
-	controlLayout->addLayout(controls);
-	wl->addWidget(controlCard);
+	// ---- Recent recordings strip ---------------------------------------
+	auto *stripHeader = new QHBoxLayout;
+	stripHeader->addWidget(new QLabel(QStringLiteral("Recent recordings"), central));
+	stripHeader->addStretch(1);
+	errorLogsButton_ = new QPushButton(QStringLiteral("Error Logs"), central);
+	stripHeader->addWidget(errorLogsButton_);
+	libraryButton_ = new QPushButton(QStringLiteral("Open Clip Library…"), central);
+	stripHeader->addWidget(libraryButton_);
+	root->addLayout(stripHeader);
 
-	// Audio sources card.
-	QFrame *audioCard = nullptr;
-	auto *audioLayout = newCard(QStringLiteral("Audio Sources"), &audioCard);
-	audioPanel_ = new AudioPanel(audio_, audioCard);
-	audioLayout->addWidget(audioPanel_);
-	wl->addWidget(audioCard);
-
-	// Recent recordings gallery card.
-	QFrame *galleryCard = nullptr;
-	auto *galleryLayout = newCard(QString(), &galleryCard);
-	auto *galleryHeader = new QHBoxLayout;
-	auto *galleryTitle = new QLabel(QStringLiteral("Recent recordings"), galleryCard);
-	galleryTitle->setObjectName(QStringLiteral("cardTitle"));
-	galleryHeader->addWidget(galleryTitle);
-	galleryHeader->addStretch(1);
-	libraryButton_ = new QPushButton(QStringLiteral("View All"), galleryCard);
-	galleryHeader->addWidget(libraryButton_);
-	galleryLayout->addLayout(galleryHeader);
-
-	recentStrip_ = new RecentListWidget(galleryCard);
+	recentStrip_ = new RecentListWidget(central);
 	recentStrip_->setViewMode(QListView::IconMode);
 	recentStrip_->setFlow(QListView::LeftToRight);
 	recentStrip_->setWrapping(false);
@@ -450,12 +315,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	recentStrip_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	recentStrip_->setContextMenuPolicy(Qt::CustomContextMenu);
 	recentStrip_->setSpacing(6);
-	galleryLayout->addWidget(recentStrip_);
-	wl->addWidget(galleryCard);
-
-	wl->addStretch(1);
-
-	rootRow->addWidget(scroll, 1);
+	root->addWidget(recentStrip_);
 
 	setCentralWidget(central);
 
@@ -467,11 +327,10 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	statusBar()->setSizeGripEnabled(false);
 	statusBar()->setStyleSheet(QStringLiteral("QStatusBar{background:transparent;} QStatusBar::item{border:none;}"));
 
-	// Three-column dashboard proportions. The workspace scrolls and its cards
-	// reflow (FlowLayout), so a smaller minimum can't cause overlap — content
-	// simply wraps or scrolls.
-	setMinimumSize(760, 560);
-	resize(1120, 720);
+	// Wide, PowerRec-like proportions; a bit taller to fit the audio meters.
+	// The minimum keeps both toolbar rows and the control bar from clipping.
+	setMinimumSize(800, 440);
+	resize(940, 470);
 
 	// ---- Wiring ---------------------------------------------------------
 	connect(primaryButton_, &QPushButton::clicked, this, &MainWindow::onPrimaryButton);
@@ -588,103 +447,22 @@ MainWindow::~MainWindow()
 
 void MainWindow::applyDarkTheme()
 {
-	// Premium dark dashboard theme. Navy/charcoal canvas, slightly lighter
-	// cards, soft borders, blue accent, green success, bright-red record.
+	// Focused accent styling; the app-wide dark palette is set in main().
 	setStyleSheet(QStringLiteral(R"(
-		QWidget { color: #e6e8ec; font-size: 13px; }
-
-		/* Canvas + panels */
-		QWidget#appRoot { background: #0E1117; }
-		QScrollArea#workspace, QWidget#workspaceInner { background: #0E1117; }
-
-		/* Left sidebar */
-		QFrame#sidebar { background: #12161F; border-right: 1px solid #1E232D; }
-		QLabel#appName { font-size: 19px; font-weight: 700; color: #f4f6fa; }
-		QLabel#sidebarVersion { color: #6b7280; font-size: 11px; }
-
-		/* Sidebar navigation */
-		QPushButton#navButton, QPushButton#navButtonActive {
-			text-align: left; padding: 8px 14px; border-radius: 9px;
-			border: 1px solid transparent; background: transparent; color: #aeb4c0;
-			font-size: 13px;
-		}
-		QPushButton#navButton:hover { background: #1A2130; color: #e6e8ec; }
-		QPushButton#navButtonActive {
-			background: rgba(59,130,246,0.16); color: #eaf1ff;
-			border: 1px solid rgba(59,130,246,0.35);
-			border-left: 3px solid #3B82F6; font-weight: 600;
-		}
-
-		/* Sidebar cards (status / error logs) */
-		QFrame#sidebarCard { background: #171C27; border: 1px solid #232A36; border-radius: 12px; }
-		QPushButton#errorLogsButton {
-			text-align: left; padding: 10px 14px; border-radius: 12px;
-			background: #171C27; border: 1px solid #232A36; color: #c7ccd6;
-		}
-		QPushButton#errorLogsButton:hover { background: #1E2530; border-color: #2c3542; }
-		QLabel#mutedSmall { color: #7c8492; font-size: 11px; }
-
-		/* Workspace headings */
-		QLabel#pageTitle { font-size: 30px; font-weight: 700; color: #f6f8fc; }
-		QLabel#pageSubtitle { color: #8b93a1; font-size: 14px; }
-		QLabel#cardTitle { font-size: 15px; font-weight: 600; color: #eef1f6; }
-		QLabel#fieldLabel { color: #8b93a1; font-size: 12px; }
-
-		/* Cards */
-		QFrame#card { background: #151A23; border: 1px solid #212836; border-radius: 16px; }
-
-		/* Controls */
-		QPushButton {
-			background: #1E2530; border: 1px solid #2c3542; border-radius: 9px;
-			padding: 7px 14px; color: #e6e8ec;
-		}
-		QPushButton:hover { background: #262e3b; }
-		QPushButton:disabled { color: #5b6270; background: #171C24; border-color: #232a36; }
-		QPushButton:focus { border: 1px solid #3B82F6; }
-
-		QComboBox, QSpinBox {
-			background: #1A2029; border: 1px solid #2a323f; border-radius: 9px;
-			padding: 7px 10px; color: #e6e8ec; min-height: 18px;
-		}
-		QComboBox:hover, QSpinBox:hover { border-color: #3a4351; }
-		QComboBox:focus, QSpinBox:focus { border: 1px solid #3B82F6; }
-		QComboBox::drop-down { border: none; width: 22px; }
-
-		QCheckBox { color: #d3d8e0; spacing: 8px; }
-		QCheckBox::indicator {
-			width: 17px; height: 17px; border-radius: 5px;
-			border: 1px solid #3a4351; background: #1A2029;
-		}
-		QCheckBox::indicator:checked { background: #3B82F6; border-color: #3B82F6; }
-
-		/* Record button — bright red, glowing feel */
-		QPushButton#primaryButton {
-			background: #ec4147; border: 1px solid transparent; color: white;
-			border-radius: 26px; font-weight: 700;
-		}
-		QPushButton#primaryButton:hover { background: #f65a60; }
+		QWidget { color: #e6e6e6; }
+		QLabel#timerLabel { color: #f0f0f0; }
+		QPushButton { background: #2b2d31; border: 1px solid #3a3d42; border-radius: 6px; padding: 6px 12px; }
+		QPushButton:hover { background: #34373c; }
+		QPushButton:disabled { color: #6b6f76; }
+		QPushButton:focus { border: 1px solid #00aeef; }
+		QPushButton#primaryButton { background: #e5484d; border: 1px solid transparent; color: white; border-radius: 10px; }
+		QPushButton#primaryButton:hover { background: #f05a5f; }
 		QPushButton#primaryButton:focus { border: 1px solid #ffd9da; }
-		QPushButton#primaryButton:disabled { background: #4a2b2d; color: #9a7a7b; }
-
-		QPushButton#pauseButton { border-radius: 26px; }
-
-		QLabel#timerLabel { color: #f4f6fa; font-weight: 600; }
-
-		/* Recent recordings gallery */
-		QListWidget { background: #10151E; border: 1px solid #1e2431; border-radius: 12px; }
-		QListWidget::item { border-radius: 10px; }
-		QListWidget::item:selected { background: #232c3a; }
-		QListWidget::item:hover { background: #1a2230; }
-
-		/* Scrollbars */
-		QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
-		QScrollBar::handle:vertical { background: #2a323f; border-radius: 5px; min-height: 30px; }
-		QScrollBar::handle:vertical:hover { background: #3a4351; }
-		QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-		QScrollBar:horizontal { background: transparent; height: 10px; margin: 2px; }
-		QScrollBar::handle:horizontal { background: #2a323f; border-radius: 5px; min-width: 30px; }
-		QScrollBar::handle:horizontal:hover { background: #3a4351; }
-		QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+		QPushButton#primaryButton:disabled { background: #5a3a3b; color: #9a7a7b; }
+		QComboBox, QSpinBox { background: #2b2d31; border: 1px solid #3a3d42; border-radius: 6px; padding: 4px 8px; }
+		QComboBox:focus, QSpinBox:focus { border: 1px solid #00aeef; }
+		QListWidget { background: #202225; border: 1px solid #303338; border-radius: 8px; }
+		QListWidget::item:selected { background: #3a3d42; }
 	)"));
 }
 

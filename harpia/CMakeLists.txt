@@ -94,8 +94,6 @@ target_sources(
     library/ThumbnailCache.hpp
     ui/MainWindow.cpp
     ui/MainWindow.hpp
-    ui/FlowLayout.cpp
-    ui/FlowLayout.hpp
     ui/AudioPanel.cpp
     ui/AudioPanel.hpp
     ui/RecentListWidget.hpp

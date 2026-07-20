@@ -153,7 +153,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	row1->addSpacing(kGroupGap);
 	row1->addWidget(fieldLabel(QStringLiteral("Display")));
 	monitorCombo_ = new QComboBox(central);
-	monitorCombo_->setMaximumWidth(180);
+	monitorCombo_->setMinimumWidth(140); // without this the adjust policy collapses it
+	monitorCombo_->setMaximumWidth(200);
 	monitorCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
 	monitorCombo_->setToolTip(QStringLiteral(
 		"Which display to record — applies to Entire Monitor and to Custom Region "
@@ -390,7 +391,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	recentStrip_->setWrapping(false);
 	recentStrip_->setMovement(QListView::Static);
 	recentStrip_->setIconSize(kStripThumb);
-	recentStrip_->setGridSize(kStripThumb + QSize(24, 44));
+	// +60 vertical: room for BOTH caption lines (date + size) under the thumb.
+	recentStrip_->setGridSize(kStripThumb + QSize(24, 60));
 	recentStrip_->setUniformItemSizes(true); // every card is one grid cell
 	recentStrip_->setResizeMode(QListView::Adjust);
 	// Thumbnail + two caption lines (date, size) — tall enough that the size

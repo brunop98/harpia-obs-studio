@@ -35,7 +35,9 @@ QProgressBar *makeMeter(QWidget *parent)
 	return bar;
 }
 
-// A compact volume slider (0..100%, defaults to 100).
+// A compact volume slider (0..100%, defaults to 100). Styled explicitly —
+// the app palette's highlight is the record-red accent, which Fusion would
+// otherwise paint into the groove and make full volume look like a warning.
 QSlider *makeVolumeSlider(QWidget *parent)
 {
 	auto *s = new QSlider(Qt::Horizontal, parent);
@@ -43,6 +45,13 @@ QSlider *makeVolumeSlider(QWidget *parent)
 	s->setValue(100);
 	s->setFixedWidth(kSliderWidth);
 	s->setToolTip(QStringLiteral("Recording volume: 100%"));
+	s->setStyleSheet(QStringLiteral(
+		"QSlider::groove:horizontal { background:#202225; border:1px solid #303338;"
+		" height:4px; border-radius:2px; }"
+		"QSlider::sub-page:horizontal { background:#3d84b8; border-radius:2px; }"
+		"QSlider::handle:horizontal { background:#cfd6de; width:10px; height:10px;"
+		" margin:-4px 0; border-radius:5px; }"
+		"QSlider::handle:horizontal:hover { background:#ffffff; }"));
 	return s;
 }
 

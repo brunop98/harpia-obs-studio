@@ -476,6 +476,15 @@ void TrackEditor::paintEvent(QPaintEvent *)
 			acc += d;
 		}
 	}
+
+	// Hover marker on the output track — mirrors the source-track marker so
+	// it's obvious which frame is being previewed.
+	if (hoverOutSeg_ >= 0 && hoverOutSeg_ < rects.size() && mode_ == Mode::None) {
+		const QRect hr = rects[hoverOutSeg_];
+		const int hx = std::clamp(hoverOutX_, hr.left() + 1, hr.right() - 1);
+		p.setPen(QPen(QColor(0xff, 0xff, 0xff, 170), 1));
+		p.drawLine(hx, hr.top() + 4, hx, hr.bottom() - 4);
+	}
 	p.restore();
 }
 
@@ -609,6 +618,8 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 
 	// Idle: cursor hints + hover preview (no click needed to see a frame).
 	qint64 newHover = -1;
+	int newOutSeg = -1;
+	int newOutX = -1;
 	if (sourceRect().contains(pos)) {
 		setCursor(Qt::CrossCursor);
 		if (e->buttons() == Qt::NoButton && duration_ > 0) {
@@ -625,27 +636,35 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 			else
 				setCursor(Qt::PointingHandCursor);
 			if (e->buttons() == Qt::NoButton) {
-				// Hovering along a cut previews within its source range.
+				// Hovering along a cut previews within its source range; the
+				// source-track marker shows where that frame comes from.
 				const double f = std::clamp(
 					double(pos.x() - r.x()) / std::max(1, r.width()), 0.0, 1.0);
 				const CutSegment &s = segs_[idx];
-				emit hoverScrub(s.srcStartMs +
-						qint64(f * double(s.srcEndMs - s.srcStartMs)));
+				newOutSeg = idx;
+				newOutX = pos.x();
+				newHover = s.srcStartMs +
+					   qint64(f * double(s.srcEndMs - s.srcStartMs));
+				emit hoverScrub(newHover);
 			}
 		} else {
 			unsetCursor();
 		}
 	}
-	if (newHover != hoverMs_) {
+	if (newHover != hoverMs_ || newOutSeg != hoverOutSeg_ || newOutX != hoverOutX_) {
 		hoverMs_ = newHover;
+		hoverOutSeg_ = newOutSeg;
+		hoverOutX_ = newOutX;
 		update();
 	}
 }
 
 void TrackEditor::leaveEvent(QEvent *)
 {
-	if (hoverMs_ >= 0) {
+	if (hoverMs_ >= 0 || hoverOutSeg_ >= 0) {
 		hoverMs_ = -1;
+		hoverOutSeg_ = -1;
+		hoverOutX_ = -1;
 		update();
 	}
 }

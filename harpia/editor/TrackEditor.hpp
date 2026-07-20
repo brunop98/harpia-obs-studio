@@ -97,7 +97,9 @@ private:
 	double zoom_ = 1.0;
 	qint64 viewStart_ = 0;
 	QVector<QImage> thumbs_;
-	qint64 hoverMs_ = -1; // hover position marker on the source track
+	qint64 hoverMs_ = -1;  // hover position marker on the source track
+	int hoverOutSeg_ = -1; // hovered output segment (marker there too)
+	int hoverOutX_ = -1;   // marker x within that segment
 
 	enum class Mode { None, CreatingCut, DraggingSegment, ResizingLeft, ResizingRight };
 	Mode mode_ = Mode::None;

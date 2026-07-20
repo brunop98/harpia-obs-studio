@@ -84,17 +84,20 @@ ThumbnailCache::ThumbnailCache(QObject *parent) : QObject(parent)
 
 QString ThumbnailCache::keyFor(const QString &videoPath, qint64 mtimeSecs, const QSize &target)
 {
-	const QString raw = QStringLiteral("%1|%2|%3x%4")
-				    .arg(videoPath)
-				    .arg(mtimeSecs)
-				    .arg(target.width())
-				    .arg(target.height());
-	return QString::fromLatin1(QCryptographicHash::hash(raw.toUtf8(), QCryptographicHash::Md5).toHex());
+	// Plain string key for the in-memory map — hashing happens only when the
+	// key becomes a disk filename (diskPath), not on every cache lookup.
+	return QStringLiteral("%1|%2|%3x%4")
+		.arg(videoPath)
+		.arg(mtimeSecs)
+		.arg(target.width())
+		.arg(target.height());
 }
 
 QString ThumbnailCache::diskPath(const QString &key) const
 {
-	return cacheDir_ + QLatin1Char('/') + key + QStringLiteral(".png");
+	const QString hashed = QString::fromLatin1(
+		QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Md5).toHex());
+	return cacheDir_ + QLatin1Char('/') + hashed + QStringLiteral(".png");
 }
 
 QImage ThumbnailCache::cached(const QString &videoPath, const QSize &target)

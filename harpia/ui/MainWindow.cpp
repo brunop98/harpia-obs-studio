@@ -1661,10 +1661,12 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
 void MainWindow::onAppWindowChanged()
 {
-	// First item ("Off — record everything") disables focus auto-pause.
+	// First item ("Off") disables focus auto-pause. No applyLiveCapture():
+	// the focus target only arms the auto-pause and never changes what is
+	// captured — recreating the capture source here caused a pointless
+	// restart (and a visible flash) on every selection.
 	appWindowValue_ = appCombo_->currentData().toString();
 	appCaptureEnabled_ = !appWindowValue_.isEmpty();
-	applyLiveCapture();
 	updateButtons();
 	refreshReadiness();
 }
@@ -1868,9 +1870,24 @@ void MainWindow::reloadPresetCombo()
 
 void MainWindow::refreshRecentList()
 {
+	const QVector<ClipInfo> clips = ClipLibrary::recent(presetFolders(), kRecentCount, presetFolderMap());
+
+	// Skip the clear-and-rebuild (and the thumbnail churn it causes) when the
+	// clip set is unchanged — refresh is called on every finished recording,
+	// preset edit, and editor export.
+	QStringList sig;
+	sig.reserve(clips.size());
+	for (const ClipInfo &clip : clips)
+		sig << QStringLiteral("%1|%2|%3")
+			       .arg(clip.filePath)
+			       .arg(clip.modified.toSecsSinceEpoch())
+			       .arg(clip.sizeBytes);
+	if (sig == lastRecentSig_)
+		return;
+	lastRecentSig_ = sig;
+
 	recentStrip_->clear();
 	itemByPath_.clear();
-	const QVector<ClipInfo> clips = ClipLibrary::recent(presetFolders(), kRecentCount, presetFolderMap());
 	for (const ClipInfo &clip : clips) {
 		auto *item = new QListWidgetItem(QStringLiteral("%1\n%2").arg(clip.relativeAge(), clip.humanSize()));
 		item->setData(kClipPathRole, clip.filePath);
@@ -1909,8 +1926,10 @@ void MainWindow::onThumbnailReady(const QString &path)
 		return;
 	const QImage thumb = thumbnails_.cached(path, kStripThumb);
 	if (!thumb.isNull()) {
+		// Geometry is pinned (uniform sizes + fixed sizeHint), so setting the
+		// icon can't change the layout — no doItemsLayout() storm needed as
+		// the 12 thumbnails stream in.
 		item->setIcon(cardIcon(thumb));
-		recentStrip_->doItemsLayout(); // reflow so the new icon can't overlap
 	}
 }
 

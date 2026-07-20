@@ -3,6 +3,7 @@
 #include <obs.h>
 
 #include <atomic>
+#include <chrono>
 #include <string>
 
 namespace harpia {
@@ -47,6 +48,15 @@ static const char *findMonitorKey(obs_properties_t *props)
 
 std::vector<MonitorOption> CaptureManager::enumerateMonitors()
 {
+	// Building source properties is expensive, and this runs on every capture
+	// (re)creation and readiness probe. Displays change rarely — cache the
+	// list for a few seconds (GUI-thread only, like every caller).
+	static std::vector<MonitorOption> cache;
+	static std::chrono::steady_clock::time_point cacheAt{};
+	const auto now = std::chrono::steady_clock::now();
+	if (!cache.empty() && now - cacheAt < std::chrono::seconds(5))
+		return cache;
+
 	std::vector<MonitorOption> out;
 
 	obs_properties_t *props = obs_get_source_properties(platformCaptureId());
@@ -75,6 +85,10 @@ std::vector<MonitorOption> CaptureManager::enumerateMonitors()
 	}
 
 	obs_properties_destroy(props);
+	if (!out.empty()) { // don't cache failures — retry those immediately
+		cache = out;
+		cacheAt = now;
+	}
 	return out;
 }
 

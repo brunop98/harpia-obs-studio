@@ -220,6 +220,7 @@ private:
 	QWidget *recentSection_ = nullptr; // header + strip, hidden when narrow
 	ThumbnailCache thumbnails_;
 	QHash<QString, QListWidgetItem *> itemByPath_;
+	QStringList lastRecentSig_; // last strip contents (path|mtime|size per clip)
 
 	AudioPanel *audioPanel_ = nullptr;
 	// Collapsible Audio foldout: a header toggle over the audio body.

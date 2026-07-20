@@ -8,7 +8,9 @@
 #include <QMouseEvent>
 #include <QPixmap>
 #include <QPoint>
+#include <QScrollBar>
 #include <QUrl>
+#include <QWheelEvent>
 
 namespace harpia {
 
@@ -81,6 +83,21 @@ protected:
 			return;
 		}
 		QListWidget::mouseMoveEvent(event);
+	}
+
+	// The strip is a single horizontal row — the mouse wheel always scrolls it
+	// horizontally (vertical wheel input included; the vertical bar is off).
+	void wheelEvent(QWheelEvent *event) override
+	{
+		const int delta = event->angleDelta().y() != 0 ? event->angleDelta().y()
+							       : event->angleDelta().x();
+		if (delta != 0) {
+			QScrollBar *h = horizontalScrollBar();
+			h->setValue(h->value() - delta);
+			event->accept();
+			return;
+		}
+		QListWidget::wheelEvent(event);
 	}
 
 	// Explicit, robust file drag (used instead of the view's default path).

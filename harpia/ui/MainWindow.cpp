@@ -151,19 +151,6 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	row1->addWidget(captureModeCombo_);
 
 	row1->addSpacing(kGroupGap);
-	idleToggle_ = new QCheckBox(QStringLiteral("Only record while using the computer"), central);
-	idleToggle_->setToolTip(
-		QStringLiteral("Auto-pause the recording after the idle time below, resume on input"));
-	row1->addWidget(idleToggle_);
-	idleSpin_ = new QSpinBox(central);
-	idleSpin_->setRange(1, 3600);
-	idleSpin_->setSuffix(QStringLiteral(" s"));
-	idleSpin_->setValue(10);
-	idleSpin_->setMaximumWidth(80);
-	idleSpin_->setToolTip(QStringLiteral("Seconds without mouse/keyboard input before auto-pausing"));
-	row1->addWidget(idleSpin_);
-
-	row1->addSpacing(kGroupGap);
 	// Countdown label + combo as one unit, so the whole thing can be hidden when
 	// the window is too narrow (it's a nice-to-have, not an essential control).
 	countdownGroup_ = new QWidget(central);
@@ -201,7 +188,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		"Pick an application to auto-pause recording whenever it isn't focused "
 		"(resumes when it is). Does not change what's captured — the capture mode "
 		"still applies. First entry disables this."));
-	appCombo_->addItem(QStringLiteral("Off — record everything"), QString());
+	appCombo_->addItem(QStringLiteral("Off"), QString());
 	// The window list is refreshed just before the popup opens (eventFilter).
 	appCombo_->installEventFilter(this);
 	row2->addWidget(appCombo_);
@@ -217,6 +204,26 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		"First entry disables the webcam."));
 	webcamCombo_->addItem(QStringLiteral("No webcam"), QString());
 	row2->addWidget(webcamCombo_);
+
+	row2->addSpacing(kGroupGap);
+	// Idle auto-pause as one unit so it can drop out on very narrow windows.
+	idleGroup_ = new QWidget(central);
+	auto *idleLayout = new QHBoxLayout(idleGroup_);
+	idleLayout->setContentsMargins(0, 0, 0, 0);
+	idleLayout->setSpacing(8);
+	idleToggle_ = new QCheckBox(QStringLiteral("Only record while active"), idleGroup_);
+	idleToggle_->setToolTip(QStringLiteral(
+		"Auto-pause the recording after the idle time to the right (no mouse/keyboard "
+		"input), and resume on input"));
+	idleLayout->addWidget(idleToggle_);
+	idleSpin_ = new QSpinBox(idleGroup_);
+	idleSpin_->setRange(1, 3600);
+	idleSpin_->setSuffix(QStringLiteral(" s"));
+	idleSpin_->setValue(10);
+	idleSpin_->setMaximumWidth(80);
+	idleSpin_->setToolTip(QStringLiteral("Seconds without mouse/keyboard input before auto-pausing"));
+	idleLayout->addWidget(idleSpin_);
+	row2->addWidget(idleGroup_);
 	row2->addStretch(1);
 	root->addLayout(row2);
 
@@ -277,15 +284,10 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	pauseButton_->setObjectName(QStringLiteral("pauseButton"));
 	pauseButton_->setMinimumSize(104, 46);
 	pauseButton_->setFont(btnFont);
-	pauseButton_->setVisible(false);
+	// Always visible, enabled only while recording — the row never rearranges
+	// and there's no reserved hole where the button would be.
+	pauseButton_->setEnabled(false);
 	pauseButton_->setToolTip(QStringLiteral("Pause/resume the recording (F10)"));
-	{
-		// Reserve the button's space while hidden so the Record button and the
-		// timer don't slide around when recording starts/stops.
-		QSizePolicy sp = pauseButton_->sizePolicy();
-		sp.setRetainSizeWhenHidden(true);
-		pauseButton_->setSizePolicy(sp);
-	}
 	controls->addWidget(pauseButton_, 0, Qt::AlignVCenter);
 
 	controls->addWidget(makeSep(), 0, Qt::AlignVCenter);
@@ -562,12 +564,15 @@ void MainWindow::applyResponsiveLayout(int width)
 	// and pause always stay visible and aligned.
 	//   >= 880 : everything
 	//   >= 700 : hide the recent-recordings gallery
-	//   >= 600 : also hide the countdown picker
+	//   >= 640 : also hide the countdown picker
+	//   >= 600 : also hide the idle auto-pause group
 	//   <  600 : also hide the passive status badge (Record/Pause/timer remain)
 	if (recentSection_)
 		recentSection_->setVisible(width >= 880);
 	if (countdownGroup_)
 		countdownGroup_->setVisible(width >= 700);
+	if (idleGroup_)
+		idleGroup_->setVisible(width >= 640);
 	if (statusGroup_)
 		statusGroup_->setVisible(width >= 600);
 }
@@ -1536,7 +1541,7 @@ void MainWindow::reloadAppCombo()
 	const QString want = appWindowValue_;
 	QSignalBlocker block(appCombo_);
 	appCombo_->clear();
-	appCombo_->addItem(QStringLiteral("Off — record everything"), QString());
+	appCombo_->addItem(QStringLiteral("Off"), QString());
 	for (const WindowOption &w : CaptureManager::enumerateWindows())
 		appCombo_->addItem(QString::fromStdString(w.name), QString::fromStdString(w.value));
 	int idx = want.isEmpty() ? 0 : appCombo_->findData(want);
@@ -2010,8 +2015,8 @@ void MainWindow::updateButtons()
 						   : QString());
 	}
 
-	// Pause/Resume: only present while actively recording (hidden while stopping).
-	pauseButton_->setVisible(recording && !stopping_);
+	// Pause/Resume: always visible; enabled only while actively recording.
+	pauseButton_->setEnabled(recording && !stopping_);
 	if (recording && pauseUiChanged) {
 		if (paused) {
 			pauseButton_->setText(QStringLiteral("▶  Resume"));
@@ -2022,6 +2027,10 @@ void MainWindow::updateButtons()
 			pauseButton_->setStyleSheet(QStringLiteral(
 				"background:#d29922;border:none;color:white;border-radius:10px;"));
 		}
+	} else if (!recording && !pauseButton_->styleSheet().isEmpty()) {
+		// Back to the idle look (theme's default disabled button).
+		pauseButton_->setText(QStringLiteral("⏸  Pause"));
+		pauseButton_->setStyleSheet(QString());
 	}
 
 	const bool locked = recording || transitioning;

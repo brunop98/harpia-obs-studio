@@ -34,6 +34,18 @@ ExportOptionsDialog::ExportOptionsDialog(const QString &defaultName, QWidget *pa
 	if (ClipExporter::webmAvailable())
 		formatCombo_->addItem(QStringLiteral("WebM (VP9)"), int(ClipExporter::Format::WebM));
 	form->addRow(QStringLiteral("Format"), formatCombo_);
+
+	// Playback speed — applies to every format (2× = twice as fast).
+	speedCombo_ = new QComboBox(this);
+	speedCombo_->addItem(QStringLiteral("0.5× (slow motion)"), 0.5);
+	speedCombo_->addItem(QStringLiteral("1× (normal)"), 1.0);
+	speedCombo_->addItem(QStringLiteral("1.5×"), 1.5);
+	speedCombo_->addItem(QStringLiteral("2×"), 2.0);
+	speedCombo_->addItem(QStringLiteral("3×"), 3.0);
+	speedCombo_->addItem(QStringLiteral("4×"), 4.0);
+	speedCombo_->setCurrentIndex(1); // 1× default
+	speedCombo_->setToolTip(QStringLiteral("Play the clip faster or slower. Audio is dropped unless 1×."));
+	form->addRow(QStringLiteral("Speed"), speedCombo_);
 	root->addLayout(form);
 
 	// Video-only options.
@@ -60,13 +72,7 @@ ExportOptionsDialog::ExportOptionsDialog(const QString &defaultName, QWidget *pa
 	gifFpsSpin_->setValue(15);
 	gifFpsSpin_->setSuffix(QStringLiteral(" fps"));
 	gform->addRow(QStringLiteral("Frame rate"), gifFpsSpin_);
-	gifWidthSpin_ = new QSpinBox(gifRow_);
-	gifWidthSpin_->setRange(120, 1920);
-	gifWidthSpin_->setSingleStep(20);
-	gifWidthSpin_->setValue(640);
-	gifWidthSpin_->setSuffix(QStringLiteral(" px wide"));
-	gifWidthSpin_->setToolTip(QStringLiteral("Smaller width = smaller GIF. Height keeps the aspect ratio."));
-	gform->addRow(QStringLiteral("Size"), gifWidthSpin_);
+	// Output size = the cropped area (or full video). Crop to make smaller GIFs.
 	root->addWidget(gifRow_);
 
 	auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
@@ -101,9 +107,9 @@ int ExportOptionsDialog::gifFps() const
 	return gifFpsSpin_->value();
 }
 
-int ExportOptionsDialog::gifWidth() const
+double ExportOptionsDialog::speed() const
 {
-	return gifWidthSpin_->value();
+	return speedCombo_->currentData().toDouble();
 }
 
 int ExportOptionsDialog::videoCrf() const

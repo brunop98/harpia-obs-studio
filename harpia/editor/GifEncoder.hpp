@@ -19,7 +19,8 @@ public:
 		bool crop = false;
 		int cropX = 0, cropY = 0, cropW = 0, cropH = 0; // source pixels
 		int fps = 15;
-		int width = 640; // output width (0 == crop/source width); height auto
+		int width = 0;      // output width (0 == crop/source width — no downscale); height auto
+		double speed = 1.0; // playback speed multiplier (2.0 = twice as fast)
 	};
 
 	// Returns true on success. `canceled()` is polled to abort; `progress()`

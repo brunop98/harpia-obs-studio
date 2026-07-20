@@ -25,9 +25,13 @@ public:
 		bool crop = false;
 		int cropX = 0, cropY = 0, cropW = 0, cropH = 0; // source pixels
 
+		// Playback speed multiplier (1.0 = normal, 2.0 = twice as fast). Applies to
+		// every format; audio is dropped when speed != 1.
+		double speed = 1.0;
+
 		// GIF-only
 		int gifFps = 15;
-		int gifWidth = 640; // output width (0 == crop/source width); height auto
+		int gifWidth = 0; // output width (0 == crop/source width — no downscale); height auto
 
 		// Video-only
 		int videoCrf = 20;    // x264/vp9 constant quality (lower = better)

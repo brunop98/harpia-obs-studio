@@ -197,6 +197,7 @@ bool GifEncoder::encode(const QString &inPath, const QString &outPath, const Par
 	avcodec_flush_buffers(s.vdec);
 
 	const double totalMs = double((p.endMs > 0 ? p.endMs : 0) - p.startMs);
+	const double speed = p.speed > 0.01 ? p.speed : 1.0;
 	int outIndex = 0;             // GIF frame counter (pts in fps time base)
 	double nextEmitMs = p.startMs; // next source time to sample
 
@@ -259,7 +260,10 @@ bool GifEncoder::encode(const QString &inPath, const QString &outPath, const Par
 					av_frame_unref(frame); // skip: fps downsample
 					continue;
 				}
-				nextEmitMs += 1000.0 / fps;
+				// Advance the source sampling point by speed×: at 2× we sample
+				// source time twice as fast while emitting at the GIF fps, so the
+				// GIF plays back at speed×.
+				nextEmitMs += (1000.0 / fps) * speed;
 
 				// Crop + scale to rgb24 at the GIF size.
 				const uint8_t *src[4] = {

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -105,6 +106,7 @@ void ClipExporter::run(const QString &inPath, const QString &outPath, const Opti
 		gp.cropH = opts.cropH;
 		gp.fps = opts.gifFps;
 		gp.width = opts.gifWidth;
+		gp.speed = opts.speed;
 		QString err;
 		const bool ok = GifEncoder::encode(
 			inPath, outPath, gp, [this]() { return cancel_.load(); },
@@ -139,8 +141,11 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 		return QStringLiteral("The file has no video track.");
 	AVStream *vin = s.ifmt->streams[vIdx];
 
+	const double speed = opts.speed > 0.01 ? opts.speed : 1.0;
 	const bool container_h264 = opts.format != Format::WebM;
-	const bool wantAudio = opts.keepAudio && container_h264;
+	// Speeding the video up would desync stream-copied audio (and pitch-shift it),
+	// so audio is only kept at normal speed.
+	const bool wantAudio = opts.keepAudio && container_h264 && speed == 1.0;
 	int aIdx = wantAudio ? av_find_best_stream(s.ifmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0) : -1;
 	AVStream *ain = (aIdx >= 0) ? s.ifmt->streams[aIdx] : nullptr;
 	// Only stream-copy AAC/MP3 audio (MP4/MKV/MOV-friendly); otherwise drop it.
@@ -271,6 +276,18 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 	bool errored = false;
 	bool videoDone = false;
 
+	// Encoder pts, rebased to the trim start and compressed by the speed factor
+	// (2× speed => timestamps half as far apart => plays twice as fast), kept
+	// strictly increasing.
+	int64_t lastEncPts = -1;
+	auto scaledPts = [&](int64_t pts) -> int64_t {
+		int64_t v = (int64_t)llround(double(pts - startV) / speed);
+		if (v <= lastEncPts)
+			v = lastEncPts + 1;
+		lastEncPts = v;
+		return v;
+	};
+
 	auto ensureYuvFull = [&](AVFrame *f) -> AVFrame * {
 		if ((AVPixelFormat)f->format == AV_PIX_FMT_YUV420P)
 			return f;
@@ -342,7 +359,7 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 						yf->data[2] + (cy / 2) * yf->linesize[2] + (cx / 2), nullptr};
 					av_image_copy(s.cropFrame->data, s.cropFrame->linesize, src, yf->linesize,
 						      AV_PIX_FMT_YUV420P, cw, ch);
-					s.cropFrame->pts = pts - startV;
+					s.cropFrame->pts = scaledPts(pts);
 					processedMs = std::max(processedMs, (pts - startV) * av_q2d(vin->time_base) *
 										     1000.0);
 					if (!encodeVideo(s.cropFrame)) {
@@ -399,7 +416,7 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 						yf->data[2] + (cy / 2) * yf->linesize[2] + (cx / 2), nullptr};
 					av_image_copy(s.cropFrame->data, s.cropFrame->linesize, src, yf->linesize,
 						      AV_PIX_FMT_YUV420P, cw, ch);
-					s.cropFrame->pts = pts - startV;
+					s.cropFrame->pts = scaledPts(pts);
 					encodeVideo(s.cropFrame);
 				}
 			}

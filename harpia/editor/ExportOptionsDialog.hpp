@@ -23,7 +23,7 @@ public:
 	QString fileName() const;               // base name, no extension
 	ClipExporter::Format format() const;
 	int gifFps() const;
-	int gifWidth() const;
+	double speed() const; // playback speed multiplier (1.0 = normal)
 	int videoCrf() const;
 	bool keepAudio() const;
 
@@ -34,9 +34,9 @@ private:
 	QLineEdit *nameEdit_ = nullptr;
 	QComboBox *formatCombo_ = nullptr;
 	QComboBox *qualityCombo_ = nullptr; // video CRF
+	QComboBox *speedCombo_ = nullptr;   // playback speed
 	QCheckBox *audioCheck_ = nullptr;
 	QSpinBox *gifFpsSpin_ = nullptr;
-	QSpinBox *gifWidthSpin_ = nullptr;
 	QWidget *gifRow_ = nullptr;
 	QWidget *videoRow_ = nullptr;
 };

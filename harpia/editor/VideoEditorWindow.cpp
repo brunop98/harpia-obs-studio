@@ -164,7 +164,8 @@ void VideoEditorWindow::onSave()
 	o.cropW = c.width();
 	o.cropH = c.height();
 	o.gifFps = dlg.gifFps();
-	o.gifWidth = dlg.gifWidth();
+	o.gifWidth = 0; // output = cropped area / full video size (no downscale)
+	o.speed = dlg.speed();
 	o.videoCrf = dlg.videoCrf();
 	o.keepAudio = dlg.keepAudio();
 

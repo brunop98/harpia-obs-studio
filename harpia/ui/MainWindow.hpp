@@ -24,6 +24,7 @@ class QPushButton;
 class QComboBox;
 class QCheckBox;
 class QSpinBox;
+class QToolButton;
 class QLabel;
 class QTimer;
 class QScreen;
@@ -125,6 +126,9 @@ private:
 	void syncIdleControls();     // load idle toggle/spin from the active preset
 	void updateStatusChip();     // reflect ready/recording/paused/warning in the chip
 	void applyDarkTheme();
+	// Progressive-disclosure responsiveness: as the window narrows, hide the
+	// least essential sections first, always keeping the record controls usable.
+	void applyResponsiveLayout(int width);
 	QString elapsedString() const;
 	void updateRegionToolVisibility(); // focus/record-driven overlay visibility
 	void writeMarker(const QString &label); // append an Auto Paused/Resumed marker
@@ -134,6 +138,7 @@ protected:
 	// Guard against silently losing a recording: closing mid-recording asks for
 	// confirmation, stops cleanly, and only closes once the file is finalized.
 	void closeEvent(QCloseEvent *event) override;
+	void resizeEvent(QResizeEvent *event) override; // drives applyResponsiveLayout
 
 private:
 	// How the screen is captured (a global tool, not part of a preset).
@@ -166,6 +171,7 @@ private:
 	QCheckBox *idleToggle_ = nullptr;
 	QSpinBox *idleSpin_ = nullptr;
 	QComboBox *countdownCombo_ = nullptr;
+	QWidget *countdownGroup_ = nullptr; // label + combo, hidden when narrow
 
 	// Toolbar row 2: single-application capture + webcam enable/device.
 	QCheckBox *appCaptureToggle_ = nullptr;
@@ -187,6 +193,7 @@ private:
 	QWidget *warningsBox_ = nullptr;
 	QVBoxLayout *warningsLayout_ = nullptr;
 	StatusBadge *statusBadge_ = nullptr; // passive Ready/Recording/Paused/Error dot
+	QWidget *statusGroup_ = nullptr;     // badge + separator, hidden when narrow
 	QTimer *readinessTimer_ = nullptr;
 	bool recordingBlocked_ = false;
 	QString firstIssue_; // headline warning/error message shown in the chip
@@ -204,10 +211,14 @@ private:
 	QPushButton *libraryButton_ = nullptr;
 	QPushButton *errorLogsButton_ = nullptr;
 	QListWidget *recentStrip_ = nullptr;
+	QWidget *recentSection_ = nullptr; // header + strip, hidden when narrow
 	ThumbnailCache thumbnails_;
 	QHash<QString, QListWidgetItem *> itemByPath_;
 
 	AudioPanel *audioPanel_ = nullptr;
+	// Collapsible Audio foldout: a header toggle over the audio body.
+	QToolButton *audioToggleButton_ = nullptr;
+	QWidget *audioBody_ = nullptr;
 
 	QTimer *stateTimer_ = nullptr;
 	QTimer *idleTimer_ = nullptr;

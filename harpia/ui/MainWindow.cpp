@@ -65,7 +65,9 @@
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QResizeEvent>
 #include <QStatusBar>
+#include <QToolButton>
 #include <QStorageInfo>
 #include <QStyle>
 #include <QThreadPool>
@@ -153,8 +155,14 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	row1->addWidget(idleSpin_);
 
 	row1->addSpacing(12);
-	row1->addWidget(new QLabel(QStringLiteral("Countdown"), central));
-	countdownCombo_ = new QComboBox(central);
+	// Countdown label + combo as one unit, so the whole thing can be hidden when
+	// the window is too narrow (it's a nice-to-have, not an essential control).
+	countdownGroup_ = new QWidget(central);
+	auto *countdownLayout = new QHBoxLayout(countdownGroup_);
+	countdownLayout->setContentsMargins(0, 0, 0, 0);
+	countdownLayout->setSpacing(8);
+	countdownLayout->addWidget(new QLabel(QStringLiteral("Countdown"), countdownGroup_));
+	countdownCombo_ = new QComboBox(countdownGroup_);
 	countdownCombo_->addItem(QStringLiteral("Off"), 0);
 	for (int s = 1; s <= 10; ++s)
 		countdownCombo_->addItem(QStringLiteral("%1s").arg(s), s);
@@ -162,7 +170,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	countdownCombo_->setToolTip(QStringLiteral(
 		"Show an on-screen countdown before recording starts, so you can get ready. "
 		"Saved on the active preset; never part of the recording."));
-	row1->addWidget(countdownCombo_);
+	countdownLayout->addWidget(countdownCombo_);
+	row1->addWidget(countdownGroup_);
 	row1->addStretch(1);
 	root->addLayout(row1);
 
@@ -176,7 +185,11 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		"Does not change what's captured — the capture mode still applies."));
 	row2->addWidget(appCaptureToggle_);
 	appCombo_ = new QComboBox(central);
-	appCombo_->setMinimumWidth(220);
+	// Keep the app-name dropdown compact and balanced; elide long names rather
+	// than letting the control stretch the whole row.
+	appCombo_->setMinimumWidth(130);
+	appCombo_->setMaximumWidth(200);
+	appCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
 	appCombo_->setEnabled(false);
 	appCombo_->setVisible(false); // shown only when "Record only one application" is on
 	appCombo_->setToolTip(QStringLiteral("The application to watch for focus auto-pause"));
@@ -188,7 +201,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		QStringLiteral("Record the camera to its own file alongside the screen recording"));
 	row2->addWidget(webcamEnableToggle_);
 	webcamCombo_ = new QComboBox(central);
-	webcamCombo_->setMinimumWidth(220);
+	webcamCombo_->setMinimumWidth(130);
+	webcamCombo_->setMaximumWidth(200);
+	webcamCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
 	webcamCombo_->setEnabled(false);
 	webcamCombo_->setVisible(false); // shown only when "Enable webcam" is on
 	row2->addWidget(webcamCombo_);
@@ -227,10 +242,15 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	controls->addStretch(1);
 
 	// Passive status badge (animated dot + label) — informational, not a button.
-	statusBadge_ = new StatusBadge(central);
-	controls->addWidget(statusBadge_, 0, Qt::AlignVCenter);
-
-	controls->addWidget(makeSep(), 0, Qt::AlignVCenter);
+	// Bundled with its trailing separator so both drop out together when narrow.
+	statusGroup_ = new QWidget(central);
+	auto *statusGroupLayout = new QHBoxLayout(statusGroup_);
+	statusGroupLayout->setContentsMargins(0, 0, 0, 0);
+	statusGroupLayout->setSpacing(14);
+	statusBadge_ = new StatusBadge(statusGroup_);
+	statusGroupLayout->addWidget(statusBadge_, 0, Qt::AlignVCenter);
+	statusGroupLayout->addWidget(makeSep(), 0, Qt::AlignVCenter);
+	controls->addWidget(statusGroup_, 0, Qt::AlignVCenter);
 
 	// Single Record/Stop toggle: Record when idle, Stop while recording.
 	primaryButton_ = new QPushButton(QStringLiteral("\xE2\x97\x8F  Record"), central);
@@ -283,25 +303,58 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	root->addStretch(1);
 
-	// ---- Audio (live levels) -------------------------------------------
-	auto *audioGroup = new QGroupBox(QStringLiteral("Audio"), central);
-	auto *audioGroupLayout = new QVBoxLayout(audioGroup);
-	audioGroupLayout->setContentsMargins(10, 6, 10, 6);
-	audioPanel_ = new AudioPanel(audio_, audioGroup);
-	audioGroupLayout->addWidget(audioPanel_);
-	root->addWidget(audioGroup);
+	// ---- Audio (collapsible foldout) -----------------------------------
+	// A header toggle expands/collapses the live-levels panel so it can be
+	// tucked away when not needed.
+	auto *audioSection = new QWidget(central);
+	auto *audioSectionLayout = new QVBoxLayout(audioSection);
+	audioSectionLayout->setContentsMargins(0, 0, 0, 0);
+	audioSectionLayout->setSpacing(4);
 
-	// ---- Recent recordings strip ---------------------------------------
+	audioToggleButton_ = new QToolButton(audioSection);
+	audioToggleButton_->setText(QStringLiteral("Audio"));
+	audioToggleButton_->setCheckable(true);
+	audioToggleButton_->setChecked(true);
+	audioToggleButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+	audioToggleButton_->setArrowType(Qt::DownArrow);
+	audioToggleButton_->setAutoRaise(true);
+	audioToggleButton_->setCursor(Qt::PointingHandCursor);
+	audioToggleButton_->setToolTip(QStringLiteral("Show or hide the audio sources and levels"));
+	audioToggleButton_->setStyleSheet(
+		QStringLiteral("QToolButton { border: none; font-weight: bold; padding: 2px 0; }"));
+	audioSectionLayout->addWidget(audioToggleButton_, 0, Qt::AlignLeft);
+
+	audioBody_ = new QFrame(audioSection);
+	audioBody_->setObjectName(QStringLiteral("audioBody"));
+	auto *audioBodyLayout = new QVBoxLayout(audioBody_);
+	audioBodyLayout->setContentsMargins(10, 6, 10, 6);
+	audioPanel_ = new AudioPanel(audio_, audioBody_);
+	audioBodyLayout->addWidget(audioPanel_);
+	audioSectionLayout->addWidget(audioBody_);
+
+	connect(audioToggleButton_, &QToolButton::toggled, this, [this](bool on) {
+		audioBody_->setVisible(on);
+		audioToggleButton_->setArrowType(on ? Qt::DownArrow : Qt::RightArrow);
+	});
+
+	root->addWidget(audioSection);
+
+	// ---- Recent recordings strip (hidden when the window is narrow) -----
+	recentSection_ = new QWidget(central);
+	auto *recentLayout = new QVBoxLayout(recentSection_);
+	recentLayout->setContentsMargins(0, 0, 0, 0);
+	recentLayout->setSpacing(6);
+
 	auto *stripHeader = new QHBoxLayout;
-	stripHeader->addWidget(new QLabel(QStringLiteral("Recent recordings"), central));
+	stripHeader->addWidget(new QLabel(QStringLiteral("Recent recordings"), recentSection_));
 	stripHeader->addStretch(1);
-	errorLogsButton_ = new QPushButton(QStringLiteral("Error Logs"), central);
+	errorLogsButton_ = new QPushButton(QStringLiteral("Error Logs"), recentSection_);
 	stripHeader->addWidget(errorLogsButton_);
-	libraryButton_ = new QPushButton(QStringLiteral("Open Clip Library…"), central);
+	libraryButton_ = new QPushButton(QStringLiteral("Open Clip Library…"), recentSection_);
 	stripHeader->addWidget(libraryButton_);
-	root->addLayout(stripHeader);
+	recentLayout->addLayout(stripHeader);
 
-	recentStrip_ = new RecentListWidget(central);
+	recentStrip_ = new RecentListWidget(recentSection_);
 	recentStrip_->setViewMode(QListView::IconMode);
 	recentStrip_->setFlow(QListView::LeftToRight);
 	recentStrip_->setWrapping(false);
@@ -315,7 +368,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	recentStrip_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	recentStrip_->setContextMenuPolicy(Qt::CustomContextMenu);
 	recentStrip_->setSpacing(6);
-	root->addWidget(recentStrip_);
+	recentLayout->addWidget(recentStrip_);
+
+	root->addWidget(recentSection_);
 
 	setCentralWidget(central);
 
@@ -328,8 +383,10 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	statusBar()->setStyleSheet(QStringLiteral("QStatusBar{background:transparent;} QStatusBar::item{border:none;}"));
 
 	// Wide, PowerRec-like proportions; a bit taller to fit the audio meters.
-	// The minimum keeps both toolbar rows and the control bar from clipping.
-	setMinimumSize(800, 440);
+	// A modest minimum lets the window shrink far enough that the responsive
+	// layout can drop non-essential sections while the record controls stay
+	// usable (see applyResponsiveLayout).
+	setMinimumSize(560, 400);
 	resize(940, 470);
 
 	// ---- Wiring ---------------------------------------------------------
@@ -436,6 +493,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	refreshReadiness();
 	refreshWebcamRow();
 	updateButtons();
+	applyResponsiveLayout(width()); // set initial section visibility
 }
 
 MainWindow::~MainWindow()
@@ -463,7 +521,31 @@ void MainWindow::applyDarkTheme()
 		QComboBox:focus, QSpinBox:focus { border: 1px solid #00aeef; }
 		QListWidget { background: #202225; border: 1px solid #303338; border-radius: 8px; }
 		QListWidget::item:selected { background: #3a3d42; }
+		QFrame#audioBody { background: #202225; border: 1px solid #303338; border-radius: 8px; }
 	)"));
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+	QMainWindow::resizeEvent(event);
+	applyResponsiveLayout(event->size().width());
+}
+
+void MainWindow::applyResponsiveLayout(int width)
+{
+	// Progressive disclosure: hide the least essential sections first as the
+	// window narrows, so controls never overlap and the record button, timer
+	// and pause always stay visible and aligned.
+	//   >= 880 : everything
+	//   >= 700 : hide the recent-recordings gallery
+	//   >= 600 : also hide the countdown picker
+	//   <  600 : also hide the passive status badge (Record/Pause/timer remain)
+	if (recentSection_)
+		recentSection_->setVisible(width >= 880);
+	if (countdownGroup_)
+		countdownGroup_->setVisible(width >= 700);
+	if (statusGroup_)
+		statusGroup_->setVisible(width >= 600);
 }
 
 const Preset &MainWindow::activePreset() const

@@ -305,21 +305,27 @@ void TrackEditor::paintEvent(QPaintEvent *)
 		p.save();
 		p.setClipPath(clip);
 
-		// Filmstrip so each part of the video is easy to recognize.
+		// Filmstrip so each part of the video is easy to recognize. Tiles keep
+		// their aspect ratio at every zoom level (a constant gap between them);
+		// zooming changes WHICH frames are shown, never their shape.
 		if (!thumbs_.isEmpty() && duration_ > 0) {
 			const int n = thumbs_.size();
+			double aspect = 16.0 / 9.0;
+			for (const QImage &t : thumbs_) {
+				if (!t.isNull()) {
+					aspect = double(t.width()) / double(t.height());
+					break;
+				}
+			}
+			const int tileH = src.height();
+			const int tileW = std::max(8, int(tileH * aspect));
+			const int tileGap = 2;
 			const double sliceMs = double(duration_) / n;
-			const qint64 viewEnd = viewStart_ + visibleMs();
-			int i0 = std::clamp(int(viewStart_ / sliceMs), 0, n - 1);
-			int i1 = std::clamp(int(viewEnd / sliceMs) + 1, i0 + 1, n);
-			for (int i = i0; i < i1; ++i) {
-				if (thumbs_[i].isNull())
-					continue;
-				const int x1 = msToX(qint64(i * sliceMs));
-				const int x2 = msToX(qint64((i + 1) * sliceMs));
-				if (x2 > x1)
-					p.drawImage(QRect(x1, src.y(), x2 - x1, src.height()),
-						    thumbs_[i]);
+			for (int x = src.left(); x < src.right(); x += tileW + tileGap) {
+				const qint64 ms = xToMs(x + tileW / 2); // frame at tile center
+				const int i = std::clamp(int(ms / sliceMs), 0, n - 1);
+				if (!thumbs_[i].isNull())
+					p.drawImage(QRect(x, src.y(), tileW, tileH), thumbs_[i]);
 			}
 		}
 
@@ -394,9 +400,9 @@ void TrackEditor::paintEvent(QPaintEvent *)
 						      thumbs_.size()),
 						  0, int(thumbs_.size()) - 1);
 			const QImage &t = thumbs_[ti];
-			if (!t.isNull()) {
+			if (!t.isNull() && t.height() > 0) {
 				const int th = r.height() - 2;
-				thumbW = std::min(th * 16 / 9, r.width() - 2);
+				thumbW = std::min(th * t.width() / t.height(), r.width() - 2);
 				QPainterPath segClip;
 				segClip.addRoundedRect(r, 4, 4);
 				p.save();

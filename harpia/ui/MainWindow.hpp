@@ -197,7 +197,6 @@ private:
 	QWidget *warningsBox_ = nullptr;
 	QVBoxLayout *warningsLayout_ = nullptr;
 	StatusBadge *statusBadge_ = nullptr; // passive Ready/Recording/Paused/Error dot
-	QWidget *statusGroup_ = nullptr;     // badge + separator, hidden when narrow
 	QTimer *readinessTimer_ = nullptr;
 	bool recordingBlocked_ = false;
 	QString firstIssue_; // headline warning/error message shown in the chip

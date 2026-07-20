@@ -272,17 +272,6 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	controls->setSpacing(14);
 	controls->addStretch(1);
 
-	// Passive status badge (animated dot + label) — informational, not a button.
-	// Bundled with its trailing separator so both drop out together when narrow.
-	statusGroup_ = new QWidget(central);
-	auto *statusGroupLayout = new QHBoxLayout(statusGroup_);
-	statusGroupLayout->setContentsMargins(0, 0, 0, 0);
-	statusGroupLayout->setSpacing(14);
-	statusBadge_ = new StatusBadge(statusGroup_);
-	statusGroupLayout->addWidget(statusBadge_, 0, Qt::AlignVCenter);
-	statusGroupLayout->addWidget(makeSep(), 0, Qt::AlignVCenter);
-	controls->addWidget(statusGroup_, 0, Qt::AlignVCenter);
-
 	// Single Record/Stop toggle: Record when idle, Stop while recording.
 	primaryButton_ = new QPushButton(QStringLiteral("\xE2\x97\x8F  Record"), central);
 	primaryButton_->setObjectName(QStringLiteral("primaryButton"));
@@ -408,13 +397,11 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	setCentralWidget(central);
 
-	// A small, unobtrusive version number in the bottom-left corner. Bumped on
-	// every commit (see harpia/Version.hpp).
-	auto *versionLabel = new QLabel(QStringLiteral("v%1").arg(QString::fromUtf8(appVersion())), this);
-	versionLabel->setStyleSheet(QStringLiteral("color:#6b6f76; font-size:11px; padding-left:6px;"));
-	statusBar()->addWidget(versionLabel);
-	// Error Logs is diagnostics, not content — it lives quietly in the status
-	// bar's right corner instead of next to the clip library.
+	// Bottom status bar:  [● status]  ————————  [Error Logs] [version]
+	// The passive status badge (Ready/Recording/Paused/Error) anchors the left;
+	// diagnostics + version sit quietly on the right.
+	statusBadge_ = new StatusBadge(this);
+	statusBar()->addWidget(statusBadge_);
 	errorLogsButton_ = new QPushButton(QStringLiteral("Error Logs"), this);
 	errorLogsButton_->setFlat(true);
 	errorLogsButton_->setCursor(Qt::PointingHandCursor);
@@ -422,6 +409,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		"QPushButton{color:#9a9fa8; background:transparent; border:none; font-size:11px; padding:2px 8px;}"
 		"QPushButton:hover{color:#e6e6e6;}"));
 	statusBar()->addPermanentWidget(errorLogsButton_);
+	auto *versionLabel = new QLabel(QStringLiteral("v%1").arg(QString::fromUtf8(appVersion())), this);
+	versionLabel->setStyleSheet(QStringLiteral("color:#6b6f76; font-size:11px; padding-right:6px;"));
+	statusBar()->addPermanentWidget(versionLabel);
 	statusBar()->setSizeGripEnabled(false);
 	statusBar()->setStyleSheet(QStringLiteral("QStatusBar{background:transparent;} QStatusBar::item{border:none;}"));
 
@@ -586,17 +576,14 @@ void MainWindow::applyResponsiveLayout(int width)
 	// and pause always stay visible and aligned.
 	//   >= 880 : everything
 	//   >= 700 : hide the recent-recordings gallery
-	//   >= 640 : also hide the countdown picker
-	//   >= 600 : also hide the idle auto-pause group
-	//   <  600 : also hide the passive status badge (Record/Pause/timer remain)
+	//   <  640 : also hide the countdown picker and the idle auto-pause group
+	// The status badge lives in the bottom status bar and always stays visible.
 	if (recentSection_)
 		recentSection_->setVisible(width >= 880);
 	if (countdownGroup_)
 		countdownGroup_->setVisible(width >= 700);
 	if (idleGroup_)
 		idleGroup_->setVisible(width >= 640);
-	if (statusGroup_)
-		statusGroup_->setVisible(width >= 600);
 }
 
 const Preset &MainWindow::activePreset() const

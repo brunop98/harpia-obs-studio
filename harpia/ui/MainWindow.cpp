@@ -150,6 +150,18 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	idleSpin_->setMaximumWidth(80);
 	idleSpin_->setToolTip(QStringLiteral("Seconds without mouse/keyboard input before auto-pausing"));
 	row1->addWidget(idleSpin_);
+
+	row1->addSpacing(12);
+	row1->addWidget(new QLabel(QStringLiteral("Countdown"), central));
+	countdownCombo_ = new QComboBox(central);
+	countdownCombo_->addItem(QStringLiteral("Off"), 0);
+	for (int s = 1; s <= 10; ++s)
+		countdownCombo_->addItem(QStringLiteral("%1s").arg(s), s);
+	countdownCombo_->setMaximumWidth(80);
+	countdownCombo_->setToolTip(QStringLiteral(
+		"Show an on-screen countdown before recording starts, so you can get ready. "
+		"Saved on the active preset; never part of the recording."));
+	row1->addWidget(countdownCombo_);
 	row1->addStretch(1);
 	root->addLayout(row1);
 
@@ -165,7 +177,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	appCombo_ = new QComboBox(central);
 	appCombo_->setMinimumWidth(220);
 	appCombo_->setEnabled(false);
-	appCombo_->setToolTip(QStringLiteral("The application window to record"));
+	appCombo_->setVisible(false); // shown only when "Record only one application" is on
+	appCombo_->setToolTip(QStringLiteral("The application to watch for focus auto-pause"));
 	row2->addWidget(appCombo_);
 
 	row2->addSpacing(16);
@@ -176,6 +189,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	webcamCombo_ = new QComboBox(central);
 	webcamCombo_->setMinimumWidth(220);
 	webcamCombo_->setEnabled(false);
+	webcamCombo_->setVisible(false); // shown only when "Enable webcam" is on
 	row2->addWidget(webcamCombo_);
 	row2->addStretch(1);
 	root->addLayout(row2);
@@ -337,6 +351,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(captureModeCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onCaptureModeChanged);
 	connect(idleToggle_, &QCheckBox::toggled, this, &MainWindow::onIdleSettingChanged);
 	connect(idleSpin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::onIdleSettingChanged);
+	connect(countdownCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onCountdownSettingChanged);
 	connect(presetCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onPresetChanged);
 	connect(presetCombo_, &QComboBox::customContextMenuRequested, this, &MainWindow::showPresetMenu);
 	// Single click only selects; double-click opens the recording.
@@ -1031,6 +1046,8 @@ void MainWindow::refreshWebcamRow()
 		QSignalBlocker block(webcamEnableToggle_);
 		webcamEnableToggle_->setChecked(p.webcamEnabled);
 	}
+	// Only show the camera dropdown while the webcam toggle is on.
+	webcamCombo_->setVisible(p.webcamEnabled);
 	webcamCombo_->setEnabled(p.webcamEnabled && !recorder_.isRecording());
 
 	if (!p.webcamEnabled) {
@@ -1552,6 +1569,18 @@ void MainWindow::onIdleSettingChanged()
 		presets_.upsert(updated);
 }
 
+void MainWindow::onCountdownSettingChanged()
+{
+	// Persist the countdown onto the active preset (read at record start).
+	const Preset *cur = presets_.find(activePresetId_);
+	if (!cur)
+		return;
+	Preset updated = *cur;
+	updated.countdownSeconds = countdownCombo_->currentData().toInt();
+	if (updated.countdownSeconds != cur->countdownSeconds)
+		presets_.upsert(updated);
+}
+
 void MainWindow::onAudioChanged()
 {
 	const Preset *cur = presets_.find(activePresetId_);
@@ -1597,6 +1626,12 @@ void MainWindow::syncIdleControls()
 	idleToggle_->setChecked(on);
 	idleSpin_->setValue(on ? p.idleTimeoutSeconds : 10);
 	idleSpin_->setEnabled(on);
+
+	// The countdown control lives on the toolbar too; keep it in sync with the
+	// active preset.
+	QSignalBlocker b3(countdownCombo_);
+	const int ci = countdownCombo_->findData(p.countdownSeconds);
+	countdownCombo_->setCurrentIndex(ci >= 0 ? ci : 0);
 }
 
 void MainWindow::reloadPresetCombo()
@@ -1885,14 +1920,18 @@ void MainWindow::updateButtons()
 	// selector stays enabled regardless of the app-capture toggle.
 	captureModeCombo_->setEnabled(!locked);
 	appCaptureToggle_->setEnabled(!locked);
+	// The app and camera dropdowns are only shown while their toggle is on.
+	appCombo_->setVisible(appCaptureEnabled_);
 	appCombo_->setEnabled(!locked && appCaptureEnabled_);
 	webcamEnableToggle_->setEnabled(!locked);
+	webcamCombo_->setVisible(activePreset().webcamEnabled);
 	webcamCombo_->setEnabled(!locked && activePreset().webcamEnabled);
 	// Locking the idle controls too: unchecking the idle toggle while the
 	// recording is auto-paused would strand it paused forever (tickIdle bails on
 	// timeout <= 0 and never resumes).
 	idleToggle_->setEnabled(!locked);
 	idleSpin_->setEnabled(!locked && idleToggle_->isChecked());
+	countdownCombo_->setEnabled(!locked);
 
 	updateStatusChip();
 }

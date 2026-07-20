@@ -76,6 +76,7 @@ private slots:
 	void refreshWebcamRow(); // populate/reflect the webcam toggle + device combo
 	void onRegionChanged(const CaptureRegion &region);
 	void onIdleSettingChanged();
+	void onCountdownSettingChanged();
 	void onAudioChanged();
 	void onPresetChanged();
 	void refreshRecentList();
@@ -164,6 +165,7 @@ private:
 	QComboBox *captureModeCombo_ = nullptr;
 	QCheckBox *idleToggle_ = nullptr;
 	QSpinBox *idleSpin_ = nullptr;
+	QComboBox *countdownCombo_ = nullptr;
 
 	// Toolbar row 2: single-application capture + webcam enable/device.
 	QCheckBox *appCaptureToggle_ = nullptr;

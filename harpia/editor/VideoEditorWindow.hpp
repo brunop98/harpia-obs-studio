@@ -86,6 +86,7 @@ private:
 	QPushButton *cutModeBtn_ = nullptr;
 	QCheckBox *cropToggle_ = nullptr;
 	QLabel *infoLabel_ = nullptr;
+	QLabel *cursorTimeLabel_ = nullptr; // preview time under the cursor/playhead
 	QString baseInfo_; // static file info; extended with cut stats in Multi-Cut
 
 	QPushButton *playBtn_ = nullptr;

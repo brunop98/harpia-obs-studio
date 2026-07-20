@@ -31,6 +31,14 @@
 namespace harpia {
 
 namespace {
+QString previewTimeText(qint64 ms)
+{
+	return QStringLiteral("%1:%2.%3")
+		.arg(ms / 60000)
+		.arg((ms / 1000) % 60, 2, 10, QLatin1Char('0'))
+		.arg(ms % 1000, 3, 10, QLatin1Char('0'));
+}
+
 void revealInFolder(const QString &path)
 {
 #ifdef Q_OS_WIN
@@ -76,6 +84,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	modeRow->addWidget(trimModeBtn_);
 	modeRow->addWidget(cutModeBtn_);
 	modeRow->addStretch(1);
+	// Live cursor readout: the source time of the frame being previewed.
+	cursorTimeLabel_ = new QLabel(QStringLiteral("0:00.000"), this);
+	cursorTimeLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8; font-family:monospace;"));
+	cursorTimeLabel_->setToolTip(QStringLiteral("Time of the frame shown in the preview"));
+	modeRow->addWidget(cursorTimeLabel_);
 	root->addLayout(modeRow);
 
 	timeline_ = new Timeline(this);
@@ -305,6 +318,7 @@ void VideoEditorWindow::onScrub(qint64 ms)
 	if (playing_)
 		stopPlayback();
 	pendingMs_ = ms;
+	cursorTimeLabel_->setText(previewTimeText(ms));
 	if (!previewTimer_->isActive())
 		previewTimer_->start();
 }
@@ -316,6 +330,7 @@ void VideoEditorWindow::onHoverScrub(qint64 ms)
 	if (!valid_ || playing_)
 		return;
 	pendingMs_ = ms;
+	cursorTimeLabel_->setText(previewTimeText(ms));
 	if (!previewTimer_->isActive())
 		previewTimer_->start();
 }
@@ -406,6 +421,7 @@ void VideoEditorWindow::onPlayTick()
 		if (!img.isNull()) {
 			canvas_->setFrame(img);
 			tracks_->setPlayhead(outPos);
+			cursorTimeLabel_->setText(previewTimeText(srcTarget));
 		}
 		return;
 	}
@@ -442,6 +458,7 @@ void VideoEditorWindow::onPlayTick()
 	if (!img.isNull()) {
 		canvas_->setFrame(img);
 		timeline_->setPlayhead(ts);
+		cursorTimeLabel_->setText(previewTimeText(ts));
 	}
 }
 

@@ -60,6 +60,7 @@ public:
 	void setDuration(qint64 ms);
 	void setStart(qint64 ms);
 	void setEnd(qint64 ms);
+	void setPlayhead(qint64 ms); // move the playhead (during playback) without emitting
 	qint64 start() const { return start_; }
 	qint64 end() const { return end_; }
 

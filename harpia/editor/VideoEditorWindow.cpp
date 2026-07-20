@@ -16,6 +16,7 @@
 #include <QProcess>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QSlider>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -51,6 +52,26 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	timeline_ = new Timeline(this);
 	root->addWidget(timeline_);
 
+	// Playback + speed row: play/pause loops the trimmed region at the chosen
+	// speed so you can judge the speed before exporting.
+	auto *playRow = new QHBoxLayout;
+	playBtn_ = new QPushButton(QStringLiteral("▶  Play"), this);
+	playBtn_->setToolTip(QStringLiteral("Loop-play the trimmed section at the current speed"));
+	playRow->addWidget(playBtn_);
+	playRow->addSpacing(12);
+	playRow->addWidget(new QLabel(QStringLiteral("Speed"), this));
+	speedSlider_ = new QSlider(Qt::Horizontal, this);
+	speedSlider_->setRange(25, 400); // 0.25× .. 4.00×
+	speedSlider_->setSingleStep(5);
+	speedSlider_->setPageStep(25);
+	speedSlider_->setValue(100); // 1.0×
+	speedSlider_->setMinimumWidth(180);
+	playRow->addWidget(speedSlider_, 1);
+	speedLabel_ = new QLabel(QStringLiteral("1.00×"), this);
+	speedLabel_->setMinimumWidth(48);
+	playRow->addWidget(speedLabel_);
+	root->addLayout(playRow);
+
 	auto *controls = new QHBoxLayout;
 	cropToggle_ = new QCheckBox(QStringLiteral("Crop"), this);
 	cropToggle_->setToolTip(QStringLiteral("Drag the rectangle to crop the image (great for smaller GIFs)"));
@@ -68,6 +89,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	controls->addWidget(saveBtn);
 	controls->addWidget(cancelBtn);
 	root->addLayout(controls);
+
+	playTimer_ = new QTimer(this);
+	playTimer_->setInterval(33); // ~30 fps preview
+	connect(playTimer_, &QTimer::timeout, this, &VideoEditorWindow::onPlayTick);
+	connect(playBtn_, &QPushButton::clicked, this, &VideoEditorWindow::onPlayPause);
+	connect(speedSlider_, &QSlider::valueChanged, this, &VideoEditorWindow::onSpeedChanged);
 
 	previewTimer_ = new QTimer(this);
 	previewTimer_->setSingleShot(true);
@@ -96,6 +123,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 
 VideoEditorWindow::~VideoEditorWindow()
 {
+	stopPlayback();
 	joinExport();
 }
 
@@ -110,9 +138,89 @@ void VideoEditorWindow::joinExport()
 
 void VideoEditorWindow::onScrub(qint64 ms)
 {
+	// User is dragging a handle/playhead — stop playback and show that frame.
+	if (playing_)
+		stopPlayback();
 	pendingMs_ = ms;
 	if (!previewTimer_->isActive())
 		previewTimer_->start();
+}
+
+void VideoEditorWindow::onPlayPause()
+{
+	if (playing_)
+		stopPlayback();
+	else
+		startPlayback();
+}
+
+void VideoEditorWindow::startPlayback()
+{
+	if (!valid_)
+		return;
+	playing_ = true;
+	playBtn_->setText(QStringLiteral("⏸  Pause"));
+	playAnchorMs_ = timeline_->start();
+	seeker_->seekTo(playAnchorMs_);
+	playClock_.restart();
+	playTimer_->start();
+}
+
+void VideoEditorWindow::stopPlayback()
+{
+	playing_ = false;
+	playBtn_->setText(QStringLiteral("▶  Play"));
+	playTimer_->stop();
+}
+
+void VideoEditorWindow::onPlayTick()
+{
+	if (!playing_ || !valid_)
+		return;
+	const qint64 start = timeline_->start();
+	const qint64 end = timeline_->end();
+
+	qint64 target = playAnchorMs_ + qint64(playClock_.elapsed() * speed_);
+	if (target >= end) {
+		// Loop back to the start of the trimmed region.
+		playAnchorMs_ = start;
+		playClock_.restart();
+		seeker_->seekTo(start);
+		target = start;
+	}
+
+	// Decode forward to the target time; show the last frame reached.
+	QImage img;
+	qint64 ts = -1;
+	for (int guard = 0; guard < 240; ++guard) {
+		qint64 fts = -1;
+		QImage f = seeker_->nextFrame(&fts, 1280, 720);
+		if (f.isNull()) { // reached end of file inside the region — loop
+			seeker_->seekTo(start);
+			playAnchorMs_ = start;
+			playClock_.restart();
+			break;
+		}
+		img = f;
+		ts = fts;
+		if (fts >= target)
+			break;
+	}
+	if (!img.isNull()) {
+		canvas_->setFrame(img);
+		timeline_->setPlayhead(ts);
+	}
+}
+
+void VideoEditorWindow::onSpeedChanged(int sliderValue)
+{
+	// Re-anchor the playback clock so the speed change is seamless.
+	if (playing_) {
+		playAnchorMs_ = playAnchorMs_ + qint64(playClock_.elapsed() * speed_);
+		playClock_.restart();
+	}
+	speed_ = sliderValue / 100.0;
+	speedLabel_->setText(QStringLiteral("%1×").arg(speed_, 0, 'f', 2));
 }
 
 void VideoEditorWindow::onPreviewTick()
@@ -140,6 +248,7 @@ void VideoEditorWindow::onSave()
 {
 	if (!valid_)
 		return;
+	stopPlayback();
 
 	const QString base = QFileInfo(inPath_).completeBaseName() + QStringLiteral("_clip");
 	ExportOptionsDialog dlg(base, this);
@@ -164,8 +273,8 @@ void VideoEditorWindow::onSave()
 	o.cropW = c.width();
 	o.cropH = c.height();
 	o.gifFps = dlg.gifFps();
-	o.gifWidth = 0; // output = cropped area / full video size (no downscale)
-	o.speed = dlg.speed();
+	o.gifWidth = 0;     // output = cropped area / full video size (no downscale)
+	o.speed = speed_;   // from the editor's speed slider
 	o.videoCrf = dlg.videoCrf();
 	o.keepAudio = dlg.keepAudio();
 
@@ -228,10 +337,13 @@ void VideoEditorWindow::onExportFinished(bool ok, bool canceled, const QString &
 	box.setWindowTitle(QStringLiteral("Clip exported"));
 	box.setIcon(QMessageBox::Information);
 	box.setText(QStringLiteral("Saved %1").arg(QDir::toNativeSeparators(outPath_)));
-	QPushButton *openBtn = box.addButton(QStringLiteral("Open Folder"), QMessageBox::ActionRole);
+	QPushButton *openFileBtn = box.addButton(QStringLiteral("Open File"), QMessageBox::ActionRole);
+	QPushButton *openFolderBtn = box.addButton(QStringLiteral("Open Folder"), QMessageBox::ActionRole);
 	box.addButton(QStringLiteral("Done"), QMessageBox::AcceptRole);
 	box.exec();
-	if (box.clickedButton() == openBtn)
+	if (box.clickedButton() == openFileBtn)
+		QDesktopServices::openUrl(QUrl::fromLocalFile(outPath_));
+	else if (box.clickedButton() == openFolderBtn)
 		revealInFolder(outPath_);
 
 	accept(); // close the editor

@@ -250,6 +250,12 @@ void Timeline::setEnd(qint64 ms)
 	update();
 }
 
+void Timeline::setPlayhead(qint64 ms)
+{
+	playhead_ = std::clamp<qint64>(ms, 0, duration_);
+	update();
+}
+
 int Timeline::msToX(qint64 ms) const
 {
 	const int w = width() - 2 * kPad;

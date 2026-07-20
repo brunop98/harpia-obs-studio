@@ -9,6 +9,8 @@ extern "C" {
 struct AVFormatContext;
 struct AVCodecContext;
 struct SwsContext;
+struct AVPacket;
+struct AVFrame;
 }
 
 namespace harpia {
@@ -32,16 +34,30 @@ public:
 	double fps() const { return fps_; }
 
 	// Decode the frame nearest to `ms` and return it as an ARGB32 image scaled to
-	// fit within maxW x maxH (aspect preserved). Empty QImage on failure.
+	// fit within maxW x maxH (aspect preserved). Empty QImage on failure. Seeks
+	// each call — for random scrubbing.
 	QImage frameAt(qint64 ms, int maxW, int maxH);
 
+	// Sequential playback: seek once, then pull frames in order (efficient — no
+	// per-frame seeking). nextFrame returns the next decoded frame and its
+	// timestamp (ms) via outMs; empty QImage at end of stream.
+	bool seekTo(qint64 ms);
+	QImage nextFrame(qint64 *outMs, int maxW, int maxH);
+
 private:
+	QImage toImage(AVFrame *f, int maxW, int maxH);
+
 	AVFormatContext *fmt_ = nullptr;
 	AVCodecContext *dec_ = nullptr;
 	SwsContext *sws_ = nullptr;
 	int swsW_ = 0;
 	int swsH_ = 0;
 	int vIdx_ = -1;
+
+	// Sequential-decode scratch (for nextFrame).
+	AVPacket *seqPkt_ = nullptr;
+	AVFrame *seqFrame_ = nullptr;
+	bool flushed_ = false;
 
 	qint64 durationMs_ = 0;
 	int width_ = 0;

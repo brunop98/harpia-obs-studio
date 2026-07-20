@@ -34,18 +34,6 @@ ExportOptionsDialog::ExportOptionsDialog(const QString &defaultName, QWidget *pa
 	if (ClipExporter::webmAvailable())
 		formatCombo_->addItem(QStringLiteral("WebM (VP9)"), int(ClipExporter::Format::WebM));
 	form->addRow(QStringLiteral("Format"), formatCombo_);
-
-	// Playback speed — applies to every format (2× = twice as fast).
-	speedCombo_ = new QComboBox(this);
-	speedCombo_->addItem(QStringLiteral("0.5× (slow motion)"), 0.5);
-	speedCombo_->addItem(QStringLiteral("1× (normal)"), 1.0);
-	speedCombo_->addItem(QStringLiteral("1.5×"), 1.5);
-	speedCombo_->addItem(QStringLiteral("2×"), 2.0);
-	speedCombo_->addItem(QStringLiteral("3×"), 3.0);
-	speedCombo_->addItem(QStringLiteral("4×"), 4.0);
-	speedCombo_->setCurrentIndex(1); // 1× default
-	speedCombo_->setToolTip(QStringLiteral("Play the clip faster or slower. Audio is dropped unless 1×."));
-	form->addRow(QStringLiteral("Speed"), speedCombo_);
 	root->addLayout(form);
 
 	// Video-only options.
@@ -105,11 +93,6 @@ ClipExporter::Format ExportOptionsDialog::format() const
 int ExportOptionsDialog::gifFps() const
 {
 	return gifFpsSpin_->value();
-}
-
-double ExportOptionsDialog::speed() const
-{
-	return speedCombo_->currentData().toDouble();
 }
 
 int ExportOptionsDialog::videoCrf() const

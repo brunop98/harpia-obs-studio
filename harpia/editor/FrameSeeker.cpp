@@ -18,6 +18,10 @@ FrameSeeker::~FrameSeeker()
 
 void FrameSeeker::close()
 {
+	if (seqPkt_)
+		av_packet_free(&seqPkt_);
+	if (seqFrame_)
+		av_frame_free(&seqFrame_);
 	if (sws_) {
 		sws_freeContext(sws_);
 		sws_ = nullptr;
@@ -28,6 +32,7 @@ void FrameSeeker::close()
 		avformat_close_input(&fmt_);
 	swsW_ = swsH_ = 0;
 	vIdx_ = -1;
+	flushed_ = false;
 }
 
 bool FrameSeeker::open(const QString &path)
@@ -62,6 +67,9 @@ bool FrameSeeker::open(const QString &path)
 		return false;
 	}
 
+	seqPkt_ = av_packet_alloc();
+	seqFrame_ = av_frame_alloc();
+
 	width_ = dec_->width;
 	height_ = dec_->height;
 	const AVRational fr = av_guess_frame_rate(fmt_, st, nullptr);
@@ -75,6 +83,35 @@ bool FrameSeeker::open(const QString &path)
 	return true;
 }
 
+QImage FrameSeeker::toImage(AVFrame *f, int maxW, int maxH)
+{
+	if (!f || f->width <= 0 || f->height <= 0)
+		return {};
+	int dw = f->width, dh = f->height;
+	if (maxW > 0 && maxH > 0) {
+		const double s = std::min(double(maxW) / dw, double(maxH) / dh);
+		if (s < 1.0) {
+			dw = std::max(1, int(dw * s));
+			dh = std::max(1, int(dh * s));
+		}
+	}
+	if (!sws_ || swsW_ != dw || swsH_ != dh) {
+		if (sws_)
+			sws_freeContext(sws_);
+		sws_ = sws_getContext(f->width, f->height, (AVPixelFormat)f->format, dw, dh, AV_PIX_FMT_RGBA,
+				      SWS_BILINEAR, nullptr, nullptr, nullptr);
+		swsW_ = dw;
+		swsH_ = dh;
+	}
+	if (!sws_)
+		return {};
+	QImage img(dw, dh, QImage::Format_RGBA8888);
+	uint8_t *dst[4] = {img.bits(), nullptr, nullptr, nullptr};
+	int dstStride[4] = {(int)img.bytesPerLine(), 0, 0, 0};
+	sws_scale(sws_, f->data, f->linesize, 0, f->height, dst, dstStride);
+	return img;
+}
+
 QImage FrameSeeker::frameAt(qint64 ms, int maxW, int maxH)
 {
 	if (!fmt_ || !dec_ || vIdx_ < 0)
@@ -83,9 +120,9 @@ QImage FrameSeeker::frameAt(qint64 ms, int maxW, int maxH)
 	AVStream *st = fmt_->streams[vIdx_];
 	const int64_t target = av_rescale_q(ms, {1, 1000}, st->time_base);
 
-	// Seek to the keyframe at or before the target, then decode forward to it.
 	av_seek_frame(fmt_, vIdx_, target, AVSEEK_FLAG_BACKWARD);
 	avcodec_flush_buffers(dec_);
+	flushed_ = false;
 
 	AVPacket *pkt = av_packet_alloc();
 	AVFrame *frame = av_frame_alloc();
@@ -103,7 +140,7 @@ QImage FrameSeeker::frameAt(qint64 ms, int maxW, int maxH)
 		if (pkt->stream_index == vIdx_ && avcodec_send_packet(dec_, pkt) >= 0) {
 			while (avcodec_receive_frame(dec_, frame) >= 0) {
 				const int64_t pts = frame->best_effort_timestamp;
-				keep(); // always keep the latest decoded frame as a fallback
+				keep();
 				if (pts != AV_NOPTS_VALUE && pts >= target) {
 					done = true;
 					break;
@@ -113,46 +150,77 @@ QImage FrameSeeker::frameAt(qint64 ms, int maxW, int maxH)
 		}
 		av_packet_unref(pkt);
 	}
-	// Flush the decoder if we ran out of packets before reaching the target.
 	if (!done) {
 		avcodec_send_packet(dec_, nullptr);
 		while (avcodec_receive_frame(dec_, frame) >= 0) {
 			keep();
 			av_frame_unref(frame);
 		}
+		avcodec_flush_buffers(dec_);
 	}
 
-	QImage img;
-	if (haveBest && best->width > 0 && best->height > 0) {
-		// Fit within maxW x maxH, preserving aspect.
-		int dw = best->width, dh = best->height;
-		if (maxW > 0 && maxH > 0) {
-			const double s = std::min(double(maxW) / dw, double(maxH) / dh);
-			if (s < 1.0) {
-				dw = std::max(1, int(dw * s));
-				dh = std::max(1, int(dh * s));
-			}
-		}
-		if (!sws_ || swsW_ != dw || swsH_ != dh) {
-			if (sws_)
-				sws_freeContext(sws_);
-			sws_ = sws_getContext(best->width, best->height, (AVPixelFormat)best->format, dw, dh,
-					      AV_PIX_FMT_RGBA, SWS_BILINEAR, nullptr, nullptr, nullptr);
-			swsW_ = dw;
-			swsH_ = dh;
-		}
-		if (sws_) {
-			img = QImage(dw, dh, QImage::Format_RGBA8888);
-			uint8_t *dst[4] = {img.bits(), nullptr, nullptr, nullptr};
-			int dstStride[4] = {(int)img.bytesPerLine(), 0, 0, 0};
-			sws_scale(sws_, best->data, best->linesize, 0, best->height, dst, dstStride);
-		}
-	}
-
+	QImage img = haveBest ? toImage(best, maxW, maxH) : QImage();
 	av_frame_free(&best);
 	av_frame_free(&frame);
 	av_packet_free(&pkt);
 	return img;
+}
+
+bool FrameSeeker::seekTo(qint64 ms)
+{
+	if (!fmt_ || vIdx_ < 0)
+		return false;
+	AVStream *st = fmt_->streams[vIdx_];
+	const int64_t target = av_rescale_q(ms, {1, 1000}, st->time_base);
+	av_seek_frame(fmt_, vIdx_, target, AVSEEK_FLAG_BACKWARD);
+	avcodec_flush_buffers(dec_);
+	flushed_ = false;
+	return true;
+}
+
+QImage FrameSeeker::nextFrame(qint64 *outMs, int maxW, int maxH)
+{
+	if (!fmt_ || !dec_ || vIdx_ < 0)
+		return {};
+	AVStream *st = fmt_->streams[vIdx_];
+
+	while (true) {
+		int r = avcodec_receive_frame(dec_, seqFrame_);
+		if (r == 0) {
+			const int64_t pts = seqFrame_->best_effort_timestamp != AV_NOPTS_VALUE
+						    ? seqFrame_->best_effort_timestamp
+						    : 0;
+			if (outMs)
+				*outMs = (qint64)(pts * av_q2d(st->time_base) * 1000.0);
+			QImage img = toImage(seqFrame_, maxW, maxH);
+			av_frame_unref(seqFrame_);
+			return img;
+		}
+		if (r == AVERROR_EOF)
+			return {};
+		if (r != AVERROR(EAGAIN))
+			return {};
+
+		// Need more input: feed the next video packet, or flush at EOF.
+		bool fed = false;
+		while (av_read_frame(fmt_, seqPkt_) >= 0) {
+			if (seqPkt_->stream_index == vIdx_) {
+				avcodec_send_packet(dec_, seqPkt_);
+				av_packet_unref(seqPkt_);
+				fed = true;
+				break;
+			}
+			av_packet_unref(seqPkt_);
+		}
+		if (!fed) {
+			if (!flushed_) {
+				avcodec_send_packet(dec_, nullptr);
+				flushed_ = true;
+			} else {
+				return {};
+			}
+		}
+	}
 }
 
 } // namespace harpia

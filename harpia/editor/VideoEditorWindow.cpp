@@ -181,6 +181,45 @@ bool VideoEditorWindow::multiCut() const
 	return stack_ && stack_->currentIndex() == 1;
 }
 
+bool VideoEditorWindow::hasUnsavedEdits() const
+{
+	if (!valid_)
+		return false;
+	if (!tracks_->segments().isEmpty())
+		return true; // Multi-Cut edit in progress
+	if (timeline_->start() != 0 || timeline_->end() != seeker_->durationMs())
+		return true; // trim range changed
+	if (speed_ != 1.0)
+		return true;
+	if (cropToggle_->isChecked())
+		return true;
+	return false;
+}
+
+void VideoEditorWindow::reject()
+{
+	// Exports save to a NEW file, so "unsaved" means any edit that would be
+	// lost by closing now. A successful export closes via accept() instead.
+	if (hasUnsavedEdits()) {
+		stopPlayback();
+		QMessageBox box(this);
+		box.setWindowTitle(QStringLiteral("Discard changes?"));
+		box.setIcon(QMessageBox::Warning);
+		box.setText(QStringLiteral("You have unsaved edits in this video."));
+		box.setInformativeText(
+			QStringLiteral("Closing the window will discard everything. Use Save… to export first."));
+		QPushButton *closeBtn =
+			box.addButton(QStringLiteral("Close window"), QMessageBox::DestructiveRole);
+		QPushButton *cancelBtn =
+			box.addButton(QStringLiteral("Cancel"), QMessageBox::RejectRole);
+		box.setDefaultButton(cancelBtn);
+		box.exec();
+		if (box.clickedButton() != closeBtn)
+			return; // keep editing
+	}
+	QDialog::reject();
+}
+
 void VideoEditorWindow::setEditMode(bool cut)
 {
 	stopPlayback();

@@ -42,6 +42,10 @@ public:
 
 	bool isValid() const { return valid_; }
 
+	// Called for every close path (title-bar X, Close button, Esc). When there
+	// are unsaved edits, asks: Cancel (keep editing) or Close window (discard).
+	void reject() override;
+
 signals:
 	void exported(const QString &path);
 
@@ -67,6 +71,7 @@ private:
 	void setEditMode(bool multiCut);
 	bool multiCut() const;
 	void updateInfoLabel();
+	bool hasUnsavedEdits() const;
 
 	QString inPath_;
 	bool valid_ = false;

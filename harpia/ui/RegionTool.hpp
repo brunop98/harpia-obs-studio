@@ -45,7 +45,9 @@ public:
 
 signals:
 	void regionChanged(const CaptureRegion &region);
-	void cancelled(); // Esc pressed while not recording
+	void cancelled();            // Esc pressed while not recording
+	void saveRegionRequested();  // "Save Region…" chosen from the right-click menu
+	void manageRegionsRequested(); // "Manage saved regions…" chosen
 
 protected:
 	void paintEvent(QPaintEvent *) override;
@@ -53,6 +55,7 @@ protected:
 	void mouseMoveEvent(QMouseEvent *) override;
 	void mouseReleaseEvent(QMouseEvent *) override;
 	void mouseDoubleClickEvent(QMouseEvent *) override;
+	void contextMenuEvent(QContextMenuEvent *) override;
 	void keyPressEvent(QKeyEvent *) override;
 
 private:

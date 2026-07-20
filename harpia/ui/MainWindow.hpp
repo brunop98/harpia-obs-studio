@@ -7,6 +7,7 @@
 #include "library/ClipLibrary.hpp"
 #include "library/ThumbnailCache.hpp"
 #include "model/FileNameTemplate.hpp"
+#include "model/RegionStore.hpp"
 #include "platform/IdleMonitor.hpp"
 
 #include <QHash>
@@ -66,6 +67,8 @@ private slots:
 	void onOpenClipLibrary();
 	void onOpenErrorLogs();
 	void onCaptureModeChanged();
+	void onSaveRegionRequested();    // "Save Region…" from the region right-click
+	void openSavedRegionsManager();  // rename/edit/delete saved regions
 	void onAppCaptureToggled(bool on);       // single-application capture toggle
 	void onAppWindowChanged();               // window picked in the app dropdown
 	void onWebcamDeviceChanged();
@@ -136,6 +139,11 @@ private:
 	enum class CaptureMode { Monitor, Region };
 	CaptureMode captureMode_ = CaptureMode::Monitor;
 
+	// Rebuild the capture dropdown (modes + saved regions + Manage). The last
+	// real selection index, restored when the "Manage…" action is chosen.
+	void reloadCaptureModeCombo();
+	int prevCaptureIndex_ = 0;
+
 	// Single-application (window) capture — overrides the monitor/region mode.
 	bool appCaptureEnabled_ = false;
 	QString appWindowValue_; // selected window's capture value
@@ -203,6 +211,7 @@ private:
 	QTimer *idleTimer_ = nullptr;
 	QTimer *meterTimer_ = nullptr;
 
+	std::unique_ptr<RegionStore> regionStore_; // saved capture regions (global)
 	std::unique_ptr<ClipLibraryWindow> clipWindow_;
 	std::unique_ptr<ErrorLogsPanel> errorLogsPanel_;
 	std::unique_ptr<RegionTool> regionTool_;

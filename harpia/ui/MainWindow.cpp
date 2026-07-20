@@ -8,6 +8,7 @@
 #include "PresetEditorDialog.hpp"
 #include "RecentListWidget.hpp"
 #include "CountdownOverlay.hpp"
+#include "RegionDialogs.hpp"
 #include "RegionTool.hpp"
 #include "ScreenBorderOverlay.hpp"
 #include "ShareExportDialog.hpp"
@@ -92,6 +93,10 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	ownPid_ = (uint64_t)QCoreApplication::applicationPid();
 
+	// Saved capture regions (global; shared across presets).
+	regionStore_ = std::make_unique<RegionStore>(presets_.configDir());
+	regionStore_->load();
+
 	if (!presets_.presets().empty())
 		activePresetId_ = presets_.presets().front().id;
 
@@ -124,10 +129,13 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	row1->addSpacing(12);
 	row1->addWidget(new QLabel(QStringLiteral("Capture"), central));
 	captureModeCombo_ = new QComboBox(central);
-	captureModeCombo_->addItem(QStringLiteral("Entire Monitor"), int(CaptureMode::Monitor));
-	captureModeCombo_->addItem(QStringLiteral("Custom Region"), int(CaptureMode::Region));
+	// Items carry a string tag in their data: "monitor", "region", "saved:<id>",
+	// or "manage". Saved regions are appended by reloadCaptureModeCombo().
+	captureModeCombo_->addItem(QStringLiteral("Entire Monitor"), QStringLiteral("monitor"));
+	captureModeCombo_->addItem(QStringLiteral("Custom Region"), QStringLiteral("region"));
 	captureModeCombo_->setToolTip(
-		QStringLiteral("What to record: the whole monitor, or a custom region you drag on screen"));
+		QStringLiteral("What to record: the whole monitor, a custom region you drag on screen, "
+			       "or a saved region. Right-click a region to save it."));
 	row1->addWidget(captureModeCombo_);
 
 	row1->addSpacing(12);
@@ -369,6 +377,12 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		// Esc: revert to full-monitor capture.
 		captureModeCombo_->setCurrentIndex(int(CaptureMode::Monitor));
 	});
+	connect(regionTool_.get(), &RegionTool::saveRegionRequested, this, &MainWindow::onSaveRegionRequested);
+	connect(regionTool_.get(), &RegionTool::manageRegionsRequested, this,
+		&MainWindow::openSavedRegionsManager);
+
+	// Populate the capture dropdown with any saved regions.
+	reloadCaptureModeCombo();
 
 	applyDarkTheme();
 
@@ -1279,11 +1293,33 @@ void MainWindow::onOpenErrorLogs()
 
 void MainWindow::onCaptureModeChanged()
 {
-	captureMode_ = CaptureMode(captureModeCombo_->currentData().toInt());
+	const QString sel = captureModeCombo_->currentData().toString();
+
+	// "Manage saved regions…" is an action, not a selectable mode — restore the
+	// previous selection and open the manager.
+	if (sel == QStringLiteral("manage")) {
+		QSignalBlocker block(captureModeCombo_);
+		captureModeCombo_->setCurrentIndex(prevCaptureIndex_);
+		openSavedRegionsManager();
+		return;
+	}
+	prevCaptureIndex_ = captureModeCombo_->currentIndex();
+
 	QScreen *screen = screenForActivePreset();
 
-	if (captureMode_ == CaptureMode::Region) {
-		// Seed a default region (centered, ~2/3 of the screen) the first time.
+	if (sel == QStringLiteral("monitor")) {
+		captureMode_ = CaptureMode::Monitor;
+		currentRegion_ = CaptureRegion{};
+		capture_.setRegion(currentRegion_);
+	} else {
+		// "region" (fresh custom) or "saved:<id>" (restore its position/size).
+		captureMode_ = CaptureMode::Region;
+		if (sel.startsWith(QStringLiteral("saved:"))) {
+			const std::string id = sel.mid(6).toStdString();
+			if (const SavedRegion *r = regionStore_->find(id))
+				currentRegion_ = CaptureRegion{true, r->x, r->y, r->width, r->height};
+		}
+		// Seed a default region (centered, ~2/3 of the screen) if none yet.
 		if (!currentRegion_.enabled || currentRegion_.width <= 0) {
 			const QSize canvas = canvasForActivePreset();
 			CaptureRegion r;
@@ -1298,13 +1334,70 @@ void MainWindow::onCaptureModeChanged()
 		regionTool_->setRegionDevicePx(
 			QRect(currentRegion_.x, currentRegion_.y, currentRegion_.width, currentRegion_.height));
 		capture_.setRegion(currentRegion_);
-	} else {
-		currentRegion_ = CaptureRegion{};
-		capture_.setRegion(currentRegion_);
 	}
 	updateRegionToolVisibility();
 	updateButtons();
 	refreshReadiness();
+}
+
+void MainWindow::reloadCaptureModeCombo()
+{
+	QSignalBlocker block(captureModeCombo_);
+	const QString prev = captureModeCombo_->currentData().toString();
+
+	captureModeCombo_->clear();
+	captureModeCombo_->addItem(QStringLiteral("Entire Monitor"), QStringLiteral("monitor"));
+	captureModeCombo_->addItem(QStringLiteral("Custom Region"), QStringLiteral("region"));
+
+	const auto &regions = regionStore_->regions();
+	if (!regions.empty()) {
+		captureModeCombo_->insertSeparator(captureModeCombo_->count());
+		for (const SavedRegion &r : regions)
+			captureModeCombo_->addItem(QString::fromStdString(r.name),
+						   QStringLiteral("saved:%1").arg(QString::fromStdString(r.id)));
+		captureModeCombo_->insertSeparator(captureModeCombo_->count());
+		captureModeCombo_->addItem(QStringLiteral("Manage saved regions…"), QStringLiteral("manage"));
+	}
+
+	// Keep the previous selection if it still exists, else reflect the mode.
+	int idx = captureModeCombo_->findData(prev.isEmpty() ? QStringLiteral("monitor") : prev);
+	if (idx < 0)
+		idx = (captureMode_ == CaptureMode::Region) ? 1 : 0;
+	captureModeCombo_->setCurrentIndex(idx);
+	prevCaptureIndex_ = captureModeCombo_->currentIndex();
+}
+
+void MainWindow::onSaveRegionRequested()
+{
+	if (!regionTool_ || captureMode_ != CaptureMode::Region || !currentRegion_.enabled)
+		return;
+
+	SavedRegion r;
+	r.id = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+	r.name = QStringLiteral("Region %1").arg(int(regionStore_->regions().size()) + 1).toStdString();
+	r.x = currentRegion_.x;
+	r.y = currentRegion_.y;
+	r.width = currentRegion_.width;
+	r.height = currentRegion_.height;
+
+	RegionEditDialog dlg(r, this);
+	if (dlg.exec() != QDialog::Accepted)
+		return;
+	const SavedRegion saved = dlg.result();
+	regionStore_->upsert(saved);
+	reloadCaptureModeCombo();
+	// Select (and apply) the newly saved region.
+	const int idx =
+		captureModeCombo_->findData(QStringLiteral("saved:%1").arg(QString::fromStdString(saved.id)));
+	if (idx >= 0)
+		captureModeCombo_->setCurrentIndex(idx); // triggers onCaptureModeChanged -> applies it
+}
+
+void MainWindow::openSavedRegionsManager()
+{
+	SavedRegionsDialog dlg(*regionStore_, this);
+	dlg.exec();
+	reloadCaptureModeCombo();
 }
 
 void MainWindow::applyLiveCapture()

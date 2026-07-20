@@ -1,7 +1,9 @@
 #include "RegionTool.hpp"
 
+#include <QContextMenuEvent>
 #include <QGuiApplication>
 #include <QKeyEvent>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QScreen>
@@ -246,6 +248,20 @@ void RegionTool::mouseDoubleClickEvent(QMouseEvent *)
 	QRect inner(mapToGlobal(innerRectLocal().topLeft()), innerRectLocal().size());
 	inner.moveCenter(s.center());
 	applyGeometry(inner);
+}
+
+void RegionTool::contextMenuEvent(QContextMenuEvent *e)
+{
+	// Right-click the region to save it as a reusable named region, or manage
+	// the saved list. Owner (MainWindow) handles the actual save/manage.
+	QMenu menu;
+	QAction *saveAct = menu.addAction(QStringLiteral("Save Region…"));
+	QAction *manageAct = menu.addAction(QStringLiteral("Manage saved regions…"));
+	QAction *chosen = menu.exec(e->globalPos());
+	if (chosen == saveAct)
+		emit saveRegionRequested();
+	else if (chosen == manageAct)
+		emit manageRegionsRequested();
 }
 
 void RegionTool::keyPressEvent(QKeyEvent *e)

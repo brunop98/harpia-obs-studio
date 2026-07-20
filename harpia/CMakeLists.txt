@@ -84,6 +84,8 @@ target_sources(
     model/PresetStore.hpp
     model/FileNameTemplate.cpp
     model/FileNameTemplate.hpp
+    model/RegionStore.cpp
+    model/RegionStore.hpp
     platform/IdleMonitor.hpp
     library/ClipLibrary.cpp
     library/ClipLibrary.hpp
@@ -116,6 +118,8 @@ target_sources(
     ui/ErrorLogsPanel.hpp
     ui/RegionTool.cpp
     ui/RegionTool.hpp
+    ui/RegionDialogs.cpp
+    ui/RegionDialogs.hpp
 )
 
 # Platform-specific idle detection + foreground-window backends.

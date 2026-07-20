@@ -382,7 +382,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	recentStrip_->setGridSize(kStripThumb + QSize(24, 44));
 	recentStrip_->setUniformItemSizes(true); // every card is one grid cell
 	recentStrip_->setResizeMode(QListView::Adjust);
-	recentStrip_->setFixedHeight(kStripThumb.height() + 60);
+	// Thumbnail + two caption lines (date, size) — tall enough that the size
+	// line is never clipped.
+	recentStrip_->setFixedHeight(kStripThumb.height() + 76);
 	recentStrip_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 	recentStrip_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	recentStrip_->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -514,12 +516,16 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	reloadPresetCombo();
 	syncIdleControls();
-	audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds);
+	audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds,
+			  activePreset().desktopVolume, activePreset().micVolumes);
 	refreshRecentList();
 	refreshReadiness();
 	refreshWebcamRow();
 	updateButtons();
 	applyResponsiveLayout(width()); // set initial section visibility
+
+	// Start keyboard focus on the primary action instead of a random combo.
+	primaryButton_->setFocus();
 }
 
 MainWindow::~MainWindow()
@@ -543,6 +549,8 @@ void MainWindow::applyDarkTheme()
 		QPushButton#primaryButton:hover { background: #f05a5f; }
 		QPushButton#primaryButton:focus { border: 1px solid #ffd9da; }
 		QPushButton#primaryButton:disabled { background: #5a3a3b; color: #9a7a7b; }
+		QPushButton#pauseButton { border-radius: 10px; }
+		QPushButton#pauseButton:disabled { background: #24262b; color: #565b63; border: 1px solid #2b2f35; }
 		QComboBox, QSpinBox { background: #2b2d31; border: 1px solid #3a3d42; border-radius: 6px; padding: 4px 8px; }
 		QComboBox:focus, QSpinBox:focus { border: 1px solid #00aeef; }
 		QListWidget { background: #202225; border: 1px solid #303338; border-radius: 8px; }
@@ -1141,7 +1149,8 @@ void MainWindow::editActivePreset(const QString &initialPage)
 		presets_.upsert(updated);
 		reloadPresetCombo();
 		syncIdleControls();
-		audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds);
+		audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds,
+			  activePreset().desktopVolume, activePreset().micVolumes);
 		refreshRecentList();
 		hwProbeMs_ = 0; // settings may have changed monitor/mic/webcam use
 		refreshReadiness();
@@ -1693,6 +1702,8 @@ void MainWindow::onAudioChanged()
 	Preset updated = *cur;
 	updated.recordDesktopAudio = audioPanel_->desktopOn();
 	updated.micDeviceIds = audioPanel_->enabledMicIds();
+	updated.desktopVolume = audioPanel_->desktopVolume();
+	updated.micVolumes = audioPanel_->micVolumes();
 	presets_.upsert(updated);
 	refreshReadiness();
 }
@@ -1703,7 +1714,8 @@ void MainWindow::onPresetChanged()
 	if (!id.isEmpty())
 		activePresetId_ = id.toStdString();
 	syncIdleControls();
-	audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds);
+	audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds,
+			  activePreset().desktopVolume, activePreset().micVolumes);
 
 	// Switch the live capture to the new preset's display (unless recording).
 	// The previous region was chosen on a possibly-different monitor, so reset

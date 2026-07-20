@@ -2,6 +2,7 @@
 
 #include <obs.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace harpia {
@@ -140,10 +141,29 @@ uint32_t AudioManager::allocMicChannel() const
 
 void AudioManager::setDesktopEnabled(bool on)
 {
-	if (on && !desktop_)
+	if (on && !desktop_) {
 		desktop_ = makeMeter(outputCaptureId(), "harpia_pc_audio", "default", kDesktopChannel);
-	else if (!on && desktop_)
+		if (desktop_ && desktop_->source)
+			obs_source_set_volume(desktop_->source, desktopVol_);
+	} else if (!on && desktop_) {
 		destroyMeter(desktop_);
+	}
+}
+
+void AudioManager::setDesktopVolume(float v)
+{
+	desktopVol_ = std::clamp(v, 0.f, 1.f);
+	if (desktop_ && desktop_->source)
+		obs_source_set_volume(desktop_->source, desktopVol_);
+}
+
+void AudioManager::setMicVolume(const std::string &deviceId, float v)
+{
+	const float vol = std::clamp(v, 0.f, 1.f);
+	micVols_[deviceId] = vol;
+	auto it = mics_.find(deviceId);
+	if (it != mics_.end() && it->second && it->second->source)
+		obs_source_set_volume(it->second->source, vol);
 }
 
 float AudioManager::desktopPeakDb() const
@@ -164,8 +184,13 @@ void AudioManager::setMicEnabled(const std::string &deviceId, bool on)
 		}
 		const std::string name = "harpia_mic_" + std::to_string(ch);
 		auto meter = makeMeter(inputCaptureId(), name.c_str(), deviceId.c_str(), ch);
-		if (meter)
+		if (meter) {
+			// Re-apply the remembered volume for this device.
+			auto vol = micVols_.find(deviceId);
+			if (vol != micVols_.end() && meter->source)
+				obs_source_set_volume(meter->source, vol->second);
 			mics_.emplace(deviceId, std::move(meter));
+		}
 	} else if (it != mics_.end()) {
 		destroyMeter(it->second);
 		mics_.erase(it);

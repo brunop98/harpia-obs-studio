@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -72,6 +73,10 @@ struct Preset {
 	// input device ids to record. Empty micDeviceIds means no mic.
 	bool recordDesktopAudio = false;
 	std::vector<std::string> micDeviceIds;
+	// Per-source volumes (linear 0..1). Mic volumes are keyed by device id and
+	// kept even for currently-disabled devices so re-enabling restores them.
+	double desktopVolume = 1.0;
+	std::map<std::string, double> micVolumes;
 
 	// Mouse recording (drawn onto the desktop so the screen capture records it).
 	bool showMouseCursor = true;                    // record the OS cursor

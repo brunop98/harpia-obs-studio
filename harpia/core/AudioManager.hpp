@@ -51,6 +51,11 @@ public:
 	bool micEnabled(const std::string &deviceId) const;
 	float micPeakDb(const std::string &deviceId) const;
 
+	// Per-source volume (linear 0..1). Values are remembered while a source is
+	// disabled and re-applied when it is (re)created.
+	void setDesktopVolume(float v);
+	void setMicVolume(const std::string &deviceId, float v);
+
 	// Release every audio source/meter.
 	void clear();
 
@@ -75,6 +80,8 @@ private:
 
 	std::unique_ptr<Meter> desktop_;
 	std::map<std::string, std::unique_ptr<Meter>> mics_;
+	float desktopVol_ = 1.f;
+	std::map<std::string, float> micVols_;
 };
 
 } // namespace harpia

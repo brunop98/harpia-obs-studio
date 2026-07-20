@@ -58,6 +58,17 @@ obs_data_t *presetToData(const Preset &p)
 	}
 	obs_data_set_array(d, "mic_device_ids", mics);
 	obs_data_array_release(mics);
+	obs_data_set_double(d, "desktop_volume", p.desktopVolume);
+	obs_data_array_t *vols = obs_data_array_create();
+	for (const auto &kv : p.micVolumes) {
+		obs_data_t *item = obs_data_create();
+		obs_data_set_string(item, "id", kv.first.c_str());
+		obs_data_set_double(item, "volume", kv.second);
+		obs_data_array_push_back(vols, item);
+		obs_data_release(item);
+	}
+	obs_data_set_array(d, "mic_volumes", vols);
+	obs_data_array_release(vols);
 	obs_data_set_bool(d, "show_mouse_cursor", p.showMouseCursor);
 	obs_data_set_bool(d, "show_mouse_area", p.showMouseArea);
 	obs_data_set_string(d, "mouse_highlight_color", p.mouseHighlightColor.c_str());
@@ -114,6 +125,16 @@ Preset presetFromData(obs_data_t *d)
 		obs_data_release(item);
 	}
 	obs_data_array_release(mics);
+	obs_data_set_default_double(d, "desktop_volume", 1.0); // pre-volume presets
+	p.desktopVolume = obs_data_get_double(d, "desktop_volume");
+	obs_data_array_t *vols = obs_data_get_array(d, "mic_volumes");
+	const size_t volCount = vols ? obs_data_array_count(vols) : 0;
+	for (size_t i = 0; i < volCount; i++) {
+		obs_data_t *item = obs_data_array_item(vols, i);
+		p.micVolumes[obs_data_get_string(item, "id")] = obs_data_get_double(item, "volume");
+		obs_data_release(item);
+	}
+	obs_data_array_release(vols);
 
 	// Defaults so presets saved before these fields keep sensible values.
 	obs_data_set_default_bool(d, "show_mouse_cursor", true);

@@ -18,7 +18,8 @@ namespace harpia {
 class ExportOptionsDialog : public QDialog {
 	Q_OBJECT
 public:
-	ExportOptionsDialog(const QString &defaultName, QWidget *parent = nullptr);
+	// allowGif=false hides the GIF format (multi-cut exports are video-only).
+	ExportOptionsDialog(const QString &defaultName, bool allowGif = true, QWidget *parent = nullptr);
 
 	QString fileName() const;               // base name, no extension
 	ClipExporter::Format format() const;

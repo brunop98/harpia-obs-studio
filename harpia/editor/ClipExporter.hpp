@@ -4,6 +4,7 @@
 #include <QString>
 
 #include <atomic>
+#include <vector>
 
 namespace harpia {
 
@@ -16,6 +17,13 @@ class ClipExporter : public QObject {
 	Q_OBJECT
 public:
 	enum class Format { Mp4, Mkv, Mov, WebM, Gif };
+
+	// One kept section of the source, played at its own speed (multi-cut).
+	struct Cut {
+		qint64 startMs = 0;
+		qint64 endMs = 0;
+		double speed = 1.0;
+	};
 
 	struct Options {
 		Format format = Format::Mp4;
@@ -36,6 +44,13 @@ public:
 		// Video-only
 		int videoCrf = 20;    // x264/vp9 constant quality (lower = better)
 		bool keepAudio = true; // MP4/MKV/MOV keep the (trimmed) audio; GIF/WebM silent
+
+		// Multi-cut assembly: when non-empty, the output is these source ranges
+		// played back-to-back, each at its own speed, and startMs/endMs/speed
+		// above are ignored. Audio (MP4/MKV/MOV) is time-stretched per cut with
+		// the pitch-preserving atempo filter and re-encoded as one AAC track.
+		// GIF is not supported with cuts.
+		std::vector<Cut> cuts;
 	};
 
 	static QString extensionFor(Format f); // "mp4"/"mkv"/"mov"/"webm"/"gif"
@@ -53,6 +68,8 @@ signals:
 private:
 	// Video-container path (MP4/MKV/MOV/WebM). Returns "" on success, else error.
 	QString runVideo(const QString &inPath, const QString &outPath, const Options &opts);
+	// Multi-cut path: opts.cuts concatenated, per-cut speed, atempo'd audio.
+	QString runVideoCuts(const QString &inPath, const QString &outPath, const Options &opts);
 
 	std::atomic<bool> cancel_{false};
 };

@@ -13,7 +13,8 @@
 
 namespace harpia {
 
-ExportOptionsDialog::ExportOptionsDialog(const QString &defaultName, QWidget *parent) : QDialog(parent)
+ExportOptionsDialog::ExportOptionsDialog(const QString &defaultName, bool allowGif, QWidget *parent)
+	: QDialog(parent)
 {
 	setWindowTitle(QStringLiteral("Export clip"));
 	setModal(true);
@@ -27,7 +28,8 @@ ExportOptionsDialog::ExportOptionsDialog(const QString &defaultName, QWidget *pa
 	form->addRow(QStringLiteral("File name"), nameEdit_);
 
 	formatCombo_ = new QComboBox(this);
-	formatCombo_->addItem(QStringLiteral("GIF (animated)"), int(ClipExporter::Format::Gif));
+	if (allowGif)
+		formatCombo_->addItem(QStringLiteral("GIF (animated)"), int(ClipExporter::Format::Gif));
 	formatCombo_->addItem(QStringLiteral("MP4 (H.264)"), int(ClipExporter::Format::Mp4));
 	formatCombo_->addItem(QStringLiteral("MKV (H.264)"), int(ClipExporter::Format::Mkv));
 	formatCombo_->addItem(QStringLiteral("MOV (H.264)"), int(ClipExporter::Format::Mov));

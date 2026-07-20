@@ -4,9 +4,14 @@
 #include "EditorWidgets.hpp"
 #include "ExportOptionsDialog.hpp"
 #include "FrameSeeker.hpp"
+#include "TrackEditor.hpp"
 
 #include <QCheckBox>
 #include <QDesktopServices>
+#include <QSignalBlocker>
+
+#include <algorithm>
+#include <cmath>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -17,6 +22,7 @@
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QSlider>
+#include <QStackedWidget>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -38,8 +44,8 @@ void revealInFolder(const QString &path)
 VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	: QDialog(parent), inPath_(inPath)
 {
-	setWindowTitle(QStringLiteral("Trim / Crop — %1").arg(QFileInfo(inPath).fileName()));
-	resize(900, 640);
+	setWindowTitle(QStringLiteral("Edit — %1").arg(QFileInfo(inPath).fileName()));
+	resize(900, 680);
 
 	seeker_ = std::make_unique<FrameSeeker>();
 	valid_ = seeker_->open(inPath);
@@ -49,8 +55,28 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	canvas_ = new PreviewCanvas(this);
 	root->addWidget(canvas_, 1);
 
+	// Mode switch: Simple Trim (one range) vs Multi-Cut (assemble many cuts).
+	auto *modeRow = new QHBoxLayout;
+	trimModeBtn_ = new QPushButton(QStringLiteral("Simple Trim"), this);
+	trimModeBtn_->setCheckable(true);
+	trimModeBtn_->setChecked(true);
+	trimModeBtn_->setToolTip(QStringLiteral("Trim one start/end range"));
+	cutModeBtn_ = new QPushButton(QStringLiteral("Multi-Cut"), this);
+	cutModeBtn_->setCheckable(true);
+	cutModeBtn_->setToolTip(QStringLiteral(
+		"Drag on the Source track to select the sections to keep; they are joined in order. "
+		"Each cut gets its own playback speed."));
+	modeRow->addWidget(trimModeBtn_);
+	modeRow->addWidget(cutModeBtn_);
+	modeRow->addStretch(1);
+	root->addLayout(modeRow);
+
 	timeline_ = new Timeline(this);
-	root->addWidget(timeline_);
+	tracks_ = new TrackEditor(this);
+	stack_ = new QStackedWidget(this);
+	stack_->addWidget(timeline_); // index 0 = Simple Trim
+	stack_->addWidget(tracks_);   // index 1 = Multi-Cut
+	root->addWidget(stack_);
 
 	// Playback + speed row: play/pause loops the trimmed region at the chosen
 	// speed so you can judge the speed before exporting.
@@ -103,6 +129,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	connect(previewTimer_, &QTimer::timeout, this, &VideoEditorWindow::onPreviewTick);
 
 	connect(timeline_, &Timeline::scrub, this, &VideoEditorWindow::onScrub);
+	connect(tracks_, &TrackEditor::scrubSource, this, &VideoEditorWindow::onScrub);
+	connect(tracks_, &TrackEditor::segmentsChanged, this, &VideoEditorWindow::onSegmentsChanged);
+	connect(tracks_, &TrackEditor::selectionChanged, this, &VideoEditorWindow::onSegmentSelected);
+	connect(trimModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(false); });
+	connect(cutModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(true); });
 	connect(cropToggle_, &QCheckBox::toggled, this, &VideoEditorWindow::onCropToggled);
 	connect(resetCrop, &QPushButton::clicked, this, [this]() { canvas_->resetCrop(); });
 	connect(saveBtn, &QPushButton::clicked, this, &VideoEditorWindow::onSave);
@@ -111,10 +142,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	if (valid_) {
 		canvas_->setVideoSize(seeker_->width(), seeker_->height());
 		timeline_->setDuration(seeker_->durationMs());
-		infoLabel_->setText(QStringLiteral("%1 × %2   %3s")
-					    .arg(seeker_->width())
-					    .arg(seeker_->height())
-					    .arg(seeker_->durationMs() / 1000.0, 0, 'f', 1));
+		tracks_->setDuration(seeker_->durationMs());
+		baseInfo_ = QStringLiteral("%1 × %2   %3s")
+				    .arg(seeker_->width())
+				    .arg(seeker_->height())
+				    .arg(seeker_->durationMs() / 1000.0, 0, 'f', 1);
+		updateInfoLabel();
 		showFrame(0);
 	} else {
 		infoLabel_->setText(QStringLiteral("Could not open this video."));
@@ -122,6 +155,75 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 		playBtn_->setEnabled(false);
 		speedSlider_->setEnabled(false);
 		cropToggle_->setEnabled(false);
+		trimModeBtn_->setEnabled(false);
+		cutModeBtn_->setEnabled(false);
+	}
+}
+
+bool VideoEditorWindow::multiCut() const
+{
+	return stack_ && stack_->currentIndex() == 1;
+}
+
+void VideoEditorWindow::setEditMode(bool cut)
+{
+	stopPlayback();
+	trimModeBtn_->setChecked(!cut);
+	cutModeBtn_->setChecked(cut);
+	stack_->setCurrentIndex(cut ? 1 : 0);
+	if (cut) {
+		playBtn_->setToolTip(QStringLiteral("Loop-play the assembled output"));
+		onSegmentSelected(tracks_->selectedIndex()); // rebind the speed slider
+	} else {
+		playBtn_->setToolTip(
+			QStringLiteral("Loop-play the trimmed section at the current speed"));
+		speedSlider_->setEnabled(valid_);
+		{
+			QSignalBlocker block(speedSlider_);
+			speedSlider_->setValue(int(speed_ * 100.0));
+		}
+		speedLabel_->setText(QStringLiteral("%1×").arg(speed_, 0, 'f', 2));
+	}
+	updateInfoLabel();
+}
+
+void VideoEditorWindow::updateInfoLabel()
+{
+	if (!valid_)
+		return;
+	QString text = baseInfo_;
+	if (multiCut()) {
+		text += QStringLiteral("   ·   %1 cut%2 → %3s")
+				.arg(tracks_->segments().size())
+				.arg(tracks_->segments().size() == 1 ? QString() : QStringLiteral("s"))
+				.arg(tracks_->totalOutputMs() / 1000.0, 0, 'f', 1);
+	}
+	infoLabel_->setText(text);
+}
+
+void VideoEditorWindow::onSegmentsChanged()
+{
+	stopPlayback();
+	playSeg_ = -1;
+	updateInfoLabel();
+}
+
+void VideoEditorWindow::onSegmentSelected(int index)
+{
+	if (!multiCut())
+		return;
+	if (index >= 0 && index < tracks_->segments().size()) {
+		speedSlider_->setEnabled(true);
+		const double sp = tracks_->segments()[index].speed;
+		{
+			QSignalBlocker block(speedSlider_);
+			speedSlider_->setValue(int(std::lround(sp * 100.0)));
+		}
+		speedLabel_->setText(QStringLiteral("%1×").arg(sp, 0, 'f', 2));
+	} else {
+		// No clip selected — the slider has nothing to edit.
+		speedSlider_->setEnabled(false);
+		speedLabel_->setText(QStringLiteral("—"));
 	}
 }
 
@@ -162,6 +264,17 @@ void VideoEditorWindow::startPlayback()
 {
 	if (!valid_)
 		return;
+	if (multiCut()) {
+		if (tracks_->segments().isEmpty())
+			return; // nothing to assemble yet
+		playing_ = true;
+		playBtn_->setText(QStringLiteral("⏸  Pause"));
+		playAnchorMs_ = 0; // output-time
+		playSeg_ = -1;     // force the first segment seek
+		playClock_.restart();
+		playTimer_->start();
+		return;
+	}
 	playing_ = true;
 	playBtn_->setText(QStringLiteral("⏸  Pause"));
 	playAnchorMs_ = timeline_->start();
@@ -181,6 +294,54 @@ void VideoEditorWindow::onPlayTick()
 {
 	if (!playing_ || !valid_)
 		return;
+
+	if (multiCut()) {
+		const qint64 total = tracks_->totalOutputMs();
+		if (total <= 0) {
+			stopPlayback();
+			return;
+		}
+		qint64 outPos = playAnchorMs_ + playClock_.elapsed();
+		if (outPos >= total) { // loop the assembled output
+			playAnchorMs_ = 0;
+			playClock_.restart();
+			playSeg_ = -1;
+			outPos = 0;
+		}
+		qint64 srcTarget = 0;
+		const int seg = tracks_->sourceForOutput(outPos, &srcTarget);
+		if (seg < 0) {
+			stopPlayback();
+			return;
+		}
+		const QVector<CutSegment> &segs = tracks_->segments();
+		if (seg != playSeg_) {
+			seeker_->seekTo(segs[seg].srcStartMs);
+			playSeg_ = seg;
+		}
+		// Decode forward to the target source time; show the last frame reached.
+		QImage img;
+		for (int guard = 0; guard < 240; ++guard) {
+			qint64 fts = -1;
+			QImage f = seeker_->nextFrame(&fts, 1280, 720);
+			if (f.isNull()) {
+				// Source ended inside this cut — skip to the next segment.
+				playAnchorMs_ = tracks_->outputStartOf(seg) + segs[seg].outDurationMs();
+				playClock_.restart();
+				playSeg_ = -1;
+				break;
+			}
+			img = f;
+			if (fts >= srcTarget)
+				break;
+		}
+		if (!img.isNull()) {
+			canvas_->setFrame(img);
+			tracks_->setPlayhead(outPos);
+		}
+		return;
+	}
+
 	const qint64 start = timeline_->start();
 	const qint64 end = timeline_->end();
 
@@ -218,12 +379,32 @@ void VideoEditorWindow::onPlayTick()
 
 void VideoEditorWindow::onSpeedChanged(int sliderValue)
 {
+	const double value = sliderValue / 100.0;
+
+	if (multiCut()) {
+		// The slider edits the SELECTED cut's speed.
+		const int sel = tracks_->selectedIndex();
+		if (sel < 0)
+			return;
+		tracks_->setSegmentSpeed(sel, value);
+		speedLabel_->setText(QStringLiteral("%1×").arg(value, 0, 'f', 2));
+		if (playing_) {
+			// Output durations shifted — re-anchor and re-map on the next tick.
+			playAnchorMs_ = std::min(playAnchorMs_ + playClock_.elapsed(),
+						 std::max<qint64>(0, tracks_->totalOutputMs() - 1));
+			playClock_.restart();
+			playSeg_ = -1;
+		}
+		updateInfoLabel();
+		return;
+	}
+
 	// Re-anchor the playback clock so the speed change is seamless.
 	if (playing_) {
 		playAnchorMs_ = playAnchorMs_ + qint64(playClock_.elapsed() * speed_);
 		playClock_.restart();
 	}
-	speed_ = sliderValue / 100.0;
+	speed_ = value;
 	speedLabel_->setText(QStringLiteral("%1×").arg(speed_, 0, 'f', 2));
 }
 
@@ -254,8 +435,16 @@ void VideoEditorWindow::onSave()
 		return;
 	stopPlayback();
 
+	const bool cuts = multiCut();
+	if (cuts && tracks_->segments().isEmpty()) {
+		QMessageBox::information(
+			this, QStringLiteral("Multi-Cut"),
+			QStringLiteral("Drag on the Source track to create at least one cut first."));
+		return;
+	}
+
 	const QString base = QFileInfo(inPath_).completeBaseName() + QStringLiteral("_clip");
-	ExportOptionsDialog dlg(base, this);
+	ExportOptionsDialog dlg(base, /*allowGif=*/!cuts, this);
 	if (dlg.exec() != QDialog::Accepted)
 		return;
 
@@ -281,6 +470,14 @@ void VideoEditorWindow::onSave()
 	o.speed = speed_;   // from the editor's speed slider
 	o.videoCrf = dlg.videoCrf();
 	o.keepAudio = dlg.keepAudio();
+	if (cuts) {
+		// Multi-cut assembly: the cut list replaces trim range + global speed.
+		for (const CutSegment &cs : tracks_->segments())
+			o.cuts.push_back({cs.srcStartMs, cs.srcEndMs, cs.speed});
+		o.startMs = 0;
+		o.endMs = 0;
+		o.speed = 1.0;
+	}
 
 	exporter_ = new ClipExporter(this);
 	connect(exporter_, &ClipExporter::progress, this, &VideoEditorWindow::onExportProgress);

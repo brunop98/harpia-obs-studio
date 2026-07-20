@@ -130,6 +130,10 @@ target_sources(
     editor/GifEncoder.hpp
     editor/EditorWidgets.cpp
     editor/EditorWidgets.hpp
+    editor/TrackEditor.cpp
+    editor/TrackEditor.hpp
+    editor/AudioRetimer.cpp
+    editor/AudioRetimer.hpp
     editor/ExportOptionsDialog.cpp
     editor/ExportOptionsDialog.hpp
     editor/VideoEditorWindow.cpp

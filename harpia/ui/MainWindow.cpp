@@ -516,7 +516,13 @@ void MainWindow::startRecording()
 	uint32_t baseW, baseH;
 	const bool appCapture = appCaptureEnabled_ && !appWindowValue_.isEmpty();
 
-	if (appCapture) {
+	if (captureMode_ == CaptureMode::Region && currentRegion_.enabled &&
+	    currentRegion_.width >= 16 && currentRegion_.height >= 16) {
+		// Custom region — records exactly the region's size. Applies whether the
+		// region crops the monitor or a single-application (window) capture.
+		baseW = (uint32_t)currentRegion_.width;
+		baseH = (uint32_t)currentRegion_.height;
+	} else if (appCapture) {
 		// The live capture is already the selected window (applyLiveCapture);
 		// size the canvas to it, falling back to the monitor if unknown yet.
 		uint32_t w = 0, h = 0;
@@ -527,10 +533,6 @@ void MainWindow::startRecording()
 			baseW = canvasSize_.width();
 			baseH = canvasSize_.height();
 		}
-	} else if (captureMode_ == CaptureMode::Region && currentRegion_.enabled &&
-		   currentRegion_.width >= 16 && currentRegion_.height >= 16) {
-		baseW = (uint32_t)currentRegion_.width;
-		baseH = (uint32_t)currentRegion_.height;
 	} else {
 		baseW = canvasSize_.width();
 		baseH = canvasSize_.height();
@@ -549,10 +551,12 @@ void MainWindow::startRecording()
 		// to pick up the current cursor setting, then it renders into the canvas.
 		capture_.startWindowCapture(appWindowValue_.toStdString(), preset.showMouseCursor);
 	} else {
-		// Ensure we're capturing this preset's display, then re-apply any region.
+		// Ensure we're capturing this preset's display.
 		capture_.startCapture(preset.monitorIndex, preset.showMouseCursor);
-		capture_.setRegion(currentRegion_);
 	}
+	// Apply the custom region crop (if any) to whichever source — monitor or the
+	// single-application window. Empty region == no crop.
+	capture_.setRegion(currentRegion_);
 
 	// Build the context tokens the clock can't supply, then expand once so the
 	// screen and webcam files share a base name.
@@ -873,10 +877,11 @@ void MainWindow::logRecordingStart(const Preset &p, const QString &recordedPath,
 	const std::string bitrate = p.videoBitrateKbps > 0 ? (std::to_string(p.videoBitrateKbps) + " kbps")
 							   : std::string("auto");
 	blog(LOG_INFO, "[harpia] bitrate: %s  gpu-encode: %s", bitrate.c_str(), p.gpuCompression ? "yes" : "no");
-	const char *captureKind = appCaptureEnabled_
-					  ? "single-application"
-					  : (captureMode_ == CaptureMode::Region ? "region" : "monitor");
-	blog(LOG_INFO, "[harpia] capture: %s  monitor#%d", captureKind, p.monitorIndex);
+	const bool regionOn = captureMode_ == CaptureMode::Region;
+	std::string captureKind = appCaptureEnabled_ ? "single-application" : (regionOn ? "region" : "monitor");
+	if (appCaptureEnabled_ && regionOn)
+		captureKind += " + region";
+	blog(LOG_INFO, "[harpia] capture: %s  monitor#%d", captureKind.c_str(), p.monitorIndex);
 	if (appCaptureEnabled_ && !appWindowValue_.isEmpty())
 		blog(LOG_INFO, "[harpia] window: %s", appWindowValue_.toUtf8().constData());
 	if (captureMode_ == CaptureMode::Region && currentRegion_.enabled)
@@ -1332,12 +1337,12 @@ void MainWindow::applyLiveCapture()
 		return; // don't disturb an in-progress capture
 
 	const Preset &p = activePreset();
-	if (appCaptureEnabled_ && !appWindowValue_.isEmpty()) {
+	if (appCaptureEnabled_ && !appWindowValue_.isEmpty())
 		capture_.startWindowCapture(appWindowValue_.toStdString(), p.showMouseCursor);
-	} else {
+	else
 		capture_.startCapture(p.monitorIndex, p.showMouseCursor);
-		capture_.setRegion(currentRegion_);
-	}
+	// A custom region crops either source (monitor or the selected window).
+	capture_.setRegion(currentRegion_);
 	updateRegionToolVisibility();
 }
 
@@ -1388,20 +1393,29 @@ void MainWindow::updateRegionToolVisibility()
 {
 	if (!regionTool_)
 		return;
-	if (appCaptureEnabled_ || captureMode_ != CaptureMode::Region) {
+	// The overlay belongs to Custom Region capture — with or without
+	// single-application capture (the region can crop the selected window too).
+	if (captureMode_ != CaptureMode::Region) {
 		regionTool_->hide();
 		return;
 	}
 	const bool recording = recorder_.isRecording();
 	regionTool_->setRecordingMode(recording);
-	// Always visible in Region mode — hiding it whenever the app lost focus
-	// removed the boundary exactly while the user clicked into the app being
-	// framed. Instead, dim it when unfocused (setRecordingMode already dims to
-	// 0.28 while recording; don't fight that).
-	regionTool_->show();
-	if (!recording) {
-		const bool focused = isActiveWindow() || regionTool_->isActiveWindow();
-		regionTool_->setWindowOpacity(focused ? 1.0 : 0.55);
+	if (recording) {
+		// While recording the overlay is always shown (dimmed by setRecordingMode)
+		// as a passive boundary indicator.
+		regionTool_->show();
+		return;
+	}
+	// Not recording: only show while the recorder — or the overlay itself, which
+	// the user may be dragging/resizing — has focus. When focus moves to another
+	// app, hide the overlay completely so it never floats over other windows.
+	const bool focused = isActiveWindow() || regionTool_->isActiveWindow();
+	if (focused) {
+		regionTool_->setWindowOpacity(1.0);
+		regionTool_->show();
+	} else {
+		regionTool_->hide();
 	}
 }
 
@@ -1799,7 +1813,9 @@ void MainWindow::updateButtons()
 	presetCombo_->setEnabled(!locked);
 	editPresetButton_->setEnabled(!locked);
 	newPresetButton_->setEnabled(!locked);
-	captureModeCombo_->setEnabled(!locked && !appCaptureEnabled_);
+	// Custom Region can be combined with single-application capture, so the mode
+	// selector stays enabled regardless of the app-capture toggle.
+	captureModeCombo_->setEnabled(!locked);
 	appCaptureToggle_->setEnabled(!locked);
 	appCombo_->setEnabled(!locked && appCaptureEnabled_);
 	webcamEnableToggle_->setEnabled(!locked);

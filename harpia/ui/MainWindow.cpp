@@ -151,6 +151,18 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	row1->addWidget(captureModeCombo_);
 
 	row1->addSpacing(kGroupGap);
+	row1->addWidget(fieldLabel(QStringLiteral("Display")));
+	monitorCombo_ = new QComboBox(central);
+	monitorCombo_->setMaximumWidth(180);
+	monitorCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+	monitorCombo_->setToolTip(QStringLiteral(
+		"Which display to record — applies to Entire Monitor and to Custom Region "
+		"(the region overlay opens on this display)."));
+	// The display list refreshes right before the popup opens (eventFilter).
+	monitorCombo_->installEventFilter(this);
+	row1->addWidget(monitorCombo_);
+
+	row1->addSpacing(kGroupGap);
 	// Countdown label + combo as one unit, so the whole thing can be hidden when
 	// the window is too narrow (it's a nice-to-have, not an essential control).
 	countdownGroup_ = new QWidget(central);
@@ -431,6 +443,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
 	connect(webcamCombo_, &QComboBox::activated, this, &MainWindow::onWebcamDeviceChanged);
 	connect(appCombo_, &QComboBox::activated, this, &MainWindow::onAppWindowChanged);
+	connect(monitorCombo_, &QComboBox::activated, this, &MainWindow::onMonitorChanged);
 	connect(libraryButton_, &QPushButton::clicked, this, &MainWindow::onOpenClipLibrary);
 	connect(errorLogsButton_, &QPushButton::clicked, this, &MainWindow::onOpenErrorLogs);
 	connect(captureModeCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onCaptureModeChanged);
@@ -480,8 +493,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(regionTool_.get(), &RegionTool::manageRegionsRequested, this,
 		&MainWindow::openSavedRegionsManager);
 
-	// Populate the capture dropdown with any saved regions.
+	// Populate the capture dropdown with any saved regions, and the display list.
 	reloadCaptureModeCombo();
+	reloadMonitorCombo();
 
 	applyDarkTheme();
 
@@ -1433,8 +1447,6 @@ void MainWindow::onCaptureModeChanged()
 	}
 	prevCaptureIndex_ = captureModeCombo_->currentIndex();
 
-	QScreen *screen = screenForActivePreset();
-
 	if (sel == QStringLiteral("monitor")) {
 		captureMode_ = CaptureMode::Monitor;
 		currentRegion_ = CaptureRegion{};
@@ -1444,8 +1456,11 @@ void MainWindow::onCaptureModeChanged()
 		captureMode_ = CaptureMode::Region;
 		if (sel.startsWith(QStringLiteral("saved:"))) {
 			const std::string id = sel.mid(6).toStdString();
-			if (const SavedRegion *r = regionStore_->find(id))
+			if (const SavedRegion *r = regionStore_->find(id)) {
+				// The region lives on a specific display — switch to it.
+				applyMonitorIndex(r->monitorIndex);
 				currentRegion_ = CaptureRegion{true, r->x, r->y, r->width, r->height};
+			}
 		}
 		// Seed a default region (centered, ~2/3 of the screen) if none yet.
 		if (!currentRegion_.enabled || currentRegion_.width <= 0) {
@@ -1458,7 +1473,8 @@ void MainWindow::onCaptureModeChanged()
 			r.y = (canvas.height() - r.height) / 2;
 			currentRegion_ = r;
 		}
-		regionTool_->setScreen(screen);
+		// Resolved after any saved-region monitor switch above.
+		regionTool_->setScreen(screenForActivePreset());
 		regionTool_->setRegionDevicePx(
 			QRect(currentRegion_.x, currentRegion_.y, currentRegion_.width, currentRegion_.height));
 		capture_.setRegion(currentRegion_);
@@ -1507,6 +1523,7 @@ void MainWindow::onSaveRegionRequested()
 	r.y = currentRegion_.y;
 	r.width = currentRegion_.width;
 	r.height = currentRegion_.height;
+	r.monitorIndex = activePreset().monitorIndex; // the display it was drawn on
 
 	RegionEditDialog dlg(r, this);
 	if (dlg.exec() != QDialog::Accepted)
@@ -1542,6 +1559,45 @@ void MainWindow::applyLiveCapture()
 	updateRegionToolVisibility();
 }
 
+void MainWindow::reloadMonitorCombo()
+{
+	const int want = activePreset().monitorIndex;
+	QSignalBlocker block(monitorCombo_);
+	monitorCombo_->clear();
+	const std::vector<MonitorOption> monitors = CaptureManager::enumerateMonitors();
+	if (monitors.empty()) {
+		monitorCombo_->addItem(QStringLiteral("Primary display"), 0);
+	} else {
+		int idx = 0;
+		for (const MonitorOption &m : monitors)
+			monitorCombo_->addItem(QString::fromStdString(m.name), idx++);
+	}
+	monitorCombo_->setCurrentIndex(want >= 0 && want < monitorCombo_->count() ? want : 0);
+}
+
+void MainWindow::applyMonitorIndex(int index)
+{
+	const Preset *cur = presets_.find(activePresetId_);
+	if (!cur || cur->monitorIndex == index)
+		return;
+	Preset updated = *cur;
+	updated.monitorIndex = index;
+	presets_.upsert(updated);
+
+	// Re-anchor everything that depends on the display: canvas size, the live
+	// capture source, and the region overlay (it opens on the new display).
+	canvasSize_ = canvasForActivePreset();
+	obs_.resetVideo(canvasSize_.width(), canvasSize_.height(), activePreset().fps);
+	reloadMonitorCombo(); // keep the selector in sync when invoked indirectly
+	applyLiveCapture();
+}
+
+void MainWindow::onMonitorChanged()
+{
+	applyMonitorIndex(monitorCombo_->currentData().toInt());
+	refreshReadiness();
+}
+
 void MainWindow::reloadAppCombo()
 {
 	// Fresh window list; keep the current selection when the app still runs.
@@ -1564,6 +1620,8 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 {
 	if (obj == appCombo_ && event->type() == QEvent::MouseButtonPress)
 		reloadAppCombo(); // refresh the list right before the popup opens
+	if (obj == monitorCombo_ && event->type() == QEvent::MouseButtonPress)
+		reloadMonitorCombo(); // catch displays plugged/unplugged since launch
 	return QMainWindow::eventFilter(obj, event);
 }
 
@@ -1732,6 +1790,10 @@ void MainWindow::onPresetChanged()
 void MainWindow::syncIdleControls()
 {
 	const Preset &p = activePreset();
+
+	// The display selector reflects the active preset's monitor.
+	reloadMonitorCombo();
+
 	QSignalBlocker b1(idleCombo_);
 	int idx = idleCombo_->findData(p.idleTimeoutSeconds);
 	if (idx < 0 && p.idleTimeoutSeconds > 0) {
@@ -2052,6 +2114,7 @@ void MainWindow::updateButtons()
 	// Custom Region can be combined with single-application capture, so the mode
 	// selector stays enabled regardless of the focus-app selection.
 	captureModeCombo_->setEnabled(!locked);
+	monitorCombo_->setEnabled(!locked); // display can't change mid-file
 	// Dropdown-only controls (first item = off): always visible, locked while
 	// recording so the auto-pause target / camera can't change mid-file.
 	appCombo_->setEnabled(!locked);

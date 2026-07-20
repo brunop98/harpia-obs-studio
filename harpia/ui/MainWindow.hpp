@@ -70,6 +70,7 @@ private slots:
 	void onCaptureModeChanged();
 	void onSaveRegionRequested();    // "Save Region…" from the region right-click
 	void openSavedRegionsManager();  // rename/edit/delete saved regions
+	void onMonitorChanged();    // display picked on the main window
 	void onAppWindowChanged();  // app dropdown; first item = no auto-pause
 	void onWebcamDeviceChanged(); // webcam dropdown; first item = no webcam
 	void refreshWebcamRow(); // populate/reflect the webcam device combo
@@ -168,6 +169,9 @@ private:
 	QPushButton *editPresetButton_ = nullptr;
 	QPushButton *newPresetButton_ = nullptr;
 	QComboBox *captureModeCombo_ = nullptr;
+	QComboBox *monitorCombo_ = nullptr; // which display to record (owns preset.monitorIndex)
+	void reloadMonitorCombo();          // refresh the display list, keep selection
+	void applyMonitorIndex(int index);  // persist + re-anchor capture/canvas/overlays
 	QComboBox *idleCombo_ = nullptr; // idle auto-pause timeout; first item = Off
 	QWidget *idleGroup_ = nullptr;   // label + combo, hidden when very narrow
 	QComboBox *countdownCombo_ = nullptr;

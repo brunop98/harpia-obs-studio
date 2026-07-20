@@ -5,8 +5,9 @@
 
 namespace harpia {
 
-// A named, reusable capture region (screen device pixels). Position and size are
-// stored so a saved region can be restored instantly from the capture dropdown.
+// A named, reusable capture region (screen device pixels). Position, size and
+// the display it was drawn on are stored so a saved region can be restored
+// instantly — including switching to its monitor — from the capture dropdown.
 struct SavedRegion {
 	std::string id;
 	std::string name;
@@ -14,6 +15,7 @@ struct SavedRegion {
 	int y = 0;
 	int width = 0;
 	int height = 0;
+	int monitorIndex = 0;
 };
 
 // Persists the user's saved capture regions as JSON in the app config dir.

@@ -170,21 +170,8 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 
 	// ===== General =====
 	QWidget *generalPage = makePage(v);
-	monitorCombo_ = new QComboBox(this);
-	const std::vector<MonitorOption> monitors = CaptureManager::enumerateMonitors();
-	if (monitors.empty()) {
-		monitorCombo_->addItem(QStringLiteral("Primary display"), 0);
-	} else {
-		int idx = 0;
-		for (const MonitorOption &m : monitors)
-			monitorCombo_->addItem(QString::fromStdString(m.name), idx++);
-	}
-	if (preset.monitorIndex >= 0 && preset.monitorIndex < monitorCombo_->count())
-		monitorCombo_->setCurrentIndex(preset.monitorIndex);
-	addField(v, QStringLiteral("Display"),
-		 QStringLiteral("Which monitor to capture when recording the entire screen."),
-		 monitorCombo_);
-
+	// The display to record is chosen on the main window (next to Capture),
+	// not per preset.
 	auto *resNote = new QLabel(QStringLiteral("Recordings use the full display — or the selected "
 						  "capture region — at its native resolution."),
 				   this);
@@ -867,7 +854,7 @@ void PresetEditorDialog::accept()
 	result_.resolutionMode = ResolutionMode::Native;
 
 	result_.outputFolder = folderEdit_->text().trimmed().toStdString();
-	result_.monitorIndex = monitorCombo_->currentData().toInt();
+	// monitorIndex is intentionally not edited here — the main window owns it.
 	result_.gpuCompression = gpuCheck_->isChecked();
 	result_.idleTimeoutSeconds = idleSpin_->value();
 	result_.countdownSeconds = countdownCombo_->currentData().toInt();

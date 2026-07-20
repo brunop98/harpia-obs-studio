@@ -58,6 +58,7 @@ void RegionStore::load()
 			r.y = (int)obs_data_get_int(d, "y");
 			r.width = (int)obs_data_get_int(d, "width");
 			r.height = (int)obs_data_get_int(d, "height");
+			r.monitorIndex = (int)obs_data_get_int(d, "monitor_index"); // 0 for old files
 			if (!r.id.empty() && r.width > 0 && r.height > 0)
 				regions_.push_back(std::move(r));
 			obs_data_release(d);
@@ -83,6 +84,7 @@ bool RegionStore::save() const
 		obs_data_set_int(d, "y", r.y);
 		obs_data_set_int(d, "width", r.width);
 		obs_data_set_int(d, "height", r.height);
+		obs_data_set_int(d, "monitor_index", r.monitorIndex);
 		obs_data_array_push_back(arr, d);
 		obs_data_release(d);
 	}

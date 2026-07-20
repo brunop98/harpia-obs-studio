@@ -230,13 +230,9 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 				"be asked whether to discard it — handy for throwing away accidental clips."),
 		 minLengthSpin_);
 
-	pauseFocusCheck_ = new QCheckBox(QStringLiteral("Auto-pause when the target application loses focus"),
-					this);
-	pauseFocusCheck_->setChecked(preset.pauseOnFocusLoss);
-	addCheck(v, pauseFocusCheck_,
-		 QStringLiteral("Remembers the app in the foreground when you hit Record and pauses whenever "
-				"it isn't the active window (its dialogs and pickers still count as focused), "
-				"resuming when you return. Great for Unity/Photoshop/Blender. Windows only."));
+	// Focus auto-pause now lives on the main window's "Record only one
+	// application" toggle (pick the app there and it pauses when that app isn't
+	// focused). The old per-preset checkbox was redundant, so it's removed here.
 
 	borderCheck_ = new QCheckBox(QStringLiteral("Show border around recorded screen (Full Screen only)"),
 				     this);
@@ -876,7 +872,8 @@ void PresetEditorDialog::accept()
 	result_.idleTimeoutSeconds = idleSpin_->value();
 	result_.countdownSeconds = countdownCombo_->currentData().toInt();
 	result_.minRecordingSeconds = minLengthSpin_->value();
-	result_.pauseOnFocusLoss = pauseFocusCheck_->isChecked();
+	// pauseOnFocusLoss keeps its stored value (no editor control anymore); focus
+	// auto-pause is driven by the main window's "Record only one application".
 	result_.showScreenBorder = borderCheck_->isChecked();
 	result_.screenBorderColor = borderColor_.name().toStdString();
 	result_.screenBorderThickness = borderThicknessSpin_->value();

@@ -150,7 +150,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	row2->setSpacing(8);
 
 	appCaptureToggle_ = new QCheckBox(QStringLiteral("Record only one application"), central);
-	appCaptureToggle_->setToolTip(QStringLiteral("Capture a single window instead of the monitor"));
+	appCaptureToggle_->setToolTip(QStringLiteral(
+		"Auto-pause recording whenever the chosen app isn't focused (resume when it is). "
+		"Does not change what's captured — the capture mode still applies."));
 	row2->addWidget(appCaptureToggle_);
 	appCombo_ = new QComboBox(central);
 	appCombo_->setMinimumWidth(220);
@@ -510,29 +512,16 @@ void MainWindow::startRecording()
 	const Preset &preset = activePreset();
 
 	// Always record at the native resolution of what's being captured: the exact
-	// region size in Region mode, the window size in single-application mode,
-	// otherwise the full display resolution. No scaling / custom sizes.
+	// region size in Region mode, otherwise the full display resolution. No
+	// scaling / custom sizes. ("Record only one application" doesn't affect the
+	// captured area — it only drives focus auto-pause.)
 	canvasSize_ = canvasForActivePreset();
 	uint32_t baseW, baseH;
-	const bool appCapture = appCaptureEnabled_ && !appWindowValue_.isEmpty();
 
 	if (captureMode_ == CaptureMode::Region && currentRegion_.enabled &&
 	    currentRegion_.width >= 16 && currentRegion_.height >= 16) {
-		// Custom region — records exactly the region's size. Applies whether the
-		// region crops the monitor or a single-application (window) capture.
 		baseW = (uint32_t)currentRegion_.width;
 		baseH = (uint32_t)currentRegion_.height;
-	} else if (appCapture) {
-		// The live capture is already the selected window (applyLiveCapture);
-		// size the canvas to it, falling back to the monitor if unknown yet.
-		uint32_t w = 0, h = 0;
-		if (capture_.sourceSize(w, h) && w >= 32 && h >= 32) {
-			baseW = w;
-			baseH = h;
-		} else {
-			baseW = canvasSize_.width();
-			baseH = canvasSize_.height();
-		}
 	} else {
 		baseW = canvasSize_.width();
 		baseH = canvasSize_.height();
@@ -546,16 +535,10 @@ void MainWindow::startRecording()
 	// Output size == base size (native, no downscale).
 	obs_.resetVideo(baseW, baseH, fps, baseW, baseH);
 
-	if (appCapture) {
-		// Window capture is already bound (applyLiveCapture); just (re)start it
-		// to pick up the current cursor setting, then it renders into the canvas.
-		capture_.startWindowCapture(appWindowValue_.toStdString(), preset.showMouseCursor);
-	} else {
-		// Ensure we're capturing this preset's display.
-		capture_.startCapture(preset.monitorIndex, preset.showMouseCursor);
-	}
-	// Apply the custom region crop (if any) to whichever source — monitor or the
-	// single-application window. Empty region == no crop.
+	// Capture the selected display; a custom region (if any) crops it. The
+	// application chosen for "Record only one application" never changes what's
+	// captured — only whether recording is auto-paused when it loses focus.
+	capture_.startCapture(preset.monitorIndex, preset.showMouseCursor);
 	capture_.setRegion(currentRegion_);
 
 	// Build the context tokens the clock can't supply, then expand once so the
@@ -634,23 +617,18 @@ void MainWindow::startRecording()
 
 	logRecordingStart(preset, recordPath, screenPath, lastWebcamPath_, baseW, baseH, fps);
 
-	// Focus auto-pause: the target is the application selected in the app
-	// dropdown — not whatever happened to be foreground before Record (with
-	// Alt-Tab the task switcher itself is often the last "foreground app", which
-	// made the old pid-based target plain wrong and the recording stay paused).
-	//
-	// This only makes sense in single-application capture mode: when capturing a
-	// whole monitor or a region, what's recorded doesn't depend on which window is
-	// focused, so pausing on focus loss would (wrongly) pause the instant Harpia's
-	// own window is foreground — and re-pause every time you click Resume. Gate it
-	// to app-capture so full-screen recording never auto-pauses on focus.
+	// Focus auto-pause: "Record only one application" doesn't change the capture
+	// source (that stays the selected mode — region/monitor); it only names the
+	// application to watch, pausing the recording whenever that app isn't the
+	// foreground window and resuming when it is. The target is the app chosen in
+	// the dropdown, matched by executable so every window/process of a
+	// multi-process app (browsers, Electron) counts as focused.
 	focusPaused_ = false;
 	targetExe_.clear();
 	markersPath_.clear();
-	if (preset.pauseOnFocusLoss && appCaptureEnabled_) {
-		// win-capture window values are "title:class:executable" with ':' inside
-		// fields encoded as "#3A". Match by executable so every window/process of
-		// the app counts as focused (browsers and Electron apps span many pids).
+	if (appCaptureEnabled_ && !appWindowValue_.isEmpty()) {
+		// Window values are "title:class:executable" with ':' inside fields
+		// encoded as "#3A".
 		targetExe_ = appWindowValue_.section(QLatin1Char(':'), -1)
 				     .replace(QLatin1String("#3A"), QLatin1String(":"))
 				     .trimmed();
@@ -877,13 +855,10 @@ void MainWindow::logRecordingStart(const Preset &p, const QString &recordedPath,
 	const std::string bitrate = p.videoBitrateKbps > 0 ? (std::to_string(p.videoBitrateKbps) + " kbps")
 							   : std::string("auto");
 	blog(LOG_INFO, "[harpia] bitrate: %s  gpu-encode: %s", bitrate.c_str(), p.gpuCompression ? "yes" : "no");
-	const bool regionOn = captureMode_ == CaptureMode::Region;
-	std::string captureKind = appCaptureEnabled_ ? "single-application" : (regionOn ? "region" : "monitor");
-	if (appCaptureEnabled_ && regionOn)
-		captureKind += " + region";
-	blog(LOG_INFO, "[harpia] capture: %s  monitor#%d", captureKind.c_str(), p.monitorIndex);
+	const char *captureKind = captureMode_ == CaptureMode::Region ? "region" : "monitor";
+	blog(LOG_INFO, "[harpia] capture: %s  monitor#%d", captureKind, p.monitorIndex);
 	if (appCaptureEnabled_ && !appWindowValue_.isEmpty())
-		blog(LOG_INFO, "[harpia] window: %s", appWindowValue_.toUtf8().constData());
+		blog(LOG_INFO, "[harpia] focus-pause app: %s", appWindowValue_.toUtf8().constData());
 	if (captureMode_ == CaptureMode::Region && currentRegion_.enabled)
 		blog(LOG_INFO, "[harpia] region: %dx%d at (%d,%d)", currentRegion_.width, currentRegion_.height,
 		     currentRegion_.x, currentRegion_.y);
@@ -903,7 +878,8 @@ void MainWindow::logRecordingStart(const Preset &p, const QString &recordedPath,
 	else
 		blog(LOG_INFO, "[harpia] webcam: off");
 	blog(LOG_INFO, "[harpia] countdown: %ds  min-length: %ds  focus-pause: %s  screen-border: %s",
-	     p.countdownSeconds, p.minRecordingSeconds, p.pauseOnFocusLoss ? "on" : "off",
+	     p.countdownSeconds, p.minRecordingSeconds,
+	     (appCaptureEnabled_ && !appWindowValue_.isEmpty()) ? "on" : "off",
 	     p.showScreenBorder ? "on" : "off");
 	blog(LOG_INFO, "========================================");
 }
@@ -1337,11 +1313,10 @@ void MainWindow::applyLiveCapture()
 		return; // don't disturb an in-progress capture
 
 	const Preset &p = activePreset();
-	if (appCaptureEnabled_ && !appWindowValue_.isEmpty())
-		capture_.startWindowCapture(appWindowValue_.toStdString(), p.showMouseCursor);
-	else
-		capture_.startCapture(p.monitorIndex, p.showMouseCursor);
-	// A custom region crops either source (monitor or the selected window).
+	// The capture source is always the selected display (+ optional region crop);
+	// "Record only one application" only selects the focus-pause target and never
+	// changes what is captured.
+	capture_.startCapture(p.monitorIndex, p.showMouseCursor);
 	capture_.setRegion(currentRegion_);
 	updateRegionToolVisibility();
 }
@@ -1997,11 +1972,10 @@ void MainWindow::tickIdle()
 
 void MainWindow::tickFocus(uint64_t foregroundPid)
 {
-	// Focus-driven pause applies only to single-application capture (see
-	// startRecording). targetExe_ is left empty for monitor/region capture, so
-	// this guard also keeps full-screen recordings from ever auto-pausing on focus.
-	if (!recorder_.isRecording() || !activePreset().pauseOnFocusLoss || !appCaptureEnabled_ ||
-	    targetExe_.isEmpty())
+	// Focus-driven pause is enabled by "Record only one application"; targetExe_
+	// is set (to the chosen app) only then, so this is inactive for a plain
+	// monitor/region recording.
+	if (!recorder_.isRecording() || !appCaptureEnabled_ || targetExe_.isEmpty())
 		return;
 
 	const uint64_t fg = foregroundPid;

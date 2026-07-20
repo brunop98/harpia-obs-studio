@@ -389,6 +389,13 @@ void Timeline::paintEvent(QPaintEvent *)
 	p.setPen(QPen(QColor(0xff, 0xff, 0xff), 1));
 	p.drawLine(xp, bar.top() - 6, xp, bar.bottom() + 6);
 
+	// Hover marker — the previewed frame's position (no click needed).
+	if (hoverMs_ >= 0 && grab_ == Grab::None) {
+		const int hx = msToX(hoverMs_);
+		p.setPen(QPen(QColor(0xff, 0xff, 0xff, 150), 1));
+		p.drawLine(hx, bar.top() + 1, hx, bar.bottom() - 1);
+	}
+
 	// Times.
 	p.setPen(QColor(0x9a, 0x9f, 0xa8));
 	auto t = [](qint64 ms) {
@@ -420,8 +427,16 @@ void Timeline::mousePressEvent(QMouseEvent *e)
 
 void Timeline::mouseMoveEvent(QMouseEvent *e)
 {
-	if (grab_ == Grab::None || !(e->buttons() & Qt::LeftButton))
+	if (grab_ == Grab::None || !(e->buttons() & Qt::LeftButton)) {
+		// Hover: preview the frame under the cursor without clicking.
+		if (e->buttons() == Qt::NoButton && duration_ > 0) {
+			hoverMs_ = xToMs(e->pos().x());
+			emit hoverScrub(hoverMs_);
+			update();
+		}
 		return;
+	}
+	hoverMs_ = -1; // a drag owns the preview
 	const qint64 ms = xToMs(e->pos().x());
 	if (grab_ == Grab::Start) {
 		start_ = std::clamp<qint64>(ms, 0, end_ - 1);
@@ -443,6 +458,14 @@ void Timeline::mouseMoveEvent(QMouseEvent *e)
 void Timeline::mouseReleaseEvent(QMouseEvent *)
 {
 	grab_ = Grab::None;
+}
+
+void Timeline::leaveEvent(QEvent *)
+{
+	if (hoverMs_ >= 0) {
+		hoverMs_ = -1;
+		update();
+	}
 }
 
 } // namespace harpia

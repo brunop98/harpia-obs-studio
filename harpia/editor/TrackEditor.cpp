@@ -7,6 +7,8 @@
 #include <QPainterPath>
 #include <QWheelEvent>
 
+#include <utility>
+
 namespace harpia {
 
 namespace {
@@ -106,12 +108,34 @@ void TrackEditor::setSegmentSpeed(int index, double speed)
 	update();
 }
 
+QList<int> TrackEditor::selectedIndices() const
+{
+	QList<int> list(multiSel_.begin(), multiSel_.end());
+	std::sort(list.begin(), list.end());
+	return list;
+}
+
 void TrackEditor::removeSegment(int index)
 {
 	if (index < 0 || index >= segs_.size())
 		return;
 	segs_.remove(index);
 	selected_ = -1;
+	multiSel_.clear();
+	emit segmentsChanged();
+	emit selectionChanged(-1);
+	update();
+}
+
+void TrackEditor::removeSelected()
+{
+	if (multiSel_.isEmpty())
+		return;
+	QList<int> list = selectedIndices();
+	for (int i = list.size() - 1; i >= 0; --i)
+		segs_.remove(list[i]);
+	selected_ = -1;
+	multiSel_.clear();
 	emit segmentsChanged();
 	emit selectionChanged(-1);
 	update();
@@ -266,7 +290,7 @@ void TrackEditor::paintEvent(QPaintEvent *)
 				     .arg(segs_.size() == 1 ? QString() : QStringLiteral("s"))
 				     .arg(totalOutputMs() / 1000.0, 0, 'f', 1);
 	if (!segs_.isEmpty())
-		outCaption += QStringLiteral("   (drag to reorder · Del to delete)");
+		outCaption += QStringLiteral("   (drag to reorder · Ctrl+click multi-select · Del to delete)");
 	p.drawText(QRect(out.x(), out.y() - kCaptionH, out.width(), kCaptionH),
 		   Qt::AlignVCenter | Qt::AlignLeft, outCaption);
 
@@ -319,6 +343,12 @@ void TrackEditor::paintEvent(QPaintEvent *)
 			p.setBrush(fill);
 			p.drawRect(QRect(QPoint(x1, src.y() + 1), QPoint(x2, src.bottom() - 1)));
 		}
+		// Hover marker — the previewed frame's position.
+		if (hoverMs_ >= 0 && mode_ == Mode::None) {
+			const int hx = msToX(hoverMs_);
+			p.setPen(QPen(QColor(0xff, 0xff, 0xff, 170), 1));
+			p.drawLine(hx, src.y() + 1, hx, src.bottom() - 1);
+		}
 		p.restore();
 	}
 
@@ -352,22 +382,63 @@ void TrackEditor::paintEvent(QPaintEvent *)
 	segFont.setPixelSize(10);
 	for (int i = 0; i < rects.size(); ++i) {
 		const QRect r = rects[i].adjusted(0, 3, 0, -3);
-		const bool sel = (i == selected_);
-		p.setPen(sel ? QPen(kAccent, 2) : QPen(kBarBorder, 1));
+		const bool sel = multiSel_.contains(i);
+		p.setPen(Qt::NoPen);
 		p.setBrush(sel ? kSegFillSel : kSegFill);
 		p.drawRoundedRect(r, 4, 4);
-		if (r.width() >= 34) {
-			p.setFont(segFont);
-			p.setPen(QColor(0xe6, 0xe6, 0xe6));
-			const QString l1 = QStringLiteral("#%1 · %2×").arg(i + 1).arg(
-				segs_[i].speed, 0, 'g', 3);
-			const QString l2 =
-				QStringLiteral("%1s").arg(segs_[i].outDurationMs() / 1000.0, 0, 'f', 1);
-			p.drawText(r.adjusted(4, 1, -4, -r.height() / 2), Qt::AlignVCenter | Qt::AlignLeft,
-				   p.fontMetrics().elidedText(l1, Qt::ElideRight, r.width() - 8));
-			p.drawText(r.adjusted(4, r.height() / 2, -4, -1), Qt::AlignVCenter | Qt::AlignLeft,
-				   p.fontMetrics().elidedText(l2, Qt::ElideRight, r.width() - 8));
+
+		// One thumbnail per cut (its first frame) — quick visual identification.
+		int thumbW = 0;
+		if (!thumbs_.isEmpty() && duration_ > 0) {
+			const int ti = std::clamp(int(double(segs_[i].srcStartMs) / duration_ *
+						      thumbs_.size()),
+						  0, int(thumbs_.size()) - 1);
+			const QImage &t = thumbs_[ti];
+			if (!t.isNull()) {
+				const int th = r.height() - 2;
+				thumbW = std::min(th * 16 / 9, r.width() - 2);
+				QPainterPath segClip;
+				segClip.addRoundedRect(r, 4, 4);
+				p.save();
+				p.setClipPath(segClip);
+				p.drawImage(QRect(r.x() + 1, r.y() + 1, thumbW, th), t);
+				p.restore();
+			}
 		}
+
+		// Labels: beside the thumbnail when there is room, else compact overlay.
+		const QString l1 =
+			QStringLiteral("#%1 · %2×").arg(i + 1).arg(segs_[i].speed, 0, 'g', 3);
+		const QString l2 =
+			QStringLiteral("%1s").arg(segs_[i].outDurationMs() / 1000.0, 0, 'f', 1);
+		p.setFont(segFont);
+		const int textX = r.x() + thumbW + 5;
+		const int room = r.right() - textX;
+		if (room >= 30) {
+			p.setPen(QColor(0xe6, 0xe6, 0xe6));
+			const QRect top(textX, r.y() + 1, room - 2, r.height() / 2 - 1);
+			const QRect bot(textX, r.y() + r.height() / 2, room - 2, r.height() / 2 - 1);
+			p.drawText(top, Qt::AlignVCenter | Qt::AlignLeft,
+				   p.fontMetrics().elidedText(l1, Qt::ElideRight, room - 2));
+			p.drawText(bot, Qt::AlignVCenter | Qt::AlignLeft,
+				   p.fontMetrics().elidedText(l2, Qt::ElideRight, room - 2));
+		} else if (r.width() >= 26) {
+			QPainterPath segClip;
+			segClip.addRoundedRect(r, 4, 4);
+			p.save();
+			p.setClipPath(segClip);
+			p.fillRect(QRect(r.x(), r.bottom() - 12, r.width(), 13), QColor(0, 0, 0, 150));
+			p.setPen(QColor(0xe6, 0xe6, 0xe6));
+			p.drawText(QRect(r.x() + 2, r.bottom() - 12, r.width() - 4, 13),
+				   Qt::AlignVCenter | Qt::AlignLeft,
+				   p.fontMetrics().elidedText(l1, Qt::ElideRight, r.width() - 4));
+			p.restore();
+		}
+
+		// Selection border on top so it stays visible over the thumbnail.
+		p.setPen(sel ? QPen(kAccent, 2) : QPen(kBarBorder, 1));
+		p.setBrush(Qt::NoBrush);
+		p.drawRoundedRect(r, 4, 4);
 	}
 
 	// Reorder caret while dragging a segment.
@@ -431,6 +502,36 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 
 	if (outputRect().contains(pos)) {
 		const int idx = segmentAt(pos);
+
+		if (idx >= 0 && (e->modifiers() & Qt::ControlModifier)) {
+			// Ctrl+click toggles membership; no drag starts.
+			if (multiSel_.contains(idx)) {
+				multiSel_.remove(idx);
+				selected_ = multiSel_.isEmpty() ? -1 : *multiSel_.begin();
+			} else {
+				multiSel_.insert(idx);
+				selected_ = idx;
+				emit scrubSource(segs_[idx].srcStartMs);
+			}
+			emit selectionChanged(selected_);
+			update();
+			return;
+		}
+		if (idx >= 0 && (e->modifiers() & Qt::ShiftModifier) && selected_ >= 0) {
+			// Shift+click selects the range between the primary and here.
+			for (int i = std::min(selected_, idx); i <= std::max(selected_, idx); ++i)
+				multiSel_.insert(i);
+			selected_ = idx;
+			emit selectionChanged(selected_);
+			emit scrubSource(segs_[idx].srcStartMs);
+			update();
+			return;
+		}
+
+		// Plain click: keep an existing multi-selection when grabbing one of its
+		// members, otherwise select just this segment.
+		if (idx < 0 || !multiSel_.contains(idx))
+			multiSel_ = (idx >= 0) ? QSet<int>{idx} : QSet<int>();
 		if (idx != selected_) {
 			selected_ = idx;
 			emit selectionChanged(idx);
@@ -500,9 +601,14 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 		return;
 	}
 
-	// Idle: cursor hints.
+	// Idle: cursor hints + hover preview (no click needed to see a frame).
+	qint64 newHover = -1;
 	if (sourceRect().contains(pos)) {
 		setCursor(Qt::CrossCursor);
+		if (e->buttons() == Qt::NoButton && duration_ > 0) {
+			newHover = xToMs(pos.x());
+			emit hoverScrub(newHover);
+		}
 	} else {
 		const int idx = segmentAt(pos);
 		if (idx >= 0) {
@@ -512,9 +618,29 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 				setCursor(Qt::SizeHorCursor);
 			else
 				setCursor(Qt::PointingHandCursor);
+			if (e->buttons() == Qt::NoButton) {
+				// Hovering along a cut previews within its source range.
+				const double f = std::clamp(
+					double(pos.x() - r.x()) / std::max(1, r.width()), 0.0, 1.0);
+				const CutSegment &s = segs_[idx];
+				emit hoverScrub(s.srcStartMs +
+						qint64(f * double(s.srcEndMs - s.srcStartMs)));
+			}
 		} else {
 			unsetCursor();
 		}
+	}
+	if (newHover != hoverMs_) {
+		hoverMs_ = newHover;
+		update();
+	}
+}
+
+void TrackEditor::leaveEvent(QEvent *)
+{
+	if (hoverMs_ >= 0) {
+		hoverMs_ = -1;
+		update();
 	}
 }
 
@@ -533,6 +659,7 @@ void TrackEditor::mouseReleaseEvent(QMouseEvent *e)
 			seg.srcEndMs = b;
 			segs_.append(seg);
 			selected_ = segs_.size() - 1;
+			multiSel_ = QSet<int>{selected_};
 			emit segmentsChanged();
 			emit selectionChanged(selected_);
 		}
@@ -549,6 +676,8 @@ void TrackEditor::mouseReleaseEvent(QMouseEvent *e)
 			if (to != selected_ && to >= 0 && to < segs_.size()) {
 				segs_.move(selected_, to);
 				selected_ = to;
+				// Indices shifted — collapse the selection to the moved cut.
+				multiSel_ = QSet<int>{selected_};
 				emit segmentsChanged();
 				emit selectionChanged(selected_);
 			}
@@ -573,8 +702,8 @@ void TrackEditor::mouseReleaseEvent(QMouseEvent *e)
 
 void TrackEditor::keyPressEvent(QKeyEvent *e)
 {
-	if ((e->key() == Qt::Key_Delete || e->key() == Qt::Key_Backspace) && selected_ >= 0) {
-		removeSegment(selected_);
+	if ((e->key() == Qt::Key_Delete || e->key() == Qt::Key_Backspace) && !multiSel_.isEmpty()) {
+		removeSelected();
 		return;
 	}
 	QWidget::keyPressEvent(e);
@@ -582,16 +711,30 @@ void TrackEditor::keyPressEvent(QKeyEvent *e)
 
 void TrackEditor::showSegmentMenu(int index, const QPoint &globalPos)
 {
+	// Acting on a member of a multi-selection applies to the whole selection.
+	const bool group = multiSel_.size() > 1 && multiSel_.contains(index);
+	const int n = group ? multiSel_.size() : 1;
+
 	QMenu menu(this);
-	QAction *del = menu.addAction(QStringLiteral("Delete cut"));
-	QAction *reset = menu.addAction(QStringLiteral("Reset speed to 1×"));
+	QAction *del = menu.addAction(group ? QStringLiteral("Delete %1 cuts").arg(n)
+					    : QStringLiteral("Delete cut"));
+	QAction *reset = menu.addAction(group ? QStringLiteral("Reset speed to 1× (%1 cuts)").arg(n)
+					      : QStringLiteral("Reset speed to 1×"));
 	QAction *chosen = menu.exec(globalPos);
 	if (chosen == del) {
-		removeSegment(index);
+		if (group)
+			removeSelected();
+		else
+			removeSegment(index);
 	} else if (chosen == reset) {
-		setSegmentSpeed(index, 1.0);
+		if (group) {
+			for (int i : std::as_const(multiSel_))
+				setSegmentSpeed(i, 1.0);
+		} else {
+			setSegmentSpeed(index, 1.0);
+		}
 		// Re-announce the selection so the editor window refreshes its slider.
-		emit selectionChanged(index);
+		emit selectionChanged(selected_ >= 0 ? selected_ : index);
 	}
 }
 

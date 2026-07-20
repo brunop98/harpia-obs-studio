@@ -47,6 +47,7 @@ signals:
 
 private slots:
 	void onScrub(qint64 ms);
+	void onHoverScrub(qint64 ms); // hover preview — never interrupts playback
 	void onPreviewTick();
 	void onCropToggled(bool on);
 	void onSave();

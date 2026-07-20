@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QImage>
+#include <QSet>
 #include <QVector>
 #include <QWidget>
 
@@ -40,9 +41,13 @@ public:
 	void setThumbs(const QVector<QImage> &thumbs);
 
 	const QVector<CutSegment> &segments() const { return segs_; }
-	int selectedIndex() const { return selected_; }
+	int selectedIndex() const { return selected_; } // primary (last clicked), -1 = none
+	// All selected cuts, ascending. Ctrl+click toggles membership, Shift+click
+	// selects a range; the speed slider applies to every selected cut.
+	QList<int> selectedIndices() const;
 	void setSegmentSpeed(int index, double speed); // repaints; no segmentsChanged
 	void removeSegment(int index);
+	void removeSelected();
 
 	qint64 totalOutputMs() const;
 	qint64 outputStartOf(int index) const; // output-time where segment #index begins
@@ -56,7 +61,8 @@ public:
 signals:
 	void segmentsChanged();          // added / removed / reordered
 	void selectionChanged(int index); // -1 = nothing selected
-	void scrubSource(qint64 ms);      // preview the source frame under the mouse
+	void scrubSource(qint64 ms);      // preview the source frame while interacting
+	void hoverScrub(qint64 ms);       // preview while merely hovering (no click)
 
 protected:
 	void paintEvent(QPaintEvent *) override;
@@ -65,6 +71,7 @@ protected:
 	void mouseReleaseEvent(QMouseEvent *) override;
 	void wheelEvent(QWheelEvent *) override;
 	void keyPressEvent(QKeyEvent *) override;
+	void leaveEvent(QEvent *) override;
 	QSize sizeHint() const override;
 	QSize minimumSizeHint() const override;
 
@@ -82,13 +89,15 @@ private:
 
 	QVector<CutSegment> segs_;
 	qint64 duration_ = 0;
-	int selected_ = -1;
+	int selected_ = -1;      // primary selection (drives resize + the slider value)
+	QSet<int> multiSel_;     // full selection; selected_ is a member when >= 0
 	qint64 playheadOutMs_ = -1;
 
 	// Source-track zoom (Ctrl+scroll; plain scroll pans) + filmstrip.
 	double zoom_ = 1.0;
 	qint64 viewStart_ = 0;
 	QVector<QImage> thumbs_;
+	qint64 hoverMs_ = -1; // hover position marker on the source track
 
 	enum class Mode { None, CreatingCut, DraggingSegment, ResizingLeft, ResizingRight };
 	Mode mode_ = Mode::None;

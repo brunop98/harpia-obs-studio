@@ -136,7 +136,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	connect(previewTimer_, &QTimer::timeout, this, &VideoEditorWindow::onPreviewTick);
 
 	connect(timeline_, &Timeline::scrub, this, &VideoEditorWindow::onScrub);
+	connect(timeline_, &Timeline::hoverScrub, this, &VideoEditorWindow::onHoverScrub);
 	connect(tracks_, &TrackEditor::scrubSource, this, &VideoEditorWindow::onScrub);
+	connect(tracks_, &TrackEditor::hoverScrub, this, &VideoEditorWindow::onHoverScrub);
 	connect(tracks_, &TrackEditor::segmentsChanged, this, &VideoEditorWindow::onSegmentsChanged);
 	connect(tracks_, &TrackEditor::selectionChanged, this, &VideoEditorWindow::onSegmentSelected);
 	connect(trimModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(false); });
@@ -233,7 +235,9 @@ void VideoEditorWindow::onSegmentSelected(int index)
 			QSignalBlocker block(speedSlider_);
 			speedSlider_->setValue(int(std::lround(sp * 100.0)));
 		}
-		speedLabel_->setText(QStringLiteral("%1×").arg(sp, 0, 'f', 2));
+		const int n = tracks_->selectedIndices().size();
+		speedLabel_->setText(n > 1 ? QStringLiteral("%1× (%2 cuts)").arg(sp, 0, 'f', 2).arg(n)
+					   : QStringLiteral("%1×").arg(sp, 0, 'f', 2));
 	} else {
 		// No clip selected — the slider has nothing to edit.
 		speedSlider_->setEnabled(false);
@@ -261,6 +265,17 @@ void VideoEditorWindow::onScrub(qint64 ms)
 	// User is dragging a handle/playhead — stop playback and show that frame.
 	if (playing_)
 		stopPlayback();
+	pendingMs_ = ms;
+	if (!previewTimer_->isActive())
+		previewTimer_->start();
+}
+
+void VideoEditorWindow::onHoverScrub(qint64 ms)
+{
+	// Hovering previews the frame under the cursor, but never fights an
+	// active playback preview.
+	if (!valid_ || playing_)
+		return;
 	pendingMs_ = ms;
 	if (!previewTimer_->isActive())
 		previewTimer_->start();
@@ -396,12 +411,16 @@ void VideoEditorWindow::onSpeedChanged(int sliderValue)
 	const double value = sliderValue / 100.0;
 
 	if (multiCut()) {
-		// The slider edits the SELECTED cut's speed.
-		const int sel = tracks_->selectedIndex();
-		if (sel < 0)
+		// The slider edits EVERY selected cut's speed.
+		const QList<int> sel = tracks_->selectedIndices();
+		if (sel.isEmpty())
 			return;
-		tracks_->setSegmentSpeed(sel, value);
-		speedLabel_->setText(QStringLiteral("%1×").arg(value, 0, 'f', 2));
+		for (int idx : sel)
+			tracks_->setSegmentSpeed(idx, value);
+		speedLabel_->setText(sel.size() > 1 ? QStringLiteral("%1× (%2 cuts)")
+							      .arg(value, 0, 'f', 2)
+							      .arg(sel.size())
+						    : QStringLiteral("%1×").arg(value, 0, 'f', 2));
 		if (playing_) {
 			// Output durations shifted — re-anchor and re-map on the next tick.
 			playAnchorMs_ = std::min(playAnchorMs_ + playClock_.elapsed(),

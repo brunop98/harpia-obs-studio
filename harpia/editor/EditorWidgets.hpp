@@ -74,7 +74,8 @@ public:
 signals:
 	void startChanged(qint64 ms);
 	void endChanged(qint64 ms);
-	void scrub(qint64 ms); // frame to preview while interacting
+	void scrub(qint64 ms);      // frame to preview while interacting
+	void hoverScrub(qint64 ms); // preview while merely hovering (no click)
 
 protected:
 	void paintEvent(QPaintEvent *) override;
@@ -82,6 +83,7 @@ protected:
 	void mouseMoveEvent(QMouseEvent *) override;
 	void mouseReleaseEvent(QMouseEvent *) override;
 	void wheelEvent(QWheelEvent *) override;
+	void leaveEvent(QEvent *) override;
 
 private:
 	int msToX(qint64 ms) const;
@@ -99,6 +101,7 @@ private:
 
 	double zoom_ = 1.0;      // 1x = whole clip visible
 	qint64 viewStart_ = 0;   // first visible ms
+	qint64 hoverMs_ = -1;    // hover position marker
 	QVector<QImage> thumbs_;
 };
 

@@ -83,6 +83,21 @@ namespace harpia {
 namespace {
 constexpr int kRecentCount = 12;
 constexpr QSize kStripThumb(160, 90);
+
+// Scale a thumbnail to FILL the card slot (cover + center crop), so every
+// recent-recordings card shows a uniform full-bleed image no matter the
+// recording's aspect ratio (portrait region captures included).
+QIcon cardIcon(const QImage &img)
+{
+	if (img.isNull())
+		return QIcon();
+	const QImage scaled =
+		img.scaled(kStripThumb, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+	const QRect crop((scaled.width() - kStripThumb.width()) / 2,
+			 (scaled.height() - kStripThumb.height()) / 2, kStripThumb.width(),
+			 kStripThumb.height());
+	return QIcon(QPixmap::fromImage(scaled.copy(crop)));
+}
 } // namespace
 
 MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFolder, QWidget *parent)
@@ -1845,7 +1860,7 @@ void MainWindow::refreshRecentList()
 
 		const QImage thumb = thumbnails_.cached(clip.filePath, kStripThumb);
 		if (!thumb.isNull())
-			item->setIcon(QIcon(QPixmap::fromImage(thumb)));
+			item->setIcon(cardIcon(thumb));
 		else
 			thumbnails_.ensure(clip.filePath, kStripThumb);
 
@@ -1871,7 +1886,7 @@ void MainWindow::onThumbnailReady(const QString &path)
 		return;
 	const QImage thumb = thumbnails_.cached(path, kStripThumb);
 	if (!thumb.isNull()) {
-		item->setIcon(QIcon(QPixmap::fromImage(thumb)));
+		item->setIcon(cardIcon(thumb));
 		recentStrip_->doItemsLayout(); // reflow so the new icon can't overlap
 	}
 }

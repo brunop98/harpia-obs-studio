@@ -226,11 +226,12 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	auto *behaviorCol = new QVBoxLayout;
 	behaviorCol->setSpacing(10);
 
+	// All three behavior dropdowns share one fixed width so the column reads
+	// as a justified block; long names elide (full text in the tooltip/popup).
+	constexpr int kBehaviorComboW = 200;
+
 	appCombo_ = new QComboBox(central);
-	// Keep the app-name dropdown compact and balanced; elide long names rather
-	// than letting the control stretch the column.
-	appCombo_->setMinimumWidth(160);
-	appCombo_->setMaximumWidth(260);
+	appCombo_->setFixedWidth(kBehaviorComboW);
 	appCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
 	appCombo_->setToolTip(QStringLiteral(
 		"Pick an application to auto-pause recording whenever it isn't focused "
@@ -241,8 +242,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	appCombo_->installEventFilter(this);
 
 	webcamCombo_ = new QComboBox(central);
-	webcamCombo_->setMinimumWidth(160);
-	webcamCombo_->setMaximumWidth(260);
+	webcamCombo_->setFixedWidth(kBehaviorComboW);
 	webcamCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
 	webcamCombo_->setToolTip(QStringLiteral(
 		"Record this camera to its own file alongside the screen recording. "
@@ -253,7 +253,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	idleCombo_->addItem(QStringLiteral("Off"), 0);
 	for (int s : {1, 2, 3, 5, 10})
 		idleCombo_->addItem(QStringLiteral("%1 s").arg(s), s);
-	idleCombo_->setMinimumWidth(80);
+	idleCombo_->setFixedWidth(kBehaviorComboW);
 	idleCombo_->setToolTip(QStringLiteral(
 		"Auto-pause the recording after this many seconds without mouse/keyboard "
 		"input, and resume on input. Off records regardless of activity."));
@@ -541,6 +541,13 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	readinessTimer_->setInterval(1500);
 	connect(readinessTimer_, &QTimer::timeout, this, &MainWindow::refreshReadiness);
 	readinessTimer_->start();
+
+	// Coalesces readiness refreshes fired by high-frequency events (a region
+	// drag emits per mouse-move) into one run shortly after they settle.
+	readinessDebounce_ = new QTimer(this);
+	readinessDebounce_->setSingleShot(true);
+	readinessDebounce_->setInterval(250);
+	connect(readinessDebounce_, &QTimer::timeout, this, &MainWindow::refreshReadiness);
 
 	reloadPresetCombo();
 	syncIdleControls();
@@ -1293,29 +1300,43 @@ void MainWindow::refreshReadiness()
 			for (const AudioDevice &d : AudioManager::inputDevices())
 				hwInputIds_.push_back(d.id);
 		hwCameraPresent_ = p.webcamEnabled ? !WebcamRecorder::cameras().empty() : true;
+
+		// Folder + encoder checks share the TTL: filesystem stats (slow on
+		// network drives) and encoder enumeration don't belong on every
+		// 1.5s tick — much less on every region-drag mouse move.
+		hwFolderIssue_ = 0;
+		const QString folder = QString::fromStdString(p.outputFolder);
+		if (!folder.isEmpty()) {
+			QDir dir(folder);
+			if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
+				hwFolderIssue_ = 1;
+			} else if (dir.exists() && !QFileInfo(folder).isWritable()) {
+				hwFolderIssue_ = 2;
+			} else {
+				const QStorageInfo storage(folder);
+				if (storage.isValid() && storage.bytesAvailable() > 0 &&
+				    storage.bytesAvailable() < 500LL * 1024 * 1024)
+					hwFolderIssue_ = 3;
+			}
+		}
+		hwEncoderOk_ = p.format == RecordingFormat::GIF ||
+			       !EncoderFactory::videoEncoderId(p).empty();
 	}
 
-	// --- Output folder ---
+	// --- Output folder --- (state cached above)
 	const QString folder = QString::fromStdString(p.outputFolder);
 	if (folder.isEmpty()) {
 		warnings.push_back({QStringLiteral("No output folder is set."), [this]() { editActivePreset(); },
 				    QStringLiteral("Set folder")});
-	} else {
-		QDir dir(folder);
-		if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
-			warnings.push_back({QStringLiteral("Output folder does not exist and can't be created."),
-					    [this]() { editActivePreset(); }, QStringLiteral("Fix folder")});
-		} else if (dir.exists() && !QFileInfo(folder).isWritable()) {
-			warnings.push_back({QStringLiteral("Output folder is not writable."),
-					    [this]() { editActivePreset(); }, QStringLiteral("Fix folder")});
-		} else {
-			const QStorageInfo storage(folder);
-			if (storage.isValid() && storage.bytesAvailable() > 0 &&
-			    storage.bytesAvailable() < 500LL * 1024 * 1024) {
-				warnings.push_back({QStringLiteral("Low disk space (< 500 MB) on the output drive."),
-						    nullptr, QString(), /*blocking=*/false});
-			}
-		}
+	} else if (hwFolderIssue_ == 1) {
+		warnings.push_back({QStringLiteral("Output folder does not exist and can't be created."),
+				    [this]() { editActivePreset(); }, QStringLiteral("Fix folder")});
+	} else if (hwFolderIssue_ == 2) {
+		warnings.push_back({QStringLiteral("Output folder is not writable."),
+				    [this]() { editActivePreset(); }, QStringLiteral("Fix folder")});
+	} else if (hwFolderIssue_ == 3) {
+		warnings.push_back({QStringLiteral("Low disk space (< 500 MB) on the output drive."), nullptr,
+				    QString(), /*blocking=*/false});
 	}
 
 	// --- Display / region ---
@@ -1358,8 +1379,8 @@ void MainWindow::refreshReadiness()
 				    /*blocking=*/false});
 	}
 
-	// --- Codec / video settings ---
-	if (p.format != RecordingFormat::GIF && EncoderFactory::videoEncoderId(p).empty()) {
+	// --- Codec / video settings --- (availability cached above)
+	if (!hwEncoderOk_) {
 		warnings.push_back({QStringLiteral("The selected codec has no available encoder."),
 				    [this]() { editActivePreset(); }, QStringLiteral("Change codec")});
 	}
@@ -1653,7 +1674,9 @@ void MainWindow::onRegionChanged(const CaptureRegion &region)
 	currentRegion_ = region;
 	// Live update — crop_filter applies immediately, even while recording.
 	capture_.setRegion(region);
-	refreshReadiness();
+	// Fired per mouse-move while dragging the region — debounce the readiness
+	// pass instead of running filesystem checks dozens of times a second.
+	readinessDebounce_->start();
 }
 
 void MainWindow::updateRegionToolVisibility()
@@ -2181,24 +2204,31 @@ void MainWindow::updateStatusChip()
 	} else {
 		text = QStringLiteral("Ready");
 		color = QColor(0x3f, 0xb9, 0x50);
-		pulse = true;
+		// No pulse at rest: an idle badge shouldn't repaint 20x/sec forever.
 		if (!firstIssue_.isEmpty())
 			tip = firstIssue_; // non-blocking caution shown on hover
 	}
 
 	statusBadge_->setStatus(text, color, pulse);
-	statusBadge_->setToolTip(tip);
+	if (statusBadge_->toolTip() != tip)
+		statusBadge_->setToolTip(tip);
 }
 
 void MainWindow::tickState()
 {
 	++spinPhase_; // drive the Starting…/Stopping… spinner
 
-	// One foreground query per tick, consumed by tickFocus below.
-	const uint64_t fg = ForegroundWatcher::foregroundProcessId();
+	// The foreground query is a real OS call — only pay for it when the focus
+	// auto-pause is actually armed (recording with a target app selected).
+	const bool focusArmed =
+		recorder_.isRecording() && appCaptureEnabled_ && !targetExe_.isEmpty();
+	const uint64_t fg = focusArmed ? ForegroundWatcher::foregroundProcessId() : 0;
 
 	// Release the webcam output once its async stop finished writing the file.
-	webcam_.reap();
+	// (reap() is internally a no-op unless a stop is pending, but the
+	// obs_output_active poll is skipped entirely when idle.)
+	if (webcam_.stopPending())
+		webcam_.reap();
 
 	if (!recorder_.isRecording()) {
 		if (recStartMs_ != 0) {

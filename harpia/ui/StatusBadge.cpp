@@ -22,7 +22,8 @@ StatusBadge::StatusBadge(QWidget *parent) : QWidget(parent)
 		phase_ += 0.18;
 		update();
 	});
-	timer_->start();
+	// Not started here: the pulse timer only runs while a pulsing (live) status
+	// is shown — see setStatus. An idle badge repaints exactly never.
 }
 
 void StatusBadge::setStatus(const QString &text, const QColor &color, bool pulse)

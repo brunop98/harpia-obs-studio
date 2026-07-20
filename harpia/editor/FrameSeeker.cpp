@@ -218,10 +218,8 @@ bool FrameSeeker::seekTo(qint64 ms)
 	return true;
 }
 
-QImage FrameSeeker::nextFrame(qint64 *outMs, int maxW, int maxH)
+bool FrameSeeker::decodeNextInto(qint64 *ptsMs)
 {
-	if (!fmt_ || !dec_ || vIdx_ < 0)
-		return {};
 	AVStream *st = fmt_->streams[vIdx_];
 
 	while (true) {
@@ -230,18 +228,14 @@ QImage FrameSeeker::nextFrame(qint64 *outMs, int maxW, int maxH)
 			const int64_t pts = seqFrame_->best_effort_timestamp != AV_NOPTS_VALUE
 						    ? seqFrame_->best_effort_timestamp
 						    : 0;
-			const qint64 ptsMs = (qint64)(pts * av_q2d(st->time_base) * 1000.0);
-			if (outMs)
-				*outMs = ptsMs;
-			posMs_ = ptsMs; // keep frameAt's roll-forward anchor in sync
-			QImage img = toImage(seqFrame_, maxW, maxH);
-			av_frame_unref(seqFrame_);
-			return img;
+			if (ptsMs)
+				*ptsMs = (qint64)(pts * av_q2d(st->time_base) * 1000.0);
+			return true;
 		}
 		if (r == AVERROR_EOF)
-			return {};
+			return false;
 		if (r != AVERROR(EAGAIN))
-			return {};
+			return false;
 
 		// Need more input: feed the next video packet, or flush at EOF.
 		bool fed = false;
@@ -259,10 +253,47 @@ QImage FrameSeeker::nextFrame(qint64 *outMs, int maxW, int maxH)
 				avcodec_send_packet(dec_, nullptr);
 				flushed_ = true;
 			} else {
-				return {};
+				return false;
 			}
 		}
 	}
+}
+
+QImage FrameSeeker::nextFrame(qint64 *outMs, int maxW, int maxH)
+{
+	if (!fmt_ || !dec_ || vIdx_ < 0)
+		return {};
+	qint64 ptsMs = 0;
+	if (!decodeNextInto(&ptsMs))
+		return {};
+	if (outMs)
+		*outMs = ptsMs;
+	posMs_ = ptsMs; // keep frameAt's roll-forward anchor in sync
+	QImage img = toImage(seqFrame_, maxW, maxH);
+	av_frame_unref(seqFrame_);
+	return img;
+}
+
+QImage FrameSeeker::nextFrameAt(qint64 targetMs, qint64 *outMs, int maxW, int maxH, int maxFrames)
+{
+	if (!fmt_ || !dec_ || vIdx_ < 0)
+		return {};
+	for (int i = 0; i < maxFrames; ++i) {
+		qint64 ptsMs = 0;
+		if (!decodeNextInto(&ptsMs))
+			return {}; // end of stream — the caller loops/advances
+		posMs_ = ptsMs;
+		if (ptsMs >= targetMs || i == maxFrames - 1) {
+			// The frame we'll actually show — the only one converted.
+			if (outMs)
+				*outMs = ptsMs;
+			QImage img = toImage(seqFrame_, maxW, maxH);
+			av_frame_unref(seqFrame_);
+			return img;
+		}
+		av_frame_unref(seqFrame_); // skipped catch-up frame: no conversion
+	}
+	return {};
 }
 
 } // namespace harpia

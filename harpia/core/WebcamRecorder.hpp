@@ -67,6 +67,9 @@ public:
 	// Release the output once an async stop() has fully finished — safe to call
 	// every UI tick; does nothing while the muxer is still writing.
 	void reap();
+	// True while an async stop() is waiting for reap() — lets the owner skip
+	// the per-tick obs_output_active poll entirely when nothing is pending.
+	bool stopPending() const { return stopRequested_; }
 
 	bool isRecording() const;
 

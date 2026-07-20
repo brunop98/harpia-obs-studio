@@ -185,6 +185,9 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 	cy = evenDown(cy);
 	cw = std::max(2, evenDown(cw));
 	ch = std::max(2, evenDown(ch));
+	// No crop selected (the default) -> decoded frames are fed straight to
+	// the encoder; the per-frame full-image copy is skipped entirely.
+	const bool cropNeeded = (cx != 0 || cy != 0 || cw != s.vdec->width || ch != s.vdec->height);
 
 	// ---- Video encoder ----
 	const char *encName = (opts.format == Format::WebM) ? "libvpx-vp9" : "libx264";
@@ -310,6 +313,7 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 			s.toYuv = sws_getContext(s.vdec->width, s.vdec->height, (AVPixelFormat)f->format,
 						 s.vdec->width, s.vdec->height, AV_PIX_FMT_YUV420P, SWS_BILINEAR,
 						 nullptr, nullptr, nullptr);
+		av_frame_make_writable(s.fullYuv); // encoder may still hold a ref
 		sws_scale(s.toYuv, f->data, f->linesize, 0, s.vdec->height, s.fullYuv->data, s.fullYuv->linesize);
 		return s.fullYuv;
 	};
@@ -354,23 +358,29 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 						av_frame_unref(frame);
 						break;
 					}
-					// Crop into the yuv420p encoder frame.
+					// Crop into the encoder frame only when a crop is set —
+					// otherwise the decoded frame goes straight through.
 					AVFrame *yf = ensureYuvFull(frame);
-					if (av_frame_make_writable(s.cropFrame) < 0) {
-						errored = true;
-						av_frame_unref(frame);
-						break;
+					AVFrame *toEnc = yf;
+					if (cropNeeded) {
+						if (av_frame_make_writable(s.cropFrame) < 0) {
+							errored = true;
+							av_frame_unref(frame);
+							break;
+						}
+						const uint8_t *src[4] = {
+							yf->data[0] + cy * yf->linesize[0] + cx,
+							yf->data[1] + (cy / 2) * yf->linesize[1] + (cx / 2),
+							yf->data[2] + (cy / 2) * yf->linesize[2] + (cx / 2),
+							nullptr};
+						av_image_copy(s.cropFrame->data, s.cropFrame->linesize, src,
+							      yf->linesize, AV_PIX_FMT_YUV420P, cw, ch);
+						toEnc = s.cropFrame;
 					}
-					const uint8_t *src[4] = {
-						yf->data[0] + cy * yf->linesize[0] + cx,
-						yf->data[1] + (cy / 2) * yf->linesize[1] + (cx / 2),
-						yf->data[2] + (cy / 2) * yf->linesize[2] + (cx / 2), nullptr};
-					av_image_copy(s.cropFrame->data, s.cropFrame->linesize, src, yf->linesize,
-						      AV_PIX_FMT_YUV420P, cw, ch);
-					s.cropFrame->pts = scaledPts(pts);
+					toEnc->pts = scaledPts(pts);
 					processedMs = std::max(processedMs, (pts - startV) * av_q2d(vin->time_base) *
 										     1000.0);
-					if (!encodeVideo(s.cropFrame)) {
+					if (!encodeVideo(toEnc)) {
 						errored = true;
 						av_frame_unref(frame);
 						break;
@@ -417,15 +427,25 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 						    : 0;
 			if (pts >= startV && pts <= endV) {
 				AVFrame *yf = ensureYuvFull(frame);
-				if (av_frame_make_writable(s.cropFrame) == 0) {
-					const uint8_t *src[4] = {
-						yf->data[0] + cy * yf->linesize[0] + cx,
-						yf->data[1] + (cy / 2) * yf->linesize[1] + (cx / 2),
-						yf->data[2] + (cy / 2) * yf->linesize[2] + (cx / 2), nullptr};
-					av_image_copy(s.cropFrame->data, s.cropFrame->linesize, src, yf->linesize,
-						      AV_PIX_FMT_YUV420P, cw, ch);
-					s.cropFrame->pts = scaledPts(pts);
-					encodeVideo(s.cropFrame);
+				AVFrame *toEnc = yf;
+				bool ok = true;
+				if (cropNeeded) {
+					if (av_frame_make_writable(s.cropFrame) == 0) {
+						const uint8_t *src[4] = {
+							yf->data[0] + cy * yf->linesize[0] + cx,
+							yf->data[1] + (cy / 2) * yf->linesize[1] + (cx / 2),
+							yf->data[2] + (cy / 2) * yf->linesize[2] + (cx / 2),
+							nullptr};
+						av_image_copy(s.cropFrame->data, s.cropFrame->linesize, src,
+							      yf->linesize, AV_PIX_FMT_YUV420P, cw, ch);
+						toEnc = s.cropFrame;
+					} else {
+						ok = false;
+					}
+				}
+				if (ok) {
+					toEnc->pts = scaledPts(pts);
+					encodeVideo(toEnc);
 				}
 			}
 			av_frame_unref(frame);
@@ -501,6 +521,9 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 	cy = evenDown(cy);
 	cw = std::max(2, evenDown(cw));
 	ch = std::max(2, evenDown(ch));
+	// No crop selected (the default) -> decoded frames are fed straight to
+	// the encoder; the per-frame full-image copy is skipped entirely.
+	const bool cropNeeded = (cx != 0 || cy != 0 || cw != s.vdec->width || ch != s.vdec->height);
 
 	// ---- Video encoder ----
 	const char *encName = (opts.format == Format::WebM) ? "libvpx-vp9" : "libx264";
@@ -610,6 +633,7 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 			s.toYuv = sws_getContext(s.vdec->width, s.vdec->height, (AVPixelFormat)f->format,
 						 s.vdec->width, s.vdec->height, AV_PIX_FMT_YUV420P,
 						 SWS_BILINEAR, nullptr, nullptr, nullptr);
+		av_frame_make_writable(s.fullYuv); // encoder may still hold a ref
 		sws_scale(s.toYuv, f->data, f->linesize, 0, s.vdec->height, s.fullYuv->data,
 			  s.fullYuv->linesize);
 		return s.fullYuv;
@@ -681,24 +705,29 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 				videoDone = true;
 				return true;
 			}
+			// Crop only when set — otherwise feed the decoded frame straight.
 			AVFrame *yf = ensureYuvFull(df);
-			if (av_frame_make_writable(s.cropFrame) < 0)
-				return false;
-			const uint8_t *src[4] = {yf->data[0] + cy * yf->linesize[0] + cx,
-						 yf->data[1] + (cy / 2) * yf->linesize[1] + (cx / 2),
-						 yf->data[2] + (cy / 2) * yf->linesize[2] + (cx / 2),
-						 nullptr};
-			av_image_copy(s.cropFrame->data, s.cropFrame->linesize, src, yf->linesize,
-				      AV_PIX_FMT_YUV420P, cw, ch);
+			AVFrame *toEnc = yf;
+			if (cropNeeded) {
+				if (av_frame_make_writable(s.cropFrame) < 0)
+					return false;
+				const uint8_t *src[4] = {yf->data[0] + cy * yf->linesize[0] + cx,
+							 yf->data[1] + (cy / 2) * yf->linesize[1] + (cx / 2),
+							 yf->data[2] + (cy / 2) * yf->linesize[2] + (cx / 2),
+							 nullptr};
+				av_image_copy(s.cropFrame->data, s.cropFrame->linesize, src, yf->linesize,
+					      AV_PIX_FMT_YUV420P, cw, ch);
+				toEnc = s.cropFrame;
+			}
 			int64_t v = (int64_t)llround(outBaseTicks + double(pts - startV) / cut.speed);
 			if (v <= lastEncPts)
 				v = lastEncPts + 1;
 			lastEncPts = v;
-			s.cropFrame->pts = v;
+			toEnc->pts = v;
 			processedMs = std::max(processedMs,
 					       doneOutMs + (pts - startV) * av_q2d(vin->time_base) *
 								   1000.0 / cut.speed);
-			return encodeVideo(s.cropFrame);
+			return encodeVideo(toEnc);
 		};
 
 		while (!errored && !(videoDone && audioDone)) {

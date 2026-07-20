@@ -207,8 +207,11 @@ private:
 	qint64 hwProbeMs_ = 0;
 	int hwMonitorCount_ = 0;
 	bool hwCameraPresent_ = false;
+	int hwFolderIssue_ = 0;   // 0 ok, 1 missing, 2 read-only, 3 low space
+	bool hwEncoderOk_ = true; // selected codec has an available encoder
 	std::vector<std::string> hwInputIds_;
 	QStringList lastWarningSig_;
+	QTimer *readinessDebounce_ = nullptr; // coalesces refreshes during drags
 
 	// Recent strip
 	QPushButton *libraryButton_ = nullptr;

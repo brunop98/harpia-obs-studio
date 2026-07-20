@@ -402,27 +402,19 @@ void VideoEditorWindow::onPlayTick()
 			seeker_->seekTo(segs[seg].srcStartMs);
 			playSeg_ = seg;
 		}
-		// Decode forward to the target source time; show the last frame reached.
-		QImage img;
-		for (int guard = 0; guard < 240; ++guard) {
-			qint64 fts = -1;
-			QImage f = seeker_->nextFrame(&fts, 1280, 720);
-			if (f.isNull()) {
-				// Source ended inside this cut — skip to the next segment.
-				playAnchorMs_ = tracks_->outputStartOf(seg) + segs[seg].outDurationMs();
-				playClock_.restart();
-				playSeg_ = -1;
-				break;
-			}
-			img = f;
-			if (fts >= srcTarget)
-				break;
+		// Decode forward to the target source time; only the shown frame is
+		// converted (skipped catch-up frames stay in YUV — see nextFrameAt).
+		const QImage img = seeker_->nextFrameAt(srcTarget, nullptr, 1280, 720, 240);
+		if (img.isNull()) {
+			// Source ended inside this cut — skip to the next segment.
+			playAnchorMs_ = tracks_->outputStartOf(seg) + segs[seg].outDurationMs();
+			playClock_.restart();
+			playSeg_ = -1;
+			return;
 		}
-		if (!img.isNull()) {
-			canvas_->setFrame(img);
-			tracks_->setPlayhead(outPos);
-			cursorTimeLabel_->setText(previewTimeText(srcTarget));
-		}
+		canvas_->setFrame(img);
+		tracks_->setPlayhead(outPos);
+		cursorTimeLabel_->setText(previewTimeText(srcTarget));
 		return;
 	}
 
@@ -438,28 +430,19 @@ void VideoEditorWindow::onPlayTick()
 		target = start;
 	}
 
-	// Decode forward to the target time; show the last frame reached.
-	QImage img;
+	// Decode forward to the target time; only the shown frame is converted
+	// (skipped catch-up frames stay in YUV — see nextFrameAt).
 	qint64 ts = -1;
-	for (int guard = 0; guard < 240; ++guard) {
-		qint64 fts = -1;
-		QImage f = seeker_->nextFrame(&fts, 1280, 720);
-		if (f.isNull()) { // reached end of file inside the region — loop
-			seeker_->seekTo(start);
-			playAnchorMs_ = start;
-			playClock_.restart();
-			break;
-		}
-		img = f;
-		ts = fts;
-		if (fts >= target)
-			break;
+	const QImage img = seeker_->nextFrameAt(target, &ts, 1280, 720, 240);
+	if (img.isNull()) { // reached end of file inside the region — loop
+		seeker_->seekTo(start);
+		playAnchorMs_ = start;
+		playClock_.restart();
+		return;
 	}
-	if (!img.isNull()) {
-		canvas_->setFrame(img);
-		timeline_->setPlayhead(ts);
-		cursorTimeLabel_->setText(previewTimeText(ts));
-	}
+	canvas_->setFrame(img);
+	timeline_->setPlayhead(ts);
+	cursorTimeLabel_->setText(previewTimeText(ts));
 }
 
 void VideoEditorWindow::onSpeedChanged(int sliderValue)

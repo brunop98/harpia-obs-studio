@@ -46,8 +46,15 @@ public:
 	bool seekTo(qint64 ms);
 	QImage nextFrame(qint64 *outMs, int maxW, int maxH);
 
+	// Playback catch-up: decode forward until reaching targetMs (or maxFrames /
+	// end of stream) and convert ONLY the final frame — skipped frames don't
+	// pay the RGBA conversion. Empty QImage at end of stream.
+	QImage nextFrameAt(qint64 targetMs, qint64 *outMs, int maxW, int maxH, int maxFrames);
+
 private:
 	QImage toImage(AVFrame *f, int maxW, int maxH);
+	// Decode the next video frame into seqFrame_ (caller unrefs); false at EOF.
+	bool decodeNextInto(qint64 *ptsMs);
 
 	AVFormatContext *fmt_ = nullptr;
 	AVCodecContext *dec_ = nullptr;

@@ -140,9 +140,9 @@ bool GifEncoder::encode(const QString &inPath, const QString &outPath, const Par
 	if (avfilter_graph_create_filter(&s.sinkCtx, avfilter_get_by_name("buffersink"), "out", nullptr, nullptr,
 					 s.graph) < 0)
 		return fail("Could not create the GIF output filter.");
-	const enum AVPixelFormat sinkFmts[] = {AV_PIX_FMT_PAL8, AV_PIX_FMT_NONE};
-	if (av_opt_set_int_list(s.sinkCtx, "pix_fmts", sinkFmts, AV_PIX_FMT_NONE, AV_OPT_SEARCH_CHILDREN) < 0)
-		return fail("Could not configure the GIF output filter.");
+	// No explicit sink format constraint: paletteuse always outputs PAL8, which is
+	// exactly what the GIF encoder wants. (Avoids the deprecated
+	// av_opt_set_int_list, which MSVC rejects under warnings-as-errors.)
 
 	AVFilterInOut *outputs = avfilter_inout_alloc();
 	AVFilterInOut *inputs = avfilter_inout_alloc();

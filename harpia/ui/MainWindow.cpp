@@ -207,22 +207,21 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	row2->addSpacing(kGroupGap);
 	// Idle auto-pause as one unit so it can drop out on very narrow windows.
+	// Dropdown-only, like the other behavior controls: first item = Off.
 	idleGroup_ = new QWidget(central);
 	auto *idleLayout = new QHBoxLayout(idleGroup_);
 	idleLayout->setContentsMargins(0, 0, 0, 0);
 	idleLayout->setSpacing(8);
-	idleToggle_ = new QCheckBox(QStringLiteral("Only record while active"), idleGroup_);
-	idleToggle_->setToolTip(QStringLiteral(
-		"Auto-pause the recording after the idle time to the right (no mouse/keyboard "
-		"input), and resume on input"));
-	idleLayout->addWidget(idleToggle_);
-	idleSpin_ = new QSpinBox(idleGroup_);
-	idleSpin_->setRange(1, 3600);
-	idleSpin_->setSuffix(QStringLiteral(" s"));
-	idleSpin_->setValue(10);
-	idleSpin_->setMaximumWidth(80);
-	idleSpin_->setToolTip(QStringLiteral("Seconds without mouse/keyboard input before auto-pausing"));
-	idleLayout->addWidget(idleSpin_);
+	idleLayout->addWidget(fieldLabel(QStringLiteral("Pause when idle")));
+	idleCombo_ = new QComboBox(idleGroup_);
+	idleCombo_->addItem(QStringLiteral("Off"), 0);
+	for (int s : {1, 2, 3, 5, 10})
+		idleCombo_->addItem(QStringLiteral("%1 s").arg(s), s);
+	idleCombo_->setMaximumWidth(80);
+	idleCombo_->setToolTip(QStringLiteral(
+		"Auto-pause the recording after this many seconds without mouse/keyboard "
+		"input, and resume on input. Off records regardless of activity."));
+	idleLayout->addWidget(idleCombo_);
 	row2->addWidget(idleGroup_);
 	row2->addStretch(1);
 	root->addLayout(row2);
@@ -435,8 +434,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(libraryButton_, &QPushButton::clicked, this, &MainWindow::onOpenClipLibrary);
 	connect(errorLogsButton_, &QPushButton::clicked, this, &MainWindow::onOpenErrorLogs);
 	connect(captureModeCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onCaptureModeChanged);
-	connect(idleToggle_, &QCheckBox::toggled, this, &MainWindow::onIdleSettingChanged);
-	connect(idleSpin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::onIdleSettingChanged);
+	connect(idleCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onIdleSettingChanged);
 	connect(countdownCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onCountdownSettingChanged);
 	connect(presetCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onPresetChanged);
 	connect(presetCombo_, &QComboBox::customContextMenuRequested, this, &MainWindow::showPresetMenu);
@@ -1669,15 +1667,13 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
 void MainWindow::onIdleSettingChanged()
 {
-	idleSpin_->setEnabled(idleToggle_->isChecked());
-
 	// Persist the idle setting onto the active preset so it survives restarts
-	// and drives tickIdle().
+	// and drives tickIdle(). First item ("Off") stores 0 = disabled.
 	const Preset *cur = presets_.find(activePresetId_);
 	if (!cur)
 		return;
 	Preset updated = *cur;
-	updated.idleTimeoutSeconds = idleToggle_->isChecked() ? idleSpin_->value() : 0;
+	updated.idleTimeoutSeconds = idleCombo_->currentData().toInt();
 	if (updated.idleTimeoutSeconds != cur->idleTimeoutSeconds)
 		presets_.upsert(updated);
 }
@@ -1736,12 +1732,16 @@ void MainWindow::onPresetChanged()
 void MainWindow::syncIdleControls()
 {
 	const Preset &p = activePreset();
-	QSignalBlocker b1(idleToggle_);
-	QSignalBlocker b2(idleSpin_);
-	const bool on = p.idleTimeoutSeconds > 0;
-	idleToggle_->setChecked(on);
-	idleSpin_->setValue(on ? p.idleTimeoutSeconds : 10);
-	idleSpin_->setEnabled(on);
+	QSignalBlocker b1(idleCombo_);
+	int idx = idleCombo_->findData(p.idleTimeoutSeconds);
+	if (idx < 0 && p.idleTimeoutSeconds > 0) {
+		// Preset saved with a timeout outside the preset list (e.g. from an
+		// older version's spinbox) — keep the value selectable.
+		idleCombo_->addItem(QStringLiteral("%1 s").arg(p.idleTimeoutSeconds),
+				    p.idleTimeoutSeconds);
+		idx = idleCombo_->count() - 1;
+	}
+	idleCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
 
 	// The countdown control lives on the toolbar too; keep it in sync with the
 	// active preset.
@@ -2056,11 +2056,10 @@ void MainWindow::updateButtons()
 	// recording so the auto-pause target / camera can't change mid-file.
 	appCombo_->setEnabled(!locked);
 	webcamCombo_->setEnabled(!locked);
-	// Locking the idle controls too: unchecking the idle toggle while the
-	// recording is auto-paused would strand it paused forever (tickIdle bails on
-	// timeout <= 0 and never resumes).
-	idleToggle_->setEnabled(!locked);
-	idleSpin_->setEnabled(!locked && idleToggle_->isChecked());
+	// Locking the idle control too: switching it to Off while the recording is
+	// auto-paused would strand it paused forever (tickIdle bails on timeout <= 0
+	// and never resumes).
+	idleCombo_->setEnabled(!locked);
 	countdownCombo_->setEnabled(!locked);
 
 	updateStatusChip();

@@ -168,9 +168,8 @@ private:
 	QPushButton *editPresetButton_ = nullptr;
 	QPushButton *newPresetButton_ = nullptr;
 	QComboBox *captureModeCombo_ = nullptr;
-	QCheckBox *idleToggle_ = nullptr;
-	QSpinBox *idleSpin_ = nullptr;
-	QWidget *idleGroup_ = nullptr; // toggle + spin, hidden when very narrow
+	QComboBox *idleCombo_ = nullptr; // idle auto-pause timeout; first item = Off
+	QWidget *idleGroup_ = nullptr;   // label + combo, hidden when very narrow
 	QComboBox *countdownCombo_ = nullptr;
 	QWidget *countdownGroup_ = nullptr; // label + combo, hidden when narrow
 

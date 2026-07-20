@@ -33,6 +33,10 @@ void FrameSeeker::close()
 	swsW_ = swsH_ = 0;
 	vIdx_ = -1;
 	flushed_ = false;
+	posMs_ = -1;
+	cacheImg_ = QImage();
+	cacheMs_ = -1;
+	cacheW_ = cacheH_ = 0;
 }
 
 bool FrameSeeker::open(const QString &path)
@@ -120,9 +124,22 @@ QImage FrameSeeker::frameAt(qint64 ms, int maxW, int maxH)
 	AVStream *st = fmt_->streams[vIdx_];
 	const int64_t target = av_rescale_q(ms, {1, 1000}, st->time_base);
 
-	av_seek_frame(fmt_, vIdx_, target, AVSEEK_FLAG_BACKWARD);
-	avcodec_flush_buffers(dec_);
-	flushed_ = false;
+	// Same frame as last time (at the same preview size)? Answer from cache so
+	// slow drags inside one frame cost nothing.
+	const qint64 frameMs = fps_ > 1.0 ? qint64(1000.0 / fps_) : 33;
+	if (!cacheImg_.isNull() && cacheW_ == maxW && cacheH_ == maxH && ms >= cacheMs_ &&
+	    ms < cacheMs_ + frameMs)
+		return cacheImg_;
+
+	// Slightly ahead of the decoder's position? Roll forward without seeking —
+	// a rightward handle drag then decodes only the few frames in between,
+	// instead of everything since the previous keyframe.
+	const bool roll = posMs_ >= 0 && !flushed_ && ms > posMs_ && (ms - posMs_) <= 2000;
+	if (!roll) {
+		av_seek_frame(fmt_, vIdx_, target, AVSEEK_FLAG_BACKWARD);
+		avcodec_flush_buffers(dec_);
+		flushed_ = false;
+	}
 
 	AVPacket *pkt = av_packet_alloc();
 	AVFrame *frame = av_frame_alloc();
@@ -136,30 +153,52 @@ QImage FrameSeeker::frameAt(qint64 ms, int maxW, int maxH)
 	};
 
 	bool done = false;
-	while (!done && av_read_frame(fmt_, pkt) >= 0) {
-		if (pkt->stream_index == vIdx_ && avcodec_send_packet(dec_, pkt) >= 0) {
-			while (avcodec_receive_frame(dec_, frame) >= 0) {
-				const int64_t pts = frame->best_effort_timestamp;
-				keep();
-				if (pts != AV_NOPTS_VALUE && pts >= target) {
-					done = true;
-					break;
-				}
-				av_frame_unref(frame);
+	int64_t bestPts = AV_NOPTS_VALUE;
+	// When rolling forward, frames buffered in the decoder come out first.
+	while (!done) {
+		int r = avcodec_receive_frame(dec_, frame);
+		if (r == 0) {
+			const int64_t pts = frame->best_effort_timestamp;
+			bestPts = pts;
+			keep();
+			if (pts != AV_NOPTS_VALUE && pts >= target) {
+				done = true;
+				break;
 			}
+			av_frame_unref(frame);
+			continue;
 		}
+		if (r != AVERROR(EAGAIN))
+			break; // EOF or error — fall through to the drain below
+		if (av_read_frame(fmt_, pkt) < 0)
+			break;
+		if (pkt->stream_index == vIdx_)
+			avcodec_send_packet(dec_, pkt);
 		av_packet_unref(pkt);
 	}
 	if (!done) {
 		avcodec_send_packet(dec_, nullptr);
 		while (avcodec_receive_frame(dec_, frame) >= 0) {
+			bestPts = frame->best_effort_timestamp;
 			keep();
 			av_frame_unref(frame);
 		}
 		avcodec_flush_buffers(dec_);
+		posMs_ = -1; // read position is at EOF — no rolling from here
 	}
 
 	QImage img = haveBest ? toImage(best, maxW, maxH) : QImage();
+	if (haveBest) {
+		const qint64 shownMs = bestPts != AV_NOPTS_VALUE
+					       ? qint64(bestPts * av_q2d(st->time_base) * 1000.0)
+					       : ms;
+		if (done)
+			posMs_ = shownMs;
+		cacheImg_ = img;
+		cacheMs_ = shownMs;
+		cacheW_ = maxW;
+		cacheH_ = maxH;
+	}
 	av_frame_free(&best);
 	av_frame_free(&frame);
 	av_packet_free(&pkt);
@@ -175,6 +214,7 @@ bool FrameSeeker::seekTo(qint64 ms)
 	av_seek_frame(fmt_, vIdx_, target, AVSEEK_FLAG_BACKWARD);
 	avcodec_flush_buffers(dec_);
 	flushed_ = false;
+	posMs_ = -1; // at the keyframe before ms — exact position unknown until decode
 	return true;
 }
 
@@ -190,8 +230,10 @@ QImage FrameSeeker::nextFrame(qint64 *outMs, int maxW, int maxH)
 			const int64_t pts = seqFrame_->best_effort_timestamp != AV_NOPTS_VALUE
 						    ? seqFrame_->best_effort_timestamp
 						    : 0;
+			const qint64 ptsMs = (qint64)(pts * av_q2d(st->time_base) * 1000.0);
 			if (outMs)
-				*outMs = (qint64)(pts * av_q2d(st->time_base) * 1000.0);
+				*outMs = ptsMs;
+			posMs_ = ptsMs; // keep frameAt's roll-forward anchor in sync
 			QImage img = toImage(seqFrame_, maxW, maxH);
 			av_frame_unref(seqFrame_);
 			return img;

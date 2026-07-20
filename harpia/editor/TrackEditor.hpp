@@ -23,9 +23,10 @@ struct CutSegment {
 
 // The multi-cut track editor: a Source track (the whole video — press and drag
 // to select a section to keep) above an Output track (the selected cuts in
-// sequence). Output segments can be clicked to select, dragged to reorder, and
-// removed with Delete or the right-click menu. Cuts are intentionally allowed
-// to overlap/repeat source material.
+// sequence). Output segments can be clicked to select, dragged to reorder,
+// trimmed by dragging their left/right edge (with live frame preview of the
+// edge position), and removed with Delete or the right-click menu. Cuts are
+// intentionally allowed to overlap/repeat source material.
 class TrackEditor : public QWidget {
 	Q_OBJECT
 public:
@@ -76,13 +77,19 @@ private:
 	int selected_ = -1;
 	qint64 playheadOutMs_ = -1;
 
-	enum class Mode { None, CreatingCut, DraggingSegment };
+	enum class Mode { None, CreatingCut, DraggingSegment, ResizingLeft, ResizingRight };
 	Mode mode_ = Mode::None;
 	qint64 dragStartMs_ = 0; // CreatingCut anchor (source ms)
 	qint64 dragCurMs_ = 0;
 	QPoint pressPos_;
 	bool dragMoved_ = false;
 	int dragInsertSlot_ = -1; // reorder target slot while dragging
+
+	// Edge-trim drag state, captured at press so the px→source-ms scale stays
+	// stable while the segment's width changes under the cursor.
+	qint64 resizeOrigStart_ = 0;
+	qint64 resizeOrigEnd_ = 0;
+	double resizeSrcPerPx_ = 0.0;
 };
 
 } // namespace harpia

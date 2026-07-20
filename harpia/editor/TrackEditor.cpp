@@ -350,11 +350,27 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 			emit selectionChanged(idx);
 		}
 		if (idx >= 0) {
-			mode_ = Mode::DraggingSegment;
 			pressPos_ = pos;
 			dragMoved_ = false;
 			dragInsertSlot_ = -1;
-			emit scrubSource(segs_[idx].srcStartMs);
+			// Near an edge → trim that boundary (with live frame preview);
+			// otherwise drag the whole segment to reorder.
+			const QRect r = segmentRects()[idx];
+			const CutSegment &seg = segs_[idx];
+			const int edgeZone = std::min(7, r.width() / 3);
+			const bool onLeft = pos.x() - r.left() <= edgeZone;
+			const bool onRight = r.right() - pos.x() <= edgeZone;
+			if (onLeft || onRight) {
+				mode_ = onLeft ? Mode::ResizingLeft : Mode::ResizingRight;
+				resizeOrigStart_ = seg.srcStartMs;
+				resizeOrigEnd_ = seg.srcEndMs;
+				resizeSrcPerPx_ = double(seg.srcEndMs - seg.srcStartMs) /
+						  double(std::max(1, r.width()));
+				emit scrubSource(onLeft ? seg.srcStartMs : seg.srcEndMs);
+			} else {
+				mode_ = Mode::DraggingSegment;
+				emit scrubSource(seg.srcStartMs);
+			}
 		}
 		update();
 	}
@@ -379,14 +395,41 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 		}
 		return;
 	}
+	if ((mode_ == Mode::ResizingLeft || mode_ == Mode::ResizingRight) && selected_ >= 0) {
+		// Live edge trim: convert the pixel delta into source ms with the scale
+		// captured at press, clamp, and preview the frame at the moving edge.
+		CutSegment &seg = segs_[selected_];
+		const qint64 deltaMs = qint64(std::llround((pos.x() - pressPos_.x()) * resizeSrcPerPx_));
+		if (mode_ == Mode::ResizingLeft) {
+			seg.srcStartMs = std::clamp<qint64>(resizeOrigStart_ + deltaMs, 0,
+							    resizeOrigEnd_ - kMinCutMs);
+			emit scrubSource(seg.srcStartMs);
+		} else {
+			seg.srcEndMs = std::clamp<qint64>(resizeOrigEnd_ + deltaMs,
+							  resizeOrigStart_ + kMinCutMs, duration_);
+			emit scrubSource(seg.srcEndMs);
+		}
+		dragMoved_ = true;
+		update();
+		return;
+	}
 
 	// Idle: cursor hints.
-	if (sourceRect().contains(pos))
+	if (sourceRect().contains(pos)) {
 		setCursor(Qt::CrossCursor);
-	else if (segmentAt(pos) >= 0)
-		setCursor(Qt::PointingHandCursor);
-	else
-		unsetCursor();
+	} else {
+		const int idx = segmentAt(pos);
+		if (idx >= 0) {
+			const QRect r = segmentRects()[idx];
+			const int edgeZone = std::min(7, r.width() / 3);
+			if (pos.x() - r.left() <= edgeZone || r.right() - pos.x() <= edgeZone)
+				setCursor(Qt::SizeHorCursor);
+			else
+				setCursor(Qt::PointingHandCursor);
+		} else {
+			unsetCursor();
+		}
+	}
 }
 
 void TrackEditor::mouseReleaseEvent(QMouseEvent *e)
@@ -425,6 +468,18 @@ void TrackEditor::mouseReleaseEvent(QMouseEvent *e)
 			}
 		}
 		dragInsertSlot_ = -1;
+		dragMoved_ = false;
+		update();
+		return;
+	}
+
+	if (mode_ == Mode::ResizingLeft || mode_ == Mode::ResizingRight) {
+		mode_ = Mode::None;
+		if (dragMoved_) {
+			emit segmentsChanged(); // durations changed
+			if (selected_ >= 0)
+				emit selectionChanged(selected_); // refresh the speed slider row
+		}
 		dragMoved_ = false;
 		update();
 	}

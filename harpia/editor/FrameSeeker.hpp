@@ -34,8 +34,10 @@ public:
 	double fps() const { return fps_; }
 
 	// Decode the frame nearest to `ms` and return it as an ARGB32 image scaled to
-	// fit within maxW x maxH (aspect preserved). Empty QImage on failure. Seeks
-	// each call — for random scrubbing.
+	// fit within maxW x maxH (aspect preserved). Empty QImage on failure.
+	// Optimized for live handle-scrubbing: requests within the currently shown
+	// frame return a cached image, and requests slightly ahead roll the decoder
+	// forward without seeking — only backward/far jumps pay for a full seek.
 	QImage frameAt(qint64 ms, int maxW, int maxH);
 
 	// Sequential playback: seek once, then pull frames in order (efficient — no
@@ -58,6 +60,15 @@ private:
 	AVPacket *seqPkt_ = nullptr;
 	AVFrame *seqFrame_ = nullptr;
 	bool flushed_ = false;
+
+	// Scrub acceleration: the decoder's current position (pts of the last frame
+	// consumed, -1 = unknown, e.g. right after a seek) and the last image
+	// returned by frameAt (same-frame requests are answered from cache).
+	qint64 posMs_ = -1;
+	QImage cacheImg_;
+	qint64 cacheMs_ = -1;
+	int cacheW_ = 0;
+	int cacheH_ = 0;
 
 	qint64 durationMs_ = 0;
 	int width_ = 0;

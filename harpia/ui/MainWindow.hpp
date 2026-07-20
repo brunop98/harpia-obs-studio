@@ -70,11 +70,9 @@ private slots:
 	void onCaptureModeChanged();
 	void onSaveRegionRequested();    // "Save Region…" from the region right-click
 	void openSavedRegionsManager();  // rename/edit/delete saved regions
-	void onAppCaptureToggled(bool on);       // single-application capture toggle
-	void onAppWindowChanged();               // window picked in the app dropdown
-	void onWebcamDeviceChanged();
-	void onWebcamEnableToggled(bool on);     // toolbar webcam enable toggle
-	void refreshWebcamRow(); // populate/reflect the webcam toggle + device combo
+	void onAppWindowChanged();  // app dropdown; first item = no auto-pause
+	void onWebcamDeviceChanged(); // webcam dropdown; first item = no webcam
+	void refreshWebcamRow(); // populate/reflect the webcam device combo
 	void onRegionChanged(const CaptureRegion &region);
 	void onIdleSettingChanged();
 	void onCountdownSettingChanged();
@@ -135,6 +133,8 @@ private:
 
 protected:
 	void changeEvent(QEvent *event) override; // track window activation
+	// Refreshes the app list right before the app dropdown's popup opens.
+	bool eventFilter(QObject *obj, QEvent *event) override;
 	// Guard against silently losing a recording: closing mid-recording asks for
 	// confirmation, stops cleanly, and only closes once the file is finalized.
 	void closeEvent(QCloseEvent *event) override;
@@ -173,10 +173,10 @@ private:
 	QComboBox *countdownCombo_ = nullptr;
 	QWidget *countdownGroup_ = nullptr; // label + combo, hidden when narrow
 
-	// Toolbar row 2: single-application capture + webcam enable/device.
-	QCheckBox *appCaptureToggle_ = nullptr;
+	// Toolbar row 2: single-application capture + webcam device. Dropdown-only —
+	// each combo's first item means "off", so nothing toggles/jumps.
 	QComboBox *appCombo_ = nullptr;
-	QCheckBox *webcamEnableToggle_ = nullptr;
+	void reloadAppCombo(); // refresh the window list (called as the popup opens)
 
 	// Center controls
 	QPushButton *primaryButton_ = nullptr; // Record/Stop toggle

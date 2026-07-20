@@ -110,11 +110,20 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	root->setContentsMargins(18, 14, 18, 14);
 	root->setSpacing(12);
 
+	// Muted field labels: quiet hierarchy so control groups scan instantly.
+	auto fieldLabel = [central](const QString &text) {
+		auto *l = new QLabel(text, central);
+		l->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+		return l;
+	};
+	// One spacing rule everywhere: 8px inside a group, 18px between groups.
+	constexpr int kGroupGap = 18;
+
 	// ---- Toolbar row 1: preset + capture + idle -------------------------
 	auto *row1 = new QHBoxLayout;
 	row1->setSpacing(8);
 
-	row1->addWidget(new QLabel(QStringLiteral("Preset"), central));
+	row1->addWidget(fieldLabel(QStringLiteral("Preset")));
 	presetCombo_ = new QComboBox(central);
 	presetCombo_->setMinimumWidth(160);
 	presetCombo_->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -129,8 +138,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	editPresetButton_->setToolTip(QStringLiteral("Edit the selected preset"));
 	row1->addWidget(editPresetButton_);
 
-	row1->addSpacing(12);
-	row1->addWidget(new QLabel(QStringLiteral("Capture"), central));
+	row1->addSpacing(kGroupGap);
+	row1->addWidget(fieldLabel(QStringLiteral("Capture")));
 	captureModeCombo_ = new QComboBox(central);
 	// Items carry a string tag in their data: "monitor", "region", "saved:<id>",
 	// or "manage". Saved regions are appended by reloadCaptureModeCombo().
@@ -141,7 +150,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 			       "or a saved region. Right-click a region to save it."));
 	row1->addWidget(captureModeCombo_);
 
-	row1->addSpacing(12);
+	row1->addSpacing(kGroupGap);
 	idleToggle_ = new QCheckBox(QStringLiteral("Only record while using the computer"), central);
 	idleToggle_->setToolTip(
 		QStringLiteral("Auto-pause the recording after the idle time below, resume on input"));
@@ -154,14 +163,14 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	idleSpin_->setToolTip(QStringLiteral("Seconds without mouse/keyboard input before auto-pausing"));
 	row1->addWidget(idleSpin_);
 
-	row1->addSpacing(12);
+	row1->addSpacing(kGroupGap);
 	// Countdown label + combo as one unit, so the whole thing can be hidden when
 	// the window is too narrow (it's a nice-to-have, not an essential control).
 	countdownGroup_ = new QWidget(central);
 	auto *countdownLayout = new QHBoxLayout(countdownGroup_);
 	countdownLayout->setContentsMargins(0, 0, 0, 0);
 	countdownLayout->setSpacing(8);
-	countdownLayout->addWidget(new QLabel(QStringLiteral("Countdown"), countdownGroup_));
+	countdownLayout->addWidget(fieldLabel(QStringLiteral("Countdown")));
 	countdownCombo_ = new QComboBox(countdownGroup_);
 	countdownCombo_->addItem(QStringLiteral("Off"), 0);
 	for (int s = 1; s <= 10; ++s)
@@ -175,37 +184,38 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	row1->addStretch(1);
 	root->addLayout(row1);
 
-	// ---- Toolbar row 2: single-application capture + webcam -------------
+	// ---- Toolbar row 2: focus-app auto-pause + webcam --------------------
+	// Dropdown-only: each combo's FIRST item means "off", so there are no
+	// toggles and nothing appears/disappears (no layout jumping).
 	auto *row2 = new QHBoxLayout;
 	row2->setSpacing(8);
 
-	appCaptureToggle_ = new QCheckBox(QStringLiteral("Record only one application"), central);
-	appCaptureToggle_->setToolTip(QStringLiteral(
-		"Auto-pause recording whenever the chosen app isn't focused (resume when it is). "
-		"Does not change what's captured — the capture mode still applies."));
-	row2->addWidget(appCaptureToggle_);
+	row2->addWidget(fieldLabel(QStringLiteral("Focus app")));
 	appCombo_ = new QComboBox(central);
 	// Keep the app-name dropdown compact and balanced; elide long names rather
 	// than letting the control stretch the whole row.
 	appCombo_->setMinimumWidth(160);
 	appCombo_->setMaximumWidth(260);
 	appCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-	appCombo_->setEnabled(false);
-	appCombo_->setVisible(false); // shown only when "Record only one application" is on
-	appCombo_->setToolTip(QStringLiteral("The application to watch for focus auto-pause"));
+	appCombo_->setToolTip(QStringLiteral(
+		"Pick an application to auto-pause recording whenever it isn't focused "
+		"(resumes when it is). Does not change what's captured — the capture mode "
+		"still applies. First entry disables this."));
+	appCombo_->addItem(QStringLiteral("Off — record everything"), QString());
+	// The window list is refreshed just before the popup opens (eventFilter).
+	appCombo_->installEventFilter(this);
 	row2->addWidget(appCombo_);
 
-	row2->addSpacing(16);
-	webcamEnableToggle_ = new QCheckBox(QStringLiteral("Enable webcam"), central);
-	webcamEnableToggle_->setToolTip(
-		QStringLiteral("Record the camera to its own file alongside the screen recording"));
-	row2->addWidget(webcamEnableToggle_);
+	row2->addSpacing(kGroupGap);
+	row2->addWidget(fieldLabel(QStringLiteral("Webcam")));
 	webcamCombo_ = new QComboBox(central);
 	webcamCombo_->setMinimumWidth(160);
 	webcamCombo_->setMaximumWidth(260);
 	webcamCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-	webcamCombo_->setEnabled(false);
-	webcamCombo_->setVisible(false); // shown only when "Enable webcam" is on
+	webcamCombo_->setToolTip(QStringLiteral(
+		"Record this camera to its own file alongside the screen recording. "
+		"First entry disables the webcam."));
+	webcamCombo_->addItem(QStringLiteral("No webcam"), QString());
 	row2->addWidget(webcamCombo_);
 	row2->addStretch(1);
 	root->addLayout(row2);
@@ -222,7 +232,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	//   ● Ready   |   [ ⬤ Record ]  [ ⏸ Pause ]   |   00:00:00
 	// A slim, premium bar: passive status badge, a clear red Record primary, and
 	// the timer — vertically centered, minimal padding, subtle separators.
-	root->addStretch(1);
+	// Weighted stretches (2 above / 3 below) keep the controls at a natural
+	// height even when the Audio foldout is collapsed.
+	root->addStretch(2);
 
 	// Button label font — modest, not oversized.
 	QFont btnFont;
@@ -267,6 +279,13 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	pauseButton_->setFont(btnFont);
 	pauseButton_->setVisible(false);
 	pauseButton_->setToolTip(QStringLiteral("Pause/resume the recording (F10)"));
+	{
+		// Reserve the button's space while hidden so the Record button and the
+		// timer don't slide around when recording starts/stops.
+		QSizePolicy sp = pauseButton_->sizePolicy();
+		sp.setRetainSizeWhenHidden(true);
+		pauseButton_->setSizePolicy(sp);
+	}
 	controls->addWidget(pauseButton_, 0, Qt::AlignVCenter);
 
 	controls->addWidget(makeSep(), 0, Qt::AlignVCenter);
@@ -301,7 +320,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	controls->addStretch(1);
 	root->addLayout(controls);
 
-	root->addStretch(1);
+	root->addStretch(3);
 
 	// ---- Audio (collapsible foldout) -----------------------------------
 	// A header toggle expands/collapses the live-levels panel so it can be
@@ -348,8 +367,6 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	auto *stripHeader = new QHBoxLayout;
 	stripHeader->addWidget(new QLabel(QStringLiteral("Recent recordings"), recentSection_));
 	stripHeader->addStretch(1);
-	errorLogsButton_ = new QPushButton(QStringLiteral("Error Logs"), recentSection_);
-	stripHeader->addWidget(errorLogsButton_);
 	libraryButton_ = new QPushButton(QStringLiteral("Open Clip Library…"), recentSection_);
 	stripHeader->addWidget(libraryButton_);
 	recentLayout->addLayout(stripHeader);
@@ -379,6 +396,15 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	auto *versionLabel = new QLabel(QStringLiteral("v%1").arg(QString::fromUtf8(appVersion())), this);
 	versionLabel->setStyleSheet(QStringLiteral("color:#6b6f76; font-size:11px; padding-left:6px;"));
 	statusBar()->addWidget(versionLabel);
+	// Error Logs is diagnostics, not content — it lives quietly in the status
+	// bar's right corner instead of next to the clip library.
+	errorLogsButton_ = new QPushButton(QStringLiteral("Error Logs"), this);
+	errorLogsButton_->setFlat(true);
+	errorLogsButton_->setCursor(Qt::PointingHandCursor);
+	errorLogsButton_->setStyleSheet(QStringLiteral(
+		"QPushButton{color:#9a9fa8; background:transparent; border:none; font-size:11px; padding:2px 8px;}"
+		"QPushButton:hover{color:#e6e6e6;}"));
+	statusBar()->addPermanentWidget(errorLogsButton_);
 	statusBar()->setSizeGripEnabled(false);
 	statusBar()->setStyleSheet(QStringLiteral("QStatusBar{background:transparent;} QStatusBar::item{border:none;}"));
 
@@ -401,8 +427,6 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(editPresetButton_, &QPushButton::clicked, this, [this]() { editActivePreset(); });
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
 	connect(webcamCombo_, &QComboBox::activated, this, &MainWindow::onWebcamDeviceChanged);
-	connect(webcamEnableToggle_, &QCheckBox::toggled, this, &MainWindow::onWebcamEnableToggled);
-	connect(appCaptureToggle_, &QCheckBox::toggled, this, &MainWindow::onAppCaptureToggled);
 	connect(appCombo_, &QComboBox::activated, this, &MainWindow::onAppWindowChanged);
 	connect(libraryButton_, &QPushButton::clicked, this, &MainWindow::onOpenClipLibrary);
 	connect(errorLogsButton_, &QPushButton::clicked, this, &MainWindow::onOpenErrorLogs);
@@ -1124,40 +1148,34 @@ void MainWindow::refreshWebcamRow()
 {
 	const Preset &p = activePreset();
 
-	// Reflect the enable state on the toolbar toggle.
+	// Populate the device list: first item = "No webcam" (off), then cameras.
+	const std::vector<AudioDevice> cams = WebcamRecorder::cameras();
 	{
-		QSignalBlocker block(webcamEnableToggle_);
-		webcamEnableToggle_->setChecked(p.webcamEnabled);
+		QSignalBlocker block(webcamCombo_);
+		webcamCombo_->clear();
+		webcamCombo_->addItem(QStringLiteral("No webcam"), QString());
+		for (const AudioDevice &c : cams)
+			webcamCombo_->addItem(QString::fromStdString(c.name), QString::fromStdString(c.id));
 	}
-	// Only show the camera dropdown while the webcam toggle is on.
-	webcamCombo_->setVisible(p.webcamEnabled);
-	webcamCombo_->setEnabled(p.webcamEnabled && !recorder_.isRecording());
+	webcamCombo_->setEnabled(!recorder_.isRecording());
 
 	if (!p.webcamEnabled) {
-		webcamBox_->setVisible(false);
+		// Off: the combo rests on its first item; no preview, no warning row.
 		{
 			QSignalBlocker block(webcamCombo_);
-			webcamCombo_->clear();
+			webcamCombo_->setCurrentIndex(0);
 		}
+		webcamBox_->setVisible(false);
 		if (webcamPreview_)
 			webcamPreview_->clearDevice();
 		return;
 	}
 
-	// Populate the device list from currently available cameras.
-	const std::vector<AudioDevice> cams = WebcamRecorder::cameras();
-	{
-		QSignalBlocker block(webcamCombo_);
-		webcamCombo_->clear();
-		for (const AudioDevice &c : cams)
-			webcamCombo_->addItem(QString::fromStdString(c.name), QString::fromStdString(c.id));
-	}
-
 	const QString wantId = QString::fromStdString(p.webcamDeviceId);
-	int idx = wantId.isEmpty() ? 0 : webcamCombo_->findData(wantId);
+	int idx = wantId.isEmpty() ? (cams.empty() ? 0 : 1) : webcamCombo_->findData(wantId);
 	const bool wantedMissing = !wantId.isEmpty() && idx < 0;
 	if (idx < 0)
-		idx = 0; // fall back to the first available camera
+		idx = cams.empty() ? 0 : 1; // fall back to the first available camera
 
 	webcamBox_->setVisible(true);
 	if (cams.empty()) {
@@ -1198,20 +1216,18 @@ void MainWindow::refreshWebcamRow()
 
 void MainWindow::onWebcamDeviceChanged()
 {
+	// First item ("No webcam") disables the webcam; any device enables it.
+	// Persisted on the preset so it survives without opening the editor.
 	const QString id = webcamCombo_->currentData().toString();
-	if (id.isEmpty())
-		return;
-
-	// Switch the live preview immediately, and remember the choice on the preset
-	// so it persists without opening the editor.
-	const Preset &p = activePreset();
-	webcamPreview_->setDevice(id.toStdString(), p.webcamWidth, p.webcamHeight, p.webcamFps);
-	webcamWarn_->setVisible(false);
-
 	if (Preset *cur = const_cast<Preset *>(presets_.find(activePresetId_))) {
-		cur->webcamDeviceId = id.toStdString();
+		cur->webcamEnabled = !id.isEmpty();
+		if (!id.isEmpty())
+			cur->webcamDeviceId = id.toStdString();
 		presets_.upsert(*cur);
 	}
+	hwProbeMs_ = 0; // re-probe hardware now that webcam use changed
+	refreshWebcamRow();
+	refreshReadiness();
 }
 
 void MainWindow::refreshReadiness()
@@ -1514,38 +1530,38 @@ void MainWindow::applyLiveCapture()
 	updateRegionToolVisibility();
 }
 
-void MainWindow::onAppCaptureToggled(bool on)
+void MainWindow::reloadAppCombo()
 {
-	appCaptureEnabled_ = on;
-	if (on) {
-		QSignalBlocker block(appCombo_);
-		appCombo_->clear();
-		for (const WindowOption &w : CaptureManager::enumerateWindows())
-			appCombo_->addItem(QString::fromStdString(w.name), QString::fromStdString(w.value));
-		if (appCombo_->count() == 0)
-			appCombo_->addItem(QStringLiteral("(no window available)"), QString());
-		appWindowValue_ = appCombo_->currentData().toString();
+	// Fresh window list; keep the current selection when the app still runs.
+	const QString want = appWindowValue_;
+	QSignalBlocker block(appCombo_);
+	appCombo_->clear();
+	appCombo_->addItem(QStringLiteral("Off — record everything"), QString());
+	for (const WindowOption &w : CaptureManager::enumerateWindows())
+		appCombo_->addItem(QString::fromStdString(w.name), QString::fromStdString(w.value));
+	int idx = want.isEmpty() ? 0 : appCombo_->findData(want);
+	if (idx < 0) {
+		// The watched app isn't running right now — keep the choice visible.
+		appCombo_->addItem(QStringLiteral("(not running)"), want);
+		idx = appCombo_->count() - 1;
 	}
-	applyLiveCapture();
-	updateButtons();
-	refreshReadiness();
+	appCombo_->setCurrentIndex(idx);
+}
+
+bool MainWindow::eventFilter(QObject *obj, QEvent *event)
+{
+	if (obj == appCombo_ && event->type() == QEvent::MouseButtonPress)
+		reloadAppCombo(); // refresh the list right before the popup opens
+	return QMainWindow::eventFilter(obj, event);
 }
 
 void MainWindow::onAppWindowChanged()
 {
+	// First item ("Off — record everything") disables focus auto-pause.
 	appWindowValue_ = appCombo_->currentData().toString();
+	appCaptureEnabled_ = !appWindowValue_.isEmpty();
 	applyLiveCapture();
-	refreshReadiness();
-}
-
-void MainWindow::onWebcamEnableToggled(bool on)
-{
-	if (Preset *cur = const_cast<Preset *>(presets_.find(activePresetId_))) {
-		cur->webcamEnabled = on;
-		presets_.upsert(*cur);
-	}
-	hwProbeMs_ = 0; // re-probe hardware now that webcam use changed
-	refreshWebcamRow();
+	updateButtons();
 	refreshReadiness();
 }
 
@@ -2013,15 +2029,12 @@ void MainWindow::updateButtons()
 	editPresetButton_->setEnabled(!locked);
 	newPresetButton_->setEnabled(!locked);
 	// Custom Region can be combined with single-application capture, so the mode
-	// selector stays enabled regardless of the app-capture toggle.
+	// selector stays enabled regardless of the focus-app selection.
 	captureModeCombo_->setEnabled(!locked);
-	appCaptureToggle_->setEnabled(!locked);
-	// The app and camera dropdowns are only shown while their toggle is on.
-	appCombo_->setVisible(appCaptureEnabled_);
-	appCombo_->setEnabled(!locked && appCaptureEnabled_);
-	webcamEnableToggle_->setEnabled(!locked);
-	webcamCombo_->setVisible(activePreset().webcamEnabled);
-	webcamCombo_->setEnabled(!locked && activePreset().webcamEnabled);
+	// Dropdown-only controls (first item = off): always visible, locked while
+	// recording so the auto-pause target / camera can't change mid-file.
+	appCombo_->setEnabled(!locked);
+	webcamCombo_->setEnabled(!locked);
 	// Locking the idle controls too: unchecking the idle toggle while the
 	// recording is auto-paused would strand it paused forever (tickIdle bails on
 	// timeout <= 0 and never resumes).

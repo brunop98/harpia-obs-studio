@@ -22,6 +22,12 @@ void FrameSeeker::close()
 		av_packet_free(&seqPkt_);
 	if (seqFrame_)
 		av_frame_free(&seqFrame_);
+	if (rndPkt_)
+		av_packet_free(&rndPkt_);
+	if (rndFrame_)
+		av_frame_free(&rndFrame_);
+	if (rndBest_)
+		av_frame_free(&rndBest_);
 	if (sws_) {
 		sws_freeContext(sws_);
 		sws_ = nullptr;
@@ -73,6 +79,9 @@ bool FrameSeeker::open(const QString &path)
 
 	seqPkt_ = av_packet_alloc();
 	seqFrame_ = av_frame_alloc();
+	rndPkt_ = av_packet_alloc();
+	rndFrame_ = av_frame_alloc();
+	rndBest_ = av_frame_alloc();
 
 	width_ = dec_->width;
 	height_ = dec_->height;
@@ -141,9 +150,11 @@ QImage FrameSeeker::frameAt(qint64 ms, int maxW, int maxH)
 		flushed_ = false;
 	}
 
-	AVPacket *pkt = av_packet_alloc();
-	AVFrame *frame = av_frame_alloc();
-	AVFrame *best = av_frame_alloc();
+	// Reused scratch (members) — no per-call libav alloc/free during drags.
+	AVPacket *pkt = rndPkt_;
+	AVFrame *frame = rndFrame_;
+	AVFrame *best = rndBest_;
+	av_frame_unref(best);
 	bool haveBest = false;
 
 	auto keep = [&]() {
@@ -199,9 +210,9 @@ QImage FrameSeeker::frameAt(qint64 ms, int maxW, int maxH)
 		cacheW_ = maxW;
 		cacheH_ = maxH;
 	}
-	av_frame_free(&best);
-	av_frame_free(&frame);
-	av_packet_free(&pkt);
+	av_frame_unref(best);
+	av_frame_unref(frame);
+	av_packet_unref(pkt);
 	return img;
 }
 

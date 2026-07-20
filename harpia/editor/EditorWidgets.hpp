@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QImage>
+#include <QPixmap>
 #include <QRect>
 #include <QVector>
 #include <QWidget>
@@ -90,6 +91,9 @@ private:
 	qint64 xToMs(int x) const;
 	qint64 visibleMs() const; // duration / zoom
 	void clampView();
+	// (Re)render the bar background + filmstrip into stripCache_ when the view
+	// changed — repaints then blit it instead of rescaling every tile.
+	void ensureStripCache(const QRect &bar);
 
 	enum class Grab { None, Start, End, Playhead };
 	Grab grab_ = Grab::None;
@@ -103,6 +107,15 @@ private:
 	qint64 viewStart_ = 0;   // first visible ms
 	qint64 hoverMs_ = -1;    // hover position marker
 	QVector<QImage> thumbs_;
+
+	// Filmstrip render cache (keyed on size/zoom/view/thumbs revision/dpr).
+	QPixmap stripCache_;
+	QSize stripCacheSize_;
+	double stripCacheZoom_ = -1.0;
+	qint64 stripCacheView_ = -1;
+	int thumbsRev_ = 0;
+	int stripCacheRev_ = -1;
+	qreal stripCacheDpr_ = 0.0;
 };
 
 } // namespace harpia

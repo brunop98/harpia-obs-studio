@@ -68,6 +68,11 @@ private:
 	AVFrame *seqFrame_ = nullptr;
 	bool flushed_ = false;
 
+	// frameAt scratch — reused across calls (a drag calls frameAt ~50x/s).
+	AVPacket *rndPkt_ = nullptr;
+	AVFrame *rndFrame_ = nullptr;
+	AVFrame *rndBest_ = nullptr;
+
 	// Scrub acceleration: the decoder's current position (pts of the last frame
 	// consumed, -1 = unknown, e.g. right after a seek) and the last image
 	// returned by frameAt (same-frame requests are answered from cache).

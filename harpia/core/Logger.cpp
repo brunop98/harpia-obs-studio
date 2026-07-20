@@ -133,7 +133,11 @@ void Logger::writeLine(LogLevel level, const std::string &text)
 		return;
 	const std::string ts = timestamp(nowMs(), "%H:%M:%S");
 	std::fprintf(file_, "[%s] %-7s %s\n", ts.c_str(), logLevelName(level), text.c_str());
-	std::fflush(file_); // crash-safe: get it to disk immediately
+	// Force-flush only what a crash investigation actually needs. libobs is
+	// verbose around start/stop/encode, and a syscall per info line lands on
+	// the busiest moments; buffered lines still reach disk on close/clearAll.
+	if (level == LogLevel::Error || level == LogLevel::Warning)
+		std::fflush(file_);
 }
 
 void Logger::obsLogHandler(int lvl, const char *msg, va_list args, void *param)

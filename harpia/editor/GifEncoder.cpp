@@ -1,6 +1,7 @@
 #include "GifEncoder.hpp"
 
 #include <algorithm>
+#include <chrono>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -203,6 +204,7 @@ bool GifEncoder::encode(const QString &inPath, const QString &outPath, const Par
 	const double speed = p.speed > 0.01 ? p.speed : 1.0;
 	int outIndex = 0;             // GIF frame counter (pts in fps time base)
 	double nextEmitMs = p.startMs; // next source time to sample
+	auto lastEmit = std::chrono::steady_clock::now() - std::chrono::milliseconds(200);
 
 	AVPacket *pkt = av_packet_alloc();
 	AVFrame *frame = av_frame_alloc();
@@ -290,7 +292,13 @@ bool GifEncoder::encode(const QString &inPath, const QString &outPath, const Par
 				// palettegen buffers until EOF, so nothing to drain yet.
 				av_frame_unref(frame);
 
-				if (totalMs > 0) {
+				// Throttled like the video exporters: at most one progress
+				// signal per 200ms instead of one per sampled frame.
+				const auto now = std::chrono::steady_clock::now();
+				if (totalMs > 0 &&
+				    std::chrono::duration_cast<std::chrono::milliseconds>(now - lastEmit)
+						    .count() >= 200) {
+					lastEmit = now;
 					const int pct = std::clamp(
 						int((tMs - p.startMs) / totalMs * 100.0), 0, 99);
 					progress(pct, 0, s.ofmt->pb ? avio_tell(s.ofmt->pb) : 0);

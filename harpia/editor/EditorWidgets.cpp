@@ -248,7 +248,55 @@ void Timeline::setDuration(qint64 ms)
 void Timeline::setThumbs(const QVector<QImage> &thumbs)
 {
 	thumbs_ = thumbs;
+	++thumbsRev_; // invalidates the strip cache
 	update();
+}
+
+void Timeline::ensureStripCache(const QRect &bar)
+{
+	const qreal dpr = devicePixelRatioF();
+	if (!stripCache_.isNull() && stripCacheSize_ == bar.size() && stripCacheZoom_ == zoom_ &&
+	    stripCacheView_ == viewStart_ && stripCacheRev_ == thumbsRev_ && stripCacheDpr_ == dpr)
+		return;
+	stripCacheSize_ = bar.size();
+	stripCacheZoom_ = zoom_;
+	stripCacheView_ = viewStart_;
+	stripCacheRev_ = thumbsRev_;
+	stripCacheDpr_ = dpr;
+
+	stripCache_ = QPixmap(bar.size() * dpr);
+	stripCache_.setDevicePixelRatio(dpr);
+	stripCache_.fill(Qt::transparent);
+	QPainter cp(&stripCache_);
+	cp.setRenderHint(QPainter::Antialiasing);
+	const QRect local(0, 0, bar.width(), bar.height());
+	cp.setPen(Qt::NoPen);
+	cp.setBrush(QColor(0x2b, 0x2d, 0x31));
+	cp.drawRoundedRect(local, 4, 4);
+
+	if (!thumbs_.isEmpty()) {
+		QPainterPath clip;
+		clip.addRoundedRect(local, 4, 4);
+		cp.setClipPath(clip);
+		const int n = thumbs_.size();
+		double aspect = 16.0 / 9.0;
+		for (const QImage &t : thumbs_) {
+			if (!t.isNull()) {
+				aspect = double(t.width()) / double(t.height());
+				break;
+			}
+		}
+		const int tileH = local.height();
+		const int tileW = std::max(8, int(tileH * aspect));
+		const int tileGap = 2;
+		const double sliceMs = double(duration_) / n;
+		for (int x = 0; x < local.width(); x += tileW + tileGap) {
+			const qint64 ms = xToMs(bar.x() + x + tileW / 2);
+			const int i = std::clamp(int(ms / sliceMs), 0, n - 1);
+			if (!thumbs_[i].isNull())
+				cp.drawImage(QRect(x, 0, tileW, tileH), thumbs_[i]);
+		}
+	}
 }
 
 qint64 Timeline::visibleMs() const
@@ -323,39 +371,17 @@ void Timeline::paintEvent(QPaintEvent *)
 	p.setRenderHint(QPainter::Antialiasing, true);
 
 	const QRect bar(kPad, kBarTop, width() - 2 * kPad, kBarH);
-	p.setPen(Qt::NoPen);
-	p.setBrush(QColor(0x2b, 0x2d, 0x31));
-	p.drawRoundedRect(bar, 4, 4);
+	// Background + filmstrip come from the render cache (rebuilt only when the
+	// view/zoom/thumbs change) — repaints are a blit, not 20+ image rescales.
+	ensureStripCache(bar);
+	p.drawPixmap(bar.topLeft(), stripCache_);
 
-	// Filmstrip + overlays live inside the rounded bar.
+	// Overlays live inside the rounded bar.
 	{
 		QPainterPath clip;
 		clip.addRoundedRect(bar, 4, 4);
 		p.save();
 		p.setClipPath(clip);
-
-		if (!thumbs_.isEmpty()) {
-			// Fixed-size, aspect-correct tiles with a constant gap: zooming
-			// changes WHICH frames are shown, never their shape.
-			const int n = thumbs_.size();
-			double aspect = 16.0 / 9.0;
-			for (const QImage &t : thumbs_) {
-				if (!t.isNull()) {
-					aspect = double(t.width()) / double(t.height());
-					break;
-				}
-			}
-			const int tileH = bar.height();
-			const int tileW = std::max(8, int(tileH * aspect));
-			const int tileGap = 2;
-			const double sliceMs = double(duration_) / n;
-			for (int x = bar.left(); x < bar.right(); x += tileW + tileGap) {
-				const qint64 ms = xToMs(x + tileW / 2); // frame at tile center
-				const int i = std::clamp(int(ms / sliceMs), 0, n - 1);
-				if (!thumbs_[i].isNull())
-					p.drawImage(QRect(x, bar.top(), tileW, tileH), thumbs_[i]);
-			}
-		}
 
 		// Selected [start,end] span (translucent, over the filmstrip) and the
 		// dimmed outside regions so the kept part reads instantly.
@@ -434,11 +460,17 @@ void Timeline::mousePressEvent(QMouseEvent *e)
 void Timeline::mouseMoveEvent(QMouseEvent *e)
 {
 	if (grab_ == Grab::None || !(e->buttons() & Qt::LeftButton)) {
-		// Hover: preview the frame under the cursor without clicking.
+		// Hover: preview the frame under the cursor without clicking. Only the
+		// old + new marker columns repaint, not the whole timeline.
 		if (e->buttons() == Qt::NoButton && duration_ > 0) {
-			hoverMs_ = xToMs(e->pos().x());
-			emit hoverScrub(hoverMs_);
-			update();
+			const qint64 nh = xToMs(e->pos().x());
+			if (nh != hoverMs_) {
+				if (hoverMs_ >= 0)
+					update(QRect(msToX(hoverMs_) - 2, 0, 5, height()));
+				hoverMs_ = nh;
+				emit hoverScrub(hoverMs_);
+				update(QRect(msToX(hoverMs_) - 2, 0, 5, height()));
+			}
 		}
 		return;
 	}

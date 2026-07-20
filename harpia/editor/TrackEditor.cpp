@@ -61,7 +61,55 @@ void TrackEditor::setDuration(qint64 ms)
 void TrackEditor::setThumbs(const QVector<QImage> &thumbs)
 {
 	thumbs_ = thumbs;
+	++thumbsRev_; // invalidates the strip cache
 	update();
+}
+
+void TrackEditor::ensureStripCache(const QRect &src)
+{
+	const qreal dpr = devicePixelRatioF();
+	if (!stripCache_.isNull() && stripCacheSize_ == src.size() && stripCacheZoom_ == zoom_ &&
+	    stripCacheView_ == viewStart_ && stripCacheRev_ == thumbsRev_ && stripCacheDpr_ == dpr)
+		return;
+	stripCacheSize_ = src.size();
+	stripCacheZoom_ = zoom_;
+	stripCacheView_ = viewStart_;
+	stripCacheRev_ = thumbsRev_;
+	stripCacheDpr_ = dpr;
+
+	stripCache_ = QPixmap(src.size() * dpr);
+	stripCache_.setDevicePixelRatio(dpr);
+	stripCache_.fill(Qt::transparent);
+	QPainter cp(&stripCache_);
+	cp.setRenderHint(QPainter::Antialiasing);
+	const QRect local(0, 0, src.width(), src.height());
+	cp.setPen(kBarBorder);
+	cp.setBrush(kBarBg);
+	cp.drawRoundedRect(local, 5, 5);
+
+	if (!thumbs_.isEmpty() && duration_ > 0) {
+		QPainterPath clip;
+		clip.addRoundedRect(local, 5, 5);
+		cp.setClipPath(clip);
+		const int n = thumbs_.size();
+		double aspect = 16.0 / 9.0;
+		for (const QImage &t : thumbs_) {
+			if (!t.isNull()) {
+				aspect = double(t.width()) / double(t.height());
+				break;
+			}
+		}
+		const int tileH = local.height();
+		const int tileW = std::max(8, int(tileH * aspect));
+		const int tileGap = 2;
+		const double sliceMs = double(duration_) / n;
+		for (int x = 0; x < local.width(); x += tileW + tileGap) {
+			const qint64 ms = xToMs(src.x() + x + tileW / 2);
+			const int i = std::clamp(int(ms / sliceMs), 0, n - 1);
+			if (!thumbs_[i].isNull())
+				cp.drawImage(QRect(x, 0, tileW, tileH), thumbs_[i]);
+		}
+	}
 }
 
 qint64 TrackEditor::visibleMs() const
@@ -295,39 +343,16 @@ void TrackEditor::paintEvent(QPaintEvent *)
 		   Qt::AlignVCenter | Qt::AlignLeft, outCaption);
 
 	// ---- Source track ----------------------------------------------------
-	p.setPen(kBarBorder);
-	p.setBrush(kBarBg);
-	p.drawRoundedRect(src, 5, 5);
+	// Background + filmstrip come from the render cache (rebuilt only when the
+	// view/zoom/thumbs change) — repaints are a blit, not 20+ image rescales.
+	ensureStripCache(src);
+	p.drawPixmap(src.topLeft(), stripCache_);
 
 	{
 		QPainterPath clip;
 		clip.addRoundedRect(src, 5, 5);
 		p.save();
 		p.setClipPath(clip);
-
-		// Filmstrip so each part of the video is easy to recognize. Tiles keep
-		// their aspect ratio at every zoom level (a constant gap between them);
-		// zooming changes WHICH frames are shown, never their shape.
-		if (!thumbs_.isEmpty() && duration_ > 0) {
-			const int n = thumbs_.size();
-			double aspect = 16.0 / 9.0;
-			for (const QImage &t : thumbs_) {
-				if (!t.isNull()) {
-					aspect = double(t.width()) / double(t.height());
-					break;
-				}
-			}
-			const int tileH = src.height();
-			const int tileW = std::max(8, int(tileH * aspect));
-			const int tileGap = 2;
-			const double sliceMs = double(duration_) / n;
-			for (int x = src.left(); x < src.right(); x += tileW + tileGap) {
-				const qint64 ms = xToMs(x + tileW / 2); // frame at tile center
-				const int i = std::clamp(int(ms / sliceMs), 0, n - 1);
-				if (!thumbs_[i].isNull())
-					p.drawImage(QRect(x, src.y(), tileW, tileH), thumbs_[i]);
-			}
-		}
 
 		// Existing cuts shown as translucent regions on the source.
 		for (int i = 0; i < segs_.size(); ++i) {
@@ -516,7 +541,14 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 	}
 
 	if (outputRect().contains(pos)) {
-		const int idx = segmentAt(pos);
+		const QVector<QRect> segRects = segmentRects(); // computed once per press
+		int idx = -1;
+		for (int i = 0; i < segRects.size(); ++i) {
+			if (segRects[i].contains(pos)) {
+				idx = i;
+				break;
+			}
+		}
 
 		if (idx >= 0 && (e->modifiers() & Qt::ControlModifier)) {
 			// Ctrl+click toggles membership; no drag starts.
@@ -557,7 +589,7 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 			dragInsertSlot_ = -1;
 			// Near an edge → trim that boundary (with live frame preview);
 			// otherwise drag the whole segment to reorder.
-			const QRect r = segmentRects()[idx];
+			const QRect r = segRects[idx];
 			const CutSegment &seg = segs_[idx];
 			const int edgeZone = std::min(7, r.width() / 3);
 			const bool onLeft = pos.x() - r.left() <= edgeZone;
@@ -617,9 +649,12 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 	}
 
 	// Idle: cursor hints + hover preview (no click needed to see a frame).
+	// segmentRects() is computed ONCE per event and repaints are limited to
+	// the marker areas that actually changed.
 	qint64 newHover = -1;
 	int newOutSeg = -1;
 	int newOutX = -1;
+	const QVector<QRect> rects = segmentRects();
 	if (sourceRect().contains(pos)) {
 		setCursor(Qt::CrossCursor);
 		if (e->buttons() == Qt::NoButton && duration_ > 0) {
@@ -627,9 +662,15 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 			emit hoverScrub(newHover);
 		}
 	} else {
-		const int idx = segmentAt(pos);
+		int idx = -1;
+		for (int i = 0; i < rects.size(); ++i) {
+			if (rects[i].contains(pos)) {
+				idx = i;
+				break;
+			}
+		}
 		if (idx >= 0) {
-			const QRect r = segmentRects()[idx];
+			const QRect r = rects[idx];
 			const int edgeZone = std::min(7, r.width() / 3);
 			if (pos.x() - r.left() <= edgeZone || r.right() - pos.x() <= edgeZone)
 				setCursor(Qt::SizeHorCursor);
@@ -652,10 +693,20 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 		}
 	}
 	if (newHover != hoverMs_ || newOutSeg != hoverOutSeg_ || newOutX != hoverOutX_) {
+		QRegion dirty;
+		const QRect src = sourceRect();
+		if (hoverMs_ >= 0)
+			dirty += QRect(msToX(hoverMs_) - 2, src.y(), 5, src.height());
+		if (newHover >= 0)
+			dirty += QRect(msToX(newHover) - 2, src.y(), 5, src.height());
+		if (hoverOutSeg_ >= 0 && hoverOutSeg_ < rects.size())
+			dirty += rects[hoverOutSeg_].adjusted(-2, -2, 2, 2);
+		if (newOutSeg >= 0 && newOutSeg < rects.size())
+			dirty += rects[newOutSeg].adjusted(-2, -2, 2, 2);
 		hoverMs_ = newHover;
 		hoverOutSeg_ = newOutSeg;
 		hoverOutX_ = newOutX;
-		update();
+		update(dirty);
 	}
 }
 

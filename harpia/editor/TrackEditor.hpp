@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QImage>
+#include <QPixmap>
 #include <QSet>
 #include <QVector>
 #include <QWidget>
@@ -82,6 +83,9 @@ private:
 	qint64 xToMs(int x) const;
 	qint64 visibleMs() const; // source-track window: duration / zoom
 	void clampView();
+	// (Re)render the source bar background + filmstrip into stripCache_ when
+	// the view changed — repaints then blit it instead of rescaling tiles.
+	void ensureStripCache(const QRect &src);
 	QVector<QRect> segmentRects() const;
 	int segmentAt(const QPoint &p) const; // -1 = none
 	int insertSlotAt(int x) const;        // 0..count reorder slot for a drop at x
@@ -97,6 +101,15 @@ private:
 	double zoom_ = 1.0;
 	qint64 viewStart_ = 0;
 	QVector<QImage> thumbs_;
+
+	// Filmstrip render cache (keyed on size/zoom/view/thumbs revision/dpr).
+	QPixmap stripCache_;
+	QSize stripCacheSize_;
+	double stripCacheZoom_ = -1.0;
+	qint64 stripCacheView_ = -1;
+	int thumbsRev_ = 0;
+	int stripCacheRev_ = -1;
+	qreal stripCacheDpr_ = 0.0;
 	qint64 hoverMs_ = -1;  // hover position marker on the source track
 	int hoverOutSeg_ = -1; // hovered output segment (marker there too)
 	int hoverOutX_ = -1;   // marker x within that segment

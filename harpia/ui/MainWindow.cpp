@@ -187,8 +187,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	appCombo_ = new QComboBox(central);
 	// Keep the app-name dropdown compact and balanced; elide long names rather
 	// than letting the control stretch the whole row.
-	appCombo_->setMinimumWidth(130);
-	appCombo_->setMaximumWidth(200);
+	appCombo_->setMinimumWidth(160);
+	appCombo_->setMaximumWidth(260);
 	appCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
 	appCombo_->setEnabled(false);
 	appCombo_->setVisible(false); // shown only when "Record only one application" is on
@@ -201,8 +201,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		QStringLiteral("Record the camera to its own file alongside the screen recording"));
 	row2->addWidget(webcamEnableToggle_);
 	webcamCombo_ = new QComboBox(central);
-	webcamCombo_->setMinimumWidth(130);
-	webcamCombo_->setMaximumWidth(200);
+	webcamCombo_->setMinimumWidth(160);
+	webcamCombo_->setMaximumWidth(260);
 	webcamCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
 	webcamCombo_->setEnabled(false);
 	webcamCombo_->setVisible(false); // shown only when "Enable webcam" is on

@@ -95,6 +95,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	connect(playTimer_, &QTimer::timeout, this, &VideoEditorWindow::onPlayTick);
 	connect(playBtn_, &QPushButton::clicked, this, &VideoEditorWindow::onPlayPause);
 	connect(speedSlider_, &QSlider::valueChanged, this, &VideoEditorWindow::onSpeedChanged);
+	connect(this, &QDialog::rejected, this, &VideoEditorWindow::stopPlayback);
 
 	previewTimer_ = new QTimer(this);
 	previewTimer_->setSingleShot(true);
@@ -118,6 +119,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	} else {
 		infoLabel_->setText(QStringLiteral("Could not open this video."));
 		saveBtn->setEnabled(false);
+		playBtn_->setEnabled(false);
+		speedSlider_->setEnabled(false);
+		cropToggle_->setEnabled(false);
 	}
 }
 
@@ -246,7 +250,7 @@ void VideoEditorWindow::onCropToggled(bool on)
 
 void VideoEditorWindow::onSave()
 {
-	if (!valid_)
+	if (!valid_ || exporter_) // ignore while an export is already running
 		return;
 	stopPlayback();
 
@@ -293,6 +297,7 @@ void VideoEditorWindow::onSave()
 			exporter_->cancel();
 	});
 	progress_->setValue(0);
+	progress_->show(); // ensure the modal progress is visible immediately
 
 	exportThread_ = std::thread([this, o]() { exporter_->run(inPath_, outPath_, o); });
 }

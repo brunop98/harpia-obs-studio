@@ -196,7 +196,10 @@ bool GifEncoder::encode(const QString &inPath, const QString &outPath, const Par
 		av_seek_frame(s.ifmt, vIdx, startV, AVSEEK_FLAG_BACKWARD);
 	avcodec_flush_buffers(s.vdec);
 
-	const double totalMs = double((p.endMs > 0 ? p.endMs : 0) - p.startMs);
+	// When endMs is 0 (export to the end of the clip), use the file duration so
+	// the progress total stays positive.
+	const int64_t durMs = s.ifmt->duration > 0 ? s.ifmt->duration / (AV_TIME_BASE / 1000) : 0;
+	const double totalMs = double((p.endMs > 0 ? p.endMs : durMs) - p.startMs);
 	const double speed = p.speed > 0.01 ? p.speed : 1.0;
 	int outIndex = 0;             // GIF frame counter (pts in fps time base)
 	double nextEmitMs = p.startMs; // next source time to sample

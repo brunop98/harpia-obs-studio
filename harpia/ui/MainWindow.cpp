@@ -127,10 +127,13 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	root->setContentsMargins(18, 14, 18, 14);
 	root->setSpacing(12);
 
-	// Muted field labels: quiet hierarchy so control groups scan instantly.
-	auto fieldLabel = [central](const QString &text) {
+	// Muted field labels: quiet hierarchy so control groups scan instantly. An
+	// optional tooltip mirrors the control's, so hovering the label helps too.
+	auto fieldLabel = [central](const QString &text, const QString &tip = QString()) {
 		auto *l = new QLabel(text, central);
 		l->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+		if (!tip.isEmpty())
+			l->setToolTip(tip);
 		return l;
 	};
 	// One spacing rule everywhere: 8px inside a group, 18px between groups.
@@ -141,7 +144,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	row1Layout_ = row1;
 	row1->setSpacing(8);
 
-	row1->addWidget(fieldLabel(QStringLiteral("Preset")));
+	row1->addWidget(fieldLabel(
+		QStringLiteral("Preset"),
+		QStringLiteral("Recording preset: output folder, format, quality and filename pattern.")));
 	presetCombo_ = new QComboBox(central);
 	presetCombo_->setMinimumWidth(160);
 	presetCombo_->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -157,7 +162,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	row1->addWidget(editPresetButton_);
 
 	row1->addSpacing(kGroupGap);
-	row1->addWidget(fieldLabel(QStringLiteral("Capture")));
+	row1->addWidget(fieldLabel(
+		QStringLiteral("Capture"),
+		QStringLiteral("What to record: the entire monitor, a custom on-screen region, or a saved region.")));
 	captureModeCombo_ = new QComboBox(central);
 	// Items carry a string tag in their data: "monitor", "region", "saved:<id>",
 	// or "manage". Saved regions are appended by reloadCaptureModeCombo().
@@ -169,7 +176,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	row1->addWidget(captureModeCombo_);
 
 	row1->addSpacing(kGroupGap);
-	row1->addWidget(fieldLabel(QStringLiteral("Display")));
+	row1->addWidget(fieldLabel(
+		QStringLiteral("Display"),
+		QStringLiteral("Which monitor to record — also where the region overlay opens.")));
 	monitorCombo_ = new QComboBox(central);
 	monitorCombo_->setMinimumWidth(140); // without this the adjust policy collapses it
 	monitorCombo_->setMaximumWidth(200);
@@ -188,7 +197,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	auto *countdownLayout = new QHBoxLayout(countdownGroup_);
 	countdownLayout->setContentsMargins(0, 0, 0, 0);
 	countdownLayout->setSpacing(8);
-	countdownLayout->addWidget(fieldLabel(QStringLiteral("Countdown")));
+	countdownLayout->addWidget(fieldLabel(
+		QStringLiteral("Countdown"),
+		QStringLiteral("On-screen countdown before recording starts, so you can get ready.")));
 	countdownCombo_ = new QComboBox(countdownGroup_);
 	countdownCombo_->addItem(QStringLiteral("Off"), 0);
 	for (int s = 1; s <= 10; ++s)
@@ -269,6 +280,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		h->setContentsMargins(0, 0, 0, 0);
 		h->setSpacing(8);
 		auto *l = fieldLabel(text);
+		l->setToolTip(control->toolTip()); // label mirrors the control's help
 		l->setFixedWidth(110);
 		l->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 		h->addWidget(l);
@@ -330,6 +342,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	timerLabel_ = new QLabel(QStringLiteral("00:00:00"), central);
 	timerLabel_->setObjectName(QStringLiteral("timerLabel"));
 	timerLabel_->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+	timerLabel_->setToolTip(QStringLiteral("Elapsed recording time (paused spans are not counted)."));
 	QFont timerFont(QStringLiteral("monospace"));
 	timerFont.setStyleHint(QFont::Monospace);
 	timerFont.setPointSize(btnFont.pointSize() + 6);
@@ -344,6 +357,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	wcLayout->setSpacing(8);
 	webcamPreview_ = new WebcamPreview(webcamBox_);
 	webcamPreview_->setFixedSize(100, 56);
+	webcamPreview_->setToolTip(QStringLiteral("Live preview of the webcam being recorded to its own file."));
 	wcLayout->addWidget(webcamPreview_);
 	webcamWarn_ = new QLabel(QStringLiteral("Webcam not found"), webcamBox_);
 	webcamWarn_->setStyleSheet(QStringLiteral("color:#e5484d;"));
@@ -402,9 +416,14 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	recentLayout->setSpacing(6);
 
 	auto *stripHeader = new QHBoxLayout;
-	stripHeader->addWidget(new QLabel(QStringLiteral("Recent recordings"), recentSection_));
+	auto *recentHeaderLabel = new QLabel(QStringLiteral("Recent recordings"), recentSection_);
+	recentHeaderLabel->setToolTip(
+		QStringLiteral("Your latest recordings — double-click to play, right-click for more."));
+	stripHeader->addWidget(recentHeaderLabel);
 	stripHeader->addStretch(1);
 	libraryButton_ = new QPushButton(QStringLiteral("Open Clip Library…"), recentSection_);
+	libraryButton_->setToolTip(
+		QStringLiteral("Browse, play, rename, edit and export all of your recordings."));
 	stripHeader->addWidget(libraryButton_);
 	recentLayout->addLayout(stripHeader);
 
@@ -453,6 +472,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	statusBar()->addPermanentWidget(devButton);
 	connect(devButton, &QPushButton::clicked, this, &MainWindow::openDevPanel);
 	errorLogsButton_ = new QPushButton(QStringLiteral("Error Logs"), this);
+	errorLogsButton_->setToolTip(QStringLiteral("View recent warnings and errors written by the recorder."));
 	errorLogsButton_->setFlat(true);
 	errorLogsButton_->setCursor(Qt::PointingHandCursor);
 	errorLogsButton_->setStyleSheet(QStringLiteral(

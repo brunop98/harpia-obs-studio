@@ -24,6 +24,21 @@ struct CutSegment {
 	}
 };
 
+// Runtime-tweakable layout parameters for the multi-cut track editor (edited
+// live from the editor's Developer Panel to find the best UI configuration).
+struct TrackLayoutParams {
+	int margin = 8;
+	int captionH = 16;
+	int srcH = 34; // source-track height (tall enough for the filmstrip)
+	int trackGap = 8;
+	int outH = 40;       // output-track height
+	int segGap = 4;      // gap between output segments
+	int minSegW = 48;    // "reasonably wide" — easy to click and drag
+	int hardMinSegW = 24; // absolute floor when many segments compete
+	int tileGap = 2;     // gap between filmstrip tiles
+	double maxZoom = 32.0;
+};
+
 // The multi-cut track editor: a Source track (the whole video — press and drag
 // to select a section to keep) above an Output track (the selected cuts in
 // sequence). Output segments can be clicked to select, dragged to reorder,
@@ -59,6 +74,10 @@ public:
 	void setPlayhead(qint64 outMs); // playhead on the output track (output-time)
 	void clearPlayhead();
 
+	// Developer Panel: tweak the layout live (invalidates the strip cache).
+	const TrackLayoutParams &layoutParams() const { return lp_; }
+	void setLayoutParams(const TrackLayoutParams &p);
+
 signals:
 	void segmentsChanged();          // added / removed / reordered
 	void selectionChanged(int index); // -1 = nothing selected
@@ -91,6 +110,7 @@ private:
 	int insertSlotAt(int x) const;        // 0..count reorder slot for a drop at x
 	void showSegmentMenu(int index, const QPoint &globalPos);
 
+	TrackLayoutParams lp_;
 	QVector<CutSegment> segs_;
 	qint64 duration_ = 0;
 	int selected_ = -1;      // primary selection (drives resize + the slider value)

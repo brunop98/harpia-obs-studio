@@ -17,6 +17,7 @@ class QTimer;
 
 namespace harpia {
 
+class DevPanel;
 class FrameSeeker;
 class PreviewCanvas;
 class Timeline;
@@ -85,6 +86,7 @@ private:
 	QPushButton *trimModeBtn_ = nullptr;
 	QPushButton *cutModeBtn_ = nullptr;
 	QCheckBox *cropToggle_ = nullptr;
+	DevPanel *devPanel_ = nullptr; // lazily created, non-modal
 	QLabel *infoLabel_ = nullptr;
 	QLabel *cursorTimeLabel_ = nullptr; // preview time under the cursor/playhead
 	QString baseInfo_; // static file info; extended with cut stats in Multi-Cut

@@ -132,6 +132,8 @@ target_sources(
     editor/EditorWidgets.hpp
     editor/TrackEditor.cpp
     editor/TrackEditor.hpp
+    editor/DevPanel.cpp
+    editor/DevPanel.hpp
     editor/TimelineThumbs.cpp
     editor/TimelineThumbs.hpp
     editor/AudioRetimer.cpp

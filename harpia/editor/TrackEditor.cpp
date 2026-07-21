@@ -12,15 +12,8 @@
 namespace harpia {
 
 namespace {
-constexpr int kMargin = 8;
-constexpr int kCaptionH = 16;
-constexpr int kSrcH = 34; // tall enough for the filmstrip
-constexpr int kTrackGap = 8;
-constexpr double kMaxZoom = 32.0;
-constexpr int kOutH = 40;
-constexpr int kSegGap = 4;
-constexpr int kMinSegW = 48;     // "reasonably wide" — easy to click and drag
-constexpr int kHardMinSegW = 24; // absolute floor when many segments compete
+// Layout values live in TrackLayoutParams (lp_) so the Developer Panel can
+// tweak them at runtime; only non-layout constants remain here.
 constexpr qint64 kMinCutMs = 150;
 
 const QColor kBarBg(0x20, 0x22, 0x25);
@@ -47,7 +40,17 @@ QSize TrackEditor::sizeHint() const
 
 QSize TrackEditor::minimumSizeHint() const
 {
-	return QSize(240, 2 * kMargin + 2 * kCaptionH + kSrcH + kTrackGap + kOutH);
+	return QSize(240, 2 * lp_.margin + 2 * lp_.captionH + lp_.srcH + lp_.trackGap + lp_.outH);
+}
+
+void TrackEditor::setLayoutParams(const TrackLayoutParams &p)
+{
+	lp_ = p;
+	zoom_ = std::clamp(zoom_, 1.0, lp_.maxZoom);
+	clampView();
+	stripCache_ = QPixmap(); // geometry changed — rebuild the filmstrip
+	updateGeometry();        // min-size hint depends on the track heights
+	update();
 }
 
 void TrackEditor::setDuration(qint64 ms)
@@ -101,7 +104,7 @@ void TrackEditor::ensureStripCache(const QRect &src)
 		}
 		const int tileH = local.height();
 		const int tileW = std::max(8, int(tileH * aspect));
-		const int tileGap = 2;
+		const int tileGap = std::max(0, lp_.tileGap);
 		const double sliceMs = double(duration_) / n;
 		for (int x = 0; x < local.width(); x += tileW + tileGap) {
 			const qint64 ms = xToMs(src.x() + x + tileW / 2);
@@ -143,7 +146,7 @@ void TrackEditor::wheelEvent(QWheelEvent *e)
 		const qint64 anchor = xToMs(x);
 		const QRect r = sourceRect();
 		const double frac = std::clamp(double(x - r.x()) / std::max(1, r.width()), 0.0, 1.0);
-		zoom_ = std::clamp(zoom_ * std::pow(1.3, steps), 1.0, kMaxZoom);
+		zoom_ = std::clamp(zoom_ * std::pow(1.3, steps), 1.0, lp_.maxZoom);
 		viewStart_ = anchor - qint64(frac * visibleMs());
 	} else {
 		viewStart_ -= qint64(steps * visibleMs() * 0.15);
@@ -243,13 +246,13 @@ void TrackEditor::clearPlayhead()
 
 QRect TrackEditor::sourceRect() const
 {
-	return QRect(kMargin, kMargin + kCaptionH, width() - 2 * kMargin, kSrcH);
+	return QRect(lp_.margin, lp_.margin + lp_.captionH, width() - 2 * lp_.margin, lp_.srcH);
 }
 
 QRect TrackEditor::outputRect() const
 {
-	return QRect(kMargin, kMargin + kCaptionH + kSrcH + kTrackGap + kCaptionH,
-		     width() - 2 * kMargin, kOutH);
+	return QRect(lp_.margin, lp_.margin + lp_.captionH + lp_.srcH + lp_.trackGap + lp_.captionH,
+		     width() - 2 * lp_.margin, lp_.outH);
 }
 
 int TrackEditor::msToX(qint64 ms) const
@@ -276,7 +279,7 @@ QVector<QRect> TrackEditor::segmentRects() const
 	if (!n)
 		return rects;
 	const QRect r = outputRect();
-	const int avail = std::max(1, r.width() - kSegGap * (n - 1));
+	const int avail = std::max(1, r.width() - lp_.segGap * (n - 1));
 	qint64 total = totalOutputMs();
 	if (total <= 0)
 		total = 1;
@@ -284,19 +287,20 @@ QVector<QRect> TrackEditor::segmentRects() const
 	QVector<double> w(n);
 	double sum = 0.0;
 	for (int i = 0; i < n; ++i) {
-		w[i] = std::max<double>(kMinSegW, double(segs_[i].outDurationMs()) / double(total) * avail);
+		w[i] = std::max<double>(lp_.minSegW,
+					double(segs_[i].outDurationMs()) / double(total) * avail);
 		sum += w[i];
 	}
 	if (sum > avail) {
 		const double k = double(avail) / sum;
 		for (int i = 0; i < n; ++i)
-			w[i] = std::max<double>(kHardMinSegW, w[i] * k);
+			w[i] = std::max<double>(lp_.hardMinSegW, w[i] * k);
 	}
 	int x = r.x();
 	for (int i = 0; i < n; ++i) {
 		const int wi = int(w[i]);
 		rects.append(QRect(x, r.y(), wi, r.height()));
-		x += wi + kSegGap;
+		x += wi + lp_.segGap;
 	}
 	return rects;
 }
@@ -336,7 +340,8 @@ void TrackEditor::paintEvent(QPaintEvent *)
 
 	// ---- Captions --------------------------------------------------------
 	p.setPen(kCaption);
-	p.drawText(QRect(src.x(), kMargin, src.width(), kCaptionH), Qt::AlignVCenter | Qt::AlignLeft,
+	p.drawText(QRect(src.x(), lp_.margin, src.width(), lp_.captionH),
+		   Qt::AlignVCenter | Qt::AlignLeft,
 		   QStringLiteral("Source — press and drag to select a section to keep"));
 	QString outCaption = QStringLiteral("Output — %1 cut%2, %3s")
 				     .arg(segs_.size())
@@ -344,7 +349,7 @@ void TrackEditor::paintEvent(QPaintEvent *)
 				     .arg(totalOutputMs() / 1000.0, 0, 'f', 1);
 	if (!segs_.isEmpty())
 		outCaption += QStringLiteral("   (drag to reorder · Ctrl+click multi-select · Del to delete)");
-	p.drawText(QRect(out.x(), out.y() - kCaptionH, out.width(), kCaptionH),
+	p.drawText(QRect(out.x(), out.y() - lp_.captionH, out.width(), lp_.captionH),
 		   Qt::AlignVCenter | Qt::AlignLeft, outCaption);
 
 	// ---- Source track ----------------------------------------------------
@@ -483,9 +488,9 @@ void TrackEditor::paintEvent(QPaintEvent *)
 		if (rects.isEmpty())
 			cx = out.x();
 		else if (dragInsertSlot_ >= rects.size())
-			cx = rects.last().right() + kSegGap / 2 + 1;
+			cx = rects.last().right() + lp_.segGap / 2 + 1;
 		else
-			cx = rects[dragInsertSlot_].left() - kSegGap / 2 - 1;
+			cx = rects[dragInsertSlot_].left() - lp_.segGap / 2 - 1;
 		p.setPen(QPen(kAccent, 2));
 		p.drawLine(cx, out.y() + 2, cx, out.bottom() - 2);
 	}

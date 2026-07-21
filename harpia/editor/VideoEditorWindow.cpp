@@ -1,6 +1,7 @@
 #include "VideoEditorWindow.hpp"
 
 #include "ClipExporter.hpp"
+#include "DevPanel.hpp"
 #include "EditorWidgets.hpp"
 #include "ExportOptionsDialog.hpp"
 #include "FrameSeeker.hpp"
@@ -84,6 +85,21 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	modeRow->addWidget(trimModeBtn_);
 	modeRow->addWidget(cutModeBtn_);
 	modeRow->addStretch(1);
+	// Developer Panel: live-tweak every timeline layout variable to find the
+	// best UI configuration (editor-only tool, values are not persisted).
+	auto *devBtn = new QPushButton(QStringLiteral("Dev"), this);
+	devBtn->setFlat(true);
+	devBtn->setToolTip(QStringLiteral(
+		"Developer Panel — tweak timeline spacing, thumbnail size, padding and zoom live"));
+	connect(devBtn, &QPushButton::clicked, this, [this]() {
+		if (!devPanel_)
+			devPanel_ = new DevPanel(timeline_, tracks_, this);
+		devPanel_->show();
+		devPanel_->raise();
+		devPanel_->activateWindow();
+	});
+	modeRow->addWidget(devBtn);
+	modeRow->addSpacing(8);
 	// Live cursor readout: the source time of the frame being previewed.
 	cursorTimeLabel_ = new QLabel(QStringLiteral("0:00.000"), this);
 	cursorTimeLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8; font-family:monospace;"));

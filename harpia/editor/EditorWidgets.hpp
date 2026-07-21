@@ -51,6 +51,17 @@ private:
 	QRect dragStartCrop_; // widget px at press
 };
 
+// Runtime-tweakable layout parameters for the trim Timeline (edited live from
+// the editor's Developer Panel to find the best UI configuration).
+struct TimelineLayoutParams {
+	int pad = 12;      // left/right margin
+	int barTop = 14;   // bar y
+	int barH = 36;     // bar height (tall enough for the filmstrip)
+	int handleW = 8;   // handle grab width
+	int tileGap = 2;   // gap between filmstrip tiles
+	double maxZoom = 32.0;
+};
+
 // A trim timeline with start/end handles and a playhead. Dragging a handle
 // emits scrub() with the ms under it (for live preview) plus startChanged()/
 // endChanged(); clicking the bar moves the playhead and scrubs. The bar shows
@@ -71,6 +82,10 @@ public:
 
 	// Filmstrip thumbnails; entry i covers time slice [i, i+1) * duration/count.
 	void setThumbs(const QVector<QImage> &thumbs);
+
+	// Developer Panel: tweak the layout live (invalidates the strip cache).
+	const TimelineLayoutParams &layoutParams() const { return lp_; }
+	void setLayoutParams(const TimelineLayoutParams &p);
 
 signals:
 	void startChanged(qint64 ms);
@@ -97,6 +112,8 @@ private:
 
 	enum class Grab { None, Start, End, Playhead };
 	Grab grab_ = Grab::None;
+
+	TimelineLayoutParams lp_;
 
 	qint64 duration_ = 0;
 	qint64 start_ = 0;

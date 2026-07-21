@@ -219,19 +219,23 @@ void PreviewCanvas::applyWidgetCrop(const QRect &widgetRect)
 
 // ============================== Timeline ==============================
 
-namespace {
-constexpr int kPad = 12;      // left/right margin
-constexpr int kBarTop = 14;   // bar y
-constexpr int kBarH = 36;     // bar height (tall enough for the filmstrip)
-constexpr int kHandleW = 8;   // handle grab width
-constexpr double kMaxZoom = 32.0;
-} // namespace
-
 Timeline::Timeline(QWidget *parent) : QWidget(parent)
 {
-	setMinimumHeight(kBarTop + kBarH + 22);
+	setMinimumHeight(lp_.barTop + lp_.barH + 22);
 	setMouseTracking(true);
 	setToolTip(QStringLiteral("Scroll to zoom, Shift+scroll to pan"));
+}
+
+void Timeline::setLayoutParams(const TimelineLayoutParams &p)
+{
+	lp_ = p;
+	zoom_ = std::clamp(zoom_, 1.0, lp_.maxZoom);
+	if (duration_ > 0)
+		clampView();
+	setMinimumHeight(lp_.barTop + lp_.barH + 22);
+	stripCache_ = QPixmap(); // geometry changed — rebuild the filmstrip
+	updateGeometry();
+	update();
 }
 
 void Timeline::setDuration(qint64 ms)
@@ -288,7 +292,7 @@ void Timeline::ensureStripCache(const QRect &bar)
 		}
 		const int tileH = local.height();
 		const int tileW = std::max(8, int(tileH * aspect));
-		const int tileGap = 2;
+		const int tileGap = std::max(0, lp_.tileGap);
 		const double sliceMs = double(duration_) / n;
 		for (int x = 0; x < local.width(); x += tileW + tileGap) {
 			const qint64 ms = xToMs(bar.x() + x + tileW / 2);
@@ -325,9 +329,9 @@ void Timeline::wheelEvent(QWheelEvent *e)
 		// Zoom around the time under the cursor — no modifier needed.
 		const int x = int(e->position().x());
 		const qint64 anchor = xToMs(x);
-		const double frac =
-			std::clamp(double(x - kPad) / std::max(1, width() - 2 * kPad), 0.0, 1.0);
-		zoom_ = std::clamp(zoom_ * std::pow(1.3, steps), 1.0, kMaxZoom);
+		const double frac = std::clamp(double(x - lp_.pad) / std::max(1, width() - 2 * lp_.pad),
+					       0.0, 1.0);
+		zoom_ = std::clamp(zoom_ * std::pow(1.3, steps), 1.0, lp_.maxZoom);
 		viewStart_ = anchor - qint64(frac * visibleMs());
 	} else {
 		viewStart_ -= qint64(steps * visibleMs() * 0.15);
@@ -357,14 +361,14 @@ void Timeline::setPlayhead(qint64 ms)
 
 int Timeline::msToX(qint64 ms) const
 {
-	const int w = width() - 2 * kPad;
-	return kPad + int(double(ms - viewStart_) / visibleMs() * w);
+	const int w = width() - 2 * lp_.pad;
+	return lp_.pad + int(double(ms - viewStart_) / visibleMs() * w);
 }
 
 qint64 Timeline::xToMs(int x) const
 {
-	const int w = std::max(1, width() - 2 * kPad);
-	return std::clamp<qint64>(viewStart_ + qint64(double(x - kPad) / w * visibleMs()), 0,
+	const int w = std::max(1, width() - 2 * lp_.pad);
+	return std::clamp<qint64>(viewStart_ + qint64(double(x - lp_.pad) / w * visibleMs()), 0,
 				  duration_);
 }
 
@@ -373,7 +377,7 @@ void Timeline::paintEvent(QPaintEvent *)
 	QPainter p(this);
 	p.setRenderHint(QPainter::Antialiasing, true);
 
-	const QRect bar(kPad, kBarTop, width() - 2 * kPad, kBarH);
+	const QRect bar(lp_.pad, lp_.barTop, width() - 2 * lp_.pad, lp_.barH);
 	// Background + filmstrip come from the render cache (rebuilt only when the
 	// view/zoom/thumbs change) — repaints are a blit, not 20+ image rescales.
 	ensureStripCache(bar);
@@ -414,7 +418,8 @@ void Timeline::paintEvent(QPaintEvent *)
 	// Handles.
 	auto handle = [&](int x, const QColor &col) {
 		p.setBrush(col);
-		p.drawRoundedRect(QRect(x - kHandleW / 2, bar.top() - 4, kHandleW, bar.height() + 8), 2, 2);
+		p.drawRoundedRect(QRect(x - lp_.handleW / 2, bar.top() - 4, lp_.handleW, bar.height() + 8),
+				  2, 2);
 	};
 	handle(xs, QColor(0x3f, 0xb9, 0x50));
 	handle(xe, QColor(0xe5, 0x48, 0x4d));
@@ -439,9 +444,9 @@ void Timeline::paintEvent(QPaintEvent *)
 			.arg((ms / 1000) % 60, 2, 10, QLatin1Char('0'))
 			.arg((ms % 1000) / 100);
 	};
-	p.drawText(rect().adjusted(kPad, bar.bottom() + 6, -kPad, 0), Qt::AlignLeft,
+	p.drawText(rect().adjusted(lp_.pad, bar.bottom() + 6, -lp_.pad, 0), Qt::AlignLeft,
 		   QStringLiteral("Start %1").arg(t(start_)));
-	p.drawText(rect().adjusted(kPad, bar.bottom() + 6, -kPad, 0), Qt::AlignRight,
+	p.drawText(rect().adjusted(lp_.pad, bar.bottom() + 6, -lp_.pad, 0), Qt::AlignRight,
 		   QStringLiteral("End %1").arg(t(end_)));
 }
 
@@ -451,9 +456,9 @@ void Timeline::mousePressEvent(QMouseEvent *e)
 		return;
 	const int x = e->pos().x();
 	const int xs = msToX(start_), xe = msToX(end_);
-	if (std::abs(x - xs) <= kHandleW)
+	if (std::abs(x - xs) <= lp_.handleW)
 		grab_ = Grab::Start;
-	else if (std::abs(x - xe) <= kHandleW)
+	else if (std::abs(x - xe) <= lp_.handleW)
 		grab_ = Grab::End;
 	else
 		grab_ = Grab::Playhead;

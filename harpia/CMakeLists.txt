@@ -4,7 +4,8 @@ cmake_minimum_required(VERSION 3.28...3.30)
 # backend. It reuses OBS's capture/encoder/output plugins but ships its own
 # small Qt frontend instead of the full OBS Studio UI.
 
-find_package(Qt6 REQUIRED Widgets Gui)
+# Multimedia provides the editor's voiceover microphone capture (QAudioSource).
+find_package(Qt6 REQUIRED Widgets Gui Multimedia)
 
 # FFmpeg (bundled with OBS deps) is used to extract clip thumbnails.
 find_package(FFmpeg REQUIRED COMPONENTS avcodec avformat avutil swscale swresample avfilter)
@@ -22,6 +23,7 @@ target_link_libraries(
     OBS::libobs
     Qt::Widgets
     Qt::Gui
+    Qt::Multimedia
     FFmpeg::avcodec
     FFmpeg::avformat
     FFmpeg::avutil
@@ -138,6 +140,10 @@ target_sources(
     editor/TrackEditor.hpp
     editor/DevPanel.cpp
     editor/DevPanel.hpp
+    editor/AudioRecorder.cpp
+    editor/AudioRecorder.hpp
+    editor/LevelMeter.cpp
+    editor/LevelMeter.hpp
     editor/TimelineThumbs.cpp
     editor/TimelineThumbs.hpp
     editor/AudioRetimer.cpp

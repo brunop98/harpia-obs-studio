@@ -1,0 +1,81 @@
+#pragma once
+
+#include <QString>
+#include <QVector>
+#include <QWidget>
+
+namespace harpia {
+
+// One recorded narration take, positioned on the output timeline.
+struct VoiceoverClip {
+	QString path;         // temp WAV on disk
+	qint64 outStartMs = 0; // where it starts on the output timeline
+	qint64 durationMs = 0; // recorded length
+	double volume = 1.0;   // linear gain applied at export (0..2)
+	int fadeInMs = 15;     // short default fades avoid clicks
+	int fadeOutMs = 15;
+	QVector<float> peaks;  // precomputed |amplitude| per bucket, 0..1 (for drawing)
+};
+
+// The Voiceover track shown under the editor's timelines: recorded narration
+// clips laid out along the OUTPUT timeline. Clips can be selected, dragged to
+// reposition, and deleted. The waveform of each take is drawn inside its block.
+// (Trim handles and per-clip volume/fade UI arrive with the export stage.)
+class VoiceoverTrack : public QWidget {
+	Q_OBJECT
+public:
+	explicit VoiceoverTrack(QWidget *parent = nullptr);
+
+	// Total output-timeline length the track maps across.
+	void setOutputDuration(qint64 ms);
+
+	// Add a take (computes its waveform peaks from the WAV if not supplied).
+	// Returns the new clip's index.
+	int addClip(VoiceoverClip clip);
+
+	const QVector<VoiceoverClip> &clips() const { return clips_; }
+	bool isEmpty() const { return clips_.isEmpty(); }
+	int selectedIndex() const { return selected_; }
+	void removeSelected();
+	void clearAll();
+
+	void setPlayhead(qint64 outMs); // output-time marker during playback
+	void clearPlayhead();
+
+	// Decode a 16-bit PCM WAV into `buckets` normalized peaks (0..1). Empty on
+	// failure. Static so the recorder side can precompute off the GUI thread.
+	static QVector<float> loadPeaks(const QString &path, int buckets);
+
+signals:
+	void clipsChanged();           // added / moved / removed
+	void clipSelected(int index);  // -1 = none
+
+protected:
+	void paintEvent(QPaintEvent *) override;
+	void mousePressEvent(QMouseEvent *) override;
+	void mouseMoveEvent(QMouseEvent *) override;
+	void mouseReleaseEvent(QMouseEvent *) override;
+	void keyPressEvent(QKeyEvent *) override;
+	QSize sizeHint() const override;
+	QSize minimumSizeHint() const override;
+
+private:
+	QRect trackRect() const;
+	int msToX(qint64 ms) const;
+	qint64 xToMs(int x) const;
+	QVector<QRect> clipRects() const;
+	int clipAt(const QPoint &p) const;
+
+	QVector<VoiceoverClip> clips_;
+	qint64 outputMs_ = 0;
+	qint64 playheadMs_ = -1;
+	int selected_ = -1;
+
+	enum class Mode { None, Moving };
+	Mode mode_ = Mode::None;
+	QPoint pressPos_;
+	qint64 dragOrigStart_ = 0;
+	bool dragMoved_ = false;
+};
+
+} // namespace harpia

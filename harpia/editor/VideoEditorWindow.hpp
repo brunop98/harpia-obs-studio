@@ -8,6 +8,7 @@
 #include <thread>
 
 class QCheckBox;
+class QComboBox;
 class QLabel;
 class QProgressDialog;
 class QPushButton;
@@ -17,9 +18,12 @@ class QTimer;
 
 namespace harpia {
 
+class AudioRecorder;
 class DevPanel;
 class FrameSeeker;
+class LevelMeter;
 class PreviewCanvas;
+class VoiceoverTrack;
 class Timeline;
 class TrackEditor;
 class TimelineThumbs;
@@ -63,8 +67,17 @@ private slots:
 	void onSpeedChanged(int sliderValue);
 	void onSegmentsChanged();
 	void onSegmentSelected(int index);
+	void onVoiceoverRecordClicked();
 
 private:
+	// Voiceover helpers.
+	void startVoiceoverCapture();     // actually opens the mic + (talk-along) plays
+	void finishVoiceover();           // stop mic, create a clip from the take
+	void updateVoiceoverAxis();       // keep the track's output-duration in sync
+	qint64 outputDurationMs() const;  // trimmed/assembled output length
+	qint64 currentOutputMs() const;   // output-time under the playhead right now
+	QString voiceoverTempDir();       // per-session temp dir for takes (lazy)
+
 	void showFrame(qint64 ms);
 	void joinExport();
 	void startPlayback();
@@ -113,6 +126,21 @@ private:
 	std::thread exportThread_;
 	QProgressDialog *progress_ = nullptr;
 	QString outPath_;
+
+	// ---- Voiceover (narration recorded over the video) ----
+	VoiceoverTrack *voTrack_ = nullptr;
+	AudioRecorder *voRecorder_ = nullptr;
+	QComboBox *voDevice_ = nullptr;
+	QPushButton *voRecordBtn_ = nullptr;
+	LevelMeter *voMeter_ = nullptr;
+	QCheckBox *voTalkAlong_ = nullptr; // play the video while capturing
+	QCheckBox *voCountdown_ = nullptr; // 3-2-1 before capture
+	QLabel *voStatus_ = nullptr;
+	QTimer *voCountdownTimer_ = nullptr;
+	int voCountdownLeft_ = 0;
+	bool voRecording_ = false;
+	qint64 voClipStartMs_ = 0; // output-time where the in-progress take begins
+	QString voTempDir_;        // holds the session's WAV takes; removed on close
 };
 
 } // namespace harpia

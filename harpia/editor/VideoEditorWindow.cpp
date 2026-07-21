@@ -1,14 +1,18 @@
 #include "VideoEditorWindow.hpp"
 
+#include "AudioRecorder.hpp"
 #include "ClipExporter.hpp"
 #include "DevPanel.hpp"
 #include "EditorWidgets.hpp"
 #include "ExportOptionsDialog.hpp"
 #include "FrameSeeker.hpp"
+#include "LevelMeter.hpp"
 #include "TimelineThumbs.hpp"
 #include "TrackEditor.hpp"
+#include "VoiceoverTrack.hpp"
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDesktopServices>
 #include <QSignalBlocker>
 
@@ -114,6 +118,55 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	stack_->addWidget(tracks_);   // index 1 = Multi-Cut
 	root->addWidget(stack_);
 
+	// ---- Voiceover: a narration track + its recording controls -----------
+	voTrack_ = new VoiceoverTrack(this);
+	root->addWidget(voTrack_);
+
+	auto *voRow = new QHBoxLayout;
+	voRecordBtn_ = new QPushButton(QStringLiteral("●  Record voiceover"), this);
+	voRecordBtn_->setToolTip(QStringLiteral("Record narration from your microphone onto the Voiceover track"));
+	voRow->addWidget(voRecordBtn_);
+	voMeter_ = new LevelMeter(this);
+	voRow->addWidget(voMeter_, 1);
+	voStatus_ = new QLabel(QString(), this);
+	voStatus_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+	voRow->addWidget(voStatus_);
+	voRow->addSpacing(8);
+	voDevice_ = new QComboBox(this);
+	voDevice_->setToolTip(QStringLiteral("Microphone to record from"));
+	voDevice_->setMinimumWidth(160);
+	for (const AudioInputDevice &d : AudioRecorder::inputDevices())
+		voDevice_->addItem(d.name, d.id);
+	voRow->addWidget(voDevice_);
+	voTalkAlong_ = new QCheckBox(QStringLiteral("Play while recording"), this);
+	voTalkAlong_->setChecked(true);
+	voTalkAlong_->setToolTip(QStringLiteral("Play the video (silently) from the start while you narrate"));
+	voRow->addWidget(voTalkAlong_);
+	voCountdown_ = new QCheckBox(QStringLiteral("Countdown"), this);
+	voCountdown_->setToolTip(QStringLiteral("Count 3-2-1 before capture starts"));
+	voRow->addWidget(voCountdown_);
+	root->addLayout(voRow);
+
+	voRecorder_ = new AudioRecorder(this);
+	connect(voRecorder_, &AudioRecorder::level, this,
+		[this](qreal rms, qreal peak) { voMeter_->setLevel(rms, peak); });
+	connect(voRecorder_, &AudioRecorder::error, this, [this](const QString &msg) {
+		QMessageBox::warning(this, QStringLiteral("Microphone"), msg);
+	});
+	voCountdownTimer_ = new QTimer(this);
+	voCountdownTimer_->setInterval(1000);
+	connect(voCountdownTimer_, &QTimer::timeout, this, [this]() {
+		if (--voCountdownLeft_ <= 0) {
+			voCountdownTimer_->stop();
+			startVoiceoverCapture();
+		} else {
+			voStatus_->setText(QStringLiteral("Starting in %1…").arg(voCountdownLeft_));
+		}
+	});
+	connect(voRecordBtn_, &QPushButton::clicked, this,
+		&VideoEditorWindow::onVoiceoverRecordClicked);
+	connect(voTrack_, &VoiceoverTrack::clipsChanged, this, [this]() { updateInfoLabel(); });
+
 	// Playback + speed row: play/pause loops the trimmed region at the chosen
 	// speed so you can judge the speed before exporting.
 	auto *playRow = new QHBoxLayout;
@@ -166,6 +219,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 
 	connect(timeline_, &Timeline::scrub, this, &VideoEditorWindow::onScrub);
 	connect(timeline_, &Timeline::hoverScrub, this, &VideoEditorWindow::onHoverScrub);
+	connect(timeline_, &Timeline::startChanged, this, [this]() { updateVoiceoverAxis(); });
+	connect(timeline_, &Timeline::endChanged, this, [this]() { updateVoiceoverAxis(); });
 	connect(tracks_, &TrackEditor::scrubSource, this, &VideoEditorWindow::onScrub);
 	connect(tracks_, &TrackEditor::hoverScrub, this, &VideoEditorWindow::onHoverScrub);
 	connect(tracks_, &TrackEditor::segmentsChanged, this, &VideoEditorWindow::onSegmentsChanged);
@@ -201,6 +256,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 				    .arg(seeker_->height())
 				    .arg(seeker_->durationMs() / 1000.0, 0, 'f', 1);
 		updateInfoLabel();
+		updateVoiceoverAxis();
 		showFrame(0);
 	} else {
 		infoLabel_->setText(QStringLiteral("Could not open this video."));
@@ -210,6 +266,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 		cropToggle_->setEnabled(false);
 		trimModeBtn_->setEnabled(false);
 		cutModeBtn_->setEnabled(false);
+		voRecordBtn_->setEnabled(false);
+		voDevice_->setEnabled(false);
 	}
 }
 
@@ -230,6 +288,8 @@ bool VideoEditorWindow::hasUnsavedEdits() const
 		return true;
 	if (cropToggle_->isChecked())
 		return true;
+	if (voTrack_ && !voTrack_->isEmpty())
+		return true; // recorded narration would be lost
 	return false;
 }
 
@@ -277,6 +337,7 @@ void VideoEditorWindow::setEditMode(bool cut)
 		speedLabel_->setText(QStringLiteral("%1×").arg(speed_, 0, 'f', 2));
 	}
 	updateInfoLabel();
+	updateVoiceoverAxis();
 }
 
 void VideoEditorWindow::updateInfoLabel()
@@ -298,6 +359,7 @@ void VideoEditorWindow::onSegmentsChanged()
 	stopPlayback();
 	playSeg_ = -1;
 	updateInfoLabel();
+	updateVoiceoverAxis();
 }
 
 void VideoEditorWindow::onSegmentSelected(int index)
@@ -324,7 +386,120 @@ void VideoEditorWindow::onSegmentSelected(int index)
 VideoEditorWindow::~VideoEditorWindow()
 {
 	stopPlayback();
+	if (voRecorder_ && voRecorder_->isRecording())
+		voRecorder_->stop();
 	joinExport();
+	// Voiceover takes are session-only — clear the temp dir on close.
+	if (!voTempDir_.isEmpty())
+		QDir(voTempDir_).removeRecursively();
+}
+
+qint64 VideoEditorWindow::outputDurationMs() const
+{
+	if (!valid_)
+		return 0;
+	if (multiCut())
+		return tracks_->totalOutputMs();
+	const double sp = speed_ > 0.01 ? speed_ : 1.0;
+	return std::max<qint64>(1, qint64((timeline_->end() - timeline_->start()) / sp));
+}
+
+qint64 VideoEditorWindow::currentOutputMs() const
+{
+	if (!playing_)
+		return 0;
+	if (multiCut())
+		return std::clamp<qint64>(playAnchorMs_ + playClock_.elapsed(), 0,
+					  std::max<qint64>(0, tracks_->totalOutputMs()));
+	const qint64 src = playAnchorMs_ + qint64(playClock_.elapsed() * speed_);
+	const double sp = speed_ > 0.01 ? speed_ : 1.0;
+	return std::max<qint64>(0, qint64((src - timeline_->start()) / sp));
+}
+
+void VideoEditorWindow::updateVoiceoverAxis()
+{
+	if (voTrack_)
+		voTrack_->setOutputDuration(outputDurationMs());
+}
+
+QString VideoEditorWindow::voiceoverTempDir()
+{
+	if (voTempDir_.isEmpty()) {
+		const QString base =
+			QDir::tempPath() + QStringLiteral("/harpia_voiceover_") +
+			QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss"));
+		QDir().mkpath(base);
+		voTempDir_ = base;
+	}
+	return voTempDir_;
+}
+
+void VideoEditorWindow::onVoiceoverRecordClicked()
+{
+	// A running countdown: cancel it.
+	if (voCountdownTimer_->isActive()) {
+		voCountdownTimer_->stop();
+		voStatus_->clear();
+		voRecordBtn_->setText(QStringLiteral("●  Record voiceover"));
+		return;
+	}
+	if (voRecording_) {
+		finishVoiceover();
+		return;
+	}
+	if (!valid_)
+		return;
+	if (voCountdown_->isChecked()) {
+		voCountdownLeft_ = 3;
+		voStatus_->setText(QStringLiteral("Starting in %1…").arg(voCountdownLeft_));
+		voRecordBtn_->setText(QStringLiteral("Cancel"));
+		voCountdownTimer_->start();
+	} else {
+		startVoiceoverCapture();
+	}
+}
+
+void VideoEditorWindow::startVoiceoverCapture()
+{
+	stopPlayback();
+	voRecorder_->setDeviceId(voDevice_->currentData().toString());
+	if (!voRecorder_->start(voiceoverTempDir())) {
+		voStatus_->clear();
+		voRecordBtn_->setText(QStringLiteral("●  Record voiceover"));
+		return;
+	}
+	voRecording_ = true;
+	// Anchor the take at the output-time under the playhead (0 when idle).
+	voClipStartMs_ = currentOutputMs();
+	voRecordBtn_->setText(QStringLiteral("■  Stop"));
+	voStatus_->setStyleSheet(QStringLiteral("color:#e5484d;"));
+	voStatus_->setText(QStringLiteral("● Recording"));
+	voTrack_->setPlayhead(voClipStartMs_);
+	// Talk-along: play the video (silently — the editor preview has no audio)
+	// so you can narrate to what you see.
+	if (voTalkAlong_->isChecked())
+		startPlayback();
+}
+
+void VideoEditorWindow::finishVoiceover()
+{
+	if (!voRecording_)
+		return;
+	voRecording_ = false;
+	const QString path = voRecorder_->stop();
+	const qint64 durMs = voRecorder_->capturedMs();
+	stopPlayback();
+	voMeter_->reset();
+	voStatus_->clear();
+	voStatus_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+	voRecordBtn_->setText(QStringLiteral("●  Record voiceover"));
+	if (path.isEmpty())
+		return; // nothing captured
+	VoiceoverClip clip;
+	clip.path = path;
+	clip.outStartMs = voClipStartMs_;
+	clip.durationMs = durMs;
+	voTrack_->addClip(clip);
 }
 
 void VideoEditorWindow::joinExport()
@@ -395,6 +570,8 @@ void VideoEditorWindow::stopPlayback()
 	playing_ = false;
 	playBtn_->setText(QStringLiteral("▶  Play"));
 	playTimer_->stop();
+	if (voTrack_ && !voRecording_)
+		voTrack_->clearPlayhead();
 }
 
 void VideoEditorWindow::onPlayTick()
@@ -438,6 +615,7 @@ void VideoEditorWindow::onPlayTick()
 		}
 		canvas_->setFrame(img);
 		tracks_->setPlayhead(outPos);
+		voTrack_->setPlayhead(outPos);
 		cursorTimeLabel_->setText(previewTimeText(srcTarget));
 		return;
 	}
@@ -466,6 +644,10 @@ void VideoEditorWindow::onPlayTick()
 	}
 	canvas_->setFrame(img);
 	timeline_->setPlayhead(ts);
+	{
+		const double sp = speed_ > 0.01 ? speed_ : 1.0;
+		voTrack_->setPlayhead(std::max<qint64>(0, qint64((ts - timeline_->start()) / sp)));
+	}
 	cursorTimeLabel_->setText(previewTimeText(ts));
 }
 
@@ -492,6 +674,7 @@ void VideoEditorWindow::onSpeedChanged(int sliderValue)
 			playSeg_ = -1;
 		}
 		updateInfoLabel();
+		updateVoiceoverAxis();
 		return;
 	}
 
@@ -502,6 +685,7 @@ void VideoEditorWindow::onSpeedChanged(int sliderValue)
 	}
 	speed_ = value;
 	speedLabel_->setText(QStringLiteral("%1×").arg(speed_, 0, 'f', 2));
+	updateVoiceoverAxis();
 }
 
 void VideoEditorWindow::onPreviewTick()

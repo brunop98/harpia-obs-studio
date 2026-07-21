@@ -461,6 +461,21 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// diagnostics + version sit quietly on the right.
 	statusBadge_ = new StatusBadge(this);
 	statusBar()->addWidget(statusBadge_);
+	// Quick "Google Drive" shortcut: shown only when the active preset carries a
+	// share link; clicking it opens that link in the browser.
+	driveLinkButton_ = new QPushButton(QStringLiteral("Google Drive"), this);
+	driveLinkButton_->setFlat(true);
+	driveLinkButton_->setCursor(Qt::PointingHandCursor);
+	driveLinkButton_->setStyleSheet(QStringLiteral(
+		"QPushButton{color:#3d84b8; background:transparent; border:none; font-size:11px; padding:2px 8px;}"
+		"QPushButton:hover{color:#5aa9e6; text-decoration:underline;}"));
+	driveLinkButton_->setVisible(false);
+	statusBar()->addWidget(driveLinkButton_);
+	connect(driveLinkButton_, &QPushButton::clicked, this, [this]() {
+		const QString link = QString::fromStdString(activePreset().googleDriveLink);
+		if (!link.isEmpty())
+			QDesktopServices::openUrl(QUrl::fromUserInput(link));
+	});
 	// Developer Panel launcher: a quiet button that opens the live layout tuner.
 	auto *devButton = new QPushButton(QStringLiteral("Dev"), this);
 	devButton->setFlat(true);
@@ -602,6 +617,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	refreshRecentList();
 	refreshReadiness();
 	refreshWebcamRow();
+	refreshDriveLink();
 	updateButtons();
 	applyResponsiveLayout(width()); // set initial section visibility
 
@@ -690,6 +706,16 @@ void MainWindow::setLayoutParams(const MainLayoutParams &p)
 	if (webcamPreview_)
 		webcamPreview_->setFixedSize(p.webcamPreviewW, p.webcamPreviewH);
 	applyStripMetrics();
+}
+
+void MainWindow::refreshDriveLink()
+{
+	if (!driveLinkButton_)
+		return;
+	const QString link = QString::fromStdString(activePreset().googleDriveLink);
+	driveLinkButton_->setVisible(!link.isEmpty());
+	if (!link.isEmpty())
+		driveLinkButton_->setToolTip(QStringLiteral("Open the preset's Google Drive share link:\n%1").arg(link));
 }
 
 void MainWindow::openDevPanel()
@@ -1352,6 +1378,7 @@ void MainWindow::editActivePreset(const QString &initialPage)
 		hwProbeMs_ = 0; // settings may have changed monitor/mic/webcam use
 		refreshReadiness();
 		refreshWebcamRow();
+		refreshDriveLink();
 	}
 }
 
@@ -2003,6 +2030,7 @@ void MainWindow::onPresetChanged()
 	hwProbeMs_ = 0; // preset changed — re-probe hardware for accurate readiness
 	refreshReadiness();
 	refreshWebcamRow();
+	refreshDriveLink();
 }
 
 void MainWindow::syncIdleControls()

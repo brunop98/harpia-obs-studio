@@ -45,6 +45,7 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_int(d, "recording_counter", p.recordingCounter);
 	obs_data_set_int(d, "countdown_seconds", p.countdownSeconds);
 	obs_data_set_int(d, "min_recording_seconds", p.minRecordingSeconds);
+	obs_data_set_string(d, "google_drive_link", p.googleDriveLink.c_str());
 	obs_data_set_bool(d, "show_screen_border", p.showScreenBorder);
 	obs_data_set_string(d, "screen_border_color", p.screenBorderColor.c_str());
 	obs_data_set_int(d, "screen_border_thickness", p.screenBorderThickness);
@@ -111,6 +112,8 @@ Preset presetFromData(obs_data_t *d)
 		p.recordingCounter = (int)obs_data_get_int(d, "recording_counter");
 	p.countdownSeconds = (int)obs_data_get_int(d, "countdown_seconds");
 	p.minRecordingSeconds = (int)obs_data_get_int(d, "min_recording_seconds");
+	if (const char *gd = obs_data_get_string(d, "google_drive_link"); gd && *gd)
+		p.googleDriveLink = gd;
 	p.showScreenBorder = obs_data_get_bool(d, "show_screen_border");
 	if (const char *bc = obs_data_get_string(d, "screen_border_color"); bc && *bc)
 		p.screenBorderColor = bc;

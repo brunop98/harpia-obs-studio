@@ -418,6 +418,13 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	templatePreview_->setStyleSheet(QStringLiteral("color:#8a8f98;"));
 	v->addWidget(templatePreview_);
 
+	driveLinkEdit_ = new QLineEdit(QString::fromStdString(preset.googleDriveLink), this);
+	driveLinkEdit_->setPlaceholderText(QStringLiteral("https://drive.google.com/…"));
+	addField(v, QStringLiteral("Google Drive share link"),
+		 QStringLiteral("Optional. When set, a clickable \"Google Drive\" shortcut appears at the "
+				"bottom of the main window and opens this link."),
+		 driveLinkEdit_);
+
 	connect(templateEdit_, &QLineEdit::textChanged, this, &PresetEditorDialog::updateFilenamePreview);
 	connect(nameEdit_, &QLineEdit::textChanged, this, &PresetEditorDialog::updateFilenamePreview);
 	connect(fpsCombo_, &QComboBox::currentTextChanged, this, &PresetEditorDialog::updateFilenamePreview);
@@ -869,6 +876,8 @@ void PresetEditorDialog::accept()
 	// like ".mp4" — restore the default naming instead of saving it.
 	if (result_.filenameTemplate.empty())
 		result_.filenameTemplate = Preset::makeDefault("").filenameTemplate;
+
+	result_.googleDriveLink = driveLinkEdit_->text().trimmed().toStdString();
 
 	result_.recordDesktopAudio = desktopAudioCheck_->isChecked();
 	result_.audioBitrateKbps = audioBitrateCombo_->currentData().toInt();

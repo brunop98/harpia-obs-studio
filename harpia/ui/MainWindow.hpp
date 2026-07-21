@@ -170,6 +170,7 @@ private:
 	QString elapsedString() const;
 	void updateRegionToolVisibility(); // focus/record-driven overlay visibility
 	void writeMarker(const QString &label); // append an Auto Paused/Resumed marker
+	void refreshDriveLink(); // show/hide the status-bar Google Drive shortcut
 
 	// Developer Panel: read/apply the live-tweakable layout metrics, and
 	// (re)compute the recent-strip icon/grid/height from them.
@@ -266,6 +267,7 @@ private:
 	// Recent strip
 	QPushButton *libraryButton_ = nullptr;
 	QPushButton *errorLogsButton_ = nullptr;
+	QPushButton *driveLinkButton_ = nullptr; // status-bar Google Drive shortcut
 	QListWidget *recentStrip_ = nullptr;
 	QWidget *recentSection_ = nullptr; // header + strip, hidden when narrow
 	ThumbnailCache thumbnails_;

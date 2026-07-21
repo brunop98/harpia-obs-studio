@@ -68,6 +68,7 @@ private:
 	QColor borderColor_;
 	QLineEdit *templateEdit_ = nullptr;
 	QLabel *templatePreview_ = nullptr;
+	QLineEdit *driveLinkEdit_ = nullptr;
 	QLabel *validationLabel_ = nullptr;
 
 	// Audio page

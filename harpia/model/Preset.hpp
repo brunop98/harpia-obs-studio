@@ -124,6 +124,12 @@ struct Preset {
 	// discard it. 0 = disabled (always keep).
 	int minRecordingSeconds = 0;
 
+	// Optional Google Drive (or any) share URL associated with this preset. When
+	// set, the main window shows a clickable "Google Drive" shortcut in the
+	// status bar that opens this link — a quick way to jump to the folder where
+	// recordings from this preset are meant to be shared. Empty = hidden.
+	std::string googleDriveLink;
+
 	// Show a colored border around the recorded monitor while recording (Full
 	// Screen capture only). The border is excluded from the recording itself.
 	bool showScreenBorder = false;

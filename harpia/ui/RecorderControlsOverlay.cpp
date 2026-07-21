@@ -54,19 +54,22 @@ RecorderControlsOverlay::RecorderControlsOverlay(QWidget *parent) : QWidget(pare
 	// Leave room on the left for the painted "recording" dot.
 	row->addSpacing(10);
 
+	// Icon-only, square buttons — no text.
 	const QString btnBase = QStringLiteral(
-		"QPushButton{color:#f2f3f5;border:none;border-radius:9px;padding:6px 12px;font-weight:bold;}"
+		"QPushButton{color:#f2f3f5;border:none;border-radius:9px;font-size:15px;font-weight:bold;}"
 		"QPushButton:disabled{color:#7d828b;}");
 
-	pauseButton_ = new QPushButton(QStringLiteral("⏸  Pause"), this);
+	pauseButton_ = new QPushButton(QStringLiteral("⏸"), this);
 	pauseButton_->setCursor(Qt::PointingHandCursor);
+	pauseButton_->setFixedSize(32, 32);
 	pauseButton_->setStyleSheet(btnBase + QStringLiteral("QPushButton{background:#3a3f47;}"
 							     "QPushButton:hover{background:#474d57;}"
 							     "QPushButton:disabled{background:#2a2d33;}"));
 	row->addWidget(pauseButton_);
 
-	stopButton_ = new QPushButton(QStringLiteral("■  Stop"), this);
+	stopButton_ = new QPushButton(QStringLiteral("■"), this);
 	stopButton_->setCursor(Qt::PointingHandCursor);
+	stopButton_->setFixedSize(32, 32);
 	stopButton_->setStyleSheet(btnBase + QStringLiteral("QPushButton{background:#e5484d;}"
 							    "QPushButton:hover{background:#f05055;}"
 							    "QPushButton:disabled{background:#5a2f31;}"));
@@ -90,8 +93,10 @@ RecorderControlsOverlay::RecorderControlsOverlay(QWidget *parent) : QWidget(pare
 void RecorderControlsOverlay::setState(bool paused, bool pauseEnabled, bool stopEnabled)
 {
 	paused_ = paused;
-	pauseButton_->setText(paused ? QStringLiteral("▶  Resume") : QStringLiteral("⏸  Pause"));
+	pauseButton_->setText(paused ? QStringLiteral("▶") : QStringLiteral("⏸"));
+	pauseButton_->setToolTip(paused ? QStringLiteral("Resume recording") : QStringLiteral("Pause recording"));
 	pauseButton_->setEnabled(pauseEnabled);
+	stopButton_->setToolTip(QStringLiteral("Stop recording"));
 	stopButton_->setEnabled(stopEnabled);
 }
 

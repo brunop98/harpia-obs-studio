@@ -44,6 +44,11 @@ public:
 	// Request the recording to stop (asynchronous; onFinished fires when done).
 	void stop();
 
+	// Last-resort watchdog kill for a stop that hung (stuck muxer/encoder):
+	// aborts the output immediately. The file may be incomplete but the app
+	// stays alive — no Task Manager needed.
+	void forceStop();
+
 	// Pause/resume. Only valid for encoded muxer recordings (our MP4/MKV path).
 	// Returns the resulting paused state.
 	bool pause(bool paused);

@@ -565,6 +565,17 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	updateButtons();
 	applyResponsiveLayout(width()); // set initial section visibility
 
+	// Surface (but never list) recordings orphaned by a crash/kill — they stay
+	// in each output folder's hidden .harpia_tmp for manual salvage instead of
+	// showing up in Recent Recordings as broken clips.
+	for (const QString &folder : presetFolders()) {
+		const QDir tmpDir(folder + QStringLiteral("/.harpia_tmp"));
+		const QStringList orphans = tmpDir.entryList(QDir::Files);
+		for (const QString &f : orphans)
+			blog(LOG_WARNING, "[harpia] orphaned partial recording (crash/kill?): %s",
+			     tmpDir.filePath(f).toUtf8().constData());
+	}
+
 	// Start keyboard focus on the primary action instead of a random combo.
 	primaryButton_->setFocus();
 }
@@ -752,15 +763,18 @@ void MainWindow::startRecording()
 	const QString screenPath =
 		dir.filePath(baseName + QLatin1Char('.') + QString::fromStdString(preset.extension()));
 
-	// MP4 finalizes slowly (especially after many pauses). Record to a temp .mkv
-	// (near-instant, crash-safe stop) and losslessly remux to the .mp4 in the
-	// background afterwards. Other formats record directly.
-	QString recordPath = screenPath;
-	if (preset.format == RecordingFormat::MP4) {
-		QDir tmp(dir.filePath(QStringLiteral(".harpia_tmp")));
-		tmp.mkpath(QStringLiteral("."));
-		recordPath = tmp.filePath(baseName + QStringLiteral(".mkv"));
-	}
+	// EVERY format records into a hidden temp folder first and is moved (or,
+	// for MP4, losslessly remuxed from a crash-safe temp .mkv) into place on a
+	// clean stop. A crash or Task Manager kill therefore can never leave a
+	// partial recording where the library would list it — orphans stay in
+	// .harpia_tmp (see the startup sweep log).
+	QDir tmp(dir.filePath(QStringLiteral(".harpia_tmp")));
+	tmp.mkpath(QStringLiteral("."));
+	const QString recordPath =
+		tmp.filePath(baseName + QLatin1Char('.') +
+			     (preset.format == RecordingFormat::MP4
+				      ? QStringLiteral("mkv")
+				      : QString::fromStdString(preset.extension())));
 
 	if (!recorder_.start(preset, recordPath.toStdString())) {
 		// The timer label gets overwritten by the next tick — the status bar
@@ -902,6 +916,8 @@ void MainWindow::beginStop()
 	// finalize adds any lag, for the short-recording check.
 	lastContentMs_ = contentElapsedMs();
 	stopping_ = true;
+	stopRequestMs_ = QDateTime::currentMSecsSinceEpoch(); // arms the watchdog
+	forcedStop_ = false;
 	updateButtons();
 	recorder_.stop(); // async; tickState clears stopping_ once finalized
 }
@@ -918,9 +934,38 @@ void MainWindow::finalizeStopped(const QString &recordedPath, const QString &fin
 		return;
 	}
 
-	// 2) Remux the temp .mkv to the final .mp4 (background), or just refresh.
+	// 2) Move the temp recording into place — MP4 goes through the lossless
+	// background remux (.mkv -> .mp4); every other format keeps its container
+	// and is simply renamed out of the hidden temp folder.
 	if (needsRemux) {
-		remuxInBackground(recordedPath, finalPath);
+		const bool sameContainer = QFileInfo(recordedPath)
+						   .suffix()
+						   .compare(QFileInfo(finalPath).suffix(),
+							    Qt::CaseInsensitive) == 0;
+		if (!sameContainer) {
+			remuxInBackground(recordedPath, finalPath);
+			return;
+		}
+		QString target = finalPath;
+		if (QFile::exists(target)) {
+			// Same template name already exists — never overwrite a clip.
+			target = QFileInfo(finalPath).absolutePath() + QLatin1Char('/') +
+				 QFileInfo(finalPath).completeBaseName() + QStringLiteral("_%1.").arg(QDateTime::currentMSecsSinceEpoch() % 100000) +
+				 QFileInfo(finalPath).suffix();
+		}
+		if (!QFile::rename(recordedPath, target)) {
+			blog(LOG_WARNING, "[harpia] could not move the recording into place: %s",
+			     recordedPath.toUtf8().constData());
+			statusBar()->showMessage(
+				QStringLiteral("Could not move the recording into the output folder — "
+					       "it was kept in .harpia_tmp"),
+				10000);
+		} else {
+			QDir().rmdir(QFileInfo(recordedPath).absolutePath()); // temp dir if empty
+		}
+		refreshClipViews();
+		if (closePending_)
+			close();
 	} else {
 		refreshClipViews();
 		if (closePending_)
@@ -2269,6 +2314,20 @@ void MainWindow::tickState()
 {
 	++spinPhase_; // drive the Starting…/Stopping… spinner
 
+	// Stop watchdog: obs_output_stop is async and a stuck muxer/encoder can
+	// hang it indefinitely (previously: kill via Task Manager). After 10s,
+	// force-stop the output — the file may lose its tail, but the app lives.
+	if (stopping_ && !forcedStop_ && stopRequestMs_ > 0 &&
+	    QDateTime::currentMSecsSinceEpoch() - stopRequestMs_ > 10000) {
+		forcedStop_ = true;
+		blog(LOG_WARNING, "[harpia] stop timed out after 10s — forcing the output to stop");
+		statusBar()->showMessage(
+			QStringLiteral("Stopping took too long — the recording was force-closed "
+				       "(the file may be incomplete)"),
+			10000);
+		recorder_.forceStop();
+	}
+
 	// The foreground query is a real OS call — only pay for it when the focus
 	// auto-pause is actually armed (recording with a target app selected).
 	const bool focusArmed =
@@ -2297,6 +2356,7 @@ void MainWindow::tickState()
 			focusPaused_ = false;
 			targetExe_.clear();
 			stopping_ = false; // finalize complete
+			stopRequestMs_ = 0; // disarm the stop watchdog
 
 			// Surface an unclean stop (disk full, write error…) instead of
 			// letting it look like a normal save.

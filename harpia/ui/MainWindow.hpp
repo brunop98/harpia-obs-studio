@@ -213,6 +213,10 @@ private:
 	QStringList lastWarningSig_;
 	QTimer *readinessDebounce_ = nullptr; // coalesces refreshes during drags
 
+	// Stop watchdog: force-stop the output if the async stop hangs > 10s.
+	qint64 stopRequestMs_ = 0;
+	bool forcedStop_ = false;
+
 	// Recent strip
 	QPushButton *libraryButton_ = nullptr;
 	QPushButton *errorLogsButton_ = nullptr;

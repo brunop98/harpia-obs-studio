@@ -146,6 +146,14 @@ void RecordingController::stop()
 		obs_output_stop(output_);
 }
 
+void RecordingController::forceStop()
+{
+	if (output_ && obs_output_active(output_)) {
+		blog(LOG_WARNING, "[harpia] force-stopping the recording output");
+		obs_output_force_stop(output_);
+	}
+}
+
 bool RecordingController::canPause() const
 {
 	if (!output_ || usesFfmpegOutput_)

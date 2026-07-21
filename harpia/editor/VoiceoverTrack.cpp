@@ -1,7 +1,10 @@
 #include "VoiceoverTrack.hpp"
 
+#include <QAction>
 #include <QFile>
+#include <QFileInfo>
 #include <QKeyEvent>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -17,6 +20,8 @@ constexpr int kMargin = 8;
 constexpr int kCaptionH = 16;
 constexpr int kTrackH = 40;
 constexpr int kMinClipW = 6;
+constexpr int kEdgeZone = 7;      // px near a clip edge that starts a trim
+constexpr qint64 kMinClipMs = 100; // shortest a clip can be trimmed to
 
 const QColor kBarBg(0x20, 0x22, 0x25);
 const QColor kBarBorder(0x30, 0x33, 0x38);
@@ -33,7 +38,8 @@ VoiceoverTrack::VoiceoverTrack(QWidget *parent) : QWidget(parent)
 	setFocusPolicy(Qt::ClickFocus);
 	setMouseTracking(true);
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-	setToolTip(QStringLiteral("Voiceover — drag a clip to move it, Del to remove"));
+	setToolTip(QStringLiteral(
+		"Voiceover — drag to move, drag an edge to trim, right-click to split, Del to remove"));
 }
 
 QSize VoiceoverTrack::sizeHint() const
@@ -96,10 +102,36 @@ QVector<float> VoiceoverTrack::loadPeaks(const QString &path, int buckets)
 	return peaks;
 }
 
+qint64 VoiceoverTrack::wavDurationMs(const QString &path)
+{
+	QFile f(path);
+	if (!f.open(QIODevice::ReadOnly))
+		return 0;
+	QByteArray h = f.read(44);
+	f.close();
+	if (h.size() < 44)
+		return 0;
+	auto u16 = [&](int o) { return quint16((quint8)h[o] | ((quint8)h[o + 1] << 8)); };
+	auto u32 = [&](int o) {
+		return quint32((quint8)h[o] | ((quint8)h[o + 1] << 8) | ((quint8)h[o + 2] << 16) |
+			       ((quint8)h[o + 3] << 24));
+	};
+	const int channels = std::max<int>(1, u16(22));
+	const int rate = std::max<int>(1, (int)u32(24));
+	const int bits = std::max<int>(8, u16(34));
+	const qint64 dataBytes = QFileInfo(path).size() - 44;
+	const qint64 frames = dataBytes / (channels * (bits / 8));
+	return frames * 1000 / rate;
+}
+
 int VoiceoverTrack::addClip(VoiceoverClip clip)
 {
 	if (clip.peaks.isEmpty() && !clip.path.isEmpty())
 		clip.peaks = loadPeaks(clip.path, 600);
+	if (clip.srcTotalMs <= 0)
+		clip.srcTotalMs = std::max(clip.durationMs, wavDurationMs(clip.path));
+	if (clip.durationMs <= 0)
+		clip.durationMs = std::max<qint64>(1, clip.srcTotalMs - clip.srcStartMs);
 	clips_.append(std::move(clip));
 	selected_ = clips_.size() - 1;
 	emit clipsChanged();
@@ -220,9 +252,11 @@ void VoiceoverTrack::paintEvent(QPaintEvent *)
 		p.setBrush(sel ? kClipFillSel : kClipFill);
 		p.drawPath(clip);
 
-		// Waveform centered vertically.
-		const QVector<float> &pk = clips_[i].peaks;
-		if (!pk.isEmpty() && cr.width() > 2) {
+		// Waveform centered vertically — draw only the trimmed source slice
+		// [srcStart, srcStart+duration] of the whole-source peak array.
+		const VoiceoverClip &vc = clips_[i];
+		const QVector<float> &pk = vc.peaks;
+		if (!pk.isEmpty() && cr.width() > 2 && vc.srcTotalMs > 0) {
 			p.save();
 			p.setClipPath(clip);
 			p.setPen(QPen(kWave, 1));
@@ -230,7 +264,9 @@ void VoiceoverTrack::paintEvent(QPaintEvent *)
 			const int halfH = cr.height() / 2 - 2;
 			for (int x = cr.left() + 1; x < cr.right() - 1; ++x) {
 				const double t = double(x - cr.left()) / std::max(1, cr.width());
-				const int b = std::clamp<int>(int(t * pk.size()), 0, int(pk.size()) - 1);
+				const double srcFrac =
+					double(vc.srcStartMs + t * vc.durationMs) / double(vc.srcTotalMs);
+				const int b = std::clamp<int>(int(srcFrac * pk.size()), 0, int(pk.size()) - 1);
 				const int h = int(pk[b] * halfH);
 				p.drawLine(x, midY - h, x, midY + h);
 			}
@@ -252,36 +288,85 @@ void VoiceoverTrack::paintEvent(QPaintEvent *)
 
 void VoiceoverTrack::mousePressEvent(QMouseEvent *e)
 {
+	const int idx = clipAt(e->pos());
+
+	if (e->button() == Qt::RightButton) {
+		if (idx >= 0) {
+			if (idx != selected_) {
+				selected_ = idx;
+				emit clipSelected(idx);
+				update();
+			}
+			showClipMenu(idx, e->globalPosition().toPoint(), xToMs(e->pos().x()));
+		}
+		return;
+	}
 	if (e->button() != Qt::LeftButton)
 		return;
-	const int idx = clipAt(e->pos());
+
 	if (idx != selected_) {
 		selected_ = idx;
 		emit clipSelected(idx);
 		update();
 	}
 	if (idx >= 0) {
-		mode_ = Mode::Moving;
 		pressPos_ = e->pos();
 		dragOrigStart_ = clips_[idx].outStartMs;
+		dragOrigSrcStart_ = clips_[idx].srcStartMs;
+		dragOrigDuration_ = clips_[idx].durationMs;
 		dragMoved_ = false;
+		// Near an edge → trim that boundary; otherwise move the whole clip.
+		const QRect r = clipRects()[idx];
+		const int edge = std::min(kEdgeZone, r.width() / 3);
+		if (e->pos().x() - r.left() <= edge)
+			mode_ = Mode::ResizingLeft;
+		else if (r.right() - e->pos().x() <= edge)
+			mode_ = Mode::ResizingRight;
+		else
+			mode_ = Mode::Moving;
 	}
 }
 
 void VoiceoverTrack::mouseMoveEvent(QMouseEvent *e)
 {
-	if (mode_ == Mode::Moving && selected_ >= 0 && (e->buttons() & Qt::LeftButton)) {
+	if (selected_ >= 0 && (e->buttons() & Qt::LeftButton) && mode_ != Mode::None) {
 		if (!dragMoved_ && std::abs(e->pos().x() - pressPos_.x()) > 3)
 			dragMoved_ = true;
-		if (dragMoved_) {
-			const qint64 deltaMs = xToMs(e->pos().x()) - xToMs(pressPos_.x());
-			const qint64 maxStart = std::max<qint64>(0, outputMs_ - clips_[selected_].durationMs);
-			clips_[selected_].outStartMs =
-				std::clamp<qint64>(dragOrigStart_ + deltaMs, 0, maxStart);
-			update();
+		if (!dragMoved_)
+			return;
+		const qint64 deltaMs = xToMs(e->pos().x()) - xToMs(pressPos_.x());
+		VoiceoverClip &c = clips_[selected_];
+		if (mode_ == Mode::Moving) {
+			const qint64 maxStart = std::max<qint64>(0, outputMs_ - c.durationMs);
+			c.outStartMs = std::clamp<qint64>(dragOrigStart_ + deltaMs, 0, maxStart);
+		} else if (mode_ == Mode::ResizingLeft) {
+			// Move the left edge (d>0 trims from the left), keeping the right edge
+			// fixed. Bounded so srcStart/outStart stay >= 0 and a min length remains.
+			const qint64 lo = -std::min(dragOrigSrcStart_, dragOrigStart_);
+			const qint64 hi = dragOrigDuration_ - kMinClipMs;
+			const qint64 d = std::clamp<qint64>(deltaMs, lo, hi);
+			c.srcStartMs = dragOrigSrcStart_ + d;
+			c.outStartMs = dragOrigStart_ + d;
+			c.durationMs = dragOrigDuration_ - d;
+		} else { // ResizingRight
+			const qint64 maxDur = c.srcTotalMs - c.srcStartMs;
+			c.durationMs = std::clamp<qint64>(dragOrigDuration_ + deltaMs, kMinClipMs, maxDur);
 		}
+		update();
+		return;
+	}
+
+	// Idle: cursor hint (trim vs move).
+	const int idx = clipAt(e->pos());
+	if (idx >= 0) {
+		const QRect r = clipRects()[idx];
+		const int edge = std::min(kEdgeZone, r.width() / 3);
+		if (e->pos().x() - r.left() <= edge || r.right() - e->pos().x() <= edge)
+			setCursor(Qt::SizeHorCursor);
+		else
+			setCursor(Qt::OpenHandCursor);
 	} else {
-		setCursor(clipAt(e->pos()) >= 0 ? Qt::OpenHandCursor : Qt::ArrowCursor);
+		setCursor(Qt::ArrowCursor);
 	}
 }
 
@@ -289,10 +374,49 @@ void VoiceoverTrack::mouseReleaseEvent(QMouseEvent *e)
 {
 	if (e->button() != Qt::LeftButton)
 		return;
-	if (mode_ == Mode::Moving && dragMoved_)
+	if (mode_ != Mode::None && dragMoved_)
 		emit clipsChanged();
 	mode_ = Mode::None;
 	dragMoved_ = false;
+}
+
+void VoiceoverTrack::splitClip(int index, qint64 outMs)
+{
+	if (index < 0 || index >= clips_.size())
+		return;
+	VoiceoverClip &a = clips_[index];
+	const qint64 off = outMs - a.outStartMs; // ms into the played region
+	if (off <= kMinClipMs || off >= a.durationMs - kMinClipMs)
+		return; // too close to an edge to split usefully
+
+	VoiceoverClip b = a; // shares path/peaks/srcTotal/volume
+	b.outStartMs = a.outStartMs + off;
+	b.srcStartMs = a.srcStartMs + off;
+	b.durationMs = a.durationMs - off;
+	b.fadeInMs = 0;  // the cut edge gets no fade
+	a.durationMs = off;
+	a.fadeOutMs = 0;
+
+	clips_.insert(index + 1, b);
+	selected_ = index + 1;
+	emit clipsChanged();
+	emit clipSelected(selected_);
+	update();
+}
+
+void VoiceoverTrack::showClipMenu(int index, const QPoint &globalPos, qint64 outMs)
+{
+	QMenu menu(this);
+	QAction *split = menu.addAction(QStringLiteral("Split here"));
+	const VoiceoverClip &c = clips_[index];
+	const qint64 off = outMs - c.outStartMs;
+	split->setEnabled(off > kMinClipMs && off < c.durationMs - kMinClipMs);
+	QAction *remove = menu.addAction(QStringLiteral("Remove"));
+	QAction *chosen = menu.exec(globalPos);
+	if (chosen == split)
+		splitClip(index, outMs);
+	else if (chosen == remove)
+		removeSelected();
 }
 
 void VoiceoverTrack::keyPressEvent(QKeyEvent *e)

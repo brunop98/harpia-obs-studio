@@ -68,6 +68,7 @@ private slots:
 	void onSegmentsChanged();
 	void onSegmentSelected(int index);
 	void onVoiceoverRecordClicked();
+	void onImportAudioClicked();
 
 private:
 	// Voiceover helpers.
@@ -132,6 +133,7 @@ private:
 	AudioRecorder *voRecorder_ = nullptr;
 	QComboBox *voDevice_ = nullptr;
 	QPushButton *voRecordBtn_ = nullptr;
+	QPushButton *voImportBtn_ = nullptr;
 	LevelMeter *voMeter_ = nullptr;
 	QCheckBox *voTalkAlong_ = nullptr; // play the video while capturing
 	QCheckBox *voCountdown_ = nullptr; // 3-2-1 before capture

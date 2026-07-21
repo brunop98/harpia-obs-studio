@@ -17,6 +17,8 @@ public:
 	struct Take {
 		QString path;          // WAV on disk (any rate/channels; resampled)
 		qint64 outStartMs = 0; // placement on the output timeline
+		qint64 srcStartMs = 0; // offset into the source (trim/split)
+		qint64 playMs = 0;     // played length (0 = to end of source)
 		double volume = 1.0;   // linear gain
 		int fadeInMs = 15;
 		int fadeOutMs = 15;
@@ -28,6 +30,11 @@ public:
 	// *cancel if provided.
 	static QString mix(const QString &videoPath, double originalVolume, bool duck,
 			   const std::vector<Take> &takes, std::atomic<bool> *cancel);
+
+	// Decode any audio file to a 16-bit PCM WAV (48 kHz stereo) at `outWav`, so an
+	// imported track becomes a normal voiceover take (waveform + trim + mix all
+	// work uniformly). Returns true on success.
+	static bool decodeToWav(const QString &inPath, const QString &outWav);
 
 	// Exposed for unit testing: apply gain + linear fades to one take and add it
 	// into `mix` (interleaved stereo) at `startFrame`; and build the ducking gain

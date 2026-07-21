@@ -6,15 +6,19 @@
 
 namespace harpia {
 
-// One recorded narration take, positioned on the output timeline.
+// One narration take (recorded or imported), positioned on the output timeline.
+// A clip can reference a sub-range of its source file (trimming/splitting):
+// srcStartMs..srcStartMs+durationMs within a source of srcTotalMs.
 struct VoiceoverClip {
-	QString path;         // temp WAV on disk
+	QString path;          // WAV on disk
 	qint64 outStartMs = 0; // where it starts on the output timeline
-	qint64 durationMs = 0; // recorded length
+	qint64 durationMs = 0; // played length (may be < the source after trimming)
+	qint64 srcStartMs = 0; // offset into the source where playback begins
+	qint64 srcTotalMs = 0; // full length of the source file
 	double volume = 1.0;   // linear gain applied at export (0..2)
 	int fadeInMs = 15;     // short default fades avoid clicks
 	int fadeOutMs = 15;
-	QVector<float> peaks;  // precomputed |amplitude| per bucket, 0..1 (for drawing)
+	QVector<float> peaks;  // |amplitude| per bucket over the WHOLE source, 0..1
 };
 
 // The Voiceover track shown under the editor's timelines: recorded narration
@@ -38,6 +42,9 @@ public:
 	int selectedIndex() const { return selected_; }
 	void removeSelected();
 	void clearAll();
+
+	// Full length (ms) of a source WAV, from its header. 0 on failure.
+	static qint64 wavDurationMs(const QString &path);
 
 	void setPlayhead(qint64 outMs); // output-time marker during playback
 	void clearPlayhead();
@@ -65,16 +72,20 @@ private:
 	qint64 xToMs(int x) const;
 	QVector<QRect> clipRects() const;
 	int clipAt(const QPoint &p) const;
+	void splitClip(int index, qint64 outMs); // split at an output-time position
+	void showClipMenu(int index, const QPoint &globalPos, qint64 outMs);
 
 	QVector<VoiceoverClip> clips_;
 	qint64 outputMs_ = 0;
 	qint64 playheadMs_ = -1;
 	int selected_ = -1;
 
-	enum class Mode { None, Moving };
+	enum class Mode { None, Moving, ResizingLeft, ResizingRight };
 	Mode mode_ = Mode::None;
 	QPoint pressPos_;
-	qint64 dragOrigStart_ = 0;
+	qint64 dragOrigStart_ = 0;    // outStartMs at press
+	qint64 dragOrigSrcStart_ = 0; // srcStartMs at press
+	qint64 dragOrigDuration_ = 0; // durationMs at press
 	bool dragMoved_ = false;
 };
 

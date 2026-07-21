@@ -105,6 +105,50 @@ std::vector<float> decodeToFloat(const QString &path)
 }
 } // namespace
 
+bool VoiceoverMixer::decodeToWav(const QString &inPath, const QString &outWav)
+{
+	const std::vector<float> s = decodeToFloat(inPath); // interleaved stereo @ 48k
+	if (s.empty())
+		return false;
+	const qint64 frames = (qint64)s.size() / kCh;
+
+	QFile f(outWav);
+	if (!f.open(QIODevice::WriteOnly))
+		return false;
+	auto pU32 = [](quint32 v) {
+		char b[4] = {char(v & 0xff), char((v >> 8) & 0xff), char((v >> 16) & 0xff),
+			     char((v >> 24) & 0xff)};
+		return QByteArray(b, 4);
+	};
+	auto pU16 = [](quint16 v) {
+		char b[2] = {char(v & 0xff), char((v >> 8) & 0xff)};
+		return QByteArray(b, 2);
+	};
+	const qint64 dataBytes = frames * kCh * 2;
+	f.write("RIFF");
+	f.write(pU32(quint32(36 + dataBytes)));
+	f.write("WAVE");
+	f.write("fmt ");
+	f.write(pU32(16));
+	f.write(pU16(1));               // PCM
+	f.write(pU16(quint16(kCh)));
+	f.write(pU32(kRate));
+	f.write(pU32(quint32(kRate * kCh * 2)));
+	f.write(pU16(quint16(kCh * 2)));
+	f.write(pU16(16));
+	f.write("data");
+	f.write(pU32(quint32(dataBytes)));
+	// Float [-1,1] → interleaved S16LE.
+	QByteArray pcm;
+	pcm.resize(int(dataBytes));
+	auto *o = reinterpret_cast<qint16 *>(pcm.data());
+	for (qint64 i = 0; i < frames * kCh; ++i)
+		o[i] = qint16(std::clamp(s[i], -1.0f, 1.0f) * 32767.0f);
+	f.write(pcm);
+	f.close();
+	return true;
+}
+
 void VoiceoverMixer::addTake(std::vector<float> &mix, const std::vector<float> &take,
 			     long long startFrame, double volume, int fadeInFrames,
 			     int fadeOutFrames)
@@ -173,9 +217,17 @@ QString VoiceoverMixer::mix(const QString &videoPath, double originalVolume, boo
 		if (canceled())
 			return QStringLiteral("Canceled.");
 		Rendered r;
-		r.samples = decodeToFloat(t.path);
-		if (r.samples.empty())
+		std::vector<float> full = decodeToFloat(t.path);
+		if (full.empty())
 			continue;
+		// Honor trim/split: take only [srcStart, srcStart+play] of the source.
+		const long long totalF = (long long)full.size() / kCh;
+		long long s0 = std::clamp<long long>(t.srcStartMs * kRate / 1000, 0, totalF);
+		long long len = t.playMs > 0 ? t.playMs * kRate / 1000 : totalF - s0;
+		len = std::clamp<long long>(len, 0, totalF - s0);
+		if (len <= 0)
+			continue;
+		r.samples.assign(full.begin() + s0 * kCh, full.begin() + (s0 + len) * kCh);
 		r.startFrame = t.outStartMs * kRate / 1000;
 		r.volume = t.volume;
 		r.fadeIn = std::max(0, t.fadeInMs) * kRate / 1000;

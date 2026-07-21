@@ -147,7 +147,8 @@ QString ClipExporter::mixVoiceover(const QString &videoPath, const Options &opts
 	std::vector<VoiceoverMixer::Take> takes;
 	takes.reserve(opts.voiceovers.size());
 	for (const Voiceover &v : opts.voiceovers)
-		takes.push_back({v.path, v.outStartMs, v.volume, v.fadeInMs, v.fadeOutMs});
+		takes.push_back(
+			{v.path, v.outStartMs, v.srcStartMs, v.playMs, v.volume, v.fadeInMs, v.fadeOutMs});
 	return VoiceoverMixer::mix(videoPath, opts.originalVolume, opts.duckOriginal, takes, &cancel_);
 }
 

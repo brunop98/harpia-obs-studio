@@ -9,6 +9,7 @@
 #include "LevelMeter.hpp"
 #include "TimelineThumbs.hpp"
 #include "TrackEditor.hpp"
+#include "VoiceoverMixer.hpp"
 #include "VoiceoverTrack.hpp"
 
 #include <QCheckBox>
@@ -20,6 +21,7 @@
 #include <cmath>
 #include <QDir>
 #include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -126,6 +128,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	voRecordBtn_ = new QPushButton(QStringLiteral("●  Record voiceover"), this);
 	voRecordBtn_->setToolTip(QStringLiteral("Record narration from your microphone onto the Voiceover track"));
 	voRow->addWidget(voRecordBtn_);
+	voImportBtn_ = new QPushButton(QStringLiteral("Import audio…"), this);
+	voImportBtn_->setToolTip(QStringLiteral("Add an existing audio file (mp3/wav/m4a/…) to the Voiceover track"));
+	voRow->addWidget(voImportBtn_);
 	voMeter_ = new LevelMeter(this);
 	voRow->addWidget(voMeter_, 1);
 	voStatus_ = new QLabel(QString(), this);
@@ -186,6 +191,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	});
 	connect(voRecordBtn_, &QPushButton::clicked, this,
 		&VideoEditorWindow::onVoiceoverRecordClicked);
+	connect(voImportBtn_, &QPushButton::clicked, this, &VideoEditorWindow::onImportAudioClicked);
 	connect(voTrack_, &VoiceoverTrack::clipsChanged, this, [this]() { updateInfoLabel(); });
 
 	// Playback + speed row: play/pause loops the trimmed region at the chosen
@@ -288,6 +294,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 		trimModeBtn_->setEnabled(false);
 		cutModeBtn_->setEnabled(false);
 		voRecordBtn_->setEnabled(false);
+		voImportBtn_->setEnabled(false);
 		voDevice_->setEnabled(false);
 	}
 }
@@ -520,6 +527,32 @@ void VideoEditorWindow::finishVoiceover()
 	clip.path = path;
 	clip.outStartMs = voClipStartMs_;
 	clip.durationMs = durMs;
+	clip.srcTotalMs = durMs;
+	voTrack_->addClip(clip);
+}
+
+void VideoEditorWindow::onImportAudioClicked()
+{
+	if (!valid_ || voRecording_)
+		return;
+	const QString in = QFileDialog::getOpenFileName(
+		this, QStringLiteral("Import audio"), QString(),
+		QStringLiteral("Audio (*.mp3 *.wav *.m4a *.aac *.ogg *.flac *.opus *.wma);;All files (*)"));
+	if (in.isEmpty())
+		return;
+	// Decode to our uniform PCM WAV so waveform/trim/mix all work the same way.
+	const QString base = voiceoverTempDir() + QStringLiteral("/import_") +
+			     QFileInfo(in).completeBaseName() + QStringLiteral(".wav");
+	if (!VoiceoverMixer::decodeToWav(in, base)) {
+		QMessageBox::warning(this, QStringLiteral("Import audio"),
+				     QStringLiteral("Could not read that audio file."));
+		return;
+	}
+	VoiceoverClip clip;
+	clip.path = base;
+	clip.outStartMs = currentOutputMs(); // 0 when idle — drag it where you want
+	clip.srcTotalMs = VoiceoverTrack::wavDurationMs(base);
+	clip.durationMs = clip.srcTotalMs;
 	voTrack_->addClip(clip);
 }
 
@@ -784,7 +817,8 @@ void VideoEditorWindow::onSave()
 	// audio). Each take's output-time position + volume + fades carry through.
 	if (fmt != ClipExporter::Format::Gif && !voTrack_->isEmpty()) {
 		for (const VoiceoverClip &vc : voTrack_->clips())
-			o.voiceovers.push_back({vc.path, vc.outStartMs, vc.volume, vc.fadeInMs, vc.fadeOutMs});
+			o.voiceovers.push_back({vc.path, vc.outStartMs, vc.srcStartMs, vc.durationMs,
+						vc.volume, vc.fadeInMs, vc.fadeOutMs});
 		o.originalVolume = voOrigVol_->value() / 100.0;
 		o.duckOriginal = voDuck_->isChecked();
 	}

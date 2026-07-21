@@ -30,6 +30,8 @@ public:
 	struct Voiceover {
 		QString path;          // WAV on disk
 		qint64 outStartMs = 0; // where it begins on the output timeline
+		qint64 srcStartMs = 0; // offset into the source (trim/split)
+		qint64 playMs = 0;     // played length (0 = to end of source)
 		double volume = 1.0;   // linear gain
 		int fadeInMs = 15;
 		int fadeOutMs = 15;

@@ -135,6 +135,9 @@ private:
 	LevelMeter *voMeter_ = nullptr;
 	QCheckBox *voTalkAlong_ = nullptr; // play the video while capturing
 	QCheckBox *voCountdown_ = nullptr; // 3-2-1 before capture
+	QSlider *voOrigVol_ = nullptr;     // original-audio level at export
+	QLabel *voOrigVolLabel_ = nullptr;
+	QCheckBox *voDuck_ = nullptr;      // auto-duck original under narration
 	QLabel *voStatus_ = nullptr;
 	QTimer *voCountdownTimer_ = nullptr;
 	int voCountdownLeft_ = 0;

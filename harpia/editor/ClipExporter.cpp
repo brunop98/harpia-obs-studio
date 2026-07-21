@@ -2,6 +2,7 @@
 
 #include "AudioRetimer.hpp"
 #include "GifEncoder.hpp"
+#include "VoiceoverMixer.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -125,12 +126,29 @@ void ClipExporter::run(const QString &inPath, const QString &outPath, const Opti
 		return;
 	}
 
-	const QString err = opts.cuts.empty() ? runVideo(inPath, outPath, opts)
-					      : runVideoCuts(inPath, outPath, opts);
+	QString err = opts.cuts.empty() ? runVideo(inPath, outPath, opts)
+					: runVideoCuts(inPath, outPath, opts);
+
+	// Voiceover is mixed in a second pass over the finished file (video
+	// containers only; GIF returned above).
+	if (err.isEmpty() && !opts.voiceovers.empty() && !cancel_.load()) {
+		emit progress(97, 0, 0);
+		err = mixVoiceover(outPath, opts);
+	}
+
 	if (cancel_.load())
 		emit finished(false, true, QString());
 	else
 		emit finished(err.isEmpty(), false, err);
+}
+
+QString ClipExporter::mixVoiceover(const QString &videoPath, const Options &opts)
+{
+	std::vector<VoiceoverMixer::Take> takes;
+	takes.reserve(opts.voiceovers.size());
+	for (const Voiceover &v : opts.voiceovers)
+		takes.push_back({v.path, v.outStartMs, v.volume, v.fadeInMs, v.fadeOutMs});
+	return VoiceoverMixer::mix(videoPath, opts.originalVolume, opts.duckOriginal, takes, &cancel_);
 }
 
 QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, const Options &opts)

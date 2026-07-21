@@ -146,6 +146,8 @@ target_sources(
     editor/LevelMeter.hpp
     editor/VoiceoverTrack.cpp
     editor/VoiceoverTrack.hpp
+    editor/VoiceoverMixer.cpp
+    editor/VoiceoverMixer.hpp
     editor/TimelineThumbs.cpp
     editor/TimelineThumbs.hpp
     editor/AudioRetimer.cpp

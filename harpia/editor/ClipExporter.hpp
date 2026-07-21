@@ -25,6 +25,16 @@ public:
 		double speed = 1.0;
 	};
 
+	// One recorded narration take, positioned on the OUTPUT timeline. Mixed over
+	// the (already assembled) output audio in a post-process pass.
+	struct Voiceover {
+		QString path;          // WAV on disk
+		qint64 outStartMs = 0; // where it begins on the output timeline
+		double volume = 1.0;   // linear gain
+		int fadeInMs = 15;
+		int fadeOutMs = 15;
+	};
+
 	struct Options {
 		Format format = Format::Mp4;
 		qint64 startMs = 0;
@@ -51,6 +61,13 @@ public:
 		// the pitch-preserving atempo filter and re-encoded as one AAC track.
 		// GIF is not supported with cuts.
 		std::vector<Cut> cuts;
+
+		// Voiceover narration mixed over the finished output audio (video
+		// containers only; ignored for GIF). When non-empty, a post-process pass
+		// lays these takes onto the assembled audio.
+		std::vector<Voiceover> voiceovers;
+		double originalVolume = 1.0; // global gain applied to the source audio (0..2)
+		bool duckOriginal = false;   // dip the source under narration (sidechain)
 	};
 
 	static QString extensionFor(Format f); // "mp4"/"mkv"/"mov"/"webm"/"gif"
@@ -70,6 +87,10 @@ private:
 	QString runVideo(const QString &inPath, const QString &outPath, const Options &opts);
 	// Multi-cut path: opts.cuts concatenated, per-cut speed, atempo'd audio.
 	QString runVideoCuts(const QString &inPath, const QString &outPath, const Options &opts);
+
+	// Post-process: mix opts.voiceovers over the just-written `videoPath`'s audio
+	// in place (via VoiceoverMixer). Returns "" on success, else an error.
+	QString mixVoiceover(const QString &videoPath, const Options &opts);
 
 	std::atomic<bool> cancel_{false};
 };

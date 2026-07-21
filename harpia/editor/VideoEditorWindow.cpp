@@ -147,6 +147,27 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	voRow->addWidget(voCountdown_);
 	root->addLayout(voRow);
 
+	// Mixing controls (applied at export): original-audio level + auto-duck.
+	auto *voMixRow = new QHBoxLayout;
+	voMixRow->addWidget(new QLabel(QStringLiteral("Original audio"), this));
+	voOrigVol_ = new QSlider(Qt::Horizontal, this);
+	voOrigVol_->setRange(0, 150); // 0..150% of the source audio
+	voOrigVol_->setValue(100);
+	voOrigVol_->setMaximumWidth(200);
+	voOrigVol_->setToolTip(QStringLiteral("Volume of the video's own audio in the export (0 = mute)"));
+	voMixRow->addWidget(voOrigVol_);
+	voOrigVolLabel_ = new QLabel(QStringLiteral("100%"), this);
+	voOrigVolLabel_->setMinimumWidth(40);
+	voMixRow->addWidget(voOrigVolLabel_);
+	connect(voOrigVol_, &QSlider::valueChanged, this, [this](int v) {
+		voOrigVolLabel_->setText(QStringLiteral("%1%").arg(v));
+	});
+	voDuck_ = new QCheckBox(QStringLiteral("Duck original under narration"), this);
+	voDuck_->setToolTip(QStringLiteral("Automatically dip the video's audio while narration plays"));
+	voMixRow->addWidget(voDuck_);
+	voMixRow->addStretch(1);
+	root->addLayout(voMixRow);
+
 	voRecorder_ = new AudioRecorder(this);
 	connect(voRecorder_, &AudioRecorder::level, this,
 		[this](qreal rms, qreal peak) { voMeter_->setLevel(rms, peak); });
@@ -757,6 +778,15 @@ void VideoEditorWindow::onSave()
 		o.startMs = 0;
 		o.endMs = 0;
 		o.speed = 1.0;
+	}
+
+	// Voiceover: mixed onto the finished output (skipped for GIF, which has no
+	// audio). Each take's output-time position + volume + fades carry through.
+	if (fmt != ClipExporter::Format::Gif && !voTrack_->isEmpty()) {
+		for (const VoiceoverClip &vc : voTrack_->clips())
+			o.voiceovers.push_back({vc.path, vc.outStartMs, vc.volume, vc.fadeInMs, vc.fadeOutMs});
+		o.originalVolume = voOrigVol_->value() / 100.0;
+		o.duckOriginal = voDuck_->isChecked();
 	}
 
 	exporter_ = new ClipExporter(this);

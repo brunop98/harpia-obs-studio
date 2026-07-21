@@ -75,6 +75,7 @@ class ScreenBorderOverlay;
 class AudioPanel;
 class MouseFxOverlay;
 class ErrorLogsPanel;
+class RecorderControlsOverlay;
 class WebcamPreview;
 class StatusBadge;
 class MainDevPanel;
@@ -169,6 +170,7 @@ private:
 	void applyResponsiveLayout(int width);
 	QString elapsedString() const;
 	void updateRegionToolVisibility(); // focus/record-driven overlay visibility
+	void updateFloatingControls();     // show/hide + sync the desktop Pause/Stop HUD
 	void writeMarker(const QString &label); // append an Auto Paused/Resumed marker
 	void refreshDriveLink(); // show/hide the status-bar Google Drive shortcut
 
@@ -302,6 +304,7 @@ private:
 	std::unique_ptr<RegionTool> regionTool_;
 	std::unique_ptr<MouseFxOverlay> mouseFx_;
 	std::unique_ptr<ScreenBorderOverlay> screenBorder_;
+	std::unique_ptr<RecorderControlsOverlay> floatingControls_; // desktop Pause/Stop HUD
 
 	std::string activePresetId_;
 	CaptureRegion currentRegion_;

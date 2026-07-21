@@ -8,6 +8,7 @@
 #include "Version.hpp"
 #include "PresetEditorDialog.hpp"
 #include "RecentListWidget.hpp"
+#include "RecorderControlsOverlay.hpp"
 #include "CountdownOverlay.hpp"
 #include "RegionDialogs.hpp"
 #include "RegionTool.hpp"
@@ -545,6 +546,14 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	mouseFx_ = std::make_unique<MouseFxOverlay>();
 	screenBorder_ = std::make_unique<ScreenBorderOverlay>();
+
+	// Floating desktop Pause/Stop HUD: its buttons reuse the exact same handlers
+	// as the main window's, so behavior stays identical wherever it's clicked.
+	floatingControls_ = std::make_unique<RecorderControlsOverlay>();
+	connect(floatingControls_.get(), &RecorderControlsOverlay::pauseClicked, this,
+		&MainWindow::onPauseButton);
+	connect(floatingControls_.get(), &RecorderControlsOverlay::stopClicked, this,
+		&MainWindow::onPrimaryButton);
 
 	countdownOverlay_ = std::make_unique<CountdownOverlay>();
 	connect(countdownOverlay_.get(), &CountdownOverlay::tick, this, [this](int remaining) {
@@ -2399,7 +2408,26 @@ void MainWindow::updateButtons()
 	idleCombo_->setEnabled(!locked);
 	countdownCombo_->setEnabled(!locked);
 
+	updateFloatingControls();
 	updateStatusChip();
+}
+
+void MainWindow::updateFloatingControls()
+{
+	if (!floatingControls_)
+		return;
+	const bool recording = recorder_.isRecording();
+	const bool paused = recorder_.isPaused();
+	// Present from the moment a start is kicked off until the file is finalized,
+	// so it's a continuous "recording in progress" indicator.
+	const bool active = recording || starting_ || stopping_;
+	if (active) {
+		floatingControls_->setState(paused, recording && !stopping_ && recorder_.canPause(),
+					    recording && !stopping_);
+		floatingControls_->showControls();
+	} else {
+		floatingControls_->hideControls();
+	}
 }
 
 void MainWindow::updateStatusChip()

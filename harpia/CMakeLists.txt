@@ -107,6 +107,8 @@ target_sources(
     ui/CountdownOverlay.hpp
     ui/ScreenBorderOverlay.cpp
     ui/ScreenBorderOverlay.hpp
+    ui/RecorderControlsOverlay.cpp
+    ui/RecorderControlsOverlay.hpp
     ui/ShareExportDialog.cpp
     ui/ShareExportDialog.hpp
     ui/WebcamPreview.cpp

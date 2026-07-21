@@ -117,6 +117,8 @@ target_sources(
     ui/ClipLibraryWindow.hpp
     ui/ErrorLogsPanel.cpp
     ui/ErrorLogsPanel.hpp
+    ui/MainDevPanel.cpp
+    ui/MainDevPanel.hpp
     ui/RegionTool.cpp
     ui/RegionTool.hpp
     ui/RegionDialogs.cpp

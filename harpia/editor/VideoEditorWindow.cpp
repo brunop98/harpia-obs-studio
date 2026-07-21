@@ -181,6 +181,14 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 		canvas_->setVideoSize(seeker_->width(), seeker_->height());
 		timeline_->setDuration(seeker_->durationMs());
 		tracks_->setDuration(seeker_->durationMs());
+		// Restore any layout tweaks saved from a previous Developer Panel session.
+		{
+			TimelineLayoutParams tl = timeline_->layoutParams();
+			TrackLayoutParams tr = tracks_->layoutParams();
+			DevPanel::loadInto(tl, tr);
+			timeline_->setLayoutParams(tl);
+			tracks_->setLayoutParams(tr);
+		}
 		// Filmstrip thumbnails decode in the background and stream in.
 		stripThumbs_ = new TimelineThumbs(this);
 		connect(stripThumbs_, &TimelineThumbs::updated, this, [this]() {

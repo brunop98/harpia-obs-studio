@@ -9,10 +9,64 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QSettings>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
 namespace harpia {
+
+namespace {
+QSettings devSettings()
+{
+	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+}
+} // namespace
+
+void DevPanel::loadInto(TimelineLayoutParams &tl, TrackLayoutParams &tr)
+{
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout"));
+	tl.pad = s.value(QStringLiteral("tl/pad"), tl.pad).toInt();
+	tl.barTop = s.value(QStringLiteral("tl/barTop"), tl.barTop).toInt();
+	tl.barH = s.value(QStringLiteral("tl/barH"), tl.barH).toInt();
+	tl.handleW = s.value(QStringLiteral("tl/handleW"), tl.handleW).toInt();
+	tl.tileGap = s.value(QStringLiteral("tl/tileGap"), tl.tileGap).toInt();
+	tl.maxZoom = s.value(QStringLiteral("tl/maxZoom"), tl.maxZoom).toDouble();
+	tr.margin = s.value(QStringLiteral("tr/margin"), tr.margin).toInt();
+	tr.captionH = s.value(QStringLiteral("tr/captionH"), tr.captionH).toInt();
+	tr.srcH = s.value(QStringLiteral("tr/srcH"), tr.srcH).toInt();
+	tr.trackGap = s.value(QStringLiteral("tr/trackGap"), tr.trackGap).toInt();
+	tr.outH = s.value(QStringLiteral("tr/outH"), tr.outH).toInt();
+	tr.segGap = s.value(QStringLiteral("tr/segGap"), tr.segGap).toInt();
+	tr.minSegW = s.value(QStringLiteral("tr/minSegW"), tr.minSegW).toInt();
+	tr.hardMinSegW = s.value(QStringLiteral("tr/hardMinSegW"), tr.hardMinSegW).toInt();
+	tr.tileGap = s.value(QStringLiteral("tr/tileGap"), tr.tileGap).toInt();
+	tr.maxZoom = s.value(QStringLiteral("tr/maxZoom"), tr.maxZoom).toDouble();
+	s.endGroup();
+}
+
+void DevPanel::saveFrom(const TimelineLayoutParams &tl, const TrackLayoutParams &tr)
+{
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout"));
+	s.setValue(QStringLiteral("tl/pad"), tl.pad);
+	s.setValue(QStringLiteral("tl/barTop"), tl.barTop);
+	s.setValue(QStringLiteral("tl/barH"), tl.barH);
+	s.setValue(QStringLiteral("tl/handleW"), tl.handleW);
+	s.setValue(QStringLiteral("tl/tileGap"), tl.tileGap);
+	s.setValue(QStringLiteral("tl/maxZoom"), tl.maxZoom);
+	s.setValue(QStringLiteral("tr/margin"), tr.margin);
+	s.setValue(QStringLiteral("tr/captionH"), tr.captionH);
+	s.setValue(QStringLiteral("tr/srcH"), tr.srcH);
+	s.setValue(QStringLiteral("tr/trackGap"), tr.trackGap);
+	s.setValue(QStringLiteral("tr/outH"), tr.outH);
+	s.setValue(QStringLiteral("tr/segGap"), tr.segGap);
+	s.setValue(QStringLiteral("tr/minSegW"), tr.minSegW);
+	s.setValue(QStringLiteral("tr/hardMinSegW"), tr.hardMinSegW);
+	s.setValue(QStringLiteral("tr/tileGap"), tr.tileGap);
+	s.setValue(QStringLiteral("tr/maxZoom"), tr.maxZoom);
+	s.endGroup();
+}
 
 DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, QWidget *parent)
 	: QDialog(parent), timeline_(timeline), tracks_(tracks)
@@ -118,6 +172,7 @@ void DevPanel::applyTimeline()
 	p.tileGap = tlTileGap_->value();
 	p.maxZoom = tlMaxZoom_->value();
 	timeline_->setLayoutParams(p);
+	saveFrom(p, tracks_->layoutParams());
 }
 
 void DevPanel::applyTracks()
@@ -134,6 +189,7 @@ void DevPanel::applyTracks()
 	p.tileGap = trTileGap_->value();
 	p.maxZoom = trMaxZoom_->value();
 	tracks_->setLayoutParams(p);
+	saveFrom(timeline_->layoutParams(), p);
 }
 
 void DevPanel::resetDefaults()
@@ -160,6 +216,7 @@ void DevPanel::resetDefaults()
 	loading_ = false;
 	timeline_->setLayoutParams(tl);
 	tracks_->setLayoutParams(tr);
+	saveFrom(tl, tr);
 }
 
 } // namespace harpia

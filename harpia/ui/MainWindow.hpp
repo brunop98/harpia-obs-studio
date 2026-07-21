@@ -29,8 +29,42 @@ class QLabel;
 class QTimer;
 class QScreen;
 class QVBoxLayout;
+class QHBoxLayout;
+class QFrame;
 
 namespace harpia {
+
+// Runtime-tweakable layout metrics for the main recorder window, edited live
+// from the Developer Panel (auto-saved to QSettings) to find the best sizing.
+// Every default here MUST match the literal used when the window is first
+// built, so a fresh install re-applies identical values.
+struct MainLayoutParams {
+	int rootMarginH = 18;       // outer left/right padding
+	int rootMarginV = 14;       // outer top/bottom padding
+	int rootSpacing = 12;       // gap between the stacked sections
+	int row1Spacing = 8;        // toolbar row base item spacing
+	int presetComboW = 160;     // preset combo min width
+	int monitorComboMinW = 140; // display combo min width
+	int monitorComboMaxW = 200; // display combo max width
+	int behaviorComboW = 200;   // Focus/Webcam/Idle combo fixed width
+	int behaviorLabelW = 110;   // right-aligned behavior label width
+	int behaviorColSpacing = 10; // gap between behavior rows
+	int behaviorRowSpacing = 8;  // gap between a behavior label and its combo
+	int middleSpacing = 18;      // gap between the behavior column and controls
+	int controlsSpacing = 14;    // gap between record controls
+	int recordBtnW = 130;
+	int recordBtnH = 46;
+	int pauseBtnW = 104;
+	int pauseBtnH = 46;
+	int separatorH = 28;         // controls-row vertical separator height
+	int webcamPreviewW = 100;
+	int webcamPreviewH = 56;
+	int stripThumbW = 160;       // recent-recording card thumbnail size
+	int stripThumbH = 90;
+	int stripCardExtraW = 24;    // card width padding beyond the thumbnail
+	int stripCardExtraH = 12;    // card height padding beyond thumb + captions
+	int stripSpacing = 6;        // gap between recent cards
+};
 
 class ObsContext;
 class PresetStore;
@@ -43,6 +77,7 @@ class MouseFxOverlay;
 class ErrorLogsPanel;
 class WebcamPreview;
 class StatusBadge;
+class MainDevPanel;
 
 // The PowerRec-inspired main window: a wide, compact, dark surface optimized for
 // starting/stopping recordings in one or two clicks.
@@ -59,6 +94,10 @@ class MainWindow : public QMainWindow {
 public:
 	MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFolder, QWidget *parent = nullptr);
 	~MainWindow() override;
+
+	// The Developer Panel drives the live layout metrics (layoutParams/
+	// setLayoutParams live in the private section below).
+	friend class MainDevPanel;
 
 private slots:
 	void onPrimaryButton(); // Record/Stop toggle
@@ -131,6 +170,13 @@ private:
 	QString elapsedString() const;
 	void updateRegionToolVisibility(); // focus/record-driven overlay visibility
 	void writeMarker(const QString &label); // append an Auto Paused/Resumed marker
+
+	// Developer Panel: read/apply the live-tweakable layout metrics, and
+	// (re)compute the recent-strip icon/grid/height from them.
+	MainLayoutParams layoutParams() const { return layout_; }
+	void setLayoutParams(const MainLayoutParams &p);
+	void applyStripMetrics();
+	void openDevPanel();
 
 protected:
 	void changeEvent(QEvent *event) override; // track window activation
@@ -230,6 +276,19 @@ private:
 	// Collapsible Audio foldout: a header toggle over the audio body.
 	QToolButton *audioToggleButton_ = nullptr;
 	QWidget *audioBody_ = nullptr;
+
+	// Developer Panel plumbing: the layouts/widgets whose sizes are tweakable
+	// live, plus the current metrics and the (lazily created) panel.
+	MainLayoutParams layout_;
+	QVBoxLayout *rootLayout_ = nullptr;
+	QHBoxLayout *row1Layout_ = nullptr;
+	QHBoxLayout *middleLayout_ = nullptr;
+	QVBoxLayout *behaviorColLayout_ = nullptr;
+	QHBoxLayout *controlsLayout_ = nullptr;
+	QFrame *ctrlSeparator_ = nullptr;
+	std::vector<QWidget *> behaviorRows_;
+	std::vector<QLabel *> behaviorLabels_;
+	MainDevPanel *devPanel_ = nullptr;
 
 	QTimer *stateTimer_ = nullptr;
 	QTimer *idleTimer_ = nullptr;

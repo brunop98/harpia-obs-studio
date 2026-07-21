@@ -3,6 +3,7 @@
 #include "AudioPanel.hpp"
 #include "ClipLibraryWindow.hpp"
 #include "ErrorLogsPanel.hpp"
+#include "MainDevPanel.hpp"
 #include "MouseFxOverlay.hpp"
 #include "Version.hpp"
 #include "PresetEditorDialog.hpp"
@@ -122,6 +123,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	auto *central = new QWidget(this);
 	auto *root = new QVBoxLayout(central);
+	rootLayout_ = root;
 	root->setContentsMargins(18, 14, 18, 14);
 	root->setSpacing(12);
 
@@ -136,6 +138,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	// ---- Toolbar row 1: preset + capture + idle -------------------------
 	auto *row1 = new QHBoxLayout;
+	row1Layout_ = row1;
 	row1->setSpacing(8);
 
 	row1->addWidget(fieldLabel(QStringLiteral("Preset")));
@@ -221,9 +224,11 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	root->addStretch(2);
 
 	auto *middle = new QHBoxLayout;
+	middleLayout_ = middle;
 	middle->setSpacing(kGroupGap);
 
 	auto *behaviorCol = new QVBoxLayout;
+	behaviorColLayout_ = behaviorCol;
 	behaviorCol->setSpacing(10);
 
 	// All three behavior dropdowns share one fixed width so the column reads
@@ -270,6 +275,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		h->addWidget(control);
 		h->addStretch(1);
 		behaviorCol->addWidget(roww);
+		// Tracked so the Developer Panel can retune the label width + row spacing.
+		behaviorLabels_.push_back(l);
+		behaviorRows_.push_back(roww);
 		return roww;
 	};
 	behaviorRow(QStringLiteral("Focus app"), appCombo_);
@@ -292,6 +300,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	};
 
 	auto *controls = new QHBoxLayout;
+	controlsLayout_ = controls;
 	controls->setSpacing(14);
 	controls->addStretch(1);
 
@@ -314,7 +323,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	pauseButton_->setToolTip(QStringLiteral("Pause/resume the recording (F10)"));
 	controls->addWidget(pauseButton_, 0, Qt::AlignVCenter);
 
-	controls->addWidget(makeSep(), 0, Qt::AlignVCenter);
+	ctrlSeparator_ = makeSep();
+	controls->addWidget(ctrlSeparator_, 0, Qt::AlignVCenter);
 
 	// Elapsed time — monospaced, readable, but not oversized.
 	timerLabel_ = new QLabel(QStringLiteral("00:00:00"), central);
@@ -432,6 +442,16 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// diagnostics + version sit quietly on the right.
 	statusBadge_ = new StatusBadge(this);
 	statusBar()->addWidget(statusBadge_);
+	// Developer Panel launcher: a quiet button that opens the live layout tuner.
+	auto *devButton = new QPushButton(QStringLiteral("Dev"), this);
+	devButton->setFlat(true);
+	devButton->setCursor(Qt::PointingHandCursor);
+	devButton->setStyleSheet(QStringLiteral(
+		"QPushButton{color:#9a9fa8; background:transparent; border:none; font-size:11px; padding:2px 8px;}"
+		"QPushButton:hover{color:#e6e6e6;}"));
+	devButton->setToolTip(QStringLiteral("Developer Panel — live-tweak the window layout sizes (auto-saved)"));
+	statusBar()->addPermanentWidget(devButton);
+	connect(devButton, &QPushButton::clicked, this, &MainWindow::openDevPanel);
 	errorLogsButton_ = new QPushButton(QStringLiteral("Error Logs"), this);
 	errorLogsButton_->setFlat(true);
 	errorLogsButton_->setCursor(Qt::PointingHandCursor);
@@ -576,6 +596,11 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 			     tmpDir.filePath(f).toUtf8().constData());
 	}
 
+	// Restore any layout metrics saved from a previous Developer Panel session
+	// and apply them over the freshly built (default-sized) layout.
+	MainDevPanel::loadInto(layout_);
+	setLayoutParams(layout_);
+
 	// Start keyboard focus on the primary action instead of a random combo.
 	primaryButton_->setFocus();
 }
@@ -585,6 +610,75 @@ MainWindow::~MainWindow()
 	webcam_.stop();
 	if (recorder_.isRecording())
 		recorder_.stop();
+}
+
+void MainWindow::applyStripMetrics()
+{
+	if (!recentStrip_)
+		return;
+	const QSize thumb(layout_.stripThumbW, layout_.stripThumbH);
+	recentStrip_->setIconSize(thumb);
+	// Two caption lines (name, then date · size) sized from the real font
+	// metrics, plus the tweakable card padding.
+	const int captionH = 2 * recentStrip_->fontMetrics().height() + 8;
+	recentStrip_->setGridSize(QSize(thumb.width() + layout_.stripCardExtraW,
+					thumb.height() + captionH + layout_.stripCardExtraH));
+	recentStrip_->setFixedHeight(recentStrip_->gridSize().height() +
+				     recentStrip_->style()->pixelMetric(QStyle::PM_ScrollBarExtent) + 8);
+	recentStrip_->setSpacing(layout_.stripSpacing);
+}
+
+void MainWindow::setLayoutParams(const MainLayoutParams &p)
+{
+	layout_ = p;
+	if (rootLayout_) {
+		rootLayout_->setContentsMargins(p.rootMarginH, p.rootMarginV, p.rootMarginH, p.rootMarginV);
+		rootLayout_->setSpacing(p.rootSpacing);
+	}
+	if (row1Layout_)
+		row1Layout_->setSpacing(p.row1Spacing);
+	if (middleLayout_)
+		middleLayout_->setSpacing(p.middleSpacing);
+	if (behaviorColLayout_)
+		behaviorColLayout_->setSpacing(p.behaviorColSpacing);
+	if (controlsLayout_)
+		controlsLayout_->setSpacing(p.controlsSpacing);
+	if (presetCombo_)
+		presetCombo_->setMinimumWidth(p.presetComboW);
+	if (monitorCombo_) {
+		monitorCombo_->setMinimumWidth(p.monitorComboMinW);
+		monitorCombo_->setMaximumWidth(p.monitorComboMaxW);
+	}
+	for (QComboBox *c : {appCombo_, webcamCombo_, idleCombo_}) {
+		if (c)
+			c->setFixedWidth(p.behaviorComboW);
+	}
+	for (QLabel *l : behaviorLabels_) {
+		if (l)
+			l->setFixedWidth(p.behaviorLabelW);
+	}
+	for (QWidget *row : behaviorRows_) {
+		if (row && row->layout())
+			row->layout()->setSpacing(p.behaviorRowSpacing);
+	}
+	if (primaryButton_)
+		primaryButton_->setMinimumSize(p.recordBtnW, p.recordBtnH);
+	if (pauseButton_)
+		pauseButton_->setMinimumSize(p.pauseBtnW, p.pauseBtnH);
+	if (ctrlSeparator_)
+		ctrlSeparator_->setFixedHeight(p.separatorH);
+	if (webcamPreview_)
+		webcamPreview_->setFixedSize(p.webcamPreviewW, p.webcamPreviewH);
+	applyStripMetrics();
+}
+
+void MainWindow::openDevPanel()
+{
+	if (!devPanel_)
+		devPanel_ = new MainDevPanel(this, this);
+	devPanel_->show();
+	devPanel_->raise();
+	devPanel_->activateWindow();
 }
 
 void MainWindow::applyDarkTheme()

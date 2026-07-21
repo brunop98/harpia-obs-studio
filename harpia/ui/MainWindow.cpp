@@ -404,13 +404,19 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	recentStrip_->setWrapping(false);
 	recentStrip_->setMovement(QListView::Static);
 	recentStrip_->setIconSize(kStripThumb);
-	// +60 vertical: room for BOTH caption lines (date + size) under the thumb.
-	recentStrip_->setGridSize(kStripThumb + QSize(24, 60));
+	// Card height derived from the REAL font metrics (two caption lines: name,
+	// then date · size) instead of hand-tuned pixels — survives DPI/font
+	// scaling without clipping the text.
+	const int captionH = 2 * recentStrip_->fontMetrics().height() + 8;
+	recentStrip_->setGridSize(QSize(kStripThumb.width() + 24,
+					kStripThumb.height() + captionH + 12));
 	recentStrip_->setUniformItemSizes(true); // every card is one grid cell
 	recentStrip_->setResizeMode(QListView::Adjust);
-	// Thumbnail + two caption lines (date, size) — tall enough that the size
-	// line is never clipped.
-	recentStrip_->setFixedHeight(kStripThumb.height() + 76);
+	// Widget height = one full card + frame + PERMANENTLY reserved scrollbar
+	// space; when the scrollbar appeared on demand it stole viewport height
+	// and clipped the bottom caption line.
+	recentStrip_->setFixedHeight(recentStrip_->gridSize().height() +
+				     recentStrip_->style()->pixelMetric(QStyle::PM_ScrollBarExtent) + 8);
 	recentStrip_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 	recentStrip_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	recentStrip_->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -1888,8 +1894,14 @@ void MainWindow::refreshRecentList()
 
 	recentStrip_->clear();
 	itemByPath_.clear();
+	const QFontMetrics fm = recentStrip_->fontMetrics();
+	const int captionW = recentStrip_->gridSize().width() - 12;
 	for (const ClipInfo &clip : clips) {
-		auto *item = new QListWidgetItem(QStringLiteral("%1\n%2").arg(clip.relativeAge(), clip.humanSize()));
+		// Two caption lines, both always visible: the clip's name (middle-
+		// elided when long) and "date · size".
+		const QString name = fm.elidedText(clip.fileName, Qt::ElideMiddle, captionW);
+		auto *item = new QListWidgetItem(QStringLiteral("%1\n%2 · %3")
+							 .arg(name, clip.relativeAge(), clip.humanSize()));
 		item->setData(kClipPathRole, clip.filePath);
 		item->setToolTip(clip.fileName + QStringLiteral("\n") + clip.filePath);
 		item->setTextAlignment(Qt::AlignHCenter | Qt::AlignBottom);

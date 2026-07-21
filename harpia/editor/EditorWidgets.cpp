@@ -231,7 +231,7 @@ Timeline::Timeline(QWidget *parent) : QWidget(parent)
 {
 	setMinimumHeight(kBarTop + kBarH + 22);
 	setMouseTracking(true);
-	setToolTip(QStringLiteral("Ctrl+scroll to zoom, scroll to pan"));
+	setToolTip(QStringLiteral("Scroll to zoom, Shift+scroll to pan"));
 }
 
 void Timeline::setDuration(qint64 ms)
@@ -313,12 +313,16 @@ void Timeline::wheelEvent(QWheelEvent *e)
 {
 	if (duration_ <= 0)
 		return;
-	const int delta = e->angleDelta().y() != 0 ? e->angleDelta().y() : e->angleDelta().x();
+	const QPoint ad = e->angleDelta();
+	// Plain scroll = zoom (up in, down out); Shift+scroll or a horizontal
+	// wheel/touchpad axis pans the zoomed view.
+	const bool pan = (e->modifiers() & Qt::ShiftModifier) || qAbs(ad.x()) > qAbs(ad.y());
+	const int delta = pan ? (ad.x() != 0 ? ad.x() : ad.y()) : ad.y();
 	if (delta == 0)
 		return;
 	const double steps = delta / 120.0;
-	if (e->modifiers() & Qt::ControlModifier) {
-		// Zoom around the time under the cursor.
+	if (!pan) {
+		// Zoom around the time under the cursor — no modifier needed.
 		const int x = int(e->position().x());
 		const qint64 anchor = xToMs(x);
 		const double frac =
@@ -326,7 +330,6 @@ void Timeline::wheelEvent(QWheelEvent *e)
 		zoom_ = std::clamp(zoom_ * std::pow(1.3, steps), 1.0, kMaxZoom);
 		viewStart_ = anchor - qint64(frac * visibleMs());
 	} else {
-		// Plain scroll pans the zoomed view.
 		viewStart_ -= qint64(steps * visibleMs() * 0.15);
 	}
 	clampView();

@@ -37,7 +37,7 @@ TrackEditor::TrackEditor(QWidget *parent) : QWidget(parent)
 	setFocusPolicy(Qt::ClickFocus); // so Delete works after clicking a segment
 	setMouseTracking(true);         // cursor hints over the tracks
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-	setToolTip(QStringLiteral("Source track: Ctrl+scroll to zoom, scroll to pan"));
+	setToolTip(QStringLiteral("Source track: scroll to zoom, Shift+scroll to pan"));
 }
 
 QSize TrackEditor::sizeHint() const
@@ -129,11 +129,16 @@ void TrackEditor::wheelEvent(QWheelEvent *e)
 		e->ignore();
 		return;
 	}
-	const int delta = e->angleDelta().y() != 0 ? e->angleDelta().y() : e->angleDelta().x();
+	const QPoint ad = e->angleDelta();
+	// Plain scroll = zoom (up in, down out); Shift+scroll or a horizontal
+	// wheel/touchpad axis pans the zoomed view.
+	const bool pan = (e->modifiers() & Qt::ShiftModifier) || qAbs(ad.x()) > qAbs(ad.y());
+	const int delta = pan ? (ad.x() != 0 ? ad.x() : ad.y()) : ad.y();
 	if (delta == 0)
 		return;
 	const double steps = delta / 120.0;
-	if (e->modifiers() & Qt::ControlModifier) {
+	if (!pan) {
+		// Zoom around the time under the cursor — no modifier needed.
 		const int x = int(e->position().x());
 		const qint64 anchor = xToMs(x);
 		const QRect r = sourceRect();

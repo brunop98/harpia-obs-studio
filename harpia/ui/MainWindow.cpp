@@ -1629,6 +1629,21 @@ void MainWindow::applyMonitorIndex(int index)
 	canvasSize_ = canvasForActivePreset();
 	obs_.resetVideo(canvasSize_.width(), canvasSize_.height(), activePreset().fps);
 	reloadMonitorCombo(); // keep the selector in sync when invoked indirectly
+
+	// Custom Region: the region is canvas-relative, so it must MOVE with the
+	// display — clamp it into the new canvas and re-anchor the overlay there
+	// (previously the overlay stayed stranded on the old monitor).
+	if (captureMode_ == CaptureMode::Region && currentRegion_.enabled && regionTool_) {
+		CaptureRegion r = currentRegion_;
+		r.width = std::min(r.width, canvasSize_.width());
+		r.height = std::min(r.height, canvasSize_.height());
+		r.x = std::clamp(r.x, 0, canvasSize_.width() - r.width);
+		r.y = std::clamp(r.y, 0, canvasSize_.height() - r.height);
+		currentRegion_ = r;
+		regionTool_->setScreen(screenForActivePreset());
+		regionTool_->setRegionDevicePx(QRect(r.x, r.y, r.width, r.height));
+	}
+
 	applyLiveCapture();
 }
 
@@ -2157,8 +2172,13 @@ void MainWindow::updateButtons()
 	}
 
 	// Pause/Resume: always visible; enabled only while actively recording.
+	// The moment Stop is pressed (stopping_), the button disables AND drops
+	// its green Resume styling so it can't read as clickable.
 	pauseButton_->setEnabled(recording && !stopping_);
-	if (recording && pauseUiChanged) {
+	if (stopping_ && !pauseButton_->styleSheet().isEmpty()) {
+		pauseButton_->setText(QStringLiteral("⏸  Pause"));
+		pauseButton_->setStyleSheet(QString());
+	} else if (recording && pauseUiChanged) {
 		if (paused) {
 			pauseButton_->setText(QStringLiteral("▶  Resume"));
 			pauseButton_->setStyleSheet(QStringLiteral(

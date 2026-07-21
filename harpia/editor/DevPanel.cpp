@@ -2,13 +2,16 @@
 
 #include "EditorWidgets.hpp"
 #include "TrackEditor.hpp"
+#include "VoiceoverTrack.hpp"
 
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSettings>
 #include <QSpinBox>
 #include <QVBoxLayout>
@@ -22,7 +25,7 @@ QSettings devSettings()
 }
 } // namespace
 
-void DevPanel::loadInto(TimelineLayoutParams &tl, TrackLayoutParams &tr)
+void DevPanel::loadInto(TimelineLayoutParams &tl, TrackLayoutParams &tr, VoiceoverLayoutParams &vo)
 {
 	QSettings s = devSettings();
 	s.beginGroup(QStringLiteral("devLayout"));
@@ -42,10 +45,16 @@ void DevPanel::loadInto(TimelineLayoutParams &tl, TrackLayoutParams &tr)
 	tr.hardMinSegW = s.value(QStringLiteral("tr/hardMinSegW"), tr.hardMinSegW).toInt();
 	tr.tileGap = s.value(QStringLiteral("tr/tileGap"), tr.tileGap).toInt();
 	tr.maxZoom = s.value(QStringLiteral("tr/maxZoom"), tr.maxZoom).toDouble();
+	vo.margin = s.value(QStringLiteral("vo/margin"), vo.margin).toInt();
+	vo.captionH = s.value(QStringLiteral("vo/captionH"), vo.captionH).toInt();
+	vo.trackH = s.value(QStringLiteral("vo/trackH"), vo.trackH).toInt();
+	vo.minClipW = s.value(QStringLiteral("vo/minClipW"), vo.minClipW).toInt();
+	vo.edgeZone = s.value(QStringLiteral("vo/edgeZone"), vo.edgeZone).toInt();
 	s.endGroup();
 }
 
-void DevPanel::saveFrom(const TimelineLayoutParams &tl, const TrackLayoutParams &tr)
+void DevPanel::saveFrom(const TimelineLayoutParams &tl, const TrackLayoutParams &tr,
+			const VoiceoverLayoutParams &vo)
 {
 	QSettings s = devSettings();
 	s.beginGroup(QStringLiteral("devLayout"));
@@ -65,11 +74,16 @@ void DevPanel::saveFrom(const TimelineLayoutParams &tl, const TrackLayoutParams 
 	s.setValue(QStringLiteral("tr/hardMinSegW"), tr.hardMinSegW);
 	s.setValue(QStringLiteral("tr/tileGap"), tr.tileGap);
 	s.setValue(QStringLiteral("tr/maxZoom"), tr.maxZoom);
+	s.setValue(QStringLiteral("vo/margin"), vo.margin);
+	s.setValue(QStringLiteral("vo/captionH"), vo.captionH);
+	s.setValue(QStringLiteral("vo/trackH"), vo.trackH);
+	s.setValue(QStringLiteral("vo/minClipW"), vo.minClipW);
+	s.setValue(QStringLiteral("vo/edgeZone"), vo.edgeZone);
 	s.endGroup();
 }
 
-DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, QWidget *parent)
-	: QDialog(parent), timeline_(timeline), tracks_(tracks)
+DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voice, QWidget *parent)
+	: QDialog(parent), timeline_(timeline), tracks_(tracks), voice_(voice)
 {
 	setWindowTitle(QStringLiteral("Developer Panel — timeline layout"));
 	// A floating tool window: stays above the editor but never blocks it, so
@@ -100,11 +114,14 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, QWidget *parent)
 		return s;
 	};
 
-	auto *root = new QVBoxLayout(this);
+	// Content lives in a scrollable inner widget so the panel stays usable even
+	// with every group expanded; the buttons stay pinned below.
+	auto *inner = new QWidget;
+	auto *root = new QVBoxLayout(inner);
 	auto *hint = new QLabel(
-		QStringLiteral("Changes apply live to the editor. Values are not saved — "
-			       "note down what looks right and make it the new default."),
-		this);
+		QStringLiteral("Changes apply live to the editor and are auto-saved — they persist "
+			       "across launches. Reset to defaults restores the shipped values."),
+		inner);
 	hint->setWordWrap(true);
 	hint->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 	root->addWidget(hint);
@@ -151,7 +168,33 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, QWidget *parent)
 		       trMaxZoom_ = dspin(1.0, 256.0, tr.maxZoom, &DevPanel::applyTracks));
 	root->addWidget(trBox);
 
+	const VoiceoverLayoutParams vo = voice_->layoutParams();
+	auto *voBox = new QGroupBox(QStringLiteral("Voiceover track"), inner);
+	auto *voForm = new QFormLayout(voBox);
+	voForm->addRow(QStringLiteral("Margin"),
+		       voMargin_ = spin(0, 48, vo.margin, &DevPanel::applyVoice));
+	voForm->addRow(QStringLiteral("Caption height"),
+		       voCaptionH_ = spin(10, 40, vo.captionH, &DevPanel::applyVoice));
+	voForm->addRow(QStringLiteral("Track height"),
+		       voTrackH_ = spin(16, 160, vo.trackH, &DevPanel::applyVoice));
+	voForm->addRow(QStringLiteral("Min clip width"),
+		       voMinClipW_ = spin(2, 60, vo.minClipW, &DevPanel::applyVoice));
+	voForm->addRow(QStringLiteral("Trim edge zone"),
+		       voEdgeZone_ = spin(2, 24, vo.edgeZone, &DevPanel::applyVoice));
+	root->addWidget(voBox);
+	root->addStretch(1);
+
+	auto *scroll = new QScrollArea(this);
+	scroll->setWidget(inner);
+	scroll->setWidgetResizable(true);
+	scroll->setFrameShape(QFrame::NoFrame);
+
+	auto *outer = new QVBoxLayout(this);
+	outer->setContentsMargins(0, 0, 0, 0);
+	outer->addWidget(scroll, 1);
+
 	auto *btnRow = new QHBoxLayout;
+	btnRow->setContentsMargins(10, 6, 10, 8);
 	auto *resetBtn = new QPushButton(QStringLiteral("Reset to defaults"), this);
 	connect(resetBtn, &QPushButton::clicked, this, &DevPanel::resetDefaults);
 	btnRow->addWidget(resetBtn);
@@ -159,7 +202,9 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, QWidget *parent)
 	auto *closeBtn = new QPushButton(QStringLiteral("Close"), this);
 	connect(closeBtn, &QPushButton::clicked, this, &QDialog::close);
 	btnRow->addWidget(closeBtn);
-	root->addLayout(btnRow);
+	outer->addLayout(btnRow);
+
+	resize(380, 620);
 }
 
 void DevPanel::applyTimeline()
@@ -172,7 +217,7 @@ void DevPanel::applyTimeline()
 	p.tileGap = tlTileGap_->value();
 	p.maxZoom = tlMaxZoom_->value();
 	timeline_->setLayoutParams(p);
-	saveFrom(p, tracks_->layoutParams());
+	saveFrom(p, tracks_->layoutParams(), voice_->layoutParams());
 }
 
 void DevPanel::applyTracks()
@@ -189,13 +234,26 @@ void DevPanel::applyTracks()
 	p.tileGap = trTileGap_->value();
 	p.maxZoom = trMaxZoom_->value();
 	tracks_->setLayoutParams(p);
-	saveFrom(timeline_->layoutParams(), p);
+	saveFrom(timeline_->layoutParams(), p, voice_->layoutParams());
+}
+
+void DevPanel::applyVoice()
+{
+	VoiceoverLayoutParams p;
+	p.margin = voMargin_->value();
+	p.captionH = voCaptionH_->value();
+	p.trackH = voTrackH_->value();
+	p.minClipW = voMinClipW_->value();
+	p.edgeZone = voEdgeZone_->value();
+	voice_->setLayoutParams(p);
+	saveFrom(timeline_->layoutParams(), tracks_->layoutParams(), p);
 }
 
 void DevPanel::resetDefaults()
 {
 	const TimelineLayoutParams tl; // struct defaults ARE the app defaults
 	const TrackLayoutParams tr;
+	const VoiceoverLayoutParams vo;
 	loading_ = true;
 	tlPad_->setValue(tl.pad);
 	tlBarTop_->setValue(tl.barTop);
@@ -213,10 +271,16 @@ void DevPanel::resetDefaults()
 	trHardMinSegW_->setValue(tr.hardMinSegW);
 	trTileGap_->setValue(tr.tileGap);
 	trMaxZoom_->setValue(tr.maxZoom);
+	voMargin_->setValue(vo.margin);
+	voCaptionH_->setValue(vo.captionH);
+	voTrackH_->setValue(vo.trackH);
+	voMinClipW_->setValue(vo.minClipW);
+	voEdgeZone_->setValue(vo.edgeZone);
 	loading_ = false;
 	timeline_->setLayoutParams(tl);
 	tracks_->setLayoutParams(tr);
-	saveFrom(tl, tr);
+	voice_->setLayoutParams(vo);
+	saveFrom(tl, tr, vo);
 }
 
 } // namespace harpia

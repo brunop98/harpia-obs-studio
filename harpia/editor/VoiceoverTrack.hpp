@@ -6,6 +6,16 @@
 
 namespace harpia {
 
+// Runtime-tweakable layout metrics for the Voiceover track (edited live from the
+// editor's Developer Panel). Defaults match the values used when first built.
+struct VoiceoverLayoutParams {
+	int margin = 8;
+	int captionH = 16;
+	int trackH = 40;   // clip-strip height
+	int minClipW = 6;  // narrowest a clip can draw
+	int edgeZone = 7;  // px near a clip edge that starts a trim
+};
+
 // One narration take (recorded or imported), positioned on the output timeline.
 // A clip can reference a sub-range of its source file (trimming/splitting):
 // srcStartMs..srcStartMs+durationMs within a source of srcTotalMs.
@@ -49,6 +59,10 @@ public:
 	void setPlayhead(qint64 outMs); // output-time marker during playback
 	void clearPlayhead();
 
+	// Developer Panel: tweak the layout live.
+	const VoiceoverLayoutParams &layoutParams() const { return lp_; }
+	void setLayoutParams(const VoiceoverLayoutParams &p);
+
 	// Decode a 16-bit PCM WAV into `buckets` normalized peaks (0..1). Empty on
 	// failure. Static so the recorder side can precompute off the GUI thread.
 	static QVector<float> loadPeaks(const QString &path, int buckets);
@@ -75,6 +89,7 @@ private:
 	void splitClip(int index, qint64 outMs); // split at an output-time position
 	void showClipMenu(int index, const QPoint &globalPos, qint64 outMs);
 
+	VoiceoverLayoutParams lp_;
 	QVector<VoiceoverClip> clips_;
 	qint64 outputMs_ = 0;
 	qint64 playheadMs_ = -1;

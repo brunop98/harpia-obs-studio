@@ -16,11 +16,8 @@
 namespace harpia {
 
 namespace {
-constexpr int kMargin = 8;
-constexpr int kCaptionH = 16;
-constexpr int kTrackH = 40;
-constexpr int kMinClipW = 6;
-constexpr int kEdgeZone = 7;      // px near a clip edge that starts a trim
+// Layout values live in VoiceoverLayoutParams (lp_) so the Developer Panel can
+// tweak them at runtime; only non-layout constants remain here.
 constexpr qint64 kMinClipMs = 100; // shortest a clip can be trimmed to
 
 const QColor kBarBg(0x20, 0x22, 0x25);
@@ -49,7 +46,14 @@ QSize VoiceoverTrack::sizeHint() const
 
 QSize VoiceoverTrack::minimumSizeHint() const
 {
-	return QSize(240, 2 * kMargin + kCaptionH + kTrackH);
+	return QSize(240, 2 * lp_.margin + lp_.captionH + lp_.trackH);
+}
+
+void VoiceoverTrack::setLayoutParams(const VoiceoverLayoutParams &p)
+{
+	lp_ = p;
+	updateGeometry(); // min-size hint depends on the heights
+	update();
 }
 
 void VoiceoverTrack::setOutputDuration(qint64 ms)
@@ -174,7 +178,7 @@ void VoiceoverTrack::clearPlayhead()
 
 QRect VoiceoverTrack::trackRect() const
 {
-	return QRect(kMargin, kMargin + kCaptionH, width() - 2 * kMargin, kTrackH);
+	return QRect(lp_.margin, lp_.margin + lp_.captionH, width() - 2 * lp_.margin, lp_.trackH);
 }
 
 int VoiceoverTrack::msToX(qint64 ms) const
@@ -201,7 +205,7 @@ QVector<QRect> VoiceoverTrack::clipRects() const
 	for (const VoiceoverClip &c : clips_) {
 		const int x1 = msToX(c.outStartMs);
 		const int x2 = msToX(c.outStartMs + c.durationMs);
-		rects.append(QRect(x1, r.y() + 2, std::max(kMinClipW, x2 - x1), r.height() - 4));
+		rects.append(QRect(x1, r.y() + 2, std::max(lp_.minClipW, x2 - x1), r.height() - 4));
 	}
 	return rects;
 }
@@ -229,7 +233,7 @@ void VoiceoverTrack::paintEvent(QPaintEvent *)
 	const QRect r = trackRect();
 
 	p.setPen(kCaption);
-	p.drawText(QRect(r.x(), kMargin, r.width(), kCaptionH), Qt::AlignVCenter | Qt::AlignLeft,
+	p.drawText(QRect(r.x(), lp_.margin, r.width(), lp_.captionH), Qt::AlignVCenter | Qt::AlignLeft,
 		   QStringLiteral("Voiceover"));
 
 	p.setPen(kBarBorder);
@@ -317,7 +321,7 @@ void VoiceoverTrack::mousePressEvent(QMouseEvent *e)
 		dragMoved_ = false;
 		// Near an edge → trim that boundary; otherwise move the whole clip.
 		const QRect r = clipRects()[idx];
-		const int edge = std::min(kEdgeZone, r.width() / 3);
+		const int edge = std::min(lp_.edgeZone, r.width() / 3);
 		if (e->pos().x() - r.left() <= edge)
 			mode_ = Mode::ResizingLeft;
 		else if (r.right() - e->pos().x() <= edge)
@@ -360,7 +364,7 @@ void VoiceoverTrack::mouseMoveEvent(QMouseEvent *e)
 	const int idx = clipAt(e->pos());
 	if (idx >= 0) {
 		const QRect r = clipRects()[idx];
-		const int edge = std::min(kEdgeZone, r.width() / 3);
+		const int edge = std::min(lp_.edgeZone, r.width() / 3);
 		if (e->pos().x() - r.left() <= edge || r.right() - e->pos().x() <= edge)
 			setCursor(Qt::SizeHorCursor);
 		else

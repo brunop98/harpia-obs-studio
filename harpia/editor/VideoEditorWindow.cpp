@@ -99,7 +99,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 		"Developer Panel — tweak timeline spacing, thumbnail size, padding and zoom live"));
 	connect(devBtn, &QPushButton::clicked, this, [this]() {
 		if (!devPanel_)
-			devPanel_ = new DevPanel(timeline_, tracks_, this);
+			devPanel_ = new DevPanel(timeline_, tracks_, voTrack_, this);
 		devPanel_->show();
 		devPanel_->raise();
 		devPanel_->activateWindow();
@@ -267,9 +267,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 		{
 			TimelineLayoutParams tl = timeline_->layoutParams();
 			TrackLayoutParams tr = tracks_->layoutParams();
-			DevPanel::loadInto(tl, tr);
+			VoiceoverLayoutParams vo = voTrack_->layoutParams();
+			DevPanel::loadInto(tl, tr, vo);
 			timeline_->setLayoutParams(tl);
 			tracks_->setLayoutParams(tr);
+			voTrack_->setLayoutParams(vo);
 		}
 		// Filmstrip thumbnails decode in the background and stream in.
 		stripThumbs_ = new TimelineThumbs(this);

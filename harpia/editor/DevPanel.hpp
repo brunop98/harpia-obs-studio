@@ -11,8 +11,10 @@ namespace harpia {
 
 class Timeline;
 class TrackEditor;
+class VoiceoverTrack;
 struct TimelineLayoutParams;
 struct TrackLayoutParams;
+struct VoiceoverLayoutParams;
 
 // Developer Panel for the video editor: exposes every timeline layout variable
 // (spacing, thumbnail/track sizes, padding, zoom limits…) as live spin boxes,
@@ -21,20 +23,24 @@ struct TrackLayoutParams;
 class DevPanel : public QDialog {
 	Q_OBJECT
 public:
-	DevPanel(Timeline *timeline, TrackEditor *tracks, QWidget *parent = nullptr);
+	DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voice,
+		 QWidget *parent = nullptr);
 
 	// Persisted tweaks: the editor calls loadInto() at startup to restore the
 	// saved layout; the panel calls saveFrom() after every change.
-	static void loadInto(TimelineLayoutParams &tl, TrackLayoutParams &tr);
-	static void saveFrom(const TimelineLayoutParams &tl, const TrackLayoutParams &tr);
+	static void loadInto(TimelineLayoutParams &tl, TrackLayoutParams &tr, VoiceoverLayoutParams &vo);
+	static void saveFrom(const TimelineLayoutParams &tl, const TrackLayoutParams &tr,
+			     const VoiceoverLayoutParams &vo);
 
 private:
 	void applyTimeline();
 	void applyTracks();
+	void applyVoice();
 	void resetDefaults();
 
 	Timeline *timeline_ = nullptr;
 	TrackEditor *tracks_ = nullptr;
+	VoiceoverTrack *voice_ = nullptr;
 
 	// Simple Trim timeline.
 	QSpinBox *tlPad_ = nullptr;
@@ -55,6 +61,13 @@ private:
 	QSpinBox *trHardMinSegW_ = nullptr;
 	QSpinBox *trTileGap_ = nullptr;
 	QDoubleSpinBox *trMaxZoom_ = nullptr;
+
+	// Voiceover track.
+	QSpinBox *voMargin_ = nullptr;
+	QSpinBox *voCaptionH_ = nullptr;
+	QSpinBox *voTrackH_ = nullptr;
+	QSpinBox *voMinClipW_ = nullptr;
+	QSpinBox *voEdgeZone_ = nullptr;
 
 	bool loading_ = false; // guard: setting spin values must not re-apply
 };

@@ -36,6 +36,7 @@
 #include <QProcess>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QSettings>
 #include <QShortcut>
 #include <QSlider>
 #include <QSplitter>
@@ -252,9 +253,23 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	stack_->addWidget(tracks_);   // index 1 = Multi-Cut
 	bottomLayout->addWidget(stack_);
 
-	// ---- Voiceover: a narration track + its recording controls -----------
+	// ---- Voiceover: a collapsible narration section (record over the video).
+	// Collapsed by default so detailed cut work keeps the vertical space; the
+	// expand/collapse state is remembered across launches.
+	auto *audioHeader = new QPushButton(this);
+	audioHeader->setFlat(true);
+	audioHeader->setCursor(Qt::PointingHandCursor);
+	audioHeader->setStyleSheet(QStringLiteral(
+		"QPushButton{text-align:left; padding:2px; color:#c8ccd4; font-weight:bold; border:none;}"
+		"QPushButton:hover{color:#e8eaed;}"));
+	bottomLayout->addWidget(audioHeader);
+
+	auto *audioBody = new QWidget(this);
+	auto *audioLayout = new QVBoxLayout(audioBody);
+	audioLayout->setContentsMargins(0, 0, 0, 0);
+
 	voTrack_ = new VoiceoverTrack(this);
-	bottomLayout->addWidget(voTrack_);
+	audioLayout->addWidget(voTrack_);
 
 	auto *voRow = new QHBoxLayout;
 	voRecordBtn_ = new QPushButton(QStringLiteral("●  Record voiceover"), this);
@@ -282,7 +297,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	voCountdown_ = new QCheckBox(QStringLiteral("Countdown"), this);
 	voCountdown_->setToolTip(QStringLiteral("Count 3-2-1 before capture starts"));
 	voRow->addWidget(voCountdown_);
-	bottomLayout->addLayout(voRow);
+	audioLayout->addLayout(voRow);
 
 	// Mixing controls (applied at export): original-audio level + auto-duck.
 	auto *voMixRow = new QHBoxLayout;
@@ -303,7 +318,28 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	voDuck_->setToolTip(QStringLiteral("Automatically dip the video's audio while narration plays"));
 	voMixRow->addWidget(voDuck_);
 	voMixRow->addStretch(1);
-	bottomLayout->addLayout(voMixRow);
+	audioLayout->addLayout(voMixRow);
+
+	bottomLayout->addWidget(audioBody);
+
+	// Wire the disclosure header: toggle the body, swap the arrow, persist state.
+	{
+		QSettings s(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		const bool expanded = s.value(QStringLiteral("editor/audioExpanded"), false).toBool();
+		auto apply = [audioHeader, audioBody](bool on) {
+			audioBody->setVisible(on);
+			audioHeader->setText(on
+				? QStringLiteral("▾  Audio — record voiceover over the video")
+				: QStringLiteral("▸  Audio — record voiceover over the video"));
+		};
+		apply(expanded);
+		connect(audioHeader, &QPushButton::clicked, this, [audioBody, apply]() {
+			const bool on = !audioBody->isVisible();
+			apply(on);
+			QSettings s2(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+			s2.setValue(QStringLiteral("editor/audioExpanded"), on);
+		});
+	}
 
 	voRecorder_ = new AudioRecorder(this);
 	connect(voRecorder_, &AudioRecorder::level, this,

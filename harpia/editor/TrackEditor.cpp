@@ -591,7 +591,7 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 				emit selectionChanged(idx);
 				update();
 			}
-			showSegmentMenu(idx, e->globalPosition().toPoint());
+			showSegmentMenu(idx, e->globalPosition().toPoint(), pos);
 		}
 		return;
 	}
@@ -860,19 +860,58 @@ void TrackEditor::keyPressEvent(QKeyEvent *e)
 	QWidget::keyPressEvent(e);
 }
 
-void TrackEditor::showSegmentMenu(int index, const QPoint &globalPos)
+void TrackEditor::splitSegment(int index, qint64 splitSrcMs)
+{
+	if (index < 0 || index >= segs_.size())
+		return;
+	CutSegment &a = segs_[index];
+	// Keep both halves at least kMinCutMs long.
+	splitSrcMs = std::clamp<qint64>(splitSrcMs, a.srcStartMs + kMinCutMs, a.srcEndMs - kMinCutMs);
+	if (splitSrcMs <= a.srcStartMs || splitSrcMs >= a.srcEndMs)
+		return;
+
+	CutSegment b = a; // shares speed
+	b.srcStartMs = splitSrcMs;
+	a.srcEndMs = splitSrcMs;
+	segs_.insert(index + 1, b);
+
+	selected_ = index + 1;
+	multiSel_ = QSet<int>{selected_};
+	emit segmentsChanged();
+	emit selectionChanged(selected_);
+	update();
+}
+
+void TrackEditor::showSegmentMenu(int index, const QPoint &globalPos, const QPoint &localPos)
 {
 	// Acting on a member of a multi-selection applies to the whole selection.
 	const bool group = multiSel_.size() > 1 && multiSel_.contains(index);
 	const int n = group ? multiSel_.size() : 1;
 
+	// Where along this cut the cursor is → the source-time to split at.
+	const QVector<QRect> rects = segmentRects();
+	const CutSegment &seg = segs_[index];
+	qint64 splitSrcMs = -1;
+	if (index < rects.size()) {
+		const QRect r = rects[index];
+		const double f = std::clamp(double(localPos.x() - r.left()) / std::max(1, r.width()),
+					    0.0, 1.0);
+		splitSrcMs = seg.srcStartMs + qint64(f * (seg.srcEndMs - seg.srcStartMs));
+	}
+	const bool canSplit = splitSrcMs > seg.srcStartMs + kMinCutMs &&
+			      splitSrcMs < seg.srcEndMs - kMinCutMs;
+
 	QMenu menu(this);
 	QAction *del = menu.addAction(group ? QStringLiteral("Delete %1 cuts").arg(n)
 					    : QStringLiteral("Delete cut"));
+	QAction *split = menu.addAction(QStringLiteral("Split here"));
+	split->setEnabled(canSplit);
 	QAction *reset = menu.addAction(group ? QStringLiteral("Reset speed to 1× (%1 cuts)").arg(n)
 					      : QStringLiteral("Reset speed to 1×"));
 	QAction *chosen = menu.exec(globalPos);
-	if (chosen == del) {
+	if (chosen == split) {
+		splitSegment(index, splitSrcMs);
+	} else if (chosen == del) {
 		if (group)
 			removeSelected();
 		else

@@ -116,7 +116,9 @@ private:
 	QVector<QRect> segmentRects() const;
 	int segmentAt(const QPoint &p) const; // -1 = none
 	int insertSlotAt(int x) const;        // 0..count reorder slot for a drop at x
-	void showSegmentMenu(int index, const QPoint &globalPos);
+	void showSegmentMenu(int index, const QPoint &globalPos, const QPoint &localPos);
+	// Split a cut into two at a source-time position (the click maps to it).
+	void splitSegment(int index, qint64 splitSrcMs);
 
 	TrackLayoutParams lp_;
 	QVector<CutSegment> segs_;

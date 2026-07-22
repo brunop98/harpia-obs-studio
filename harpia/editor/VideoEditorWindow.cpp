@@ -254,7 +254,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// Inspector toggle — show/hide the right-side properties panel.
 	inspectorBtn_ = new QPushButton(QStringLiteral("Inspector"), this);
 	inspectorBtn_->setCheckable(true);
-	inspectorBtn_->setChecked(true);
+	inspectorBtn_->setChecked(false); // collapsed until the user opens it
 	inspectorBtn_->setToolTip(QStringLiteral(
 		"Show/hide the properties panel for the selected cut (uses the space beside portrait previews)"));
 	connect(inspectorBtn_, &QPushButton::toggled, this, [this](bool on) {
@@ -441,6 +441,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// that space to work as a live clip inspector.
 	inspector_ = new QWidget(this);
 	inspector_->setMinimumWidth(180);
+	inspector_->setVisible(false); // collapsed until the Inspector button opens it
 	auto *insLayout = new QVBoxLayout(inspector_);
 	insLayout->setContentsMargins(10, 8, 10, 8);
 	insLayout->setSpacing(6);

@@ -234,11 +234,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	// Playback + speed row: play/pause loops the trimmed region at the chosen
 	// speed so you can judge the speed before exporting.
 	auto *playRow = new QHBoxLayout;
-	playBtn_ = new QPushButton(QStringLiteral("▶  Play"), this);
+	playBtn_ = new QPushButton(QStringLiteral("▶"), this);
 	playBtn_->setToolTip(QStringLiteral("Play from the marker at the current speed"));
+	playBtn_->setFixedWidth(40);
 	playRow->addWidget(playBtn_);
-	auto *resetBtn = new QPushButton(QStringLiteral("⏮  Reset"), this);
+	auto *resetBtn = new QPushButton(QStringLiteral("⏮"), this);
 	resetBtn->setToolTip(QStringLiteral("Move the playhead back to the start"));
+	resetBtn->setFixedWidth(40);
 	connect(resetBtn, &QPushButton::clicked, this, &VideoEditorWindow::onResetMarker);
 	playRow->addWidget(resetBtn);
 	playRow->addSpacing(12);
@@ -277,14 +279,14 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	infoLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 	controls->addWidget(infoLabel_);
 	controls->addSpacing(12);
-	auto *openProjBtn = new QPushButton(QStringLiteral("Open project…"), this);
+	auto *openProjBtn = new QPushButton(QStringLiteral("Load project"), this);
 	openProjBtn->setToolTip(QStringLiteral("Load a saved editing project (.harpiaproj)"));
-	auto *saveProjBtn = new QPushButton(QStringLiteral("Save project…"), this);
+	auto *saveProjBtn = new QPushButton(QStringLiteral("Save project"), this);
 	saveProjBtn->setToolTip(QStringLiteral("Save the current editing as a project to continue later"));
 	controls->addWidget(openProjBtn);
 	controls->addWidget(saveProjBtn);
 	controls->addSpacing(12);
-	auto *saveBtn = new QPushButton(QStringLiteral("Save…"), this);
+	auto *saveBtn = new QPushButton(QStringLiteral("Export…"), this);
 	saveBtn->setDefault(true);
 	auto *cancelBtn = new QPushButton(QStringLiteral("Close"), this);
 	controls->addWidget(saveBtn);
@@ -1131,7 +1133,7 @@ void VideoEditorWindow::startPlayback()
 		if (tracks_->segments().isEmpty())
 			return; // nothing to assemble yet
 		playing_ = true;
-		playBtn_->setText(QStringLiteral("⏸  Pause"));
+		playBtn_->setText(QStringLiteral("⏸"));
 		// Start from the marker (output-time); fall back to the start if it's
 		// unset or past the end.
 		const qint64 total = tracks_->totalOutputMs();
@@ -1145,7 +1147,7 @@ void VideoEditorWindow::startPlayback()
 		return;
 	}
 	playing_ = true;
-	playBtn_->setText(QStringLiteral("⏸  Pause"));
+	playBtn_->setText(QStringLiteral("⏸"));
 	// Start from the marker (source-time), clamped into the trimmed region.
 	const qint64 start = timeline_->start(), end = timeline_->end();
 	qint64 pos = timeline_->playhead();
@@ -1160,7 +1162,7 @@ void VideoEditorWindow::startPlayback()
 void VideoEditorWindow::stopPlayback()
 {
 	playing_ = false;
-	playBtn_->setText(QStringLiteral("▶  Play"));
+	playBtn_->setText(QStringLiteral("▶"));
 	playTimer_->stop();
 	if (voTrack_ && !voRecording_)
 		voTrack_->clearPlayhead();

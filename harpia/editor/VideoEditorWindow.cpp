@@ -1093,6 +1093,11 @@ void VideoEditorWindow::onSegmentSelected(int index)
 	if (!multiCut())
 		return;
 	if (index >= 0 && index < tracks_->segments().size()) {
+		// Sync the Source track to the selected cut's video so you see (and can
+		// cut more from) the source that clip came from.
+		const int sid = tracks_->segments()[index].sourceId;
+		if (sid != activeSourceId_ && sourceById(sid))
+			setActiveSource(sid);
 		speedSlider_->setEnabled(true);
 		speedSpin_->setEnabled(true);
 		const double sp = tracks_->segments()[index].speed;

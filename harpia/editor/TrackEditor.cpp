@@ -1055,11 +1055,21 @@ void TrackEditor::showSegmentMenu(int index, const QPoint &globalPos, const QPoi
 					    : QStringLiteral("Delete cut"));
 	QAction *split = menu.addAction(QStringLiteral("Split here"));
 	split->setEnabled(canSplit);
+	QAction *dup = menu.addAction(QStringLiteral("Duplicate"));
 	QAction *reset = menu.addAction(group ? QStringLiteral("Reset speed to 1× (%1 cuts)").arg(n)
 					      : QStringLiteral("Reset speed to 1×"));
 	QAction *chosen = menu.exec(globalPos);
 	if (chosen == split) {
 		splitSegment(index, splitSrcMs);
+	} else if (chosen == dup) {
+		// Insert an identical copy of this cut immediately to its right.
+		const CutSegment copy = segs_[index];
+		segs_.insert(index + 1, copy);
+		selected_ = index + 1;
+		multiSel_ = QSet<int>{selected_};
+		emit segmentsChanged();
+		emit selectionChanged(selected_);
+		update();
 	} else if (chosen == del) {
 		if (group)
 			removeSelected();

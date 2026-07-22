@@ -111,60 +111,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	canvas_ = new PreviewCanvas(this);
 	topLayout->addWidget(canvas_, 1);
 
-	// Transport bar: Play · Reset · a big timecode · Speed, right under the
-	// preview so the primary playback controls sit next to what they drive.
-	auto *transport = new QHBoxLayout;
-	playBtn_ = new QPushButton(QStringLiteral("▶"), this);
-	playBtn_->setToolTip(QStringLiteral("Play from the marker at the current speed"));
-	playBtn_->setFixedWidth(40);
-	transport->addWidget(playBtn_);
-	auto *resetBtn = new QPushButton(QStringLiteral("⏮"), this);
-	resetBtn->setToolTip(QStringLiteral("Move the playhead back to the start"));
-	resetBtn->setFixedWidth(40);
-	connect(resetBtn, &QPushButton::clicked, this, &VideoEditorWindow::onResetMarker);
-	transport->addWidget(resetBtn);
-	transport->addSpacing(14);
-	// Live cursor readout: the source time of the frame being previewed — large
-	// and monospace so it reads as the editor's primary timecode.
-	cursorTimeLabel_ = new QLabel(QStringLiteral("0:00.000"), this);
-	cursorTimeLabel_->setStyleSheet(QStringLiteral(
-		"color:#e8eaed; font-family:monospace; font-size:18px; font-weight:bold;"));
-	cursorTimeLabel_->setToolTip(QStringLiteral("Time of the frame shown in the preview"));
-	transport->addWidget(cursorTimeLabel_);
-	transport->addStretch(1);
-	transport->addWidget(new QLabel(QStringLiteral("Speed"), this));
-	speedSlider_ = new QSlider(Qt::Horizontal, this);
-	speedSlider_->setRange(0, kSpeedTicks); // exponential 0.1×..50×
-	speedSlider_->setPageStep(kSpeedTicks / 20);
-	speedSlider_->setValue(speedToSlider(1.0));
-	speedSlider_->setMinimumWidth(180);
-	speedSlider_->setToolTip(QStringLiteral("Playback speed (0.1×–50×); scaled so low speeds are easy to fine-tune"));
-	transport->addWidget(speedSlider_, 1);
-	// Editable numeric speed — type an exact value.
-	speedSpin_ = new QDoubleSpinBox(this);
-	speedSpin_->setRange(kMinSpeed, kMaxSpeed);
-	speedSpin_->setDecimals(2);
-	speedSpin_->setSingleStep(0.1);
-	speedSpin_->setSuffix(QStringLiteral("×"));
-	speedSpin_->setValue(1.0);
-	speedSpin_->setKeyboardTracking(false); // apply on Enter/focus-out, not each digit
-	speedSpin_->setFixedWidth(72);
-	transport->addWidget(speedSpin_);
-	speedLabel_ = new QLabel(QString(), this); // "(N cuts)" / "—" status
-	speedLabel_->setMinimumWidth(56);
-	speedLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
-	transport->addWidget(speedLabel_);
-	topLayout->addLayout(transport);
-	splitter->addWidget(topPane);
-
-	// ---- Bottom pane: modes, timelines, voiceover and file controls ----
-	auto *bottomPane = new QWidget(this);
-	auto *bottomLayout = new QVBoxLayout(bottomPane);
-	bottomLayout->setContentsMargins(0, 0, 0, 0);
+	// One unified toolbar under the preview, left → right:
+	//   [Simple Trim | Multi-Cut]  [undo][redo]  [reset][play] timecode
+	//   Speed <slider><value>  [Inspector]  [Dev]
+	auto *bar = new QHBoxLayout;
 
 	// Mode switch as a segmented control: the two modes are mutually exclusive,
 	// so join them visually and enforce exclusivity with a button group.
-	auto *modeRow = new QHBoxLayout;
 	trimModeBtn_ = new QPushButton(QStringLiteral("Simple Trim"), this);
 	trimModeBtn_->setCheckable(true);
 	trimModeBtn_->setChecked(true);
@@ -182,17 +135,16 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	const QString segBase = QStringLiteral(
 		"QPushButton{background:#2b2f36;color:#c8ccd4;border:1px solid #3a3f47;padding:5px 14px;}"
 		"QPushButton:checked{background:#3d7eff;color:#ffffff;border-color:#3d7eff;}");
-	trimModeBtn_->setStyleSheet(segBase + QStringLiteral(
-		"QPushButton{border-top-left-radius:5px;border-bottom-left-radius:5px;border-right:none;}"));
-	cutModeBtn_->setStyleSheet(segBase + QStringLiteral(
-		"QPushButton{border-top-right-radius:5px;border-bottom-right-radius:5px;}"));
+	trimModeBtn_->setStyleSheet(segBase + QStringLiteral("QPushButton{border-right:none;}"));
+	cutModeBtn_->setStyleSheet(segBase);
 	auto *segBox = new QHBoxLayout;
 	segBox->setSpacing(0); // no gap — the two segments read as one control
 	segBox->setContentsMargins(0, 0, 0, 0);
 	segBox->addWidget(trimModeBtn_);
 	segBox->addWidget(cutModeBtn_);
-	modeRow->addLayout(segBox);
-	modeRow->addSpacing(14);
+	bar->addLayout(segBox);
+	bar->addSpacing(12);
+
 	// Undo/redo, grouped tightly as one cluster.
 	auto *urBox = new QHBoxLayout;
 	urBox->setSpacing(2);
@@ -209,8 +161,53 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	redoBtn_->setEnabled(false);
 	connect(redoBtn_, &QPushButton::clicked, this, &VideoEditorWindow::redo);
 	urBox->addWidget(redoBtn_);
-	modeRow->addLayout(urBox);
-	modeRow->addStretch(1);
+	bar->addLayout(urBox);
+	bar->addSpacing(12);
+
+	// Transport: reset · play · a big monospace timecode.
+	auto *resetBtn = new QPushButton(QStringLiteral("⏮"), this);
+	resetBtn->setToolTip(QStringLiteral("Move the playhead back to the start"));
+	resetBtn->setFixedWidth(40);
+	connect(resetBtn, &QPushButton::clicked, this, &VideoEditorWindow::onResetMarker);
+	bar->addWidget(resetBtn);
+	playBtn_ = new QPushButton(QStringLiteral("▶"), this);
+	playBtn_->setToolTip(QStringLiteral("Play from the marker at the current speed"));
+	playBtn_->setFixedWidth(40);
+	bar->addWidget(playBtn_);
+	bar->addSpacing(8);
+	// Live cursor readout: the source time of the frame being previewed — large
+	// and monospace so it reads as the editor's primary timecode.
+	cursorTimeLabel_ = new QLabel(QStringLiteral("0:00.000"), this);
+	cursorTimeLabel_->setStyleSheet(QStringLiteral(
+		"color:#e8eaed; font-family:monospace; font-size:18px; font-weight:bold;"));
+	cursorTimeLabel_->setToolTip(QStringLiteral("Time of the frame shown in the preview"));
+	bar->addWidget(cursorTimeLabel_);
+	bar->addSpacing(16);
+
+	// Speed: label · slider (stretches) · editable value · per-cut count.
+	bar->addWidget(new QLabel(QStringLiteral("Speed"), this));
+	speedSlider_ = new QSlider(Qt::Horizontal, this);
+	speedSlider_->setRange(0, kSpeedTicks); // exponential 0.1×..50×
+	speedSlider_->setPageStep(kSpeedTicks / 20);
+	speedSlider_->setValue(speedToSlider(1.0));
+	speedSlider_->setMinimumWidth(140);
+	speedSlider_->setToolTip(QStringLiteral("Playback speed (0.1×–50×); scaled so low speeds are easy to fine-tune"));
+	bar->addWidget(speedSlider_, 1); // takes the slack so Inspector/Dev pin right
+	speedSpin_ = new QDoubleSpinBox(this);
+	speedSpin_->setRange(kMinSpeed, kMaxSpeed);
+	speedSpin_->setDecimals(2);
+	speedSpin_->setSingleStep(0.1);
+	speedSpin_->setSuffix(QStringLiteral("×"));
+	speedSpin_->setValue(1.0);
+	speedSpin_->setKeyboardTracking(false); // apply on Enter/focus-out, not each digit
+	speedSpin_->setFixedWidth(72);
+	bar->addWidget(speedSpin_);
+	speedLabel_ = new QLabel(QString(), this); // "(N cuts)" / "—" status
+	speedLabel_->setMinimumWidth(56);
+	speedLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+	bar->addWidget(speedLabel_);
+	bar->addSpacing(10);
+
 	// Inspector toggle — show/hide the right-side properties panel.
 	inspectorBtn_ = new QPushButton(QStringLiteral("Inspector"), this);
 	inspectorBtn_->setCheckable(true);
@@ -221,8 +218,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 		if (inspector_)
 			inspector_->setVisible(on);
 	});
-	modeRow->addWidget(inspectorBtn_);
-	modeRow->addSpacing(8);
+	bar->addWidget(inspectorBtn_);
+	bar->addSpacing(6);
 	// Developer Panel: live-tweak every timeline layout variable to find the
 	// best UI configuration (editor-only tool, values are not persisted).
 	auto *devBtn = new QPushButton(QStringLiteral("Dev"), this);
@@ -230,14 +227,23 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	devBtn->setToolTip(QStringLiteral(
 		"Developer Panel — tweak timeline spacing, thumbnail size, padding and zoom live"));
 	connect(devBtn, &QPushButton::clicked, this, [this]() {
-		if (!devPanel_)
+		if (!devPanel_) {
 			devPanel_ = new DevPanel(timeline_, tracks_, voTrack_, canvas_, this);
+			connect(devPanel_, &DevPanel::buttonHeightChanged, this,
+				&VideoEditorWindow::applyButtonHeight);
+		}
 		devPanel_->show();
 		devPanel_->raise();
 		devPanel_->activateWindow();
 	});
-	modeRow->addWidget(devBtn);
-	bottomLayout->addLayout(modeRow);
+	bar->addWidget(devBtn);
+	topLayout->addLayout(bar);
+	splitter->addWidget(topPane);
+
+	// ---- Bottom pane: timelines, voiceover and file controls ----
+	auto *bottomPane = new QWidget(this);
+	auto *bottomLayout = new QVBoxLayout(bottomPane);
+	bottomLayout->setContentsMargins(0, 0, 0, 0);
 
 	timeline_ = new Timeline(this);
 	tracks_ = new TrackEditor(this);
@@ -511,6 +517,20 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 		voImportBtn_->setEnabled(false);
 		voDevice_->setEnabled(false);
 	}
+
+	// Collect every button now (the Developer Panel is created lazily, so its
+	// own buttons are excluded) and apply the saved Dev-tunable height.
+	uiButtons_ = findChildren<QPushButton *>();
+	applyButtonHeight(DevPanel::loadButtonHeight());
+}
+
+void VideoEditorWindow::applyButtonHeight(int h)
+{
+	if (h <= 0)
+		return;
+	for (QPushButton *b : uiButtons_)
+		if (b)
+			b->setFixedHeight(h);
 }
 
 bool VideoEditorWindow::multiCut() const

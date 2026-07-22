@@ -35,17 +35,30 @@ public:
 	static void saveFrom(const TimelineLayoutParams &tl, const TrackLayoutParams &tr,
 			     const VoiceoverLayoutParams &vo, const PreviewLayoutParams &pv);
 
+	// The toolbar/transport button height is a window-level tweak (not part of
+	// any timeline layout struct); the editor reads it at startup and follows
+	// buttonHeightChanged() live.
+	static int loadButtonHeight();
+	static void saveButtonHeight(int h);
+
+signals:
+	void buttonHeightChanged(int h);
+
 private:
 	void applyTimeline();
 	void applyTracks();
 	void applyVoice();
 	void applyPreview();
+	void applyButtons();
 	void resetDefaults();
 
 	Timeline *timeline_ = nullptr;
 	TrackEditor *tracks_ = nullptr;
 	VoiceoverTrack *voice_ = nullptr;
 	PreviewCanvas *preview_ = nullptr;
+
+	// Editor window (toolbar/transport).
+	QSpinBox *winBtnH_ = nullptr;
 
 	// Simple Trim timeline.
 	QSpinBox *tlPad_ = nullptr;

@@ -24,7 +24,25 @@ QSettings devSettings()
 {
 	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
 }
+constexpr int kDefaultButtonHeight = 28; // shipped toolbar/transport button height
 } // namespace
+
+int DevPanel::loadButtonHeight()
+{
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout"));
+	const int h = s.value(QStringLiteral("win/btnH"), kDefaultButtonHeight).toInt();
+	s.endGroup();
+	return h;
+}
+
+void DevPanel::saveButtonHeight(int h)
+{
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout"));
+	s.setValue(QStringLiteral("win/btnH"), h);
+	s.endGroup();
+}
 
 void DevPanel::loadInto(TimelineLayoutParams &tl, TrackLayoutParams &tr, VoiceoverLayoutParams &vo,
 			PreviewLayoutParams &pv)
@@ -138,6 +156,13 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 	hint->setWordWrap(true);
 	hint->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 	root->addWidget(hint);
+
+	// Window-level toolbar tweaks (not part of any timeline layout struct).
+	auto *winBox = new QGroupBox(QStringLiteral("Editor window"), inner);
+	auto *winForm = new QFormLayout(winBox);
+	winForm->addRow(QStringLiteral("Button height"),
+			winBtnH_ = spin(16, 64, loadButtonHeight(), &DevPanel::applyButtons));
+	root->addWidget(winBox);
 
 	const TimelineLayoutParams tl = timeline_->layoutParams();
 	auto *tlBox = new QGroupBox(QStringLiteral("Simple Trim timeline"), this);
@@ -289,6 +314,13 @@ void DevPanel::applyVoice()
 	saveFrom(timeline_->layoutParams(), tracks_->layoutParams(), p, preview_->layoutParams());
 }
 
+void DevPanel::applyButtons()
+{
+	const int h = winBtnH_->value();
+	saveButtonHeight(h);
+	emit buttonHeightChanged(h);
+}
+
 void DevPanel::resetDefaults()
 {
 	const TimelineLayoutParams tl; // struct defaults ARE the app defaults
@@ -322,12 +354,15 @@ void DevPanel::resetDefaults()
 	voTrackH_->setValue(vo.trackH);
 	voMinClipW_->setValue(vo.minClipW);
 	voEdgeZone_->setValue(vo.edgeZone);
+	winBtnH_->setValue(kDefaultButtonHeight);
 	loading_ = false;
 	timeline_->setLayoutParams(tl);
 	tracks_->setLayoutParams(tr);
 	voice_->setLayoutParams(vo);
 	preview_->setLayoutParams(pv);
 	saveFrom(tl, tr, vo, pv);
+	saveButtonHeight(kDefaultButtonHeight);
+	emit buttonHeightChanged(kDefaultButtonHeight);
 }
 
 } // namespace harpia

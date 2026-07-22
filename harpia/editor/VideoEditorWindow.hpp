@@ -5,6 +5,7 @@
 
 #include <QDialog>
 #include <QElapsedTimer>
+#include <QList>
 #include <QRect>
 #include <QString>
 #include <QVector>
@@ -167,6 +168,12 @@ private:
 	QPushButton *playBtn_ = nullptr;
 	QPushButton *undoBtn_ = nullptr;
 	QPushButton *redoBtn_ = nullptr;
+
+	// Every button in the editor shares a Dev-tunable height. Collected once at
+	// construction (before the Developer Panel exists) so its own buttons are
+	// never resized.
+	QList<QPushButton *> uiButtons_;
+	void applyButtonHeight(int h);
 	QVector<EditorSnapshot> history_;
 	int histIndex_ = -1;    // current position in history_
 	bool restoring_ = false; // guard: restoring must not schedule new snapshots

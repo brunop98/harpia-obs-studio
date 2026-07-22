@@ -41,6 +41,12 @@
 #include <QSlider>
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QIcon>
+#include <QListWidget>
+#include <QMimeData>
+#include <QPixmap>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -48,6 +54,17 @@
 namespace harpia {
 
 namespace {
+// Accepted source video extensions (drag-drop + Add video filter).
+bool isVideoFile(const QString &path)
+{
+	static const QStringList kExts = {QStringLiteral("mp4"), QStringLiteral("mov"),
+					  QStringLiteral("mkv"), QStringLiteral("webm"),
+					  QStringLiteral("avi"), QStringLiteral("m4v"),
+					  QStringLiteral("gif"), QStringLiteral("wmv"),
+					  QStringLiteral("flv"), QStringLiteral("ts")};
+	return kExts.contains(QFileInfo(path).suffix().toLower());
+}
+
 QString previewTimeText(qint64 ms)
 {
 	return QStringLiteral("%1:%2.%3")
@@ -92,10 +109,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	setWindowFlags(Qt::Window | Qt::WindowTitleHint | Qt::WindowSystemMenuHint |
 		       Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint);
 	setSizeGripEnabled(true);
-	resize(900, 680);
-
-	seeker_ = std::make_unique<FrameSeeker>();
-	valid_ = seeker_->open(inPath);
+	resize(1040, 680);
+	setAcceptDrops(true); // drop video files to add them as sources
 
 	auto *root = new QVBoxLayout(this);
 
@@ -442,14 +457,42 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	insLayout->addWidget(inspHint_);
 	insLayout->addStretch(1);
 
-	// Left (splitter of preview/editing) + right inspector, side by side.
+	// ---- Left sidebar: the list of sources (videos) you can cut from -------
+	auto *sidebar = new QWidget(this);
+	auto *sideLayout = new QVBoxLayout(sidebar);
+	sideLayout->setContentsMargins(6, 4, 6, 6);
+	sideLayout->setSpacing(6);
+	auto *sideHeader = new QLabel(QStringLiteral("Sources"), this);
+	sideHeader->setStyleSheet(QStringLiteral("font-weight:bold; color:#c8ccd4;"));
+	sideLayout->addWidget(sideHeader);
+	sourceList_ = new QListWidget(this);
+	sourceList_->setIconSize(QSize(96, 54));
+	sourceList_->setToolTip(QStringLiteral(
+		"Videos you can cut from. Drop video files here (or anywhere on the window) "
+		"to add more; click one to cut from it."));
+	sideLayout->addWidget(sourceList_, 1);
+	auto *addSrcBtn = new QPushButton(QStringLiteral("Add video…"), this);
+	addSrcBtn->setToolTip(QStringLiteral("Add another video as a source (or drag files onto the window)"));
+	connect(addSrcBtn, &QPushButton::clicked, this, &VideoEditorWindow::onAddSource);
+	sideLayout->addWidget(addSrcBtn);
+	auto *removeSrcBtn = new QPushButton(QStringLiteral("Remove"), this);
+	removeSrcBtn->setToolTip(QStringLiteral("Remove the selected source (only if no cut uses it)"));
+	connect(removeSrcBtn, &QPushButton::clicked, this, &VideoEditorWindow::onRemoveSource);
+	sideLayout->addWidget(removeSrcBtn);
+	connect(sourceList_, &QListWidget::itemSelectionChanged, this,
+		&VideoEditorWindow::onSourceRowChanged);
+
+	// Left sources | (preview/editing split) | right inspector.
 	auto *hsplit = new QSplitter(Qt::Horizontal, this);
 	hsplit->setChildrenCollapsible(false);
 	hsplit->setHandleWidth(6);
+	hsplit->addWidget(sidebar);
 	hsplit->addWidget(splitter);
 	hsplit->addWidget(inspector_);
-	hsplit->setStretchFactor(0, 4); // editing area takes the lion's share
-	hsplit->setStretchFactor(1, 1);
+	hsplit->setStretchFactor(0, 1); // sources
+	hsplit->setStretchFactor(1, 5); // editing area takes the lion's share
+	hsplit->setStretchFactor(2, 1); // inspector
+	hsplit->setSizes({170, 700, 190});
 	root->addWidget(hsplit, 1);
 
 	playTimer_ = new QTimer(this);
@@ -504,37 +547,27 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	connect(openProjBtn, &QPushButton::clicked, this, &VideoEditorWindow::onOpenProject);
 	connect(saveProjBtn, &QPushButton::clicked, this, &VideoEditorWindow::onSaveProject);
 
+	// Restore any layout tweaks saved from a previous Developer Panel session
+	// (independent of the source).
+	{
+		TimelineLayoutParams tl = timeline_->layoutParams();
+		TrackLayoutParams tr = tracks_->layoutParams();
+		VoiceoverLayoutParams vo = voTrack_->layoutParams();
+		PreviewLayoutParams pv = canvas_->layoutParams();
+		DevPanel::loadInto(tl, tr, vo, pv);
+		timeline_->setLayoutParams(tl);
+		tracks_->setLayoutParams(tr);
+		voTrack_->setLayoutParams(vo);
+		canvas_->setLayoutParams(pv);
+	}
+
+	// Open the launch file as the first source.
+	const int firstId = addSource(inPath_);
+	valid_ = (firstId >= 0);
 	if (valid_) {
-		canvas_->setVideoSize(seeker_->width(), seeker_->height());
-		timeline_->setDuration(seeker_->durationMs());
-		tracks_->setDuration(seeker_->durationMs());
-		// Restore any layout tweaks saved from a previous Developer Panel session.
-		{
-			TimelineLayoutParams tl = timeline_->layoutParams();
-			TrackLayoutParams tr = tracks_->layoutParams();
-			VoiceoverLayoutParams vo = voTrack_->layoutParams();
-			PreviewLayoutParams pv = canvas_->layoutParams();
-			DevPanel::loadInto(tl, tr, vo, pv);
-			timeline_->setLayoutParams(tl);
-			tracks_->setLayoutParams(tr);
-			voTrack_->setLayoutParams(vo);
-			canvas_->setLayoutParams(pv);
-		}
-		// Filmstrip thumbnails decode in the background and stream in.
-		stripThumbs_ = new TimelineThumbs(this);
-		connect(stripThumbs_, &TimelineThumbs::updated, this, [this]() {
-			timeline_->setThumbs(stripThumbs_->thumbs());
-			tracks_->setThumbs(stripThumbs_->thumbs());
-		});
-		stripThumbs_->start(inPath_, 60, 128, 72);
-		baseInfo_ = QStringLiteral("%1 × %2   %3s")
-				    .arg(seeker_->width())
-				    .arg(seeker_->height())
-				    .arg(seeker_->durationMs() / 1000.0, 0, 'f', 1);
-		updateInfoLabel();
+		setActiveSource(firstId);
 		updateInspector();
 		updateVoiceoverAxis();
-		showFrame(0);
 		// Seed the undo history with the untouched state.
 		history_.clear();
 		history_.push_back(snapshot());
@@ -584,6 +617,209 @@ void VideoEditorWindow::applyChrome(const EditorChromeParams &p)
 		speedSlider_->setMinimumWidth(p.speedSliderMinW);
 	if (speedSpin_)
 		speedSpin_->setFixedWidth(p.speedSpinW);
+}
+
+// ---------------------------------------------------------------------------
+// Sources (multi-video mixing)
+// ---------------------------------------------------------------------------
+
+EditorSource *VideoEditorWindow::sourceById(int id)
+{
+	for (auto &s : sources_)
+		if (s.id == id)
+			return &s;
+	return nullptr;
+}
+
+EditorSource *VideoEditorWindow::activeSource()
+{
+	return sourceById(activeSourceId_);
+}
+
+FrameSeeker *VideoEditorWindow::seekerFor(int id)
+{
+	EditorSource *s = sourceById(id);
+	return s ? s->seeker.get() : nullptr;
+}
+
+bool VideoEditorWindow::sourceInUse(int id) const
+{
+	for (const CutSegment &c : tracks_->segments())
+		if (c.sourceId == id)
+			return true;
+	return false;
+}
+
+int VideoEditorWindow::addSource(const QString &path)
+{
+	auto seeker = std::make_unique<FrameSeeker>();
+	if (!seeker->open(path)) {
+		QMessageBox::warning(this, QStringLiteral("Add video"),
+				     QStringLiteral("Could not open %1").arg(QFileInfo(path).fileName()));
+		return -1;
+	}
+	EditorSource src;
+	src.id = nextSourceId_++;
+	src.path = path;
+	src.name = QFileInfo(path).fileName();
+	src.durationMs = seeker->durationMs();
+	src.width = seeker->width();
+	src.height = seeker->height();
+	src.seeker = std::move(seeker);
+	const int id = src.id;
+	auto *thumbs = new TimelineThumbs(this);
+	src.thumbs = thumbs;
+	sources_.push_back(std::move(src));
+	// The filmstrip streams in on a worker thread; cache it per source and, if
+	// this is the active source, push it live to the timeline/tracks widgets.
+	connect(thumbs, &TimelineThumbs::updated, this, [this, id, thumbs]() {
+		EditorSource *s = sourceById(id);
+		if (!s)
+			return;
+		s->thumbCache = thumbs->thumbs();
+		refreshSourceList();
+		if (id == activeSourceId_) {
+			timeline_->setThumbs(s->thumbCache);
+			tracks_->setThumbs(s->thumbCache);
+		}
+	});
+	thumbs->start(path, 60, 128, 72);
+	refreshSourceList();
+	return id;
+}
+
+void VideoEditorWindow::setActiveSource(int id)
+{
+	EditorSource *s = sourceById(id);
+	if (!s)
+		return;
+	stopPlayback();
+	activeSourceId_ = id;
+	seeker_ = s->seeker.get();
+	tracks_->setActiveSource(id);
+	canvas_->setVideoSize(s->width, s->height);
+	timeline_->setDuration(s->durationMs);
+	tracks_->setDuration(s->durationMs);
+	timeline_->setThumbs(s->thumbCache);
+	tracks_->setThumbs(s->thumbCache);
+	baseInfo_ = QStringLiteral("%1 × %2   %3s")
+			    .arg(s->width)
+			    .arg(s->height)
+			    .arg(s->durationMs / 1000.0, 0, 'f', 1);
+	updateInfoLabel();
+	// Reflect the selection in the sidebar without re-entering the slot.
+	if (sourceList_) {
+		QSignalBlocker b(sourceList_);
+		for (int i = 0; i < sourceList_->count(); ++i)
+			if (sourceList_->item(i)->data(Qt::UserRole).toInt() == id) {
+				sourceList_->setCurrentRow(i);
+				break;
+			}
+	}
+	showFrame(id, 0);
+}
+
+void VideoEditorWindow::refreshSourceList()
+{
+	if (!sourceList_)
+		return;
+	QSignalBlocker b(sourceList_); // rebuild must not fire selection changes
+	sourceList_->clear();
+	for (const EditorSource &s : sources_) {
+		auto *item = new QListWidgetItem(s.name);
+		item->setData(Qt::UserRole, s.id);
+		if (!s.thumbCache.isEmpty() && !s.thumbCache.front().isNull())
+			item->setIcon(QIcon(QPixmap::fromImage(s.thumbCache.front())));
+		item->setToolTip(QStringLiteral("%1  ·  %2×%3  ·  %4s")
+					 .arg(s.name)
+					 .arg(s.width)
+					 .arg(s.height)
+					 .arg(s.durationMs / 1000.0, 0, 'f', 1));
+		sourceList_->addItem(item);
+		if (s.id == activeSourceId_)
+			sourceList_->setCurrentItem(item);
+	}
+}
+
+void VideoEditorWindow::onAddSource()
+{
+	const QString dir = activeSource() ? QFileInfo(activeSource()->path).absolutePath() : QString();
+	const QString path = QFileDialog::getOpenFileName(
+		this, QStringLiteral("Add video"), dir,
+		QStringLiteral("Video files (*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.gif *.wmv *.flv *.ts);;"
+			       "All files (*)"));
+	if (path.isEmpty())
+		return;
+	const int id = addSource(path);
+	if (id >= 0)
+		setActiveSource(id);
+}
+
+void VideoEditorWindow::onSourceRowChanged()
+{
+	if (!sourceList_ || !sourceList_->currentItem())
+		return;
+	const int id = sourceList_->currentItem()->data(Qt::UserRole).toInt();
+	if (id != activeSourceId_)
+		setActiveSource(id);
+}
+
+void VideoEditorWindow::onRemoveSource()
+{
+	if (!sourceList_ || !sourceList_->currentItem())
+		return;
+	const int id = sourceList_->currentItem()->data(Qt::UserRole).toInt();
+	if (sources_.size() <= 1) {
+		QMessageBox::information(this, QStringLiteral("Remove source"),
+					 QStringLiteral("The editor needs at least one source."));
+		return;
+	}
+	if (sourceInUse(id)) {
+		QMessageBox::warning(
+			this, QStringLiteral("Remove source"),
+			QStringLiteral("Some cuts still use this video. Delete those cuts first."));
+		return;
+	}
+	for (auto it = sources_.begin(); it != sources_.end(); ++it) {
+		if (it->id == id) {
+			if (it->thumbs)
+				it->thumbs->deleteLater();
+			sources_.erase(it);
+			break;
+		}
+	}
+	if (activeSourceId_ == id)
+		setActiveSource(sources_.front().id);
+	else
+		refreshSourceList();
+}
+
+void VideoEditorWindow::dragEnterEvent(QDragEnterEvent *e)
+{
+	if (!e->mimeData()->hasUrls())
+		return;
+	for (const QUrl &u : e->mimeData()->urls())
+		if (isVideoFile(u.toLocalFile())) {
+			e->acceptProposedAction();
+			return;
+		}
+}
+
+void VideoEditorWindow::dropEvent(QDropEvent *e)
+{
+	int firstAdded = -1;
+	for (const QUrl &u : e->mimeData()->urls()) {
+		const QString f = u.toLocalFile();
+		if (f.isEmpty() || !isVideoFile(f))
+			continue;
+		const int id = addSource(f);
+		if (id >= 0 && firstAdded < 0)
+			firstAdded = id;
+	}
+	if (firstAdded >= 0) {
+		setActiveSource(firstAdded);
+		e->acceptProposedAction();
+	}
 }
 
 bool VideoEditorWindow::multiCut() const
@@ -1017,6 +1253,7 @@ void VideoEditorWindow::onSceneDetected(const QVector<qint64> &cutMs, const QStr
 			s.srcStartMs = a;
 			s.srcEndMs = b;
 			s.speed = 1.0;
+			s.sourceId = activeSourceId_; // auto-cut works on the active source
 			segs.push_back(s);
 		}
 	}
@@ -1211,6 +1448,9 @@ void VideoEditorWindow::onScrub(qint64 ms)
 	// User is dragging a handle/playhead — stop playback and show that frame.
 	if (playing_)
 		stopPlayback();
+	// Multi-Cut scrubs come from the Output/Source track and carry the segment's
+	// source; Simple-Trim scrubs are always the active source.
+	pendingSource_ = multiCut() ? tracks_->scrubSourceId() : activeSourceId_;
 	pendingMs_ = ms;
 	cursorTimeLabel_->setText(previewTimeText(ms));
 	if (!previewTimer_->isActive())
@@ -1223,6 +1463,7 @@ void VideoEditorWindow::onHoverScrub(qint64 ms)
 	// active playback preview.
 	if (!valid_ || playing_)
 		return;
+	pendingSource_ = multiCut() ? tracks_->scrubSourceId() : activeSourceId_;
 	pendingMs_ = ms;
 	cursorTimeLabel_->setText(previewTimeText(ms));
 	if (!previewTimer_->isActive())
@@ -1247,10 +1488,14 @@ void VideoEditorWindow::onResetMarker()
 		if (voTrack_)
 			voTrack_->setPlayhead(0);
 		qint64 srcMs = 0;
-		if (tracks_->sourceForOutput(0, &srcMs) >= 0)
-			onScrub(srcMs); // preview the first frame of the output
-		else
-			showFrame(0);
+		const int seg = tracks_->sourceForOutput(0, &srcMs);
+		if (seg >= 0) {
+			const int sid = tracks_->segments()[seg].sourceId;
+			cursorTimeLabel_->setText(previewTimeText(srcMs));
+			showFrame(sid, srcMs); // preview the first frame of the output
+		} else {
+			showFrame(activeSourceId_, 0);
+		}
 	} else {
 		const qint64 s = timeline_->start();
 		timeline_->setPlayhead(s);
@@ -1336,10 +1581,11 @@ void VideoEditorWindow::restoreSnapshot(const EditorSnapshot &s)
 	// Repaint the preview at a sensible frame.
 	if (multiCut()) {
 		qint64 srcMs = 0;
-		if (tracks_->sourceForOutput(0, &srcMs) >= 0)
-			showFrame(srcMs);
+		const int seg = tracks_->sourceForOutput(0, &srcMs);
+		if (seg >= 0)
+			showFrame(tracks_->segments()[seg].sourceId, srcMs);
 	} else {
-		showFrame(timeline_->start());
+		showFrame(activeSourceId_, timeline_->start());
 	}
 
 	restoring_ = false;
@@ -1447,13 +1693,21 @@ void VideoEditorWindow::onPlayTick()
 			return;
 		}
 		const QVector<CutSegment> &segs = tracks_->segments();
-		if (seg != playSeg_) {
-			seeker_->seekTo(segs[seg].srcStartMs);
+		// Each cut may come from a different source — decode from that source's
+		// seeker, seeking on any segment OR source change.
+		FrameSeeker *segSeeker = seekerFor(segs[seg].sourceId);
+		if (!segSeeker) {
+			stopPlayback();
+			return;
+		}
+		if (seg != playSeg_ || segs[seg].sourceId != playSourceId_) {
+			segSeeker->seekTo(segs[seg].srcStartMs);
 			playSeg_ = seg;
+			playSourceId_ = segs[seg].sourceId;
 		}
 		// Decode forward to the target source time; only the shown frame is
 		// converted (skipped catch-up frames stay in YUV — see nextFrameAt).
-		const QImage img = seeker_->nextFrameAt(srcTarget, nullptr, 1280, 720, 240);
+		const QImage img = segSeeker->nextFrameAt(srcTarget, nullptr, 1280, 720, 240);
 		if (img.isNull()) {
 			// Source ended inside this cut — skip to the next segment.
 			playAnchorMs_ = tracks_->outputStartOf(seg) + segs[seg].outDurationMs();
@@ -1561,15 +1815,20 @@ void VideoEditorWindow::applySpeed(double value)
 void VideoEditorWindow::onPreviewTick()
 {
 	if (pendingMs_ >= 0)
-		showFrame(pendingMs_);
+		showFrame(pendingSource_, pendingMs_);
 	pendingMs_ = -1;
 }
 
-void VideoEditorWindow::showFrame(qint64 ms)
+void VideoEditorWindow::showFrame(int sourceId, qint64 ms)
 {
 	if (!valid_)
 		return;
-	const QImage img = seeker_->frameAt(ms, 1280, 720);
+	FrameSeeker *fs = seekerFor(sourceId);
+	if (!fs)
+		fs = seeker_; // fall back to the active source
+	if (!fs)
+		return;
+	const QImage img = fs->frameAt(ms, 1280, 720);
 	if (!img.isNull())
 		canvas_->setFrame(img);
 }
@@ -1591,6 +1850,21 @@ void VideoEditorWindow::onSave()
 			this, QStringLiteral("Multi-Cut"),
 			QStringLiteral("Drag on the Source track to create at least one cut first."));
 		return;
+	}
+
+	// Phase 1: export still consumes a single input. Block exporting a project
+	// that mixes more than one source (multi-source export lands next).
+	{
+		const int primary = sources_.empty() ? -1 : sources_.front().id;
+		for (const CutSegment &c : tracks_->segments())
+			if (c.sourceId != primary) {
+				QMessageBox::information(
+					this, QStringLiteral("Export"),
+					QStringLiteral("This project mixes more than one source. Exporting "
+						       "multiple sources is coming next — for now, export "
+						       "projects that use a single video."));
+				return;
+			}
 	}
 
 	const QString base = QFileInfo(inPath_).completeBaseName() + QStringLiteral("_clip");

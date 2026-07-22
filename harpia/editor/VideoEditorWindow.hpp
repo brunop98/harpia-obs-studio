@@ -5,6 +5,7 @@
 
 #include <QDialog>
 #include <QElapsedTimer>
+#include <QImage>
 #include <QList>
 #include <QRect>
 #include <QString>
@@ -13,16 +14,20 @@
 #include <atomic>
 #include <memory>
 #include <thread>
+#include <vector>
 
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
+class QListWidget;
 class QProgressDialog;
 class QPushButton;
 class QSlider;
 class QStackedWidget;
 class QTimer;
+class QDragEnterEvent;
+class QDropEvent;
 
 namespace harpia {
 
@@ -56,6 +61,22 @@ class TrackEditor;
 class TimelineThumbs;
 class ClipExporter;
 
+// One video the editor can cut from. The first source is the file the editor
+// was launched on; more are added via the sidebar / drag-and-drop. Each owns
+// its own decoder and background filmstrip so switching the active source is
+// instant and cuts from any source preview/play correctly.
+struct EditorSource {
+	int id = 0; // stable, monotonic
+	QString path;
+	QString name;
+	qint64 durationMs = 0;
+	int width = 0;
+	int height = 0;
+	std::unique_ptr<FrameSeeker> seeker;
+	TimelineThumbs *thumbs = nullptr; // parented to the window
+	QVector<QImage> thumbCache;       // last emitted filmstrip
+};
+
 // A lightweight built-in video editor with two modes:
 //  - Simple Trim: one start/end range on a timeline (with live frame preview
 //    under the handles), a single playback speed, optional crop.
@@ -77,6 +98,11 @@ public:
 	// Called for every close path (title-bar X, Close button, Esc). When there
 	// are unsaved edits, asks: Cancel (keep editing) or Close window (discard).
 	void reject() override;
+
+protected:
+	// Drag-and-drop video files onto the editor to add them as sources.
+	void dragEnterEvent(QDragEnterEvent *e) override;
+	void dropEvent(QDropEvent *e) override;
 
 signals:
 	void exported(const QString &path);
@@ -103,6 +129,9 @@ private slots:
 	void onAutoCut(); // source-track "Auto-cut on scene changes"
 	void onSaveProject();
 	void onOpenProject();
+	void onAddSource();          // "Add video…" button / sidebar
+	void onSourceRowChanged();   // sidebar selection → setActiveSource
+	void onRemoveSource();       // remove the selected source (if unused)
 
 private:
 	// Apply a speed value (multi-cut: to the selection; trim: global) and refresh
@@ -126,7 +155,7 @@ private:
 	QString voiceoverTempDir();       // per-session temp dir for takes (lazy)
 	void onSceneDetected(const QVector<qint64> &cutMs, const QString &err); // auto-cut result
 
-	void showFrame(qint64 ms);
+	void showFrame(int sourceId, qint64 ms);
 	void joinExport();
 	void startPlayback();
 	void stopPlayback();
@@ -138,8 +167,20 @@ private:
 	QString inPath_;
 	bool valid_ = false;
 
-	std::unique_ptr<FrameSeeker> seeker_;
-	TimelineThumbs *stripThumbs_ = nullptr; // background filmstrip decoder
+	// ---- Sources (multi-video mixing) ----
+	std::vector<EditorSource> sources_;
+	int activeSourceId_ = -1;
+	int nextSourceId_ = 0;
+	QListWidget *sourceList_ = nullptr; // left sidebar
+	EditorSource *sourceById(int id);
+	EditorSource *activeSource();
+	FrameSeeker *seekerFor(int id); // nullptr if unknown
+	int addSource(const QString &path); // opens + starts filmstrip; -1 on failure
+	void setActiveSource(int id);       // swap what the Source track/preview shows
+	void refreshSourceList();           // rebuild the sidebar rows
+	bool sourceInUse(int id) const;     // any cut references this source?
+
+	FrameSeeker *seeker_ = nullptr; // non-owning: the ACTIVE source's decoder
 	PreviewCanvas *canvas_ = nullptr;
 	Timeline *timeline_ = nullptr;
 	TrackEditor *tracks_ = nullptr;
@@ -187,6 +228,7 @@ private:
 
 	QTimer *previewTimer_ = nullptr;
 	qint64 pendingMs_ = -1;
+	int pendingSource_ = -1; // source for the pending preview frame
 
 	// Looping playback. Simple Trim: the trimmed region at the global speed
 	// (playAnchorMs_ = source ms at clock zero). Multi-Cut: the assembled output
@@ -197,6 +239,7 @@ private:
 	QElapsedTimer playClock_;
 	qint64 playAnchorMs_ = 0;
 	int playSeg_ = -1;
+	int playSourceId_ = -1; // source of the segment currently being decoded
 
 	ClipExporter *exporter_ = nullptr;
 	std::thread exportThread_;

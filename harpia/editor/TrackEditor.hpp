@@ -18,6 +18,7 @@ struct CutSegment {
 	qint64 srcStartMs = 0;
 	qint64 srcEndMs = 0;
 	double speed = 1.0;
+	int sourceId = 0; // which editor source this cut comes from (multi-source mix)
 
 	qint64 outDurationMs() const
 	{
@@ -27,7 +28,8 @@ struct CutSegment {
 
 	bool operator==(const CutSegment &o) const
 	{
-		return srcStartMs == o.srcStartMs && srcEndMs == o.srcEndMs && speed == o.speed;
+		return srcStartMs == o.srcStartMs && srcEndMs == o.srcEndMs && speed == o.speed &&
+		       sourceId == o.sourceId;
 	}
 };
 
@@ -60,6 +62,14 @@ public:
 	explicit TrackEditor(QWidget *parent = nullptr);
 
 	void setDuration(qint64 ms);
+
+	// Which editor source the Source track currently shows. New cuts created on
+	// the Source track are stamped with this id (multi-source mixing).
+	void setActiveSource(int id) { activeSourceId_ = id; }
+	// The editor source id relevant to the most recent scrubSource()/hoverScrub()
+	// emission (the active source for the Source track, the hovered/clicked
+	// segment's source for the Output track). Read synchronously in the slot.
+	int scrubSourceId() const { return lastScrubSourceId_; }
 
 	// Filmstrip thumbnails for the source track; entry i covers the time slice
 	// [i, i+1) * duration/count.
@@ -135,9 +145,24 @@ private:
 	// Split a cut into two at a source-time position (the click maps to it).
 	void splitSegment(int index, qint64 splitSrcMs);
 
+	// Emit a scrub/hover preview, remembering which source the ms belongs to so
+	// the window can decode from the right file (see scrubSourceId()).
+	void emitScrub(qint64 ms, int srcId)
+	{
+		lastScrubSourceId_ = srcId;
+		emit scrubSource(ms);
+	}
+	void emitHover(qint64 ms, int srcId)
+	{
+		lastScrubSourceId_ = srcId;
+		emit hoverScrub(ms);
+	}
+
 	TrackLayoutParams lp_;
 	QVector<CutSegment> segs_;
 	qint64 duration_ = 0;
+	int activeSourceId_ = 0;    // stamped onto new cuts from the Source track
+	int lastScrubSourceId_ = 0; // source of the most recent scrub/hover emit
 	int selected_ = -1;      // primary selection (drives resize + the slider value)
 	QSet<int> multiSel_;     // full selection; selected_ is a member when >= 0
 	qint64 playheadOutMs_ = -1;

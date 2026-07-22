@@ -240,7 +240,7 @@ void TrackEditor::wheelEvent(QWheelEvent *e)
 		clampView();
 		if (mode_ == Mode::None) { // preview the frame under the cursor
 			hoverMs_ = xToMs(x);
-			emit hoverScrub(hoverMs_);
+			emitHover(hoverMs_, activeSourceId_);
 		}
 	} else { // onOutput — same controls over the assembled output timeline
 		if (!pan) {
@@ -259,7 +259,7 @@ void TrackEditor::wheelEvent(QWheelEvent *e)
 			if (seg >= 0) {
 				hoverOutSeg_ = seg;
 				hoverOutX_ = x;
-				emit hoverScrub(srcMs);
+				emitHover(srcMs, segs_[seg].sourceId);
 			}
 		}
 	}
@@ -728,7 +728,7 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 	if (duration_ > 0 && sourceRect().contains(pos)) {
 		mode_ = Mode::CreatingCut;
 		dragStartMs_ = dragCurMs_ = xToMs(pos.x());
-		emit scrubSource(dragCurMs_);
+		emitScrub(dragCurMs_, activeSourceId_);
 		update();
 		return;
 	}
@@ -751,7 +751,7 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 			} else {
 				multiSel_.insert(idx);
 				selected_ = idx;
-				emit scrubSource(segs_[idx].srcStartMs);
+				emitScrub(segs_[idx].srcStartMs, segs_[idx].sourceId);
 			}
 			emit selectionChanged(selected_);
 			update();
@@ -763,7 +763,7 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 				multiSel_.insert(i);
 			selected_ = idx;
 			emit selectionChanged(selected_);
-			emit scrubSource(segs_[idx].srcStartMs);
+			emitScrub(segs_[idx].srcStartMs, segs_[idx].sourceId);
 			update();
 			return;
 		}
@@ -793,7 +793,7 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 				resizeOrigEnd_ = seg.srcEndMs;
 				resizeSrcPerPx_ = double(seg.srcEndMs - seg.srcStartMs) /
 						  double(std::max(1, r.width()));
-				emit scrubSource(onLeft ? seg.srcStartMs : seg.srcEndMs);
+				emitScrub(onLeft ? seg.srcStartMs : seg.srcEndMs, seg.sourceId);
 			} else {
 				mode_ = Mode::DraggingSegment;
 				// Simple click: move the output playhead to exactly where you
@@ -805,7 +805,7 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 				playheadOutMs_ = outMs;
 				qint64 srcMs = seg.srcStartMs;
 				sourceForOutput(outMs, &srcMs);
-				emit scrubSource(srcMs);
+				emitScrub(srcMs, seg.sourceId);
 			}
 		}
 		update();
@@ -818,7 +818,7 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 
 	if (mode_ == Mode::CreatingCut) {
 		dragCurMs_ = xToMs(pos.x());
-		emit scrubSource(dragCurMs_);
+		emitScrub(dragCurMs_, activeSourceId_);
 		update();
 		return;
 	}
@@ -841,11 +841,11 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 		if (mode_ == Mode::ResizingLeft) {
 			seg.srcStartMs = std::clamp<qint64>(resizeOrigStart_ + deltaMs, 0,
 							    resizeOrigEnd_ - kMinCutMs);
-			emit scrubSource(seg.srcStartMs);
+			emitScrub(seg.srcStartMs, seg.sourceId);
 		} else {
 			seg.srcEndMs = std::clamp<qint64>(resizeOrigEnd_ + deltaMs,
 							  resizeOrigStart_ + kMinCutMs, duration_);
-			emit scrubSource(seg.srcEndMs);
+			emitScrub(seg.srcEndMs, seg.sourceId);
 		}
 		dragMoved_ = true;
 		update();
@@ -863,7 +863,7 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 		setCursor(Qt::CrossCursor);
 		if (e->buttons() == Qt::NoButton && duration_ > 0) {
 			newHover = xToMs(pos.x());
-			emit hoverScrub(newHover);
+			emitHover(newHover, activeSourceId_);
 		}
 	} else {
 		int idx = -1;
@@ -890,7 +890,7 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 				newOutX = pos.x();
 				newHover = s.srcStartMs +
 					   qint64(f * double(s.srcEndMs - s.srcStartMs));
-				emit hoverScrub(newHover);
+				emitHover(newHover, s.sourceId);
 			}
 		} else {
 			unsetCursor();
@@ -937,6 +937,7 @@ void TrackEditor::mouseReleaseEvent(QMouseEvent *e)
 			CutSegment seg;
 			seg.srcStartMs = a;
 			seg.srcEndMs = b;
+			seg.sourceId = activeSourceId_;
 			segs_.append(seg);
 			selected_ = segs_.size() - 1;
 			multiSel_ = QSet<int>{selected_};

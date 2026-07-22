@@ -573,56 +573,57 @@ void TrackEditor::paintEvent(QPaintEvent *)
 		p.setBrush(sel ? kSegFillSel : kSegFill);
 		p.drawRoundedRect(r, 4, 4);
 
-		// One thumbnail per cut (its first frame) from the cut's OWN source, so a
-		// mix shows the right frames regardless of which source is active. If the
-		// source's strip hasn't decoded yet, show the block without a thumbnail.
-		int thumbW = 0;
+		// Filmstrip across the whole cut, sampled from the cut's OWN source, so a
+		// long segment shows its progression (not just one frame) and a mix shows
+		// the right frames regardless of which source is active. If the source's
+		// strip hasn't decoded yet, the block stays plain.
 		const auto tIt = srcThumbs_.constFind(segs_[i].sourceId);
 		const qint64 srcDur = srcThumbDur_.value(segs_[i].sourceId, 0);
 		if (tIt != srcThumbs_.constEnd() && !tIt.value().isEmpty() && srcDur > 0) {
 			const QVector<QImage> &strip = tIt.value();
-			const int ti = std::clamp(
-				int(double(segs_[i].srcStartMs) / srcDur * strip.size()), 0,
-				int(strip.size()) - 1);
-			const QImage &t = strip[ti];
-			if (!t.isNull() && t.height() > 0) {
-				const int th = r.height() - 2;
-				thumbW = std::min(th * t.width() / t.height(), r.width() - 2);
-				QPainterPath segClip;
-				segClip.addRoundedRect(r, 4, 4);
-				p.save();
-				p.setClipPath(segClip);
-				p.drawImage(QRect(r.x() + 1, r.y() + 1, thumbW, th), t);
-				p.restore();
-			}
-		}
-
-		// Labels: beside the thumbnail when there is room, else compact overlay.
-		const QString l1 =
-			QStringLiteral("#%1 · %2×").arg(i + 1).arg(segs_[i].speed, 0, 'g', 3);
-		const QString l2 =
-			QStringLiteral("%1s").arg(segs_[i].outDurationMs() / 1000.0, 0, 'f', 1);
-		p.setFont(segFont);
-		const int textX = r.x() + thumbW + 5;
-		const int room = r.right() - textX;
-		if (room >= 30) {
-			p.setPen(QColor(0xe6, 0xe6, 0xe6));
-			const QRect top(textX, r.y() + 1, room - 2, r.height() / 2 - 1);
-			const QRect bot(textX, r.y() + r.height() / 2, room - 2, r.height() / 2 - 1);
-			p.drawText(top, Qt::AlignVCenter | Qt::AlignLeft,
-				   p.fontMetrics().elidedText(l1, Qt::ElideRight, room - 2));
-			p.drawText(bot, Qt::AlignVCenter | Qt::AlignLeft,
-				   p.fontMetrics().elidedText(l2, Qt::ElideRight, room - 2));
-		} else if (r.width() >= 26) {
+			double aspect = 16.0 / 9.0;
+			for (const QImage &t : strip)
+				if (!t.isNull()) {
+					aspect = double(t.width()) / double(t.height());
+					break;
+				}
+			const int th = r.height() - 2;
+			const int tileW = std::max(8, int(th * aspect));
+			const qint64 s0 = segs_[i].srcStartMs, s1 = segs_[i].srcEndMs;
 			QPainterPath segClip;
 			segClip.addRoundedRect(r, 4, 4);
 			p.save();
 			p.setClipPath(segClip);
-			p.fillRect(QRect(r.x(), r.bottom() - 12, r.width(), 13), QColor(0, 0, 0, 150));
+			for (int x = r.x() + 1; x < r.right() - 1; x += tileW) {
+				// This tile's center → source-time within the cut → strip index.
+				const double f = std::clamp(
+					double(x + tileW / 2 - r.x()) / std::max(1, r.width()), 0.0, 1.0);
+				const qint64 ms = s0 + qint64(f * double(s1 - s0));
+				const int ti =
+					std::clamp(int(double(ms) / srcDur * strip.size()), 0,
+						   int(strip.size()) - 1);
+				if (!strip[ti].isNull())
+					p.drawImage(QRect(x, r.y() + 1, tileW, th), strip[ti]);
+			}
+			p.restore();
+		}
+
+		// Label overlay: a dark bar along the bottom with cut #, speed, duration.
+		if (r.width() >= 26) {
+			const QString label = QStringLiteral("#%1 · %2× · %3s")
+						      .arg(i + 1)
+						      .arg(segs_[i].speed, 0, 'g', 3)
+						      .arg(segs_[i].outDurationMs() / 1000.0, 0, 'f', 1);
+			p.setFont(segFont);
+			QPainterPath segClip;
+			segClip.addRoundedRect(r, 4, 4);
+			p.save();
+			p.setClipPath(segClip);
+			p.fillRect(QRect(r.x(), r.bottom() - 12, r.width(), 13), QColor(0, 0, 0, 160));
 			p.setPen(QColor(0xe6, 0xe6, 0xe6));
-			p.drawText(QRect(r.x() + 2, r.bottom() - 12, r.width() - 4, 13),
+			p.drawText(QRect(r.x() + 3, r.bottom() - 12, r.width() - 5, 13),
 				   Qt::AlignVCenter | Qt::AlignLeft,
-				   p.fontMetrics().elidedText(l1, Qt::ElideRight, r.width() - 4));
+				   p.fontMetrics().elidedText(label, Qt::ElideRight, r.width() - 5));
 			p.restore();
 		}
 

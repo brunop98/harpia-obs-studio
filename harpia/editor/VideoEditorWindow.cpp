@@ -44,6 +44,7 @@
 #include <QStackedWidget>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QEvent>
 #include <QIcon>
 #include <QListWidget>
 #include <QMimeData>
@@ -224,6 +225,26 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	speedLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 	bar->addWidget(speedLabel_);
 	bar->addSpacing(10);
+
+	// Sources toggle — show/hide the floating Sources panel.
+	sourcesBtn_ = new QPushButton(QStringLiteral("Sources"), this);
+	sourcesBtn_->setCheckable(true);
+	sourcesBtn_->setChecked(true);
+	sourcesBtn_->setToolTip(QStringLiteral("Show/hide the floating Sources panel"));
+	connect(sourcesBtn_, &QPushButton::toggled, this, [this](bool on) {
+		if (!sourcesPanel_)
+			return;
+		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		if (on) {
+			showSourcesPanel();
+		} else {
+			st.setValue(QStringLiteral("editor/sourcesGeom"), sourcesPanel_->saveGeometry());
+			sourcesPanel_->hide();
+		}
+		st.setValue(QStringLiteral("editor/sourcesShown"), on);
+	});
+	bar->addWidget(sourcesBtn_);
+	bar->addSpacing(6);
 
 	// Inspector toggle — show/hide the right-side properties panel.
 	inspectorBtn_ = new QPushButton(QStringLiteral("Inspector"), this);
@@ -458,42 +479,41 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	insLayout->addWidget(inspHint_);
 	insLayout->addStretch(1);
 
-	// ---- Left sidebar: the list of sources (videos) you can cut from -------
-	auto *sidebar = new QWidget(this);
-	auto *sideLayout = new QVBoxLayout(sidebar);
-	sideLayout->setContentsMargins(6, 4, 6, 6);
+	// ---- Sources: a floating, toggleable panel of videos you can cut from ----
+	sourcesPanel_ = new QWidget(this, Qt::Tool | Qt::WindowTitleHint | Qt::WindowCloseButtonHint);
+	sourcesPanel_->setWindowTitle(QStringLiteral("Sources"));
+	sourcesPanel_->resize(220, 440);
+	auto *sideLayout = new QVBoxLayout(sourcesPanel_);
+	sideLayout->setContentsMargins(8, 8, 8, 8);
 	sideLayout->setSpacing(6);
-	auto *sideHeader = new QLabel(QStringLiteral("Sources"), this);
-	sideHeader->setStyleSheet(QStringLiteral("font-weight:bold; color:#c8ccd4;"));
-	sideLayout->addWidget(sideHeader);
-	sourceList_ = new QListWidget(this);
+	sourceList_ = new QListWidget(sourcesPanel_);
 	sourceList_->setIconSize(QSize(96, 54));
+	sourceList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	sourceList_->setToolTip(QStringLiteral(
-		"Videos you can cut from. Drop video files here (or anywhere on the window) "
-		"to add more; click one to cut from it."));
+		"Videos you can cut from. Drop video files onto the editor to add more; "
+		"click one to cut from it."));
 	sideLayout->addWidget(sourceList_, 1);
-	auto *addSrcBtn = new QPushButton(QStringLiteral("Add video…"), this);
+	auto *addSrcBtn = new QPushButton(QStringLiteral("Add video…"), sourcesPanel_);
 	addSrcBtn->setToolTip(QStringLiteral("Add another video as a source (or drag files onto the window)"));
 	connect(addSrcBtn, &QPushButton::clicked, this, &VideoEditorWindow::onAddSource);
 	sideLayout->addWidget(addSrcBtn);
-	auto *removeSrcBtn = new QPushButton(QStringLiteral("Remove"), this);
+	auto *removeSrcBtn = new QPushButton(QStringLiteral("Remove"), sourcesPanel_);
 	removeSrcBtn->setToolTip(QStringLiteral("Remove the selected source (only if no cut uses it)"));
 	connect(removeSrcBtn, &QPushButton::clicked, this, &VideoEditorWindow::onRemoveSource);
 	sideLayout->addWidget(removeSrcBtn);
 	connect(sourceList_, &QListWidget::itemSelectionChanged, this,
 		&VideoEditorWindow::onSourceRowChanged);
+	sourcesPanel_->installEventFilter(this); // keep the toolbar toggle in sync
 
-	// Left sources | (preview/editing split) | right inspector.
+	// (preview/editing split) | right inspector. Sources float over this.
 	auto *hsplit = new QSplitter(Qt::Horizontal, this);
 	hsplit->setChildrenCollapsible(false);
 	hsplit->setHandleWidth(6);
-	hsplit->addWidget(sidebar);
 	hsplit->addWidget(splitter);
 	hsplit->addWidget(inspector_);
-	hsplit->setStretchFactor(0, 1); // sources
-	hsplit->setStretchFactor(1, 5); // editing area takes the lion's share
-	hsplit->setStretchFactor(2, 1); // inspector
-	hsplit->setSizes({170, 700, 190});
+	hsplit->setStretchFactor(0, 5); // editing area takes the lion's share
+	hsplit->setStretchFactor(1, 1); // inspector
+	hsplit->setSizes({820, 190});
 	root->addWidget(hsplit, 1);
 
 	playTimer_ = new QTimer(this);
@@ -821,6 +841,55 @@ void VideoEditorWindow::dropEvent(QDropEvent *e)
 		setActiveSource(firstAdded);
 		e->acceptProposedAction();
 	}
+}
+
+void VideoEditorWindow::showSourcesPanel()
+{
+	if (!sourcesPanel_)
+		return;
+	if (!sourcesPlaced_) {
+		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		const QByteArray geom = st.value(QStringLiteral("editor/sourcesGeom")).toByteArray();
+		if (!geom.isEmpty())
+			sourcesPanel_->restoreGeometry(geom);
+		else
+			sourcesPanel_->move(geometry().left() + 16, geometry().top() + 76);
+		sourcesPlaced_ = true;
+	}
+	sourcesPanel_->show();
+	sourcesPanel_->raise();
+}
+
+void VideoEditorWindow::showEvent(QShowEvent *e)
+{
+	QDialog::showEvent(e);
+	if (sourcesFirstShown_)
+		return;
+	sourcesFirstShown_ = true;
+	// Restore the persisted toggle state on the first display.
+	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	const bool shown = st.value(QStringLiteral("editor/sourcesShown"), true).toBool();
+	if (sourcesBtn_) {
+		QSignalBlocker b(sourcesBtn_);
+		sourcesBtn_->setChecked(shown);
+	}
+	if (shown)
+		showSourcesPanel();
+}
+
+bool VideoEditorWindow::eventFilter(QObject *watched, QEvent *e)
+{
+	// Closing the floating panel via its title-bar X mirrors the toolbar toggle.
+	if (watched == sourcesPanel_ && e->type() == QEvent::Close) {
+		if (sourcesBtn_ && sourcesBtn_->isChecked()) {
+			QSignalBlocker b(sourcesBtn_);
+			sourcesBtn_->setChecked(false);
+		}
+		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		st.setValue(QStringLiteral("editor/sourcesGeom"), sourcesPanel_->saveGeometry());
+		st.setValue(QStringLiteral("editor/sourcesShown"), false);
+	}
+	return QDialog::eventFilter(watched, e);
 }
 
 bool VideoEditorWindow::multiCut() const

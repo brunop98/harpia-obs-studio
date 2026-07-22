@@ -28,6 +28,8 @@ class QStackedWidget;
 class QTimer;
 class QDragEnterEvent;
 class QDropEvent;
+class QEvent;
+class QShowEvent;
 
 namespace harpia {
 
@@ -103,6 +105,8 @@ protected:
 	// Drag-and-drop video files onto the editor to add them as sources.
 	void dragEnterEvent(QDragEnterEvent *e) override;
 	void dropEvent(QDropEvent *e) override;
+	void showEvent(QShowEvent *e) override;              // first-show: place Sources panel
+	bool eventFilter(QObject *watched, QEvent *e) override; // sync toggle when panel closed
 
 signals:
 	void exported(const QString &path);
@@ -171,7 +175,12 @@ private:
 	std::vector<EditorSource> sources_;
 	int activeSourceId_ = -1;
 	int nextSourceId_ = 0;
-	QListWidget *sourceList_ = nullptr; // left sidebar
+	QListWidget *sourceList_ = nullptr;      // inside the floating Sources panel
+	QWidget *sourcesPanel_ = nullptr;        // floating, toggleable tool window
+	QPushButton *sourcesBtn_ = nullptr;      // toolbar toggle
+	bool sourcesPlaced_ = false;             // has the panel been positioned yet?
+	bool sourcesFirstShown_ = false;         // gate the one-time initial show
+	void showSourcesPanel();                 // position (first time) + show + raise
 	EditorSource *sourceById(int id);
 	EditorSource *activeSource();
 	FrameSeeker *seekerFor(int id); // nullptr if unknown

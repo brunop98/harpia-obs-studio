@@ -669,7 +669,16 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 				emit scrubSource(onLeft ? seg.srcStartMs : seg.srcEndMs);
 			} else {
 				mode_ = Mode::DraggingSegment;
-				emit scrubSource(seg.srcStartMs);
+				// Simple click: move the output playhead to exactly where you
+				// clicked and preview that frame (not just the segment's start).
+				const double f = std::clamp(
+					double(pos.x() - r.left()) / std::max(1, r.width()), 0.0, 1.0);
+				const qint64 outMs = outputStartOf(idx) +
+						     qint64(f * segs_[idx].outDurationMs());
+				playheadOutMs_ = outMs;
+				qint64 srcMs = seg.srcStartMs;
+				sourceForOutput(outMs, &srcMs);
+				emit scrubSource(srcMs);
 			}
 		}
 		update();

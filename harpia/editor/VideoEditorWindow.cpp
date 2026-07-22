@@ -210,7 +210,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	speedSlider_->setValue(speedToSlider(1.0));
 	speedSlider_->setMinimumWidth(140);
 	speedSlider_->setToolTip(QStringLiteral("Playback speed (0.1×–50×); scaled so low speeds are easy to fine-tune"));
-	bar->addWidget(speedSlider_, 1); // takes the slack so Inspector/Dev pin right
+	bar->addWidget(speedSlider_); // compact, fixed width (see applyChrome)
 	speedSpin_ = new QDoubleSpinBox(this);
 	speedSpin_->setRange(kMinSpeed, kMaxSpeed);
 	speedSpin_->setDecimals(2);
@@ -224,7 +224,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	speedLabel_->setMinimumWidth(56);
 	speedLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 	bar->addWidget(speedLabel_);
-	bar->addSpacing(10);
+	bar->addStretch(1); // slack here: transport+speed left, panel toggles right
 
 	// Sources toggle — show/hide the floating Sources panel.
 	sourcesBtn_ = new QPushButton(QStringLiteral("Sources"), this);
@@ -501,8 +501,16 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	removeSrcBtn->setToolTip(QStringLiteral("Remove the selected source (only if no cut uses it)"));
 	connect(removeSrcBtn, &QPushButton::clicked, this, &VideoEditorWindow::onRemoveSource);
 	sideLayout->addWidget(removeSrcBtn);
+	auto *srcHint = new QLabel(
+		QStringLiteral("Drag videos onto the editor · double-click a source to add its whole clip."),
+		sourcesPanel_);
+	srcHint->setWordWrap(true);
+	srcHint->setStyleSheet(QStringLiteral("color:#7f858e;"));
+	sideLayout->addWidget(srcHint);
 	connect(sourceList_, &QListWidget::itemSelectionChanged, this,
 		&VideoEditorWindow::onSourceRowChanged);
+	connect(sourceList_, &QListWidget::itemDoubleClicked, this,
+		&VideoEditorWindow::onSourceDoubleClicked);
 	sourcesPanel_->installEventFilter(this); // keep the toolbar toggle in sync
 
 	// (preview/editing split) | right inspector. Sources float over this.
@@ -634,8 +642,10 @@ void VideoEditorWindow::applyChrome(const EditorChromeParams &p)
 		if (l)
 			l->setStyleSheet(insStyle);
 
-	if (speedSlider_)
+	if (speedSlider_) {
 		speedSlider_->setMinimumWidth(p.speedSliderMinW);
+		speedSlider_->setMaximumWidth(p.speedSliderMinW); // fixed, compact width
+	}
 	if (speedSpin_)
 		speedSpin_->setFixedWidth(p.speedSpinW);
 }
@@ -747,7 +757,12 @@ void VideoEditorWindow::refreshSourceList()
 	QSignalBlocker b(sourceList_); // rebuild must not fire selection changes
 	sourceList_->clear();
 	for (const EditorSource &s : sources_) {
-		auto *item = new QListWidgetItem(s.name);
+		auto *item = new QListWidgetItem(
+			QStringLiteral("%1\n%2s · %3×%4")
+				.arg(s.name)
+				.arg(s.durationMs / 1000.0, 0, 'f', 1)
+				.arg(s.width)
+				.arg(s.height));
 		item->setData(Qt::UserRole, s.id);
 		if (!s.thumbCache.isEmpty() && !s.thumbCache.front().isNull())
 			item->setIcon(QIcon(QPixmap::fromImage(s.thumbCache.front())));
@@ -813,6 +828,28 @@ void VideoEditorWindow::onRemoveSource()
 		setActiveSource(sources_.front().id);
 	else
 		refreshSourceList();
+}
+
+void VideoEditorWindow::onSourceDoubleClicked(QListWidgetItem *item)
+{
+	if (!item)
+		return;
+	const int id = item->data(Qt::UserRole).toInt();
+	EditorSource *s = sourceById(id);
+	if (!s || s->durationMs <= 0)
+		return;
+	// Drop the whole clip onto the Output track as one cut — a fast rough mix.
+	if (!multiCut())
+		setEditMode(true);
+	CutSegment c;
+	c.srcStartMs = 0;
+	c.srcEndMs = s->durationMs;
+	c.speed = 1.0;
+	c.sourceId = id;
+	tracks_->addSegments({c});
+	updateInfoLabel();
+	updateInspector();
+	scheduleSnapshot();
 }
 
 void VideoEditorWindow::dragEnterEvent(QDragEnterEvent *e)

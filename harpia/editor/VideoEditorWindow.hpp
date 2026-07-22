@@ -21,6 +21,7 @@ class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
 class QListWidget;
+class QListWidgetItem;
 class QProgressDialog;
 class QPushButton;
 class QSlider;
@@ -135,6 +136,7 @@ private slots:
 	void onOpenProject();
 	void onAddSource();          // "Add video…" button / sidebar
 	void onSourceRowChanged();   // sidebar selection → setActiveSource
+	void onSourceDoubleClicked(QListWidgetItem *item); // append whole clip as a cut
 	void onRemoveSource();       // remove the selected source (if unused)
 
 private:

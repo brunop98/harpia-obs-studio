@@ -24,23 +24,32 @@ QSettings devSettings()
 {
 	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
 }
-constexpr int kDefaultButtonHeight = 28; // shipped toolbar/transport button height
 } // namespace
 
-int DevPanel::loadButtonHeight()
+EditorChromeParams DevPanel::loadChrome()
 {
+	const EditorChromeParams d; // struct defaults ARE the shipped defaults
+	EditorChromeParams p;
 	QSettings s = devSettings();
 	s.beginGroup(QStringLiteral("devLayout"));
-	const int h = s.value(QStringLiteral("win/btnH"), kDefaultButtonHeight).toInt();
+	p.buttonH = s.value(QStringLiteral("win/btnH"), d.buttonH).toInt();
+	p.timecodeFontPx = s.value(QStringLiteral("win/tcFont"), d.timecodeFontPx).toInt();
+	p.inspectorFontPx = s.value(QStringLiteral("win/insFont"), d.inspectorFontPx).toInt();
+	p.speedSliderMinW = s.value(QStringLiteral("win/speedW"), d.speedSliderMinW).toInt();
+	p.speedSpinW = s.value(QStringLiteral("win/spinW"), d.speedSpinW).toInt();
 	s.endGroup();
-	return h;
+	return p;
 }
 
-void DevPanel::saveButtonHeight(int h)
+void DevPanel::saveChrome(const EditorChromeParams &p)
 {
 	QSettings s = devSettings();
 	s.beginGroup(QStringLiteral("devLayout"));
-	s.setValue(QStringLiteral("win/btnH"), h);
+	s.setValue(QStringLiteral("win/btnH"), p.buttonH);
+	s.setValue(QStringLiteral("win/tcFont"), p.timecodeFontPx);
+	s.setValue(QStringLiteral("win/insFont"), p.inspectorFontPx);
+	s.setValue(QStringLiteral("win/speedW"), p.speedSliderMinW);
+	s.setValue(QStringLiteral("win/spinW"), p.speedSpinW);
 	s.endGroup();
 }
 
@@ -158,10 +167,19 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 	root->addWidget(hint);
 
 	// Window-level toolbar tweaks (not part of any timeline layout struct).
+	const EditorChromeParams ch = loadChrome();
 	auto *winBox = new QGroupBox(QStringLiteral("Editor window"), inner);
 	auto *winForm = new QFormLayout(winBox);
 	winForm->addRow(QStringLiteral("Button height"),
-			winBtnH_ = spin(16, 64, loadButtonHeight(), &DevPanel::applyButtons));
+			winBtnH_ = spin(16, 64, ch.buttonH, &DevPanel::applyChrome));
+	winForm->addRow(QStringLiteral("Timecode font size"),
+			winTcFont_ = spin(8, 48, ch.timecodeFontPx, &DevPanel::applyChrome));
+	winForm->addRow(QStringLiteral("Inspector font size"),
+			winInsFont_ = spin(8, 32, ch.inspectorFontPx, &DevPanel::applyChrome));
+	winForm->addRow(QStringLiteral("Speed slider min width"),
+			winSpeedW_ = spin(60, 600, ch.speedSliderMinW, &DevPanel::applyChrome));
+	winForm->addRow(QStringLiteral("Speed value box width"),
+			winSpinW_ = spin(48, 160, ch.speedSpinW, &DevPanel::applyChrome));
 	root->addWidget(winBox);
 
 	const TimelineLayoutParams tl = timeline_->layoutParams();
@@ -314,11 +332,16 @@ void DevPanel::applyVoice()
 	saveFrom(timeline_->layoutParams(), tracks_->layoutParams(), p, preview_->layoutParams());
 }
 
-void DevPanel::applyButtons()
+void DevPanel::applyChrome()
 {
-	const int h = winBtnH_->value();
-	saveButtonHeight(h);
-	emit buttonHeightChanged(h);
+	EditorChromeParams p;
+	p.buttonH = winBtnH_->value();
+	p.timecodeFontPx = winTcFont_->value();
+	p.inspectorFontPx = winInsFont_->value();
+	p.speedSliderMinW = winSpeedW_->value();
+	p.speedSpinW = winSpinW_->value();
+	saveChrome(p);
+	emit chromeChanged(p);
 }
 
 void DevPanel::resetDefaults()
@@ -354,15 +377,20 @@ void DevPanel::resetDefaults()
 	voTrackH_->setValue(vo.trackH);
 	voMinClipW_->setValue(vo.minClipW);
 	voEdgeZone_->setValue(vo.edgeZone);
-	winBtnH_->setValue(kDefaultButtonHeight);
+	const EditorChromeParams ch; // struct defaults ARE the shipped defaults
+	winBtnH_->setValue(ch.buttonH);
+	winTcFont_->setValue(ch.timecodeFontPx);
+	winInsFont_->setValue(ch.inspectorFontPx);
+	winSpeedW_->setValue(ch.speedSliderMinW);
+	winSpinW_->setValue(ch.speedSpinW);
 	loading_ = false;
 	timeline_->setLayoutParams(tl);
 	tracks_->setLayoutParams(tr);
 	voice_->setLayoutParams(vo);
 	preview_->setLayoutParams(pv);
 	saveFrom(tl, tr, vo, pv);
-	saveButtonHeight(kDefaultButtonHeight);
-	emit buttonHeightChanged(kDefaultButtonHeight);
+	saveChrome(ch);
+	emit chromeChanged(ch);
 }
 
 } // namespace harpia

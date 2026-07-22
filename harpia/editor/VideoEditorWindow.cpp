@@ -230,8 +230,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	connect(devBtn, &QPushButton::clicked, this, [this]() {
 		if (!devPanel_) {
 			devPanel_ = new DevPanel(timeline_, tracks_, voTrack_, canvas_, this);
-			connect(devPanel_, &DevPanel::buttonHeightChanged, this,
-				&VideoEditorWindow::applyButtonHeight);
+			connect(devPanel_, &DevPanel::chromeChanged, this,
+				&VideoEditorWindow::applyChrome);
 		}
 		devPanel_->show();
 		devPanel_->raise();
@@ -555,18 +555,35 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	}
 
 	// Collect every button now (the Developer Panel is created lazily, so its
-	// own buttons are excluded) and apply the saved Dev-tunable height.
+	// own buttons are excluded) and apply the saved Dev-tunable chrome.
 	uiButtons_ = findChildren<QPushButton *>();
-	applyButtonHeight(DevPanel::loadButtonHeight());
+	applyChrome(DevPanel::loadChrome());
 }
 
-void VideoEditorWindow::applyButtonHeight(int h)
+void VideoEditorWindow::applyChrome(const EditorChromeParams &p)
 {
-	if (h <= 0)
-		return;
-	for (QPushButton *b : uiButtons_)
-		if (b)
-			b->setFixedHeight(h);
+	if (p.buttonH > 0)
+		for (QPushButton *b : uiButtons_)
+			if (b)
+				b->setFixedHeight(p.buttonH);
+
+	if (cursorTimeLabel_)
+		cursorTimeLabel_->setStyleSheet(
+			QStringLiteral("color:#e8eaed; font-family:monospace; font-weight:bold; "
+				       "font-size:%1px;")
+				.arg(p.timecodeFontPx));
+
+	const QString insStyle =
+		QStringLiteral("color:#e8eaed; font-family:monospace; font-size:%1px;")
+			.arg(p.inspectorFontPx);
+	for (QLabel *l : {inspInMs_, inspOutMs_, inspSrcLen_, inspSpeed_, inspOutLen_})
+		if (l)
+			l->setStyleSheet(insStyle);
+
+	if (speedSlider_)
+		speedSlider_->setMinimumWidth(p.speedSliderMinW);
+	if (speedSpin_)
+		speedSpin_->setFixedWidth(p.speedSpinW);
 }
 
 bool VideoEditorWindow::multiCut() const

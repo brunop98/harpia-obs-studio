@@ -173,7 +173,9 @@ private:
 	// construction (before the Developer Panel exists) so its own buttons are
 	// never resized.
 	QList<QPushButton *> uiButtons_;
-	void applyButtonHeight(int h);
+	// Apply the Dev-tunable window chrome (button height, text sizes, speed
+	// slider/value widths) live.
+	void applyChrome(const struct EditorChromeParams &p);
 	QVector<EditorSnapshot> history_;
 	int histIndex_ = -1;    // current position in history_
 	bool restoring_ = false; // guard: restoring must not schedule new snapshots

@@ -9,6 +9,17 @@ class QSpinBox;
 
 namespace harpia {
 
+// Window-level "chrome" tweaks for the editor toolbar/transport — not part of
+// any timeline layout struct. The editor reads these at startup and follows
+// chromeChanged() live from the Developer Panel.
+struct EditorChromeParams {
+	int buttonH = 28;         // toolbar/transport button height
+	int timecodeFontPx = 18;  // the big monospace playhead timecode
+	int inspectorFontPx = 13; // the inspector's value readouts
+	int speedSliderMinW = 140; // speed slider minimum width
+	int speedSpinW = 72;       // editable speed-value box width
+};
+
 class PreviewCanvas;
 class Timeline;
 class TrackEditor;
@@ -35,21 +46,20 @@ public:
 	static void saveFrom(const TimelineLayoutParams &tl, const TrackLayoutParams &tr,
 			     const VoiceoverLayoutParams &vo, const PreviewLayoutParams &pv);
 
-	// The toolbar/transport button height is a window-level tweak (not part of
-	// any timeline layout struct); the editor reads it at startup and follows
-	// buttonHeightChanged() live.
-	static int loadButtonHeight();
-	static void saveButtonHeight(int h);
+	// Window-chrome tweaks (button height, text sizes, speed-slider widths):
+	// the editor reads these at startup and follows chromeChanged() live.
+	static EditorChromeParams loadChrome();
+	static void saveChrome(const EditorChromeParams &p);
 
 signals:
-	void buttonHeightChanged(int h);
+	void chromeChanged(const EditorChromeParams &p);
 
 private:
 	void applyTimeline();
 	void applyTracks();
 	void applyVoice();
 	void applyPreview();
-	void applyButtons();
+	void applyChrome();
 	void resetDefaults();
 
 	Timeline *timeline_ = nullptr;
@@ -57,8 +67,12 @@ private:
 	VoiceoverTrack *voice_ = nullptr;
 	PreviewCanvas *preview_ = nullptr;
 
-	// Editor window (toolbar/transport).
+	// Editor window (toolbar/transport chrome).
 	QSpinBox *winBtnH_ = nullptr;
+	QSpinBox *winTcFont_ = nullptr;
+	QSpinBox *winInsFont_ = nullptr;
+	QSpinBox *winSpeedW_ = nullptr;
+	QSpinBox *winSpinW_ = nullptr;
 
 	// Simple Trim timeline.
 	QSpinBox *tlPad_ = nullptr;

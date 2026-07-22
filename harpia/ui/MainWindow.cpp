@@ -824,6 +824,73 @@ static QString gdiNameForMonitorId(const std::string &monId)
 	}
 	return QString();
 }
+
+// The monitor's human-readable name (what Qt 6's QScreen::name() returns on
+// Windows, e.g. "SMT22A550") for a GDI display like "\\.\DISPLAY1", via the
+// DisplayConfig API. Empty if unresolved.
+static QString friendlyNameForGdi(const QString &gdiName)
+{
+	UINT32 nPath = 0, nMode = 0;
+	if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &nPath, &nMode) != ERROR_SUCCESS)
+		return QString();
+	std::vector<DISPLAYCONFIG_PATH_INFO> paths(nPath);
+	std::vector<DISPLAYCONFIG_MODE_INFO> modes(nMode);
+	if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &nPath, paths.data(), &nMode, modes.data(),
+			       nullptr) != ERROR_SUCCESS)
+		return QString();
+	for (UINT32 i = 0; i < nPath; ++i) {
+		DISPLAYCONFIG_SOURCE_DEVICE_NAME src{};
+		src.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+		src.header.size = sizeof(src);
+		src.header.adapterId = paths[i].sourceInfo.adapterId;
+		src.header.id = paths[i].sourceInfo.id;
+		if (DisplayConfigGetDeviceInfo(&src.header) != ERROR_SUCCESS)
+			continue;
+		if (gdiName.compare(QString::fromWCharArray(src.viewGdiDeviceName),
+				    Qt::CaseInsensitive) != 0)
+			continue;
+		DISPLAYCONFIG_TARGET_DEVICE_NAME tgt{};
+		tgt.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+		tgt.header.size = sizeof(tgt);
+		tgt.header.adapterId = paths[i].targetInfo.adapterId;
+		tgt.header.id = paths[i].targetInfo.id;
+		if (DisplayConfigGetDeviceInfo(&tgt.header) != ERROR_SUCCESS)
+			continue;
+		return QString::fromWCharArray(tgt.monitorFriendlyDeviceName);
+	}
+	return QString();
+}
+
+// Native desktop rect (device pixels) of a GDI display.
+static bool nativeRectForGdi(const QString &gdiName, QRect *out)
+{
+	DEVMODEW dm{};
+	dm.dmSize = sizeof(dm);
+	if (!EnumDisplaySettingsW(reinterpret_cast<const wchar_t *>(gdiName.utf16()),
+				  ENUM_CURRENT_SETTINGS, &dm))
+		return false;
+	*out = QRect(dm.dmPosition.x, dm.dmPosition.y, int(dm.dmPelsWidth), int(dm.dmPelsHeight));
+	return true;
+}
+
+// All active GDI displays with their native rects (for arrangement matching).
+static std::vector<std::pair<QString, QRect>> activeGdiDisplays()
+{
+	std::vector<std::pair<QString, QRect>> out;
+	for (DWORD ai = 0;; ++ai) {
+		DISPLAY_DEVICEW adapter{};
+		adapter.cb = sizeof(adapter);
+		if (!EnumDisplayDevicesW(nullptr, ai, &adapter, 0))
+			break;
+		if (!(adapter.StateFlags & DISPLAY_DEVICE_ACTIVE))
+			continue;
+		const QString name = QString::fromWCharArray(adapter.DeviceName);
+		QRect r;
+		if (nativeRectForGdi(name, &r))
+			out.emplace_back(name, r);
+	}
+	return out;
+}
 #endif
 
 QScreen *MainWindow::screenForActivePreset() const
@@ -844,21 +911,65 @@ QScreen *MainWindow::screenForActivePreset() const
 	if (idx < (int)mons.size() && mons[idx].isString) {
 		const QString gdi = gdiNameForMonitorId(mons[idx].strValue);
 		if (!gdi.isEmpty()) {
-			// Tolerant match: Qt versions differ on whether QScreen::name()
-			// includes the "\\.\" prefix — accept either containing the other.
+			auto pick = [&](QScreen *s, const char *how) {
+				blog(LOG_INFO, "[harpia] monitor map: OBS #%d (%s) -> Qt screen '%s' via %s",
+				     idx, gdi.toUtf8().constData(), s->name().toUtf8().constData(), how);
+				return s;
+			};
+
+			// 1) Qt 5-style: QScreen::name() IS the GDI name ("\\.\DISPLAY2"),
+			//    with or without the "\\.\" prefix.
 			for (QScreen *s : screens) {
 				const QString qn = s->name();
 				if (qn.compare(gdi, Qt::CaseInsensitive) == 0 ||
 				    gdi.endsWith(qn, Qt::CaseInsensitive) ||
-				    qn.endsWith(gdi, Qt::CaseInsensitive)) {
-					if (s != screens.at(idx))
-						blog(LOG_INFO,
-						     "[harpia] monitor map: OBS #%d (%s) -> Qt screen '%s' "
-						     "(index order differed)",
-						     idx, gdi.toUtf8().constData(), qn.toUtf8().constData());
-					return s;
+				    qn.endsWith(gdi, Qt::CaseInsensitive))
+					return pick(s, "GDI name");
+			}
+
+			// 2) Qt 6-style: QScreen::name() is the monitor's friendly name
+			//    ("SMT22A550"). Only trust it when unique — twin monitors share it.
+			const QString friendly = friendlyNameForGdi(gdi);
+			if (!friendly.isEmpty()) {
+				QScreen *match = nullptr;
+				int matches = 0;
+				for (QScreen *s : screens)
+					if (s->name().compare(friendly, Qt::CaseInsensitive) == 0) {
+						match = s;
+						++matches;
+					}
+				if (matches == 1)
+					return pick(match, "friendly name");
+			}
+
+			// 3) Arrangement rank: Qt preserves the physical left-to-right /
+			//    top-to-bottom layout, so the Nth display by native position is
+			//    the Nth QScreen by logical position (DPI-scaling safe).
+			QRect nat;
+			if (nativeRectForGdi(gdi, &nat)) {
+				auto gdiList = activeGdiDisplays();
+				std::sort(gdiList.begin(), gdiList.end(),
+					  [](const auto &a, const auto &b) {
+						  return a.second.x() != b.second.x()
+								 ? a.second.x() < b.second.x()
+								 : a.second.y() < b.second.y();
+					  });
+				int rank = -1;
+				for (size_t i = 0; i < gdiList.size(); ++i)
+					if (gdiList[i].first.compare(gdi, Qt::CaseInsensitive) == 0)
+						rank = int(i);
+				if (rank >= 0 && (int)gdiList.size() == screens.size()) {
+					QList<QScreen *> byPos = screens;
+					std::sort(byPos.begin(), byPos.end(), [](QScreen *a, QScreen *b) {
+						const QPoint pa = a->geometry().topLeft();
+						const QPoint pb = b->geometry().topLeft();
+						return pa.x() != pb.x() ? pa.x() < pb.x()
+									: pa.y() < pb.y();
+					});
+					return pick(byPos.at(rank), "arrangement rank");
 				}
 			}
+
 			blog(LOG_WARNING,
 			     "[harpia] monitor map: no Qt screen matches OBS #%d (%s) — using Qt index %d",
 			     idx, gdi.toUtf8().constData(), idx);

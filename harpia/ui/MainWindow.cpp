@@ -844,9 +844,24 @@ QScreen *MainWindow::screenForActivePreset() const
 	if (idx < (int)mons.size() && mons[idx].isString) {
 		const QString gdi = gdiNameForMonitorId(mons[idx].strValue);
 		if (!gdi.isEmpty()) {
-			for (QScreen *s : screens)
-				if (s->name().compare(gdi, Qt::CaseInsensitive) == 0)
+			// Tolerant match: Qt versions differ on whether QScreen::name()
+			// includes the "\\.\" prefix — accept either containing the other.
+			for (QScreen *s : screens) {
+				const QString qn = s->name();
+				if (qn.compare(gdi, Qt::CaseInsensitive) == 0 ||
+				    gdi.endsWith(qn, Qt::CaseInsensitive) ||
+				    qn.endsWith(gdi, Qt::CaseInsensitive)) {
+					if (s != screens.at(idx))
+						blog(LOG_INFO,
+						     "[harpia] monitor map: OBS #%d (%s) -> Qt screen '%s' "
+						     "(index order differed)",
+						     idx, gdi.toUtf8().constData(), qn.toUtf8().constData());
 					return s;
+				}
+			}
+			blog(LOG_WARNING,
+			     "[harpia] monitor map: no Qt screen matches OBS #%d (%s) — using Qt index %d",
+			     idx, gdi.toUtf8().constData(), idx);
 		}
 	}
 #endif

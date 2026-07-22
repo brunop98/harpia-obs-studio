@@ -7,6 +7,7 @@
 #include "ExportOptionsDialog.hpp"
 #include "FrameSeeker.hpp"
 #include "LevelMeter.hpp"
+#include "SceneDetector.hpp"
 #include "TimelineThumbs.hpp"
 #include "TrackEditor.hpp"
 #include "VoiceoverMixer.hpp"
@@ -318,6 +319,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	connect(tracks_, &TrackEditor::segmentsChanged, this, &VideoEditorWindow::onSegmentsChanged);
 	connect(tracks_, &TrackEditor::segmentsChanged, this, &VideoEditorWindow::scheduleSnapshot);
 	connect(tracks_, &TrackEditor::selectionChanged, this, &VideoEditorWindow::onSegmentSelected);
+	connect(tracks_, &TrackEditor::autoCutRequested, this, &VideoEditorWindow::onAutoCut);
 	connect(trimModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(false); });
 	connect(cutModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(true); });
 	connect(cropToggle_, &QCheckBox::toggled, this, &VideoEditorWindow::onCropToggled);
@@ -498,6 +500,10 @@ VideoEditorWindow::~VideoEditorWindow()
 	stopPlayback();
 	if (voRecorder_ && voRecorder_->isRecording())
 		voRecorder_->stop();
+	if (sceneThread_.joinable()) {
+		sceneCancel_.store(true);
+		sceneThread_.join();
+	}
 	joinExport();
 	// Voiceover takes are session-only — clear the temp dir on close.
 	if (!voTempDir_.isEmpty())
@@ -636,6 +642,128 @@ void VideoEditorWindow::onImportAudioClicked()
 	clip.srcTotalMs = VoiceoverTrack::wavDurationMs(base);
 	clip.durationMs = clip.srcTotalMs;
 	voTrack_->addClip(clip);
+}
+
+void VideoEditorWindow::onAutoCut()
+{
+	if (!valid_ || sceneThread_.joinable())
+		return;
+
+	// Modal: pick the scene-change threshold before detecting.
+	QDialog dlg(this);
+	dlg.setWindowTitle(QStringLiteral("Auto-cut on scene changes"));
+	auto *v = new QVBoxLayout(&dlg);
+	auto *info = new QLabel(
+		QStringLiteral("Detect visual scene changes and add a cut at each one.\n"
+			       "Lower threshold = more cuts, higher = fewer."),
+		&dlg);
+	info->setWordWrap(true);
+	v->addWidget(info);
+	auto *row = new QHBoxLayout;
+	row->addWidget(new QLabel(QStringLiteral("Threshold"), &dlg));
+	auto *sl = new QSlider(Qt::Horizontal, &dlg);
+	sl->setRange(0, 100);
+	sl->setValue(40); // 0.40 — FFmpeg's typical default
+	row->addWidget(sl, 1);
+	auto *val = new QLabel(QStringLiteral("0.40"), &dlg);
+	val->setMinimumWidth(40);
+	row->addWidget(val);
+	connect(sl, &QSlider::valueChanged, val,
+		[val](int x) { val->setText(QString::number(x / 100.0, 'f', 2)); });
+	v->addLayout(row);
+	auto *btns = new QHBoxLayout;
+	btns->addStretch(1);
+	auto *startBtn = new QPushButton(QStringLiteral("Start"), &dlg);
+	startBtn->setDefault(true);
+	auto *cancelBtn = new QPushButton(QStringLiteral("Cancel"), &dlg);
+	btns->addWidget(startBtn);
+	btns->addWidget(cancelBtn);
+	v->addLayout(btns);
+	connect(startBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
+	connect(cancelBtn, &QPushButton::clicked, &dlg, &QDialog::reject);
+	if (dlg.exec() != QDialog::Accepted)
+		return;
+	const double threshold = sl->value() / 100.0;
+
+	stopPlayback();
+	sceneCancel_.store(false);
+	sceneProgress_ = new QProgressDialog(QStringLiteral("Detecting scene changes…"),
+					     QStringLiteral("Cancel"), 0, 100, this);
+	sceneProgress_->setWindowModality(Qt::WindowModal);
+	sceneProgress_->setAutoClose(false);
+	sceneProgress_->setAutoReset(false);
+	sceneProgress_->setMinimumDuration(0);
+	connect(sceneProgress_, &QProgressDialog::canceled, this, [this]() { sceneCancel_.store(true); });
+	sceneProgress_->setValue(0);
+	sceneProgress_->show();
+
+	const QString path = inPath_;
+	sceneThread_ = std::thread([this, path, threshold]() {
+		QString err;
+		const QVector<qint64> cuts = SceneDetector::detect(
+			path, threshold, &sceneCancel_,
+			[this](int pct) {
+				QMetaObject::invokeMethod(
+					this, [this, pct]() {
+						if (sceneProgress_)
+							sceneProgress_->setValue(pct);
+					},
+					Qt::QueuedConnection);
+			},
+			&err);
+		QMetaObject::invokeMethod(
+			this, [this, cuts, err]() { onSceneDetected(cuts, err); }, Qt::QueuedConnection);
+	});
+}
+
+void VideoEditorWindow::onSceneDetected(const QVector<qint64> &cutMs, const QString &err)
+{
+	if (sceneThread_.joinable())
+		sceneThread_.join();
+	if (sceneProgress_) {
+		sceneProgress_->reset();
+		sceneProgress_->deleteLater();
+		sceneProgress_ = nullptr;
+	}
+	if (sceneCancel_.load())
+		return;
+	if (!err.isEmpty()) {
+		QMessageBox::warning(this, QStringLiteral("Auto-cut"), err);
+		return;
+	}
+
+	// Build cut spans from the boundaries: 0, each scene change, end.
+	const qint64 dur = seeker_->durationMs();
+	QVector<qint64> bounds;
+	bounds.push_back(0);
+	for (qint64 t : cutMs)
+		if (t > 0 && t < dur)
+			bounds.push_back(t);
+	bounds.push_back(dur);
+	std::sort(bounds.begin(), bounds.end());
+
+	QVector<CutSegment> segs;
+	for (int i = 0; i + 1 < bounds.size(); ++i) {
+		const qint64 a = bounds[i], b = bounds[i + 1];
+		if (b - a >= 150) { // skip sub-150ms slivers (the cut minimum)
+			CutSegment s;
+			s.srcStartMs = a;
+			s.srcEndMs = b;
+			s.speed = 1.0;
+			segs.push_back(s);
+		}
+	}
+	if (segs.size() <= 1) {
+		QMessageBox::information(
+			this, QStringLiteral("Auto-cut"),
+			QStringLiteral("No scene changes were detected — try a lower threshold."));
+		return;
+	}
+	if (!multiCut())
+		setEditMode(true); // show the output track
+	tracks_->addSegments(segs);
+	QMessageBox::information(this, QStringLiteral("Auto-cut"),
+				QStringLiteral("Added %1 cuts from scene changes.").arg(segs.size()));
 }
 
 void VideoEditorWindow::joinExport()

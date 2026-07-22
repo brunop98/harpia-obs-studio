@@ -148,6 +148,8 @@ target_sources(
     editor/VoiceoverTrack.hpp
     editor/VoiceoverMixer.cpp
     editor/VoiceoverMixer.hpp
+    editor/SceneDetector.cpp
+    editor/SceneDetector.hpp
     editor/TimelineThumbs.cpp
     editor/TimelineThumbs.hpp
     editor/AudioRetimer.cpp

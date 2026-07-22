@@ -74,6 +74,7 @@ public:
 	// selects a range; the speed slider applies to every selected cut.
 	QList<int> selectedIndices() const;
 	void setSegmentSpeed(int index, double speed); // repaints; no segmentsChanged
+	void addSegments(const QVector<CutSegment> &segs); // append (auto-cut populate)
 	void removeSegment(int index);
 	void removeSelected();
 
@@ -96,6 +97,7 @@ signals:
 	void selectionChanged(int index); // -1 = nothing selected
 	void scrubSource(qint64 ms);      // preview the source frame while interacting
 	void hoverScrub(qint64 ms);       // preview while merely hovering (no click)
+	void autoCutRequested();          // "Auto-cut on scene changes" from the source menu
 
 protected:
 	void paintEvent(QPaintEvent *) override;

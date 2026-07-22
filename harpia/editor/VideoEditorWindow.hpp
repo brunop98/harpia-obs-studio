@@ -9,6 +9,7 @@
 #include <QString>
 #include <QVector>
 
+#include <atomic>
 #include <memory>
 #include <thread>
 
@@ -98,6 +99,7 @@ private slots:
 	void onSegmentSelected(int index);
 	void onVoiceoverRecordClicked();
 	void onImportAudioClicked();
+	void onAutoCut(); // source-track "Auto-cut on scene changes"
 
 private:
 	// Apply a speed value (multi-cut: to the selection; trim: global) and refresh
@@ -119,6 +121,7 @@ private:
 	qint64 outputDurationMs() const;  // trimmed/assembled output length
 	qint64 currentOutputMs() const;   // output-time under the playhead right now
 	QString voiceoverTempDir();       // per-session temp dir for takes (lazy)
+	void onSceneDetected(const QVector<qint64> &cutMs, const QString &err); // auto-cut result
 
 	void showFrame(qint64 ms);
 	void joinExport();
@@ -175,6 +178,11 @@ private:
 	std::thread exportThread_;
 	QProgressDialog *progress_ = nullptr;
 	QString outPath_;
+
+	// Auto-cut (scene detection) runs on a worker thread.
+	std::thread sceneThread_;
+	std::atomic<bool> sceneCancel_{false};
+	QProgressDialog *sceneProgress_ = nullptr;
 
 	// ---- Voiceover (narration recorded over the video) ----
 	VoiceoverTrack *voTrack_ = nullptr;

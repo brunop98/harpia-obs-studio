@@ -291,6 +291,18 @@ void TrackEditor::setSegments(const QVector<CutSegment> &segs)
 	update();
 }
 
+void TrackEditor::addSegments(const QVector<CutSegment> &segs)
+{
+	if (segs.isEmpty())
+		return;
+	segs_ += segs;
+	selected_ = segs_.size() - 1;
+	multiSel_ = QSet<int>{selected_};
+	emit segmentsChanged();
+	emit selectionChanged(selected_);
+	update();
+}
+
 void TrackEditor::removeSegment(int index)
 {
 	if (index < 0 || index >= segs_.size())
@@ -654,6 +666,12 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 				update();
 			}
 			showSegmentMenu(idx, e->globalPosition().toPoint(), pos);
+		} else if (duration_ > 0 && sourceRect().contains(pos)) {
+			// Source-track menu: auto-populate cuts from scene changes.
+			QMenu menu(this);
+			QAction *autoCut = menu.addAction(QStringLiteral("Auto-cut on scene changes…"));
+			if (menu.exec(e->globalPosition().toPoint()) == autoCut)
+				emit autoCutRequested();
 		}
 		return;
 	}

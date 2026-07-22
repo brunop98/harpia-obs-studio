@@ -100,6 +100,8 @@ private slots:
 	void onVoiceoverRecordClicked();
 	void onImportAudioClicked();
 	void onAutoCut(); // source-track "Auto-cut on scene changes"
+	void onSaveProject();
+	void onOpenProject();
 
 private:
 	// Apply a speed value (multi-cut: to the selection; trim: global) and refresh

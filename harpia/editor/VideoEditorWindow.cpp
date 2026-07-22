@@ -26,6 +26,9 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QMessageBox>
 #include <QProcess>
@@ -274,6 +277,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	infoLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 	controls->addWidget(infoLabel_);
 	controls->addSpacing(12);
+	auto *openProjBtn = new QPushButton(QStringLiteral("Open project…"), this);
+	openProjBtn->setToolTip(QStringLiteral("Load a saved editing project (.harpiaproj)"));
+	auto *saveProjBtn = new QPushButton(QStringLiteral("Save project…"), this);
+	saveProjBtn->setToolTip(QStringLiteral("Save the current editing as a project to continue later"));
+	controls->addWidget(openProjBtn);
+	controls->addWidget(saveProjBtn);
+	controls->addSpacing(12);
 	auto *saveBtn = new QPushButton(QStringLiteral("Save…"), this);
 	saveBtn->setDefault(true);
 	auto *cancelBtn = new QPushButton(QStringLiteral("Close"), this);
@@ -328,6 +338,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	connect(resetCrop, &QPushButton::clicked, this, [this]() { canvas_->resetCrop(); });
 	connect(saveBtn, &QPushButton::clicked, this, &VideoEditorWindow::onSave);
 	connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
+	connect(openProjBtn, &QPushButton::clicked, this, &VideoEditorWindow::onOpenProject);
+	connect(saveProjBtn, &QPushButton::clicked, this, &VideoEditorWindow::onSaveProject);
 
 	if (valid_) {
 		canvas_->setVideoSize(seeker_->width(), seeker_->height());
@@ -764,6 +776,170 @@ void VideoEditorWindow::onSceneDetected(const QVector<qint64> &cutMs, const QStr
 	tracks_->addSegments(segs);
 	QMessageBox::information(this, QStringLiteral("Auto-cut"),
 				QStringLiteral("Added %1 cuts from scene changes.").arg(segs.size()));
+}
+
+void VideoEditorWindow::onSaveProject()
+{
+	if (!valid_)
+		return;
+	const QString suggested = QFileInfo(inPath_).absolutePath() + QLatin1Char('/') +
+				  QFileInfo(inPath_).completeBaseName() + QStringLiteral("_edit.harpiaproj");
+	QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Save project"), suggested,
+						    QStringLiteral("Harpia project (*.harpiaproj)"));
+	if (path.isEmpty())
+		return;
+	if (!path.endsWith(QStringLiteral(".harpiaproj"), Qt::CaseInsensitive))
+		path += QStringLiteral(".harpiaproj");
+
+	const EditorSnapshot s = snapshot();
+	const QString projDir = QFileInfo(path).absolutePath();
+	const QString assetsRel = QFileInfo(path).completeBaseName() + QStringLiteral("_assets");
+	const QString assetsDir = projDir + QLatin1Char('/') + assetsRel;
+
+	QJsonObject root;
+	root[QStringLiteral("harpiaProject")] = 1;
+	root[QStringLiteral("source")] = QDir::toNativeSeparators(inPath_);
+	root[QStringLiteral("sourceName")] = QFileInfo(inPath_).fileName();
+	root[QStringLiteral("durationMs")] = double(seeker_->durationMs());
+	root[QStringLiteral("trimStart")] = double(s.trimStart);
+	root[QStringLiteral("trimEnd")] = double(s.trimEnd);
+	root[QStringLiteral("speed")] = s.speed;
+	QJsonObject crop;
+	crop[QStringLiteral("enabled")] = s.cropEnabled;
+	crop[QStringLiteral("x")] = s.cropRect.x();
+	crop[QStringLiteral("y")] = s.cropRect.y();
+	crop[QStringLiteral("w")] = s.cropRect.width();
+	crop[QStringLiteral("h")] = s.cropRect.height();
+	root[QStringLiteral("crop")] = crop;
+
+	QJsonArray segArr;
+	for (const CutSegment &c : s.segments) {
+		QJsonObject o;
+		o[QStringLiteral("srcStart")] = double(c.srcStartMs);
+		o[QStringLiteral("srcEnd")] = double(c.srcEndMs);
+		o[QStringLiteral("speed")] = c.speed;
+		segArr.append(o);
+	}
+	root[QStringLiteral("segments")] = segArr;
+
+	// Copy each voiceover WAV into the project's assets folder so it's portable.
+	QJsonArray voArr;
+	if (!s.voiceClips.isEmpty())
+		QDir().mkpath(assetsDir);
+	bool copyOk = true;
+	for (int i = 0; i < s.voiceClips.size(); ++i) {
+		const VoiceoverClip &v = s.voiceClips[i];
+		const QString dstName = QStringLiteral("vo_%1.wav").arg(i, 3, 10, QLatin1Char('0'));
+		const QString dst = assetsDir + QLatin1Char('/') + dstName;
+		QFile::remove(dst);
+		if (!QFile::copy(v.path, dst))
+			copyOk = false;
+		QJsonObject o;
+		o[QStringLiteral("file")] = assetsRel + QLatin1Char('/') + dstName;
+		o[QStringLiteral("outStart")] = double(v.outStartMs);
+		o[QStringLiteral("duration")] = double(v.durationMs);
+		o[QStringLiteral("srcStart")] = double(v.srcStartMs);
+		o[QStringLiteral("srcTotal")] = double(v.srcTotalMs);
+		o[QStringLiteral("volume")] = v.volume;
+		o[QStringLiteral("fadeIn")] = v.fadeInMs;
+		o[QStringLiteral("fadeOut")] = v.fadeOutMs;
+		voArr.append(o);
+	}
+	root[QStringLiteral("voiceovers")] = voArr;
+
+	QFile f(path);
+	if (!f.open(QIODevice::WriteOnly)) {
+		QMessageBox::warning(this, QStringLiteral("Save project"),
+				     QStringLiteral("Could not write the project file."));
+		return;
+	}
+	f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+	f.close();
+	if (!copyOk)
+		QMessageBox::warning(
+			this, QStringLiteral("Save project"),
+			QStringLiteral("Project saved, but some voiceover audio could not be copied."));
+	else
+		QMessageBox::information(this, QStringLiteral("Save project"),
+					QStringLiteral("Project saved."));
+}
+
+void VideoEditorWindow::onOpenProject()
+{
+	if (!valid_)
+		return;
+	const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Open project"),
+							  QFileInfo(inPath_).absolutePath(),
+							  QStringLiteral("Harpia project (*.harpiaproj)"));
+	if (path.isEmpty())
+		return;
+	QFile f(path);
+	if (!f.open(QIODevice::ReadOnly)) {
+		QMessageBox::warning(this, QStringLiteral("Open project"),
+				     QStringLiteral("Could not read the project file."));
+		return;
+	}
+	QJsonParseError perr;
+	const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &perr);
+	f.close();
+	if (perr.error != QJsonParseError::NoError || !doc.isObject() ||
+	    !doc.object().contains(QStringLiteral("harpiaProject"))) {
+		QMessageBox::warning(this, QStringLiteral("Open project"),
+				     QStringLiteral("This is not a valid Harpia project file."));
+		return;
+	}
+	const QJsonObject root = doc.object();
+
+	const QString projSourceName = root.value(QStringLiteral("sourceName")).toString();
+	if (!projSourceName.isEmpty() && projSourceName != QFileInfo(inPath_).fileName()) {
+		const auto ret = QMessageBox::question(
+			this, QStringLiteral("Open project"),
+			QStringLiteral("This project was made for \"%1\", but you're editing \"%2\".\n"
+				       "Apply the edits anyway?")
+				.arg(projSourceName, QFileInfo(inPath_).fileName()));
+		if (ret != QMessageBox::Yes)
+			return;
+	}
+
+	EditorSnapshot s;
+	s.trimStart = qint64(root.value(QStringLiteral("trimStart")).toDouble(0));
+	s.trimEnd = qint64(root.value(QStringLiteral("trimEnd")).toDouble(double(seeker_->durationMs())));
+	s.speed = root.value(QStringLiteral("speed")).toDouble(1.0);
+	const QJsonObject crop = root.value(QStringLiteral("crop")).toObject();
+	s.cropEnabled = crop.value(QStringLiteral("enabled")).toBool(false);
+	s.cropRect = QRect(crop.value(QStringLiteral("x")).toInt(), crop.value(QStringLiteral("y")).toInt(),
+			   crop.value(QStringLiteral("w")).toInt(), crop.value(QStringLiteral("h")).toInt());
+	for (const QJsonValue &jv : root.value(QStringLiteral("segments")).toArray()) {
+		const QJsonObject o = jv.toObject();
+		CutSegment c;
+		c.srcStartMs = qint64(o.value(QStringLiteral("srcStart")).toDouble());
+		c.srcEndMs = qint64(o.value(QStringLiteral("srcEnd")).toDouble());
+		c.speed = o.value(QStringLiteral("speed")).toDouble(1.0);
+		s.segments.push_back(c);
+	}
+	const QString projDir = QFileInfo(path).absolutePath();
+	for (const QJsonValue &jv : root.value(QStringLiteral("voiceovers")).toArray()) {
+		const QJsonObject o = jv.toObject();
+		VoiceoverClip v;
+		v.path = QDir(projDir).filePath(o.value(QStringLiteral("file")).toString());
+		v.outStartMs = qint64(o.value(QStringLiteral("outStart")).toDouble());
+		v.durationMs = qint64(o.value(QStringLiteral("duration")).toDouble());
+		v.srcStartMs = qint64(o.value(QStringLiteral("srcStart")).toDouble());
+		v.srcTotalMs = qint64(o.value(QStringLiteral("srcTotal")).toDouble());
+		v.volume = o.value(QStringLiteral("volume")).toDouble(1.0);
+		v.fadeInMs = o.value(QStringLiteral("fadeIn")).toInt(15);
+		v.fadeOutMs = o.value(QStringLiteral("fadeOut")).toInt(15);
+		v.peaks = VoiceoverTrack::loadPeaks(v.path, 600); // for the waveform
+		s.voiceClips.push_back(v);
+	}
+
+	restoreSnapshot(s);
+	if (!s.segments.isEmpty() && !multiCut())
+		setEditMode(true);
+	captureSnapshot(); // make the load an undo step
+	updateUndoRedoButtons();
+	QMessageBox::information(this, QStringLiteral("Open project"),
+				QStringLiteral("Project loaded."));
 }
 
 void VideoEditorWindow::joinExport()

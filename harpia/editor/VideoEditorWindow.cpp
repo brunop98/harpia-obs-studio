@@ -234,7 +234,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// Sources toggle — show/hide the floating Sources panel.
 	sourcesBtn_ = new QPushButton(QStringLiteral("Sources"), this);
 	sourcesBtn_->setCheckable(true);
-	sourcesBtn_->setChecked(true);
+	sourcesBtn_->setChecked(false); // closed until the user opens it
 	sourcesBtn_->setToolTip(QStringLiteral("Show/hide the floating Sources panel"));
 	connect(sourcesBtn_, &QPushButton::toggled, this, [this](bool on) {
 		if (!sourcesPanel_)
@@ -1002,18 +1002,8 @@ void VideoEditorWindow::showSourcesPanel()
 void VideoEditorWindow::showEvent(QShowEvent *e)
 {
 	QDialog::showEvent(e);
-	if (sourcesFirstShown_)
-		return;
-	sourcesFirstShown_ = true;
-	// Restore the persisted toggle state on the first display.
-	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
-	const bool shown = st.value(QStringLiteral("editor/sourcesShown"), true).toBool();
-	if (sourcesBtn_) {
-		QSignalBlocker b(sourcesBtn_);
-		sourcesBtn_->setChecked(shown);
-	}
-	if (shown)
-		showSourcesPanel();
+	// The Sources panel stays closed until the user opens it with the toolbar
+	// "Sources" button — it never opens on its own.
 }
 
 bool VideoEditorWindow::eventFilter(QObject *watched, QEvent *e)

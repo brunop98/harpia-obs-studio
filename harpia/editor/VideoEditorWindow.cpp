@@ -584,6 +584,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	new QShortcut(QKeySequence::Undo, this, this, &VideoEditorWindow::undo);
 	new QShortcut(QKeySequence::Redo, this, this, &VideoEditorWindow::redo);
 	new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Y), this, this, &VideoEditorWindow::redo);
+	// Spacebar toggles play/pause of the current preview (the assembled output
+	// in Multi-Cut). A window shortcut so it works regardless of which control
+	// has focus.
+	new QShortcut(QKeySequence(Qt::Key_Space), this, this, &VideoEditorWindow::onPlayPause);
 
 	connect(timeline_, &Timeline::scrub, this, &VideoEditorWindow::onScrub);
 	connect(timeline_, &Timeline::hoverScrub, this, &VideoEditorWindow::onHoverScrub);

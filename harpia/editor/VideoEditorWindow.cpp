@@ -28,6 +28,7 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -1289,10 +1290,22 @@ void VideoEditorWindow::onSaveProject()
 	const QString assetsDir = projDir + QLatin1Char('/') + assetsRel;
 
 	QJsonObject root;
-	root[QStringLiteral("harpiaProject")] = 1;
-	root[QStringLiteral("source")] = QDir::toNativeSeparators(inPath_);
+	root[QStringLiteral("harpiaProject")] = 2; // v2: multiple sources
+	// All sources (index by stable id; segments reference these ids).
+	QJsonArray srcArr;
+	for (const EditorSource &es : sources_) {
+		QJsonObject so;
+		so[QStringLiteral("id")] = es.id;
+		so[QStringLiteral("path")] = QDir::toNativeSeparators(es.path);
+		so[QStringLiteral("name")] = es.name;
+		so[QStringLiteral("durationMs")] = double(es.durationMs);
+		so[QStringLiteral("width")] = es.width;
+		so[QStringLiteral("height")] = es.height;
+		srcArr.append(so);
+	}
+	root[QStringLiteral("sources")] = srcArr;
+	// Kept for the "different file" hint when a v2 project is opened elsewhere.
 	root[QStringLiteral("sourceName")] = QFileInfo(inPath_).fileName();
-	root[QStringLiteral("durationMs")] = double(seeker_->durationMs());
 	root[QStringLiteral("trimStart")] = double(s.trimStart);
 	root[QStringLiteral("trimEnd")] = double(s.trimEnd);
 	root[QStringLiteral("speed")] = s.speed;
@@ -1310,6 +1323,7 @@ void VideoEditorWindow::onSaveProject()
 		o[QStringLiteral("srcStart")] = double(c.srcStartMs);
 		o[QStringLiteral("srcEnd")] = double(c.srcEndMs);
 		o[QStringLiteral("speed")] = c.speed;
+		o[QStringLiteral("source")] = c.sourceId;
 		segArr.append(o);
 	}
 	root[QStringLiteral("segments")] = segArr;
@@ -1381,16 +1395,62 @@ void VideoEditorWindow::onOpenProject()
 		return;
 	}
 	const QJsonObject root = doc.object();
+	const int ver = root.value(QStringLiteral("harpiaProject")).toInt(1);
 
-	const QString projSourceName = root.value(QStringLiteral("sourceName")).toString();
-	if (!projSourceName.isEmpty() && projSourceName != QFileInfo(inPath_).fileName()) {
-		const auto ret = QMessageBox::question(
-			this, QStringLiteral("Open project"),
-			QStringLiteral("This project was made for \"%1\", but you're editing \"%2\".\n"
-				       "Apply the edits anyway?")
-				.arg(projSourceName, QFileInfo(inPath_).fileName()));
-		if (ret != QMessageBox::Yes)
-			return;
+	// v2 projects carry their own list of sources — open (or relink) each and
+	// map its saved id onto the editor's live source id. v1 projects (single
+	// source) fall back to the primary source and the "different file" hint.
+	QHash<int, int> srcMap; // project source id -> editor source id
+	int defaultSrcId = sources_.empty() ? 0 : sources_.front().id;
+	if (ver >= 2 && root.value(QStringLiteral("sources")).isArray()) {
+		bool first = true;
+		for (const QJsonValue &jv : root.value(QStringLiteral("sources")).toArray()) {
+			const QJsonObject so = jv.toObject();
+			const int pid = so.value(QStringLiteral("id")).toInt();
+			QString spath = so.value(QStringLiteral("path")).toString();
+			const QString sname = so.value(QStringLiteral("name")).toString();
+			int eid = -1;
+			for (const EditorSource &es : sources_)
+				if (QFileInfo(es.path).absoluteFilePath() ==
+				    QFileInfo(spath).absoluteFilePath()) {
+					eid = es.id;
+					break;
+				}
+			if (eid < 0) {
+				if (!QFileInfo::exists(spath)) {
+					const QString picked = QFileDialog::getOpenFileName(
+						this,
+						QStringLiteral("Locate \"%1\"")
+							.arg(sname.isEmpty() ? QFileInfo(spath).fileName()
+									     : sname),
+						QFileInfo(path).absolutePath(),
+						QStringLiteral("Video files (*.mp4 *.mov *.mkv *.webm *.avi "
+							       "*.m4v *.gif *.wmv *.flv *.ts);;All files (*)"));
+					if (!picked.isEmpty())
+						spath = picked;
+				}
+				eid = addSource(spath);
+			}
+			if (eid >= 0) {
+				srcMap.insert(pid, eid);
+				if (first) {
+					defaultSrcId = eid;
+					first = false;
+				}
+			}
+		}
+	} else {
+		const QString projSourceName = root.value(QStringLiteral("sourceName")).toString();
+		if (!projSourceName.isEmpty() && projSourceName != QFileInfo(inPath_).fileName()) {
+			const auto ret = QMessageBox::question(
+				this, QStringLiteral("Open project"),
+				QStringLiteral(
+					"This project was made for \"%1\", but you're editing \"%2\".\n"
+					"Apply the edits anyway?")
+					.arg(projSourceName, QFileInfo(inPath_).fileName()));
+			if (ret != QMessageBox::Yes)
+				return;
+		}
 	}
 
 	EditorSnapshot s;
@@ -1407,6 +1467,10 @@ void VideoEditorWindow::onOpenProject()
 		c.srcStartMs = qint64(o.value(QStringLiteral("srcStart")).toDouble());
 		c.srcEndMs = qint64(o.value(QStringLiteral("srcEnd")).toDouble());
 		c.speed = o.value(QStringLiteral("speed")).toDouble(1.0);
+		// Remap the project's source id onto the live editor source (v1 has no
+		// per-segment source → the primary).
+		const int pid = o.value(QStringLiteral("source")).toInt(defaultSrcId);
+		c.sourceId = srcMap.isEmpty() ? defaultSrcId : srcMap.value(pid, defaultSrcId);
 		s.segments.push_back(c);
 	}
 	const QString projDir = QFileInfo(path).absolutePath();
@@ -1425,6 +1489,9 @@ void VideoEditorWindow::onOpenProject()
 		s.voiceClips.push_back(v);
 	}
 
+	// Show a source that the project actually uses, then apply the edits (which
+	// restore the trim range / segments on top).
+	setActiveSource(defaultSrcId);
 	restoreSnapshot(s);
 	if (!s.segments.isEmpty() && !multiCut())
 		setEditMode(true);

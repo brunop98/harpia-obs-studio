@@ -214,7 +214,7 @@ void TrackEditor::setSegmentSpeed(int index, double speed)
 {
 	if (index < 0 || index >= segs_.size())
 		return;
-	segs_[index].speed = std::clamp(speed, 0.25, 4.0);
+	segs_[index].speed = std::clamp(speed, 0.1, 50.0);
 	update();
 }
 

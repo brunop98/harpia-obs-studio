@@ -9,6 +9,7 @@
 
 class QCheckBox;
 class QComboBox;
+class QDoubleSpinBox;
 class QLabel;
 class QProgressDialog;
 class QPushButton;
@@ -64,13 +65,19 @@ private slots:
 	void onExportFinished(bool ok, bool canceled, const QString &err);
 	void onPlayPause();
 	void onPlayTick();
-	void onSpeedChanged(int sliderValue);
+	void onSpeedChanged(int sliderValue); // slider moved (exponential mapping)
+	void onSpeedSpinChanged(double value); // typed into the speed box
 	void onSegmentsChanged();
 	void onSegmentSelected(int index);
 	void onVoiceoverRecordClicked();
 	void onImportAudioClicked();
 
 private:
+	// Apply a speed value (multi-cut: to the selection; trim: global) and refresh
+	// the count label. Callers keep the slider + spin box in sync.
+	void applySpeed(double value);
+	void syncSpeedControls(double value); // set slider + spin without re-applying
+
 	// Voiceover helpers.
 	void startVoiceoverCapture();     // actually opens the mic + (talk-along) plays
 	void finishVoiceover();           // stop mic, create a clip from the take
@@ -107,7 +114,8 @@ private:
 
 	QPushButton *playBtn_ = nullptr;
 	QSlider *speedSlider_ = nullptr;
-	QLabel *speedLabel_ = nullptr;
+	QDoubleSpinBox *speedSpin_ = nullptr; // editable numeric speed (text input)
+	QLabel *speedLabel_ = nullptr;        // "(N cuts)" / "—" status next to it
 	double speed_ = 1.0;
 
 	QTimer *previewTimer_ = nullptr;

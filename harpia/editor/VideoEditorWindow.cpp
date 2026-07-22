@@ -15,6 +15,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDesktopServices>
+#include <QDoubleSpinBox>
 #include <QSignalBlocker>
 
 #include <algorithm>
@@ -44,6 +45,21 @@ QString previewTimeText(qint64 ms)
 		.arg(ms / 60000)
 		.arg((ms / 1000) % 60, 2, 10, QLatin1Char('0'))
 		.arg(ms % 1000, 3, 10, QLatin1Char('0'));
+}
+
+// Speed control: 0.1×..50×, mapped exponentially onto the slider so each step
+// multiplies by a constant factor (fine control at low speeds, like CapCut).
+constexpr double kMinSpeed = 0.1;
+constexpr double kMaxSpeed = 50.0;
+constexpr int kSpeedTicks = 1000;
+double sliderToSpeed(int v)
+{
+	return kMinSpeed * std::pow(kMaxSpeed / kMinSpeed, double(v) / kSpeedTicks);
+}
+int speedToSlider(double sp)
+{
+	sp = std::clamp(sp, kMinSpeed, kMaxSpeed);
+	return int(std::lround(kSpeedTicks * std::log(sp / kMinSpeed) / std::log(kMaxSpeed / kMinSpeed)));
 }
 
 void revealInFolder(const QString &path)
@@ -203,14 +219,25 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	playRow->addSpacing(12);
 	playRow->addWidget(new QLabel(QStringLiteral("Speed"), this));
 	speedSlider_ = new QSlider(Qt::Horizontal, this);
-	speedSlider_->setRange(25, 400); // 0.25× .. 4.00×
-	speedSlider_->setSingleStep(5);
-	speedSlider_->setPageStep(25);
-	speedSlider_->setValue(100); // 1.0×
+	speedSlider_->setRange(0, kSpeedTicks); // exponential 0.1×..50×
+	speedSlider_->setPageStep(kSpeedTicks / 20);
+	speedSlider_->setValue(speedToSlider(1.0));
 	speedSlider_->setMinimumWidth(180);
+	speedSlider_->setToolTip(QStringLiteral("Playback speed (0.1×–50×); scaled so low speeds are easy to fine-tune"));
 	playRow->addWidget(speedSlider_, 1);
-	speedLabel_ = new QLabel(QStringLiteral("1.00×"), this);
-	speedLabel_->setMinimumWidth(48);
+	// Editable numeric speed — type an exact value.
+	speedSpin_ = new QDoubleSpinBox(this);
+	speedSpin_->setRange(kMinSpeed, kMaxSpeed);
+	speedSpin_->setDecimals(2);
+	speedSpin_->setSingleStep(0.1);
+	speedSpin_->setSuffix(QStringLiteral("×"));
+	speedSpin_->setValue(1.0);
+	speedSpin_->setKeyboardTracking(false); // apply on Enter/focus-out, not each digit
+	speedSpin_->setFixedWidth(72);
+	playRow->addWidget(speedSpin_);
+	speedLabel_ = new QLabel(QString(), this); // "(N cuts)" / "—" status
+	speedLabel_->setMinimumWidth(56);
+	speedLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 	playRow->addWidget(speedLabel_);
 	root->addLayout(playRow);
 
@@ -237,6 +264,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	connect(playTimer_, &QTimer::timeout, this, &VideoEditorWindow::onPlayTick);
 	connect(playBtn_, &QPushButton::clicked, this, &VideoEditorWindow::onPlayPause);
 	connect(speedSlider_, &QSlider::valueChanged, this, &VideoEditorWindow::onSpeedChanged);
+	connect(speedSpin_, &QDoubleSpinBox::valueChanged, this, &VideoEditorWindow::onSpeedSpinChanged);
 	connect(this, &QDialog::rejected, this, &VideoEditorWindow::stopPlayback);
 
 	previewTimer_ = new QTimer(this);
@@ -294,6 +322,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 		saveBtn->setEnabled(false);
 		playBtn_->setEnabled(false);
 		speedSlider_->setEnabled(false);
+		speedSpin_->setEnabled(false);
 		cropToggle_->setEnabled(false);
 		trimModeBtn_->setEnabled(false);
 		cutModeBtn_->setEnabled(false);
@@ -362,14 +391,20 @@ void VideoEditorWindow::setEditMode(bool cut)
 		playBtn_->setToolTip(
 			QStringLiteral("Loop-play the trimmed section at the current speed"));
 		speedSlider_->setEnabled(valid_);
-		{
-			QSignalBlocker block(speedSlider_);
-			speedSlider_->setValue(int(speed_ * 100.0));
-		}
-		speedLabel_->setText(QStringLiteral("%1×").arg(speed_, 0, 'f', 2));
+		speedSpin_->setEnabled(valid_);
+		syncSpeedControls(speed_);
+		speedLabel_->setText(QString()); // no per-cut count in Simple Trim
 	}
 	updateInfoLabel();
 	updateVoiceoverAxis();
+}
+
+void VideoEditorWindow::syncSpeedControls(double value)
+{
+	QSignalBlocker bs(speedSlider_);
+	QSignalBlocker bp(speedSpin_);
+	speedSlider_->setValue(speedToSlider(value));
+	speedSpin_->setValue(value);
 }
 
 void VideoEditorWindow::updateInfoLabel()
@@ -400,17 +435,15 @@ void VideoEditorWindow::onSegmentSelected(int index)
 		return;
 	if (index >= 0 && index < tracks_->segments().size()) {
 		speedSlider_->setEnabled(true);
+		speedSpin_->setEnabled(true);
 		const double sp = tracks_->segments()[index].speed;
-		{
-			QSignalBlocker block(speedSlider_);
-			speedSlider_->setValue(int(std::lround(sp * 100.0)));
-		}
+		syncSpeedControls(sp);
 		const int n = tracks_->selectedIndices().size();
-		speedLabel_->setText(n > 1 ? QStringLiteral("%1× (%2 cuts)").arg(sp, 0, 'f', 2).arg(n)
-					   : QStringLiteral("%1×").arg(sp, 0, 'f', 2));
+		speedLabel_->setText(n > 1 ? QStringLiteral("(%1 cuts)").arg(n) : QString());
 	} else {
-		// No clip selected — the slider has nothing to edit.
+		// No clip selected — nothing to edit.
 		speedSlider_->setEnabled(false);
+		speedSpin_->setEnabled(false);
 		speedLabel_->setText(QStringLiteral("—"));
 	}
 }
@@ -711,19 +744,38 @@ void VideoEditorWindow::onPlayTick()
 
 void VideoEditorWindow::onSpeedChanged(int sliderValue)
 {
-	const double value = sliderValue / 100.0;
+	// Slider → exponential speed; mirror the value into the spin box.
+	const double value = sliderToSpeed(sliderValue);
+	{
+		QSignalBlocker bp(speedSpin_);
+		speedSpin_->setValue(value);
+	}
+	applySpeed(value);
+}
+
+void VideoEditorWindow::onSpeedSpinChanged(double value)
+{
+	// Typed value → matching slider position (exponential), then apply.
+	{
+		QSignalBlocker bs(speedSlider_);
+		speedSlider_->setValue(speedToSlider(value));
+	}
+	applySpeed(value);
+}
+
+void VideoEditorWindow::applySpeed(double value)
+{
+	value = std::clamp(value, kMinSpeed, kMaxSpeed);
 
 	if (multiCut()) {
-		// The slider edits EVERY selected cut's speed.
+		// The control edits EVERY selected cut's speed.
 		const QList<int> sel = tracks_->selectedIndices();
 		if (sel.isEmpty())
 			return;
 		for (int idx : sel)
 			tracks_->setSegmentSpeed(idx, value);
-		speedLabel_->setText(sel.size() > 1 ? QStringLiteral("%1× (%2 cuts)")
-							      .arg(value, 0, 'f', 2)
-							      .arg(sel.size())
-						    : QStringLiteral("%1×").arg(value, 0, 'f', 2));
+		speedLabel_->setText(sel.size() > 1 ? QStringLiteral("(%1 cuts)").arg(sel.size())
+						    : QString());
 		if (playing_) {
 			// Output durations shifted — re-anchor and re-map on the next tick.
 			playAnchorMs_ = std::min(playAnchorMs_ + playClock_.elapsed(),
@@ -742,7 +794,6 @@ void VideoEditorWindow::onSpeedChanged(int sliderValue)
 		playClock_.restart();
 	}
 	speed_ = value;
-	speedLabel_->setText(QStringLiteral("%1×").arg(speed_, 0, 'f', 2));
 	updateVoiceoverAxis();
 }
 

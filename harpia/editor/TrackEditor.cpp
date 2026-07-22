@@ -488,7 +488,8 @@ void TrackEditor::paintEvent(QPaintEvent *)
 				     .arg(segs_.size() == 1 ? QString() : QStringLiteral("s"))
 				     .arg(totalOutputMs() / 1000.0, 0, 'f', 1);
 	if (!segs_.isEmpty())
-		outCaption += QStringLiteral("   (drag to reorder · Ctrl+click multi-select · Del to delete)");
+		outCaption += QStringLiteral(
+			"   (drag to reorder · drag edge to trim · Shift+edge to change speed · Del to delete)");
 	p.drawText(QRect(out.x(), out.y() - lp_.captionH, out.width(), lp_.captionH),
 		   Qt::AlignVCenter | Qt::AlignLeft, outCaption);
 
@@ -811,6 +812,9 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 				resizeOrigEnd_ = seg.srcEndMs;
 				resizeSrcPerPx_ = double(seg.srcEndMs - seg.srcStartMs) /
 						  double(std::max(1, r.width()));
+				resizeOrigOutDur_ = seg.outDurationMs();
+				resizeOutPerPx_ =
+					double(outVisibleMs()) / double(std::max(1, outputRect().width()));
 				emitScrub(onLeft ? seg.srcStartMs : seg.srcEndMs, seg.sourceId);
 			} else {
 				mode_ = Mode::DraggingSegment;
@@ -852,9 +856,29 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 		return;
 	}
 	if ((mode_ == Mode::ResizingLeft || mode_ == Mode::ResizingRight) && selected_ >= 0) {
+		CutSegment &seg = segs_[selected_];
+
+		// Shift+trim = re-time: keep the source range, change SPEED so the same
+		// content fits the new output width the drag defines.
+		if (e->modifiers() & Qt::ShiftModifier) {
+			const double deltaPx = pos.x() - pressPos_.x();
+			double newOutDur = (mode_ == Mode::ResizingRight)
+						   ? resizeOrigOutDur_ + deltaPx * resizeOutPerPx_
+						   : resizeOrigOutDur_ - deltaPx * resizeOutPerPx_;
+			const double srcRange = double(resizeOrigEnd_ - resizeOrigStart_);
+			// Bound the width so speed stays within 0.1×..50×.
+			newOutDur = std::clamp(newOutDur, srcRange / 50.0, srcRange / 0.1);
+			seg.srcStartMs = resizeOrigStart_; // source content unchanged
+			seg.srcEndMs = resizeOrigEnd_;
+			seg.speed = std::clamp(srcRange / std::max(1.0, newOutDur), 0.1, 50.0);
+			emitScrub(mode_ == Mode::ResizingLeft ? seg.srcStartMs : seg.srcEndMs, seg.sourceId);
+			dragMoved_ = true;
+			update();
+			return;
+		}
+
 		// Live edge trim: convert the pixel delta into source ms with the scale
 		// captured at press, clamp, and preview the frame at the moving edge.
-		CutSegment &seg = segs_[selected_];
 		const qint64 deltaMs = qint64(std::llround((pos.x() - pressPos_.x()) * resizeSrcPerPx_));
 		if (mode_ == Mode::ResizingLeft) {
 			seg.srcStartMs = std::clamp<qint64>(resizeOrigStart_ + deltaMs, 0,

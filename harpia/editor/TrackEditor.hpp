@@ -208,6 +208,11 @@ private:
 	qint64 resizeOrigStart_ = 0;
 	qint64 resizeOrigEnd_ = 0;
 	double resizeSrcPerPx_ = 0.0;
+	// For Shift+trim (re-time): the cut's output duration at press and the
+	// output-ms-per-pixel scale, so dragging the edge changes speed to fit the
+	// same source content into the new width.
+	qint64 resizeOrigOutDur_ = 0;
+	double resizeOutPerPx_ = 0.0;
 };
 
 } // namespace harpia

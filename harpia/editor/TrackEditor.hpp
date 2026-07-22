@@ -115,12 +115,17 @@ private:
 	qint64 xToMs(int x) const;
 	qint64 visibleMs() const; // source-track window: duration / zoom
 	void clampView();
+	// Output track has its own zoom/pan over OUTPUT-time (0..totalOutputMs).
+	qint64 outVisibleMs() const;
+	int outMsToX(qint64 ms) const;
+	qint64 outXToMs(int x) const;
+	void clampOutView();
 	// (Re)render the source bar background + filmstrip into stripCache_ when
 	// the view changed — repaints then blit it instead of rescaling tiles.
 	void ensureStripCache(const QRect &src);
-	// Tick marks + time labels along the source track, so it's easy to tell where
-	// you are while editing (spacing adapts to the zoom level).
-	void drawTimeRuler(QPainter &p, const QRect &src) const;
+	// Tick marks + time labels along a track (source or output), spacing adapts
+	// to the zoom level. Maps [viewStart, viewStart+visible] across `bar`.
+	void drawTimeRuler(QPainter &p, const QRect &bar, qint64 viewStart, qint64 visible) const;
 	QVector<QRect> segmentRects() const;
 	int segmentAt(const QPoint &p) const; // -1 = none
 	int insertSlotAt(int x) const;        // 0..count reorder slot for a drop at x
@@ -138,6 +143,8 @@ private:
 	// Source-track zoom (Ctrl+scroll; plain scroll pans) + filmstrip.
 	double zoom_ = 1.0;
 	qint64 viewStart_ = 0;
+	double outZoom_ = 1.0;    // output-track zoom (1 = whole output visible)
+	qint64 outViewStart_ = 0; // first visible output-ms
 	QVector<QImage> thumbs_;
 
 	// Filmstrip render cache (keyed on size/zoom/view/thumbs revision/dpr).

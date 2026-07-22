@@ -30,7 +30,7 @@ TrackEditor::TrackEditor(QWidget *parent) : QWidget(parent)
 	setFocusPolicy(Qt::ClickFocus); // so Delete works after clicking a segment
 	setMouseTracking(true);         // cursor hints over the tracks
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-	setToolTip(QStringLiteral("Source track: scroll to zoom, Shift+scroll to pan"));
+	setToolTip(QStringLiteral("Scroll to zoom, Shift+scroll to pan (both the source and output tracks)"));
 }
 
 QSize TrackEditor::sizeHint() const
@@ -58,6 +58,8 @@ void TrackEditor::setDuration(qint64 ms)
 	duration_ = std::max<qint64>(0, ms);
 	zoom_ = 1.0;
 	viewStart_ = 0;
+	outZoom_ = 1.0;
+	outViewStart_ = 0;
 	update();
 }
 
@@ -120,15 +122,15 @@ qint64 TrackEditor::visibleMs() const
 	return std::max<qint64>(1, qint64(duration_ / zoom_));
 }
 
-void TrackEditor::drawTimeRuler(QPainter &p, const QRect &src) const
+void TrackEditor::drawTimeRuler(QPainter &p, const QRect &bar, qint64 viewStart, qint64 visible) const
 {
-	if (duration_ <= 0 || src.width() <= 0)
+	if (visible <= 0 || bar.width() <= 0)
 		return;
 	// Pick a "nice" tick interval so labels are ~70px apart at the current zoom.
 	static const qint64 kSteps[] = {200,   500,    1000,   2000,   5000,  10000,
 					15000, 30000,  60000,  120000, 300000, 600000,
 					900000, 1800000, 3600000};
-	const double msPerPx = double(visibleMs()) / std::max(1, src.width());
+	const double msPerPx = double(visible) / std::max(1, bar.width());
 	const qint64 want = qint64(msPerPx * 70.0);
 	qint64 step = kSteps[sizeof(kSteps) / sizeof(kSteps[0]) - 1];
 	for (qint64 s : kSteps) {
@@ -144,28 +146,31 @@ void TrackEditor::drawTimeRuler(QPainter &p, const QRect &src) const
 			return QStringLiteral("%1.%2s").arg(ms / 1000).arg((ms % 1000) / 100);
 		return QStringLiteral("%1:%2").arg(m).arg(s, 2, 10, QLatin1Char('0'));
 	};
+	auto toX = [&](qint64 t) {
+		return bar.left() + int(double(t - viewStart) / double(visible) * bar.width());
+	};
 
-	// A subtle dark band across the top of the source strip keeps labels legible.
+	// A subtle dark band across the top of the strip keeps labels legible.
 	const int bandH = 12;
 	p.setPen(Qt::NoPen);
 	p.setBrush(QColor(0, 0, 0, 90));
-	p.drawRect(QRect(src.left(), src.top(), src.width(), bandH));
+	p.drawRect(QRect(bar.left(), bar.top(), bar.width(), bandH));
 
 	QFont rf = p.font();
 	rf.setPixelSize(9);
 	p.setFont(rf);
 
-	const qint64 first = (viewStart_ / step) * step;
-	for (qint64 t = first; t <= viewStart_ + visibleMs(); t += step) {
+	const qint64 first = (viewStart / step) * step;
+	for (qint64 t = first; t <= viewStart + visible; t += step) {
 		if (t < 0)
 			continue;
-		const int x = msToX(t);
-		if (x < src.left() - 1 || x > src.right() + 1)
+		const int x = toX(t);
+		if (x < bar.left() - 1 || x > bar.right() + 1)
 			continue;
 		p.setPen(QColor(0xff, 0xff, 0xff, 60));
-		p.drawLine(x, src.top(), x, src.top() + bandH); // tick
+		p.drawLine(x, bar.top(), x, bar.top() + bandH); // tick
 		p.setPen(QColor(0xc8, 0xcc, 0xd2));
-		p.drawText(x + 2, src.top() + bandH - 2, label(t)); // label
+		p.drawText(x + 2, bar.top() + bandH - 2, label(t)); // label
 	}
 }
 
@@ -174,10 +179,41 @@ void TrackEditor::clampView()
 	viewStart_ = std::clamp<qint64>(viewStart_, 0, std::max<qint64>(0, duration_ - visibleMs()));
 }
 
+qint64 TrackEditor::outVisibleMs() const
+{
+	return std::max<qint64>(1, qint64(totalOutputMs() / outZoom_));
+}
+
+int TrackEditor::outMsToX(qint64 ms) const
+{
+	const QRect r = outputRect();
+	if (totalOutputMs() <= 0 || r.width() <= 0)
+		return r.x();
+	return r.x() + int(double(ms - outViewStart_) / double(outVisibleMs()) * r.width());
+}
+
+qint64 TrackEditor::outXToMs(int x) const
+{
+	const QRect r = outputRect();
+	const qint64 total = totalOutputMs();
+	if (total <= 0 || r.width() <= 0)
+		return 0;
+	const double t = double(x - r.x()) / double(r.width());
+	return std::clamp<qint64>(outViewStart_ + qint64(std::llround(t * outVisibleMs())), 0, total);
+}
+
+void TrackEditor::clampOutView()
+{
+	outViewStart_ = std::clamp<qint64>(outViewStart_, 0,
+					   std::max<qint64>(0, totalOutputMs() - outVisibleMs()));
+}
+
 void TrackEditor::wheelEvent(QWheelEvent *e)
 {
-	// Zoom/pan applies to the source track (the output track has its own scale).
-	if (duration_ <= 0 || !sourceRect().contains(e->position().toPoint())) {
+	const QPoint pos = e->position().toPoint();
+	const bool onSource = duration_ > 0 && sourceRect().contains(pos);
+	const bool onOutput = totalOutputMs() > 0 && outputRect().contains(pos);
+	if (!onSource && !onOutput) {
 		e->ignore();
 		return;
 	}
@@ -189,22 +225,43 @@ void TrackEditor::wheelEvent(QWheelEvent *e)
 	if (delta == 0)
 		return;
 	const double steps = delta / 120.0;
-	if (!pan) {
-		// Zoom around the time under the cursor — no modifier needed.
-		const int x = int(e->position().x());
-		const qint64 anchor = xToMs(x);
-		const QRect r = sourceRect();
-		const double frac = std::clamp(double(x - r.x()) / std::max(1, r.width()), 0.0, 1.0);
-		zoom_ = std::clamp(zoom_ * std::pow(1.3, steps), 1.0, lp_.maxZoom);
-		viewStart_ = anchor - qint64(frac * visibleMs());
-	} else {
-		viewStart_ -= qint64(steps * visibleMs() * 0.15);
-	}
-	clampView();
-	// Preview the frame under the cursor as the view scrolls, mirroring hover.
-	if (mode_ == Mode::None) {
-		hoverMs_ = xToMs(int(e->position().x()));
-		emit hoverScrub(hoverMs_);
+	const int x = pos.x();
+
+	if (onSource) {
+		if (!pan) {
+			const qint64 anchor = xToMs(x);
+			const QRect r = sourceRect();
+			const double frac = std::clamp(double(x - r.x()) / std::max(1, r.width()), 0.0, 1.0);
+			zoom_ = std::clamp(zoom_ * std::pow(1.3, steps), 1.0, lp_.maxZoom);
+			viewStart_ = anchor - qint64(frac * visibleMs());
+		} else {
+			viewStart_ -= qint64(steps * visibleMs() * 0.15);
+		}
+		clampView();
+		if (mode_ == Mode::None) { // preview the frame under the cursor
+			hoverMs_ = xToMs(x);
+			emit hoverScrub(hoverMs_);
+		}
+	} else { // onOutput — same controls over the assembled output timeline
+		if (!pan) {
+			const qint64 anchor = outXToMs(x);
+			const QRect r = outputRect();
+			const double frac = std::clamp(double(x - r.x()) / std::max(1, r.width()), 0.0, 1.0);
+			outZoom_ = std::clamp(outZoom_ * std::pow(1.3, steps), 1.0, lp_.maxZoom);
+			outViewStart_ = anchor - qint64(frac * outVisibleMs());
+		} else {
+			outViewStart_ -= qint64(steps * outVisibleMs() * 0.15);
+		}
+		clampOutView();
+		if (mode_ == Mode::None) { // preview the output frame under the cursor
+			qint64 srcMs = 0;
+			const int seg = sourceForOutput(outXToMs(x), &srcMs);
+			if (seg >= 0) {
+				hoverOutSeg_ = seg;
+				hoverOutX_ = x;
+				emit hoverScrub(srcMs);
+			}
+		}
 	}
 	update();
 	e->accept();
@@ -337,33 +394,21 @@ qint64 TrackEditor::xToMs(int x) const
 
 QVector<QRect> TrackEditor::segmentRects() const
 {
+	// Output-time axis: each cut occupies [outputStartOf(i), +outDuration] mapped
+	// through the output zoom/view, so the track zooms and pans like the source.
 	QVector<QRect> rects;
 	const int n = segs_.size();
 	if (!n)
 		return rects;
 	const QRect r = outputRect();
-	const int avail = std::max(1, r.width() - lp_.segGap * (n - 1));
-	qint64 total = totalOutputMs();
-	if (total <= 0)
-		total = 1;
-
-	QVector<double> w(n);
-	double sum = 0.0;
+	const int gap = std::max(0, lp_.segGap);
 	for (int i = 0; i < n; ++i) {
-		w[i] = std::max<double>(lp_.minSegW,
-					double(segs_[i].outDurationMs()) / double(total) * avail);
-		sum += w[i];
-	}
-	if (sum > avail) {
-		const double k = double(avail) / sum;
-		for (int i = 0; i < n; ++i)
-			w[i] = std::max<double>(lp_.hardMinSegW, w[i] * k);
-	}
-	int x = r.x();
-	for (int i = 0; i < n; ++i) {
-		const int wi = int(w[i]);
-		rects.append(QRect(x, r.y(), wi, r.height()));
-		x += wi + lp_.segGap;
+		const qint64 s0 = outputStartOf(i);
+		const qint64 s1 = s0 + segs_[i].outDurationMs();
+		const int x1 = outMsToX(s0);
+		const int x2 = outMsToX(s1);
+		const int w = std::max(2, x2 - x1 - gap); // small visual separation
+		rects.append(QRect(x1, r.y(), w, r.height()));
 	}
 	return rects;
 }
@@ -397,6 +442,8 @@ void TrackEditor::paintEvent(QPaintEvent *)
 	QFont capFont = font();
 	capFont.setPixelSize(std::max(6, lp_.captionFontPx));
 	p.setFont(capFont);
+
+	clampOutView(); // keep the output window valid after edits/resizes
 
 	const QRect src = sourceRect();
 	const QRect out = outputRect();
@@ -454,7 +501,7 @@ void TrackEditor::paintEvent(QPaintEvent *)
 			p.drawLine(hx, src.y() + 1, hx, src.bottom() - 1);
 		}
 		// Time ruler (ticks + labels) over the top of the source strip.
-		drawTimeRuler(p, src);
+		drawTimeRuler(p, src, viewStart_, visibleMs());
 		p.restore();
 	}
 
@@ -560,21 +607,11 @@ void TrackEditor::paintEvent(QPaintEvent *)
 		p.drawLine(cx, out.y() + 2, cx, out.bottom() - 2);
 	}
 
-	// Output playhead.
-	if (playheadOutMs_ >= 0 && !rects.isEmpty()) {
-		qint64 acc = 0;
-		for (int i = 0; i < segs_.size(); ++i) {
-			const qint64 d = segs_[i].outDurationMs();
-			if (playheadOutMs_ < acc + d || i == segs_.size() - 1) {
-				const double f =
-					std::clamp(double(playheadOutMs_ - acc) / double(d), 0.0, 1.0);
-				const int px = rects[i].x() + int(f * rects[i].width());
-				p.setPen(QPen(kPlayhead, 2));
-				p.drawLine(px, out.y() + 1, px, out.bottom() - 1);
-				break;
-			}
-			acc += d;
-		}
+	// Output playhead (mapped through the output zoom/view).
+	if (playheadOutMs_ >= 0 && !segs_.isEmpty()) {
+		const int px = outMsToX(playheadOutMs_);
+		p.setPen(QPen(kPlayhead, 2));
+		p.drawLine(px, out.y() + 1, px, out.bottom() - 1);
 	}
 
 	// Hover marker on the output track — mirrors the source-track marker so
@@ -585,7 +622,23 @@ void TrackEditor::paintEvent(QPaintEvent *)
 		p.setPen(QPen(QColor(0xff, 0xff, 0xff, 170), 1));
 		p.drawLine(hx, hr.top() + 4, hx, hr.bottom() - 4);
 	}
+
+	// Time ruler over the output track.
+	if (!segs_.isEmpty())
+		drawTimeRuler(p, out, outViewStart_, outVisibleMs());
 	p.restore();
+
+	// Output zoom indicator: which part of the assembled output is visible.
+	if (outZoom_ > 1.001 && totalOutputMs() > 0) {
+		const int y = out.bottom() + 2;
+		p.setPen(Qt::NoPen);
+		p.setBrush(kBarBg);
+		p.drawRect(QRect(out.left(), y, out.width(), 2));
+		p.setBrush(kCaption);
+		const int ix = out.left() + int(double(outViewStart_) / totalOutputMs() * out.width());
+		const int iw = std::max(8, int(double(outVisibleMs()) / totalOutputMs() * out.width()));
+		p.drawRect(QRect(ix, y, iw, 2));
+	}
 }
 
 void TrackEditor::mousePressEvent(QMouseEvent *e)

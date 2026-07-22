@@ -149,6 +149,19 @@ private:
 	DevPanel *devPanel_ = nullptr; // lazily created, non-modal
 	QLabel *infoLabel_ = nullptr;
 	QLabel *cursorTimeLabel_ = nullptr; // preview time under the cursor/playhead
+
+	// Right-side inspector (fills the dead space beside portrait previews):
+	// live properties of the selected cut / trim range. Collapsible.
+	QWidget *inspector_ = nullptr;
+	QPushButton *inspectorBtn_ = nullptr; // toolbar toggle (show/hide the panel)
+	QLabel *inspTitle_ = nullptr;
+	QLabel *inspInMs_ = nullptr;
+	QLabel *inspOutMs_ = nullptr;
+	QLabel *inspSrcLen_ = nullptr;
+	QLabel *inspSpeed_ = nullptr;
+	QLabel *inspOutLen_ = nullptr;
+	QLabel *inspHint_ = nullptr;
+	void updateInspector(); // refresh the inspector from the current selection
 	QString baseInfo_; // static file info; extended with cut stats in Multi-Cut
 
 	QPushButton *playBtn_ = nullptr;

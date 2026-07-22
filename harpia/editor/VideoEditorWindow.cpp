@@ -25,6 +25,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFormLayout>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -187,6 +188,18 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	connect(redoBtn_, &QPushButton::clicked, this, &VideoEditorWindow::redo);
 	modeRow->addWidget(redoBtn_);
 	modeRow->addStretch(1);
+	// Inspector toggle — show/hide the right-side properties panel.
+	inspectorBtn_ = new QPushButton(QStringLiteral("Inspector"), this);
+	inspectorBtn_->setCheckable(true);
+	inspectorBtn_->setChecked(true);
+	inspectorBtn_->setToolTip(QStringLiteral(
+		"Show/hide the properties panel for the selected cut (uses the space beside portrait previews)"));
+	connect(inspectorBtn_, &QPushButton::toggled, this, [this](bool on) {
+		if (inspector_)
+			inspector_->setVisible(on);
+	});
+	modeRow->addWidget(inspectorBtn_);
+	modeRow->addSpacing(8);
 	// Developer Panel: live-tweak every timeline layout variable to find the
 	// best UI configuration (editor-only tool, values are not persisted).
 	auto *devBtn = new QPushButton(QStringLiteral("Dev"), this);
@@ -315,7 +328,64 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	splitter->addWidget(bottomPane);
 	splitter->setStretchFactor(0, 3); // preview grows more than the editing area
 	splitter->setStretchFactor(1, 2);
-	root->addWidget(splitter, 1);
+
+	// ---- Right-side inspector: properties of the selected cut / trim range.
+	// Portrait clips leave wide black bars beside the preview; this panel puts
+	// that space to work as a live clip inspector.
+	inspector_ = new QWidget(this);
+	inspector_->setMinimumWidth(180);
+	auto *insLayout = new QVBoxLayout(inspector_);
+	insLayout->setContentsMargins(10, 8, 10, 8);
+	insLayout->setSpacing(6);
+	auto *insHeader = new QLabel(QStringLiteral("Inspector"), this);
+	insHeader->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
+	insLayout->addWidget(insHeader);
+	inspTitle_ = new QLabel(QString(), this);
+	inspTitle_->setStyleSheet(QStringLiteral("color:#c8ccd4;"));
+	inspTitle_->setWordWrap(true);
+	insLayout->addWidget(inspTitle_);
+	auto *insForm = new QFormLayout;
+	insForm->setLabelAlignment(Qt::AlignLeft);
+	insForm->setContentsMargins(0, 4, 0, 0);
+	insForm->setHorizontalSpacing(10);
+	insForm->setVerticalSpacing(4);
+	auto mkVal = [this]() {
+		auto *l = new QLabel(QStringLiteral("—"), this);
+		l->setStyleSheet(QStringLiteral("color:#e8eaed; font-family:monospace;"));
+		l->setTextInteractionFlags(Qt::TextSelectableByMouse);
+		return l;
+	};
+	auto mkKey = [this](const QString &t) {
+		auto *l = new QLabel(t, this);
+		l->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+		return l;
+	};
+	inspInMs_ = mkVal();
+	inspOutMs_ = mkVal();
+	inspSrcLen_ = mkVal();
+	inspSpeed_ = mkVal();
+	inspOutLen_ = mkVal();
+	insForm->addRow(mkKey(QStringLiteral("Source in")), inspInMs_);
+	insForm->addRow(mkKey(QStringLiteral("Source out")), inspOutMs_);
+	insForm->addRow(mkKey(QStringLiteral("Source length")), inspSrcLen_);
+	insForm->addRow(mkKey(QStringLiteral("Speed")), inspSpeed_);
+	insForm->addRow(mkKey(QStringLiteral("Output length")), inspOutLen_);
+	insLayout->addLayout(insForm);
+	inspHint_ = new QLabel(QString(), this);
+	inspHint_->setWordWrap(true);
+	inspHint_->setStyleSheet(QStringLiteral("color:#7f858e;"));
+	insLayout->addWidget(inspHint_);
+	insLayout->addStretch(1);
+
+	// Left (splitter of preview/editing) + right inspector, side by side.
+	auto *hsplit = new QSplitter(Qt::Horizontal, this);
+	hsplit->setChildrenCollapsible(false);
+	hsplit->setHandleWidth(6);
+	hsplit->addWidget(splitter);
+	hsplit->addWidget(inspector_);
+	hsplit->setStretchFactor(0, 4); // editing area takes the lion's share
+	hsplit->setStretchFactor(1, 1);
+	root->addWidget(hsplit, 1);
 
 	playTimer_ = new QTimer(this);
 	playTimer_->setInterval(33); // ~30 fps preview
@@ -344,10 +414,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	connect(timeline_, &Timeline::hoverScrub, this, &VideoEditorWindow::onHoverScrub);
 	connect(timeline_, &Timeline::startChanged, this, [this]() {
 		updateVoiceoverAxis();
+		updateInspector();
 		scheduleSnapshot();
 	});
 	connect(timeline_, &Timeline::endChanged, this, [this]() {
 		updateVoiceoverAxis();
+		updateInspector();
 		scheduleSnapshot();
 	});
 	connect(tracks_, &TrackEditor::scrubSource, this, &VideoEditorWindow::onScrub);
@@ -395,6 +467,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 				    .arg(seeker_->height())
 				    .arg(seeker_->durationMs() / 1000.0, 0, 'f', 1);
 		updateInfoLabel();
+		updateInspector();
 		updateVoiceoverAxis();
 		showFrame(0);
 		// Seed the undo history with the untouched state.
@@ -481,6 +554,7 @@ void VideoEditorWindow::setEditMode(bool cut)
 		speedLabel_->setText(QString()); // no per-cut count in Simple Trim
 	}
 	updateInfoLabel();
+	updateInspector();
 	updateVoiceoverAxis();
 }
 
@@ -506,11 +580,69 @@ void VideoEditorWindow::updateInfoLabel()
 	infoLabel_->setText(text);
 }
 
+void VideoEditorWindow::updateInspector()
+{
+	if (!inspector_)
+		return;
+	auto setRange = [this](qint64 inMs, qint64 outMs, double sp, qint64 outLen) {
+		inspInMs_->setText(previewTimeText(inMs));
+		inspOutMs_->setText(previewTimeText(outMs));
+		inspSrcLen_->setText(QStringLiteral("%1s").arg((outMs - inMs) / 1000.0, 0, 'f', 2));
+		inspSpeed_->setText(QStringLiteral("%1×").arg(sp, 0, 'f', 2));
+		inspOutLen_->setText(QStringLiteral("%1s").arg(outLen / 1000.0, 0, 'f', 2));
+	};
+	if (!valid_) {
+		inspTitle_->setText(QStringLiteral("No clip loaded"));
+		inspInMs_->setText(QStringLiteral("—"));
+		inspOutMs_->setText(QStringLiteral("—"));
+		inspSrcLen_->setText(QStringLiteral("—"));
+		inspSpeed_->setText(QStringLiteral("—"));
+		inspOutLen_->setText(QStringLiteral("—"));
+		inspHint_->clear();
+		return;
+	}
+	if (multiCut()) {
+		const int idx = tracks_->selectedIndex();
+		const auto &segs = tracks_->segments();
+		if (idx >= 0 && idx < segs.size()) {
+			const CutSegment &s = segs[idx];
+			const int n = tracks_->selectedIndices().size();
+			inspTitle_->setText(n > 1
+				? QStringLiteral("Cut %1 of %2 selected  ·  %3 total")
+					  .arg(idx + 1).arg(segs.size()).arg(n)
+				: QStringLiteral("Cut %1 of %2").arg(idx + 1).arg(segs.size()));
+			setRange(s.srcStartMs, s.srcEndMs, s.speed, s.outDurationMs());
+			inspHint_->setText(n > 1
+				? QStringLiteral("The speed control applies to all %1 selected cuts.").arg(n)
+				: QString());
+		} else {
+			inspTitle_->setText(QStringLiteral("No cut selected"));
+			inspInMs_->setText(QStringLiteral("—"));
+			inspOutMs_->setText(QStringLiteral("—"));
+			inspSrcLen_->setText(QStringLiteral("—"));
+			inspSpeed_->setText(QStringLiteral("—"));
+			inspOutLen_->setText(QStringLiteral("—"));
+			inspHint_->setText(QStringLiteral(
+				"Click a cut on the Output track to see and edit its properties."));
+		}
+	} else {
+		// Simple Trim: the single kept range at the global speed.
+		const qint64 in = timeline_->start();
+		const qint64 out = timeline_->end();
+		const double sp = speed_ > 0.01 ? speed_ : 1.0;
+		const qint64 outLen = std::max<qint64>(1, qint64((out - in) / sp));
+		inspTitle_->setText(QStringLiteral("Trim range"));
+		setRange(in, out, speed_, outLen);
+		inspHint_->clear();
+	}
+}
+
 void VideoEditorWindow::onSegmentsChanged()
 {
 	stopPlayback();
 	playSeg_ = -1;
 	updateInfoLabel();
+	updateInspector();
 	updateVoiceoverAxis();
 }
 
@@ -531,6 +663,7 @@ void VideoEditorWindow::onSegmentSelected(int index)
 		speedSpin_->setEnabled(false);
 		speedLabel_->setText(QStringLiteral("—"));
 	}
+	updateInspector();
 }
 
 VideoEditorWindow::~VideoEditorWindow()
@@ -1101,6 +1234,7 @@ void VideoEditorWindow::restoreSnapshot(const EditorSnapshot &s)
 		speedLabel_->setText(QString());
 	}
 	updateInfoLabel();
+	updateInspector();
 	updateVoiceoverAxis();
 
 	// Repaint the preview at a sensible frame.
@@ -1311,6 +1445,7 @@ void VideoEditorWindow::applySpeed(double value)
 			playSeg_ = -1;
 		}
 		updateInfoLabel();
+		updateInspector();
 		updateVoiceoverAxis();
 		scheduleSnapshot();
 		return;
@@ -1322,6 +1457,7 @@ void VideoEditorWindow::applySpeed(double value)
 		playClock_.restart();
 	}
 	speed_ = value;
+	updateInspector();
 	updateVoiceoverAxis();
 	scheduleSnapshot();
 }

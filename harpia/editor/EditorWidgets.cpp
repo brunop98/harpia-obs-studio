@@ -18,9 +18,17 @@ constexpr int kHandle = 8;
 
 PreviewCanvas::PreviewCanvas(QWidget *parent) : QWidget(parent)
 {
-	setMinimumSize(480, 270);
+	setMinimumSize(lp_.minW, lp_.minH);
 	setMouseTracking(true);
 	setStyleSheet(QStringLiteral("background:#0d0e11;"));
+}
+
+void PreviewCanvas::setLayoutParams(const PreviewLayoutParams &p)
+{
+	lp_ = p;
+	setMinimumSize(lp_.minW, lp_.minH);
+	updateGeometry();
+	update();
 }
 
 void PreviewCanvas::setVideoSize(int w, int h)
@@ -438,6 +446,11 @@ void Timeline::paintEvent(QPaintEvent *)
 
 	// Times.
 	p.setPen(QColor(0x9a, 0x9f, 0xa8));
+	{
+		QFont tf = font();
+		tf.setPixelSize(std::max(6, lp_.fontPx));
+		p.setFont(tf);
+	}
 	auto t = [](qint64 ms) {
 		return QStringLiteral("%1:%2.%3")
 			.arg(ms / 60000, 2, 10, QLatin1Char('0'))

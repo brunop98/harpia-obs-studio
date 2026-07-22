@@ -332,7 +332,7 @@ void TrackEditor::paintEvent(QPaintEvent *)
 	p.setRenderHint(QPainter::Antialiasing);
 
 	QFont capFont = font();
-	capFont.setPixelSize(11);
+	capFont.setPixelSize(std::max(6, lp_.captionFontPx));
 	p.setFont(capFont);
 
 	const QRect src = sourceRect();
@@ -420,7 +420,7 @@ void TrackEditor::paintEvent(QPaintEvent *)
 	p.setClipRect(out.adjusted(1, 0, -1, 0));
 	const QVector<QRect> rects = segmentRects();
 	QFont segFont = font();
-	segFont.setPixelSize(10);
+	segFont.setPixelSize(std::max(6, lp_.segFontPx));
 	for (int i = 0; i < rects.size(); ++i) {
 		const QRect r = rects[i].adjusted(0, 3, 0, -3);
 		const bool sel = multiSel_.contains(i);

@@ -8,6 +8,13 @@
 
 namespace harpia {
 
+// Runtime-tweakable minimum size of the video preview canvas (shared by both
+// editor modes), edited live from the Developer Panel.
+struct PreviewLayoutParams {
+	int minW = 480;
+	int minH = 270;
+};
+
 // Shows the current video frame scaled-to-fit, and (when crop is enabled) an
 // interactive crop rectangle with 8 resize handles that maps to source-video
 // pixels. Emits cropChanged() in source pixels.
@@ -23,6 +30,10 @@ public:
 	bool cropEnabled() const { return cropEnabled_; }
 	QRect cropRectVideo() const { return cropVideo_; }
 	void resetCrop(); // full frame
+
+	// Developer Panel: tweak the preview's minimum size live.
+	const PreviewLayoutParams &layoutParams() const { return lp_; }
+	void setLayoutParams(const PreviewLayoutParams &p);
 
 signals:
 	void cropChanged(const QRect &videoRect);
@@ -41,6 +52,7 @@ private:
 	Zone zoneAt(const QPoint &p) const;
 	void applyWidgetCrop(const QRect &widgetRect); // clamp + map back to video px
 
+	PreviewLayoutParams lp_;
 	QImage frame_;
 	int vw_ = 0, vh_ = 0;
 	bool cropEnabled_ = false;
@@ -59,6 +71,7 @@ struct TimelineLayoutParams {
 	int barH = 36;     // bar height (tall enough for the filmstrip)
 	int handleW = 8;   // handle grab width
 	int tileGap = 2;   // gap between filmstrip tiles
+	int fontPx = 12;   // Start/End time-label font size
 	double maxZoom = 32.0;
 };
 

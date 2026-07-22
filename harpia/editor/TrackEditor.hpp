@@ -36,6 +36,8 @@ struct TrackLayoutParams {
 	int minSegW = 48;    // "reasonably wide" — easy to click and drag
 	int hardMinSegW = 24; // absolute floor when many segments compete
 	int tileGap = 2;     // gap between filmstrip tiles
+	int captionFontPx = 11; // track captions
+	int segFontPx = 10;     // per-segment labels
 	double maxZoom = 32.0;
 };
 

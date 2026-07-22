@@ -3,6 +3,7 @@
 #include "EditorWidgets.hpp"
 #include "TrackEditor.hpp"
 #include "VoiceoverTrack.hpp"
+// PreviewCanvas + PreviewLayoutParams come from EditorWidgets.hpp.
 
 #include <QDoubleSpinBox>
 #include <QFormLayout>
@@ -25,7 +26,8 @@ QSettings devSettings()
 }
 } // namespace
 
-void DevPanel::loadInto(TimelineLayoutParams &tl, TrackLayoutParams &tr, VoiceoverLayoutParams &vo)
+void DevPanel::loadInto(TimelineLayoutParams &tl, TrackLayoutParams &tr, VoiceoverLayoutParams &vo,
+			PreviewLayoutParams &pv)
 {
 	QSettings s = devSettings();
 	s.beginGroup(QStringLiteral("devLayout"));
@@ -34,6 +36,7 @@ void DevPanel::loadInto(TimelineLayoutParams &tl, TrackLayoutParams &tr, Voiceov
 	tl.barH = s.value(QStringLiteral("tl/barH"), tl.barH).toInt();
 	tl.handleW = s.value(QStringLiteral("tl/handleW"), tl.handleW).toInt();
 	tl.tileGap = s.value(QStringLiteral("tl/tileGap"), tl.tileGap).toInt();
+	tl.fontPx = s.value(QStringLiteral("tl/fontPx"), tl.fontPx).toInt();
 	tl.maxZoom = s.value(QStringLiteral("tl/maxZoom"), tl.maxZoom).toDouble();
 	tr.margin = s.value(QStringLiteral("tr/margin"), tr.margin).toInt();
 	tr.captionH = s.value(QStringLiteral("tr/captionH"), tr.captionH).toInt();
@@ -44,7 +47,11 @@ void DevPanel::loadInto(TimelineLayoutParams &tl, TrackLayoutParams &tr, Voiceov
 	tr.minSegW = s.value(QStringLiteral("tr/minSegW"), tr.minSegW).toInt();
 	tr.hardMinSegW = s.value(QStringLiteral("tr/hardMinSegW"), tr.hardMinSegW).toInt();
 	tr.tileGap = s.value(QStringLiteral("tr/tileGap"), tr.tileGap).toInt();
+	tr.captionFontPx = s.value(QStringLiteral("tr/captionFontPx"), tr.captionFontPx).toInt();
+	tr.segFontPx = s.value(QStringLiteral("tr/segFontPx"), tr.segFontPx).toInt();
 	tr.maxZoom = s.value(QStringLiteral("tr/maxZoom"), tr.maxZoom).toDouble();
+	pv.minW = s.value(QStringLiteral("pv/minW"), pv.minW).toInt();
+	pv.minH = s.value(QStringLiteral("pv/minH"), pv.minH).toInt();
 	vo.margin = s.value(QStringLiteral("vo/margin"), vo.margin).toInt();
 	vo.captionH = s.value(QStringLiteral("vo/captionH"), vo.captionH).toInt();
 	vo.trackH = s.value(QStringLiteral("vo/trackH"), vo.trackH).toInt();
@@ -54,7 +61,7 @@ void DevPanel::loadInto(TimelineLayoutParams &tl, TrackLayoutParams &tr, Voiceov
 }
 
 void DevPanel::saveFrom(const TimelineLayoutParams &tl, const TrackLayoutParams &tr,
-			const VoiceoverLayoutParams &vo)
+			const VoiceoverLayoutParams &vo, const PreviewLayoutParams &pv)
 {
 	QSettings s = devSettings();
 	s.beginGroup(QStringLiteral("devLayout"));
@@ -63,6 +70,7 @@ void DevPanel::saveFrom(const TimelineLayoutParams &tl, const TrackLayoutParams 
 	s.setValue(QStringLiteral("tl/barH"), tl.barH);
 	s.setValue(QStringLiteral("tl/handleW"), tl.handleW);
 	s.setValue(QStringLiteral("tl/tileGap"), tl.tileGap);
+	s.setValue(QStringLiteral("tl/fontPx"), tl.fontPx);
 	s.setValue(QStringLiteral("tl/maxZoom"), tl.maxZoom);
 	s.setValue(QStringLiteral("tr/margin"), tr.margin);
 	s.setValue(QStringLiteral("tr/captionH"), tr.captionH);
@@ -73,7 +81,11 @@ void DevPanel::saveFrom(const TimelineLayoutParams &tl, const TrackLayoutParams 
 	s.setValue(QStringLiteral("tr/minSegW"), tr.minSegW);
 	s.setValue(QStringLiteral("tr/hardMinSegW"), tr.hardMinSegW);
 	s.setValue(QStringLiteral("tr/tileGap"), tr.tileGap);
+	s.setValue(QStringLiteral("tr/captionFontPx"), tr.captionFontPx);
+	s.setValue(QStringLiteral("tr/segFontPx"), tr.segFontPx);
 	s.setValue(QStringLiteral("tr/maxZoom"), tr.maxZoom);
+	s.setValue(QStringLiteral("pv/minW"), pv.minW);
+	s.setValue(QStringLiteral("pv/minH"), pv.minH);
 	s.setValue(QStringLiteral("vo/margin"), vo.margin);
 	s.setValue(QStringLiteral("vo/captionH"), vo.captionH);
 	s.setValue(QStringLiteral("vo/trackH"), vo.trackH);
@@ -82,8 +94,9 @@ void DevPanel::saveFrom(const TimelineLayoutParams &tl, const TrackLayoutParams 
 	s.endGroup();
 }
 
-DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voice, QWidget *parent)
-	: QDialog(parent), timeline_(timeline), tracks_(tracks), voice_(voice)
+DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voice,
+		   PreviewCanvas *preview, QWidget *parent)
+	: QDialog(parent), timeline_(timeline), tracks_(tracks), voice_(voice), preview_(preview)
 {
 	setWindowTitle(QStringLiteral("Developer Panel — timeline layout"));
 	// A floating tool window: stays above the editor but never blocks it, so
@@ -139,9 +152,20 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		       tlHandleW_ = spin(4, 24, tl.handleW, &DevPanel::applyTimeline));
 	tlForm->addRow(QStringLiteral("Thumbnail gap"),
 		       tlTileGap_ = spin(0, 16, tl.tileGap, &DevPanel::applyTimeline));
+	tlForm->addRow(QStringLiteral("Font size"),
+		       tlFontPx_ = spin(6, 40, tl.fontPx, &DevPanel::applyTimeline));
 	tlForm->addRow(QStringLiteral("Max zoom"),
 		       tlMaxZoom_ = dspin(1.0, 256.0, tl.maxZoom, &DevPanel::applyTimeline));
 	root->addWidget(tlBox);
+
+	const PreviewLayoutParams pv = preview_->layoutParams();
+	auto *pvBox = new QGroupBox(QStringLiteral("Preview (both modes)"), inner);
+	auto *pvForm = new QFormLayout(pvBox);
+	pvForm->addRow(QStringLiteral("Preview min width"),
+		       pvW_ = spin(160, 1920, pv.minW, &DevPanel::applyPreview));
+	pvForm->addRow(QStringLiteral("Preview min height"),
+		       pvH_ = spin(90, 1080, pv.minH, &DevPanel::applyPreview));
+	root->addWidget(pvBox);
 
 	const TrackLayoutParams tr = tracks_->layoutParams();
 	auto *trBox = new QGroupBox(QStringLiteral("Multi-Cut tracks"), this);
@@ -164,6 +188,10 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		       trHardMinSegW_ = spin(4, 200, tr.hardMinSegW, &DevPanel::applyTracks));
 	trForm->addRow(QStringLiteral("Thumbnail gap"),
 		       trTileGap_ = spin(0, 16, tr.tileGap, &DevPanel::applyTracks));
+	trForm->addRow(QStringLiteral("Caption font size"),
+		       trCaptionFontPx_ = spin(6, 40, tr.captionFontPx, &DevPanel::applyTracks));
+	trForm->addRow(QStringLiteral("Segment font size"),
+		       trSegFontPx_ = spin(6, 40, tr.segFontPx, &DevPanel::applyTracks));
 	trForm->addRow(QStringLiteral("Max zoom"),
 		       trMaxZoom_ = dspin(1.0, 256.0, tr.maxZoom, &DevPanel::applyTracks));
 	root->addWidget(trBox);
@@ -215,9 +243,10 @@ void DevPanel::applyTimeline()
 	p.barH = tlBarH_->value();
 	p.handleW = tlHandleW_->value();
 	p.tileGap = tlTileGap_->value();
+	p.fontPx = tlFontPx_->value();
 	p.maxZoom = tlMaxZoom_->value();
 	timeline_->setLayoutParams(p);
-	saveFrom(p, tracks_->layoutParams(), voice_->layoutParams());
+	saveFrom(p, tracks_->layoutParams(), voice_->layoutParams(), preview_->layoutParams());
 }
 
 void DevPanel::applyTracks()
@@ -232,9 +261,20 @@ void DevPanel::applyTracks()
 	p.minSegW = trMinSegW_->value();
 	p.hardMinSegW = trHardMinSegW_->value();
 	p.tileGap = trTileGap_->value();
+	p.captionFontPx = trCaptionFontPx_->value();
+	p.segFontPx = trSegFontPx_->value();
 	p.maxZoom = trMaxZoom_->value();
 	tracks_->setLayoutParams(p);
-	saveFrom(timeline_->layoutParams(), p, voice_->layoutParams());
+	saveFrom(timeline_->layoutParams(), p, voice_->layoutParams(), preview_->layoutParams());
+}
+
+void DevPanel::applyPreview()
+{
+	PreviewLayoutParams p;
+	p.minW = pvW_->value();
+	p.minH = pvH_->value();
+	preview_->setLayoutParams(p);
+	saveFrom(timeline_->layoutParams(), tracks_->layoutParams(), voice_->layoutParams(), p);
 }
 
 void DevPanel::applyVoice()
@@ -246,7 +286,7 @@ void DevPanel::applyVoice()
 	p.minClipW = voMinClipW_->value();
 	p.edgeZone = voEdgeZone_->value();
 	voice_->setLayoutParams(p);
-	saveFrom(timeline_->layoutParams(), tracks_->layoutParams(), p);
+	saveFrom(timeline_->layoutParams(), tracks_->layoutParams(), p, preview_->layoutParams());
 }
 
 void DevPanel::resetDefaults()
@@ -254,13 +294,17 @@ void DevPanel::resetDefaults()
 	const TimelineLayoutParams tl; // struct defaults ARE the app defaults
 	const TrackLayoutParams tr;
 	const VoiceoverLayoutParams vo;
+	const PreviewLayoutParams pv;
 	loading_ = true;
 	tlPad_->setValue(tl.pad);
 	tlBarTop_->setValue(tl.barTop);
 	tlBarH_->setValue(tl.barH);
 	tlHandleW_->setValue(tl.handleW);
 	tlTileGap_->setValue(tl.tileGap);
+	tlFontPx_->setValue(tl.fontPx);
 	tlMaxZoom_->setValue(tl.maxZoom);
+	pvW_->setValue(pv.minW);
+	pvH_->setValue(pv.minH);
 	trMargin_->setValue(tr.margin);
 	trCaptionH_->setValue(tr.captionH);
 	trSrcH_->setValue(tr.srcH);
@@ -270,6 +314,8 @@ void DevPanel::resetDefaults()
 	trMinSegW_->setValue(tr.minSegW);
 	trHardMinSegW_->setValue(tr.hardMinSegW);
 	trTileGap_->setValue(tr.tileGap);
+	trCaptionFontPx_->setValue(tr.captionFontPx);
+	trSegFontPx_->setValue(tr.segFontPx);
 	trMaxZoom_->setValue(tr.maxZoom);
 	voMargin_->setValue(vo.margin);
 	voCaptionH_->setValue(vo.captionH);
@@ -280,7 +326,8 @@ void DevPanel::resetDefaults()
 	timeline_->setLayoutParams(tl);
 	tracks_->setLayoutParams(tr);
 	voice_->setLayoutParams(vo);
-	saveFrom(tl, tr, vo);
+	preview_->setLayoutParams(pv);
+	saveFrom(tl, tr, vo, pv);
 }
 
 } // namespace harpia

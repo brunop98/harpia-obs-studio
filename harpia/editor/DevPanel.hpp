@@ -9,9 +9,11 @@ class QSpinBox;
 
 namespace harpia {
 
+class PreviewCanvas;
 class Timeline;
 class TrackEditor;
 class VoiceoverTrack;
+struct PreviewLayoutParams;
 struct TimelineLayoutParams;
 struct TrackLayoutParams;
 struct VoiceoverLayoutParams;
@@ -24,23 +26,26 @@ class DevPanel : public QDialog {
 	Q_OBJECT
 public:
 	DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voice,
-		 QWidget *parent = nullptr);
+		 PreviewCanvas *preview, QWidget *parent = nullptr);
 
 	// Persisted tweaks: the editor calls loadInto() at startup to restore the
 	// saved layout; the panel calls saveFrom() after every change.
-	static void loadInto(TimelineLayoutParams &tl, TrackLayoutParams &tr, VoiceoverLayoutParams &vo);
+	static void loadInto(TimelineLayoutParams &tl, TrackLayoutParams &tr, VoiceoverLayoutParams &vo,
+			     PreviewLayoutParams &pv);
 	static void saveFrom(const TimelineLayoutParams &tl, const TrackLayoutParams &tr,
-			     const VoiceoverLayoutParams &vo);
+			     const VoiceoverLayoutParams &vo, const PreviewLayoutParams &pv);
 
 private:
 	void applyTimeline();
 	void applyTracks();
 	void applyVoice();
+	void applyPreview();
 	void resetDefaults();
 
 	Timeline *timeline_ = nullptr;
 	TrackEditor *tracks_ = nullptr;
 	VoiceoverTrack *voice_ = nullptr;
+	PreviewCanvas *preview_ = nullptr;
 
 	// Simple Trim timeline.
 	QSpinBox *tlPad_ = nullptr;
@@ -48,6 +53,7 @@ private:
 	QSpinBox *tlBarH_ = nullptr;
 	QSpinBox *tlHandleW_ = nullptr;
 	QSpinBox *tlTileGap_ = nullptr;
+	QSpinBox *tlFontPx_ = nullptr;
 	QDoubleSpinBox *tlMaxZoom_ = nullptr;
 
 	// Multi-Cut track editor.
@@ -60,7 +66,13 @@ private:
 	QSpinBox *trMinSegW_ = nullptr;
 	QSpinBox *trHardMinSegW_ = nullptr;
 	QSpinBox *trTileGap_ = nullptr;
+	QSpinBox *trCaptionFontPx_ = nullptr;
+	QSpinBox *trSegFontPx_ = nullptr;
 	QDoubleSpinBox *trMaxZoom_ = nullptr;
+
+	// Preview canvas (shared by both modes).
+	QSpinBox *pvW_ = nullptr;
+	QSpinBox *pvH_ = nullptr;
 
 	// Voiceover track.
 	QSpinBox *voMargin_ = nullptr;

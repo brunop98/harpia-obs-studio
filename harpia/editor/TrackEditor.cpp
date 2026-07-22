@@ -120,6 +120,55 @@ qint64 TrackEditor::visibleMs() const
 	return std::max<qint64>(1, qint64(duration_ / zoom_));
 }
 
+void TrackEditor::drawTimeRuler(QPainter &p, const QRect &src) const
+{
+	if (duration_ <= 0 || src.width() <= 0)
+		return;
+	// Pick a "nice" tick interval so labels are ~70px apart at the current zoom.
+	static const qint64 kSteps[] = {200,   500,    1000,   2000,   5000,  10000,
+					15000, 30000,  60000,  120000, 300000, 600000,
+					900000, 1800000, 3600000};
+	const double msPerPx = double(visibleMs()) / std::max(1, src.width());
+	const qint64 want = qint64(msPerPx * 70.0);
+	qint64 step = kSteps[sizeof(kSteps) / sizeof(kSteps[0]) - 1];
+	for (qint64 s : kSteps) {
+		if (s >= want) {
+			step = s;
+			break;
+		}
+	}
+
+	auto label = [](qint64 ms) {
+		const qint64 m = ms / 60000, s = (ms / 1000) % 60;
+		if (ms % 1000 && ms < 60000)
+			return QStringLiteral("%1.%2s").arg(ms / 1000).arg((ms % 1000) / 100);
+		return QStringLiteral("%1:%2").arg(m).arg(s, 2, 10, QLatin1Char('0'));
+	};
+
+	// A subtle dark band across the top of the source strip keeps labels legible.
+	const int bandH = 12;
+	p.setPen(Qt::NoPen);
+	p.setBrush(QColor(0, 0, 0, 90));
+	p.drawRect(QRect(src.left(), src.top(), src.width(), bandH));
+
+	QFont rf = p.font();
+	rf.setPixelSize(9);
+	p.setFont(rf);
+
+	const qint64 first = (viewStart_ / step) * step;
+	for (qint64 t = first; t <= viewStart_ + visibleMs(); t += step) {
+		if (t < 0)
+			continue;
+		const int x = msToX(t);
+		if (x < src.left() - 1 || x > src.right() + 1)
+			continue;
+		p.setPen(QColor(0xff, 0xff, 0xff, 60));
+		p.drawLine(x, src.top(), x, src.top() + bandH); // tick
+		p.setPen(QColor(0xc8, 0xcc, 0xd2));
+		p.drawText(x + 2, src.top() + bandH - 2, label(t)); // label
+	}
+}
+
 void TrackEditor::clampView()
 {
 	viewStart_ = std::clamp<qint64>(viewStart_, 0, std::max<qint64>(0, duration_ - visibleMs()));
@@ -152,6 +201,11 @@ void TrackEditor::wheelEvent(QWheelEvent *e)
 		viewStart_ -= qint64(steps * visibleMs() * 0.15);
 	}
 	clampView();
+	// Preview the frame under the cursor as the view scrolls, mirroring hover.
+	if (mode_ == Mode::None) {
+		hoverMs_ = xToMs(int(e->position().x()));
+		emit hoverScrub(hoverMs_);
+	}
 	update();
 	e->accept();
 }
@@ -390,6 +444,8 @@ void TrackEditor::paintEvent(QPaintEvent *)
 			p.setPen(QPen(QColor(0xff, 0xff, 0xff, 170), 1));
 			p.drawLine(hx, src.y() + 1, hx, src.bottom() - 1);
 		}
+		// Time ruler (ticks + labels) over the top of the source strip.
+		drawTimeRuler(p, src);
 		p.restore();
 	}
 

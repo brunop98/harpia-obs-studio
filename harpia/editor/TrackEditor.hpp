@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cmath>
 
+class QPainter;
+
 namespace harpia {
 
 // One kept section of the source video, played at its own speed in the output.
@@ -107,6 +109,9 @@ private:
 	// (Re)render the source bar background + filmstrip into stripCache_ when
 	// the view changed — repaints then blit it instead of rescaling tiles.
 	void ensureStripCache(const QRect &src);
+	// Tick marks + time labels along the source track, so it's easy to tell where
+	// you are while editing (spacing adapts to the zoom level).
+	void drawTimeRuler(QPainter &p, const QRect &src) const;
 	QVector<QRect> segmentRects() const;
 	int segmentAt(const QPoint &p) const; // -1 = none
 	int insertSlotAt(int x) const;        // 0..count reorder slot for a drop at x

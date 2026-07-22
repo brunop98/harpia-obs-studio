@@ -496,7 +496,7 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 	else if (chosen == deleteAct)
 		deleteSelected();
 	else if (oneVideo && chosen == trimAct) {
-		auto *editor = new VideoEditorWindow(sel.front(), this);
+		auto *editor = new VideoEditorWindow(sel.front(), folders(), this);
 		if (!editor->isValid()) {
 			QMessageBox::warning(this, QStringLiteral("Trim"),
 					     QStringLiteral("Could not open this video for editing."));

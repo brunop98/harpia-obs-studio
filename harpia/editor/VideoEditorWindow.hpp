@@ -9,6 +9,7 @@
 #include <QList>
 #include <QRect>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
 #include <atomic>
@@ -63,6 +64,7 @@ class Timeline;
 class TrackEditor;
 class TimelineThumbs;
 class ClipExporter;
+class ThumbnailCache;
 
 // One video the editor can cut from. The first source is the file the editor
 // was launched on; more are added via the sidebar / drag-and-drop. Each owns
@@ -93,7 +95,10 @@ struct EditorSource {
 class VideoEditorWindow : public QDialog {
 	Q_OBJECT
 public:
-	explicit VideoEditorWindow(const QString &inPath, QWidget *parent = nullptr);
+	// libraryFolders: the app's recording output folders, so the Sources panel's
+	// "Library" tab can offer existing recordings to add as sources.
+	explicit VideoEditorWindow(const QString &inPath, const QStringList &libraryFolders = {},
+				   QWidget *parent = nullptr);
 	~VideoEditorWindow() override;
 
 	bool isValid() const { return valid_; }
@@ -138,6 +143,9 @@ private slots:
 	void onSourceRowChanged();   // sidebar selection → setActiveSource
 	void onSourceDoubleClicked(QListWidgetItem *item); // append whole clip as a cut
 	void onRemoveSource();       // remove the selected source (if unused)
+	void refreshLibrary();       // rescan the library folders into the Library tab
+	void onLibraryDoubleClicked(QListWidgetItem *item); // add a library clip as a source
+	void onThumbReady(const QString &path);             // library thumbnail decoded
 
 private:
 	// Apply a speed value (multi-cut: to the selection; trim: global) and refresh
@@ -177,7 +185,10 @@ private:
 	std::vector<EditorSource> sources_;
 	int activeSourceId_ = -1;
 	int nextSourceId_ = 0;
-	QListWidget *sourceList_ = nullptr;      // inside the floating Sources panel
+	QListWidget *sourceList_ = nullptr;      // "Sources" tab of the floating panel
+	QListWidget *libraryList_ = nullptr;     // "Library" tab (existing recordings)
+	QStringList libraryFolders_;             // app recording folders to scan
+	ThumbnailCache *thumbCache_ = nullptr;   // async thumbnails for the Library tab
 	QWidget *sourcesPanel_ = nullptr;        // floating, toggleable tool window
 	QPushButton *sourcesBtn_ = nullptr;      // toolbar toggle
 	bool sourcesPlaced_ = false;             // has the panel been positioned yet?

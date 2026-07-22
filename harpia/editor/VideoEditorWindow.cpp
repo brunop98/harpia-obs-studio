@@ -49,6 +49,10 @@
 #include <QListWidget>
 #include <QMimeData>
 #include <QPixmap>
+#include <QTabWidget>
+
+#include "../library/ClipLibrary.hpp"
+#include "../library/ThumbnailCache.hpp"
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -101,8 +105,9 @@ void revealInFolder(const QString &path)
 }
 } // namespace
 
-VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
-	: QDialog(parent), inPath_(inPath)
+VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &libraryFolders,
+				     QWidget *parent)
+	: QDialog(parent), inPath_(inPath), libraryFolders_(libraryFolders)
 {
 	setWindowTitle(QStringLiteral("Edit — %1").arg(QFileInfo(inPath).fileName()));
 	// A real window with minimize/maximize (QDialog hides them by default), so
@@ -479,38 +484,70 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	insLayout->addWidget(inspHint_);
 	insLayout->addStretch(1);
 
-	// ---- Sources: a floating, toggleable panel of videos you can cut from ----
+	// ---- Sources: a floating, toggleable panel with two tabs ----------------
 	sourcesPanel_ = new QWidget(this, Qt::Tool | Qt::WindowTitleHint | Qt::WindowCloseButtonHint);
 	sourcesPanel_->setWindowTitle(QStringLiteral("Sources"));
-	sourcesPanel_->resize(220, 440);
+	sourcesPanel_->resize(240, 460);
 	auto *sideLayout = new QVBoxLayout(sourcesPanel_);
 	sideLayout->setContentsMargins(8, 8, 8, 8);
 	sideLayout->setSpacing(6);
-	sourceList_ = new QListWidget(sourcesPanel_);
+	auto *srcTabs = new QTabWidget(sourcesPanel_);
+
+	// Tab 1 — "Sources": the videos currently loaded into this edit.
+	auto *usedTab = new QWidget(srcTabs);
+	auto *usedLayout = new QVBoxLayout(usedTab);
+	usedLayout->setContentsMargins(0, 6, 0, 0);
+	usedLayout->setSpacing(6);
+	sourceList_ = new QListWidget(usedTab);
 	sourceList_->setIconSize(QSize(96, 54));
 	sourceList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	sourceList_->setToolTip(QStringLiteral(
-		"Videos you can cut from. Drop video files onto the editor to add more; "
-		"click one to cut from it."));
-	sideLayout->addWidget(sourceList_, 1);
-	auto *addSrcBtn = new QPushButton(QStringLiteral("Add video…"), sourcesPanel_);
+		"Videos you can cut from. Click one to cut from it; double-click to add its "
+		"whole clip to the output."));
+	usedLayout->addWidget(sourceList_, 1);
+	auto *addSrcBtn = new QPushButton(QStringLiteral("Add video…"), usedTab);
 	addSrcBtn->setToolTip(QStringLiteral("Add another video as a source (or drag files onto the window)"));
 	connect(addSrcBtn, &QPushButton::clicked, this, &VideoEditorWindow::onAddSource);
-	sideLayout->addWidget(addSrcBtn);
-	auto *removeSrcBtn = new QPushButton(QStringLiteral("Remove"), sourcesPanel_);
+	usedLayout->addWidget(addSrcBtn);
+	auto *removeSrcBtn = new QPushButton(QStringLiteral("Remove"), usedTab);
 	removeSrcBtn->setToolTip(QStringLiteral("Remove the selected source (only if no cut uses it)"));
 	connect(removeSrcBtn, &QPushButton::clicked, this, &VideoEditorWindow::onRemoveSource);
-	sideLayout->addWidget(removeSrcBtn);
-	auto *srcHint = new QLabel(
-		QStringLiteral("Drag videos onto the editor · double-click a source to add its whole clip."),
-		sourcesPanel_);
-	srcHint->setWordWrap(true);
-	srcHint->setStyleSheet(QStringLiteral("color:#7f858e;"));
-	sideLayout->addWidget(srcHint);
+	usedLayout->addWidget(removeSrcBtn);
 	connect(sourceList_, &QListWidget::itemSelectionChanged, this,
 		&VideoEditorWindow::onSourceRowChanged);
 	connect(sourceList_, &QListWidget::itemDoubleClicked, this,
 		&VideoEditorWindow::onSourceDoubleClicked);
+	srcTabs->addTab(usedTab, QStringLiteral("Sources"));
+
+	// Tab 2 — "Library": your existing recordings, double-click to add as a source.
+	auto *libTab = new QWidget(srcTabs);
+	auto *libLayout = new QVBoxLayout(libTab);
+	libLayout->setContentsMargins(0, 6, 0, 0);
+	libLayout->setSpacing(6);
+	libraryList_ = new QListWidget(libTab);
+	libraryList_->setIconSize(QSize(96, 54));
+	libraryList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	libraryList_->setToolTip(
+		QStringLiteral("Recordings from your library — double-click to add one as a source."));
+	libLayout->addWidget(libraryList_, 1);
+	auto *refreshLibBtn = new QPushButton(QStringLiteral("Refresh"), libTab);
+	connect(refreshLibBtn, &QPushButton::clicked, this, &VideoEditorWindow::refreshLibrary);
+	libLayout->addWidget(refreshLibBtn);
+	connect(libraryList_, &QListWidget::itemDoubleClicked, this,
+		&VideoEditorWindow::onLibraryDoubleClicked);
+	srcTabs->addTab(libTab, QStringLiteral("Library"));
+
+	sideLayout->addWidget(srcTabs, 1);
+	auto *srcHint = new QLabel(
+		QStringLiteral("Drag videos onto the editor · double-click a clip to add it."),
+		sourcesPanel_);
+	srcHint->setWordWrap(true);
+	srcHint->setStyleSheet(QStringLiteral("color:#7f858e;"));
+	sideLayout->addWidget(srcHint);
+
+	thumbCache_ = new ThumbnailCache(this);
+	connect(thumbCache_, &ThumbnailCache::ready, this, &VideoEditorWindow::onThumbReady);
+	refreshLibrary();
 	sourcesPanel_->installEventFilter(this); // keep the toolbar toggle in sync
 
 	// (preview/editing split) | right inspector. Sources float over this.
@@ -840,6 +877,59 @@ void VideoEditorWindow::onRemoveSource()
 	refreshSourceList(); // rebuild the sidebar without the removed row
 	if (activeSourceId_ == id) // removed the active source — fall back to another
 		setActiveSource(sources_.front().id);
+}
+
+void VideoEditorWindow::refreshLibrary()
+{
+	if (!libraryList_)
+		return;
+	libraryList_->clear();
+	const QSize thumbSz(96, 54);
+	const QVector<ClipInfo> clips = ClipLibrary::scan(libraryFolders_);
+	for (const ClipInfo &c : clips) {
+		auto *item = new QListWidgetItem(QStringLiteral("%1\n%2").arg(c.fileName, c.relativeAge()));
+		item->setData(Qt::UserRole, c.filePath);
+		item->setToolTip(c.filePath);
+		const QImage img = thumbCache_ ? thumbCache_->cached(c.filePath, thumbSz) : QImage();
+		if (!img.isNull())
+			item->setIcon(QIcon(QPixmap::fromImage(img)));
+		else if (thumbCache_)
+			thumbCache_->ensure(c.filePath, thumbSz); // decodes async → onThumbReady
+		libraryList_->addItem(item);
+	}
+}
+
+void VideoEditorWindow::onThumbReady(const QString &path)
+{
+	if (!libraryList_ || !thumbCache_)
+		return;
+	const QImage img = thumbCache_->cached(path, QSize(96, 54));
+	if (img.isNull())
+		return;
+	const QIcon icon(QPixmap::fromImage(img));
+	for (int i = 0; i < libraryList_->count(); ++i) {
+		QListWidgetItem *it = libraryList_->item(i);
+		if (it->data(Qt::UserRole).toString() == path)
+			it->setIcon(icon);
+	}
+}
+
+void VideoEditorWindow::onLibraryDoubleClicked(QListWidgetItem *item)
+{
+	if (!item)
+		return;
+	const QString path = item->data(Qt::UserRole).toString();
+	if (path.isEmpty())
+		return;
+	// Already loaded as a source? Just make it active. Otherwise add it.
+	for (const EditorSource &es : sources_)
+		if (QFileInfo(es.path).absoluteFilePath() == QFileInfo(path).absoluteFilePath()) {
+			setActiveSource(es.id);
+			return;
+		}
+	const int id = addSource(path);
+	if (id >= 0)
+		setActiveSource(id);
 }
 
 void VideoEditorWindow::onSourceDoubleClicked(QListWidgetItem *item)

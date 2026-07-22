@@ -2195,7 +2195,7 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 		return;
 
 	if (chosen == trimAct) {
-		auto *editor = new VideoEditorWindow(path, this);
+		auto *editor = new VideoEditorWindow(path, presetFolders(), this);
 		if (!editor->isValid()) {
 			QMessageBox::warning(this, QStringLiteral("Trim"),
 					     QStringLiteral("Could not open this video for editing."));

@@ -708,7 +708,17 @@ int VideoEditorWindow::addSource(const QString &path)
 		if (!s)
 			return;
 		s->thumbCache = thumbs->thumbs();
-		refreshSourceList();
+		// Update just this source's row icon in place (rebuilding the whole list
+		// on every streamed thumbnail, for every source, was needless churn).
+		if (sourceList_ && !s->thumbCache.isEmpty() && !s->thumbCache.front().isNull()) {
+			for (int i = 0; i < sourceList_->count(); ++i) {
+				QListWidgetItem *it = sourceList_->item(i);
+				if (it->data(Qt::UserRole).toInt() == id) {
+					it->setIcon(QIcon(QPixmap::fromImage(s->thumbCache.front())));
+					break;
+				}
+			}
+		}
 		// Every source feeds the Output track so its cuts render from their own
 		// frames; the active source also drives the Source track + Simple-Trim.
 		tracks_->setSourceThumbs(id, s->thumbCache, s->durationMs);
@@ -827,10 +837,9 @@ void VideoEditorWindow::onRemoveSource()
 			break;
 		}
 	}
-	if (activeSourceId_ == id)
+	refreshSourceList(); // rebuild the sidebar without the removed row
+	if (activeSourceId_ == id) // removed the active source — fall back to another
 		setActiveSource(sources_.front().id);
-	else
-		refreshSourceList();
 }
 
 void VideoEditorWindow::onSourceDoubleClicked(QListWidgetItem *item)

@@ -27,6 +27,10 @@
 
 #include <util/base.h> // blog
 
+#if defined(_WIN32)
+#include <windows.h> // EnumDisplayDevices — correlate OBS monitor_id → QScreen
+#endif
+
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
@@ -794,15 +798,58 @@ const Preset &MainWindow::activePreset() const
 	return fallback;
 }
 
+#if defined(_WIN32)
+// The GDI device name (e.g. "\\.\DISPLAY2", matching QScreen::name()) for the
+// display whose monitor device-interface path equals `monId` — the value OBS's
+// monitor_capture stores in "monitor_id". Empty if it can't be resolved.
+static QString gdiNameForMonitorId(const std::string &monId)
+{
+	if (monId.empty())
+		return QString();
+	const QString want = QString::fromStdString(monId);
+	for (DWORD ai = 0;; ++ai) {
+		DISPLAY_DEVICEW adapter{};
+		adapter.cb = sizeof(adapter);
+		if (!EnumDisplayDevicesW(nullptr, ai, &adapter, 0))
+			break;
+		if (!(adapter.StateFlags & DISPLAY_DEVICE_ACTIVE))
+			continue;
+		DISPLAY_DEVICEW mon{};
+		mon.cb = sizeof(mon);
+		for (DWORD mi = 0;
+		     EnumDisplayDevicesW(adapter.DeviceName, mi, &mon, EDD_GET_DEVICE_INTERFACE_NAME); ++mi) {
+			if (want.compare(QString::fromWCharArray(mon.DeviceID), Qt::CaseInsensitive) == 0)
+				return QString::fromWCharArray(adapter.DeviceName);
+		}
+	}
+	return QString();
+}
+#endif
+
 QScreen *MainWindow::screenForActivePreset() const
 {
 	const QList<QScreen *> screens = QGuiApplication::screens();
 	if (screens.isEmpty())
 		return nullptr;
-	// Best-effort: map the preset's monitor index onto Qt's screen order.
 	int idx = activePreset().monitorIndex;
 	if (idx < 0 || idx >= screens.size())
 		idx = 0;
+
+#if defined(_WIN32)
+	// The overlay/crop origin must sit on the SAME physical monitor OBS captures.
+	// Qt's screen order and OBS's monitor list order are independent on Windows,
+	// so map by device identity (OBS monitor_id → GDI name → QScreen::name())
+	// rather than trusting the bare index. Falls back to the index if unresolved.
+	const std::vector<MonitorOption> mons = CaptureManager::enumerateMonitors();
+	if (idx < (int)mons.size() && mons[idx].isString) {
+		const QString gdi = gdiNameForMonitorId(mons[idx].strValue);
+		if (!gdi.isEmpty()) {
+			for (QScreen *s : screens)
+				if (s->name().compare(gdi, Qt::CaseInsensitive) == 0)
+					return s;
+		}
+	}
+#endif
 	return screens.at(idx);
 }
 

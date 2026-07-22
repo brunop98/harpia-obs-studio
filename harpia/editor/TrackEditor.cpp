@@ -615,8 +615,20 @@ void TrackEditor::paintEvent(QPaintEvent *)
 		p.drawRoundedRect(r, 4, 4);
 	}
 
-	// Reorder caret while dragging a segment.
+	// Reorder visuals while dragging a segment: dim the one being moved, draw a
+	// bold insertion caret at the drop slot, and float a ghost under the cursor.
 	if (mode_ == Mode::DraggingSegment && dragMoved_ && dragInsertSlot_ >= 0) {
+		// Dim the segment at its original position so it reads as "in flight".
+		if (selected_ >= 0 && selected_ < rects.size()) {
+			p.save();
+			QPainterPath clip;
+			clip.addRoundedRect(rects[selected_], 4, 4);
+			p.setClipPath(clip);
+			p.fillRect(rects[selected_], QColor(0, 0, 0, 130));
+			p.restore();
+		}
+
+		// Insertion caret at the drop slot, with a triangle marker top & bottom.
 		int cx;
 		if (rects.isEmpty())
 			cx = out.x();
@@ -624,8 +636,34 @@ void TrackEditor::paintEvent(QPaintEvent *)
 			cx = rects.last().right() + lp_.segGap / 2 + 1;
 		else
 			cx = rects[dragInsertSlot_].left() - lp_.segGap / 2 - 1;
-		p.setPen(QPen(kAccent, 2));
-		p.drawLine(cx, out.y() + 2, cx, out.bottom() - 2);
+		p.setPen(QPen(kAccent, 3));
+		p.drawLine(cx, out.y(), cx, out.bottom());
+		QPainterPath caret;
+		caret.moveTo(cx - 5, out.y());
+		caret.lineTo(cx + 5, out.y());
+		caret.lineTo(cx, out.y() + 6);
+		caret.closeSubpath();
+		caret.moveTo(cx - 5, out.bottom());
+		caret.lineTo(cx + 5, out.bottom());
+		caret.lineTo(cx, out.bottom() - 6);
+		caret.closeSubpath();
+		p.setPen(Qt::NoPen);
+		p.setBrush(kAccent);
+		p.drawPath(caret);
+
+		// A translucent ghost of the dragged segment following the cursor.
+		if (selected_ >= 0 && selected_ < rects.size() && dragGhostX_ >= 0) {
+			const int gw = rects[selected_].width();
+			QRect g(dragGhostX_ - gw / 2, out.y() + 2, gw, out.height() - 4);
+			p.save();
+			p.setOpacity(0.8);
+			p.setPen(QPen(kAccent, 2));
+			p.setBrush(QColor(kAccent.red(), kAccent.green(), kAccent.blue(), 70));
+			p.drawRoundedRect(g, 4, 4);
+			p.setPen(QColor(0xff, 0xff, 0xff));
+			p.drawText(g, Qt::AlignCenter, QStringLiteral("#%1").arg(selected_ + 1));
+			p.restore();
+		}
 	}
 
 	// Output playhead (mapped through the output zoom/view).
@@ -788,7 +826,9 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 		if (!dragMoved_ && (pos - pressPos_).manhattanLength() > 6)
 			dragMoved_ = true;
 		if (dragMoved_) {
+			setCursor(Qt::ClosedHandCursor); // "grabbing" while reordering
 			dragInsertSlot_ = insertSlotAt(pos.x());
+			dragGhostX_ = pos.x();
 			update();
 		}
 		return;
@@ -923,7 +963,9 @@ void TrackEditor::mouseReleaseEvent(QMouseEvent *e)
 			}
 		}
 		dragInsertSlot_ = -1;
+		dragGhostX_ = -1;
 		dragMoved_ = false;
+		unsetCursor(); // drop the "grabbing" cursor; hover logic re-hints
 		update();
 		return;
 	}

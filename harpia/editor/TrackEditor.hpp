@@ -168,6 +168,7 @@ private:
 	QPoint pressPos_;
 	bool dragMoved_ = false;
 	int dragInsertSlot_ = -1; // reorder target slot while dragging
+	int dragGhostX_ = -1;     // mouse x while reordering (drives the drag ghost)
 
 	// Edge-trim drag state, captured at press so the px→source-ms scale stays
 	// stable while the segment's width changes under the cursor.

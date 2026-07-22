@@ -77,6 +77,7 @@ public:
 
 	void setPlayhead(qint64 outMs); // playhead on the output track (output-time)
 	void clearPlayhead();
+	qint64 playhead() const { return playheadOutMs_; } // -1 when none
 
 	// Developer Panel: tweak the layout live (invalidates the strip cache).
 	const TrackLayoutParams &layoutParams() const { return lp_; }

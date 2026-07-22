@@ -92,6 +92,7 @@ public:
 	void setPlayhead(qint64 ms); // move the playhead (during playback) without emitting
 	qint64 start() const { return start_; }
 	qint64 end() const { return end_; }
+	qint64 playhead() const { return playhead_; }
 
 	// Filmstrip thumbnails; entry i covers time slice [i, i+1) * duration/count.
 	void setThumbs(const QVector<QImage> &thumbs);

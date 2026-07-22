@@ -64,6 +64,7 @@ private slots:
 	void onExportProgress(int pct, qint64 etaMs, qint64 bytes);
 	void onExportFinished(bool ok, bool canceled, const QString &err);
 	void onPlayPause();
+	void onResetMarker(); // move the playhead back to the start
 	void onPlayTick();
 	void onSpeedChanged(int sliderValue); // slider moved (exponential mapping)
 	void onSpeedSpinChanged(double value); // typed into the speed box

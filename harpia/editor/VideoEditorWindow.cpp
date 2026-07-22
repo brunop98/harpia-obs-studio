@@ -214,8 +214,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	// speed so you can judge the speed before exporting.
 	auto *playRow = new QHBoxLayout;
 	playBtn_ = new QPushButton(QStringLiteral("▶  Play"), this);
-	playBtn_->setToolTip(QStringLiteral("Loop-play the trimmed section at the current speed"));
+	playBtn_->setToolTip(QStringLiteral("Play from the marker at the current speed"));
 	playRow->addWidget(playBtn_);
+	auto *resetBtn = new QPushButton(QStringLiteral("⏮  Reset"), this);
+	resetBtn->setToolTip(QStringLiteral("Move the playhead back to the start"));
+	connect(resetBtn, &QPushButton::clicked, this, &VideoEditorWindow::onResetMarker);
+	playRow->addWidget(resetBtn);
 	playRow->addSpacing(12);
 	playRow->addWidget(new QLabel(QStringLiteral("Speed"), this));
 	speedSlider_ = new QSlider(Qt::Horizontal, this);
@@ -633,6 +637,29 @@ void VideoEditorWindow::onPlayPause()
 		startPlayback();
 }
 
+void VideoEditorWindow::onResetMarker()
+{
+	if (!valid_)
+		return;
+	stopPlayback();
+	if (multiCut()) {
+		tracks_->setPlayhead(0);
+		if (voTrack_)
+			voTrack_->setPlayhead(0);
+		qint64 srcMs = 0;
+		if (tracks_->sourceForOutput(0, &srcMs) >= 0)
+			onScrub(srcMs); // preview the first frame of the output
+		else
+			showFrame(0);
+	} else {
+		const qint64 s = timeline_->start();
+		timeline_->setPlayhead(s);
+		if (voTrack_)
+			voTrack_->setPlayhead(0);
+		onScrub(s);
+	}
+}
+
 void VideoEditorWindow::startPlayback()
 {
 	if (!valid_)
@@ -642,15 +669,26 @@ void VideoEditorWindow::startPlayback()
 			return; // nothing to assemble yet
 		playing_ = true;
 		playBtn_->setText(QStringLiteral("⏸  Pause"));
-		playAnchorMs_ = 0; // output-time
-		playSeg_ = -1;     // force the first segment seek
+		// Start from the marker (output-time); fall back to the start if it's
+		// unset or past the end.
+		const qint64 total = tracks_->totalOutputMs();
+		qint64 pos = tracks_->playhead();
+		if (pos < 0 || pos >= total)
+			pos = 0;
+		playAnchorMs_ = pos;
+		playSeg_ = -1; // force the first segment seek
 		playClock_.restart();
 		playTimer_->start();
 		return;
 	}
 	playing_ = true;
 	playBtn_->setText(QStringLiteral("⏸  Pause"));
-	playAnchorMs_ = timeline_->start();
+	// Start from the marker (source-time), clamped into the trimmed region.
+	const qint64 start = timeline_->start(), end = timeline_->end();
+	qint64 pos = timeline_->playhead();
+	if (pos < start || pos >= end)
+		pos = start;
+	playAnchorMs_ = pos;
 	seeker_->seekTo(playAnchorMs_);
 	playClock_.restart();
 	playTimer_->start();

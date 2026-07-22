@@ -17,6 +17,7 @@
 #include <QComboBox>
 #include <QDesktopServices>
 #include <QDoubleSpinBox>
+#include <QButtonGroup>
 #include <QSignalBlocker>
 
 #include <algorithm>
@@ -161,7 +162,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	auto *bottomLayout = new QVBoxLayout(bottomPane);
 	bottomLayout->setContentsMargins(0, 0, 0, 0);
 
-	// Mode switch: Simple Trim (one range) vs Multi-Cut (assemble many cuts).
+	// Mode switch as a segmented control: the two modes are mutually exclusive,
+	// so join them visually and enforce exclusivity with a button group.
 	auto *modeRow = new QHBoxLayout;
 	trimModeBtn_ = new QPushButton(QStringLiteral("Simple Trim"), this);
 	trimModeBtn_->setCheckable(true);
@@ -172,21 +174,42 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	cutModeBtn_->setToolTip(QStringLiteral(
 		"Drag on the Source track to select the sections to keep; they are joined in order. "
 		"Each cut gets its own playback speed."));
-	modeRow->addWidget(trimModeBtn_);
-	modeRow->addWidget(cutModeBtn_);
-	modeRow->addSpacing(12);
+	auto *modeGroup = new QButtonGroup(this);
+	modeGroup->setExclusive(true); // only one mode active; can't un-check both
+	modeGroup->addButton(trimModeBtn_);
+	modeGroup->addButton(cutModeBtn_);
+	// Segmented look: shared fill, joined borders, accent on the active segment.
+	const QString segBase = QStringLiteral(
+		"QPushButton{background:#2b2f36;color:#c8ccd4;border:1px solid #3a3f47;padding:5px 14px;}"
+		"QPushButton:checked{background:#3d7eff;color:#ffffff;border-color:#3d7eff;}");
+	trimModeBtn_->setStyleSheet(segBase + QStringLiteral(
+		"QPushButton{border-top-left-radius:5px;border-bottom-left-radius:5px;border-right:none;}"));
+	cutModeBtn_->setStyleSheet(segBase + QStringLiteral(
+		"QPushButton{border-top-right-radius:5px;border-bottom-right-radius:5px;}"));
+	auto *segBox = new QHBoxLayout;
+	segBox->setSpacing(0); // no gap — the two segments read as one control
+	segBox->setContentsMargins(0, 0, 0, 0);
+	segBox->addWidget(trimModeBtn_);
+	segBox->addWidget(cutModeBtn_);
+	modeRow->addLayout(segBox);
+	modeRow->addSpacing(14);
+	// Undo/redo, grouped tightly as one cluster.
+	auto *urBox = new QHBoxLayout;
+	urBox->setSpacing(2);
+	urBox->setContentsMargins(0, 0, 0, 0);
 	undoBtn_ = new QPushButton(QStringLiteral("↶"), this);
 	undoBtn_->setToolTip(QStringLiteral("Undo (Ctrl+Z)"));
 	undoBtn_->setFixedWidth(34);
 	undoBtn_->setEnabled(false);
 	connect(undoBtn_, &QPushButton::clicked, this, &VideoEditorWindow::undo);
-	modeRow->addWidget(undoBtn_);
+	urBox->addWidget(undoBtn_);
 	redoBtn_ = new QPushButton(QStringLiteral("↷"), this);
 	redoBtn_->setToolTip(QStringLiteral("Redo (Ctrl+Shift+Z)"));
 	redoBtn_->setFixedWidth(34);
 	redoBtn_->setEnabled(false);
 	connect(redoBtn_, &QPushButton::clicked, this, &VideoEditorWindow::redo);
-	modeRow->addWidget(redoBtn_);
+	urBox->addWidget(redoBtn_);
+	modeRow->addLayout(urBox);
 	modeRow->addStretch(1);
 	// Inspector toggle — show/hide the right-side properties panel.
 	inspectorBtn_ = new QPushButton(QStringLiteral("Inspector"), this);

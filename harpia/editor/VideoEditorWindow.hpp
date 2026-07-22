@@ -1,8 +1,13 @@
 #pragma once
 
+#include "TrackEditor.hpp"    // CutSegment (stored in EditorSnapshot)
+#include "VoiceoverTrack.hpp" // VoiceoverClip (stored in EditorSnapshot)
+
 #include <QDialog>
 #include <QElapsedTimer>
+#include <QRect>
 #include <QString>
+#include <QVector>
 
 #include <memory>
 #include <thread>
@@ -18,6 +23,25 @@ class QStackedWidget;
 class QTimer;
 
 namespace harpia {
+
+// A full snapshot of the editor's undoable state. Undo/redo restores one of
+// these; snapshot-based history is simple and robust for this size of state.
+struct EditorSnapshot {
+	QVector<CutSegment> segments;
+	qint64 trimStart = 0;
+	qint64 trimEnd = 0;
+	double speed = 1.0;
+	bool cropEnabled = false;
+	QRect cropRect;
+	QVector<VoiceoverClip> voiceClips;
+
+	bool operator==(const EditorSnapshot &o) const
+	{
+		return segments == o.segments && trimStart == o.trimStart && trimEnd == o.trimEnd &&
+		       speed == o.speed && cropEnabled == o.cropEnabled && cropRect == o.cropRect &&
+		       voiceClips == o.voiceClips;
+	}
+};
 
 class AudioRecorder;
 class DevPanel;
@@ -66,6 +90,8 @@ private slots:
 	void onPlayPause();
 	void onResetMarker(); // move the playhead back to the start
 	void onPlayTick();
+	void undo();
+	void redo();
 	void onSpeedChanged(int sliderValue); // slider moved (exponential mapping)
 	void onSpeedSpinChanged(double value); // typed into the speed box
 	void onSegmentsChanged();
@@ -78,6 +104,13 @@ private:
 	// the count label. Callers keep the slider + spin box in sync.
 	void applySpeed(double value);
 	void syncSpeedControls(double value); // set slider + spin without re-applying
+
+	// Undo/redo history (snapshot-based, coalesced via histTimer_).
+	EditorSnapshot snapshot() const;
+	void restoreSnapshot(const EditorSnapshot &s);
+	void scheduleSnapshot();  // debounced: records after edits settle
+	void captureSnapshot();   // histTimer_ fired — push if changed
+	void updateUndoRedoButtons();
 
 	// Voiceover helpers.
 	void startVoiceoverCapture();     // actually opens the mic + (talk-along) plays
@@ -114,6 +147,12 @@ private:
 	QString baseInfo_; // static file info; extended with cut stats in Multi-Cut
 
 	QPushButton *playBtn_ = nullptr;
+	QPushButton *undoBtn_ = nullptr;
+	QPushButton *redoBtn_ = nullptr;
+	QVector<EditorSnapshot> history_;
+	int histIndex_ = -1;    // current position in history_
+	bool restoring_ = false; // guard: restoring must not schedule new snapshots
+	QTimer *histTimer_ = nullptr;
 	QSlider *speedSlider_ = nullptr;
 	QDoubleSpinBox *speedSpin_ = nullptr; // editable numeric speed (text input)
 	QLabel *speedLabel_ = nullptr;        // "(N cuts)" / "—" status next to it

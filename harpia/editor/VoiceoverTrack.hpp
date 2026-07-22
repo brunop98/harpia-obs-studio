@@ -29,6 +29,15 @@ struct VoiceoverClip {
 	int fadeInMs = 15;     // short default fades avoid clicks
 	int fadeOutMs = 15;
 	QVector<float> peaks;  // |amplitude| per bucket over the WHOLE source, 0..1
+
+	// Compares the editable fields only (ignores the derived waveform peaks),
+	// for undo/redo change detection.
+	bool operator==(const VoiceoverClip &o) const
+	{
+		return path == o.path && outStartMs == o.outStartMs && durationMs == o.durationMs &&
+		       srcStartMs == o.srcStartMs && volume == o.volume && fadeInMs == o.fadeInMs &&
+		       fadeOutMs == o.fadeOutMs;
+	}
 };
 
 // The Voiceover track shown under the editor's timelines: recorded narration
@@ -48,6 +57,8 @@ public:
 	int addClip(VoiceoverClip clip);
 
 	const QVector<VoiceoverClip> &clips() const { return clips_; }
+	// Replace the whole clip list (undo/redo restore). Does NOT emit clipsChanged.
+	void setClips(const QVector<VoiceoverClip> &clips);
 	bool isEmpty() const { return clips_.isEmpty(); }
 	int selectedIndex() const { return selected_; }
 	void removeSelected();

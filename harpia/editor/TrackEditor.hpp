@@ -24,6 +24,11 @@ struct CutSegment {
 		const double sp = speed > 0.01 ? speed : 1.0;
 		return std::max<qint64>(1, qint64(std::llround(double(srcEndMs - srcStartMs) / sp)));
 	}
+
+	bool operator==(const CutSegment &o) const
+	{
+		return srcStartMs == o.srcStartMs && srcEndMs == o.srcEndMs && speed == o.speed;
+	}
 };
 
 // Runtime-tweakable layout parameters for the multi-cut track editor (edited
@@ -61,6 +66,9 @@ public:
 	void setThumbs(const QVector<QImage> &thumbs);
 
 	const QVector<CutSegment> &segments() const { return segs_; }
+	// Replace the whole cut list (undo/redo restore). Clears selection; does NOT
+	// emit segmentsChanged (the caller refreshes derived UI).
+	void setSegments(const QVector<CutSegment> &segs);
 	int selectedIndex() const { return selected_; } // primary (last clicked), -1 = none
 	// All selected cuts, ascending. Ctrl+click toggles membership, Shift+click
 	// selects a range; the speed slider applies to every selected cut.

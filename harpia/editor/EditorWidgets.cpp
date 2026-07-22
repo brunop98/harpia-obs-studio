@@ -61,6 +61,12 @@ void PreviewCanvas::resetCrop()
 	update();
 }
 
+void PreviewCanvas::setCropRectVideo(const QRect &r)
+{
+	cropVideo_ = r;
+	update();
+}
+
 QRect PreviewCanvas::displayRect() const
 {
 	if (vw_ <= 0 || vh_ <= 0)

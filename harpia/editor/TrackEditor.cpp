@@ -225,6 +225,15 @@ QList<int> TrackEditor::selectedIndices() const
 	return list;
 }
 
+void TrackEditor::setSegments(const QVector<CutSegment> &segs)
+{
+	segs_ = segs;
+	selected_ = -1;
+	multiSel_.clear();
+	playheadOutMs_ = -1;
+	update();
+}
+
 void TrackEditor::removeSegment(int index)
 {
 	if (index < 0 || index >= segs_.size())
@@ -923,7 +932,9 @@ void TrackEditor::showSegmentMenu(int index, const QPoint &globalPos, const QPoi
 		} else {
 			setSegmentSpeed(index, 1.0);
 		}
-		// Re-announce the selection so the editor window refreshes its slider.
+		// Speed changes output durations — treat it as an edit (updates the info
+		// label + records an undo step), then refresh the slider.
+		emit segmentsChanged();
 		emit selectionChanged(selected_ >= 0 ? selected_ : index);
 	}
 }

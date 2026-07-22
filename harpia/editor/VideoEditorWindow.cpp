@@ -30,6 +30,7 @@
 #include <QProcess>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QShortcut>
 #include <QSlider>
 #include <QStackedWidget>
 #include <QTimer>
@@ -106,6 +107,19 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 		"Each cut gets its own playback speed."));
 	modeRow->addWidget(trimModeBtn_);
 	modeRow->addWidget(cutModeBtn_);
+	modeRow->addSpacing(12);
+	undoBtn_ = new QPushButton(QStringLiteral("↶"), this);
+	undoBtn_->setToolTip(QStringLiteral("Undo (Ctrl+Z)"));
+	undoBtn_->setFixedWidth(34);
+	undoBtn_->setEnabled(false);
+	connect(undoBtn_, &QPushButton::clicked, this, &VideoEditorWindow::undo);
+	modeRow->addWidget(undoBtn_);
+	redoBtn_ = new QPushButton(QStringLiteral("↷"), this);
+	redoBtn_->setToolTip(QStringLiteral("Redo (Ctrl+Shift+Z)"));
+	redoBtn_->setFixedWidth(34);
+	redoBtn_->setEnabled(false);
+	connect(redoBtn_, &QPushButton::clicked, this, &VideoEditorWindow::redo);
+	modeRow->addWidget(redoBtn_);
 	modeRow->addStretch(1);
 	// Developer Panel: live-tweak every timeline layout variable to find the
 	// best UI configuration (editor-only tool, values are not persisted).
@@ -208,7 +222,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	connect(voRecordBtn_, &QPushButton::clicked, this,
 		&VideoEditorWindow::onVoiceoverRecordClicked);
 	connect(voImportBtn_, &QPushButton::clicked, this, &VideoEditorWindow::onImportAudioClicked);
-	connect(voTrack_, &VoiceoverTrack::clipsChanged, this, [this]() { updateInfoLabel(); });
+	connect(voTrack_, &VoiceoverTrack::clipsChanged, this, [this]() {
+		updateInfoLabel();
+		scheduleSnapshot();
+	});
 
 	// Playback + speed row: play/pause loops the trimmed region at the chosen
 	// speed so you can judge the speed before exporting.
@@ -276,17 +293,36 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 	previewTimer_->setInterval(20);
 	connect(previewTimer_, &QTimer::timeout, this, &VideoEditorWindow::onPreviewTick);
 
+	// Undo/redo history: coalesce a burst of edits (a drag, slider sweep) into
+	// one snapshot taken shortly after they settle.
+	histTimer_ = new QTimer(this);
+	histTimer_->setSingleShot(true);
+	histTimer_->setInterval(350);
+	connect(histTimer_, &QTimer::timeout, this, &VideoEditorWindow::captureSnapshot);
+	new QShortcut(QKeySequence::Undo, this, this, &VideoEditorWindow::undo);
+	new QShortcut(QKeySequence::Redo, this, this, &VideoEditorWindow::redo);
+	new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Y), this, this, &VideoEditorWindow::redo);
+
 	connect(timeline_, &Timeline::scrub, this, &VideoEditorWindow::onScrub);
 	connect(timeline_, &Timeline::hoverScrub, this, &VideoEditorWindow::onHoverScrub);
-	connect(timeline_, &Timeline::startChanged, this, [this]() { updateVoiceoverAxis(); });
-	connect(timeline_, &Timeline::endChanged, this, [this]() { updateVoiceoverAxis(); });
+	connect(timeline_, &Timeline::startChanged, this, [this]() {
+		updateVoiceoverAxis();
+		scheduleSnapshot();
+	});
+	connect(timeline_, &Timeline::endChanged, this, [this]() {
+		updateVoiceoverAxis();
+		scheduleSnapshot();
+	});
 	connect(tracks_, &TrackEditor::scrubSource, this, &VideoEditorWindow::onScrub);
 	connect(tracks_, &TrackEditor::hoverScrub, this, &VideoEditorWindow::onHoverScrub);
 	connect(tracks_, &TrackEditor::segmentsChanged, this, &VideoEditorWindow::onSegmentsChanged);
+	connect(tracks_, &TrackEditor::segmentsChanged, this, &VideoEditorWindow::scheduleSnapshot);
 	connect(tracks_, &TrackEditor::selectionChanged, this, &VideoEditorWindow::onSegmentSelected);
 	connect(trimModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(false); });
 	connect(cutModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(true); });
 	connect(cropToggle_, &QCheckBox::toggled, this, &VideoEditorWindow::onCropToggled);
+	connect(cropToggle_, &QCheckBox::toggled, this, [this]() { scheduleSnapshot(); });
+	connect(canvas_, &PreviewCanvas::cropChanged, this, [this]() { scheduleSnapshot(); });
 	connect(resetCrop, &QPushButton::clicked, this, [this]() { canvas_->resetCrop(); });
 	connect(saveBtn, &QPushButton::clicked, this, &VideoEditorWindow::onSave);
 	connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
@@ -321,6 +357,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, QWidget *parent)
 		updateInfoLabel();
 		updateVoiceoverAxis();
 		showFrame(0);
+		// Seed the undo history with the untouched state.
+		history_.clear();
+		history_.push_back(snapshot());
+		histIndex_ = 0;
+		updateUndoRedoButtons();
 	} else {
 		infoLabel_->setText(QStringLiteral("Could not open this video."));
 		saveBtn->setEnabled(false);
@@ -660,6 +701,124 @@ void VideoEditorWindow::onResetMarker()
 	}
 }
 
+EditorSnapshot VideoEditorWindow::snapshot() const
+{
+	EditorSnapshot s;
+	s.segments = tracks_->segments();
+	s.trimStart = timeline_->start();
+	s.trimEnd = timeline_->end();
+	s.speed = speed_;
+	s.cropEnabled = canvas_->cropEnabled();
+	s.cropRect = canvas_->cropRectVideo();
+	s.voiceClips = voTrack_->clips();
+	return s;
+}
+
+void VideoEditorWindow::scheduleSnapshot()
+{
+	if (restoring_ || !valid_)
+		return;
+	histTimer_->start(); // (re)start the coalescing timer
+}
+
+void VideoEditorWindow::captureSnapshot()
+{
+	if (restoring_ || !valid_)
+		return;
+	const EditorSnapshot s = snapshot();
+	if (histIndex_ >= 0 && histIndex_ < history_.size() && s == history_[histIndex_])
+		return; // nothing actually changed
+	if (histIndex_ + 1 < history_.size())
+		history_.resize(histIndex_ + 1); // drop the redo tail
+	history_.push_back(s);
+	constexpr int kMaxHistory = 100;
+	if (history_.size() > kMaxHistory)
+		history_.removeFirst();
+	histIndex_ = history_.size() - 1;
+	updateUndoRedoButtons();
+}
+
+void VideoEditorWindow::restoreSnapshot(const EditorSnapshot &s)
+{
+	restoring_ = true;
+	stopPlayback();
+
+	tracks_->setSegments(s.segments);
+
+	// Order the trim setters so the internal start<end clamps don't fight us.
+	timeline_->setStart(0);
+	timeline_->setEnd(s.trimEnd);
+	timeline_->setStart(s.trimStart);
+
+	speed_ = s.speed;
+
+	{
+		QSignalBlocker b(cropToggle_);
+		cropToggle_->setChecked(s.cropEnabled);
+	}
+	canvas_->setCropEnabled(s.cropEnabled);
+	canvas_->setCropRectVideo(s.cropRect);
+
+	voTrack_->setClips(s.voiceClips);
+
+	// Refresh derived UI + speed controls for the current mode.
+	if (multiCut()) {
+		onSegmentSelected(tracks_->selectedIndex());
+	} else {
+		speedSlider_->setEnabled(valid_);
+		speedSpin_->setEnabled(valid_);
+		syncSpeedControls(speed_);
+		speedLabel_->setText(QString());
+	}
+	updateInfoLabel();
+	updateVoiceoverAxis();
+
+	// Repaint the preview at a sensible frame.
+	if (multiCut()) {
+		qint64 srcMs = 0;
+		if (tracks_->sourceForOutput(0, &srcMs) >= 0)
+			showFrame(srcMs);
+	} else {
+		showFrame(timeline_->start());
+	}
+
+	restoring_ = false;
+}
+
+void VideoEditorWindow::undo()
+{
+	if (histTimer_->isActive()) { // commit a pending edit first
+		histTimer_->stop();
+		captureSnapshot();
+	}
+	if (histIndex_ <= 0)
+		return;
+	--histIndex_;
+	restoreSnapshot(history_[histIndex_]);
+	updateUndoRedoButtons();
+}
+
+void VideoEditorWindow::redo()
+{
+	if (histTimer_->isActive()) {
+		histTimer_->stop();
+		captureSnapshot();
+	}
+	if (histIndex_ + 1 >= history_.size())
+		return;
+	++histIndex_;
+	restoreSnapshot(history_[histIndex_]);
+	updateUndoRedoButtons();
+}
+
+void VideoEditorWindow::updateUndoRedoButtons()
+{
+	if (undoBtn_)
+		undoBtn_->setEnabled(histIndex_ > 0);
+	if (redoBtn_)
+		redoBtn_->setEnabled(histIndex_ + 1 < history_.size());
+}
+
 void VideoEditorWindow::startPlayback()
 {
 	if (!valid_)
@@ -823,6 +982,7 @@ void VideoEditorWindow::applySpeed(double value)
 		}
 		updateInfoLabel();
 		updateVoiceoverAxis();
+		scheduleSnapshot();
 		return;
 	}
 
@@ -833,6 +993,7 @@ void VideoEditorWindow::applySpeed(double value)
 	}
 	speed_ = value;
 	updateVoiceoverAxis();
+	scheduleSnapshot();
 }
 
 void VideoEditorWindow::onPreviewTick()

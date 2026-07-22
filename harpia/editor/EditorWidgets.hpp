@@ -29,6 +29,7 @@ public:
 	void setCropEnabled(bool on);
 	bool cropEnabled() const { return cropEnabled_; }
 	QRect cropRectVideo() const { return cropVideo_; }
+	void setCropRectVideo(const QRect &r); // undo/redo restore; no signal
 	void resetCrop(); // full frame
 
 	// Developer Panel: tweak the preview's minimum size live.

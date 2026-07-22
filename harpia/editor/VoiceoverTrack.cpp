@@ -144,6 +144,13 @@ int VoiceoverTrack::addClip(VoiceoverClip clip)
 	return selected_;
 }
 
+void VoiceoverTrack::setClips(const QVector<VoiceoverClip> &clips)
+{
+	clips_ = clips;
+	selected_ = -1;
+	update();
+}
+
 void VoiceoverTrack::removeSelected()
 {
 	if (selected_ < 0 || selected_ >= clips_.size())

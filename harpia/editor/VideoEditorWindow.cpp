@@ -709,6 +709,9 @@ int VideoEditorWindow::addSource(const QString &path)
 			return;
 		s->thumbCache = thumbs->thumbs();
 		refreshSourceList();
+		// Every source feeds the Output track so its cuts render from their own
+		// frames; the active source also drives the Source track + Simple-Trim.
+		tracks_->setSourceThumbs(id, s->thumbCache, s->durationMs);
 		if (id == activeSourceId_) {
 			timeline_->setThumbs(s->thumbCache);
 			tracks_->setThumbs(s->thumbCache);

@@ -56,10 +56,12 @@ void TrackEditor::setLayoutParams(const TrackLayoutParams &p)
 void TrackEditor::setDuration(qint64 ms)
 {
 	duration_ = std::max<qint64>(0, ms);
+	// Reset the SOURCE-track view (this is the video the source track shows).
+	// Leave the OUTPUT-track view intact — switching the active source must not
+	// throw away the output timeline's zoom/scroll (the mix is unchanged).
 	zoom_ = 1.0;
 	viewStart_ = 0;
-	outZoom_ = 1.0;
-	outViewStart_ = 0;
+	clampOutView();
 	update();
 }
 
@@ -68,6 +70,13 @@ void TrackEditor::setThumbs(const QVector<QImage> &thumbs)
 	thumbs_ = thumbs;
 	++thumbsRev_; // invalidates the strip cache
 	update();
+}
+
+void TrackEditor::setSourceThumbs(int sourceId, const QVector<QImage> &thumbs, qint64 durationMs)
+{
+	srcThumbs_[sourceId] = thumbs;
+	srcThumbDur_[sourceId] = durationMs;
+	update(); // Output cut tiles for this source can now render
 }
 
 void TrackEditor::ensureStripCache(const QRect &src)
@@ -495,8 +504,11 @@ void TrackEditor::paintEvent(QPaintEvent *)
 		p.save();
 		p.setClipPath(clip);
 
-		// Existing cuts shown as translucent regions on the source.
+		// Parts of THIS source already used in the output — only the active
+		// source's cuts map onto this timeline (others live in other videos).
 		for (int i = 0; i < segs_.size(); ++i) {
+			if (segs_[i].sourceId != activeSourceId_)
+				continue;
 			const int x1 = msToX(segs_[i].srcStartMs);
 			const int x2 = msToX(segs_[i].srcEndMs);
 			QColor fill = kAccent;
@@ -561,13 +573,18 @@ void TrackEditor::paintEvent(QPaintEvent *)
 		p.setBrush(sel ? kSegFillSel : kSegFill);
 		p.drawRoundedRect(r, 4, 4);
 
-		// One thumbnail per cut (its first frame) — quick visual identification.
+		// One thumbnail per cut (its first frame) from the cut's OWN source, so a
+		// mix shows the right frames regardless of which source is active. If the
+		// source's strip hasn't decoded yet, show the block without a thumbnail.
 		int thumbW = 0;
-		if (!thumbs_.isEmpty() && duration_ > 0) {
-			const int ti = std::clamp(int(double(segs_[i].srcStartMs) / duration_ *
-						      thumbs_.size()),
-						  0, int(thumbs_.size()) - 1);
-			const QImage &t = thumbs_[ti];
+		const auto tIt = srcThumbs_.constFind(segs_[i].sourceId);
+		const qint64 srcDur = srcThumbDur_.value(segs_[i].sourceId, 0);
+		if (tIt != srcThumbs_.constEnd() && !tIt.value().isEmpty() && srcDur > 0) {
+			const QVector<QImage> &strip = tIt.value();
+			const int ti = std::clamp(
+				int(double(segs_[i].srcStartMs) / srcDur * strip.size()), 0,
+				int(strip.size()) - 1);
+			const QImage &t = strip[ti];
 			if (!t.isNull() && t.height() > 0) {
 				const int th = r.height() - 2;
 				thumbW = std::min(th * t.width() / t.height(), r.width() - 2);

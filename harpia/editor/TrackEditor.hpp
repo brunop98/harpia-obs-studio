@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QImage>
 #include <QPixmap>
 #include <QSet>
@@ -74,6 +75,10 @@ public:
 	// Filmstrip thumbnails for the source track; entry i covers the time slice
 	// [i, i+1) * duration/count.
 	void setThumbs(const QVector<QImage> &thumbs);
+
+	// Per-source filmstrip so Output cuts render from their OWN source (a mix can
+	// hold cuts from several videos). Fed for every source as its strip decodes.
+	void setSourceThumbs(int sourceId, const QVector<QImage> &thumbs, qint64 durationMs);
 
 	const QVector<CutSegment> &segments() const { return segs_; }
 	// Replace the whole cut list (undo/redo restore). Clears selection; does NOT
@@ -163,6 +168,9 @@ private:
 	qint64 duration_ = 0;
 	int activeSourceId_ = 0;    // stamped onto new cuts from the Source track
 	int lastScrubSourceId_ = 0; // source of the most recent scrub/hover emit
+	// Per-source filmstrips for rendering Output cuts (keyed by source id).
+	QHash<int, QVector<QImage>> srcThumbs_;
+	QHash<int, qint64> srcThumbDur_;
 	int selected_ = -1;      // primary selection (drives resize + the slider value)
 	QSet<int> multiSel_;     // full selection; selected_ is a member when >= 0
 	qint64 playheadOutMs_ = -1;

@@ -208,6 +208,7 @@ qint64 VoiceoverTrack::xToMs(int x) const
 QVector<QRect> VoiceoverTrack::clipRects() const
 {
 	QVector<QRect> rects;
+	rects.reserve(clips_.size());
 	const QRect r = trackRect();
 	for (const VoiceoverClip &c : clips_) {
 		const int x1 = msToX(c.outStartMs);

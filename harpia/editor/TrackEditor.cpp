@@ -408,19 +408,28 @@ QVector<QRect> TrackEditor::segmentRects() const
 {
 	// Output-time axis: each cut occupies [outputStartOf(i), +outDuration] mapped
 	// through the output zoom/view, so the track zooms and pans like the source.
+	// Computed in one linear pass (total + running start hoisted out of the loop)
+	// since this runs on every paint and mouse-move.
 	QVector<QRect> rects;
 	const int n = segs_.size();
 	if (!n)
 		return rects;
 	const QRect r = outputRect();
 	const int gap = std::max(0, lp_.segGap);
+	const qint64 total = totalOutputMs();
+	const qint64 vis = std::max<qint64>(1, qint64(total / outZoom_));
+	const double scale = double(r.width()) / double(vis);
+	auto mapX = [&](qint64 ms) {
+		return (total <= 0 || r.width() <= 0) ? r.x() : r.x() + int(double(ms - outViewStart_) * scale);
+	};
+	rects.reserve(n);
+	qint64 acc = 0;
 	for (int i = 0; i < n; ++i) {
-		const qint64 s0 = outputStartOf(i);
-		const qint64 s1 = s0 + segs_[i].outDurationMs();
-		const int x1 = outMsToX(s0);
-		const int x2 = outMsToX(s1);
-		const int w = std::max(2, x2 - x1 - gap); // small visual separation
-		rects.append(QRect(x1, r.y(), w, r.height()));
+		const qint64 d = segs_[i].outDurationMs();
+		const int x1 = mapX(acc);
+		const int x2 = mapX(acc + d);
+		rects.append(QRect(x1, r.y(), std::max(2, x2 - x1 - gap), r.height()));
+		acc += d;
 	}
 	return rects;
 }

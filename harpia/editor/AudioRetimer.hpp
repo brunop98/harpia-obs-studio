@@ -41,6 +41,13 @@ public:
 	// AV_CODEC_FLAG_GLOBAL_HEADER on the encoder.
 	bool init(const AVCodecParameters *srcPar, int tbNum, int tbDen, bool globalHeader, QString *err);
 
+	// Multi-source: point the decoder at a different input audio stream while
+	// keeping the same output encoder/timeline (samples stay gapless). The atempo
+	// graph is rebuilt for the new input format on the next beginSegment(); the
+	// per-source resample to the encoder's rate/layout is automatic. Call between
+	// segments, before beginSegment().
+	bool setInput(const AVCodecParameters *srcPar, int tbNum, int tbDen, QString *err);
+
 	// Valid after init(); used to create the muxer's audio stream.
 	AVCodecContext *encoder() const { return enc_; }
 	int sampleRate() const;

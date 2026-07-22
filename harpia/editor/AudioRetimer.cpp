@@ -106,6 +106,34 @@ bool AudioRetimer::init(const AVCodecParameters *srcPar, int tbNum, int tbDen, b
 	return true;
 }
 
+bool AudioRetimer::setInput(const AVCodecParameters *srcPar, int tbNum, int tbDen, QString *err)
+{
+	if (!enc_)
+		return fail(err, "Audio pipeline not initialized.");
+	// Rebuild only the decoder; the encoder + sample counter (nextPts_) stay so
+	// the output track remains one gapless AAC stream. The atempo graph — which
+	// reads its input format from the decoder and resamples to the encoder via
+	// aformat — is rebuilt for this source on the next beginSegment().
+	destroyGraph();
+	if (dec_)
+		avcodec_free_context(&dec_);
+
+	tbNum_ = tbNum > 0 ? tbNum : 1;
+	tbDen_ = tbDen > 0 ? tbDen : 1000;
+	const AVCodec *dc = avcodec_find_decoder(srcPar->codec_id);
+	if (!dc)
+		return fail(err, "No decoder for the source audio.");
+	dec_ = avcodec_alloc_context3(dc);
+	if (!dec_ || avcodec_parameters_to_context(dec_, srcPar) < 0)
+		return fail(err, "Could not set up the audio decoder.");
+	dec_->pkt_timebase = AVRational{tbNum_, tbDen_};
+	if (avcodec_open2(dec_, dc, nullptr) < 0)
+		return fail(err, "Could not open the audio decoder.");
+	if (dec_->sample_rate <= 0 || dec_->ch_layout.nb_channels <= 0)
+		return fail(err, "The source audio format is unknown.");
+	return true;
+}
+
 bool AudioRetimer::buildGraph(double speed, QString *err)
 {
 	destroyGraph();

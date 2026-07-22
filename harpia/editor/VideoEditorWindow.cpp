@@ -1852,21 +1852,6 @@ void VideoEditorWindow::onSave()
 		return;
 	}
 
-	// Phase 1: export still consumes a single input. Block exporting a project
-	// that mixes more than one source (multi-source export lands next).
-	{
-		const int primary = sources_.empty() ? -1 : sources_.front().id;
-		for (const CutSegment &c : tracks_->segments())
-			if (c.sourceId != primary) {
-				QMessageBox::information(
-					this, QStringLiteral("Export"),
-					QStringLiteral("This project mixes more than one source. Exporting "
-						       "multiple sources is coming next — for now, export "
-						       "projects that use a single video."));
-				return;
-			}
-	}
-
 	const QString base = QFileInfo(inPath_).completeBaseName() + QStringLiteral("_clip");
 	ExportOptionsDialog dlg(base, /*allowGif=*/!cuts, this);
 	if (dlg.exec() != QDialog::Accepted)
@@ -1896,8 +1881,31 @@ void VideoEditorWindow::onSave()
 	o.keepAudio = dlg.keepAudio();
 	if (cuts) {
 		// Multi-cut assembly: the cut list replaces trim range + global speed.
-		for (const CutSegment &cs : tracks_->segments())
-			o.cuts.push_back({cs.srcStartMs, cs.srcEndMs, cs.speed});
+		// inputs[0] is always the primary (canvas) source; other used sources
+		// follow. When only the primary is used, inputs stays empty so the
+		// single-input export path runs unchanged.
+		const int primaryId = sources_.front().id;
+		std::vector<int> order{primaryId}; // source ids; index 0 = canvas source
+		auto indexOf = [&](int sid) -> int {
+			for (size_t i = 0; i < order.size(); ++i)
+				if (order[i] == sid)
+					return int(i);
+			order.push_back(sid);
+			return int(order.size() - 1);
+		};
+		for (const CutSegment &cs : tracks_->segments()) {
+			ClipExporter::Cut cut;
+			cut.startMs = cs.srcStartMs;
+			cut.endMs = cs.srcEndMs;
+			cut.speed = cs.speed;
+			cut.source = indexOf(cs.sourceId);
+			o.cuts.push_back(cut);
+		}
+		if (order.size() > 1) { // more than the primary → multi-source export
+			for (int sid : order)
+				if (EditorSource *es = sourceById(sid))
+					o.inputs.push_back(es->path.toStdString());
+		}
 		o.startMs = 0;
 		o.endMs = 0;
 		o.speed = 1.0;

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -126,8 +127,13 @@ void ClipExporter::run(const QString &inPath, const QString &outPath, const Opti
 		return;
 	}
 
-	QString err = opts.cuts.empty() ? runVideo(inPath, outPath, opts)
-					: runVideoCuts(inPath, outPath, opts);
+	QString err;
+	if (opts.cuts.empty())
+		err = runVideo(inPath, outPath, opts);
+	else if (opts.inputs.size() > 1)
+		err = runVideoCutsMulti(outPath, opts); // cuts drawn from several sources
+	else
+		err = runVideoCuts(inPath, outPath, opts);
 
 	// Voiceover is mixed in a second pass over the finished file (video
 	// containers only; GIF returned above).
@@ -830,6 +836,379 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 			errored = true;
 		if (!errored) {
 			encodeVideo(nullptr); // flush the video encoder
+			av_write_trailer(s.ofmt);
+		}
+	}
+
+	av_packet_free(&pkt);
+	av_frame_free(&frame);
+	av_packet_free(&outPkt);
+
+	if (s.ofmt && s.ofmt->pb && !(s.ofmt->oformat->flags & AVFMT_NOFILE))
+		avio_closep(&s.ofmt->pb);
+
+	if (cancel_.load())
+		return QString();
+	if (errored)
+		return audioErr.isEmpty() ? QStringLiteral("Encoding failed.") : audioErr;
+	return QString();
+}
+
+// ---------------------------------------------------------------------------
+// Multi-source multi-cut: cuts drawn from several input files, each frame
+// scaled and letterboxed onto the primary (inputs[0]) canvas. Audio from each
+// cut's own source is retimed into one continuous AAC track (only when every
+// used source has audio — otherwise the export is video-only).
+// ---------------------------------------------------------------------------
+QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &opts)
+{
+	const QByteArray out = outPath.toUtf8();
+
+	// One decode context per input file.
+	struct MSrc {
+		AVFormatContext *ifmt = nullptr;
+		int vIdx = -1, aIdx = -1;
+		AVStream *vin = nullptr, *ain = nullptr;
+		AVCodecContext *vdec = nullptr;
+		SwsContext *sws = nullptr; // decoded -> fitW×fitH YUV420P (into the canvas)
+		int fitW = 0, fitH = 0, padX = 0, padY = 0;
+		~MSrc()
+		{
+			if (sws)
+				sws_freeContext(sws);
+			if (vdec)
+				avcodec_free_context(&vdec);
+			if (ifmt)
+				avformat_close_input(&ifmt);
+		}
+	};
+	std::vector<MSrc> src(opts.inputs.size());
+
+	for (size_t i = 0; i < opts.inputs.size(); ++i) {
+		MSrc &m = src[i];
+		if (avformat_open_input(&m.ifmt, opts.inputs[i].c_str(), nullptr, nullptr) < 0 ||
+		    avformat_find_stream_info(m.ifmt, nullptr) < 0)
+			return QStringLiteral("Could not open a source file.");
+		m.vIdx = av_find_best_stream(m.ifmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+		if (m.vIdx < 0)
+			return QStringLiteral("A source has no video track.");
+		m.vin = m.ifmt->streams[m.vIdx];
+		const AVCodec *vdc = avcodec_find_decoder(m.vin->codecpar->codec_id);
+		if (!vdc)
+			return QStringLiteral("Unsupported source video codec.");
+		m.vdec = avcodec_alloc_context3(vdc);
+		if (!m.vdec || avcodec_parameters_to_context(m.vdec, m.vin->codecpar) < 0)
+			return QStringLiteral("Could not set up a video decoder.");
+		m.vdec->pkt_timebase = m.vin->time_base;
+		if (avcodec_open2(m.vdec, vdc, nullptr) < 0)
+			return QStringLiteral("Could not open a video decoder.");
+		m.aIdx = av_find_best_stream(m.ifmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+		m.ain = (m.aIdx >= 0) ? m.ifmt->streams[m.aIdx] : nullptr;
+	}
+
+	// Canvas = primary (inputs[0]) full resolution + framerate. Crop is not
+	// applied when mixing sources.
+	const int cw = std::max(2, evenDown(src[0].vdec->width));
+	const int ch = std::max(2, evenDown(src[0].vdec->height));
+	const AVRational fr = av_guess_frame_rate(src[0].ifmt, src[0].vin, nullptr);
+
+	// Fit rectangle for each source (preserve aspect, centered, even-aligned).
+	for (MSrc &m : src) {
+		const double sc = std::min(double(cw) / m.vdec->width, double(ch) / m.vdec->height);
+		m.fitW = std::max(2, evenDown(int(m.vdec->width * sc)));
+		m.fitH = std::max(2, evenDown(int(m.vdec->height * sc)));
+		m.padX = evenDown((cw - m.fitW) / 2);
+		m.padY = evenDown((ch - m.fitH) / 2);
+		m.sws = sws_getContext(m.vdec->width, m.vdec->height, m.vdec->pix_fmt, m.fitW, m.fitH,
+				       AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr, nullptr);
+		if (!m.sws)
+			return QStringLiteral("Could not create a video scaler.");
+	}
+
+	// Normalize cuts (clamp to each source's duration).
+	std::vector<Cut> cuts;
+	cuts.reserve(opts.cuts.size());
+	for (Cut c : opts.cuts) {
+		if (c.source < 0 || c.source >= int(src.size()))
+			continue;
+		const qint64 dur = durationMsOf(src[c.source].ifmt);
+		if (dur > 0) {
+			c.startMs = std::clamp<qint64>(c.startMs, 0, dur);
+			c.endMs = (c.endMs > 0) ? std::min(c.endMs, dur) : dur;
+		}
+		c.speed = std::clamp(c.speed, 0.05, 50.0);
+		if (c.endMs - c.startMs >= 10)
+			cuts.push_back(c);
+	}
+	if (cuts.empty())
+		return QStringLiteral("There are no cuts to export.");
+
+	// Output container + H.264/VP9 encoder at the canvas size (VideoState owns
+	// the output side; its input fields stay null).
+	VideoState s;
+	const char *encName = (opts.format == Format::WebM) ? "libvpx-vp9" : "libx264";
+	const AVCodec *vc = avcodec_find_encoder_by_name(encName);
+	if (!vc)
+		return QStringLiteral("The output video encoder is not available in this build.");
+	s.venc = avcodec_alloc_context3(vc);
+	if (!s.venc)
+		return QStringLiteral("Could not allocate the video encoder.");
+	s.venc->width = cw;
+	s.venc->height = ch;
+	s.venc->pix_fmt = AV_PIX_FMT_YUV420P;
+	s.venc->time_base = AVRational{1, 90000}; // common output tick (multi-source)
+	s.venc->framerate = fr;
+	s.venc->gop_size = (fr.num > 0 && fr.den > 0) ? std::max(1, int(av_q2d(fr) * 2.0)) : 60;
+
+	if (avformat_alloc_output_context2(&s.ofmt, nullptr, nullptr, out.constData()) < 0 || !s.ofmt)
+		return QStringLiteral("Could not create the output file.");
+	if (s.ofmt->oformat->flags & AVFMT_GLOBALHEADER)
+		s.venc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+	if (opts.format == Format::WebM) {
+		s.venc->bit_rate = 0;
+		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
+		av_opt_set(s.venc->priv_data, "deadline", "good", 0);
+		av_opt_set_int(s.venc->priv_data, "cpu-used", 5, 0);
+		av_opt_set(s.venc->priv_data, "row-mt", "1", 0);
+	} else {
+		av_opt_set(s.venc->priv_data, "preset", "veryfast", 0);
+		av_opt_set(s.venc->priv_data, "profile", "high", 0);
+		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
+	}
+	if (avcodec_open2(s.venc, vc, nullptr) < 0)
+		return QStringLiteral("Could not open the video encoder.");
+	s.vOut = avformat_new_stream(s.ofmt, nullptr);
+	if (!s.vOut || avcodec_parameters_from_context(s.vOut->codecpar, s.venc) < 0)
+		return QStringLiteral("Could not create the output video stream.");
+	s.vOut->time_base = s.venc->time_base;
+
+	// Audio: one retimer switched between sources — only if EVERY used source
+	// has an audio stream (otherwise a gap would desync; export video-only).
+	AudioRetimer retimer;
+	bool wantAudio = (opts.keepAudio && opts.format != Format::WebM);
+	if (wantAudio)
+		for (const Cut &c : cuts)
+			if (!src[c.source].ain) {
+				wantAudio = false;
+				break;
+			}
+	int curAudioSrc = -1;
+	if (wantAudio) {
+		const int first = cuts[0].source;
+		MSrc &fm = src[first];
+		QString aerr;
+		if (retimer.init(fm.ain->codecpar, fm.ain->time_base.num, fm.ain->time_base.den,
+				 (s.ofmt->oformat->flags & AVFMT_GLOBALHEADER) != 0, &aerr)) {
+			curAudioSrc = first;
+			s.aOut = avformat_new_stream(s.ofmt, nullptr);
+			if (!s.aOut ||
+			    avcodec_parameters_from_context(s.aOut->codecpar, retimer.encoder()) < 0)
+				return QStringLiteral("Could not create the output audio stream.");
+			s.aOut->time_base = AVRational{1, retimer.sampleRate()};
+		} else {
+			wantAudio = false; // fall back to video-only
+		}
+	}
+
+	// Canvas frame (reuse cropFrame as the letterboxed output frame).
+	s.cropFrame = av_frame_alloc();
+	s.cropFrame->format = AV_PIX_FMT_YUV420P;
+	s.cropFrame->width = cw;
+	s.cropFrame->height = ch;
+	if (av_frame_get_buffer(s.cropFrame, 0) < 0)
+		return QStringLiteral("Out of memory.");
+
+	if (!(s.ofmt->oformat->flags & AVFMT_NOFILE)) {
+		if (avio_open(&s.ofmt->pb, out.constData(), AVIO_FLAG_WRITE) < 0)
+			return QStringLiteral("Could not open the output file for writing.");
+	}
+	{
+		AVDictionary *mux = nullptr;
+		if (opts.format == Format::Mp4 || opts.format == Format::Mov)
+			av_dict_set(&mux, "movflags", "+faststart", 0);
+		int hr = avformat_write_header(s.ofmt, &mux);
+		av_dict_free(&mux);
+		if (hr < 0)
+			return QStringLiteral("Could not start writing the output file.");
+	}
+	s.headerWritten = true;
+
+	AVPacket *pkt = av_packet_alloc();
+	AVFrame *frame = av_frame_alloc();
+	AVPacket *outPkt = av_packet_alloc();
+	bool errored = false;
+	QString audioErr;
+
+	auto fillBlack = [&](AVFrame *f) {
+		std::memset(f->data[0], 16, size_t(f->linesize[0]) * f->height);
+		std::memset(f->data[1], 128, size_t(f->linesize[1]) * (f->height / 2));
+		std::memset(f->data[2], 128, size_t(f->linesize[2]) * (f->height / 2));
+	};
+	auto encodeVideo = [&](AVFrame *f) -> bool {
+		if (avcodec_send_frame(s.venc, f) < 0)
+			return false;
+		while (true) {
+			int r = avcodec_receive_packet(s.venc, outPkt);
+			if (r == AVERROR(EAGAIN) || r == AVERROR_EOF)
+				break;
+			if (r < 0)
+				return false;
+			av_packet_rescale_ts(outPkt, s.venc->time_base, s.vOut->time_base);
+			outPkt->stream_index = s.vOut->index;
+			if (av_interleaved_write_frame(s.ofmt, outPkt) < 0)
+				return false;
+			av_packet_unref(outPkt);
+		}
+		return true;
+	};
+	auto writeAudio = [&](AVPacket *p) -> bool {
+		av_packet_rescale_ts(p, AVRational{1, retimer.sampleRate()}, s.aOut->time_base);
+		p->stream_index = s.aOut->index;
+		p->pos = -1;
+		return av_interleaved_write_frame(s.ofmt, p) >= 0;
+	};
+
+	int64_t lastEncPts = -1;
+	double doneOutMs = 0.0, totalOutMs = 0.0, processedMs = 0.0;
+	for (const Cut &c : cuts)
+		totalOutMs += double(c.endMs - c.startMs) / c.speed;
+
+	const auto startWall = std::chrono::steady_clock::now();
+	auto lastEmit = startWall;
+
+	for (size_t ci = 0; ci < cuts.size() && !errored; ++ci) {
+		if (cancel_.load())
+			break;
+		const Cut &cut = cuts[ci];
+		MSrc &m = src[cut.source];
+		const int64_t startV = av_rescale_q(cut.startMs, {1, 1000}, m.vin->time_base);
+		const int64_t endV = av_rescale_q(cut.endMs, {1, 1000}, m.vin->time_base);
+		const int64_t endA = m.ain ? av_rescale_q(cut.endMs, {1, 1000}, m.ain->time_base) : 0;
+
+		av_seek_frame(m.ifmt, m.vIdx, startV, AVSEEK_FLAG_BACKWARD);
+		avcodec_flush_buffers(m.vdec);
+		if (wantAudio) {
+			if (cut.source != curAudioSrc) {
+				if (!retimer.setInput(m.ain->codecpar, m.ain->time_base.num,
+						      m.ain->time_base.den, &audioErr)) {
+					errored = true;
+					break;
+				}
+				curAudioSrc = cut.source;
+			}
+			if (!retimer.beginSegment(cut.startMs, cut.endMs, cut.speed, &audioErr)) {
+				errored = true;
+				break;
+			}
+		}
+
+		bool videoDone = false;
+		bool audioDone = !wantAudio;
+
+		auto handleDecodedFrame = [&](AVFrame *df) -> bool {
+			const int64_t pts =
+				df->best_effort_timestamp != AV_NOPTS_VALUE ? df->best_effort_timestamp : 0;
+			if (pts < startV)
+				return true;
+			if (pts > endV) {
+				videoDone = true;
+				return true;
+			}
+			if (av_frame_make_writable(s.cropFrame) < 0)
+				return false;
+			fillBlack(s.cropFrame); // letterbox background
+			uint8_t *dst[4] = {
+				s.cropFrame->data[0] + m.padY * s.cropFrame->linesize[0] + m.padX,
+				s.cropFrame->data[1] + (m.padY / 2) * s.cropFrame->linesize[1] + (m.padX / 2),
+				s.cropFrame->data[2] + (m.padY / 2) * s.cropFrame->linesize[2] + (m.padX / 2),
+				nullptr};
+			sws_scale(m.sws, df->data, df->linesize, 0, m.vdec->height, dst,
+				  s.cropFrame->linesize);
+			const double srcMs = double(pts) * av_q2d(m.vin->time_base) * 1000.0;
+			const double outMs = doneOutMs + (srcMs - cut.startMs) / cut.speed;
+			int64_t v = (int64_t)llround(outMs * 90.0); // 90000 ticks/s ÷ 1000
+			if (v <= lastEncPts)
+				v = lastEncPts + 1;
+			lastEncPts = v;
+			s.cropFrame->pts = v;
+			processedMs = std::max(processedMs, outMs);
+			return encodeVideo(s.cropFrame);
+		};
+
+		while (!errored && !(videoDone && audioDone)) {
+			if (cancel_.load())
+				break;
+			if (av_read_frame(m.ifmt, pkt) < 0)
+				break;
+			if (pkt->stream_index == m.vIdx && !videoDone) {
+				if (avcodec_send_packet(m.vdec, pkt) >= 0) {
+					while (avcodec_receive_frame(m.vdec, frame) >= 0) {
+						if (!handleDecodedFrame(frame)) {
+							errored = true;
+							av_frame_unref(frame);
+							break;
+						}
+						av_frame_unref(frame);
+						if (videoDone)
+							break;
+					}
+				}
+			} else if (wantAudio && pkt->stream_index == m.aIdx && !audioDone) {
+				if (pkt->pts != AV_NOPTS_VALUE && pkt->pts > endA)
+					audioDone = true;
+				else if (!retimer.push(pkt, writeAudio, &audioErr))
+					errored = true;
+			}
+			av_packet_unref(pkt);
+
+			const auto now = std::chrono::steady_clock::now();
+			if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastEmit).count() >=
+			    200) {
+				lastEmit = now;
+				const double wall =
+					std::chrono::duration_cast<std::chrono::milliseconds>(now - startWall)
+						.count() /
+					1000.0;
+				const int pct =
+					totalOutMs > 0
+						? std::clamp(int(processedMs / totalOutMs * 100.0), 0, 99)
+						: 0;
+				const double rate = wall > 0.05 ? (processedMs / 1000.0) / wall : 0.0;
+				const qint64 eta =
+					(totalOutMs > 0 && rate > 0.01)
+						? qint64((totalOutMs - processedMs) / 1000.0 / rate * 1000.0)
+						: 0;
+				emit progress(pct, eta, s.ofmt->pb ? avio_tell(s.ofmt->pb) : 0);
+			}
+		}
+
+		if (errored || cancel_.load())
+			break;
+
+		// Drain the video decoder for this cut's reordered tail.
+		avcodec_send_packet(m.vdec, nullptr);
+		while (avcodec_receive_frame(m.vdec, frame) >= 0) {
+			const int64_t pts =
+				frame->best_effort_timestamp != AV_NOPTS_VALUE ? frame->best_effort_timestamp : 0;
+			if (pts >= startV && pts <= endV && !videoDone) {
+				if (!handleDecodedFrame(frame))
+					errored = true;
+			}
+			av_frame_unref(frame);
+		}
+		avcodec_flush_buffers(m.vdec);
+
+		if (wantAudio && !retimer.endSegment(writeAudio, &audioErr))
+			errored = true;
+
+		doneOutMs += double(cut.endMs - cut.startMs) / cut.speed;
+	}
+
+	if (!errored && !cancel_.load()) {
+		if (wantAudio && !retimer.finish(writeAudio, &audioErr))
+			errored = true;
+		if (!errored) {
+			encodeVideo(nullptr);
 			av_write_trailer(s.ofmt);
 		}
 	}

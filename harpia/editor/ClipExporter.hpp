@@ -18,11 +18,12 @@ class ClipExporter : public QObject {
 public:
 	enum class Format { Mp4, Mkv, Mov, WebM, Gif };
 
-	// One kept section of the source, played at its own speed (multi-cut).
+	// One kept section of a source, played at its own speed (multi-cut).
 	struct Cut {
 		qint64 startMs = 0;
 		qint64 endMs = 0;
 		double speed = 1.0;
+		int source = 0; // index into Options::inputs (0 = primary/canvas source)
 	};
 
 	// One recorded narration take, positioned on the OUTPUT timeline. Mixed over
@@ -64,6 +65,13 @@ public:
 		// GIF is not supported with cuts.
 		std::vector<Cut> cuts;
 
+		// Multi-source mixing: the source files, index 0 = the primary whose
+		// resolution+framerate define the output canvas (others scale to fit,
+		// letterboxed). Each Cut::source indexes this list. When it has <= 1
+		// entry the single-input `inPath` path is used unchanged; crop is honored
+		// only for single-source exports.
+		std::vector<std::string> inputs;
+
 		// Voiceover narration mixed over the finished output audio (video
 		// containers only; ignored for GIF). When non-empty, a post-process pass
 		// lays these takes onto the assembled audio.
@@ -89,6 +97,9 @@ private:
 	QString runVideo(const QString &inPath, const QString &outPath, const Options &opts);
 	// Multi-cut path: opts.cuts concatenated, per-cut speed, atempo'd audio.
 	QString runVideoCuts(const QString &inPath, const QString &outPath, const Options &opts);
+	// Multi-source multi-cut path: cuts drawn from opts.inputs, each frame scaled
+	// and letterboxed onto the primary (inputs[0]) canvas.
+	QString runVideoCutsMulti(const QString &outPath, const Options &opts);
 
 	// Post-process: mix opts.voiceovers over the just-written `videoPath`'s audio
 	// in place (via VoiceoverMixer). Returns "" on success, else an error.

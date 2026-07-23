@@ -590,12 +590,13 @@ void TrackEditor::paintEvent(QPaintEvent *)
 				}
 			const int th = r.height() - 2;
 			const int tileW = std::max(8, int(th * aspect));
+			const int tileGap = std::max(0, lp_.tileGap); // same gap as the source strip
 			const qint64 s0 = segs_[i].srcStartMs, s1 = segs_[i].srcEndMs;
 			QPainterPath segClip;
 			segClip.addRoundedRect(r, 4, 4);
 			p.save();
 			p.setClipPath(segClip);
-			for (int x = r.x() + 1; x < r.right() - 1; x += tileW) {
+			for (int x = r.x() + 1; x < r.right() - 1; x += tileW + tileGap) {
 				// This tile's center → source-time within the cut → strip index.
 				const double f = std::clamp(
 					double(x + tileW / 2 - r.x()) / std::max(1, r.width()), 0.0, 1.0);

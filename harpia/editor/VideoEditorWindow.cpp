@@ -97,8 +97,16 @@ int speedToSlider(double sp)
 void revealInFolder(const QString &path)
 {
 #ifdef Q_OS_WIN
-	QProcess::startDetached(QStringLiteral("explorer.exe"),
-				{QStringLiteral("/select,") + QDir::toNativeSeparators(path)});
+	// explorer's "/select,<path>" must reach it verbatim. Passed through the
+	// normal argument list, Qt quotes the whole "/select,C:\…\clip.mp4" token,
+	// which Explorer can't parse — it then opens a default location instead of
+	// the file's folder. setNativeArguments bypasses Qt's quoting.
+	const QString native = QDir::toNativeSeparators(path);
+	QProcess p;
+	p.setProgram(QStringLiteral("explorer.exe"));
+	p.setNativeArguments(QStringLiteral("/select,\"%1\"").arg(native));
+	if (!p.startDetached()) // fall back to just opening the containing folder
+		QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
 #else
 	QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
 #endif

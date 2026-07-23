@@ -46,8 +46,14 @@ QString humanEta(qint64 ms)
 void revealInFolder(const QString &path)
 {
 #ifdef Q_OS_WIN
-	QProcess::startDetached(QStringLiteral("explorer.exe"),
-				{QStringLiteral("/select,") + QDir::toNativeSeparators(path)});
+	// Pass explorer's "/select,<path>" as native args — Qt's normal argument
+	// quoting mangles it, making Explorer open a default location instead.
+	QProcess p;
+	p.setProgram(QStringLiteral("explorer.exe"));
+	p.setNativeArguments(
+		QStringLiteral("/select,\"%1\"").arg(QDir::toNativeSeparators(path)));
+	if (!p.startDetached())
+		QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
 #else
 	QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
 #endif

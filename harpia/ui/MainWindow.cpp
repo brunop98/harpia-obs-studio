@@ -2393,9 +2393,14 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 		// On Windows, reveal the file selected in Explorer; elsewhere open the
 		// containing folder.
 #ifdef Q_OS_WIN
-		QProcess::startDetached(
-			QStringLiteral("explorer.exe"),
-			{QStringLiteral("/select,") + QDir::toNativeSeparators(path)});
+		// "/select,<path>" must reach Explorer verbatim — Qt's argument quoting
+		// mangles it (opens a default location), so pass native arguments.
+		QProcess p;
+		p.setProgram(QStringLiteral("explorer.exe"));
+		p.setNativeArguments(
+			QStringLiteral("/select,\"%1\"").arg(QDir::toNativeSeparators(path)));
+		if (!p.startDetached())
+			QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
 #else
 		QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
 #endif

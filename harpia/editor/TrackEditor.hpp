@@ -186,12 +186,19 @@ private:
 	qint64 viewStart_ = 0;
 	double outZoom_ = 1.0;    // output-track zoom (1 = whole output visible)
 	qint64 outViewStart_ = 0; // first visible output-ms
-	// Smooth-scroll: panning sets a target and a timer eases the view toward it,
-	// so scrolling glides instead of jumping (easier to follow the position).
+	// Smooth-scroll / smooth-zoom: panning and zooming set targets and a timer
+	// eases toward them, so both glide instead of jumping. While a zoom eases,
+	// the view is recomputed each frame to keep the cursor's anchor point fixed.
 	qint64 viewTarget_ = 0;
 	qint64 outViewTarget_ = 0;
+	double zoomTarget_ = 1.0;
+	double outZoomTarget_ = 1.0;
+	qint64 zoomAnchorMs_ = 0;      // ms under the cursor to hold fixed (source)
+	double zoomAnchorFrac_ = 0.0;  // its fractional x across the source track
+	qint64 outZoomAnchorMs_ = 0;   // same, for the output track
+	double outZoomAnchorFrac_ = 0.0;
 	QTimer *scrollAnim_ = nullptr;
-	void animateScrollStep(); // ease viewStart_/outViewStart_ toward the targets
+	void animateScrollStep(); // ease view + zoom toward the targets
 	QVector<QImage> thumbs_;
 
 	// Filmstrip render cache (keyed on size/zoom/view/thumbs revision/dpr).

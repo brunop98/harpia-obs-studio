@@ -41,7 +41,7 @@ TrackEditor::TrackEditor(QWidget *parent) : QWidget(parent)
 
 void TrackEditor::animateScrollStep()
 {
-	auto ease = [](qint64 &cur, qint64 tgt) -> bool {
+	auto easeI = [](qint64 &cur, qint64 tgt) -> bool {
 		if (cur == tgt)
 			return false;
 		qint64 step = qint64((tgt - cur) * 0.25); // ease-out: big steps, then small
@@ -52,8 +52,37 @@ void TrackEditor::animateScrollStep()
 			cur = tgt;
 		return true;
 	};
-	bool moving = ease(viewStart_, viewTarget_);
-	moving = ease(outViewStart_, outViewTarget_) || moving;
+	auto easeZoom = [](double &cur, double tgt) -> bool {
+		if (std::abs(cur - tgt) < 1e-4)
+			return false;
+		cur += (tgt - cur) * 0.25;
+		if (std::abs(cur - tgt) / std::max(1.0, tgt) < 1e-3)
+			cur = tgt;
+		return true;
+	};
+
+	bool moving = false;
+
+	// Source: zoom (anchor held under the cursor) takes priority over scroll.
+	if (easeZoom(zoom_, zoomTarget_)) {
+		viewStart_ = zoomAnchorMs_ - qint64(zoomAnchorFrac_ * visibleMs());
+		clampView();
+		viewTarget_ = viewStart_;
+		moving = true;
+	} else if (easeI(viewStart_, viewTarget_)) {
+		moving = true;
+	}
+
+	// Output track, same rules.
+	if (easeZoom(outZoom_, outZoomTarget_)) {
+		outViewStart_ = outZoomAnchorMs_ - qint64(outZoomAnchorFrac_ * outVisibleMs());
+		clampOutView();
+		outViewTarget_ = outViewStart_;
+		moving = true;
+	} else if (easeI(outViewStart_, outViewTarget_)) {
+		moving = true;
+	}
+
 	update();
 	if (!moving)
 		scrollAnim_->stop();
@@ -75,6 +104,8 @@ void TrackEditor::setLayoutParams(const TrackLayoutParams &p)
 	zoom_ = std::clamp(zoom_, 1.0, lp_.maxZoom);
 	clampView();
 	viewTarget_ = viewStart_;
+	zoomTarget_ = zoom_;
+	outZoomTarget_ = outZoom_;
 	stripCache_ = QPixmap(); // geometry changed — rebuild the filmstrip
 	updateGeometry();        // min-size hint depends on the track heights
 	update();
@@ -87,10 +118,12 @@ void TrackEditor::setDuration(qint64 ms)
 	// Leave the OUTPUT-track view intact — switching the active source must not
 	// throw away the output timeline's zoom/scroll (the mix is unchanged).
 	zoom_ = 1.0;
+	zoomTarget_ = 1.0;
 	viewStart_ = 0;
 	viewTarget_ = 0;
 	clampOutView();
 	outViewTarget_ = outViewStart_;
+	outZoomTarget_ = outZoom_;
 	if (scrollAnim_)
 		scrollAnim_->stop();
 	update();
@@ -269,13 +302,13 @@ void TrackEditor::wheelEvent(QWheelEvent *e)
 
 	if (onSource) {
 		if (!pan) {
-			const qint64 anchor = xToMs(x);
+			// Smooth zoom: glide zoom_ toward a target while holding the ms under
+			// the cursor fixed (recomputed each animation frame).
 			const QRect r = sourceRect();
-			const double frac = std::clamp(double(x - r.x()) / std::max(1, r.width()), 0.0, 1.0);
-			zoom_ = std::clamp(zoom_ * std::pow(1.3, steps), 1.0, lp_.maxZoom);
-			viewStart_ = anchor - qint64(frac * visibleMs());
-			clampView();
-			viewTarget_ = viewStart_; // zoom is immediate — cancel any glide
+			zoomAnchorMs_ = xToMs(x);
+			zoomAnchorFrac_ = std::clamp(double(x - r.x()) / std::max(1, r.width()), 0.0, 1.0);
+			zoomTarget_ = std::clamp(zoomTarget_ * std::pow(1.3, steps), 1.0, lp_.maxZoom);
+			scrollAnim_->start();
 		} else {
 			// Pan: glide toward a target instead of snapping there.
 			viewTarget_ -= qint64(steps * visibleMs() * 0.15);
@@ -289,13 +322,12 @@ void TrackEditor::wheelEvent(QWheelEvent *e)
 		}
 	} else { // onOutput — same controls over the assembled output timeline
 		if (!pan) {
-			const qint64 anchor = outXToMs(x);
 			const QRect r = outputRect();
-			const double frac = std::clamp(double(x - r.x()) / std::max(1, r.width()), 0.0, 1.0);
-			outZoom_ = std::clamp(outZoom_ * std::pow(1.3, steps), 1.0, lp_.maxZoom);
-			outViewStart_ = anchor - qint64(frac * outVisibleMs());
-			clampOutView();
-			outViewTarget_ = outViewStart_;
+			outZoomAnchorMs_ = outXToMs(x);
+			outZoomAnchorFrac_ =
+				std::clamp(double(x - r.x()) / std::max(1, r.width()), 0.0, 1.0);
+			outZoomTarget_ = std::clamp(outZoomTarget_ * std::pow(1.3, steps), 1.0, lp_.maxZoom);
+			scrollAnim_->start();
 		} else {
 			outViewTarget_ -= qint64(steps * outVisibleMs() * 0.15);
 			outViewTarget_ = std::clamp<qint64>(

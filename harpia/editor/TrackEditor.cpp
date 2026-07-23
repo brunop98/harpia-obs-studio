@@ -5,6 +5,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QTimer>
 #include <QWheelEvent>
 
 #include <utility>
@@ -31,6 +32,31 @@ TrackEditor::TrackEditor(QWidget *parent) : QWidget(parent)
 	setMouseTracking(true);         // cursor hints over the tracks
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 	setToolTip(QStringLiteral("Scroll to zoom, Shift+scroll to pan (both the source and output tracks)"));
+
+	// ~60fps easing timer for smooth panning; runs only while the view is gliding.
+	scrollAnim_ = new QTimer(this);
+	scrollAnim_->setInterval(16);
+	connect(scrollAnim_, &QTimer::timeout, this, &TrackEditor::animateScrollStep);
+}
+
+void TrackEditor::animateScrollStep()
+{
+	auto ease = [](qint64 &cur, qint64 tgt) -> bool {
+		if (cur == tgt)
+			return false;
+		qint64 step = qint64((tgt - cur) * 0.25); // ease-out: big steps, then small
+		if (step == 0)
+			step = (tgt > cur) ? 1 : -1;
+		cur += step;
+		if ((tgt > cur) != (step > 0)) // overshoot guard
+			cur = tgt;
+		return true;
+	};
+	bool moving = ease(viewStart_, viewTarget_);
+	moving = ease(outViewStart_, outViewTarget_) || moving;
+	update();
+	if (!moving)
+		scrollAnim_->stop();
 }
 
 QSize TrackEditor::sizeHint() const
@@ -48,6 +74,7 @@ void TrackEditor::setLayoutParams(const TrackLayoutParams &p)
 	lp_ = p;
 	zoom_ = std::clamp(zoom_, 1.0, lp_.maxZoom);
 	clampView();
+	viewTarget_ = viewStart_;
 	stripCache_ = QPixmap(); // geometry changed — rebuild the filmstrip
 	updateGeometry();        // min-size hint depends on the track heights
 	update();
@@ -61,7 +88,11 @@ void TrackEditor::setDuration(qint64 ms)
 	// throw away the output timeline's zoom/scroll (the mix is unchanged).
 	zoom_ = 1.0;
 	viewStart_ = 0;
+	viewTarget_ = 0;
 	clampOutView();
+	outViewTarget_ = outViewStart_;
+	if (scrollAnim_)
+		scrollAnim_->stop();
 	update();
 }
 
@@ -243,10 +274,15 @@ void TrackEditor::wheelEvent(QWheelEvent *e)
 			const double frac = std::clamp(double(x - r.x()) / std::max(1, r.width()), 0.0, 1.0);
 			zoom_ = std::clamp(zoom_ * std::pow(1.3, steps), 1.0, lp_.maxZoom);
 			viewStart_ = anchor - qint64(frac * visibleMs());
+			clampView();
+			viewTarget_ = viewStart_; // zoom is immediate — cancel any glide
 		} else {
-			viewStart_ -= qint64(steps * visibleMs() * 0.15);
+			// Pan: glide toward a target instead of snapping there.
+			viewTarget_ -= qint64(steps * visibleMs() * 0.15);
+			viewTarget_ = std::clamp<qint64>(viewTarget_, 0,
+							 std::max<qint64>(0, duration_ - visibleMs()));
+			scrollAnim_->start();
 		}
-		clampView();
 		if (mode_ == Mode::None) { // preview the frame under the cursor
 			hoverMs_ = xToMs(x);
 			emitHover(hoverMs_, activeSourceId_);
@@ -258,10 +294,14 @@ void TrackEditor::wheelEvent(QWheelEvent *e)
 			const double frac = std::clamp(double(x - r.x()) / std::max(1, r.width()), 0.0, 1.0);
 			outZoom_ = std::clamp(outZoom_ * std::pow(1.3, steps), 1.0, lp_.maxZoom);
 			outViewStart_ = anchor - qint64(frac * outVisibleMs());
+			clampOutView();
+			outViewTarget_ = outViewStart_;
 		} else {
-			outViewStart_ -= qint64(steps * outVisibleMs() * 0.15);
+			outViewTarget_ -= qint64(steps * outVisibleMs() * 0.15);
+			outViewTarget_ = std::clamp<qint64>(
+				outViewTarget_, 0, std::max<qint64>(0, totalOutputMs() - outVisibleMs()));
+			scrollAnim_->start();
 		}
-		clampOutView();
 		if (mode_ == Mode::None) { // preview the output frame under the cursor
 			qint64 srcMs = 0;
 			const int seg = sourceForOutput(outXToMs(x), &srcMs);
@@ -474,6 +514,7 @@ void TrackEditor::paintEvent(QPaintEvent *)
 	p.setFont(capFont);
 
 	clampOutView(); // keep the output window valid after edits/resizes
+	outViewTarget_ = outViewStart_;
 
 	const QRect src = sourceRect();
 	const QRect out = outputRect();

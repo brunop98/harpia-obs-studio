@@ -11,6 +11,7 @@
 #include <cmath>
 
 class QPainter;
+class QTimer;
 
 namespace harpia {
 
@@ -65,8 +66,13 @@ public:
 	void setDuration(qint64 ms);
 
 	// Which editor source the Source track currently shows. New cuts created on
-	// the Source track are stamped with this id (multi-source mixing).
-	void setActiveSource(int id) { activeSourceId_ = id; }
+	// the Source track are stamped with this id (multi-source mixing). Repaints so
+	// the used-region overlay always reflects the shown source.
+	void setActiveSource(int id)
+	{
+		activeSourceId_ = id;
+		update();
+	}
 	// The editor source id relevant to the most recent scrubSource()/hoverScrub()
 	// emission (the active source for the Source track, the hovered/clicked
 	// segment's source for the Output track). Read synchronously in the slot.
@@ -180,6 +186,12 @@ private:
 	qint64 viewStart_ = 0;
 	double outZoom_ = 1.0;    // output-track zoom (1 = whole output visible)
 	qint64 outViewStart_ = 0; // first visible output-ms
+	// Smooth-scroll: panning sets a target and a timer eases the view toward it,
+	// so scrolling glides instead of jumping (easier to follow the position).
+	qint64 viewTarget_ = 0;
+	qint64 outViewTarget_ = 0;
+	QTimer *scrollAnim_ = nullptr;
+	void animateScrollStep(); // ease viewStart_/outViewStart_ toward the targets
 	QVector<QImage> thumbs_;
 
 	// Filmstrip render cache (keyed on size/zoom/view/thumbs revision/dpr).

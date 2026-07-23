@@ -149,7 +149,11 @@ private:
 	// Tick marks + time labels along a track (source or output), spacing adapts
 	// to the zoom level. Maps [viewStart, viewStart+visible] across `bar`.
 	void drawTimeRuler(QPainter &p, const QRect &bar, qint64 viewStart, qint64 visible) const;
-	QVector<QRect> segmentRects() const;
+	// Output-track rectangles for each cut. Memoized: recomputed only when the
+	// cut list (segsRev_) or the output view/geometry actually change, so the
+	// per-paint and per-mouse-move calls are a cheap cache hit. Returns a const
+	// ref into the cache — do not hold it across a mutation of segs_.
+	const QVector<QRect> &segmentRects() const;
 	int segmentAt(const QPoint &p) const; // -1 = none
 	int insertSlotAt(int x) const;        // 0..count reorder slot for a drop at x
 	void showSegmentMenu(int index, const QPoint &globalPos, const QPoint &localPos);
@@ -177,9 +181,22 @@ private:
 	// Per-source filmstrips for rendering Output cuts (keyed by source id).
 	QHash<int, QVector<QImage>> srcThumbs_;
 	QHash<int, qint64> srcThumbDur_;
+	QHash<int, double> srcAspect_; // cached tile aspect per source (hoisted out of paint)
 	int selected_ = -1;      // primary selection (drives resize + the slider value)
 	QSet<int> multiSel_;     // full selection; selected_ is a member when >= 0
 	qint64 playheadOutMs_ = -1;
+
+	// Revision counter bumped on every change to segs_ (add/remove/reorder/trim/
+	// speed). Drives the totalOutputMs and segmentRects memo caches below.
+	int segsRev_ = 0;
+	mutable qint64 totalOutCache_ = 0;   // memoized totalOutputMs()
+	mutable int totalOutCacheRev_ = -1;
+	mutable QVector<QRect> segRectsCache_; // memoized segmentRects()
+	mutable int segRectsRev_ = -1;
+	mutable QSize segRectsSize_;
+	mutable double segRectsZoom_ = -1.0;
+	mutable qint64 segRectsView_ = -1;
+	mutable int segRectsGap_ = -1;
 
 	// Source-track zoom (Ctrl+scroll; plain scroll pans) + filmstrip.
 	double zoom_ = 1.0;

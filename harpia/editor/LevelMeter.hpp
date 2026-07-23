@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QLinearGradient>
 #include <QWidget>
 
 namespace harpia {
@@ -25,6 +26,10 @@ protected:
 private:
 	qreal rms_ = 0.0;
 	qreal peakHold_ = 0.0;
+	// The green→amber→red fill gradient, rebuilt only when the width changes
+	// (paints run at the audio-callback rate, so don't rebuild it every frame).
+	QLinearGradient fillGrad_;
+	int gradW_ = -1;
 };
 
 } // namespace harpia

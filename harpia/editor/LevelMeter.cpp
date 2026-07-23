@@ -55,11 +55,14 @@ void LevelMeter::paintEvent(QPaintEvent *)
 	if (rms_ > 0.0) {
 		QRectF fill = r;
 		fill.setWidth(r.width() * rms_);
-		QLinearGradient g(r.left(), 0, r.right(), 0);
-		g.setColorAt(0.0, QColor(0x3f, 0xb9, 0x50));  // green
-		g.setColorAt(0.7, QColor(0xd2, 0x99, 0x22));  // amber
-		g.setColorAt(0.9, QColor(0xe5, 0x48, 0x4d));  // red
-		p.setBrush(g);
+		if (gradW_ != width()) { // spans the full track, so only width matters
+			fillGrad_ = QLinearGradient(r.left(), 0, r.right(), 0);
+			fillGrad_.setColorAt(0.0, QColor(0x3f, 0xb9, 0x50));  // green
+			fillGrad_.setColorAt(0.7, QColor(0xd2, 0x99, 0x22));  // amber
+			fillGrad_.setColorAt(0.9, QColor(0xe5, 0x48, 0x4d));  // red
+			gradW_ = width();
+		}
+		p.setBrush(fillGrad_);
 		p.drawRoundedRect(fill, radius, radius);
 	}
 

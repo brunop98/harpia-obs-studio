@@ -140,6 +140,14 @@ void TrackEditor::setSourceThumbs(int sourceId, const QVector<QImage> &thumbs, q
 {
 	srcThumbs_[sourceId] = thumbs;
 	srcThumbDur_[sourceId] = durationMs;
+	// Cache the tile aspect once here instead of rescanning the strip every paint.
+	double aspect = 16.0 / 9.0;
+	for (const QImage &t : thumbs)
+		if (!t.isNull()) {
+			aspect = double(t.width()) / double(t.height());
+			break;
+		}
+	srcAspect_[sourceId] = aspect;
 	update(); // Output cut tiles for this source can now render
 }
 
@@ -353,6 +361,7 @@ void TrackEditor::setSegmentSpeed(int index, double speed)
 	if (index < 0 || index >= segs_.size())
 		return;
 	segs_[index].speed = std::clamp(speed, 0.1, 50.0);
+	++segsRev_;
 	update();
 }
 
@@ -366,6 +375,7 @@ QList<int> TrackEditor::selectedIndices() const
 void TrackEditor::setSegments(const QVector<CutSegment> &segs)
 {
 	segs_ = segs;
+	++segsRev_;
 	selected_ = -1;
 	multiSel_.clear();
 	playheadOutMs_ = -1;
@@ -377,6 +387,7 @@ void TrackEditor::addSegments(const QVector<CutSegment> &segs)
 	if (segs.isEmpty())
 		return;
 	segs_ += segs;
+	++segsRev_;
 	selected_ = segs_.size() - 1;
 	multiSel_ = QSet<int>{selected_};
 	emit segmentsChanged();
@@ -389,6 +400,7 @@ void TrackEditor::removeSegment(int index)
 	if (index < 0 || index >= segs_.size())
 		return;
 	segs_.remove(index);
+	++segsRev_;
 	selected_ = -1;
 	multiSel_.clear();
 	emit segmentsChanged();
@@ -403,6 +415,7 @@ void TrackEditor::removeSelected()
 	QList<int> list = selectedIndices();
 	for (int i = list.size() - 1; i >= 0; --i)
 		segs_.remove(list[i]);
+	++segsRev_;
 	selected_ = -1;
 	multiSel_.clear();
 	emit segmentsChanged();
@@ -412,10 +425,16 @@ void TrackEditor::removeSelected()
 
 qint64 TrackEditor::totalOutputMs() const
 {
-	qint64 total = 0;
-	for (const CutSegment &s : segs_)
-		total += s.outDurationMs();
-	return total;
+	// Memoized: recomputed only when the cut list changes (segsRev_). This is
+	// called ~8× per paint plus inside outVisibleMs/clampOutView/segmentRects.
+	if (totalOutCacheRev_ != segsRev_) {
+		qint64 total = 0;
+		for (const CutSegment &s : segs_)
+			total += s.outDurationMs();
+		totalOutCache_ = total;
+		totalOutCacheRev_ = segsRev_;
+	}
+	return totalOutCache_;
 }
 
 qint64 TrackEditor::outputStartOf(int index) const
@@ -485,39 +504,48 @@ qint64 TrackEditor::xToMs(int x) const
 	return std::clamp<qint64>(viewStart_ + qint64(std::llround(t * visibleMs())), 0, duration_);
 }
 
-QVector<QRect> TrackEditor::segmentRects() const
+const QVector<QRect> &TrackEditor::segmentRects() const
 {
 	// Output-time axis: each cut occupies [outputStartOf(i), +outDuration] mapped
 	// through the output zoom/view, so the track zooms and pans like the source.
-	// Computed in one linear pass (total + running start hoisted out of the loop)
-	// since this runs on every paint and mouse-move.
-	QVector<QRect> rects;
-	const int n = segs_.size();
-	if (!n)
-		return rects;
+	// Memoized: the result depends only on the cut list (segsRev_) and the output
+	// view/geometry, so identical paints and mouse-moves reuse the cached vector.
 	const QRect r = outputRect();
 	const int gap = std::max(0, lp_.segGap);
+	if (segRectsRev_ == segsRev_ && segRectsSize_ == r.size() && segRectsZoom_ == outZoom_ &&
+	    segRectsView_ == outViewStart_ && segRectsGap_ == gap)
+		return segRectsCache_;
+	segRectsRev_ = segsRev_;
+	segRectsSize_ = r.size();
+	segRectsZoom_ = outZoom_;
+	segRectsView_ = outViewStart_;
+	segRectsGap_ = gap;
+
+	segRectsCache_.clear();
+	const int n = segs_.size();
+	if (!n)
+		return segRectsCache_;
 	const qint64 total = totalOutputMs();
 	const qint64 vis = std::max<qint64>(1, qint64(total / outZoom_));
 	const double scale = double(r.width()) / double(vis);
 	auto mapX = [&](qint64 ms) {
 		return (total <= 0 || r.width() <= 0) ? r.x() : r.x() + int(double(ms - outViewStart_) * scale);
 	};
-	rects.reserve(n);
+	segRectsCache_.reserve(n);
 	qint64 acc = 0;
 	for (int i = 0; i < n; ++i) {
 		const qint64 d = segs_[i].outDurationMs();
 		const int x1 = mapX(acc);
 		const int x2 = mapX(acc + d);
-		rects.append(QRect(x1, r.y(), std::max(2, x2 - x1 - gap), r.height()));
+		segRectsCache_.append(QRect(x1, r.y(), std::max(2, x2 - x1 - gap), r.height()));
 		acc += d;
 	}
-	return rects;
+	return segRectsCache_;
 }
 
 int TrackEditor::segmentAt(const QPoint &p) const
 {
-	const QVector<QRect> rects = segmentRects();
+	const QVector<QRect> &rects = segmentRects();
 	for (int i = 0; i < rects.size(); ++i) {
 		if (rects[i].contains(p))
 			return i;
@@ -527,7 +555,7 @@ int TrackEditor::segmentAt(const QPoint &p) const
 
 int TrackEditor::insertSlotAt(int x) const
 {
-	const QVector<QRect> rects = segmentRects();
+	const QVector<QRect> &rects = segmentRects();
 	int slot = 0;
 	for (int i = 0; i < rects.size(); ++i) {
 		if (x > rects[i].center().x())
@@ -637,7 +665,7 @@ void TrackEditor::paintEvent(QPaintEvent *)
 
 	p.save();
 	p.setClipRect(out.adjusted(1, 0, -1, 0));
-	const QVector<QRect> rects = segmentRects();
+	const QVector<QRect> &rects = segmentRects();
 	QFont segFont = font();
 	segFont.setPixelSize(std::max(6, lp_.segFontPx));
 	for (int i = 0; i < rects.size(); ++i) {
@@ -655,12 +683,7 @@ void TrackEditor::paintEvent(QPaintEvent *)
 		const qint64 srcDur = srcThumbDur_.value(segs_[i].sourceId, 0);
 		if (tIt != srcThumbs_.constEnd() && !tIt.value().isEmpty() && srcDur > 0) {
 			const QVector<QImage> &strip = tIt.value();
-			double aspect = 16.0 / 9.0;
-			for (const QImage &t : strip)
-				if (!t.isNull()) {
-					aspect = double(t.width()) / double(t.height());
-					break;
-				}
+			const double aspect = srcAspect_.value(segs_[i].sourceId, 16.0 / 9.0);
 			const int th = r.height() - 2;
 			const int tileW = std::max(8, int(th * aspect));
 			const int tileGap = std::max(0, lp_.tileGap); // same gap as the source strip
@@ -827,7 +850,7 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 	}
 
 	if (outputRect().contains(pos)) {
-		const QVector<QRect> segRects = segmentRects(); // computed once per press
+		const QVector<QRect> &segRects = segmentRects(); // computed once per press
 		int idx = -1;
 		for (int i = 0; i < segRects.size(); ++i) {
 			if (segRects[i].contains(pos)) {
@@ -945,6 +968,7 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 			seg.srcStartMs = resizeOrigStart_; // source content unchanged
 			seg.srcEndMs = resizeOrigEnd_;
 			seg.speed = std::clamp(srcRange / std::max(1.0, newOutDur), 0.1, 50.0);
+			++segsRev_;
 			emitScrub(mode_ == Mode::ResizingLeft ? seg.srcStartMs : seg.srcEndMs, seg.sourceId);
 			dragMoved_ = true;
 			update();
@@ -963,6 +987,7 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 							  resizeOrigStart_ + kMinCutMs, duration_);
 			emitScrub(seg.srcEndMs, seg.sourceId);
 		}
+		++segsRev_;
 		dragMoved_ = true;
 		update();
 		return;
@@ -974,7 +999,7 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 	qint64 newHover = -1;
 	int newOutSeg = -1;
 	int newOutX = -1;
-	const QVector<QRect> rects = segmentRects();
+	const QVector<QRect> &rects = segmentRects();
 	if (sourceRect().contains(pos)) {
 		setCursor(Qt::CrossCursor);
 		if (e->buttons() == Qt::NoButton && duration_ > 0) {
@@ -1055,6 +1080,7 @@ void TrackEditor::mouseReleaseEvent(QMouseEvent *e)
 			seg.srcEndMs = b;
 			seg.sourceId = activeSourceId_;
 			segs_.append(seg);
+			++segsRev_;
 			selected_ = segs_.size() - 1;
 			multiSel_ = QSet<int>{selected_};
 			emit segmentsChanged();
@@ -1072,6 +1098,7 @@ void TrackEditor::mouseReleaseEvent(QMouseEvent *e)
 				--to; // removing the item shifts later slots left
 			if (to != selected_ && to >= 0 && to < segs_.size()) {
 				segs_.move(selected_, to);
+				++segsRev_;
 				selected_ = to;
 				// Indices shifted — collapse the selection to the moved cut.
 				multiSel_ = QSet<int>{selected_};
@@ -1122,6 +1149,7 @@ void TrackEditor::splitSegment(int index, qint64 splitSrcMs)
 	b.srcStartMs = splitSrcMs;
 	a.srcEndMs = splitSrcMs;
 	segs_.insert(index + 1, b);
+	++segsRev_;
 
 	selected_ = index + 1;
 	multiSel_ = QSet<int>{selected_};
@@ -1137,7 +1165,7 @@ void TrackEditor::showSegmentMenu(int index, const QPoint &globalPos, const QPoi
 	const int n = group ? multiSel_.size() : 1;
 
 	// Where along this cut the cursor is → the source-time to split at.
-	const QVector<QRect> rects = segmentRects();
+	const QVector<QRect> &rects = segmentRects();
 	const CutSegment &seg = segs_[index];
 	qint64 splitSrcMs = -1;
 	if (index < rects.size()) {
@@ -1164,6 +1192,7 @@ void TrackEditor::showSegmentMenu(int index, const QPoint &globalPos, const QPoi
 		// Insert an identical copy of this cut immediately to its right.
 		const CutSegment copy = segs_[index];
 		segs_.insert(index + 1, copy);
+		++segsRev_;
 		selected_ = index + 1;
 		multiSel_ = QSet<int>{selected_};
 		emit segmentsChanged();

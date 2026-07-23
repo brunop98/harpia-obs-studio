@@ -300,7 +300,15 @@ void VoiceoverTrack::paintEvent(QPaintEvent *)
 
 void VoiceoverTrack::mousePressEvent(QMouseEvent *e)
 {
-	const int idx = clipAt(e->pos());
+	// Build the rects once and reuse for both hit-testing and edge detection.
+	const QVector<QRect> rects = clipRects();
+	int idx = -1;
+	for (int i = rects.size() - 1; i >= 0; --i) { // topmost last-added wins on overlap
+		if (rects[i].contains(e->pos())) {
+			idx = i;
+			break;
+		}
+	}
 
 	if (e->button() == Qt::RightButton) {
 		if (idx >= 0) {
@@ -328,7 +336,7 @@ void VoiceoverTrack::mousePressEvent(QMouseEvent *e)
 		dragOrigDuration_ = clips_[idx].durationMs;
 		dragMoved_ = false;
 		// Near an edge → trim that boundary; otherwise move the whole clip.
-		const QRect r = clipRects()[idx];
+		const QRect r = rects[idx];
 		const int edge = std::min(lp_.edgeZone, r.width() / 3);
 		if (e->pos().x() - r.left() <= edge)
 			mode_ = Mode::ResizingLeft;
@@ -368,10 +376,17 @@ void VoiceoverTrack::mouseMoveEvent(QMouseEvent *e)
 		return;
 	}
 
-	// Idle: cursor hint (trim vs move).
-	const int idx = clipAt(e->pos());
+	// Idle: cursor hint (trim vs move). Build the rects once and reuse.
+	const QVector<QRect> rects = clipRects();
+	int idx = -1;
+	for (int i = rects.size() - 1; i >= 0; --i) {
+		if (rects[i].contains(e->pos())) {
+			idx = i;
+			break;
+		}
+	}
 	if (idx >= 0) {
-		const QRect r = clipRects()[idx];
+		const QRect r = rects[idx];
 		const int edge = std::min(lp_.edgeZone, r.width() / 3);
 		if (e->pos().x() - r.left() <= edge || r.right() - e->pos().x() <= edge)
 			setCursor(Qt::SizeHorCursor);

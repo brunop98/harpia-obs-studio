@@ -1,7 +1,8 @@
 #pragma once
 
-#include "TrackEditor.hpp"    // CutSegment (stored in EditorSnapshot)
-#include "VoiceoverTrack.hpp" // VoiceoverClip (stored in EditorSnapshot)
+#include "TrackEditor.hpp"        // CutSegment (stored in EditorSnapshot)
+#include "VoiceoverTrack.hpp"     // VoiceoverClip (stored in EditorSnapshot)
+#include "shader/ShaderEffect.hpp" // ShaderState / ShaderParam (post-processing)
 
 #include <QDialog>
 #include <QElapsedTimer>
@@ -28,6 +29,7 @@ class QPushButton;
 class QSlider;
 class QStackedWidget;
 class QTimer;
+class QFileSystemWatcher;
 class QDragEnterEvent;
 class QDropEvent;
 class QEvent;
@@ -65,6 +67,7 @@ class TrackEditor;
 class TimelineThumbs;
 class ClipExporter;
 class ThumbnailCache;
+class ShaderRenderer;
 
 // One video the editor can cut from. The first source is the file the editor
 // was launched on; more are added via the sidebar / drag-and-drop. Each owns
@@ -227,6 +230,31 @@ private:
 	QLabel *inspHint_ = nullptr;
 	void updateInspector(); // refresh the inspector from the current selection
 	QString baseInfo_; // static file info; extended with cut stats in Multi-Cut
+
+	// ---- Post-processing shader effect (preview + baked into export) ----
+	// The active effect (ShaderState) drives both the live preview (via
+	// shaderRenderer_, a GUI-thread offscreen GL renderer) and export (the same
+	// wrapped GLSL is handed to ClipExporter). Shaders are `.frag` files in a
+	// user-writable folder; each declares its own tunable //@param controls.
+	std::unique_ptr<ShaderRenderer> shaderRenderer_;
+	ShaderState shaderState_;             // active shader name + parameter values
+	QVector<ShaderParam> shaderParams_;   // parsed controls of the active shader
+	QString shaderSource_;                // wrapped GLSL of the active shader (for export)
+	QComboBox *shaderCombo_ = nullptr;    // "None" + one row per .frag
+	QWidget *shaderParamBox_ = nullptr;   // container rebuilt when the shader changes
+	QLabel *shaderError_ = nullptr;       // compile errors / "no GPU" notice
+	QFileSystemWatcher *shaderWatch_ = nullptr; // live-reload the active file
+	QString shadersDir_;                  // the user-writable shaders folder
+	bool shaderRebuilding_ = false;       // guard while rebuilding param controls
+	QString shadersDirPath();             // ensure + return the folder (seeds crt.frag)
+	void refreshShaderList();             // rescan the folder into the combo
+	void selectShader(const QString &name); // compile + build controls + preview
+	void rebuildShaderControls();         // param sliders/checkboxes from shaderParams_
+	QImage runShader(const QImage &img, qint64 ms); // filter one frame through the effect
+	void setPreviewFrame(const QImage &img, qint64 ms); // stash raw + show filtered
+	void refreshPreviewFrame();           // re-filter the stashed frame (effect changed)
+	QImage lastPreviewRaw_;               // last decoded (unfiltered) preview frame
+	qint64 lastPreviewMs_ = 0;
 
 	QPushButton *playBtn_ = nullptr;
 	QPushButton *undoBtn_ = nullptr;

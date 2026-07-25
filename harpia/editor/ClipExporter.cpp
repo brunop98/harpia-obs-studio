@@ -3,6 +3,9 @@
 #include "AudioRetimer.hpp"
 #include "GifEncoder.hpp"
 #include "VoiceoverMixer.hpp"
+#include "shader/ShaderRenderer.hpp"
+
+#include <QImage>
 
 #include <algorithm>
 #include <chrono>
@@ -87,6 +90,84 @@ struct VideoState {
 		}
 		if (ifmt)
 			avformat_close_input(&ifmt);
+	}
+};
+
+// Applies a compiled post-processing shader to output frames on the export
+// worker thread. YUV420P -> RGBA -> shader -> YUV420P, in place on the frame
+// about to be encoded, so the baked file matches the editor's live preview.
+struct ShaderPass {
+	ShaderRenderer renderer;
+	SwsContext *toRgba = nullptr;
+	SwsContext *toYuv = nullptr;
+	int w = 0, h = 0;
+	bool active = false;
+	QMap<QString, double> vals;
+
+	~ShaderPass()
+	{
+		if (toRgba)
+			sws_freeContext(toRgba);
+		if (toYuv)
+			sws_freeContext(toYuv);
+	}
+
+	// Compile + ready the GPU. Returns an error string (empty on success). Leaves
+	// active=false when the Options carry no shader.
+	QString init(const ClipExporter::Options &o)
+	{
+		if (o.shaderSource.isEmpty())
+			return QString();
+		if (!renderer.ensureGl())
+			return QStringLiteral("The effect needs OpenGL 3.3, which isn't available here: %1")
+				.arg(renderer.lastError());
+		QString err;
+		if (!renderer.setShader(o.shaderSource, o.shaderParamDefs, &err))
+			return QStringLiteral("The effect shader failed to compile:\n%1").arg(err);
+		vals = o.shaderParams;
+		active = true;
+		return QString();
+	}
+
+	// Filter one writable YUV420P frame in place. Returns false only on an
+	// unexpected sws failure.
+	bool process(AVFrame *f, float tSec, int frame)
+	{
+		if (!active || !f)
+			return true;
+		const int W = f->width, H = f->height;
+		if (!toRgba || W != w || H != h) {
+			if (toRgba)
+				sws_freeContext(toRgba);
+			if (toYuv)
+				sws_freeContext(toYuv);
+			toRgba = sws_getContext(W, H, (AVPixelFormat)f->format, W, H, AV_PIX_FMT_RGBA,
+						SWS_BILINEAR, nullptr, nullptr, nullptr);
+			toYuv = sws_getContext(W, H, AV_PIX_FMT_RGBA, W, H, AV_PIX_FMT_YUV420P, SWS_BILINEAR,
+					       nullptr, nullptr, nullptr);
+			w = W;
+			h = H;
+		}
+		if (!toRgba || !toYuv)
+			return false;
+
+		QImage img(W, H, QImage::Format_RGBA8888);
+		uint8_t *dst[4] = {img.bits(), nullptr, nullptr, nullptr};
+		int dstStride[4] = {(int)img.bytesPerLine(), 0, 0, 0};
+		sws_scale(toRgba, f->data, f->linesize, 0, H, dst, dstStride);
+
+		QImage out = renderer.apply(img, tSec, frame, vals);
+		if (out.format() != QImage::Format_RGBA8888)
+			out = out.convertToFormat(QImage::Format_RGBA8888);
+
+		// The decoded frame may be a read-only, decoder-owned buffer (yuv420p
+		// sources pass through un-copied); make it writable before overwriting it.
+		if (av_frame_make_writable(f) < 0)
+			return false;
+		const uint8_t *src[4] = {out.constBits(), nullptr, nullptr, nullptr};
+		int srcStride[4] = {(int)out.bytesPerLine(), 0, 0, 0};
+		sws_scale(toYuv, src, srcStride, 0, H, f->data, f->linesize);
+		return true;
 	}
 };
 
@@ -343,7 +424,14 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 		return s.fullYuv;
 	};
 
+	ShaderPass shaderPass;
+	if (QString e = shaderPass.init(opts); !e.isEmpty())
+		return e;
+	int shaderFrame = 0;
+
 	auto encodeVideo = [&](AVFrame *f) -> bool {
+		if (f && shaderPass.active)
+			shaderPass.process(f, float(f->pts * av_q2d(s.venc->time_base)), shaderFrame++);
 		if (avcodec_send_frame(s.venc, f) < 0)
 			return false;
 		while (true) {
@@ -664,7 +752,14 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 		return s.fullYuv;
 	};
 
+	ShaderPass shaderPass;
+	if (QString e = shaderPass.init(opts); !e.isEmpty())
+		return e;
+	int shaderFrame = 0;
+
 	auto encodeVideo = [&](AVFrame *f) -> bool {
+		if (f && shaderPass.active)
+			shaderPass.process(f, float(f->pts * av_q2d(s.venc->time_base)), shaderFrame++);
 		if (avcodec_send_frame(s.venc, f) < 0)
 			return false;
 		while (true) {
@@ -1044,7 +1139,14 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 		std::memset(f->data[1], 128, size_t(f->linesize[1]) * (f->height / 2));
 		std::memset(f->data[2], 128, size_t(f->linesize[2]) * (f->height / 2));
 	};
+	ShaderPass shaderPass;
+	if (QString e = shaderPass.init(opts); !e.isEmpty())
+		return e;
+	int shaderFrame = 0;
+
 	auto encodeVideo = [&](AVFrame *f) -> bool {
+		if (f && shaderPass.active)
+			shaderPass.process(f, float(f->pts * av_q2d(s.venc->time_base)), shaderFrame++);
 		if (avcodec_send_frame(s.venc, f) < 0)
 			return false;
 		while (true) {

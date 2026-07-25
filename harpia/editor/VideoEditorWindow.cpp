@@ -2449,6 +2449,14 @@ void VideoEditorWindow::onSave()
 		o.duckOriginal = voDuck_->isChecked();
 	}
 
+	// Bake the active post-processing shader into the output frames (ignored for
+	// GIF, which uses a separate palette-based encoder).
+	if (shaderState_.active() && !shaderSource_.isEmpty()) {
+		o.shaderSource = shaderSource_;
+		o.shaderParamDefs = shaderParams_;
+		o.shaderParams = shaderState_.params;
+	}
+
 	exporter_ = new ClipExporter(this);
 	connect(exporter_, &ClipExporter::progress, this, &VideoEditorWindow::onExportProgress);
 	connect(exporter_, &ClipExporter::finished, this, &VideoEditorWindow::onExportFinished);

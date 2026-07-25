@@ -3,6 +3,8 @@
 #include <QObject>
 #include <QString>
 
+#include "shader/ShaderEffect.hpp" // ShaderParam (post-processing effect)
+
 #include <atomic>
 #include <vector>
 
@@ -78,6 +80,14 @@ public:
 		std::vector<Voiceover> voiceovers;
 		double originalVolume = 1.0; // global gain applied to the source audio (0..2)
 		bool duckOriginal = false;   // dip the source under narration (sidechain)
+
+		// Post-processing shader baked into the output frames (GPU). Empty source
+		// = no effect. shaderSource is the fully wrapped fragment shader (see
+		// wrapShaderToy); shaderParamDefs carries the uniform types so values can
+		// be pushed with the right GLSL type; shaderParams holds the values.
+		QString shaderSource;
+		QVector<ShaderParam> shaderParamDefs;
+		QMap<QString, double> shaderParams;
 	};
 
 	static QString extensionFor(Format f); // "mp4"/"mkv"/"mov"/"webm"/"gif"

@@ -2206,12 +2206,16 @@ QString VideoEditorWindow::shadersDirPath()
 		shadersDir_ = base + QStringLiteral("/harpia/shaders");
 	}
 	QDir().mkpath(shadersDir_);
-	// Seed the bundled CRT shader on first run so there is always an example.
-	const QString crt = shadersDir_ + QStringLiteral("/crt.frag");
-	if (!QFile::exists(crt)) {
-		QFile res(QStringLiteral(":/shaders/crt.frag"));
+	// Seed the bundled shaders when missing so there are always examples to start
+	// from (per-file, so user edits are never overwritten and new bundled shaders
+	// arrive on the next launch after an update).
+	for (const QString &name : {QStringLiteral("crt"), QStringLiteral("adjust")}) {
+		const QString dst = shadersDir_ + QLatin1Char('/') + name + QStringLiteral(".frag");
+		if (QFile::exists(dst))
+			continue;
+		QFile res(QStringLiteral(":/shaders/") + name + QStringLiteral(".frag"));
 		if (res.open(QIODevice::ReadOnly)) {
-			QFile out(crt);
+			QFile out(dst);
 			if (out.open(QIODevice::WriteOnly))
 				out.write(res.readAll());
 		}

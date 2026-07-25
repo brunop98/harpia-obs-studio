@@ -1636,6 +1636,17 @@ void VideoEditorWindow::onSaveProject()
 	}
 	root[QStringLiteral("voiceovers")] = voArr;
 
+	// Post-processing shader effect (name references a .frag in the user folder).
+	if (!s.shaderName.isEmpty()) {
+		QJsonObject shader;
+		shader[QStringLiteral("name")] = s.shaderName;
+		QJsonObject params;
+		for (auto it = s.shaderParams.constBegin(); it != s.shaderParams.constEnd(); ++it)
+			params[it.key()] = it.value();
+		shader[QStringLiteral("params")] = params;
+		root[QStringLiteral("shader")] = shader;
+	}
+
 	QFile f(path);
 	if (!f.open(QIODevice::WriteOnly)) {
 		QMessageBox::warning(this, QStringLiteral("Save project"),
@@ -1772,6 +1783,13 @@ void VideoEditorWindow::onOpenProject()
 		s.voiceClips.push_back(v);
 	}
 
+	// Post-processing shader effect (restored by restoreSnapshot below).
+	const QJsonObject shader = root.value(QStringLiteral("shader")).toObject();
+	s.shaderName = shader.value(QStringLiteral("name")).toString();
+	const QJsonObject sparams = shader.value(QStringLiteral("params")).toObject();
+	for (auto it = sparams.constBegin(); it != sparams.constEnd(); ++it)
+		s.shaderParams[it.key()] = it.value().toDouble();
+
 	// Show a source that the project actually uses, then apply the edits (which
 	// restore the trim range / segments on top).
 	setActiveSource(defaultSrcId);
@@ -1865,6 +1883,8 @@ EditorSnapshot VideoEditorWindow::snapshot() const
 	s.cropEnabled = canvas_->cropEnabled();
 	s.cropRect = canvas_->cropRectVideo();
 	s.voiceClips = voTrack_->clips();
+	s.shaderName = shaderState_.name;
+	s.shaderParams = shaderState_.params;
 	return s;
 }
 
@@ -1914,6 +1934,21 @@ void VideoEditorWindow::restoreSnapshot(const EditorSnapshot &s)
 	canvas_->setCropRectVideo(s.cropRect);
 
 	voTrack_->setClips(s.voiceClips);
+
+	// Restore the post-processing effect (recompiles + rebuilds controls when the
+	// shader changes, then applies the saved parameter values on top).
+	if (shaderCombo_) {
+		QSignalBlocker sb(shaderCombo_);
+		if (s.shaderName != shaderState_.name)
+			selectShader(s.shaderName);
+		for (auto it = s.shaderParams.constBegin(); it != s.shaderParams.constEnd(); ++it)
+			if (shaderState_.params.contains(it.key()))
+				shaderState_.params[it.key()] = it.value();
+		const int idx =
+			s.shaderName.isEmpty() ? 0 : shaderCombo_->findText(s.shaderName);
+		shaderCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
+		rebuildShaderControls();
+	}
 
 	// Refresh derived UI + speed controls for the current mode.
 	if (multiCut()) {

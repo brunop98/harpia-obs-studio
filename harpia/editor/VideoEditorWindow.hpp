@@ -47,12 +47,15 @@ struct EditorSnapshot {
 	bool cropEnabled = false;
 	QRect cropRect;
 	QVector<VoiceoverClip> voiceClips;
+	QString shaderName;                 // active effect ("" = none)
+	QMap<QString, double> shaderParams; // its parameter values
 
 	bool operator==(const EditorSnapshot &o) const
 	{
 		return segments == o.segments && trimStart == o.trimStart && trimEnd == o.trimEnd &&
 		       speed == o.speed && cropEnabled == o.cropEnabled && cropRect == o.cropRect &&
-		       voiceClips == o.voiceClips;
+		       voiceClips == o.voiceClips && shaderName == o.shaderName &&
+		       shaderParams == o.shaderParams;
 	}
 };
 

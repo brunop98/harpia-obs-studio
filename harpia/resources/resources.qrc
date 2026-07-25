@@ -1,5 +1,7 @@
 <RCC>
   <qresource prefix="/">
     <file>harpia.png</file>
+    <!-- Bundled default shader, seeded into the user shaders folder on first run. -->
+    <file alias="shaders/crt.frag">../editor/shader/presets/crt.frag</file>
   </qresource>
 </RCC>

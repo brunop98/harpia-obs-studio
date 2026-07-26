@@ -4,5 +4,10 @@
     <!-- Bundled shaders, seeded into the user shaders folder on first run. -->
     <file alias="shaders/crt.frag">../editor/shader/presets/crt.frag</file>
     <file alias="shaders/adjust.frag">../editor/shader/presets/adjust.frag</file>
+    <file alias="shaders/grayscale.frag">../editor/shader/presets/grayscale.frag</file>
+    <file alias="shaders/vignette.frag">../editor/shader/presets/vignette.frag</file>
+    <file alias="shaders/sharpen.frag">../editor/shader/presets/sharpen.frag</file>
+    <file alias="shaders/grain.frag">../editor/shader/presets/grain.frag</file>
+    <file alias="shaders/pixelate.frag">../editor/shader/presets/pixelate.frag</file>
   </qresource>
 </RCC>

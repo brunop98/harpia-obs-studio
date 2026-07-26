@@ -34,7 +34,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QAction>
 #include <QLabel>
+#include <QMenu>
 #include <QMessageBox>
 #include <QProcess>
 #include <QProgressDialog>
@@ -262,6 +264,24 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	bar->addWidget(sourcesBtn_);
 	bar->addSpacing(6);
 
+	// Effects toggle — opens the right panel (post-processing effects sit at its
+	// top). A dedicated button so the effect stack is easy to find.
+	effectsBtn_ = new QPushButton(QStringLiteral("Effects"), this);
+	effectsBtn_->setCheckable(true);
+	effectsBtn_->setChecked(false);
+	effectsBtn_->setToolTip(QStringLiteral(
+		"Show/hide post-processing effects (color grade, CRT, …) — applied to the preview and baked into export"));
+	connect(effectsBtn_, &QPushButton::toggled, this, [this](bool on) {
+		if (inspector_)
+			inspector_->setVisible(on);
+		if (inspectorBtn_) {
+			QSignalBlocker b(inspectorBtn_);
+			inspectorBtn_->setChecked(on);
+		}
+	});
+	bar->addWidget(effectsBtn_);
+	bar->addSpacing(6);
+
 	// Inspector toggle — show/hide the right-side properties panel.
 	inspectorBtn_ = new QPushButton(QStringLiteral("Inspector"), this);
 	inspectorBtn_->setCheckable(true);
@@ -271,6 +291,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(inspectorBtn_, &QPushButton::toggled, this, [this](bool on) {
 		if (inspector_)
 			inspector_->setVisible(on);
+		if (effectsBtn_) {
+			QSignalBlocker b(effectsBtn_);
+			effectsBtn_->setChecked(on);
+		}
 	});
 	bar->addWidget(inspectorBtn_);
 	bar->addSpacing(6);
@@ -459,6 +483,80 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	auto *insHeader = new QLabel(QStringLiteral("Inspector"), this);
 	insHeader->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
 	insLayout->addWidget(insHeader);
+	// ---- Effect stack: user GLSL post-processing (preview + baked export) ----
+	// Placed first so it's the panel's headline feature (open via the Effects
+	// toolbar button). Effects stack top-to-bottom; each is a .frag in the user
+	// shaders folder with its own //@param controls.
+	{
+		auto *fxHdr = new QLabel(QStringLiteral("Effects"), this);
+		fxHdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
+		insLayout->addWidget(fxHdr);
+
+		auto *fxBtns = new QHBoxLayout;
+		addEffectBtn_ = new QPushButton(QStringLiteral("Add effect  ▾"), this);
+		addEffectBtn_->setToolTip(QStringLiteral(
+			"Add a post-processing shader. Effects stack top-to-bottom and bake into export."));
+		auto *folderBtn = new QPushButton(QStringLiteral("Folder"), this);
+		folderBtn->setToolTip(QStringLiteral("Open the shaders folder — drop .frag files here"));
+		fxBtns->addWidget(addEffectBtn_, 1);
+		fxBtns->addWidget(folderBtn);
+		insLayout->addLayout(fxBtns);
+
+		shaderError_ = new QLabel(QString(), this);
+		shaderError_->setWordWrap(true);
+		shaderError_->setStyleSheet(
+			QStringLiteral("color:#e5484d; font-family:monospace; font-size:11px;"));
+		shaderError_->setVisible(false);
+		insLayout->addWidget(shaderError_);
+
+		effectsBox_ = new QWidget(this);
+		auto *ebl = new QVBoxLayout(effectsBox_);
+		ebl->setContentsMargins(0, 2, 0, 2);
+		ebl->setSpacing(6);
+		insLayout->addWidget(effectsBox_);
+
+		connect(addEffectBtn_, &QPushButton::clicked, this, [this]() {
+			QMenu menu(this);
+			const QStringList names = availableShaders();
+			if (names.isEmpty())
+				menu.addAction(QStringLiteral("(no shaders in folder)"))->setEnabled(false);
+			for (const QString &n : names) {
+				QAction *a = menu.addAction(n);
+				connect(a, &QAction::triggered, this, [this, n]() { addEffect(n); });
+			}
+			menu.exec(addEffectBtn_->mapToGlobal(QPoint(0, addEffectBtn_->height())));
+		});
+		connect(folderBtn, &QPushButton::clicked, this,
+			[this]() { QDesktopServices::openUrl(QUrl::fromLocalFile(shadersDirPath())); });
+	}
+
+	shaderRenderer_ = std::make_unique<ShaderRenderer>();
+	shaderWatch_ = new QFileSystemWatcher(this);
+	connect(shaderWatch_, &QFileSystemWatcher::fileChanged, this, [this](const QString &path) {
+		// Editors often replace the file on save (breaking the watch); re-add it and
+		// recompile the whole chain from disk so live edits show immediately.
+		if (QFile::exists(path) && !shaderWatch_->files().contains(path))
+			shaderWatch_->addPath(path);
+		for (EditorEffect &e : effects_) {
+			EditorEffect fresh;
+			QString err;
+			if (loadShaderFile(e.name, &fresh, &err)) {
+				fresh.params = e.params; // keep current values
+				e.defs = fresh.defs;
+				e.wrapped = fresh.wrapped;
+			}
+		}
+		recompileChain();
+		rebuildEffectsUI();
+		refreshPreviewFrame();
+	});
+	shadersDirPath(); // ensure the folder exists + presets are seeded
+	rebuildEffectsUI(); // show the empty-state hint
+
+	// ---- Clip properties -------------------------------------------------
+	auto *clipHdr = new QLabel(QStringLiteral("Clip"), this);
+	clipHdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed; margin-top:6px;"));
+	insLayout->addWidget(clipHdr);
 	inspTitle_ = new QLabel(QString(), this);
 	inspTitle_->setStyleSheet(QStringLiteral("color:#c8ccd4;"));
 	inspTitle_->setWordWrap(true);
@@ -494,69 +592,6 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	inspHint_->setWordWrap(true);
 	inspHint_->setStyleSheet(QStringLiteral("color:#7f858e;"));
 	insLayout->addWidget(inspHint_);
-
-	// ---- Effect: a user GLSL post-processing shader (preview + baked export) --
-	{
-		auto *fxSep = new QLabel(QStringLiteral("Effect"), this);
-		fxSep->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed; margin-top:8px;"));
-		insLayout->addWidget(fxSep);
-
-		shaderCombo_ = new QComboBox(this);
-		shaderCombo_->setToolTip(QStringLiteral(
-			"Post-processing shader applied to the preview and baked into the exported video."));
-		insLayout->addWidget(shaderCombo_);
-
-		auto *fxBtns = new QHBoxLayout;
-		auto *reloadBtn = new QPushButton(QStringLiteral("Reload"), this);
-		reloadBtn->setToolTip(
-			QStringLiteral("Rescan the shaders folder and recompile the current shader"));
-		auto *folderBtn = new QPushButton(QStringLiteral("Open folder"), this);
-		folderBtn->setToolTip(QStringLiteral("Open the shaders folder — drop .frag files here"));
-		fxBtns->addWidget(reloadBtn);
-		fxBtns->addWidget(folderBtn);
-		insLayout->addLayout(fxBtns);
-
-		shaderError_ = new QLabel(QString(), this);
-		shaderError_->setWordWrap(true);
-		shaderError_->setStyleSheet(
-			QStringLiteral("color:#e5484d; font-family:monospace; font-size:11px;"));
-		shaderError_->setVisible(false);
-		insLayout->addWidget(shaderError_);
-
-		shaderParamBox_ = new QWidget(this);
-		auto *pbl = new QFormLayout(shaderParamBox_);
-		pbl->setContentsMargins(0, 2, 0, 0);
-		pbl->setHorizontalSpacing(8);
-		pbl->setVerticalSpacing(4);
-		insLayout->addWidget(shaderParamBox_);
-
-		connect(shaderCombo_, &QComboBox::currentTextChanged, this, [this](const QString &t) {
-			if (shaderRebuilding_)
-				return;
-			selectShader(t == QStringLiteral("None") ? QString() : t);
-		});
-		connect(reloadBtn, &QPushButton::clicked, this, [this]() {
-			refreshShaderList();
-			if (shaderState_.active())
-				selectShader(shaderState_.name);
-		});
-		connect(folderBtn, &QPushButton::clicked, this,
-			[this]() { QDesktopServices::openUrl(QUrl::fromLocalFile(shadersDirPath())); });
-	}
-
-	shaderRenderer_ = std::make_unique<ShaderRenderer>();
-	shaderWatch_ = new QFileSystemWatcher(this);
-	connect(shaderWatch_, &QFileSystemWatcher::fileChanged, this, [this](const QString &) {
-		if (!shaderState_.active())
-			return;
-		// Editors often replace the file on save (breaking the watch) — re-add it.
-		const QString p =
-			shadersDir_ + QLatin1Char('/') + shaderState_.name + QStringLiteral(".frag");
-		if (!shaderWatch_->files().contains(p) && QFile::exists(p))
-			shaderWatch_->addPath(p);
-		selectShader(shaderState_.name);
-	});
-	refreshShaderList();
 
 	insLayout->addStretch(1);
 
@@ -1636,15 +1671,19 @@ void VideoEditorWindow::onSaveProject()
 	}
 	root[QStringLiteral("voiceovers")] = voArr;
 
-	// Post-processing shader effect (name references a .frag in the user folder).
-	if (!s.shaderName.isEmpty()) {
-		QJsonObject shader;
-		shader[QStringLiteral("name")] = s.shaderName;
-		QJsonObject params;
-		for (auto it = s.shaderParams.constBegin(); it != s.shaderParams.constEnd(); ++it)
-			params[it.key()] = it.value();
-		shader[QStringLiteral("params")] = params;
-		root[QStringLiteral("shader")] = shader;
+	// Post-processing effect stack (names reference .frag files in the user folder).
+	if (!s.effects.isEmpty()) {
+		QJsonArray fxArr;
+		for (const ShaderState &st : s.effects) {
+			QJsonObject fo;
+			fo[QStringLiteral("name")] = st.name;
+			QJsonObject params;
+			for (auto it = st.params.constBegin(); it != st.params.constEnd(); ++it)
+				params[it.key()] = it.value();
+			fo[QStringLiteral("params")] = params;
+			fxArr.append(fo);
+		}
+		root[QStringLiteral("effects")] = fxArr;
 	}
 
 	QFile f(path);
@@ -1783,12 +1822,27 @@ void VideoEditorWindow::onOpenProject()
 		s.voiceClips.push_back(v);
 	}
 
-	// Post-processing shader effect (restored by restoreSnapshot below).
-	const QJsonObject shader = root.value(QStringLiteral("shader")).toObject();
-	s.shaderName = shader.value(QStringLiteral("name")).toString();
-	const QJsonObject sparams = shader.value(QStringLiteral("params")).toObject();
-	for (auto it = sparams.constBegin(); it != sparams.constEnd(); ++it)
-		s.shaderParams[it.key()] = it.value().toDouble();
+	// Post-processing effect stack (restored by restoreSnapshot below). Back-compat:
+	// older projects stored a single "shader" object instead of an "effects" array.
+	auto readEffect = [](const QJsonObject &fo) {
+		ShaderState st;
+		st.name = fo.value(QStringLiteral("name")).toString();
+		const QJsonObject params = fo.value(QStringLiteral("params")).toObject();
+		for (auto it = params.constBegin(); it != params.constEnd(); ++it)
+			st.params[it.key()] = it.value().toDouble();
+		return st;
+	};
+	if (root.value(QStringLiteral("effects")).isArray()) {
+		for (const QJsonValue &jv : root.value(QStringLiteral("effects")).toArray()) {
+			const ShaderState st = readEffect(jv.toObject());
+			if (!st.name.isEmpty())
+				s.effects.push_back(st);
+		}
+	} else if (root.value(QStringLiteral("shader")).isObject()) {
+		const ShaderState st = readEffect(root.value(QStringLiteral("shader")).toObject());
+		if (!st.name.isEmpty())
+			s.effects.push_back(st);
+	}
 
 	// Show a source that the project actually uses, then apply the edits (which
 	// restore the trim range / segments on top).
@@ -1883,8 +1937,8 @@ EditorSnapshot VideoEditorWindow::snapshot() const
 	s.cropEnabled = canvas_->cropEnabled();
 	s.cropRect = canvas_->cropRectVideo();
 	s.voiceClips = voTrack_->clips();
-	s.shaderName = shaderState_.name;
-	s.shaderParams = shaderState_.params;
+	for (const EditorEffect &e : effects_)
+		s.effects.push_back(ShaderState{e.name, e.params});
 	return s;
 }
 
@@ -1935,20 +1989,19 @@ void VideoEditorWindow::restoreSnapshot(const EditorSnapshot &s)
 
 	voTrack_->setClips(s.voiceClips);
 
-	// Restore the post-processing effect (recompiles + rebuilds controls when the
-	// shader changes, then applies the saved parameter values on top).
-	if (shaderCombo_) {
-		QSignalBlocker sb(shaderCombo_);
-		if (s.shaderName != shaderState_.name)
-			selectShader(s.shaderName);
-		for (auto it = s.shaderParams.constBegin(); it != s.shaderParams.constEnd(); ++it)
-			if (shaderState_.params.contains(it.key()))
-				shaderState_.params[it.key()] = it.value();
-		const int idx =
-			s.shaderName.isEmpty() ? 0 : shaderCombo_->findText(s.shaderName);
-		shaderCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
-		rebuildShaderControls();
+	// Restore the effect stack: reload each named shader from disk and apply the
+	// saved parameter values on top of its defaults.
+	effects_.clear();
+	for (const ShaderState &st : s.effects) {
+		EditorEffect e;
+		e.params = st.params;
+		QString err;
+		if (loadShaderFile(st.name, &e, &err))
+			effects_.append(e);
 	}
+	recompileChain();
+	rebuildEffectsUI();
+	updateShaderWatch();
 
 	// Refresh derived UI + speed controls for the current mode.
 	if (multiCut()) {
@@ -2209,7 +2262,10 @@ QString VideoEditorWindow::shadersDirPath()
 	// Seed the bundled shaders when missing so there are always examples to start
 	// from (per-file, so user edits are never overwritten and new bundled shaders
 	// arrive on the next launch after an update).
-	for (const QString &name : {QStringLiteral("crt"), QStringLiteral("adjust")}) {
+	for (const QString &name :
+	     {QStringLiteral("adjust"), QStringLiteral("crt"), QStringLiteral("grayscale"),
+	      QStringLiteral("vignette"), QStringLiteral("sharpen"), QStringLiteral("grain"),
+	      QStringLiteral("pixelate")}) {
 		const QString dst = shadersDir_ + QLatin1Char('/') + name + QStringLiteral(".frag");
 		if (QFile::exists(dst))
 			continue;
@@ -2223,147 +2279,223 @@ QString VideoEditorWindow::shadersDirPath()
 	return shadersDir_;
 }
 
-void VideoEditorWindow::refreshShaderList()
+QStringList VideoEditorWindow::availableShaders()
 {
-	if (!shaderCombo_)
-		return;
-	const QString dir = shadersDirPath();
 	QStringList names;
 	for (const QFileInfo &fi :
-	     QDir(dir).entryInfoList({QStringLiteral("*.frag")}, QDir::Files, QDir::Name))
+	     QDir(shadersDirPath()).entryInfoList({QStringLiteral("*.frag")}, QDir::Files, QDir::Name))
 		names << fi.completeBaseName();
-
-	shaderRebuilding_ = true;
-	const QString keep = shaderState_.name;
-	shaderCombo_->clear();
-	shaderCombo_->addItem(QStringLiteral("None"));
-	shaderCombo_->addItems(names);
-	const int idx = keep.isEmpty() ? 0 : shaderCombo_->findText(keep);
-	shaderCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
-	shaderRebuilding_ = false;
+	return names;
 }
 
-void VideoEditorWindow::selectShader(const QString &name)
+bool VideoEditorWindow::loadShaderFile(const QString &name, EditorEffect *out, QString *err)
 {
-	// Stop watching the previous file.
-	if (shaderWatch_ && !shaderWatch_->files().isEmpty())
-		shaderWatch_->removePath(shaderWatch_->files().first());
-
-	if (name.isEmpty()) {
-		shaderState_ = ShaderState{};
-		shaderParams_.clear();
-		shaderSource_.clear();
-		if (shaderRenderer_)
-			shaderRenderer_->clearShader();
-		if (shaderError_)
-			shaderError_->setVisible(false);
-		rebuildShaderControls();
-		refreshPreviewFrame();
-		scheduleSnapshot();
-		return;
-	}
-
 	const QString path = shadersDirPath() + QLatin1Char('/') + name + QStringLiteral(".frag");
 	QFile f(path);
 	if (!f.open(QIODevice::ReadOnly)) {
+		if (err)
+			*err = QStringLiteral("Could not read %1.frag").arg(name);
+		return false;
+	}
+	const QString glsl = QString::fromUtf8(f.readAll());
+	f.close();
+	out->name = name;
+	out->defs = parseShaderParams(glsl);
+	out->wrapped = wrapShaderToy(glsl, out->defs);
+	for (const ShaderParam &p : out->defs) // default any unset params
+		if (!out->params.contains(p.uniform))
+			out->params[p.uniform] = p.def;
+	return true;
+}
+
+void VideoEditorWindow::addEffect(const QString &name)
+{
+	EditorEffect e;
+	QString err;
+	if (!loadShaderFile(name, &e, &err)) {
 		if (shaderError_) {
-			shaderError_->setText(QStringLiteral("Could not read %1").arg(name));
+			shaderError_->setText(err);
 			shaderError_->setVisible(true);
 		}
 		return;
 	}
-	const QString glsl = QString::fromUtf8(f.readAll());
-	f.close();
-
-	const QVector<ShaderParam> params = parseShaderParams(glsl);
-	const QString wrapped = wrapShaderToy(glsl, params);
-
-	QString err;
-	const bool ok = shaderRenderer_ && shaderRenderer_->setShader(wrapped, params, &err);
-	if (shaderError_) {
-		shaderError_->setText(ok ? QString() : err);
-		shaderError_->setVisible(!ok);
-	}
-	if (!ok)
-		return;
-
-	// Carry over any values already set for this shader (name unchanged); default
-	// the rest. Switching to a different shader starts from its declared defaults.
-	QMap<QString, double> vals;
-	for (const ShaderParam &p : params) {
-		if (shaderState_.name == name && shaderState_.params.contains(p.uniform))
-			vals[p.uniform] = shaderState_.params.value(p.uniform);
-		else
-			vals[p.uniform] = p.def;
-	}
-	shaderState_.name = name;
-	shaderState_.params = vals;
-	shaderParams_ = params;
-	shaderSource_ = wrapped;
-
-	if (shaderWatch_)
-		shaderWatch_->addPath(path);
-	rebuildShaderControls();
+	effects_.append(e);
+	recompileChain();
+	rebuildEffectsUI();
+	updateShaderWatch();
 	refreshPreviewFrame();
 	scheduleSnapshot();
 }
 
-void VideoEditorWindow::rebuildShaderControls()
+void VideoEditorWindow::removeEffect(int index)
 {
-	if (!shaderParamBox_)
+	if (index < 0 || index >= effects_.size())
 		return;
-	auto *form = qobject_cast<QFormLayout *>(shaderParamBox_->layout());
-	if (!form)
-		return;
-	// Clear existing rows.
-	while (form->rowCount() > 0)
-		form->removeRow(0);
+	effects_.remove(index);
+	recompileChain();
+	rebuildEffectsUI();
+	updateShaderWatch();
+	refreshPreviewFrame();
+	scheduleSnapshot();
+}
 
-	for (const ShaderParam &p : shaderParams_) {
-		const double val = shaderState_.params.value(p.uniform, p.def);
-		if (p.type == ShaderParam::Type::Bool) {
-			auto *cb = new QCheckBox(shaderParamBox_);
-			cb->setChecked(val != 0.0);
-			connect(cb, &QCheckBox::toggled, this, [this, u = p.uniform](bool on) {
-				shaderState_.params[u] = on ? 1.0 : 0.0;
-				refreshPreviewFrame();
-				scheduleSnapshot();
-			});
-			form->addRow(p.label, cb);
-		} else {
-			// Slider (0..1000) mapped to [min,max], with a live value label.
-			auto *row = new QWidget(shaderParamBox_);
-			auto *rl = new QHBoxLayout(row);
-			rl->setContentsMargins(0, 0, 0, 0);
-			rl->setSpacing(6);
-			auto *sl = new QSlider(Qt::Horizontal, row);
-			sl->setRange(0, 1000);
-			const double span = (p.max > p.min) ? (p.max - p.min) : 1.0;
-			sl->setValue(int(std::clamp((val - p.min) / span, 0.0, 1.0) * 1000.0));
-			auto *vlab = new QLabel(QString::number(val, 'g', 3), row);
-			vlab->setMinimumWidth(40);
-			vlab->setStyleSheet(QStringLiteral("color:#c8ccd4; font-family:monospace;"));
-			rl->addWidget(sl, 1);
-			rl->addWidget(vlab);
-			connect(sl, &QSlider::valueChanged, this,
-				[this, u = p.uniform, mn = p.min, sp = span, vlab](int v) {
-					const double d = mn + (double(v) / 1000.0) * sp;
-					shaderState_.params[u] = d;
-					vlab->setText(QString::number(d, 'g', 3));
+void VideoEditorWindow::moveEffect(int index, int delta)
+{
+	const int to = index + delta;
+	if (index < 0 || index >= effects_.size() || to < 0 || to >= effects_.size())
+		return;
+	effects_.move(index, to);
+	recompileChain();
+	rebuildEffectsUI();
+	refreshPreviewFrame();
+	scheduleSnapshot();
+}
+
+void VideoEditorWindow::recompileChain()
+{
+	if (!shaderRenderer_)
+		return;
+	QVector<ShaderLayerSource> layers;
+	layers.reserve(effects_.size());
+	for (const EditorEffect &e : effects_)
+		layers.append({e.wrapped, e.defs});
+	QString err;
+	const bool ok = shaderRenderer_->setChain(layers, &err);
+	if (shaderError_) {
+		shaderError_->setText(ok ? QString() : err);
+		shaderError_->setVisible(!ok);
+	}
+}
+
+void VideoEditorWindow::updateShaderWatch()
+{
+	if (!shaderWatch_)
+		return;
+	if (!shaderWatch_->files().isEmpty())
+		shaderWatch_->removePaths(shaderWatch_->files());
+	for (const EditorEffect &e : effects_) {
+		const QString p = shadersDirPath() + QLatin1Char('/') + e.name + QStringLiteral(".frag");
+		if (QFile::exists(p))
+			shaderWatch_->addPath(p);
+	}
+}
+
+void VideoEditorWindow::rebuildEffectsUI()
+{
+	if (!effectsBox_)
+		return;
+	auto *box = qobject_cast<QVBoxLayout *>(effectsBox_->layout());
+	if (!box)
+		return;
+	// Clear existing children.
+	while (QLayoutItem *item = box->takeAt(0)) {
+		if (QWidget *w = item->widget())
+			w->deleteLater();
+		delete item;
+	}
+
+	if (effects_.isEmpty()) {
+		auto *empty = new QLabel(
+			QStringLiteral("No effects yet — click “Add effect” to grade or stylize the video."),
+			effectsBox_);
+		empty->setWordWrap(true);
+		empty->setStyleSheet(QStringLiteral("color:#7f858e;"));
+		box->addWidget(empty);
+		return;
+	}
+
+	for (int i = 0; i < effects_.size(); ++i) {
+		const EditorEffect &e = effects_[i];
+		auto *card = new QWidget(effectsBox_);
+		card->setObjectName(QStringLiteral("fxCard"));
+		card->setStyleSheet(QStringLiteral(
+			"QWidget#fxCard { background:#1c1e22; border:1px solid #2c2f36; border-radius:4px; }"));
+		auto *cv = new QVBoxLayout(card);
+		cv->setContentsMargins(8, 6, 8, 8);
+		cv->setSpacing(4);
+
+		auto *hdr = new QHBoxLayout;
+		auto *title = new QLabel(QStringLiteral("%1. %2").arg(i + 1).arg(e.name), card);
+		title->setStyleSheet(QStringLiteral("color:#e8eaed; font-weight:bold;"));
+		hdr->addWidget(title, 1);
+		auto *up = new QPushButton(QStringLiteral("↑"), card);
+		auto *down = new QPushButton(QStringLiteral("↓"), card);
+		auto *del = new QPushButton(QStringLiteral("✕"), card);
+		up->setFixedWidth(26);
+		down->setFixedWidth(26);
+		del->setFixedWidth(26);
+		up->setEnabled(i > 0);
+		down->setEnabled(i < effects_.size() - 1);
+		up->setToolTip(QStringLiteral("Move earlier in the chain"));
+		down->setToolTip(QStringLiteral("Move later in the chain"));
+		del->setToolTip(QStringLiteral("Remove this effect"));
+		hdr->addWidget(up);
+		hdr->addWidget(down);
+		hdr->addWidget(del);
+		cv->addLayout(hdr);
+		connect(up, &QPushButton::clicked, this, [this, i]() { moveEffect(i, -1); });
+		connect(down, &QPushButton::clicked, this, [this, i]() { moveEffect(i, +1); });
+		connect(del, &QPushButton::clicked, this, [this, i]() { removeEffect(i); });
+
+		auto *form = new QFormLayout;
+		form->setContentsMargins(0, 2, 0, 0);
+		form->setHorizontalSpacing(8);
+		form->setVerticalSpacing(3);
+		for (const ShaderParam &p : e.defs) {
+			const double val = e.params.value(p.uniform, p.def);
+			auto *key = new QLabel(p.label, card);
+			key->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+			if (p.type == ShaderParam::Type::Bool) {
+				auto *cb = new QCheckBox(card);
+				cb->setChecked(val != 0.0);
+				connect(cb, &QCheckBox::toggled, this, [this, i, u = p.uniform](bool on) {
+					if (i < effects_.size())
+						effects_[i].params[u] = on ? 1.0 : 0.0;
 					refreshPreviewFrame();
 					scheduleSnapshot();
 				});
-			form->addRow(p.label, row);
+				form->addRow(key, cb);
+			} else {
+				auto *roww = new QWidget(card);
+				auto *rl = new QHBoxLayout(roww);
+				rl->setContentsMargins(0, 0, 0, 0);
+				rl->setSpacing(6);
+				auto *sl = new QSlider(Qt::Horizontal, roww);
+				sl->setRange(0, 1000);
+				const double span = (p.max > p.min) ? (p.max - p.min) : 1.0;
+				sl->setValue(int(std::clamp((val - p.min) / span, 0.0, 1.0) * 1000.0));
+				auto *vlab = new QLabel(QString::number(val, 'g', 3), roww);
+				vlab->setMinimumWidth(40);
+				vlab->setStyleSheet(QStringLiteral("color:#c8ccd4; font-family:monospace;"));
+				rl->addWidget(sl, 1);
+				rl->addWidget(vlab);
+				connect(sl, &QSlider::valueChanged, this,
+					[this, i, u = p.uniform, mn = p.min, sp = span, vlab](int v) {
+						const double d = mn + (double(v) / 1000.0) * sp;
+						if (i < effects_.size())
+							effects_[i].params[u] = d;
+						vlab->setText(QString::number(d, 'g', 3));
+						refreshPreviewFrame();
+						scheduleSnapshot();
+					});
+				form->addRow(key, roww);
+			}
 		}
+		cv->addLayout(form);
+		box->addWidget(card);
 	}
 }
 
 QImage VideoEditorWindow::runShader(const QImage &img, qint64 ms)
 {
-	if (!shaderState_.active() || !shaderRenderer_ || !shaderRenderer_->ready() || img.isNull())
+	if (effects_.isEmpty() || !shaderRenderer_ || !shaderRenderer_->hasChain() || img.isNull())
 		return img;
+	QVector<QMap<QString, double>> perLayer;
+	perLayer.reserve(effects_.size());
+	for (const EditorEffect &e : effects_)
+		perLayer.append(e.params);
 	const float t = float(ms) / 1000.0f;
-	return shaderRenderer_->apply(img, t, int(ms / 33), shaderState_.params);
+	return shaderRenderer_->apply(img, t, int(ms / 33), perLayer);
 }
 
 void VideoEditorWindow::setPreviewFrame(const QImage &img, qint64 ms)
@@ -2488,13 +2620,10 @@ void VideoEditorWindow::onSave()
 		o.duckOriginal = voDuck_->isChecked();
 	}
 
-	// Bake the active post-processing shader into the output frames (ignored for
+	// Bake the post-processing effect stack into the output frames (ignored for
 	// GIF, which uses a separate palette-based encoder).
-	if (shaderState_.active() && !shaderSource_.isEmpty()) {
-		o.shaderSource = shaderSource_;
-		o.shaderParamDefs = shaderParams_;
-		o.shaderParams = shaderState_.params;
-	}
+	for (const EditorEffect &e : effects_)
+		o.effects.push_back({e.wrapped, e.defs, e.params});
 
 	exporter_ = new ClipExporter(this);
 	connect(exporter_, &ClipExporter::progress, this, &VideoEditorWindow::onExportProgress);

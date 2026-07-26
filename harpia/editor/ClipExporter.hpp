@@ -81,13 +81,16 @@ public:
 		double originalVolume = 1.0; // global gain applied to the source audio (0..2)
 		bool duckOriginal = false;   // dip the source under narration (sidechain)
 
-		// Post-processing shader baked into the output frames (GPU). Empty source
-		// = no effect. shaderSource is the fully wrapped fragment shader (see
-		// wrapShaderToy); shaderParamDefs carries the uniform types so values can
-		// be pushed with the right GLSL type; shaderParams holds the values.
-		QString shaderSource;
-		QVector<ShaderParam> shaderParamDefs;
-		QMap<QString, double> shaderParams;
+		// Post-processing effect chain baked into the output frames (GPU),
+		// applied in order. Empty = no effect. Each layer carries the fully
+		// wrapped fragment shader (see wrapShaderToy), the uniform type defs (so
+		// values push with the right GLSL type), and the values.
+		struct Effect {
+			QString source;
+			QVector<ShaderParam> paramDefs;
+			QMap<QString, double> params;
+		};
+		std::vector<Effect> effects;
 	};
 
 	static QString extensionFor(Format f); // "mp4"/"mkv"/"mov"/"webm"/"gif"

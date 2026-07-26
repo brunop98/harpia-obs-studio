@@ -102,7 +102,7 @@ struct ShaderPass {
 	SwsContext *toYuv = nullptr;
 	int w = 0, h = 0;
 	bool active = false;
-	QMap<QString, double> vals;
+	QVector<QMap<QString, double>> perLayer; // values per effect layer
 
 	~ShaderPass()
 	{
@@ -113,18 +113,24 @@ struct ShaderPass {
 	}
 
 	// Compile + ready the GPU. Returns an error string (empty on success). Leaves
-	// active=false when the Options carry no shader.
+	// active=false when the Options carry no effect.
 	QString init(const ClipExporter::Options &o)
 	{
-		if (o.shaderSource.isEmpty())
+		if (o.effects.empty())
 			return QString();
 		if (!renderer.ensureGl())
 			return QStringLiteral("The effect needs OpenGL 3.3, which isn't available here: %1")
 				.arg(renderer.lastError());
+		QVector<ShaderLayerSource> layers;
+		layers.reserve(int(o.effects.size()));
+		perLayer.clear();
+		for (const auto &e : o.effects) {
+			layers.append({e.source, e.paramDefs});
+			perLayer.append(e.params);
+		}
 		QString err;
-		if (!renderer.setShader(o.shaderSource, o.shaderParamDefs, &err))
+		if (!renderer.setChain(layers, &err))
 			return QStringLiteral("The effect shader failed to compile:\n%1").arg(err);
-		vals = o.shaderParams;
 		active = true;
 		return QString();
 	}
@@ -156,7 +162,7 @@ struct ShaderPass {
 		int dstStride[4] = {(int)img.bytesPerLine(), 0, 0, 0};
 		sws_scale(toRgba, f->data, f->linesize, 0, H, dst, dstStride);
 
-		QImage out = renderer.apply(img, tSec, frame, vals);
+		QImage out = renderer.apply(img, tSec, frame, perLayer);
 		if (out.format() != QImage::Format_RGBA8888)
 			out = out.convertToFormat(QImage::Format_RGBA8888);
 

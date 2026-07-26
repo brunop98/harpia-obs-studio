@@ -47,16 +47,24 @@ struct EditorSnapshot {
 	bool cropEnabled = false;
 	QRect cropRect;
 	QVector<VoiceoverClip> voiceClips;
-	QString shaderName;                 // active effect ("" = none)
-	QMap<QString, double> shaderParams; // its parameter values
+	QVector<ShaderState> effects; // post-processing stack (name + params), in order
 
 	bool operator==(const EditorSnapshot &o) const
 	{
 		return segments == o.segments && trimStart == o.trimStart && trimEnd == o.trimEnd &&
 		       speed == o.speed && cropEnabled == o.cropEnabled && cropRect == o.cropRect &&
-		       voiceClips == o.voiceClips && shaderName == o.shaderName &&
-		       shaderParams == o.shaderParams;
+		       voiceClips == o.voiceClips && effects == o.effects;
 	}
+};
+
+// One live effect in the post-processing stack: the persisted state (name +
+// param values) plus the parsed uniform defs and the wrapped GLSL, cached so the
+// controls and the GPU chain can be rebuilt without re-reading the file.
+struct EditorEffect {
+	QString name;
+	QMap<QString, double> params;
+	QVector<ShaderParam> defs;
+	QString wrapped; // wrapped fragment shader (for the renderer + export)
 };
 
 class AudioRecorder;
@@ -234,29 +242,33 @@ private:
 	void updateInspector(); // refresh the inspector from the current selection
 	QString baseInfo_; // static file info; extended with cut stats in Multi-Cut
 
-	// ---- Post-processing shader effect (preview + baked into export) ----
-	// The active effect (ShaderState) drives both the live preview (via
-	// shaderRenderer_, a GUI-thread offscreen GL renderer) and export (the same
-	// wrapped GLSL is handed to ClipExporter). Shaders are `.frag` files in a
-	// user-writable folder; each declares its own tunable //@param controls.
+	// ---- Post-processing effect stack (preview + baked into export) ----
+	// An ordered list of GLSL effects drives both the live preview (via
+	// shaderRenderer_, a GUI-thread offscreen GL chain) and export (the same
+	// wrapped GLSL layers are handed to ClipExporter). Shaders are `.frag` files
+	// in a user-writable folder; each declares its own tunable //@param controls.
 	std::unique_ptr<ShaderRenderer> shaderRenderer_;
-	ShaderState shaderState_;             // active shader name + parameter values
-	QVector<ShaderParam> shaderParams_;   // parsed controls of the active shader
-	QString shaderSource_;                // wrapped GLSL of the active shader (for export)
-	QComboBox *shaderCombo_ = nullptr;    // "None" + one row per .frag
-	QWidget *shaderParamBox_ = nullptr;   // container rebuilt when the shader changes
-	QLabel *shaderError_ = nullptr;       // compile errors / "no GPU" notice
-	QFileSystemWatcher *shaderWatch_ = nullptr; // live-reload the active file
-	QString shadersDir_;                  // the user-writable shaders folder
-	bool shaderRebuilding_ = false;       // guard while rebuilding param controls
-	QString shadersDirPath();             // ensure + return the folder (seeds crt.frag)
-	void refreshShaderList();             // rescan the folder into the combo
-	void selectShader(const QString &name); // compile + build controls + preview
-	void rebuildShaderControls();         // param sliders/checkboxes from shaderParams_
-	QImage runShader(const QImage &img, qint64 ms); // filter one frame through the effect
+	QVector<EditorEffect> effects_;             // the stack, applied in order
+	QWidget *effectsBox_ = nullptr;             // container listing the stack (rebuilt)
+	QLabel *shaderError_ = nullptr;             // compile errors / "no GPU" notice
+	QPushButton *addEffectBtn_ = nullptr;       // "Add effect ▾" (menu of shaders)
+	QPushButton *effectsBtn_ = nullptr;         // toolbar toggle (opens the panel)
+	QFileSystemWatcher *shaderWatch_ = nullptr; // live-reload the active .frag files
+	QString shadersDir_;                        // the user-writable shaders folder
+	bool effectsRebuilding_ = false;            // guard while rebuilding controls
+	QString shadersDirPath();                   // ensure + return the folder (seeds presets)
+	QStringList availableShaders();             // .frag stems in the folder
+	bool loadShaderFile(const QString &name, EditorEffect *out, QString *err); // parse+wrap
+	void addEffect(const QString &name);        // append a layer + recompile + preview
+	void removeEffect(int index);
+	void moveEffect(int index, int delta);      // reorder within the stack
+	void recompileChain();                      // push effects_ to the GPU renderer
+	void rebuildEffectsUI();                    // (re)build the stack's widgets
+	void updateShaderWatch();                   // watch every active layer's .frag
+	QImage runShader(const QImage &img, qint64 ms);     // run the chain over one frame
 	void setPreviewFrame(const QImage &img, qint64 ms); // stash raw + show filtered
-	void refreshPreviewFrame();           // re-filter the stashed frame (effect changed)
-	QImage lastPreviewRaw_;               // last decoded (unfiltered) preview frame
+	void refreshPreviewFrame();                 // re-filter the stashed frame (effect changed)
+	QImage lastPreviewRaw_;                     // last decoded (unfiltered) preview frame
 	qint64 lastPreviewMs_ = 0;
 
 	QPushButton *playBtn_ = nullptr;

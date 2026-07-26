@@ -1,10 +1,10 @@
 #pragma once
 
-// Offscreen GPU renderer that applies a user GLSL fragment shader to an RGBA
-// QImage. The exact same renderer serves the live preview (on the GUI thread)
-// and the export encoder (on its worker thread) — construct one per thread and
-// call ensureGl() there, since an OpenGL context is bound to the thread that
-// makes it current.
+// Offscreen GPU renderer that applies a CHAIN of user GLSL fragment shaders to
+// an RGBA QImage (each layer's output feeds the next, via ping-pong FBOs). The
+// same renderer serves the live preview (GUI thread) and the export encoder
+// (worker thread) — construct one per thread and call ensureGl() there, since
+// an OpenGL context is bound to the thread that makes it current.
 //
 // Not a QObject: it holds only GL resources and is driven synchronously.
 
@@ -24,6 +24,13 @@ class QOpenGLFramebufferObject;
 
 namespace harpia {
 
+// One compiled effect in the chain: the fully wrapped fragment shader plus the
+// parameter definitions (so apply() can push each uniform with the right type).
+struct ShaderLayerSource {
+	QString wrapped;
+	QVector<ShaderParam> defs;
+};
+
 class ShaderRenderer {
 public:
 	ShaderRenderer();
@@ -36,38 +43,43 @@ public:
 	// returns false (and stays false) if OpenGL 3.3 is unavailable here.
 	bool ensureGl();
 
-	// Compile+link a wrapped fragment shader (see wrapShaderToy). `params` is kept
-	// so apply() can push each uniform with the right type. Returns false and fills
-	// *err with the compile/link log on failure; the previous program is retained.
-	bool setShader(const QString &wrappedGlsl, const QVector<ShaderParam> &params, QString *err = nullptr);
+	// Compile a chain of effects (applied in order). Returns false and fills *err
+	// on the first layer that fails to compile; the previous chain is left intact.
+	// An empty list clears the chain (apply() then returns frames untouched).
+	bool setChain(const QVector<ShaderLayerSource> &layers, QString *err = nullptr);
 
-	// Clear the active shader (apply() then returns frames untouched).
-	void clearShader() { hasShader_ = false; }
-
-	// Run the shader over `src`, returning a new RGBA8888 image the same size.
-	// Returns `src` unchanged when GL isn't ready or no shader is set.
-	QImage apply(const QImage &src, float iTime, int iFrame, const QMap<QString, double> &params);
+	// Run the chain over `src`. perLayerParams[i] holds the values for layer i
+	// (missing keys fall back to that layer's declared default). Returns `src`
+	// unchanged when GL isn't ready or the chain is empty.
+	QImage apply(const QImage &src, float iTime, int iFrame,
+		     const QVector<QMap<QString, double>> &perLayerParams);
 
 	bool glAvailable() const { return glReady_; }
-	bool hasShader() const { return hasShader_; }
-	bool ready() const { return glReady_ && hasShader_; }
+	bool hasChain() const { return !passes_.isEmpty(); }
+	int passCount() const { return passes_.size(); }
 	QString lastError() const { return error_; }
 
 private:
 	bool buildQuad();
+	void deletePasses();
+	void ensureFbos(int w, int h);
+
+	struct Pass {
+		QOpenGLShaderProgram *prog = nullptr;
+		QVector<ShaderParam> defs;
+	};
 
 	QOffscreenSurface *surface_ = nullptr;
 	QOpenGLContext *ctx_ = nullptr;
-	QOpenGLShaderProgram *prog_ = nullptr;
-	QOpenGLFramebufferObject *fbo_ = nullptr;
+	QVector<Pass> passes_;
+	QOpenGLFramebufferObject *fbo_[2] = {nullptr, nullptr};
+	int fboW_ = 0, fboH_ = 0;
 	QOpenGLBuffer vbo_{QOpenGLBuffer::VertexBuffer};
 	QOpenGLVertexArrayObject vao_;
-	unsigned int tex_ = 0; // GLuint input texture
+	unsigned int tex_ = 0; // GLuint input texture (uploaded source frame)
 
 	bool glReady_ = false;
 	bool glFailed_ = false;
-	bool hasShader_ = false;
-	QVector<ShaderParam> params_;
 	QString error_;
 };
 

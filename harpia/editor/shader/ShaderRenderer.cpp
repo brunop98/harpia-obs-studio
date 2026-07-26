@@ -26,16 +26,22 @@ ShaderRenderer::~ShaderRenderer()
 	if (ctx_ && surface_ && ctx_->makeCurrent(surface_)) {
 		if (tex_)
 			ctx_->functions()->glDeleteTextures(1, &tex_);
-		delete fbo_;
-		fbo_ = nullptr;
-		delete prog_;
-		prog_ = nullptr;
+		deletePasses();
+		delete fbo_[0];
+		delete fbo_[1];
 		vbo_.destroy();
 		vao_.destroy();
 		ctx_->doneCurrent();
 	}
 	delete ctx_;
 	delete surface_;
+}
+
+void ShaderRenderer::deletePasses()
+{
+	for (Pass &p : passes_)
+		delete p.prog;
+	passes_.clear();
 }
 
 bool ShaderRenderer::ensureGl()
@@ -84,7 +90,6 @@ bool ShaderRenderer::ensureGl()
 
 bool ShaderRenderer::buildQuad()
 {
-	// Two triangles covering clip space; positions only.
 	static const float verts[] = {
 		-1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f,
 		-1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f,
@@ -106,8 +111,21 @@ bool ShaderRenderer::buildQuad()
 	return true;
 }
 
-bool ShaderRenderer::setShader(const QString &wrappedGlsl, const QVector<ShaderParam> &params, QString *err)
+bool ShaderRenderer::setChain(const QVector<ShaderLayerSource> &layers, QString *err)
 {
+	if (layers.isEmpty()) {
+		if (glReady_ && ctx_->makeCurrent(surface_)) {
+			deletePasses();
+			ctx_->doneCurrent();
+		} else {
+			deletePasses();
+		}
+		error_.clear();
+		if (err)
+			err->clear();
+		return true;
+	}
+
 	if (!ensureGl()) {
 		if (err)
 			*err = error_;
@@ -120,28 +138,33 @@ bool ShaderRenderer::setShader(const QString &wrappedGlsl, const QVector<ShaderP
 		return false;
 	}
 
-	auto *prog = new QOpenGLShaderProgram();
-	QString log;
-	if (!prog->addShaderFromSourceCode(QOpenGLShader::Vertex, kVert)) {
-		log = prog->log();
-	} else if (!prog->addShaderFromSourceCode(QOpenGLShader::Fragment, wrappedGlsl)) {
-		log = prog->log();
-	} else if (!prog->link()) {
-		log = prog->log();
-	}
-	if (!log.isEmpty()) {
-		delete prog;
-		ctx_->doneCurrent();
-		error_ = log;
-		if (err)
-			*err = log;
-		return false;
+	// Compile all layers first; only swap in the new chain if every one links.
+	QVector<Pass> built;
+	built.reserve(layers.size());
+	for (int i = 0; i < layers.size(); ++i) {
+		auto *prog = new QOpenGLShaderProgram();
+		QString log;
+		if (!prog->addShaderFromSourceCode(QOpenGLShader::Vertex, kVert))
+			log = prog->log();
+		else if (!prog->addShaderFromSourceCode(QOpenGLShader::Fragment, layers[i].wrapped))
+			log = prog->log();
+		else if (!prog->link())
+			log = prog->log();
+		if (!log.isEmpty()) {
+			delete prog;
+			for (Pass &p : built)
+				delete p.prog;
+			ctx_->doneCurrent();
+			error_ = log;
+			if (err)
+				*err = log;
+			return false;
+		}
+		built.append({prog, layers[i].defs});
 	}
 
-	delete prog_;
-	prog_ = prog;
-	params_ = params;
-	hasShader_ = true;
+	deletePasses();
+	passes_ = built;
 	error_.clear();
 	ctx_->doneCurrent();
 	if (err)
@@ -149,9 +172,32 @@ bool ShaderRenderer::setShader(const QString &wrappedGlsl, const QVector<ShaderP
 	return true;
 }
 
-QImage ShaderRenderer::apply(const QImage &src, float iTime, int iFrame, const QMap<QString, double> &params)
+void ShaderRenderer::ensureFbos(int w, int h)
 {
-	if (!glReady_ || !hasShader_ || !prog_ || src.isNull())
+	if (fbo_[0] && fboW_ == w && fboH_ == h)
+		return;
+	delete fbo_[0];
+	delete fbo_[1];
+	fbo_[0] = new QOpenGLFramebufferObject(w, h, QOpenGLFramebufferObject::NoAttachment, GL_TEXTURE_2D,
+					       GL_RGBA8);
+	fbo_[1] = new QOpenGLFramebufferObject(w, h, QOpenGLFramebufferObject::NoAttachment, GL_TEXTURE_2D,
+					       GL_RGBA8);
+	auto *f = ctx_->functions();
+	for (QOpenGLFramebufferObject *fb : fbo_) {
+		f->glBindTexture(GL_TEXTURE_2D, fb->texture());
+		f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	}
+	fboW_ = w;
+	fboH_ = h;
+}
+
+QImage ShaderRenderer::apply(const QImage &src, float iTime, int iFrame,
+			     const QVector<QMap<QString, double>> &perLayerParams)
+{
+	if (!glReady_ || passes_.isEmpty() || src.isNull())
 		return src;
 	if (!ctx_->makeCurrent(surface_))
 		return src;
@@ -159,17 +205,11 @@ QImage ShaderRenderer::apply(const QImage &src, float iTime, int iFrame, const Q
 	const int w = src.width();
 	const int h = src.height();
 	auto *f = ctx_->functions();
-
-	if (!fbo_ || fbo_->width() != w || fbo_->height() != h) {
-		delete fbo_;
-		fbo_ = new QOpenGLFramebufferObject(w, h, QOpenGLFramebufferObject::NoAttachment, GL_TEXTURE_2D,
-						    GL_RGBA8);
-	}
+	ensureFbos(w, h);
 
 	// Upload flipped vertically so the shader samples with the ShaderToy
 	// bottom-left origin; the FBO read-back (toImage) flips once more, so the
-	// final image comes back upright. (QImage::flipped() is Qt 6.9+; older Qt
-	// uses the pre-deprecation mirrored().)
+	// final image comes back upright. (QImage::flipped() is Qt 6.9+.)
 	const QImage rgba = src.convertToFormat(QImage::Format_RGBA8888);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
 	const QImage up = rgba.flipped(Qt::Vertical);
@@ -183,34 +223,44 @@ QImage ShaderRenderer::apply(const QImage &src, float iTime, int iFrame, const Q
 	f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-	fbo_->bind();
-	f->glViewport(0, 0, w, h);
-	f->glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-	f->glClear(GL_COLOR_BUFFER_BIT);
+	const int n = passes_.size();
+	int lastTarget = 0;
+	for (int i = 0; i < n; ++i) {
+		const unsigned int inputTex = (i == 0) ? tex_ : fbo_[(i - 1) % 2]->texture();
+		QOpenGLFramebufferObject *target = fbo_[i % 2];
+		lastTarget = i % 2;
 
-	prog_->bind();
-	prog_->setUniformValue("iResolution", QVector3D(float(w), float(h), 1.0f));
-	prog_->setUniformValue("iTime", iTime);
-	prog_->setUniformValue("iFrame", iFrame);
-	f->glActiveTexture(GL_TEXTURE0);
-	f->glBindTexture(GL_TEXTURE_2D, tex_);
-	prog_->setUniformValue("iChannel0", 0);
-	for (const ShaderParam &p : params_) {
-		const double v = params.value(p.uniform, p.def);
-		const QByteArray name = p.uniform.toUtf8();
-		if (p.type == ShaderParam::Type::Bool)
-			prog_->setUniformValue(name.constData(), v != 0.0);
-		else
-			prog_->setUniformValue(name.constData(), GLfloat(v));
+		target->bind();
+		f->glViewport(0, 0, w, h);
+		f->glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+		f->glClear(GL_COLOR_BUFFER_BIT);
+
+		Pass &p = passes_[i];
+		p.prog->bind();
+		p.prog->setUniformValue("iResolution", QVector3D(float(w), float(h), 1.0f));
+		p.prog->setUniformValue("iTime", iTime);
+		p.prog->setUniformValue("iFrame", iFrame);
+		f->glActiveTexture(GL_TEXTURE0);
+		f->glBindTexture(GL_TEXTURE_2D, inputTex);
+		p.prog->setUniformValue("iChannel0", 0);
+		const QMap<QString, double> &vals =
+			(i < perLayerParams.size()) ? perLayerParams[i] : QMap<QString, double>();
+		for (const ShaderParam &sp : p.defs) {
+			const double v = vals.value(sp.uniform, sp.def);
+			const QByteArray name = sp.uniform.toUtf8();
+			if (sp.type == ShaderParam::Type::Bool)
+				p.prog->setUniformValue(name.constData(), v != 0.0);
+			else
+				p.prog->setUniformValue(name.constData(), GLfloat(v));
+		}
+
+		vao_.bind();
+		f->glDrawArrays(GL_TRIANGLES, 0, 6);
+		vao_.release();
+		p.prog->release();
 	}
 
-	vao_.bind();
-	f->glDrawArrays(GL_TRIANGLES, 0, 6);
-	vao_.release();
-	prog_->release();
-
-	QImage out = fbo_->toImage(); // flips back to top-down, upright
-	fbo_->release();
+	QImage out = fbo_[lastTarget]->toImage(); // flips back to top-down, upright
 	ctx_->doneCurrent();
 	return out.convertToFormat(QImage::Format_RGBA8888);
 }

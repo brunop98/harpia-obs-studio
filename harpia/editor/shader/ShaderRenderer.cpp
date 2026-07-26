@@ -168,8 +168,14 @@ QImage ShaderRenderer::apply(const QImage &src, float iTime, int iFrame, const Q
 
 	// Upload flipped vertically so the shader samples with the ShaderToy
 	// bottom-left origin; the FBO read-back (toImage) flips once more, so the
-	// final image comes back upright.
-	const QImage up = src.convertToFormat(QImage::Format_RGBA8888).mirrored(false, true);
+	// final image comes back upright. (QImage::flipped() is Qt 6.9+; older Qt
+	// uses the pre-deprecation mirrored().)
+	const QImage rgba = src.convertToFormat(QImage::Format_RGBA8888);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
+	const QImage up = rgba.flipped(Qt::Vertical);
+#else
+	const QImage up = rgba.mirrored(false, true);
+#endif
 	f->glBindTexture(GL_TEXTURE_2D, tex_);
 	f->glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, up.constBits());
 	f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);

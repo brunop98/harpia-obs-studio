@@ -363,12 +363,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		syncPreviewTransformTarget();
 		updateInspector();
 	});
-	// "Show in inspector" from a clip's right-click menu.
-	connect(timelineView_, &TimelineView::inspectClipRequested, this, [this]() {
-		if (inspectorBtn_ && !inspectorBtn_->isChecked())
-			inspectorBtn_->setChecked(true); // reveals the panel
-		updateInspector();
-	});
+	// "Show in inspector" from a clip's right-click menu (any mode).
+	connect(timelineView_, &TimelineView::inspectClipRequested, this,
+		&VideoEditorWindow::revealInspector);
 	// Direct manipulation of the selected clip straight in the preview.
 	connect(canvas_, &PreviewCanvas::transformDragged, this,
 		&VideoEditorWindow::onPreviewTransformDrag);
@@ -789,6 +786,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(tracks_, &TrackEditor::segmentsChanged, this, &VideoEditorWindow::scheduleSnapshot);
 	connect(tracks_, &TrackEditor::selectionChanged, this, &VideoEditorWindow::onSegmentSelected);
 	connect(tracks_, &TrackEditor::autoCutRequested, this, &VideoEditorWindow::onAutoCut);
+	connect(tracks_, &TrackEditor::inspectRequested, this, &VideoEditorWindow::revealInspector);
 	connect(trimModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(EditMode::Trim); });
 	connect(cutModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(EditMode::MultiCut); });
 	connect(fullModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(EditMode::Full); });
@@ -2157,6 +2155,18 @@ void VideoEditorWindow::updateInfoLabel()
 				.arg(tracks_->totalOutputMs() / 1000.0, 0, 'f', 1);
 	}
 	infoLabel_->setText(text);
+}
+
+void VideoEditorWindow::revealInspector()
+{
+	// Open the side panel (the Inspector/Effects buttons mirror each other) and
+	// show the current selection's properties.
+	if (inspectorBtn_ && !inspectorBtn_->isChecked())
+		inspectorBtn_->setChecked(true);
+	else if (inspector_)
+		inspector_->setVisible(true);
+	updateInspector();
+	refreshProjectInspector();
 }
 
 void VideoEditorWindow::updateInspector()

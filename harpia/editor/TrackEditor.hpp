@@ -119,6 +119,7 @@ signals:
 	void scrubSource(qint64 ms);      // preview the source frame while interacting
 	void hoverScrub(qint64 ms);       // preview while merely hovering (no click)
 	void autoCutRequested();          // "Auto-cut on scene changes" from the source menu
+	void inspectRequested();          // "Show in inspector" from a cut's menu
 
 protected:
 	void paintEvent(QPaintEvent *) override;

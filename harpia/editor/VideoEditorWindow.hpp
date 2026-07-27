@@ -278,6 +278,7 @@ private:
 	QLabel *inspOutLen_ = nullptr;
 	QLabel *inspHint_ = nullptr;
 	void updateInspector(); // refresh the inspector from the current selection
+	void revealInspector(); // "Show in inspector": open the panel + refresh it
 	QString baseInfo_; // static file info; extended with cut stats in Multi-Cut
 
 	// ---- Full-editing clip inspector (transform + keyframes + text style) ----

@@ -1178,6 +1178,8 @@ void TrackEditor::showSegmentMenu(int index, const QPoint &globalPos, const QPoi
 			      splitSrcMs < seg.srcEndMs - kMinCutMs;
 
 	QMenu menu(this);
+	QAction *inspect = menu.addAction(QStringLiteral("Show in inspector"));
+	menu.addSeparator();
 	QAction *del = menu.addAction(group ? QStringLiteral("Delete %1 cuts").arg(n)
 					    : QStringLiteral("Delete cut"));
 	QAction *split = menu.addAction(QStringLiteral("Split here"));
@@ -1186,7 +1188,9 @@ void TrackEditor::showSegmentMenu(int index, const QPoint &globalPos, const QPoi
 	QAction *reset = menu.addAction(group ? QStringLiteral("Reset speed to 1× (%1 cuts)").arg(n)
 					      : QStringLiteral("Reset speed to 1×"));
 	QAction *chosen = menu.exec(globalPos);
-	if (chosen == split) {
+	if (chosen == inspect) {
+		emit inspectRequested();
+	} else if (chosen == split) {
 		splitSegment(index, splitSrcMs);
 	} else if (chosen == dup) {
 		// Insert an identical copy of this cut immediately to its right.

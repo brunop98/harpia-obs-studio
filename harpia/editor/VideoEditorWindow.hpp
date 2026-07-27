@@ -194,11 +194,12 @@ private:
 	EditMode mode() const;
 	bool multiCut() const;   // mode() == MultiCut
 	bool fullEdit() const;   // mode() == Full
-	// Full-mode timeline preview: resolve an output-time to the topmost video
-	// clip's (source, source-ms) and show it. Returns false if nothing is there.
+	// Full-mode timeline preview: composite every visible track at an output time
+	// and push the result (through the effect chain) into the preview canvas.
 	void onTimelineScrub(qint64 outMs);
 	void onTimelineHoverScrub(qint64 outMs);
-	bool timelineFrameAt(qint64 outMs, int *sourceId, qint64 *srcMs) const;
+	void showTimelineFrame(qint64 outMs);
+	QSize timelineCanvasSize() const; // primary source's resolution (fallback 1920x1080)
 	void addActiveSourceToTimeline(); // "Add to timeline" for the active source
 	void updateInfoLabel();
 	bool hasUnsavedEdits() const;

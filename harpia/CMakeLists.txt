@@ -168,6 +168,8 @@ target_sources(
     editor/timeline/TimelineModel.hpp
     editor/timeline/TimelineView.cpp
     editor/timeline/TimelineView.hpp
+    editor/timeline/TimelineCompositor.cpp
+    editor/timeline/TimelineCompositor.hpp
 )
 
 # Platform-specific idle detection + foreground-window backends.

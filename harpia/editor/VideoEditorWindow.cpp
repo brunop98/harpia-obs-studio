@@ -13,6 +13,7 @@
 #include "VoiceoverMixer.hpp"
 #include "VoiceoverTrack.hpp"
 #include "shader/ShaderRenderer.hpp"
+#include "timeline/TimelineCompositor.hpp"
 #include "timeline/TimelineView.hpp"
 
 #include <QCheckBox>
@@ -1119,26 +1120,34 @@ void VideoEditorWindow::addActiveSourceToTimeline()
 	updateInfoLabel();
 }
 
-bool VideoEditorWindow::timelineFrameAt(qint64 outMs, int *sourceId, qint64 *srcMs) const
+QSize VideoEditorWindow::timelineCanvasSize() const
 {
-	if (!timelineView_)
-		return false;
-	const TimelineModel &m = timelineView_->model();
-	// Topmost video track wins (later index = higher compositing z-order).
-	for (int ti = m.tracks.size() - 1; ti >= 0; --ti) {
-		const TlTrack &t = m.tracks[ti];
-		if (t.kind != TlTrack::Kind::Video)
-			continue;
-		const int ci = t.clipAt(outMs);
-		if (ci >= 0) {
-			if (sourceId)
-				*sourceId = t.clips[ci].sourceId;
-			if (srcMs)
-				*srcMs = t.clips[ci].srcAtOutput(outMs);
-			return true;
+	// The first source defines the output canvas (like the multi-source export).
+	if (!sources_.empty() && sources_.front().width > 0 && sources_.front().height > 0)
+		return QSize(sources_.front().width, sources_.front().height);
+	return QSize(1920, 1080);
+}
+
+void VideoEditorWindow::showTimelineFrame(qint64 outMs)
+{
+	if (!timelineView_ || !canvas_)
+		return;
+	// Feeds the compositor from the editor's per-source decoders (GUI thread).
+	struct Provider : TimelineCompositor::FrameProvider {
+		VideoEditorWindow *w = nullptr;
+		QImage frameFor(int sourceId, qint64 srcMs) override
+		{
+			FrameSeeker *fs = w->seekerFor(sourceId);
+			return fs ? fs->frameAt(srcMs, 1920, 1080) : QImage();
 		}
-	}
-	return false;
+	} fp;
+	fp.w = this;
+
+	const QSize canvasSize = timelineCanvasSize();
+	canvas_->setVideoSize(canvasSize.width(), canvasSize.height());
+	const QImage composed =
+		TimelineCompositor::compose(timelineView_->model(), outMs, canvasSize, fp);
+	setPreviewFrame(composed, outMs);
 }
 
 void VideoEditorWindow::onTimelineScrub(qint64 outMs)
@@ -1147,29 +1156,18 @@ void VideoEditorWindow::onTimelineScrub(qint64 outMs)
 		stopPlayback();
 	timelineView_->setPlayhead(outMs);
 	cursorTimeLabel_->setText(previewTimeText(outMs));
-	int sid = 0;
-	qint64 sm = 0;
-	if (timelineFrameAt(outMs, &sid, &sm)) {
-		pendingSource_ = sid;
-		pendingMs_ = sm;
-		previewTimer_->start();
-	} else {
-		lastPreviewRaw_ = QImage(); // gap → nothing showing through yet
-		canvas_->setFrame(QImage());
-	}
+	pendingSource_ = -1; // -1 = "composite the timeline" (see onPreviewTick)
+	pendingMs_ = outMs;
+	previewTimer_->start();
 }
 
 void VideoEditorWindow::onTimelineHoverScrub(qint64 outMs)
 {
 	if (playing_)
 		return;
-	int sid = 0;
-	qint64 sm = 0;
-	if (timelineFrameAt(outMs, &sid, &sm)) {
-		pendingSource_ = sid;
-		pendingMs_ = sm;
-		previewTimer_->start();
-	}
+	pendingSource_ = -1;
+	pendingMs_ = outMs;
+	previewTimer_->start();
 }
 
 void VideoEditorWindow::dragEnterEvent(QDragEnterEvent *e)
@@ -2298,18 +2296,7 @@ void VideoEditorWindow::onPlayTick()
 		}
 		timelineView_->setPlayhead(outPos);
 		cursorTimeLabel_->setText(previewTimeText(outPos));
-		int sid = 0;
-		qint64 sm = 0;
-		if (timelineFrameAt(outPos, &sid, &sm)) {
-			FrameSeeker *fs = seekerFor(sid);
-			if (fs) {
-				const QImage img = fs->frameAt(sm, 1280, 720);
-				if (!img.isNull())
-					setPreviewFrame(img, outPos);
-			}
-		} else {
-			canvas_->setFrame(QImage()); // gap
-		}
+		showTimelineFrame(outPos); // composites every visible track + text
 		return;
 	}
 
@@ -2715,8 +2702,14 @@ void VideoEditorWindow::refreshPreviewFrame()
 
 void VideoEditorWindow::onPreviewTick()
 {
-	if (pendingMs_ >= 0)
-		showFrame(pendingSource_, pendingMs_);
+	if (pendingMs_ >= 0) {
+		// pendingSource_ == -1 means "composite the whole timeline at this
+		// OUTPUT time" (Full editing); otherwise it's a single source frame.
+		if (pendingSource_ < 0)
+			showTimelineFrame(pendingMs_);
+		else
+			showFrame(pendingSource_, pendingMs_);
+	}
 	pendingMs_ = -1;
 }
 

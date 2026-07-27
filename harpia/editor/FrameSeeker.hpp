@@ -24,7 +24,12 @@ public:
 	FrameSeeker() = default;
 	~FrameSeeker();
 
-	bool open(const QString &path);
+	// fastThumbnails: for filmstrips, where "a frame from about here" is enough.
+	// Skips the deblocking filter and every non-reference frame, which is what
+	// makes seeking through long GOPs expensive — invisible at thumbnail size,
+	// and it can land a few frames off the request. Never use it for the
+	// preview, which must show the exact frame asked for.
+	bool open(const QString &path, bool fastThumbnails = false);
 	bool isOpen() const { return fmt_ != nullptr; }
 	void close();
 

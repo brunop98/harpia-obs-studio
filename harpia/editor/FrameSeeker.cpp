@@ -45,7 +45,7 @@ void FrameSeeker::close()
 	cacheW_ = cacheH_ = 0;
 }
 
-bool FrameSeeker::open(const QString &path)
+bool FrameSeeker::open(const QString &path, bool fastThumbnails)
 {
 	close();
 	const QByteArray p = path.toUtf8();
@@ -72,6 +72,18 @@ bool FrameSeeker::open(const QString &path)
 		return false;
 	}
 	dec_->pkt_timebase = st->time_base;
+	// Decode across cores. A seek lands on the previous keyframe and then has to
+	// roll forward to the target — up to a whole GOP — so single-threaded decode
+	// dominated both filmstrip generation and scrub latency.
+	dec_->thread_count = 0; // 0 = pick from the CPU
+	dec_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+	if (fastThumbnails) {
+		// A filmstrip tile is ~128px wide, so the deblocking filter and the
+		// non-reference frames contribute nothing visible to it.
+		dec_->skip_loop_filter = AVDISCARD_ALL;
+		dec_->skip_frame = AVDISCARD_NONREF;
+		dec_->flags2 |= AV_CODEC_FLAG2_FAST;
+	}
 	if (avcodec_open2(dec_, codec, nullptr) < 0) {
 		close();
 		return false;

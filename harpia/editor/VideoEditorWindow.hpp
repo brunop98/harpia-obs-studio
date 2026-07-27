@@ -241,6 +241,9 @@ private:
 	void applySelectedClipTransform(const TlTransform &tf);
 	void syncPreviewTransformTarget(); // arm/disarm + refresh the outline
 	qint64 timelinePlayheadMs() const;
+	// Playhead clamped inside the selected clip: where an edit applies AND is
+	// previewed, so the two can never disagree.
+	qint64 timelineEditMs() const;
 	bool autoKeyframe_ = false; // record a keyframe on every transform edit
 	void updateInfoLabel();
 	bool hasUnsavedEdits() const;
@@ -371,6 +374,9 @@ private:
 	QLabel *scriptError_ = nullptr;
 	QFileSystemWatcher *scriptWatch_ = nullptr;
 	QString scriptsDir_;
+	// Set whenever the timeline or the compiled set changes; makes the per-frame
+	// "is every script compiled?" sweep run on change instead of every frame.
+	bool scriptScanDirty_ = true;
 	QHash<QString, QVector<ShaderParam>> scriptParamDefs_; // per script name
 	// Which script scriptParamBox_ currently holds controls for, and handles on
 	// those controls. Keeping them lets a refresh update values in place instead

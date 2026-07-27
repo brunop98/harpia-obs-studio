@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QImage>
 #include <QObject>
 #include <QString>
@@ -32,6 +33,7 @@ signals:
 
 private:
 	QVector<QImage> thumbs_;
+	QElapsedTimer lastEmit_; // GUI thread only: coalesces the updated() signal
 	std::thread worker_;
 	std::atomic<bool> abort_{false};
 };

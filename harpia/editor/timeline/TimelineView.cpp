@@ -34,6 +34,9 @@ const QColor kTextFill(0x4a, 0x3a, 0x5e);
 const QColor kTextFillSel(0x6b, 0x51, 0x8c);
 const QColor kWave(0x6f, 0xd0, 0xb0);
 const QColor kPlayhead(0xe5, 0x48, 0x4d);
+// Distinct from the playhead on purpose: the hover marker is where the PREVIEW
+// is looking right now, which is not where an edit will land.
+const QColor kHover(0xf5, 0xc0, 0x42);
 } // namespace
 
 TimelineView::TimelineView(QWidget *parent) : QWidget(parent)
@@ -585,6 +588,21 @@ void TimelineView::drawRuler(QPainter &p) const
 	}
 }
 
+void TimelineView::ensureFonts() const
+{
+	if (fontsForPx_ == lp_.segFontPx)
+		return;
+	fontsForPx_ = lp_.segFontPx;
+	hdrFont_ = font();
+	hdrFont_.setPixelSize(11);
+	hdrFont_.setBold(true);
+	toggleFont_ = font();
+	toggleFont_.setPixelSize(11);
+	toggleFont_.setBold(false);
+	clipFont_ = font();
+	clipFont_.setPixelSize(std::max(6, lp_.segFontPx));
+}
+
 void TimelineView::drawClip(QPainter &p, int track, int clip) const
 {
 	const TlTrack &t = model_.tracks[track];
@@ -594,6 +612,12 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	const bool video = t.kind == TlTrack::Kind::Video && !isText && !isImage;
 	const bool sel = (track == selTrack_ && clip == selClip_);
 	const QRect r = clipRect(track, clip);
+	// Scrolled-away clips cost the same as visible ones otherwise: the painter
+	// clips the output, but the filmstrip tiling and the per-pixel waveform loop
+	// below still run in full. On a long timeline that is most of the paint.
+	const QRect content = contentRect();
+	if (r.right() < content.x() || r.x() > content.right())
+		return;
 	QPainterPath path;
 	path.addRoundedRect(r, 4, 4);
 	p.setPen(Qt::NoPen);
@@ -620,7 +644,13 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 			const double aspect = srcAspect_.value(c.sourceId, 16.0 / 9.0);
 			const int th = r.height() - 2;
 			const int tileW = std::max(8, int(th * aspect));
-			for (int x = r.x() + 1; x < r.right() - 1; x += tileW + 1) {
+			// Start at the first tile at or before the visible edge (tiles must stay
+			// on their original grid, or they'd shift as the view scrolls).
+			const int x0 = r.x() + 1;
+			const int step = tileW + 1;
+			const int firstVis = x0 + std::max(0, (content.x() - x0) / step) * step;
+			const int lastVis = std::min(r.right() - 1, content.right() + step);
+			for (int x = firstVis; x < lastVis; x += step) {
 				const double f =
 					std::clamp(double(x + tileW / 2 - r.x()) / std::max(1, r.width()),
 						   0.0, 1.0);
@@ -636,7 +666,9 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 		const int midY = r.center().y();
 		const int halfH = r.height() / 2 - 3;
 		const qint64 total = std::max<qint64>(1, srcThumbDur_.value(c.sourceId, c.srcEndMs));
-		for (int x = r.left() + 1; x < r.right() - 1; ++x) {
+		const int wx0 = std::max(r.left() + 1, content.x());
+		const int wx1 = std::min(r.right() - 1, content.right() + 1);
+		for (int x = wx0; x < wx1; ++x) {
 			const double tt = double(x - r.left()) / std::max(1, r.width());
 			const double srcFrac = double(c.srcStartMs + tt * c.srcLenMs()) / double(total);
 			const int b = std::clamp<int>(int(srcFrac * c.peaks.size()), 0, c.peaks.size() - 1);
@@ -668,9 +700,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 
 	// Label bar along the bottom.
 	if (!dragging && r.width() >= 28) {
-		QFont sf = p.font();
-		sf.setPixelSize(std::max(6, lp_.segFontPx));
-		p.setFont(sf);
+		p.setFont(clipFont_);
 		p.fillRect(QRect(r.x(), r.bottom() - 12, r.width(), 13), QColor(0, 0, 0, 150));
 		p.setPen(QColor(0xe6, 0xe6, 0xe6));
 		QString what;
@@ -702,6 +732,7 @@ void TimelineView::paintEvent(QPaintEvent *)
 
 	clampView();
 	viewTarget_ = viewStart_;
+	ensureFonts();
 
 	const bool dragging = (mode_ == Mode::Move && dragMoved_);
 
@@ -728,18 +759,12 @@ void TimelineView::paintEvent(QPaintEvent *)
 		p.drawRect(QRect(hdr.x(), hdr.y() + 1, 4, hdr.height() - 2));
 
 		p.setPen((t.hidden || t.muted) ? kCaption : QColor(0xe8, 0xea, 0xed));
-		QFont hf = p.font();
-		hf.setPixelSize(11);
-		hf.setBold(true);
-		p.setFont(hf);
+		p.setFont(hdrFont_);
 		p.drawText(hdr.adjusted(10, 2, -4, 0), Qt::AlignTop | Qt::AlignLeft, t.name);
 
 		// Lock / hide / mute toggles (hidden while dragging to cut clutter).
 		if (!dragging) {
-			QFont gf = p.font();
-			gf.setPixelSize(11);
-			gf.setBold(false);
-			p.setFont(gf);
+			p.setFont(toggleFont_);
 			auto drawToggle = [&](HeaderHit which, const QString &glyph, bool on) {
 				const QRect r = headerToggleRect(i, which);
 				if (r.isEmpty())
@@ -785,6 +810,37 @@ void TimelineView::paintEvent(QPaintEvent *)
 	}
 
 	drawRuler(p);
+
+	// Hover marker: while the pointer is over a clip the preview follows it
+	// rather than the playhead, which is otherwise invisible and reads as the
+	// preview having jumped on its own. Dashed and amber so it can't be mistaken
+	// for the playhead — an edit still lands at the playhead, not here.
+	if (hoverMs_ >= 0 && !dragging) {
+		const int hx = msToX(hoverMs_);
+		const QRect c = contentRect();
+		if (hx >= c.x() - 1 && hx <= c.right() + 1) {
+			QPen hp(kHover, 1, Qt::DashLine);
+			p.setPen(hp);
+			p.drawLine(hx, lp_.margin, hx, height() - lp_.margin);
+
+			const qint64 mm = hoverMs_ / 60000, ss = (hoverMs_ / 1000) % 60,
+				     cs = (hoverMs_ % 1000) / 10;
+			const QString lab = QStringLiteral("%1:%2.%3")
+						    .arg(mm)
+						    .arg(ss, 2, 10, QLatin1Char('0'))
+						    .arg(cs, 2, 10, QLatin1Char('0'));
+			p.setFont(toggleFont_);
+			const int tw = p.fontMetrics().horizontalAdvance(lab) + 8;
+			// Flip the tag to the left near the right edge so it stays readable.
+			const bool flip = hx + tw + 2 > c.right();
+			const QRect tag(flip ? hx - tw - 2 : hx + 2, lp_.margin + 1, tw, 14);
+			p.setPen(Qt::NoPen);
+			p.setBrush(kHover);
+			p.drawRoundedRect(tag, 2, 2);
+			p.setPen(QColor(0x15, 0x17, 0x1a));
+			p.drawText(tag, Qt::AlignCenter, lab);
+		}
+	}
 
 	// Playhead across all lanes.
 	if (playheadMs_ >= 0) {
@@ -974,11 +1030,16 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 			const qint64 om = xToMs(pos.x());
 			if (om != hoverMs_) {
 				hoverMs_ = om;
+				update(); // move the hover marker with the mouse
 				emit hoverScrub(om);
 			}
 		}
 	} else {
 		unsetCursor();
+		if (hoverMs_ >= 0) { // off the clips: the preview is no longer following
+			hoverMs_ = -1;
+			update();
+		}
 	}
 }
 
@@ -1085,6 +1146,7 @@ void TimelineView::keyPressEvent(QKeyEvent *e)
 void TimelineView::leaveEvent(QEvent *)
 {
 	hoverMs_ = -1;
+	update(); // drop the hover marker
 }
 
 void TimelineView::deleteSelected()

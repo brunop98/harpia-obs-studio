@@ -360,6 +360,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(timelineView_, &TimelineView::clipsChanged, this, [this]() {
 		updateInfoLabel();
 		syncPreviewTransformTarget();
+		scriptScanDirty_ = true;
 		// Moving or trimming a clip on the timeline changes where the playhead
 		// falls inside it, so the pose and keyframe readout the Inspector shows
 		// have to follow along live.
@@ -1436,7 +1437,10 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 
 	// Any clip script that hasn't been compiled in this evaluator yet (e.g. after
 	// loading a project) is brought up before the frame is composed.
-	if (scriptEval_) {
+	// Only worth walking when the timeline actually changed — this is every clip
+	// times every script in its stack, and it ran on every single frame.
+	if (scriptEval_ && scriptScanDirty_) {
+		scriptScanDirty_ = false;
 		for (const TlTrack &t : timelineView_->model().tracks)
 			for (const TlClip &c : t.clips)
 				for (const TlScript &s : c.scripts)
@@ -1712,6 +1716,7 @@ void VideoEditorWindow::reloadScriptsFromDisk()
 	for (const QString &n : scriptParamDefs_.keys())
 		scriptEval_->forget(n);
 	scriptParamDefs_.clear();
+	scriptScanDirty_ = true; // everything must be recompiled on the next frame
 	QString err;
 	if (const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr; c)
 		for (const TlScript &sc : c->scripts)
@@ -2334,7 +2339,12 @@ void VideoEditorWindow::editSelectedClip(const std::function<void(TlClip &)> &fn
 	fn(c);
 	timelineView_->updateSelectedClip(c);
 	syncPreviewTransformTarget();
-	showTimelineFrame(timelinePlayheadMs());
+	// Park the playhead where the edit actually applies, so the preview shows
+	// the clip being changed instead of whatever (or nothing) is at the raw
+	// playhead, and the marker agrees with what is on screen.
+	const qint64 at = timelineEditMs();
+	timelineView_->setPlayhead(at);
+	showTimelineFrame(at);
 	syncClipInspector();
 	scheduleSnapshot();
 }
@@ -2486,6 +2496,22 @@ qint64 VideoEditorWindow::timelinePlayheadMs() const
 	return std::max<qint64>(0, timelineView_->playhead());
 }
 
+// The time an edit to the selected clip should be seen at.
+//
+// Edits land at the playhead, but the playhead need not be inside the clip
+// being edited — it starts at 0, and hovering previews a time without moving
+// it. Rendering the raw playhead then showed a moment the clip does not cover,
+// i.e. a black frame, while the edit itself was clamped into the clip. Clamping
+// both to the same instant means you always see the clip you are changing.
+qint64 VideoEditorWindow::timelineEditMs() const
+{
+	const qint64 ph = timelinePlayheadMs();
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!sel)
+		return ph;
+	return std::clamp<qint64>(ph, sel->outStartMs, std::max(sel->outStartMs, sel->outEndMs() - 1));
+}
+
 void VideoEditorWindow::syncPreviewTransformTarget()
 {
 	if (!canvas_ || !timelineView_)
@@ -2526,7 +2552,7 @@ void VideoEditorWindow::applySelectedClipTransform(const TlTransform &tf)
 	// Keyframed clips (or auto-key) record the pose at the playhead so the zoom
 	// animates; otherwise the clip's static pose moves.
 	if (autoKeyframe_ || !c.keys.isEmpty()) {
-		const qint64 ph = std::clamp<qint64>(timelinePlayheadMs(), c.outStartMs, c.outEndMs());
+		const qint64 ph = timelineEditMs();
 		if (c.keys.isEmpty()) {
 			// Seed the animation with the current static pose at the clip start so
 			// the first recorded key doesn't snap the whole clip.
@@ -2541,7 +2567,9 @@ void VideoEditorWindow::applySelectedClipTransform(const TlTransform &tf)
 	}
 	timelineView_->updateSelectedClip(c);
 	syncPreviewTransformTarget();
-	showTimelineFrame(timelinePlayheadMs());
+	const qint64 at = timelineEditMs();
+	timelineView_->setPlayhead(at);
+	showTimelineFrame(at);
 	// Dragging in the preview is an edit like any other, so the Inspector's
 	// position/zoom/rotation must track the mouse rather than going stale until
 	// the next reselect.
@@ -3852,6 +3880,7 @@ void VideoEditorWindow::restoreSnapshot(const EditorSnapshot &s)
 {
 	restoring_ = true;
 	stopPlayback();
+	scriptScanDirty_ = true; // the whole timeline is being swapped out
 
 	tracks_->setSegments(s.segments);
 

@@ -2,6 +2,8 @@
 
 #include "TimelineModel.hpp"
 
+#include <QFont>
+
 #include <QHash>
 #include <QImage>
 #include <QPixmap>
@@ -105,6 +107,14 @@ private:
 	qint64 xToMs(int x) const;
 	QRect clipRect(int track, int clip) const;
 	void clampView();
+	// Fonts used by the paint path, built once instead of per track and per clip
+	// (constructing a QFont and calling setFont re-resolves it every time).
+	void ensureFonts() const;
+	mutable QFont hdrFont_;    // track name
+	mutable QFont toggleFont_; // L/H/M chips
+	mutable QFont clipFont_;   // clip label bar
+	mutable int fontsForPx_ = -1; // segFontPx the cached fonts were built for
+
 	void drawRuler(QPainter &p) const;
 	void drawClip(QPainter &p, int track, int clip) const;
 

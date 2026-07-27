@@ -7,6 +7,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPainterPathStroker>
+#include <QHash>
 #include <QStringList>
 
 #include <algorithm>
@@ -30,6 +31,35 @@ QFont buildFont(const TlText &t, QSize canvas)
 	f.setItalic(t.italic);
 	return f;
 }
+
+// Building a text path means shaping every glyph into outlines, and the outline
+// pass runs a QPainterPathStroker over the result — easily the most expensive
+// thing in a frame containing a caption, and it produced an identical path on
+// every frame. Cache both against everything they depend on. A caption's style
+// changes at human speed, so a handful of entries covers any real timeline.
+struct TextPathKey {
+	QString text, family;
+	int px = 0, align = 0, canvasH = 0;
+	bool bold = false, italic = false;
+
+	bool operator==(const TextPathKey &o) const
+	{
+		return text == o.text && family == o.family && px == o.px && align == o.align &&
+		       canvasH == o.canvasH && bold == o.bold && italic == o.italic;
+	}
+};
+
+size_t qHash(const TextPathKey &k, size_t seed = 0)
+{
+	return qHashMulti(seed, k.text, k.family, k.px, k.align, k.canvasH, k.bold, k.italic);
+}
+
+struct CachedText {
+	QPainterPath path;
+	QRectF block;
+	double strokeWidth = -1.0; // what `stroke` was built for (<0 = not built)
+	QPainterPath stroke;
+};
 
 QStringList textLines(const TlText &t)
 {
@@ -68,13 +98,37 @@ QPainterPath buildTextPath(const TlText &t, const QFont &f, QRectF *blockOut)
 	return path;
 }
 
+// The cache is per-thread: the preview composes on the GUI thread and the
+// exporter on its worker, and QPainterPath is not shared safely between them.
+CachedText &cachedText(const TlText &t, const QFont &f, QSize canvas)
+{
+	static thread_local QHash<TextPathKey, CachedText> cache;
+	TextPathKey k;
+	k.text = t.text;
+	k.family = t.fontFamily;
+	k.px = f.pixelSize();
+	k.align = t.align;
+	k.canvasH = canvas.height();
+	k.bold = t.bold;
+	k.italic = t.italic;
+
+	auto it = cache.find(k);
+	if (it == cache.end()) {
+		if (cache.size() > 64)
+			cache.clear(); // bounded; captions change at human speed
+		CachedText ct;
+		ct.path = buildTextPath(t, f, &ct.block);
+		it = cache.insert(k, ct);
+	}
+	return it.value();
+}
+
 } // namespace
 
 QSize TimelineCompositor::textNaturalSize(const TlText &t, QSize canvas)
 {
 	const QFont f = buildFont(t, canvas);
-	QRectF block;
-	buildTextPath(t, f, &block);
+	const QRectF block = cachedText(t, f, canvas).block;
 	const double pad = t.boxEnabled ? t.boxPadding * 2.0 : 0.0;
 	return QSize(std::max(1, int(std::ceil(block.width() + pad))),
 		     std::max(1, int(std::ceil(block.height() + pad))));
@@ -102,8 +156,9 @@ void TimelineCompositor::drawTextClip(QPainter &p, const TlClip &c, const TlTran
 	if (t.text.isEmpty())
 		return;
 	const QFont f = buildFont(t, canvas);
-	QRectF block;
-	const QPainterPath path = buildTextPath(t, f, &block);
+	CachedText &ct = cachedText(t, f, canvas);
+	const QPainterPath &path = ct.path;
+	const QRectF &block = ct.block;
 
 	p.save();
 	p.setOpacity(std::clamp(tf.opacity, 0.0, 1.0));
@@ -122,11 +177,15 @@ void TimelineCompositor::drawTextClip(QPainter &p, const TlClip &c, const TlTran
 		p.drawRoundedRect(box, t.boxRadius, t.boxRadius);
 	}
 	if (t.outlineWidth > 0.01) {
-		QPainterPathStroker stroker;
-		stroker.setWidth(t.outlineWidth * 2.0); // stroke straddles the glyph edge
-		stroker.setJoinStyle(Qt::RoundJoin);
-		stroker.setCapStyle(Qt::RoundCap);
-		p.fillPath(stroker.createStroke(path), t.outlineColor);
+		if (ct.strokeWidth != t.outlineWidth) {
+			QPainterPathStroker stroker;
+			stroker.setWidth(t.outlineWidth * 2.0); // straddles the glyph edge
+			stroker.setJoinStyle(Qt::RoundJoin);
+			stroker.setCapStyle(Qt::RoundCap);
+			ct.stroke = stroker.createStroke(path);
+			ct.strokeWidth = t.outlineWidth;
+		}
+		p.fillPath(ct.stroke, t.outlineColor);
 	}
 	p.fillPath(path, t.color);
 	p.restore();

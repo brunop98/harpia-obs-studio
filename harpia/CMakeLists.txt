@@ -164,6 +164,10 @@ target_sources(
     editor/shader/ShaderEffect.hpp
     editor/shader/ShaderRenderer.cpp
     editor/shader/ShaderRenderer.hpp
+    # "Full editing" multi-track NLE timeline.
+    editor/timeline/TimelineModel.hpp
+    editor/timeline/TimelineView.cpp
+    editor/timeline/TimelineView.hpp
 )
 
 # Platform-specific idle detection + foreground-window backends.

@@ -79,6 +79,7 @@ class TimelineThumbs;
 class ClipExporter;
 class ThumbnailCache;
 class ShaderRenderer;
+class TimelineView;
 
 // One video the editor can cut from. The first source is the file the editor
 // was launched on; more are added via the sidebar / drag-and-drop. Each owns
@@ -187,8 +188,18 @@ private:
 	void joinExport();
 	void startPlayback();
 	void stopPlayback();
-	void setEditMode(bool multiCut);
-	bool multiCut() const;
+	// The three editor modes map 1:1 onto stack_ page indices.
+	enum class EditMode { Trim = 0, MultiCut = 1, Full = 2 };
+	void setEditMode(EditMode mode);
+	EditMode mode() const;
+	bool multiCut() const;   // mode() == MultiCut
+	bool fullEdit() const;   // mode() == Full
+	// Full-mode timeline preview: resolve an output-time to the topmost video
+	// clip's (source, source-ms) and show it. Returns false if nothing is there.
+	void onTimelineScrub(qint64 outMs);
+	void onTimelineHoverScrub(qint64 outMs);
+	bool timelineFrameAt(qint64 outMs, int *sourceId, qint64 *srcMs) const;
+	void addActiveSourceToTimeline(); // "Add to timeline" for the active source
 	void updateInfoLabel();
 	bool hasUnsavedEdits() const;
 
@@ -220,10 +231,16 @@ private:
 	PreviewCanvas *canvas_ = nullptr;
 	Timeline *timeline_ = nullptr;
 	TrackEditor *tracks_ = nullptr;
+	TimelineView *timelineView_ = nullptr; // "Full editing" multi-track timeline
 	QStackedWidget *stack_ = nullptr;
 	QPushButton *trimModeBtn_ = nullptr;
 	QPushButton *cutModeBtn_ = nullptr;
+	QPushButton *fullModeBtn_ = nullptr;
 	QCheckBox *cropToggle_ = nullptr;
+	QPushButton *audioHeader_ = nullptr; // voiceover disclosure (hidden in Full mode)
+	QWidget *audioBody_ = nullptr;
+	bool audioExpandedBeforeFull_ = false; // restore audio foldout when leaving Full
+	bool timelineSeeded_ = false;          // seeded the timeline with the first source once
 	DevPanel *devPanel_ = nullptr; // lazily created, non-modal
 	QLabel *infoLabel_ = nullptr;
 	QLabel *cursorTimeLabel_ = nullptr; // preview time under the cursor/playhead

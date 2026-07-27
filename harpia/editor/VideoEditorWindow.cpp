@@ -13,6 +13,7 @@
 #include "VoiceoverMixer.hpp"
 #include "VoiceoverTrack.hpp"
 #include "shader/ShaderRenderer.hpp"
+#include "timeline/TimelineView.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -163,21 +164,29 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	cutModeBtn_->setToolTip(QStringLiteral(
 		"Drag on the Source track to select the sections to keep; they are joined in order. "
 		"Each cut gets its own playback speed."));
+	fullModeBtn_ = new QPushButton(QStringLiteral("Full Editing"), this);
+	fullModeBtn_->setCheckable(true);
+	fullModeBtn_->setToolTip(QStringLiteral(
+		"Multi-track timeline: place clips on stacked video/audio tracks, with overlays, "
+		"picture-in-picture and gaps (like a full video editor)."));
 	auto *modeGroup = new QButtonGroup(this);
 	modeGroup->setExclusive(true); // only one mode active; can't un-check both
 	modeGroup->addButton(trimModeBtn_);
 	modeGroup->addButton(cutModeBtn_);
+	modeGroup->addButton(fullModeBtn_);
 	// Segmented look: shared fill, joined borders, accent on the active segment.
 	const QString segBase = QStringLiteral(
 		"QPushButton{background:#2b2f36;color:#c8ccd4;border:1px solid #3a3f47;padding:5px 14px;}"
 		"QPushButton:checked{background:#3d7eff;color:#ffffff;border-color:#3d7eff;}");
 	trimModeBtn_->setStyleSheet(segBase + QStringLiteral("QPushButton{border-right:none;}"));
-	cutModeBtn_->setStyleSheet(segBase);
+	cutModeBtn_->setStyleSheet(segBase + QStringLiteral("QPushButton{border-right:none;}"));
+	fullModeBtn_->setStyleSheet(segBase);
 	auto *segBox = new QHBoxLayout;
-	segBox->setSpacing(0); // no gap — the two segments read as one control
+	segBox->setSpacing(0); // no gap — the segments read as one control
 	segBox->setContentsMargins(0, 0, 0, 0);
 	segBox->addWidget(trimModeBtn_);
 	segBox->addWidget(cutModeBtn_);
+	segBox->addWidget(fullModeBtn_);
 	bar->addLayout(segBox);
 	bar->addSpacing(12);
 
@@ -325,15 +334,25 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 
 	timeline_ = new Timeline(this);
 	tracks_ = new TrackEditor(this);
+	timelineView_ = new TimelineView(this);
 	stack_ = new QStackedWidget(this);
-	stack_->addWidget(timeline_); // index 0 = Simple Trim
-	stack_->addWidget(tracks_);   // index 1 = Multi-Cut
+	stack_->addWidget(timeline_);      // index 0 = Simple Trim
+	stack_->addWidget(tracks_);        // index 1 = Multi-Cut
+	stack_->addWidget(timelineView_);  // index 2 = Full Editing
 	bottomLayout->addWidget(stack_);
+
+	connect(timelineView_, &TimelineView::scrub, this, &VideoEditorWindow::onTimelineScrub);
+	connect(timelineView_, &TimelineView::hoverScrub, this, &VideoEditorWindow::onTimelineHoverScrub);
+	connect(timelineView_, &TimelineView::clipsChanged, this, [this]() {
+		updateInfoLabel();
+		scheduleSnapshot();
+	});
 
 	// ---- Voiceover: a collapsible narration section (record over the video).
 	// Collapsed by default so detailed cut work keeps the vertical space; the
 	// expand/collapse state is remembered across launches.
 	auto *audioHeader = new QPushButton(this);
+	audioHeader_ = audioHeader;
 	audioHeader->setFlat(true);
 	audioHeader->setCursor(Qt::PointingHandCursor);
 	audioHeader->setStyleSheet(QStringLiteral(
@@ -342,6 +361,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	bottomLayout->addWidget(audioHeader);
 
 	auto *audioBody = new QWidget(this);
+	audioBody_ = audioBody;
 	auto *audioLayout = new QVBoxLayout(audioBody);
 	audioLayout->setContentsMargins(0, 0, 0, 0);
 
@@ -717,8 +737,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(tracks_, &TrackEditor::segmentsChanged, this, &VideoEditorWindow::scheduleSnapshot);
 	connect(tracks_, &TrackEditor::selectionChanged, this, &VideoEditorWindow::onSegmentSelected);
 	connect(tracks_, &TrackEditor::autoCutRequested, this, &VideoEditorWindow::onAutoCut);
-	connect(trimModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(false); });
-	connect(cutModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(true); });
+	connect(trimModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(EditMode::Trim); });
+	connect(cutModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(EditMode::MultiCut); });
+	connect(fullModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(EditMode::Full); });
 	connect(cropToggle_, &QCheckBox::toggled, this, &VideoEditorWindow::onCropToggled);
 	connect(cropToggle_, &QCheckBox::toggled, this, [this]() { scheduleSnapshot(); });
 	connect(canvas_, &PreviewCanvas::cropChanged, this, [this]() { scheduleSnapshot(); });
@@ -874,6 +895,8 @@ int VideoEditorWindow::addSource(const QString &path)
 		// Every source feeds the Output track so its cuts render from their own
 		// frames; the active source also drives the Source track + Simple-Trim.
 		tracks_->setSourceThumbs(id, s->thumbCache, s->durationMs);
+		if (timelineView_)
+			timelineView_->setSourceThumbs(id, s->thumbCache, s->durationMs);
 		if (id == activeSourceId_) {
 			timeline_->setThumbs(s->thumbCache);
 			tracks_->setThumbs(s->thumbCache);
@@ -1055,9 +1078,20 @@ void VideoEditorWindow::onSourceDoubleClicked(QListWidgetItem *item)
 	EditorSource *s = sourceById(id);
 	if (!s || s->durationMs <= 0)
 		return;
-	// Drop the whole clip onto the Output track as one cut — a fast rough mix.
+	// In Full editing, append the whole clip to the end of the timeline's video
+	// track; otherwise drop it onto the Multi-Cut Output track as one cut.
+	if (fullEdit()) {
+		TlClip c;
+		c.sourceId = id;
+		c.srcStartMs = 0;
+		c.srcEndMs = s->durationMs;
+		c.outStartMs = timelineView_->durationMs();
+		timelineView_->addClip(TlTrack::Kind::Video, c);
+		updateInfoLabel();
+		return;
+	}
 	if (!multiCut())
-		setEditMode(true);
+		setEditMode(EditMode::MultiCut);
 	CutSegment c;
 	c.srcStartMs = 0;
 	c.srcEndMs = s->durationMs;
@@ -1067,6 +1101,75 @@ void VideoEditorWindow::onSourceDoubleClicked(QListWidgetItem *item)
 	updateInfoLabel();
 	updateInspector();
 	scheduleSnapshot();
+}
+
+void VideoEditorWindow::addActiveSourceToTimeline()
+{
+	EditorSource *s = activeSource();
+	if (!s || s->durationMs <= 0 || !timelineView_)
+		return;
+	TlClip c;
+	c.sourceId = s->id;
+	c.srcStartMs = 0;
+	c.srcEndMs = s->durationMs;
+	c.outStartMs = timelineView_->durationMs();
+	timelineView_->addClip(TlTrack::Kind::Video, c);
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	updateInfoLabel();
+}
+
+bool VideoEditorWindow::timelineFrameAt(qint64 outMs, int *sourceId, qint64 *srcMs) const
+{
+	if (!timelineView_)
+		return false;
+	const TimelineModel &m = timelineView_->model();
+	// Topmost video track wins (later index = higher compositing z-order).
+	for (int ti = m.tracks.size() - 1; ti >= 0; --ti) {
+		const TlTrack &t = m.tracks[ti];
+		if (t.kind != TlTrack::Kind::Video)
+			continue;
+		const int ci = t.clipAt(outMs);
+		if (ci >= 0) {
+			if (sourceId)
+				*sourceId = t.clips[ci].sourceId;
+			if (srcMs)
+				*srcMs = t.clips[ci].srcAtOutput(outMs);
+			return true;
+		}
+	}
+	return false;
+}
+
+void VideoEditorWindow::onTimelineScrub(qint64 outMs)
+{
+	if (playing_)
+		stopPlayback();
+	timelineView_->setPlayhead(outMs);
+	cursorTimeLabel_->setText(previewTimeText(outMs));
+	int sid = 0;
+	qint64 sm = 0;
+	if (timelineFrameAt(outMs, &sid, &sm)) {
+		pendingSource_ = sid;
+		pendingMs_ = sm;
+		previewTimer_->start();
+	} else {
+		lastPreviewRaw_ = QImage(); // gap → nothing showing through yet
+		canvas_->setFrame(QImage());
+	}
+}
+
+void VideoEditorWindow::onTimelineHoverScrub(qint64 outMs)
+{
+	if (playing_)
+		return;
+	int sid = 0;
+	qint64 sm = 0;
+	if (timelineFrameAt(outMs, &sid, &sm)) {
+		pendingSource_ = sid;
+		pendingMs_ = sm;
+		previewTimer_->start();
+	}
 }
 
 void VideoEditorWindow::dragEnterEvent(QDragEnterEvent *e)
@@ -1136,9 +1239,19 @@ bool VideoEditorWindow::eventFilter(QObject *watched, QEvent *e)
 	return QDialog::eventFilter(watched, e);
 }
 
+VideoEditorWindow::EditMode VideoEditorWindow::mode() const
+{
+	return stack_ ? EditMode(stack_->currentIndex()) : EditMode::Trim;
+}
+
 bool VideoEditorWindow::multiCut() const
 {
-	return stack_ && stack_->currentIndex() == 1;
+	return mode() == EditMode::MultiCut;
+}
+
+bool VideoEditorWindow::fullEdit() const
+{
+	return mode() == EditMode::Full;
 }
 
 bool VideoEditorWindow::hasUnsavedEdits() const
@@ -1155,6 +1268,8 @@ bool VideoEditorWindow::hasUnsavedEdits() const
 		return true;
 	if (voTrack_ && !voTrack_->isEmpty())
 		return true; // recorded narration would be lost
+	if (timelineView_ && !timelineView_->model().isEmpty())
+		return true; // Full-editing timeline in progress
 	return false;
 }
 
@@ -1182,20 +1297,59 @@ void VideoEditorWindow::reject()
 	QDialog::reject();
 }
 
-void VideoEditorWindow::setEditMode(bool cut)
+void VideoEditorWindow::setEditMode(EditMode m)
 {
 	stopPlayback();
-	trimModeBtn_->setChecked(!cut);
-	cutModeBtn_->setChecked(cut);
-	stack_->setCurrentIndex(cut ? 1 : 0);
-	if (cut) {
+	const bool wasFull = fullEdit();
+	trimModeBtn_->setChecked(m == EditMode::Trim);
+	cutModeBtn_->setChecked(m == EditMode::MultiCut);
+	fullModeBtn_->setChecked(m == EditMode::Full);
+	stack_->setCurrentIndex(int(m));
+
+	// The speed control and the separate Voiceover foldout only apply to Trim /
+	// Multi-Cut; Full editing puts audio on its own timeline tracks. Only touch
+	// the audio foldout when crossing into/out of Full, so Trim<->Multi-Cut keeps
+	// the user's collapse state.
+	const bool full = (m == EditMode::Full);
+	if (full && !wasFull) {
+		if (audioBody_)
+			audioExpandedBeforeFull_ = audioBody_->isVisible();
+		if (audioHeader_)
+			audioHeader_->setVisible(false);
+		if (audioBody_)
+			audioBody_->setVisible(false);
+	} else if (!full && wasFull) {
+		if (audioHeader_)
+			audioHeader_->setVisible(true);
+		if (audioBody_)
+			audioBody_->setVisible(audioExpandedBeforeFull_);
+	}
+	speedSlider_->setEnabled(valid_ && !full);
+	speedSpin_->setEnabled(valid_ && !full);
+
+	if (m == EditMode::MultiCut) {
 		playBtn_->setToolTip(QStringLiteral("Loop-play the assembled output"));
 		onSegmentSelected(tracks_->selectedIndex()); // rebind the speed slider
+	} else if (m == EditMode::Full) {
+		playBtn_->setToolTip(QStringLiteral("Play the timeline"));
+		speedLabel_->setText(QString());
+		// First time in, seed the timeline with the active source so there's
+		// something to edit (like the other modes start on the whole clip).
+		if (!timelineSeeded_ && timelineView_ && timelineView_->model().isEmpty()) {
+			EditorSource *s = activeSource();
+			if (s && s->durationMs > 0) {
+				TlClip c;
+				c.sourceId = s->id;
+				c.srcStartMs = 0;
+				c.srcEndMs = s->durationMs;
+				c.outStartMs = 0;
+				timelineView_->addClip(TlTrack::Kind::Video, c);
+			}
+			timelineSeeded_ = true;
+		}
 	} else {
 		playBtn_->setToolTip(
 			QStringLiteral("Loop-play the trimmed section at the current speed"));
-		speedSlider_->setEnabled(valid_);
-		speedSpin_->setEnabled(valid_);
 		syncSpeedControls(speed_);
 		speedLabel_->setText(QString()); // no per-cut count in Simple Trim
 	}
@@ -1336,6 +1490,8 @@ qint64 VideoEditorWindow::outputDurationMs() const
 {
 	if (!valid_)
 		return 0;
+	if (fullEdit())
+		return timelineView_->durationMs();
 	if (multiCut())
 		return tracks_->totalOutputMs();
 	const double sp = speed_ > 0.01 ? speed_ : 1.0;
@@ -1346,6 +1502,9 @@ qint64 VideoEditorWindow::currentOutputMs() const
 {
 	if (!playing_)
 		return 0;
+	if (fullEdit())
+		return std::clamp<qint64>(playAnchorMs_ + playClock_.elapsed(), 0,
+					  std::max<qint64>(0, timelineView_->durationMs()));
 	if (multiCut())
 		return std::clamp<qint64>(playAnchorMs_ + playClock_.elapsed(), 0,
 					  std::max<qint64>(0, tracks_->totalOutputMs()));
@@ -1583,7 +1742,7 @@ void VideoEditorWindow::onSceneDetected(const QVector<qint64> &cutMs, const QStr
 		return;
 	}
 	if (!multiCut())
-		setEditMode(true); // show the output track
+		setEditMode(EditMode::MultiCut); // show the output track
 	tracks_->addSegments(segs);
 	QMessageBox::information(this, QStringLiteral("Auto-cut"),
 				QStringLiteral("Added %1 cuts from scene changes.").arg(segs.size()));
@@ -1849,7 +2008,7 @@ void VideoEditorWindow::onOpenProject()
 	setActiveSource(defaultSrcId);
 	restoreSnapshot(s);
 	if (!s.segments.isEmpty() && !multiCut())
-		setEditMode(true);
+		setEditMode(EditMode::MultiCut);
 	captureSnapshot(); // make the load an undo step
 	updateUndoRedoButtons();
 	QMessageBox::information(this, QStringLiteral("Open project"),
@@ -2067,6 +2226,20 @@ void VideoEditorWindow::startPlayback()
 {
 	if (!valid_)
 		return;
+	if (fullEdit()) {
+		if (timelineView_->durationMs() <= 0)
+			return; // empty timeline
+		playing_ = true;
+		playBtn_->setText(QStringLiteral("⏸"));
+		const qint64 total = timelineView_->durationMs();
+		qint64 pos = timelineView_->playhead();
+		if (pos < 0 || pos >= total)
+			pos = 0;
+		playAnchorMs_ = pos; // output-time
+		playClock_.restart();
+		playTimer_->start();
+		return;
+	}
 	if (multiCut()) {
 		if (tracks_->segments().isEmpty())
 			return; // nothing to assemble yet
@@ -2110,6 +2283,35 @@ void VideoEditorWindow::onPlayTick()
 {
 	if (!playing_ || !valid_)
 		return;
+
+	if (fullEdit()) {
+		const qint64 total = timelineView_->durationMs();
+		if (total <= 0) {
+			stopPlayback();
+			return;
+		}
+		qint64 outPos = playAnchorMs_ + playClock_.elapsed();
+		if (outPos >= total) { // loop
+			playAnchorMs_ = 0;
+			playClock_.restart();
+			outPos = 0;
+		}
+		timelineView_->setPlayhead(outPos);
+		cursorTimeLabel_->setText(previewTimeText(outPos));
+		int sid = 0;
+		qint64 sm = 0;
+		if (timelineFrameAt(outPos, &sid, &sm)) {
+			FrameSeeker *fs = seekerFor(sid);
+			if (fs) {
+				const QImage img = fs->frameAt(sm, 1280, 720);
+				if (!img.isNull())
+					setPreviewFrame(img, outPos);
+			}
+		} else {
+			canvas_->setFrame(QImage()); // gap
+		}
+		return;
+	}
 
 	if (multiCut()) {
 		const qint64 total = tracks_->totalOutputMs();
@@ -2542,6 +2744,15 @@ void VideoEditorWindow::onSave()
 	if (!valid_ || exporter_) // ignore while an export is already running
 		return;
 	stopPlayback();
+
+	if (fullEdit()) {
+		// Timeline rendering (the compositing exporter) lands in a later update.
+		QMessageBox::information(
+			this, QStringLiteral("Export"),
+			QStringLiteral("Exporting the Full-editing timeline is coming in the next update. "
+				       "For now, export from Simple Trim or Multi-Cut."));
+		return;
+	}
 
 	const bool cuts = multiCut();
 	if (cuts && tracks_->segments().isEmpty()) {

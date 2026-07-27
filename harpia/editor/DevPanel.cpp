@@ -9,13 +9,13 @@
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFrame>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSettings>
 #include <QSpinBox>
+#include <QTabWidget>
 #include <QVBoxLayout>
 
 namespace harpia {
@@ -195,22 +195,45 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		return s;
 	};
 
-	// Content lives in a scrollable inner widget so the panel stays usable even
-	// with every group expanded; the buttons stay pinned below.
-	auto *inner = new QWidget;
-	auto *root = new QVBoxLayout(inner);
-	auto *hint = new QLabel(
-		QStringLiteral("Changes apply live to the editor and are auto-saved — they persist "
-			       "across launches. Reset to defaults restores the shipped values."),
-		inner);
-	hint->setWordWrap(true);
-	hint->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
-	root->addWidget(hint);
+	// One tab per section. Everything used to be stacked in a single scroll, so
+	// reaching the Multi-Cut or Voiceover numbers meant scrolling past all the
+	// others; each section is now a page of its own.
+	auto *tabs = new QTabWidget(this);
+	tabs->setDocumentMode(true);
+
+	// Each page scrolls independently, so a long section stays usable in a short
+	// window and the tab bar never moves.
+	auto addPage = [&](const QString &title, const QString &blurb) {
+		auto *page = new QWidget;
+		auto *pv = new QVBoxLayout(page);
+		pv->setContentsMargins(12, 10, 12, 10);
+		pv->setSpacing(8);
+		if (!blurb.isEmpty()) {
+			auto *lb = new QLabel(blurb, page);
+			lb->setWordWrap(true);
+			lb->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+			pv->addWidget(lb);
+		}
+		auto *form = new QFormLayout;
+		form->setLabelAlignment(Qt::AlignLeft);
+		form->setHorizontalSpacing(12);
+		form->setVerticalSpacing(6);
+		pv->addLayout(form);
+		pv->addStretch(1);
+
+		auto *sc = new QScrollArea(tabs);
+		sc->setWidget(page);
+		sc->setWidgetResizable(true);
+		sc->setFrameShape(QFrame::NoFrame);
+		tabs->addTab(sc, title);
+		return form;
+	};
 
 	// Window-level toolbar tweaks (not part of any timeline layout struct).
 	const EditorChromeParams ch = loadChrome();
-	auto *winBox = new QGroupBox(QStringLiteral("Editor window"), inner);
-	auto *winForm = new QFormLayout(winBox);
+	QFormLayout *winForm = addPage(
+		QStringLiteral("Window"),
+		QStringLiteral("Toolbar and panel sizing for the editor window itself."));
 	winForm->addRow(QStringLiteral("Button height"),
 			winBtnH_ = spin(16, 64, ch.buttonH, &DevPanel::applyChrome));
 	winForm->addRow(QStringLiteral("Timecode font size"),
@@ -221,11 +244,10 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 			winSpeedW_ = spin(60, 600, ch.speedSliderMinW, &DevPanel::applyChrome));
 	winForm->addRow(QStringLiteral("Speed value box width"),
 			winSpinW_ = spin(48, 160, ch.speedSpinW, &DevPanel::applyChrome));
-	root->addWidget(winBox);
 
 	const TimelineLayoutParams tl = timeline_->layoutParams();
-	auto *tlBox = new QGroupBox(QStringLiteral("Simple Trim timeline"), this);
-	auto *tlForm = new QFormLayout(tlBox);
+	QFormLayout *tlForm = addPage(QStringLiteral("Trim"),
+				      QStringLiteral("The single-range timeline in Simple Trim mode."));
 	tlForm->addRow(QStringLiteral("Side padding"),
 		       tlPad_ = spin(0, 64, tl.pad, &DevPanel::applyTimeline));
 	tlForm->addRow(QStringLiteral("Bar top offset"),
@@ -240,20 +262,19 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		       tlFontPx_ = spin(6, 40, tl.fontPx, &DevPanel::applyTimeline));
 	tlForm->addRow(QStringLiteral("Max zoom"),
 		       tlMaxZoom_ = dspin(1.0, 256.0, tl.maxZoom, &DevPanel::applyTimeline));
-	root->addWidget(tlBox);
 
 	const PreviewLayoutParams pv = preview_->layoutParams();
-	auto *pvBox = new QGroupBox(QStringLiteral("Preview (both modes)"), inner);
-	auto *pvForm = new QFormLayout(pvBox);
+	QFormLayout *pvForm = addPage(QStringLiteral("Preview"),
+				      QStringLiteral("The video preview, shared by every mode."));
 	pvForm->addRow(QStringLiteral("Preview min width"),
 		       pvW_ = spin(160, 1920, pv.minW, &DevPanel::applyPreview));
 	pvForm->addRow(QStringLiteral("Preview min height"),
 		       pvH_ = spin(90, 1080, pv.minH, &DevPanel::applyPreview));
-	root->addWidget(pvBox);
 
 	const TrackLayoutParams tr = tracks_->layoutParams();
-	auto *trBox = new QGroupBox(QStringLiteral("Multi-Cut tracks"), this);
-	auto *trForm = new QFormLayout(trBox);
+	QFormLayout *trForm = addPage(
+		QStringLiteral("Multi-Cut"),
+		QStringLiteral("The source and output tracks in Multi-Cut mode."));
 	trForm->addRow(QStringLiteral("Margin"),
 		       trMargin_ = spin(0, 64, tr.margin, &DevPanel::applyTracks));
 	trForm->addRow(QStringLiteral("Caption height"),
@@ -278,7 +299,6 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		       trSegFontPx_ = spin(6, 40, tr.segFontPx, &DevPanel::applyTracks));
 	trForm->addRow(QStringLiteral("Max zoom"),
 		       trMaxZoom_ = dspin(1.0, 256.0, tr.maxZoom, &DevPanel::applyTracks));
-	root->addWidget(trBox);
 
 	const VoiceoverLayoutParams vo = voice_->layoutParams();
 	// Full-editing multi-track timeline (only when that widget exists).
@@ -286,8 +306,9 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		// The widget was already given the saved values at startup, so reading
 		// them back keeps the boxes in step with what's on screen.
 		const TimelineViewParams ft = fullTimeline_->layoutParams();
-		auto *ftBox = new QGroupBox(QStringLiteral("Full-editing timeline"), inner);
-		auto *ftForm = new QFormLayout(ftBox);
+		QFormLayout *ftForm =
+			addPage(QStringLiteral("Full editing"),
+				QStringLiteral("The multi-track timeline in Full editing mode."));
 		ftForm->addRow(QStringLiteral("Track header width"),
 			       ftGutterW_ = spin(60, 320, ft.gutterW, &DevPanel::applyFullTimeline));
 		ftForm->addRow(QStringLiteral("Ruler height"),
@@ -310,11 +331,10 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 			       ftSegFontPx_ = spin(6, 40, ft.segFontPx, &DevPanel::applyFullTimeline));
 		ftForm->addRow(QStringLiteral("Max zoom"),
 			       ftMaxZoom_ = dspin(1.0, 512.0, ft.maxZoom, &DevPanel::applyFullTimeline));
-		root->addWidget(ftBox);
 	}
 
-	auto *voBox = new QGroupBox(QStringLiteral("Voiceover track"), inner);
-	auto *voForm = new QFormLayout(voBox);
+	QFormLayout *voForm = addPage(QStringLiteral("Voiceover"),
+				      QStringLiteral("The narration track under the editing area."));
 	voForm->addRow(QStringLiteral("Margin"),
 		       voMargin_ = spin(0, 48, vo.margin, &DevPanel::applyVoice));
 	voForm->addRow(QStringLiteral("Caption height"),
@@ -325,17 +345,34 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		       voMinClipW_ = spin(2, 60, vo.minClipW, &DevPanel::applyVoice));
 	voForm->addRow(QStringLiteral("Trim edge zone"),
 		       voEdgeZone_ = spin(2, 24, vo.edgeZone, &DevPanel::applyVoice));
-	root->addWidget(voBox);
-	root->addStretch(1);
 
-	auto *scroll = new QScrollArea(this);
-	scroll->setWidget(inner);
-	scroll->setWidgetResizable(true);
-	scroll->setFrameShape(QFrame::NoFrame);
+	// Come back to the tab you were last on, like every other value here.
+	{
+		QSettings st = devSettings();
+		st.beginGroup(QStringLiteral("devLayout"));
+		const int want = st.value(QStringLiteral("tab"), 0).toInt();
+		st.endGroup();
+		if (want >= 0 && want < tabs->count())
+			tabs->setCurrentIndex(want);
+	}
+	connect(tabs, &QTabWidget::currentChanged, this, [](int i) {
+		QSettings st = devSettings();
+		st.beginGroup(QStringLiteral("devLayout"));
+		st.setValue(QStringLiteral("tab"), i);
+		st.endGroup();
+	});
 
 	auto *outer = new QVBoxLayout(this);
 	outer->setContentsMargins(0, 0, 0, 0);
-	outer->addWidget(scroll, 1);
+
+	auto *hint = new QLabel(
+		QStringLiteral("Changes apply live to the editor and are auto-saved — they persist "
+			       "across launches. Reset to defaults restores the shipped values."),
+		this);
+	hint->setWordWrap(true);
+	hint->setStyleSheet(QStringLiteral("color:#9a9fa8; padding:8px 12px 0 12px;"));
+	outer->addWidget(hint);
+	outer->addWidget(tabs, 1);
 
 	auto *btnRow = new QHBoxLayout;
 	btnRow->setContentsMargins(10, 6, 10, 8);

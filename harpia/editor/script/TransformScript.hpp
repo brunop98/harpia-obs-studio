@@ -25,14 +25,16 @@
 // and the exporter call them in different orders, so anything that accumulates
 // state across calls would make the render disagree with what you saw.
 //
-// A QJSEngine is not thread-safe, so each thread that renders (the GUI for the
+// The engine is a QuickJS runtime, vendored under harpia/third_party/quickjs.
+// A runtime is not thread-safe, so each thread that renders (the GUI for the
 // preview, the export worker) owns its own TransformEvaluator compiled from the
-// same source.
-
+// same source. Scripts get the language and Math/JSON and nothing else — no
+// file, process or network access is reachable from one.
+//
 // The engine lives entirely behind a PIMPL, so this header pulls in no
 // scripting types and the backend can be swapped without touching callers.
-// available() is false when the app was built against a Qt with no Qml module
-// (the trimmed obs-deps Qt is one) — scripting then no-ops cleanly.
+// available() is false only in a build made without the engine, where scripting
+// no-ops cleanly instead of failing to compile.
 
 #include "../shader/ShaderEffect.hpp" // ShaderParam + parseShaderParams (same //@param format)
 #include "../timeline/TimelineModel.hpp"

@@ -8,17 +8,17 @@ cmake_minimum_required(VERSION 3.28...3.30)
 # OpenGL provides the offscreen GPU shader pipeline (post-processing effects);
 find_package(Qt6 REQUIRED Widgets Gui Multimedia OpenGL)
 
-# Qml provides QJSEngine, which runs the per-clip transform scripts. It is
-# OPTIONAL: the trimmed obs-deps Qt used for Windows builds ships no Qml module,
-# and the rest of the app must still build there — scripting just goes inert.
-find_package(Qt6 QUIET COMPONENTS Qml)
-
 # FFmpeg (bundled with OBS deps) is used to extract clip thumbnails.
 find_package(FFmpeg REQUIRED COMPONENTS avcodec avformat avutil swscale swresample avfilter)
 
 if(NOT TARGET OBS::libobs)
   add_subdirectory("${CMAKE_SOURCE_DIR}/libobs" libobs)
 endif()
+
+# QuickJS runs the per-clip transform scripts. It is vendored (MIT) rather than
+# taken from Qt's Qml module, because the trimmed obs-deps Qt used for the
+# Windows builds ships no Qml — see third_party/quickjs/README.harpia.md.
+add_subdirectory(third_party/quickjs)
 
 add_executable(harpia-recorder)
 add_executable(OBS::harpia ALIAS harpia-recorder)
@@ -39,13 +39,8 @@ target_link_libraries(
     FFmpeg::avfilter
 )
 
-if(TARGET Qt6::Qml)
-  target_link_libraries(harpia-recorder PRIVATE Qt::Qml)
-  target_compile_definitions(harpia-recorder PRIVATE HARPIA_HAVE_QJS=1)
-  message(STATUS "Harpia: per-clip transform scripting ENABLED (Qt6::Qml found)")
-else()
-  message(STATUS "Harpia: per-clip transform scripting DISABLED (this Qt has no Qml module)")
-endif()
+target_link_libraries(harpia-recorder PRIVATE harpia-quickjs)
+target_compile_definitions(harpia-recorder PRIVATE HARPIA_HAVE_QJS=1)
 
 set_target_properties(
   harpia-recorder

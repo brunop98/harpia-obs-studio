@@ -16,6 +16,8 @@
 #include "timeline/TimelineCompositor.hpp"
 #include "timeline/TimelineView.hpp"
 
+#include "../Version.hpp"
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDesktopServices>
@@ -25,12 +27,16 @@
 
 #include <algorithm>
 #include <cmath>
+#include <QApplication>
+#include <QClipboard>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
 #include <QFormLayout>
+#include <QLineEdit>
 #include <QHBoxLayout>
 #include <QHash>
 #include <QJsonArray>
@@ -543,6 +549,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	auto *insHeader = new QLabel(QStringLiteral("Inspector"), this);
 	insHeader->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
 	insLayout->addWidget(insHeader);
+
+	// Project-level metadata + actions (collapsible, above the per-clip panels).
+	buildProjectInspector(insLayout);
 	// ---- Effect stack: user GLSL post-processing (preview + baked export) ----
 	// Placed first so it's the panel's headline feature (open via the Effects
 	// toolbar button). Effects stack top-to-bottom; each is a .frag in the user
@@ -1223,6 +1232,222 @@ void styleSwatch(QPushButton *b, const QColor &c)
 				 .arg(c.name(QColor::HexRgb)));
 }
 } // namespace
+
+QWidget *VideoEditorWindow::addSection(QVBoxLayout *into, const QString &title, bool expanded)
+{
+	auto *head = new QPushButton(this);
+	head->setFlat(true);
+	head->setCursor(Qt::PointingHandCursor);
+	head->setStyleSheet(QStringLiteral(
+		"QPushButton{text-align:left;color:#e8eaed;font-weight:bold;border:none;padding:4px 0;}"
+		"QPushButton:hover{color:#ffffff;}"));
+	auto *body = new QWidget(this);
+	auto *bl = new QVBoxLayout(body);
+	bl->setContentsMargins(2, 2, 2, 6);
+	bl->setSpacing(4);
+	body->setVisible(expanded);
+	head->setText((expanded ? QStringLiteral("▾  ") : QStringLiteral("▸  ")) + title);
+	connect(head, &QPushButton::clicked, this, [head, body, title]() {
+		const bool on = !body->isVisible();
+		body->setVisible(on);
+		head->setText((on ? QStringLiteral("▾  ") : QStringLiteral("▸  ")) + title);
+	});
+	into->addWidget(head);
+	into->addWidget(body);
+	return body;
+}
+
+namespace {
+QString humanBytes(qint64 b)
+{
+	if (b <= 0)
+		return QStringLiteral("—");
+	const double kb = b / 1024.0;
+	if (kb < 1024.0)
+		return QStringLiteral("%1 KB").arg(kb, 0, 'f', 0);
+	const double mb = kb / 1024.0;
+	if (mb < 1024.0)
+		return QStringLiteral("%1 MB").arg(mb, 0, 'f', 1);
+	return QStringLiteral("%1 GB").arg(mb / 1024.0, 0, 'f', 2);
+}
+
+// Recursive size of a folder (used for the project's assets).
+qint64 dirSize(const QString &path)
+{
+	qint64 total = 0;
+	QDirIterator it(path, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+	while (it.hasNext()) {
+		it.next();
+		total += it.fileInfo().size();
+	}
+	return total;
+}
+} // namespace
+
+void VideoEditorWindow::buildProjectInspector(QVBoxLayout *into)
+{
+	QWidget *body = addSection(into, QStringLiteral("Project"), true);
+	auto *v = qobject_cast<QVBoxLayout *>(body->layout());
+	projectBox_ = body;
+
+	auto *form = new QFormLayout;
+	form->setContentsMargins(0, 0, 0, 0);
+	form->setHorizontalSpacing(8);
+	form->setVerticalSpacing(3);
+	form->setLabelAlignment(Qt::AlignLeft);
+	auto mkKey = [this](const QString &t) {
+		auto *l = new QLabel(t, this);
+		l->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+		return l;
+	};
+	auto mkVal = [this](bool wrap = false) {
+		auto *l = new QLabel(QStringLiteral("—"), this);
+		l->setStyleSheet(QStringLiteral("color:#e8eaed;"));
+		l->setTextInteractionFlags(Qt::TextSelectableByMouse);
+		l->setWordWrap(wrap);
+		return l;
+	};
+	pjName_ = mkVal();
+	pjLocation_ = mkVal(true);
+	pjCreated_ = mkVal();
+	pjSaved_ = mkVal();
+	pjVersion_ = mkVal();
+	pjFormat_ = mkVal();
+	pjSize_ = mkVal();
+	pjAutosave_ = mkVal();
+	pjAuthor_ = new QLineEdit(this);
+	pjAuthor_->setPlaceholderText(QStringLiteral("(optional)"));
+	connect(pjAuthor_, &QLineEdit::textEdited, this,
+		[this](const QString &t) { projectAuthor_ = t; });
+
+	form->addRow(mkKey(QStringLiteral("Name")), pjName_);
+	form->addRow(mkKey(QStringLiteral("Location")), pjLocation_);
+	form->addRow(mkKey(QStringLiteral("Created")), pjCreated_);
+	form->addRow(mkKey(QStringLiteral("Last saved")), pjSaved_);
+	form->addRow(mkKey(QStringLiteral("Author")), pjAuthor_);
+	form->addRow(mkKey(QStringLiteral("Format")), pjFormat_);
+	form->addRow(mkKey(QStringLiteral("Version")), pjVersion_);
+	form->addRow(mkKey(QStringLiteral("Size")), pjSize_);
+	form->addRow(mkKey(QStringLiteral("Autosave")), pjAutosave_);
+	v->addLayout(form);
+
+	autosaveChk_ = new QCheckBox(QStringLiteral("Autosave every 5 minutes"), this);
+	autosaveChk_->setToolTip(QStringLiteral(
+		"Writes a separate <project>_autosave.harpiaproj beside your project — your own file "
+		"is never overwritten automatically."));
+	connect(autosaveChk_, &QCheckBox::toggled, this, [this](bool on) {
+		QSettings().setValue(QStringLiteral("editor/autosave"), on);
+		if (on)
+			autosaveTimer_->start();
+		else
+			autosaveTimer_->stop();
+		refreshProjectInspector();
+	});
+	v->addWidget(autosaveChk_);
+
+	auto *row1 = new QHBoxLayout;
+	auto *saveBtn = new QPushButton(QStringLiteral("Save"), this);
+	auto *saveAsBtn = new QPushButton(QStringLiteral("Save As…"), this);
+	row1->addWidget(saveBtn);
+	row1->addWidget(saveAsBtn);
+	v->addLayout(row1);
+	auto *row2 = new QHBoxLayout;
+	auto *revealBtn = new QPushButton(QStringLiteral("Reveal folder"), this);
+	auto *copyBtn = new QPushButton(QStringLiteral("Copy path"), this);
+	row2->addWidget(revealBtn);
+	row2->addWidget(copyBtn);
+	v->addLayout(row2);
+	connect(saveBtn, &QPushButton::clicked, this, &VideoEditorWindow::onSaveProject);
+	connect(saveAsBtn, &QPushButton::clicked, this, &VideoEditorWindow::onSaveProjectAs);
+	connect(revealBtn, &QPushButton::clicked, this, &VideoEditorWindow::revealProjectFolder);
+	connect(copyBtn, &QPushButton::clicked, this, [this]() {
+		if (!projectPath_.isEmpty())
+			QApplication::clipboard()->setText(QDir::toNativeSeparators(projectPath_));
+	});
+
+	// Autosave writes a sidecar file, so it can never clobber the user's project.
+	autosaveTimer_ = new QTimer(this);
+	autosaveTimer_->setInterval(5 * 60 * 1000);
+	connect(autosaveTimer_, &QTimer::timeout, this, &VideoEditorWindow::doAutosave);
+	const bool wantAutosave = QSettings().value(QStringLiteral("editor/autosave"), false).toBool();
+	autosaveChk_->setChecked(wantAutosave);
+	if (wantAutosave)
+		autosaveTimer_->start();
+}
+
+void VideoEditorWindow::refreshProjectInspector()
+{
+	if (!pjName_)
+		return;
+	const bool saved = !projectPath_.isEmpty();
+	const QFileInfo fi(projectPath_);
+	pjName_->setText(saved ? fi.completeBaseName() : QStringLiteral("Untitled (not saved yet)"));
+	pjLocation_->setText(saved ? QDir::toNativeSeparators(fi.absolutePath())
+				   : QStringLiteral("—"));
+	pjCreated_->setText(projectCreated_.isValid()
+				    ? projectCreated_.toString(QStringLiteral("yyyy-MM-dd HH:mm"))
+				    : QStringLiteral("—"));
+	pjSaved_->setText(saved ? fi.lastModified().toString(QStringLiteral("yyyy-MM-dd HH:mm"))
+				: QStringLiteral("Never"));
+	pjAuthor_->setText(projectAuthor_);
+	pjVersion_->setText(QStringLiteral("Harpia project v3 · app %1").arg(appVersion()));
+
+	const QSize c = timelineCanvasSize();
+	double fps = 0.0;
+	if (!sources_.empty() && sources_.front().seeker)
+		fps = sources_.front().seeker->fps();
+	pjFormat_->setText(fps > 1.0 ? QStringLiteral("%1 × %2 @ %3 fps")
+					       .arg(c.width())
+					       .arg(c.height())
+					       .arg(fps, 0, 'f', 2)
+				     : QStringLiteral("%1 × %2").arg(c.width()).arg(c.height()));
+
+	// Project size = the project file + its assets folder (voiceover takes).
+	qint64 bytes = 0;
+	if (saved) {
+		bytes += fi.size();
+		const QString assets = fi.absolutePath() + QLatin1Char('/') + fi.completeBaseName() +
+				       QStringLiteral("_assets");
+		if (QFileInfo::exists(assets))
+			bytes += dirSize(assets);
+	}
+	qint64 media = 0;
+	for (const EditorSource &s : sources_)
+		media += QFileInfo(s.path).size();
+	pjSize_->setText(saved ? QStringLiteral("%1  (media %2)")
+					 .arg(humanBytes(bytes), humanBytes(media))
+			       : QStringLiteral("—  (media %1)").arg(humanBytes(media)));
+
+	if (!autosaveChk_ || !autosaveChk_->isChecked())
+		pjAutosave_->setText(QStringLiteral("Off"));
+	else if (!saved)
+		pjAutosave_->setText(QStringLiteral("On — waiting for a first save"));
+	else if (lastAutosave_.isValid())
+		pjAutosave_->setText(
+			QStringLiteral("On — last %1").arg(lastAutosave_.toString(QStringLiteral("HH:mm"))));
+	else
+		pjAutosave_->setText(QStringLiteral("On"));
+}
+
+void VideoEditorWindow::doAutosave()
+{
+	// Only once we know where the project lives, and never onto that file itself.
+	if (!valid_ || projectPath_.isEmpty())
+		return;
+	const QFileInfo fi(projectPath_);
+	const QString side = fi.absolutePath() + QLatin1Char('/') + fi.completeBaseName() +
+			     QStringLiteral("_autosave.harpiaproj");
+	saveProjectTo(side, /*quiet=*/true);
+	refreshProjectInspector();
+}
+
+void VideoEditorWindow::revealProjectFolder()
+{
+	const QString target = projectPath_.isEmpty() ? inPath_ : projectPath_;
+	if (target.isEmpty())
+		return;
+	revealInFolder(target);
+}
 
 void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 {
@@ -2307,15 +2532,43 @@ void VideoEditorWindow::onSaveProject()
 {
 	if (!valid_)
 		return;
-	const QString suggested = QFileInfo(inPath_).absolutePath() + QLatin1Char('/') +
-				  QFileInfo(inPath_).completeBaseName() + QStringLiteral("_edit.harpiaproj");
-	QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Save project"), suggested,
+	// Re-save over the known file; fall back to Save As the first time.
+	if (projectPath_.isEmpty()) {
+		onSaveProjectAs();
+		return;
+	}
+	const QString err = saveProjectTo(projectPath_, /*quiet=*/false);
+	if (!err.isEmpty())
+		QMessageBox::warning(this, QStringLiteral("Save project"), err);
+	refreshProjectInspector();
+}
+
+void VideoEditorWindow::onSaveProjectAs()
+{
+	if (!valid_)
+		return;
+	const QString suggested =
+		projectPath_.isEmpty()
+			? QFileInfo(inPath_).absolutePath() + QLatin1Char('/') +
+				  QFileInfo(inPath_).completeBaseName() + QStringLiteral("_edit.harpiaproj")
+			: projectPath_;
+	QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Save project as"), suggested,
 						    QStringLiteral("Harpia project (*.harpiaproj)"));
 	if (path.isEmpty())
 		return;
 	if (!path.endsWith(QStringLiteral(".harpiaproj"), Qt::CaseInsensitive))
 		path += QStringLiteral(".harpiaproj");
+	const QString err = saveProjectTo(path, /*quiet=*/false);
+	if (!err.isEmpty())
+		QMessageBox::warning(this, QStringLiteral("Save project"), err);
+	refreshProjectInspector();
+}
 
+// Writes the project to `path`. Returns "" on success, else a message. `quiet`
+// suppresses the success dialog and leaves projectPath_ alone (used by autosave,
+// which writes to a sidecar file).
+QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
+{
 	const EditorSnapshot s = snapshot();
 	const QString projDir = QFileInfo(path).absolutePath();
 	const QString assetsRel = QFileInfo(path).completeBaseName() + QStringLiteral("_assets");
@@ -2323,6 +2576,13 @@ void VideoEditorWindow::onSaveProject()
 
 	QJsonObject root;
 	root[QStringLiteral("harpiaProject")] = 2; // v2: multiple sources
+	// Project metadata (shown in the Inspector's Project section).
+	if (!projectCreated_.isValid())
+		projectCreated_ = QDateTime::currentDateTime();
+	root[QStringLiteral("created")] = projectCreated_.toString(Qt::ISODate);
+	root[QStringLiteral("saved")] = QDateTime::currentDateTime().toString(Qt::ISODate);
+	if (!projectAuthor_.isEmpty())
+		root[QStringLiteral("author")] = projectAuthor_;
 	// All sources (index by stable id; segments reference these ids).
 	QJsonArray srcArr;
 	for (const EditorSource &es : sources_) {
@@ -2486,20 +2746,20 @@ void VideoEditorWindow::onSaveProject()
 	}
 
 	QFile f(path);
-	if (!f.open(QIODevice::WriteOnly)) {
-		QMessageBox::warning(this, QStringLiteral("Save project"),
-				     QStringLiteral("Could not write the project file."));
-		return;
-	}
+	if (!f.open(QIODevice::WriteOnly))
+		return QStringLiteral("Could not write the project file.");
 	f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
 	f.close();
+
+	if (quiet) { // autosave sidecar — don't adopt it as the project file
+		lastAutosave_ = QDateTime::currentDateTime();
+		return QString();
+	}
+	projectPath_ = path;
 	if (!copyOk)
-		QMessageBox::warning(
-			this, QStringLiteral("Save project"),
-			QStringLiteral("Project saved, but some voiceover audio could not be copied."));
-	else
-		QMessageBox::information(this, QStringLiteral("Save project"),
-					QStringLiteral("Project saved."));
+		return QStringLiteral("Project saved, but some voiceover audio could not be copied.");
+	QMessageBox::information(this, QStringLiteral("Save project"), QStringLiteral("Project saved."));
+	return QString();
 }
 
 void VideoEditorWindow::onOpenProject()
@@ -2730,6 +2990,13 @@ void VideoEditorWindow::onOpenProject()
 	// restore the trim range / segments on top).
 	setActiveSource(defaultSrcId);
 	restoreSnapshot(s);
+	// Remember where this project lives + its metadata (Project inspector).
+	projectPath_ = path;
+	projectAuthor_ = root.value(QStringLiteral("author")).toString();
+	projectCreated_ =
+		QDateTime::fromString(root.value(QStringLiteral("created")).toString(), Qt::ISODate);
+	refreshProjectInspector();
+
 	// Open in the mode the project was authored in.
 	if (!s.timeline.isEmpty()) {
 		timelineSeeded_ = true; // don't seed over the loaded timeline

@@ -5,6 +5,7 @@
 #include "shader/ShaderEffect.hpp"    // ShaderState / ShaderParam (post-processing)
 #include "timeline/TimelineModel.hpp" // TlClip / TlTransform (Full-editing timeline)
 
+#include <QDateTime>
 #include <QDialog>
 #include <QElapsedTimer>
 #include <QImage>
@@ -36,6 +37,7 @@ class QSpinBox;
 class QPlainTextEdit;
 class QFontComboBox;
 class QVBoxLayout;
+class QLineEdit;
 class QDragEnterEvent;
 class QDropEvent;
 class QEvent;
@@ -304,6 +306,32 @@ private:
 	QPushButton *addTextBtn_ = nullptr; // bottom controls row, Full mode only
 	QPushButton *snapBtn_ = nullptr;    // magnet toggle, Full mode only
 	bool syncingClip_ = false;          // guard while pushing values into the UI
+
+	// ---- Project inspector (metadata for the whole edit, not one clip) ----
+	QString projectPath_;      // "" until saved/opened
+	QString projectAuthor_;
+	QDateTime projectCreated_;
+	QDateTime lastAutosave_;
+	QTimer *autosaveTimer_ = nullptr;
+	QWidget *projectBox_ = nullptr;
+	QLabel *pjName_ = nullptr;
+	QLabel *pjLocation_ = nullptr;
+	QLabel *pjCreated_ = nullptr;
+	QLabel *pjSaved_ = nullptr;
+	QLabel *pjVersion_ = nullptr;
+	QLabel *pjFormat_ = nullptr;   // resolution @ fps
+	QLabel *pjSize_ = nullptr;
+	QLabel *pjAutosave_ = nullptr;
+	QLineEdit *pjAuthor_ = nullptr;
+	QCheckBox *autosaveChk_ = nullptr;
+	void buildProjectInspector(QVBoxLayout *into);
+	void refreshProjectInspector();
+	void onSaveProjectAs();
+	QString saveProjectTo(const QString &path, bool quiet);
+	void doAutosave();
+	void revealProjectFolder();
+	// A collapsible "▾ Title" section; returns the body to fill in.
+	QWidget *addSection(QVBoxLayout *into, const QString &title, bool expanded);
 
 	void buildClipInspector(QVBoxLayout *into);
 	void syncClipInspector();                       // selected clip -> controls

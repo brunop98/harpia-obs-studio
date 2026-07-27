@@ -30,6 +30,7 @@ class QListWidgetItem;
 class QProgressDialog;
 class QPushButton;
 class QSlider;
+class QSplitter;
 class QStackedWidget;
 class QTimer;
 class QFileSystemWatcher;
@@ -193,6 +194,15 @@ private:
 	qint64 currentOutputMs() const;   // output-time under the playhead right now
 	QString voiceoverTempDir();       // per-session temp dir for takes (lazy)
 	void onSceneDetected(const QVector<qint64> &cutMs, const QString &err); // auto-cut result
+
+	// Show/hide the right-hand properties panel, opening it wide enough that its
+	// own controls are not clipped.
+	void showInspector(bool on);
+	// Size the preview/editing split to what the current mode actually needs.
+	void applyModeSplit();
+	QSplitter *hsplit_ = nullptr;   // preview+editing | inspector
+	QSplitter *vsplit_ = nullptr;   // preview / editing area
+	QWidget *bottomPane_ = nullptr; // mode bar + mode stack + audio + buttons
 
 	void showFrame(int sourceId, qint64 ms);
 	void joinExport();
@@ -452,6 +462,8 @@ private:
 	QSlider *speedSlider_ = nullptr;
 	QDoubleSpinBox *speedSpin_ = nullptr; // editable numeric speed (text input)
 	QLabel *speedLabel_ = nullptr;        // "(N cuts)" / "—" status next to it
+	QLabel *speedCaption_ = nullptr;      // the "Speed" caption (hidden in Full editing)
+	QPushButton *resetCropBtn_ = nullptr; // hides with the Crop toggle
 	double speed_ = 1.0;
 
 	QTimer *previewTimer_ = nullptr;

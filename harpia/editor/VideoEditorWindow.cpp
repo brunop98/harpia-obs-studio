@@ -243,12 +243,15 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	bar->addSpacing(16);
 
 	// Speed: label · slider (stretches) · editable value · per-cut count.
-	bar->addWidget(new QLabel(QStringLiteral("Speed"), this));
+	// Full editing has per-clip speed in the Inspector instead, so the whole group
+	// hides there rather than sitting greyed out taking up the toolbar.
+	speedCaption_ = new QLabel(QStringLiteral("Speed"), this);
+	bar->addWidget(speedCaption_);
 	speedSlider_ = new QSlider(Qt::Horizontal, this);
 	speedSlider_->setRange(0, kSpeedTicks); // exponential 0.1×..50×
 	speedSlider_->setPageStep(kSpeedTicks / 20);
 	speedSlider_->setValue(speedToSlider(1.0));
-	speedSlider_->setMinimumWidth(140);
+	speedSlider_->setMinimumWidth(96); // see EditorChromeParams::speedSliderMinW
 	speedSlider_->setToolTip(QStringLiteral("Playback speed (0.1×–50×); scaled so low speeds are easy to fine-tune"));
 	bar->addWidget(speedSlider_); // compact, fixed width (see applyChrome)
 	speedSpin_ = new QDoubleSpinBox(this);
@@ -261,7 +264,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	speedSpin_->setFixedWidth(72);
 	bar->addWidget(speedSpin_);
 	speedLabel_ = new QLabel(QString(), this); // "(N cuts)" / "—" status
-	speedLabel_->setMinimumWidth(56);
+	// No reserved width: it is empty in Simple Trim and hidden in Full editing,
+	// and 56px of nothing was pushing the toolbar's minimum width up.
 	speedLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 	bar->addWidget(speedLabel_);
 	bar->addStretch(1); // slack here: transport+speed left, panel toggles right
@@ -294,8 +298,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	effectsBtn_->setToolTip(QStringLiteral(
 		"Show/hide post-processing effects (color grade, CRT, …) — applied to the preview and baked into export"));
 	connect(effectsBtn_, &QPushButton::toggled, this, [this](bool on) {
-		if (inspector_)
-			inspector_->setVisible(on);
+		showInspector(on);
 		if (inspectorBtn_) {
 			QSignalBlocker b(inspectorBtn_);
 			inspectorBtn_->setChecked(on);
@@ -311,8 +314,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	inspectorBtn_->setToolTip(QStringLiteral(
 		"Show/hide the properties panel for the selected cut (uses the space beside portrait previews)"));
 	connect(inspectorBtn_, &QPushButton::toggled, this, [this](bool on) {
-		if (inspector_)
-			inspector_->setVisible(on);
+		showInspector(on);
 		if (effectsBtn_) {
 			QSignalBlocker b(effectsBtn_);
 			effectsBtn_->setChecked(on);
@@ -343,6 +345,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 
 	// ---- Bottom pane: timelines, voiceover and file controls ----
 	auto *bottomPane = new QWidget(this);
+	bottomPane_ = bottomPane;
 	auto *bottomLayout = new QVBoxLayout(bottomPane);
 	bottomLayout->setContentsMargins(0, 0, 0, 0);
 
@@ -499,6 +502,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	cropToggle_->setToolTip(QStringLiteral("Drag the rectangle to crop the image (great for smaller GIFs)"));
 	controls->addWidget(cropToggle_);
 	auto *resetCrop = new QPushButton(QStringLiteral("Reset crop"), this);
+	resetCropBtn_ = resetCrop;
 	controls->addWidget(resetCrop);
 	// Full editing: drop a styled text/caption clip on the timeline.
 	addTextBtn_ = new QPushButton(QStringLiteral("Add text"), this);
@@ -562,12 +566,15 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	splitter->addWidget(bottomPane);
 	splitter->setStretchFactor(0, 3); // preview grows more than the editing area
 	splitter->setStretchFactor(1, 2);
+	vsplit_ = splitter;
 
 	// ---- Right-side inspector: properties of the selected cut / trim range.
 	// Portrait clips leave wide black bars beside the preview; this panel puts
 	// that space to work as a live clip inspector.
 	inspector_ = new QWidget(this);
-	inspector_->setMinimumWidth(180);
+	// 180 was narrow enough to clip the value fields, the Save/Save As row and
+	// several hints, leaving a horizontal scrollbar to reach them.
+	inspector_->setMinimumWidth(250);
 	inspector_->setVisible(false); // collapsed until the Inspector button opens it
 	auto *insOuter = new QVBoxLayout(inspector_);
 	insOuter->setContentsMargins(0, 0, 0, 0);
@@ -806,6 +813,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	hsplit->addWidget(splitter);
 	hsplit->addWidget(inspector_);
 	hsplit->setStretchFactor(0, 5); // editing area takes the lion's share
+	hsplit_ = hsplit;
 	hsplit->setStretchFactor(1, 1); // inspector
 	hsplit->setSizes({820, 190});
 	root->addWidget(hsplit, 1);
@@ -2688,6 +2696,9 @@ void VideoEditorWindow::showEvent(QShowEvent *e)
 	QDialog::showEvent(e);
 	// The Sources panel stays closed until the user opens it with the toolbar
 	// "Sources" button — it never opens on its own.
+
+	// First real geometry: now the split can be sized to the starting mode.
+	QTimer::singleShot(0, this, [this]() { applyModeSplit(); });
 }
 
 bool VideoEditorWindow::eventFilter(QObject *watched, QEvent *e)
@@ -2763,6 +2774,58 @@ void VideoEditorWindow::reject()
 	QDialog::reject();
 }
 
+void VideoEditorWindow::applyModeSplit()
+{
+	// The three modes need very different amounts of room below the preview:
+	// Simple Trim is one short bar, Full editing a whole track stack. Without
+	// this the split stayed wherever the tallest mode left it, and Simple Trim
+	// showed a band of dead space under its timeline while the preview was
+	// squeezed. Only ever gives space BACK to the preview.
+	if (!vsplit_ || !bottomPane_ || !stack_ || !stack_->currentWidget())
+		return;
+	const QList<int> sizes = vsplit_->sizes();
+	if (sizes.size() != 2)
+		return;
+	const int total = sizes[0] + sizes[1];
+	if (total <= 0)
+		return;
+	// The stack reports the TALLEST page, so ask this page directly and add the
+	// rows around it (mode bar, audio foldout, buttons) measured, not guessed.
+	const int chrome = bottomPane_->sizeHint().height() - stack_->sizeHint().height();
+	const int wanted = std::clamp(chrome + stack_->currentWidget()->sizeHint().height(), 120,
+				      std::max(120, total / 2));
+	if (sizes[1] > wanted)
+		vsplit_->setSizes({total - wanted, wanted});
+}
+
+void VideoEditorWindow::showInspector(bool on)
+{
+	if (!inspector_)
+		return;
+	inspector_->setVisible(on);
+	if (!on || !hsplit_)
+		return;
+	// A QSplitter hands a freshly-shown pane whatever its stretch factor implies,
+	// which here was its bare minimum — narrow enough to clip the panel's own
+	// controls. Widen it to something the content fits in, but never more than a
+	// third of the window, and leave it alone once it is already wide enough (so
+	// a width the user chose is kept).
+	//
+	// Deferred: the splitter re-lays out when the pane is shown, and doing this
+	// inline just gets overwritten by that pass.
+	QTimer::singleShot(0, this, [this]() {
+		if (!hsplit_ || !inspector_ || !inspector_->isVisible())
+			return;
+		const QList<int> sizes = hsplit_->sizes();
+		if (sizes.size() != 2)
+			return;
+		const int total = sizes[0] + sizes[1];
+		const int want = std::clamp(320, inspector_->minimumWidth(), std::max(260, total / 3));
+		if (sizes[1] < want)
+			hsplit_->setSizes({total - want, want});
+	});
+}
+
 void VideoEditorWindow::setEditMode(EditMode m)
 {
 	stopPlayback();
@@ -2792,6 +2855,12 @@ void VideoEditorWindow::setEditMode(EditMode m)
 	}
 	speedSlider_->setEnabled(valid_ && !full);
 	speedSpin_->setEnabled(valid_ && !full);
+	// Hidden rather than disabled in Full editing: a dead slider reads as broken,
+	// and per-clip speed lives in the Inspector there.
+	for (QWidget *w : {static_cast<QWidget *>(speedCaption_), static_cast<QWidget *>(speedSlider_),
+			   static_cast<QWidget *>(speedSpin_), static_cast<QWidget *>(speedLabel_)})
+		if (w)
+			w->setVisible(!full);
 
 	if (m == EditMode::MultiCut) {
 		playBtn_->setToolTip(QStringLiteral("Loop-play the assembled output"));
@@ -2822,6 +2891,8 @@ void VideoEditorWindow::setEditMode(EditMode m)
 
 	// Crop is a Trim/Multi-Cut tool; Full editing uses per-clip zoom/position
 	// instead (driven from the preview with the mouse).
+	if (resetCropBtn_)
+		resetCropBtn_->setVisible(!full); // followed the Crop toggle, which already hid
 	if (cropToggle_) {
 		cropToggle_->setVisible(!full);
 		if (full && cropToggle_->isChecked()) {
@@ -2843,6 +2914,10 @@ void VideoEditorWindow::setEditMode(EditMode m)
 	syncPreviewTransformTarget();
 	if (full)
 		showTimelineFrame(timelinePlayheadMs());
+
+	// Deferred: during construction, and immediately after a mode switch, the
+	// splitter has not laid out yet and its sizes() mean nothing.
+	QTimer::singleShot(0, this, [this]() { applyModeSplit(); });
 
 	updateInfoLabel();
 	updateInspector();

@@ -17,7 +17,8 @@ struct EditorChromeParams {
 	int buttonH = 28;         // toolbar/transport button height
 	int timecodeFontPx = 18;  // the big monospace playhead timecode
 	int inspectorFontPx = 13; // the inspector's value readouts
-	int speedSliderMinW = 140; // speed slider minimum width
+	int speedSliderMinW = 96; // speed slider minimum width (drives the toolbar's
+				  // own minimum, so it caps how narrow the window can get)
 	int speedSpinW = 72;       // editable speed-value box width
 	// Pause preview playback while the app is in the background. Playback is the
 	// only thing in the editor that runs continuously on its own, so this is

@@ -346,8 +346,18 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(timelineView_, &TimelineView::hoverScrub, this, &VideoEditorWindow::onTimelineHoverScrub);
 	connect(timelineView_, &TimelineView::clipsChanged, this, [this]() {
 		updateInfoLabel();
+		syncPreviewTransformTarget();
 		scheduleSnapshot();
 	});
+	connect(timelineView_, &TimelineView::selectionChanged, this, [this](int, int) {
+		syncPreviewTransformTarget();
+		updateInspector();
+	});
+	// Direct manipulation of the selected clip straight in the preview.
+	connect(canvas_, &PreviewCanvas::transformDragged, this,
+		&VideoEditorWindow::onPreviewTransformDrag);
+	connect(canvas_, &PreviewCanvas::transformZoomed, this,
+		&VideoEditorWindow::onPreviewTransformZoom);
 
 	// ---- Voiceover: a collapsible narration section (record over the video).
 	// Collapsed by default so detailed cut work keeps the vertical space; the
@@ -1170,6 +1180,95 @@ void VideoEditorWindow::onTimelineHoverScrub(qint64 outMs)
 	previewTimer_->start();
 }
 
+qint64 VideoEditorWindow::timelinePlayheadMs() const
+{
+	if (!timelineView_)
+		return 0;
+	return std::max<qint64>(0, timelineView_->playhead());
+}
+
+void VideoEditorWindow::syncPreviewTransformTarget()
+{
+	if (!canvas_ || !timelineView_)
+		return;
+	const TlClip *c = fullEdit() ? timelineView_->selectedClipPtr() : nullptr;
+	canvas_->setTransformMode(c != nullptr);
+	if (!c) {
+		canvas_->setTransformRect(QRectF());
+		return;
+	}
+	// Outline the clip where it currently sits on the canvas.
+	const QSize canvasSize = timelineCanvasSize();
+	const qint64 ph = timelinePlayheadMs();
+	const TlTransform tf = c->transformAt(ph);
+	QSize natural;
+	if (c->type == TlClip::Type::Text) {
+		natural = TimelineCompositor::textNaturalSize(c->text, canvasSize);
+	} else if (EditorSource *s = sourceById(c->sourceId)) {
+		natural = (!c->crop.isNull() && c->crop.width() > 1) ? c->crop.size()
+								    : QSize(s->width, s->height);
+	}
+	canvas_->setTransformRect(natural.isEmpty()
+					  ? QRectF()
+					  : TimelineCompositor::clipRectOnCanvas(tf, canvasSize, natural));
+}
+
+void VideoEditorWindow::applySelectedClipTransform(const TlTransform &tf)
+{
+	if (!timelineView_)
+		return;
+	const TlClip *sel = timelineView_->selectedClipPtr();
+	if (!sel)
+		return;
+	TlClip c = *sel;
+	// Keyframed clips (or auto-key) record the pose at the playhead so the zoom
+	// animates; otherwise the clip's static pose moves.
+	if (autoKeyframe_ || !c.keys.isEmpty()) {
+		const qint64 ph = std::clamp<qint64>(timelinePlayheadMs(), c.outStartMs, c.outEndMs());
+		if (c.keys.isEmpty()) {
+			// Seed the animation with the current static pose at the clip start so
+			// the first recorded key doesn't snap the whole clip.
+			TlKeyframe seed;
+			seed.tMs = 0;
+			seed.tf = c.baseTransform();
+			c.keys.append(seed);
+		}
+		c.setKeyframeAt(ph, tf);
+	} else {
+		c.setBaseTransform(tf);
+	}
+	timelineView_->updateSelectedClip(c);
+	syncPreviewTransformTarget();
+	showTimelineFrame(timelinePlayheadMs());
+	scheduleSnapshot();
+}
+
+void VideoEditorWindow::onPreviewTransformDrag(double dxNorm, double dyNorm)
+{
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!sel)
+		return;
+	TlTransform tf = sel->transformAt(timelinePlayheadMs());
+	tf.posX += dxNorm;
+	tf.posY += dyNorm;
+	applySelectedClipTransform(tf);
+}
+
+void VideoEditorWindow::onPreviewTransformZoom(double factor, double cursorXNorm, double cursorYNorm)
+{
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!sel)
+		return;
+	TlTransform tf = sel->transformAt(timelinePlayheadMs());
+	const double newScale = std::clamp(tf.scale * factor, 0.05, 20.0);
+	const double k = newScale / std::max(0.0001, tf.scale); // actual applied factor
+	// Hold the point under the cursor fixed: c' = cursor - k * (cursor - c).
+	tf.posX = cursorXNorm - k * (cursorXNorm - tf.posX);
+	tf.posY = cursorYNorm - k * (cursorYNorm - tf.posY);
+	tf.scale = newScale;
+	applySelectedClipTransform(tf);
+}
+
 void VideoEditorWindow::dragEnterEvent(QDragEnterEvent *e)
 {
 	if (!e->mimeData()->hasUrls())
@@ -1351,6 +1450,21 @@ void VideoEditorWindow::setEditMode(EditMode m)
 		syncSpeedControls(speed_);
 		speedLabel_->setText(QString()); // no per-cut count in Simple Trim
 	}
+
+	// Crop is a Trim/Multi-Cut tool; Full editing uses per-clip zoom/position
+	// instead (driven from the preview with the mouse).
+	if (cropToggle_) {
+		cropToggle_->setVisible(!full);
+		if (full && cropToggle_->isChecked()) {
+			QSignalBlocker b(cropToggle_);
+			cropToggle_->setChecked(false);
+			canvas_->setCropEnabled(false);
+		}
+	}
+	syncPreviewTransformTarget();
+	if (full)
+		showTimelineFrame(timelinePlayheadMs());
+
 	updateInfoLabel();
 	updateInspector();
 	updateVoiceoverAxis();

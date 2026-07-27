@@ -32,18 +32,34 @@ public:
 	void setCropRectVideo(const QRect &r); // undo/redo restore; no signal
 	void resetCrop(); // full frame
 
+	// ---- Direct clip manipulation (Full editing) ------------------------
+	// When armed, dragging moves the selected timeline clip and the wheel zooms
+	// it about the cursor. Deltas are emitted normalised to the output canvas, so
+	// the window can apply them to the clip's pose (or a keyframe) directly.
+	void setTransformMode(bool on);
+	bool transformMode() const { return transformMode_; }
+	// Outline of the clip being manipulated, in output-canvas pixels (empty
+	// hides it). Drawn as a dashed selection box for feedback.
+	void setTransformRect(const QRectF &canvasRect);
+
 	// Developer Panel: tweak the preview's minimum size live.
 	const PreviewLayoutParams &layoutParams() const { return lp_; }
 	void setLayoutParams(const PreviewLayoutParams &p);
 
 signals:
 	void cropChanged(const QRect &videoRect);
+	// Incremental move, as a fraction of the canvas (add to posX/posY).
+	void transformDragged(double dxNorm, double dyNorm);
+	// Zoom by `factor` while holding the point under the cursor fixed; the
+	// cursor is given in normalised canvas coordinates.
+	void transformZoomed(double factor, double cursorXNorm, double cursorYNorm);
 
 protected:
 	void paintEvent(QPaintEvent *) override;
 	void mousePressEvent(QMouseEvent *) override;
 	void mouseMoveEvent(QMouseEvent *) override;
 	void mouseReleaseEvent(QMouseEvent *) override;
+	void wheelEvent(QWheelEvent *) override;
 
 private:
 	enum class Zone { None, Move, L, R, T, B, TL, TR, BL, BR };
@@ -62,6 +78,12 @@ private:
 	Zone drag_ = Zone::None;
 	QPoint dragStart_;
 	QRect dragStartCrop_; // widget px at press
+
+	// Full-editing clip manipulation.
+	bool transformMode_ = false;
+	bool transformDragging_ = false;
+	QPoint transformLast_;
+	QRectF transformRect_; // canvas px; empty = no outline
 };
 
 // Runtime-tweakable layout parameters for the trim Timeline (edited live from

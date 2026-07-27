@@ -101,6 +101,19 @@ void PreviewCanvas::paintEvent(QPaintEvent *)
 	if (!frame_.isNull())
 		p.drawImage(d, frame_);
 
+	// Full editing: dashed outline of the clip being manipulated (canvas px ->
+	// widget px), so it's obvious what scroll/drag will move.
+	if (transformMode_ && !transformRect_.isEmpty() && vw_ > 0 && vh_ > 0) {
+		const double sx = double(d.width()) / vw_;
+		const double sy = double(d.height()) / vh_;
+		const QRectF r(d.x() + transformRect_.x() * sx, d.y() + transformRect_.y() * sy,
+			       transformRect_.width() * sx, transformRect_.height() * sy);
+		QPen pen(QColor(0x00, 0xae, 0xef), 1.5, Qt::DashLine);
+		p.setPen(pen);
+		p.setBrush(Qt::NoBrush);
+		p.drawRect(r);
+	}
+
 	if (!cropEnabled_)
 		return;
 
@@ -158,8 +171,60 @@ PreviewCanvas::Zone PreviewCanvas::zoneAt(const QPoint &pos) const
 	return Zone::None;
 }
 
+void PreviewCanvas::setTransformMode(bool on)
+{
+	if (transformMode_ == on)
+		return;
+	transformMode_ = on;
+	transformDragging_ = false;
+	if (!on)
+		transformRect_ = QRectF();
+	setCursor(on ? Qt::OpenHandCursor : Qt::ArrowCursor);
+	update();
+}
+
+void PreviewCanvas::setTransformRect(const QRectF &canvasRect)
+{
+	if (transformRect_ == canvasRect)
+		return;
+	transformRect_ = canvasRect;
+	update();
+}
+
+void PreviewCanvas::wheelEvent(QWheelEvent *e)
+{
+	// Wheel zooms the clip under the cursor (Full editing). Anything else keeps
+	// the default behaviour so the event can propagate.
+	if (!transformMode_ || cropEnabled_) {
+		QWidget::wheelEvent(e);
+		return;
+	}
+	const QRect d = displayRect();
+	if (d.width() <= 0 || d.height() <= 0) {
+		QWidget::wheelEvent(e);
+		return;
+	}
+	const int dy = e->angleDelta().y();
+	if (dy == 0) {
+		QWidget::wheelEvent(e);
+		return;
+	}
+	const double factor = std::pow(1.15, dy / 120.0);
+	const QPointF pos = e->position();
+	const double cx = std::clamp(double(pos.x() - d.x()) / d.width(), 0.0, 1.0);
+	const double cy = std::clamp(double(pos.y() - d.y()) / d.height(), 0.0, 1.0);
+	emit transformZoomed(factor, cx, cy);
+	e->accept();
+}
+
 void PreviewCanvas::mousePressEvent(QMouseEvent *e)
 {
+	if (transformMode_ && !cropEnabled_ && e->button() == Qt::LeftButton) {
+		transformDragging_ = true;
+		transformLast_ = e->pos();
+		setCursor(Qt::ClosedHandCursor);
+		return;
+	}
 	if (!cropEnabled_ || e->button() != Qt::LeftButton)
 		return;
 	drag_ = zoneAt(e->pos());
@@ -169,6 +234,16 @@ void PreviewCanvas::mousePressEvent(QMouseEvent *e)
 
 void PreviewCanvas::mouseMoveEvent(QMouseEvent *e)
 {
+	if (transformDragging_ && (e->buttons() & Qt::LeftButton)) {
+		const QRect d = displayRect();
+		if (d.width() > 0 && d.height() > 0) {
+			const QPoint delta = e->pos() - transformLast_;
+			transformLast_ = e->pos();
+			emit transformDragged(double(delta.x()) / d.width(),
+					      double(delta.y()) / d.height());
+		}
+		return;
+	}
 	if (drag_ == Zone::None || !(e->buttons() & Qt::LeftButton))
 		return;
 	const QPoint delta = e->pos() - dragStart_;
@@ -210,6 +285,10 @@ void PreviewCanvas::mouseMoveEvent(QMouseEvent *e)
 void PreviewCanvas::mouseReleaseEvent(QMouseEvent *)
 {
 	drag_ = Zone::None;
+	if (transformDragging_) {
+		transformDragging_ = false;
+		setCursor(transformMode_ ? Qt::OpenHandCursor : Qt::ArrowCursor);
+	}
 }
 
 void PreviewCanvas::applyWidgetCrop(const QRect &widgetRect)

@@ -2,7 +2,8 @@
 
 #include "TrackEditor.hpp"        // CutSegment (stored in EditorSnapshot)
 #include "VoiceoverTrack.hpp"     // VoiceoverClip (stored in EditorSnapshot)
-#include "shader/ShaderEffect.hpp" // ShaderState / ShaderParam (post-processing)
+#include "shader/ShaderEffect.hpp"    // ShaderState / ShaderParam (post-processing)
+#include "timeline/TimelineModel.hpp" // TlClip / TlTransform (Full-editing timeline)
 
 #include <QDialog>
 #include <QElapsedTimer>
@@ -201,6 +202,17 @@ private:
 	void showTimelineFrame(qint64 outMs);
 	QSize timelineCanvasSize() const; // primary source's resolution (fallback 1920x1080)
 	void addActiveSourceToTimeline(); // "Add to timeline" for the active source
+
+	// ---- Direct manipulation of the selected clip in the preview ----
+	// Drag repositions, wheel zooms about the cursor. When the clip is
+	// keyframed (or auto-key is on) the edit lands on a keyframe at the
+	// playhead; otherwise it updates the clip's static pose.
+	void onPreviewTransformDrag(double dxNorm, double dyNorm);
+	void onPreviewTransformZoom(double factor, double cursorXNorm, double cursorYNorm);
+	void applySelectedClipTransform(const TlTransform &tf);
+	void syncPreviewTransformTarget(); // arm/disarm + refresh the outline
+	qint64 timelinePlayheadMs() const;
+	bool autoKeyframe_ = false; // record a keyframe on every transform edit
 	void updateInfoLabel();
 	bool hasUnsavedEdits() const;
 

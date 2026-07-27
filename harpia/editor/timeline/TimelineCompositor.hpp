@@ -30,7 +30,11 @@ public:
 	};
 
 	// Compose every visible track at `outMs` onto a `canvas`-sized RGBA image.
-	static QImage compose(const TimelineModel &m, qint64 outMs, QSize canvas, FrameProvider &fp);
+	// `eval` (optional) applies each clip's transform script on top of its base
+	// pose / keyframes. A QJSEngine isn't thread-safe, so pass the evaluator
+	// belonging to the CALLING thread (the preview's, or the export worker's).
+	static QImage compose(const TimelineModel &m, qint64 outMs, QSize canvas, FrameProvider &fp,
+			      class TransformEvaluator *eval = nullptr, double fps = 30.0);
 
 	// Where a clip is drawn on the canvas at this pose, in canvas pixels. Used by
 	// the preview to hit-test and drag the selected clip. `srcSize` is the clip's

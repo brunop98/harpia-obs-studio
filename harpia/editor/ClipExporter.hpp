@@ -102,6 +102,9 @@ public:
 		// format; timelineSources maps a clip's sourceId to its file path.
 		TimelineModel timeline;
 		std::map<int, std::string> timelineSources;
+		// Transform scripts by name, source included, so the worker never has to
+		// touch the user's scripts folder mid-render.
+		QMap<QString, QString> timelineScripts;
 		int canvasW = 0;
 		int canvasH = 0;
 		double timelineFps = 30.0;

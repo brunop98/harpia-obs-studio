@@ -5,8 +5,9 @@ cmake_minimum_required(VERSION 3.28...3.30)
 # small Qt frontend instead of the full OBS Studio UI.
 
 # Multimedia provides the editor's voiceover microphone capture (QAudioSource).
-# OpenGL provides the offscreen GPU shader pipeline (post-processing effects).
-find_package(Qt6 REQUIRED Widgets Gui Multimedia OpenGL)
+# OpenGL provides the offscreen GPU shader pipeline (post-processing effects);
+# Qml provides QJSEngine, which runs the per-clip transform scripts.
+find_package(Qt6 REQUIRED Widgets Gui Multimedia OpenGL Qml)
 
 # FFmpeg (bundled with OBS deps) is used to extract clip thumbnails.
 find_package(FFmpeg REQUIRED COMPONENTS avcodec avformat avutil swscale swresample avfilter)
@@ -26,6 +27,7 @@ target_link_libraries(
     Qt::Gui
     Qt::Multimedia
     Qt::OpenGL
+    Qt::Qml
     FFmpeg::avcodec
     FFmpeg::avformat
     FFmpeg::avutil
@@ -170,6 +172,9 @@ target_sources(
     editor/timeline/TimelineView.hpp
     editor/timeline/TimelineCompositor.cpp
     editor/timeline/TimelineCompositor.hpp
+    # Per-clip transform scripting (QJSEngine).
+    editor/script/TransformScript.cpp
+    editor/script/TransformScript.hpp
 )
 
 # Platform-specific idle detection + foreground-window backends.

@@ -1,5 +1,7 @@
 #include "TimelineCompositor.hpp"
 
+#include "../script/TransformScript.hpp"
+
 #include <QFont>
 #include <QFontMetricsF>
 #include <QPainter>
@@ -162,7 +164,8 @@ void TimelineCompositor::drawClip(QPainter &p, const TlClip &c, const TlTransfor
 	p.restore();
 }
 
-QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize canvas, FrameProvider &fp)
+QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize canvas, FrameProvider &fp,
+				   TransformEvaluator *eval, double fps)
 {
 	if (canvas.width() <= 0 || canvas.height() <= 0)
 		return QImage();
@@ -183,9 +186,20 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 		if (ci < 0)
 			continue;
 		const TlClip &c = t.clips[ci];
-		const TlTransform tf = c.transformAt(outMs);
+		// Base pose / keyframes first, then the clip's script overrides whichever
+		// channels it defines.
+		TlTransform tf = c.transformAt(outMs);
+		if (eval && !c.scriptName.isEmpty()) {
+			ScriptContext sctx;
+			sctx.canvasW = canvas.width();
+			sctx.canvasH = canvas.height();
+			sctx.fps = fps;
+			sctx.index = ci;
+			sctx.globalTime = double(outMs) / 1000.0;
+			tf = eval->apply(ClipScript{c.scriptName, c.scriptParams}, tf, c, outMs, sctx);
+		}
 		QImage frame;
-		if (c.type == TlClip::Type::Video)
+		if (c.type == TlClip::Type::Video || c.type == TlClip::Type::Image)
 			frame = fp.frameFor(c.sourceId, c.srcAtOutput(outMs));
 		drawClip(p, c, tf, canvas, frame);
 	}

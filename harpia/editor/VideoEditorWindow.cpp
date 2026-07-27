@@ -12,6 +12,7 @@
 #include "TrackEditor.hpp"
 #include "VoiceoverMixer.hpp"
 #include "VoiceoverTrack.hpp"
+#include "script/TransformScript.hpp"
 #include "shader/ShaderRenderer.hpp"
 #include "timeline/TimelineCompositor.hpp"
 #include "timeline/TimelineView.hpp"
@@ -640,6 +641,22 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	});
 	shadersDirPath(); // ensure the folder exists + presets are seeded
 	rebuildEffectsUI(); // show the empty-state hint
+
+	// Transform scripts: GUI-thread evaluator + live reload of the folder.
+	scriptEval_ = std::make_unique<TransformEvaluator>();
+	scriptsDirPath(); // create + seed the examples
+	refreshScriptList();
+	scriptWatch_ = new QFileSystemWatcher(this);
+	scriptWatch_->addPath(scriptsDir_);
+	connect(scriptWatch_, &QFileSystemWatcher::directoryChanged, this, [this](const QString &) {
+		refreshScriptList();
+		reloadScriptsFromDisk();
+	});
+	connect(scriptWatch_, &QFileSystemWatcher::fileChanged, this, [this](const QString &p) {
+		if (QFile::exists(p) && !scriptWatch_->files().contains(p))
+			scriptWatch_->addPath(p); // editors replace files on save
+		reloadScriptsFromDisk();
+	});
 
 	// ---- Clip properties -------------------------------------------------
 	auto *clipHdr = new QLabel(QStringLiteral("Clip"), this);
@@ -1390,10 +1407,22 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 	} fp;
 	fp.w = this;
 
+	// Any clip script that hasn't been compiled in this evaluator yet (e.g. after
+	// loading a project) is brought up before the frame is composed.
+	if (scriptEval_) {
+		for (const TlTrack &t : timelineView_->model().tracks)
+			for (const TlClip &c : t.clips)
+				if (!c.scriptName.isEmpty() && !scriptEval_->has(c.scriptName))
+					ensureScriptCompiled(c.scriptName, nullptr);
+	}
+	double fps = 30.0;
+	if (!sources_.empty() && sources_.front().seeker && sources_.front().seeker->fps() > 1.0)
+		fps = sources_.front().seeker->fps();
+
 	const QSize canvasSize = timelineCanvasSize();
 	canvas_->setVideoSize(canvasSize.width(), canvasSize.height());
-	const QImage composed =
-		TimelineCompositor::compose(timelineView_->model(), outMs, canvasSize, fp);
+	const QImage composed = TimelineCompositor::compose(timelineView_->model(), outMs, canvasSize,
+							    fp, scriptEval_.get(), fps);
 	setPreviewFrame(composed, outMs);
 }
 
@@ -1415,6 +1444,170 @@ void VideoEditorWindow::onTimelineHoverScrub(qint64 outMs)
 	pendingSource_ = -1;
 	pendingMs_ = outMs;
 	previewTimer_->start();
+}
+
+// ---- Per-clip transform scripting ----------------------------------------
+
+QString VideoEditorWindow::scriptsDirPath()
+{
+	if (scriptsDir_.isEmpty()) {
+		const QString base = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+		scriptsDir_ = base + QStringLiteral("/harpia/scripts");
+	}
+	QDir().mkpath(scriptsDir_);
+	// Seed the bundled examples when missing (never overwrite user edits).
+	for (const QString &name : {QStringLiteral("zoom-in"), QStringLiteral("fade-in-out"),
+				    QStringLiteral("shake")}) {
+		const QString dst = scriptsDir_ + QLatin1Char('/') + name + QStringLiteral(".js");
+		if (QFile::exists(dst))
+			continue;
+		QFile res(QStringLiteral(":/scripts/") + name + QStringLiteral(".js"));
+		if (res.open(QIODevice::ReadOnly)) {
+			QFile out(dst);
+			if (out.open(QIODevice::WriteOnly))
+				out.write(res.readAll());
+		}
+	}
+	return scriptsDir_;
+}
+
+QStringList VideoEditorWindow::availableScripts()
+{
+	QStringList names;
+	for (const QFileInfo &fi :
+	     QDir(scriptsDirPath()).entryInfoList({QStringLiteral("*.js")}, QDir::Files, QDir::Name))
+		names << fi.completeBaseName();
+	return names;
+}
+
+void VideoEditorWindow::refreshScriptList()
+{
+	if (!scriptCombo_)
+		return;
+	const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	const QString keep = c ? c->scriptName : QString();
+	const bool wasSyncing = syncingClip_;
+	syncingClip_ = true; // repopulating must not rewrite the clip
+	scriptCombo_->clear();
+	scriptCombo_->addItem(QStringLiteral("None"));
+	scriptCombo_->addItems(availableScripts());
+	const int idx = keep.isEmpty() ? 0 : scriptCombo_->findText(keep);
+	scriptCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
+	syncingClip_ = wasSyncing;
+}
+
+bool VideoEditorWindow::ensureScriptCompiled(const QString &name, QString *err)
+{
+	if (name.isEmpty() || !scriptEval_)
+		return false;
+	if (scriptEval_->has(name) && scriptParamDefs_.contains(name))
+		return true;
+	QFile f(scriptsDirPath() + QLatin1Char('/') + name + QStringLiteral(".js"));
+	if (!f.open(QIODevice::ReadOnly)) {
+		if (err)
+			*err = QStringLiteral("Could not read %1.js").arg(name);
+		return false;
+	}
+	const QString src = QString::fromUtf8(f.readAll());
+	f.close();
+	scriptParamDefs_.insert(name, parseShaderParams(src)); // same //@param format
+	return scriptEval_->compile(name, src, err);
+}
+
+void VideoEditorWindow::onClipScriptChanged(const QString &name)
+{
+	const QString pick = (name == QStringLiteral("None")) ? QString() : name;
+	QString err;
+	if (!pick.isEmpty() && !ensureScriptCompiled(pick, &err)) {
+		if (scriptError_) {
+			scriptError_->setText(err);
+			scriptError_->setVisible(true);
+		}
+		return;
+	}
+	if (scriptError_)
+		scriptError_->setVisible(false);
+	editSelectedClip([&](TlClip &c) {
+		c.scriptName = pick;
+		c.scriptParams.clear();
+		for (const ShaderParam &p : scriptParamDefs_.value(pick))
+			c.scriptParams[p.uniform] = p.def; // start from the declared defaults
+	});
+	rebuildScriptParams();
+}
+
+void VideoEditorWindow::rebuildScriptParams()
+{
+	if (!scriptParamBox_)
+		return;
+	auto *form = qobject_cast<QFormLayout *>(scriptParamBox_->layout());
+	if (!form)
+		return;
+	while (form->rowCount() > 0)
+		form->removeRow(0);
+
+	const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!c || c->scriptName.isEmpty())
+		return;
+	for (const ShaderParam &p : scriptParamDefs_.value(c->scriptName)) {
+		const double val = c->scriptParams.value(p.uniform, p.def);
+		auto *key = new QLabel(p.label, scriptParamBox_);
+		key->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+		if (p.type == ShaderParam::Type::Bool) {
+			auto *cb = new QCheckBox(scriptParamBox_);
+			cb->setChecked(val != 0.0);
+			connect(cb, &QCheckBox::toggled, this, [this, u = p.uniform](bool on) {
+				if (syncingClip_)
+					return;
+				editSelectedClip([&](TlClip &cl) { cl.scriptParams[u] = on ? 1.0 : 0.0; });
+			});
+			form->addRow(key, cb);
+		} else {
+			auto *row = new QWidget(scriptParamBox_);
+			auto *rl = new QHBoxLayout(row);
+			rl->setContentsMargins(0, 0, 0, 0);
+			rl->setSpacing(6);
+			auto *sl = new QSlider(Qt::Horizontal, row);
+			sl->setRange(0, 1000);
+			const double span = (p.max > p.min) ? (p.max - p.min) : 1.0;
+			sl->setValue(int(std::clamp((val - p.min) / span, 0.0, 1.0) * 1000.0));
+			auto *vlab = new QLabel(QString::number(val, 'g', 3), row);
+			vlab->setMinimumWidth(40);
+			vlab->setStyleSheet(QStringLiteral("color:#c8ccd4; font-family:monospace;"));
+			rl->addWidget(sl, 1);
+			rl->addWidget(vlab);
+			connect(sl, &QSlider::valueChanged, this,
+				[this, u = p.uniform, mn = p.min, sp = span, vlab](int v) {
+					if (syncingClip_)
+						return;
+					const double d = mn + (double(v) / 1000.0) * sp;
+					vlab->setText(QString::number(d, 'g', 3));
+					editSelectedClip([&](TlClip &cl) { cl.scriptParams[u] = d; });
+				});
+			form->addRow(key, row);
+		}
+	}
+}
+
+void VideoEditorWindow::reloadScriptsFromDisk()
+{
+	if (!scriptEval_)
+		return;
+	// Forget everything so the next evaluation recompiles from the edited files.
+	for (const QString &n : scriptParamDefs_.keys())
+		scriptEval_->forget(n);
+	scriptParamDefs_.clear();
+	QString err;
+	if (const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	    c && !c->scriptName.isEmpty())
+		ensureScriptCompiled(c->scriptName, &err);
+	// Any other clip's script recompiles lazily on its next frame.
+	if (scriptError_) {
+		scriptError_->setText(err);
+		scriptError_->setVisible(!err.isEmpty());
+	}
+	rebuildScriptParams();
+	showTimelineFrame(timelinePlayheadMs());
 }
 
 // ---- Full-editing clip inspector ----------------------------------------
@@ -1757,6 +1950,55 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	keyInfo_->setStyleSheet(QStringLiteral("color:#7f858e;"));
 	v->addWidget(keyInfo_);
 
+	// ---- Transform script -------------------------------------------------
+	auto *scHdr = new QLabel(QStringLiteral("Script"), clipBox_);
+	scHdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed; margin-top:6px;"));
+	v->addWidget(scHdr);
+	auto *scHint = new QLabel(
+		QStringLiteral("Drives position/scale/rotation/opacity in code. Channels the script "
+			       "leaves out keep the values above."),
+		clipBox_);
+	scHint->setWordWrap(true);
+	scHint->setStyleSheet(QStringLiteral("color:#7f858e;"));
+	v->addWidget(scHint);
+
+	scriptCombo_ = new QComboBox(clipBox_);
+	v->addWidget(scriptCombo_);
+	connect(scriptCombo_, &QComboBox::currentTextChanged, this, [this](const QString &t) {
+		if (syncingClip_)
+			return;
+		onClipScriptChanged(t);
+	});
+
+	auto *scBtns = new QHBoxLayout;
+	auto *scReload = new QPushButton(QStringLiteral("Reload"), clipBox_);
+	scReload->setToolTip(QStringLiteral("Recompile the scripts after editing them on disk"));
+	auto *scFolder = new QPushButton(QStringLiteral("Folder"), clipBox_);
+	scFolder->setToolTip(QStringLiteral("Open the scripts folder — drop .js files here"));
+	scBtns->addWidget(scReload);
+	scBtns->addWidget(scFolder);
+	v->addLayout(scBtns);
+	connect(scReload, &QPushButton::clicked, this, [this]() {
+		refreshScriptList();
+		reloadScriptsFromDisk();
+	});
+	connect(scFolder, &QPushButton::clicked, this,
+		[this]() { QDesktopServices::openUrl(QUrl::fromLocalFile(scriptsDirPath())); });
+
+	scriptError_ = new QLabel(QString(), clipBox_);
+	scriptError_->setWordWrap(true);
+	scriptError_->setStyleSheet(
+		QStringLiteral("color:#e5484d; font-family:monospace; font-size:11px;"));
+	scriptError_->setVisible(false);
+	v->addWidget(scriptError_);
+
+	scriptParamBox_ = new QWidget(clipBox_);
+	auto *spl = new QFormLayout(scriptParamBox_);
+	spl->setContentsMargins(0, 2, 0, 0);
+	spl->setHorizontalSpacing(8);
+	spl->setVerticalSpacing(4);
+	v->addWidget(scriptParamBox_);
+
 	// ---- Text style (text clips only) ------------------------------------
 	textBox_ = new QWidget(clipBox_);
 	textBox_->setVisible(false);
@@ -1948,6 +2190,13 @@ void VideoEditorWindow::syncClipInspector()
 					    .arg(c->keys.size())
 					    .arg(c->keys.size() == 1 ? QString() : QStringLiteral("s"))
 					    .arg(here >= 0 ? QStringLiteral(" · on one now") : QString()));
+
+	// Transform script picker + its parameter controls.
+	if (scriptCombo_) {
+		const int si = c->scriptName.isEmpty() ? 0 : scriptCombo_->findText(c->scriptName);
+		scriptCombo_->setCurrentIndex(si >= 0 ? si : 0);
+	}
+	rebuildScriptParams();
 
 	const bool isText = c->type == TlClip::Type::Text;
 	textBox_->setVisible(isText);
@@ -2951,6 +3200,16 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 					}
 					co[QStringLiteral("keys")] = keyArr;
 				}
+				if (!c.scriptName.isEmpty()) {
+					QJsonObject sc;
+					sc[QStringLiteral("name")] = c.scriptName;
+					QJsonObject sp;
+					for (auto it = c.scriptParams.constBegin();
+					     it != c.scriptParams.constEnd(); ++it)
+						sp[it.key()] = it.value();
+					sc[QStringLiteral("params")] = sp;
+					co[QStringLiteral("script")] = sc;
+				}
 				if (c.type == TlClip::Type::Text) {
 					QJsonObject tx;
 					tx[QStringLiteral("text")] = c.text.text;
@@ -3187,6 +3446,13 @@ void VideoEditorWindow::onOpenProject()
 						 ? TlKeyframe::Ease::Linear
 						 : TlKeyframe::Ease::EaseInOut;
 				c.keys.append(k);
+			}
+			if (co.contains(QStringLiteral("script"))) {
+				const QJsonObject sc = co.value(QStringLiteral("script")).toObject();
+				c.scriptName = sc.value(QStringLiteral("name")).toString();
+				const QJsonObject sp = sc.value(QStringLiteral("params")).toObject();
+				for (auto it = sp.constBegin(); it != sp.constEnd(); ++it)
+					c.scriptParams[it.key()] = it.value().toDouble();
 			}
 			if (c.type == TlClip::Type::Text) {
 				const QJsonObject tx = co.value(QStringLiteral("textStyle")).toObject();
@@ -4082,6 +4348,18 @@ void VideoEditorWindow::onSave()
 		o.timeline = timelineView_->model();
 		for (const EditorSource &es : sources_)
 			o.timelineSources[es.id] = es.path.toStdString();
+		// Ship each referenced script's SOURCE so the worker compiles its own
+		// engine without touching the scripts folder mid-render.
+		for (const TlTrack &t : o.timeline.tracks)
+			for (const TlClip &c : t.clips) {
+				if (c.scriptName.isEmpty() || o.timelineScripts.contains(c.scriptName))
+					continue;
+				QFile sf(scriptsDirPath() + QLatin1Char('/') + c.scriptName +
+					 QStringLiteral(".js"));
+				if (sf.open(QIODevice::ReadOnly))
+					o.timelineScripts.insert(c.scriptName,
+								 QString::fromUtf8(sf.readAll()));
+			}
 		const QSize canvas = timelineCanvasSize();
 		o.canvasW = canvas.width();
 		o.canvasH = canvas.height();

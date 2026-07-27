@@ -10,6 +10,7 @@
 // exporter can all share it.
 
 #include <QColor>
+#include <QMap>
 #include <QRect>
 #include <QString>
 #include <QVector>
@@ -106,6 +107,12 @@ struct TlClip {
 
 	// Text clips only.
 	TlText text;
+
+	// Optional transform script (file stem in the user's scripts folder) and its
+	// //@param values. Evaluated per frame by the compositor; channels the script
+	// doesn't define fall through to the base pose / keyframes above.
+	QString scriptName;
+	QMap<QString, double> scriptParams;
 
 	// Audio-only.
 	double volume = 1.0;
@@ -205,8 +212,9 @@ struct TlClip {
 		       srcEndMs == o.srcEndMs && speed == o.speed && outStartMs == o.outStartMs &&
 		       posX == o.posX && posY == o.posY && scale == o.scale &&
 		       rotation == o.rotation && opacity == o.opacity &&
-		       crop == o.crop && keys == o.keys && text == o.text && volume == o.volume &&
-		       fadeInMs == o.fadeInMs && fadeOutMs == o.fadeOutMs;
+		       crop == o.crop && keys == o.keys && text == o.text &&
+		       scriptName == o.scriptName && scriptParams == o.scriptParams &&
+		       volume == o.volume && fadeInMs == o.fadeInMs && fadeOutMs == o.fadeOutMs;
 	}
 };
 

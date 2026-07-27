@@ -89,6 +89,7 @@ class ClipExporter;
 class ThumbnailCache;
 class ShaderRenderer;
 class TimelineView;
+class TransformEvaluator;
 
 // One video the editor can cut from. The first source is the file the editor
 // was launched on; more are added via the sidebar / drag-and-drop. Each owns
@@ -356,6 +357,24 @@ private:
 	void revealProjectFolder();
 	// A collapsible "▾ Title" section; returns the body to fill in.
 	QWidget *addSection(QVBoxLayout *into, const QString &title, bool expanded);
+
+	// ---- Per-clip transform scripting ----
+	// The GUI-thread evaluator (the exporter makes its own on its worker). Script
+	// files live beside the shaders, with the same //@param convention.
+	std::unique_ptr<TransformEvaluator> scriptEval_;
+	QComboBox *scriptCombo_ = nullptr;
+	QWidget *scriptParamBox_ = nullptr;
+	QLabel *scriptError_ = nullptr;
+	QFileSystemWatcher *scriptWatch_ = nullptr;
+	QString scriptsDir_;
+	QHash<QString, QVector<ShaderParam>> scriptParamDefs_; // per script name
+	QString scriptsDirPath();          // ensure + seed the folder
+	QStringList availableScripts();
+	void refreshScriptList(); // rescan the folder into the combo
+	bool ensureScriptCompiled(const QString &name, QString *err); // compile into scriptEval_
+	void onClipScriptChanged(const QString &name);
+	void rebuildScriptParams();        // controls for the selected clip's script
+	void reloadScriptsFromDisk();      // live reload: recompile + repaint
 
 	void buildClipInspector(QVBoxLayout *into);
 	void syncClipInspector();                       // selected clip -> controls

@@ -4,6 +4,7 @@
 #include "FrameSeeker.hpp"
 #include "GifEncoder.hpp"
 #include "VoiceoverMixer.hpp"
+#include "script/TransformScript.hpp"
 #include "shader/ShaderRenderer.hpp"
 #include "timeline/TimelineCompositor.hpp"
 
@@ -1435,6 +1436,16 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 		}
 	}
 
+	// Transform scripts run on THIS thread (a QJSEngine can't be shared), from
+	// the sources carried on Options rather than off disk.
+	TransformEvaluator scriptEval;
+	for (auto it = opts.timelineScripts.constBegin(); it != opts.timelineScripts.constEnd(); ++it) {
+		QString serr;
+		if (!scriptEval.compile(it.key(), it.value(), &serr))
+			return QStringLiteral("The transform script \"%1\" failed to compile:\n%2")
+				.arg(it.key(), serr);
+	}
+
 	// Optional post-processing shader chain, applied to the composited RGBA frame
 	// before it is converted for the encoder (same chain as the preview).
 	ShaderRenderer shader;
@@ -1550,7 +1561,8 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 			break;
 		const qint64 tMs = qint64(std::llround(double(i) * 1000.0 / fps));
 
-		QImage composed = TimelineCompositor::compose(tl, tMs, canvas, provider);
+		QImage composed =
+			TimelineCompositor::compose(tl, tMs, canvas, provider, &scriptEval, fps);
 		if (composed.isNull()) {
 			cleanup();
 			return QStringLiteral("Could not compose the timeline frame.");

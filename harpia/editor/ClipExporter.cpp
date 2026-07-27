@@ -1,16 +1,21 @@
 #include "ClipExporter.hpp"
 
 #include "AudioRetimer.hpp"
+#include "FrameSeeker.hpp"
 #include "GifEncoder.hpp"
 #include "VoiceoverMixer.hpp"
 #include "shader/ShaderRenderer.hpp"
+#include "timeline/TimelineCompositor.hpp"
 
 #include <QImage>
+#include <QSize>
+#include <QTemporaryDir>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <memory>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -184,10 +189,10 @@ void ClipExporter::run(const QString &inPath, const QString &outPath, const Opti
 	cancel_.store(false);
 
 	if (opts.format == Format::Gif) {
-		if (!opts.cuts.empty()) {
+		if (!opts.cuts.empty() || !opts.timeline.isEmpty()) {
 			emit finished(false, false,
-				      QStringLiteral("GIF export is not available in Multi-Cut mode yet — "
-						     "choose MP4, MKV or MOV."));
+				      QStringLiteral("GIF export is not available in Multi-Cut or Full "
+						     "editing yet — choose MP4, MKV or MOV."));
 			return;
 		}
 		// Delegate to the avfilter-based GIF encoder; bridge its callbacks to our
@@ -215,16 +220,23 @@ void ClipExporter::run(const QString &inPath, const QString &outPath, const Opti
 	}
 
 	QString err;
-	if (opts.cuts.empty())
+	const bool timeline = !opts.timeline.isEmpty();
+	if (timeline)
+		err = runTimeline(outPath, opts); // Full editing: composited multi-track
+	else if (opts.cuts.empty())
 		err = runVideo(inPath, outPath, opts);
 	else if (opts.inputs.size() > 1)
 		err = runVideoCutsMulti(outPath, opts); // cuts drawn from several sources
 	else
 		err = runVideoCuts(inPath, outPath, opts);
 
-	// Voiceover is mixed in a second pass over the finished file (video
-	// containers only; GIF returned above).
-	if (err.isEmpty() && !opts.voiceovers.empty() && !cancel_.load()) {
+	// Audio is mixed in a second pass over the finished file (video containers
+	// only; GIF returned above). The timeline mixes every clip at its own
+	// position; the other modes mix the voiceover takes over the source audio.
+	if (err.isEmpty() && timeline && !cancel_.load()) {
+		emit progress(97, 0, 0);
+		err = mixTimelineAudio(outPath, opts);
+	} else if (err.isEmpty() && !opts.voiceovers.empty() && !cancel_.load()) {
 		emit progress(97, 0, 0);
 		err = mixVoiceover(outPath, opts);
 	}
@@ -1333,6 +1345,265 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 	if (errored)
 		return audioErr.isEmpty() ? QStringLiteral("Encoding failed.") : audioErr;
 	return QString();
+}
+
+// ===================== Full editing: timeline render =====================
+
+QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
+{
+	const TimelineModel &tl = opts.timeline;
+	const qint64 totalMs = tl.durationMs();
+	if (totalMs <= 0)
+		return QStringLiteral("The timeline is empty — add a clip before exporting.");
+
+	const int cw = evenDown(std::max(2, opts.canvasW));
+	const int ch = evenDown(std::max(2, opts.canvasH));
+	const double fps = std::clamp(opts.timelineFps > 0.1 ? opts.timelineFps : 30.0, 1.0, 240.0);
+	const QSize canvas(cw, ch);
+
+	// One decoder per source the timeline references. FrameSeeker::frameAt rolls
+	// forward without seeking for near-future requests, which is exactly the
+	// access pattern of a linear render.
+	struct Provider : TimelineCompositor::FrameProvider {
+		std::map<int, std::unique_ptr<FrameSeeker>> seekers;
+		int w = 0, h = 0;
+		QImage frameFor(int sourceId, qint64 srcMs) override
+		{
+			auto it = seekers.find(sourceId);
+			if (it == seekers.end() || !it->second)
+				return QImage();
+			return it->second->frameAt(srcMs, w, h);
+		}
+	} provider;
+	provider.w = cw;
+	provider.h = ch;
+	for (const TlTrack &t : tl.tracks) {
+		if (t.kind != TlTrack::Kind::Video)
+			continue;
+		for (const TlClip &c : t.clips) {
+			if (c.type != TlClip::Type::Video || provider.seekers.count(c.sourceId))
+				continue;
+			const auto sit = opts.timelineSources.find(c.sourceId);
+			if (sit == opts.timelineSources.end())
+				continue;
+			auto fs = std::make_unique<FrameSeeker>();
+			if (fs->open(QString::fromStdString(sit->second)))
+				provider.seekers[c.sourceId] = std::move(fs);
+		}
+	}
+
+	// Optional post-processing shader chain, applied to the composited RGBA frame
+	// before it is converted for the encoder (same chain as the preview).
+	ShaderRenderer shader;
+	QVector<QMap<QString, double>> shaderParams;
+	bool shaderOn = false;
+	if (!opts.effects.empty()) {
+		if (!shader.ensureGl())
+			return QStringLiteral("The effect needs OpenGL 3.3, which isn't available here: %1")
+				.arg(shader.lastError());
+		QVector<ShaderLayerSource> layers;
+		for (const auto &e : opts.effects) {
+			layers.append({e.source, e.paramDefs});
+			shaderParams.append(e.params);
+		}
+		QString serr;
+		if (!shader.setChain(layers, &serr))
+			return QStringLiteral("The effect shader failed to compile:\n%1").arg(serr);
+		shaderOn = true;
+	}
+
+	// ---- Output container + encoder (mirrors the multi-source path) -------
+	VideoState s;
+	const char *encName = (opts.format == Format::WebM) ? "libvpx-vp9" : "libx264";
+	const AVCodec *vc = avcodec_find_encoder_by_name(encName);
+	if (!vc)
+		return QStringLiteral("The output video encoder is not available in this build.");
+	s.venc = avcodec_alloc_context3(vc);
+	if (!s.venc)
+		return QStringLiteral("Could not allocate the video encoder.");
+	s.venc->width = cw;
+	s.venc->height = ch;
+	s.venc->pix_fmt = AV_PIX_FMT_YUV420P;
+	s.venc->time_base = AVRational{1, 90000};
+	s.venc->framerate = av_d2q(fps, 1000000);
+	s.venc->gop_size = std::max(1, int(fps * 2.0));
+
+	const QByteArray out = outPath.toUtf8();
+	if (avformat_alloc_output_context2(&s.ofmt, nullptr, nullptr, out.constData()) < 0 || !s.ofmt)
+		return QStringLiteral("Could not create the output file.");
+	if (s.ofmt->oformat->flags & AVFMT_GLOBALHEADER)
+		s.venc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+	if (opts.format == Format::WebM) {
+		s.venc->bit_rate = 0;
+		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
+		av_opt_set(s.venc->priv_data, "deadline", "good", 0);
+		av_opt_set_int(s.venc->priv_data, "cpu-used", 5, 0);
+		av_opt_set(s.venc->priv_data, "row-mt", "1", 0);
+	} else {
+		av_opt_set(s.venc->priv_data, "preset", "veryfast", 0);
+		av_opt_set(s.venc->priv_data, "profile", "high", 0);
+		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
+	}
+	if (avcodec_open2(s.venc, vc, nullptr) < 0)
+		return QStringLiteral("Could not open the video encoder.");
+	s.vOut = avformat_new_stream(s.ofmt, nullptr);
+	if (!s.vOut || avcodec_parameters_from_context(s.vOut->codecpar, s.venc) < 0)
+		return QStringLiteral("Could not create the output video stream.");
+	s.vOut->time_base = s.venc->time_base;
+	if (!(s.ofmt->oformat->flags & AVFMT_NOFILE) &&
+	    avio_open(&s.ofmt->pb, out.constData(), AVIO_FLAG_WRITE) < 0)
+		return QStringLiteral("Could not open the output file for writing.");
+	if (avformat_write_header(s.ofmt, nullptr) < 0)
+		return QStringLiteral("Could not write the output header.");
+	s.headerWritten = true;
+
+	// RGBA (composited) -> YUV420P (encoder).
+	SwsContext *toYuv = sws_getContext(cw, ch, AV_PIX_FMT_RGBA, cw, ch, AV_PIX_FMT_YUV420P,
+					   SWS_BILINEAR, nullptr, nullptr, nullptr);
+	AVFrame *yuv = av_frame_alloc();
+	AVPacket *pkt = av_packet_alloc();
+	if (!toYuv || !yuv || !pkt) {
+		if (toYuv)
+			sws_freeContext(toYuv);
+		if (yuv)
+			av_frame_free(&yuv);
+		if (pkt)
+			av_packet_free(&pkt);
+		return QStringLiteral("Could not allocate the render buffers.");
+	}
+	yuv->format = AV_PIX_FMT_YUV420P;
+	yuv->width = cw;
+	yuv->height = ch;
+	av_frame_get_buffer(yuv, 0);
+
+	auto cleanup = [&]() {
+		sws_freeContext(toYuv);
+		av_frame_free(&yuv);
+		av_packet_free(&pkt);
+	};
+	auto encode = [&](AVFrame *f) -> bool {
+		if (avcodec_send_frame(s.venc, f) < 0)
+			return false;
+		while (true) {
+			const int r = avcodec_receive_packet(s.venc, pkt);
+			if (r == AVERROR(EAGAIN) || r == AVERROR_EOF)
+				break;
+			if (r < 0)
+				return false;
+			av_packet_rescale_ts(pkt, s.venc->time_base, s.vOut->time_base);
+			pkt->stream_index = s.vOut->index;
+			if (av_interleaved_write_frame(s.ofmt, pkt) < 0)
+				return false;
+			av_packet_unref(pkt);
+		}
+		return true;
+	};
+
+	// ---- Render every frame -----------------------------------------------
+	const auto t0 = std::chrono::steady_clock::now();
+	const int64_t frames = std::max<int64_t>(1, int64_t(std::llround(totalMs / 1000.0 * fps)));
+	for (int64_t i = 0; i < frames; ++i) {
+		if (cancel_.load())
+			break;
+		const qint64 tMs = qint64(std::llround(double(i) * 1000.0 / fps));
+
+		QImage composed = TimelineCompositor::compose(tl, tMs, canvas, provider);
+		if (composed.isNull()) {
+			cleanup();
+			return QStringLiteral("Could not compose the timeline frame.");
+		}
+		if (shaderOn)
+			composed = shader.apply(composed, float(tMs) / 1000.0f, int(i), shaderParams);
+		if (composed.format() != QImage::Format_RGBA8888)
+			composed = composed.convertToFormat(QImage::Format_RGBA8888);
+
+		if (av_frame_make_writable(yuv) < 0) {
+			cleanup();
+			return QStringLiteral("Could not prepare the encoder frame.");
+		}
+		const uint8_t *src[4] = {composed.constBits(), nullptr, nullptr, nullptr};
+		int srcStride[4] = {int(composed.bytesPerLine()), 0, 0, 0};
+		sws_scale(toYuv, src, srcStride, 0, ch, yuv->data, yuv->linesize);
+		yuv->pts = av_rescale_q(tMs, AVRational{1, 1000}, s.venc->time_base);
+		if (!encode(yuv)) {
+			cleanup();
+			return QStringLiteral("Encoding failed.");
+		}
+
+		if ((i % 8) == 0) {
+			const double done = double(i + 1) / double(frames);
+			const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+						     std::chrono::steady_clock::now() - t0)
+						     .count();
+			const qint64 eta = done > 0.01 ? qint64(elapsed / done - elapsed) : 0;
+			const qint64 bytes = s.ofmt->pb ? avio_tell(s.ofmt->pb) : 0;
+			emit progress(std::min(95, int(done * 95.0)), eta, bytes);
+		}
+	}
+
+	encode(nullptr); // flush
+	av_write_trailer(s.ofmt);
+	cleanup();
+	if (cancel_.load())
+		return QString();
+	return QString();
+}
+
+QString ClipExporter::mixTimelineAudio(const QString &videoPath, const Options &opts)
+{
+	// Every clip contributes its source audio at its own output position: video
+	// clips bring the footage's sound, audio-track clips their own. Decoding each
+	// source once to a 48k stereo WAV lets VoiceoverMixer do positional,
+	// sample-domain mixing (the same path narration already uses).
+	QTemporaryDir tmp;
+	if (!tmp.isValid())
+		return QStringLiteral("Could not create a temporary folder for the audio mix.");
+
+	std::map<int, QString> wavForSource; // sourceId -> decoded WAV ("" = no audio)
+	std::vector<VoiceoverMixer::Take> takes;
+
+	for (const TlTrack &t : opts.timeline.tracks) {
+		if (t.muted)
+			continue;
+		for (const TlClip &c : t.clips) {
+			if (c.type == TlClip::Type::Text)
+				continue; // text has no audio
+			// Speed-changed clips would need atempo to stay in sync; the timeline
+			// UI only creates 1x clips today, so skip anything else rather than
+			// emit audio that drifts against the picture.
+			if (std::abs(c.speed - 1.0) > 0.01)
+				continue;
+			auto it = wavForSource.find(c.sourceId);
+			if (it == wavForSource.end()) {
+				const auto sit = opts.timelineSources.find(c.sourceId);
+				QString wav;
+				if (sit != opts.timelineSources.end()) {
+					const QString cand =
+						tmp.filePath(QStringLiteral("src%1.wav").arg(c.sourceId));
+					if (VoiceoverMixer::decodeToWav(
+						    QString::fromStdString(sit->second), cand))
+						wav = cand;
+				}
+				it = wavForSource.emplace(c.sourceId, wav).first;
+			}
+			if (it->second.isEmpty())
+				continue; // that source has no usable audio
+			VoiceoverMixer::Take tk;
+			tk.path = it->second;
+			tk.outStartMs = c.outStartMs;
+			tk.srcStartMs = c.srcStartMs;
+			tk.playMs = c.srcLenMs();
+			tk.volume = (t.kind == TlTrack::Kind::Audio) ? c.volume : 1.0;
+			tk.fadeInMs = c.fadeInMs;
+			tk.fadeOutMs = c.fadeOutMs;
+			takes.push_back(tk);
+		}
+	}
+
+	if (takes.empty())
+		return QString(); // a silent timeline is fine — leave the video as-is
+	// originalVolume 0: the rendered video has no audio of its own to keep.
+	return VoiceoverMixer::mix(videoPath, 0.0, false, takes, &cancel_);
 }
 
 } // namespace harpia

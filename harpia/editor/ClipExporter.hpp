@@ -3,9 +3,11 @@
 #include <QObject>
 #include <QString>
 
-#include "shader/ShaderEffect.hpp" // ShaderParam (post-processing effect)
+#include "shader/ShaderEffect.hpp"    // ShaderParam (post-processing effect)
+#include "timeline/TimelineModel.hpp" // TimelineModel (Full-editing export)
 
 #include <atomic>
+#include <map>
 #include <vector>
 
 namespace harpia {
@@ -91,6 +93,18 @@ public:
 			QMap<QString, double> params;
 		};
 		std::vector<Effect> effects;
+
+		// ---- "Full editing" multi-track timeline -------------------------
+		// When the timeline has clips it REPLACES cuts/inputs/trim: every output
+		// frame is composited from the visible video tracks (with per-clip
+		// transform, keyframes and text) and the audio of every clip is mixed at
+		// its own output position. canvasW/H and timelineFps define the output
+		// format; timelineSources maps a clip's sourceId to its file path.
+		TimelineModel timeline;
+		std::map<int, std::string> timelineSources;
+		int canvasW = 0;
+		int canvasH = 0;
+		double timelineFps = 30.0;
 	};
 
 	static QString extensionFor(Format f); // "mp4"/"mkv"/"mov"/"webm"/"gif"
@@ -113,10 +127,15 @@ private:
 	// Multi-source multi-cut path: cuts drawn from opts.inputs, each frame scaled
 	// and letterboxed onto the primary (inputs[0]) canvas.
 	QString runVideoCutsMulti(const QString &outPath, const Options &opts);
+	// "Full editing" path: composite the multi-track timeline frame by frame.
+	QString runTimeline(const QString &outPath, const Options &opts);
 
 	// Post-process: mix opts.voiceovers over the just-written `videoPath`'s audio
 	// in place (via VoiceoverMixer). Returns "" on success, else an error.
 	QString mixVoiceover(const QString &videoPath, const Options &opts);
+	// Post-process for the timeline: mix every clip's audio at its own output
+	// position (video clips contribute their source audio too).
+	QString mixTimelineAudio(const QString &videoPath, const Options &opts);
 
 	std::atomic<bool> cancel_{false};
 };

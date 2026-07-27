@@ -3269,12 +3269,10 @@ void VideoEditorWindow::onSave()
 		return;
 	stopPlayback();
 
-	if (fullEdit()) {
-		// Timeline rendering (the compositing exporter) lands in a later update.
+	if (fullEdit() && timelineView_->model().isEmpty()) {
 		QMessageBox::information(
 			this, QStringLiteral("Export"),
-			QStringLiteral("Exporting the Full-editing timeline is coming in the next update. "
-				       "For now, export from Simple Trim or Multi-Cut."));
+			QStringLiteral("The timeline is empty — add a clip before exporting."));
 		return;
 	}
 
@@ -3340,6 +3338,28 @@ void VideoEditorWindow::onSave()
 				if (EditorSource *es = sourceById(sid))
 					o.inputs.push_back(es->path.toStdString());
 		}
+		o.startMs = 0;
+		o.endMs = 0;
+		o.speed = 1.0;
+	}
+
+	// Full editing: hand over the whole timeline. It replaces the trim range and
+	// the cut list — the exporter composites every visible track per frame.
+	if (fullEdit()) {
+		o.timeline = timelineView_->model();
+		for (const EditorSource &es : sources_)
+			o.timelineSources[es.id] = es.path.toStdString();
+		const QSize canvas = timelineCanvasSize();
+		o.canvasW = canvas.width();
+		o.canvasH = canvas.height();
+		// Match the primary source's frame rate when we know it.
+		double fps = 30.0;
+		if (!sources_.empty() && sources_.front().seeker && sources_.front().seeker->fps() > 1.0)
+			fps = sources_.front().seeker->fps();
+		o.timelineFps = fps;
+		o.cuts.clear();
+		o.inputs.clear();
+		o.crop = false;
 		o.startMs = 0;
 		o.endMs = 0;
 		o.speed = 1.0;

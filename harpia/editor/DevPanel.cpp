@@ -54,6 +54,45 @@ void DevPanel::saveChrome(const EditorChromeParams &p)
 	s.endGroup();
 }
 
+TimelineViewParams DevPanel::loadFullTimeline()
+{
+	TimelineViewParams p; // struct defaults are the shipped values
+	const TimelineViewParams d;
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout"));
+	p.gutterW = s.value(QStringLiteral("ft/gutterW"), d.gutterW).toInt();
+	p.rulerH = s.value(QStringLiteral("ft/rulerH"), d.rulerH).toInt();
+	p.videoLaneH = s.value(QStringLiteral("ft/videoLaneH"), d.videoLaneH).toInt();
+	p.audioLaneH = s.value(QStringLiteral("ft/audioLaneH"), d.audioLaneH).toInt();
+	p.laneGap = s.value(QStringLiteral("ft/laneGap"), d.laneGap).toInt();
+	p.margin = s.value(QStringLiteral("ft/margin"), d.margin).toInt();
+	p.minClipW = s.value(QStringLiteral("ft/minClipW"), d.minClipW).toInt();
+	p.snapPx = s.value(QStringLiteral("ft/snapPx"), d.snapPx).toInt();
+	p.dropBandPx = s.value(QStringLiteral("ft/dropBandPx"), d.dropBandPx).toInt();
+	p.segFontPx = s.value(QStringLiteral("ft/segFontPx"), d.segFontPx).toInt();
+	p.maxZoom = s.value(QStringLiteral("ft/maxZoom"), d.maxZoom).toDouble();
+	s.endGroup();
+	return p;
+}
+
+void DevPanel::saveFullTimeline(const TimelineViewParams &p)
+{
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout"));
+	s.setValue(QStringLiteral("ft/gutterW"), p.gutterW);
+	s.setValue(QStringLiteral("ft/rulerH"), p.rulerH);
+	s.setValue(QStringLiteral("ft/videoLaneH"), p.videoLaneH);
+	s.setValue(QStringLiteral("ft/audioLaneH"), p.audioLaneH);
+	s.setValue(QStringLiteral("ft/laneGap"), p.laneGap);
+	s.setValue(QStringLiteral("ft/margin"), p.margin);
+	s.setValue(QStringLiteral("ft/minClipW"), p.minClipW);
+	s.setValue(QStringLiteral("ft/snapPx"), p.snapPx);
+	s.setValue(QStringLiteral("ft/dropBandPx"), p.dropBandPx);
+	s.setValue(QStringLiteral("ft/segFontPx"), p.segFontPx);
+	s.setValue(QStringLiteral("ft/maxZoom"), p.maxZoom);
+	s.endGroup();
+}
+
 void DevPanel::loadInto(TimelineLayoutParams &tl, TrackLayoutParams &tr, VoiceoverLayoutParams &vo,
 			PreviewLayoutParams &pv)
 {
@@ -244,6 +283,8 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 	const VoiceoverLayoutParams vo = voice_->layoutParams();
 	// Full-editing multi-track timeline (only when that widget exists).
 	if (fullTimeline_) {
+		// The widget was already given the saved values at startup, so reading
+		// them back keeps the boxes in step with what's on screen.
 		const TimelineViewParams ft = fullTimeline_->layoutParams();
 		auto *ftBox = new QGroupBox(QStringLiteral("Full-editing timeline"), inner);
 		auto *ftForm = new QFormLayout(ftBox);
@@ -360,6 +401,7 @@ void DevPanel::applyFullTimeline()
 	p.segFontPx = ftSegFontPx_->value();
 	p.maxZoom = ftMaxZoom_->value();
 	fullTimeline_->setLayoutParams(p);
+	saveFullTimeline(p); // auto-saved, like every other group
 }
 
 void DevPanel::applyPreview()
@@ -434,13 +476,30 @@ void DevPanel::resetDefaults()
 	winInsFont_->setValue(ch.inspectorFontPx);
 	winSpeedW_->setValue(ch.speedSliderMinW);
 	winSpinW_->setValue(ch.speedSpinW);
+	const TimelineViewParams ft; // Full-editing timeline defaults
+	if (ftGutterW_) {
+		ftGutterW_->setValue(ft.gutterW);
+		ftRulerH_->setValue(ft.rulerH);
+		ftVideoLaneH_->setValue(ft.videoLaneH);
+		ftAudioLaneH_->setValue(ft.audioLaneH);
+		ftLaneGap_->setValue(ft.laneGap);
+		ftMargin_->setValue(ft.margin);
+		ftMinClipW_->setValue(ft.minClipW);
+		ftSnapPx_->setValue(ft.snapPx);
+		ftDropBandPx_->setValue(ft.dropBandPx);
+		ftSegFontPx_->setValue(ft.segFontPx);
+		ftMaxZoom_->setValue(ft.maxZoom);
+	}
 	loading_ = false;
 	timeline_->setLayoutParams(tl);
 	tracks_->setLayoutParams(tr);
 	voice_->setLayoutParams(vo);
 	preview_->setLayoutParams(pv);
+	if (fullTimeline_)
+		fullTimeline_->setLayoutParams(ft);
 	saveFrom(tl, tr, vo, pv);
 	saveChrome(ch);
+	saveFullTimeline(ft);
 	emit chromeChanged(ch);
 }
 

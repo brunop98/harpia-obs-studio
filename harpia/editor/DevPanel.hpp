@@ -54,6 +54,11 @@ public:
 	static EditorChromeParams loadChrome();
 	static void saveChrome(const EditorChromeParams &p);
 
+	// Full-editing timeline layout. Kept as its own pair (like the chrome above)
+	// so the older loadInto/saveFrom signature stays untouched.
+	static TimelineViewParams loadFullTimeline();
+	static void saveFullTimeline(const TimelineViewParams &p);
+
 signals:
 	void chromeChanged(const EditorChromeParams &p);
 

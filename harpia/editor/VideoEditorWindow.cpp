@@ -827,6 +827,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		tracks_->setLayoutParams(tr);
 		voTrack_->setLayoutParams(vo);
 		canvas_->setLayoutParams(pv);
+		timelineView_->setLayoutParams(DevPanel::loadFullTimeline());
 	}
 
 	// Open the launch file as the first source.

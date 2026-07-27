@@ -368,6 +368,14 @@ private:
 	QFileSystemWatcher *scriptWatch_ = nullptr;
 	QString scriptsDir_;
 	QHash<QString, QVector<ShaderParam>> scriptParamDefs_; // per script name
+	// Which script scriptParamBox_ currently holds controls for, and handles on
+	// those controls. Keeping them lets a refresh update values in place instead
+	// of tearing the widgets down — which otherwise happens under the user's
+	// cursor mid-drag, and once per mouse-move while reframing in the preview.
+	QString scriptParamsBuiltFor_;
+	QHash<QString, QSlider *> scriptParamSliders_;
+	QHash<QString, QLabel *> scriptParamValues_;
+	QHash<QString, QCheckBox *> scriptParamChecks_;
 	QString scriptsDirPath();          // ensure + seed the folder
 	QStringList availableScripts();
 	void refreshScriptList(); // rescan the folder into the combo

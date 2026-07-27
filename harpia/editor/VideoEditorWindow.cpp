@@ -54,6 +54,7 @@
 #include <QSpinBox>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSettings>
 #include <QShortcut>
 #include <QSlider>
@@ -359,6 +360,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(timelineView_, &TimelineView::clipsChanged, this, [this]() {
 		updateInfoLabel();
 		syncPreviewTransformTarget();
+		// Moving or trimming a clip on the timeline changes where the playhead
+		// falls inside it, so the pose and keyframe readout the Inspector shows
+		// have to follow along live.
+		syncClipInspector();
 		scheduleSnapshot();
 	});
 	connect(timelineView_, &TimelineView::selectionChanged, this, [this](int, int) {
@@ -563,12 +568,34 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	inspector_ = new QWidget(this);
 	inspector_->setMinimumWidth(180);
 	inspector_->setVisible(false); // collapsed until the Inspector button opens it
-	auto *insLayout = new QVBoxLayout(inspector_);
-	insLayout->setContentsMargins(10, 8, 10, 8);
-	insLayout->setSpacing(6);
+	auto *insOuter = new QVBoxLayout(inspector_);
+	insOuter->setContentsMargins(0, 0, 0, 0);
+	insOuter->setSpacing(0);
+
+	// The header stays put; only the sections below it scroll.
 	auto *insHeader = new QLabel(QStringLiteral("Inspector"), this);
-	insHeader->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
-	insLayout->addWidget(insHeader);
+	insHeader->setStyleSheet(
+		QStringLiteral("font-weight:bold; color:#e8eaed; padding:8px 10px 2px 10px;"));
+	insOuter->addWidget(insHeader);
+
+	// Project, Effects, clip transform, keyframes, text and script add up to far
+	// more than a window's height. Without a scroll area the layout squeezes the
+	// sections past their minimums and they overlap, so the content lives in one.
+	auto *insScroll = new QScrollArea(inspector_);
+	insScroll->setWidgetResizable(true);
+	insScroll->setFrameShape(QFrame::NoFrame);
+	insScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	insScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+	insScroll->viewport()->setAutoFillBackground(false);
+	insScroll->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; }"));
+	insOuter->addWidget(insScroll, 1);
+
+	auto *insContent = new QWidget(insScroll);
+	insContent->setAutoFillBackground(false);
+	insScroll->setWidget(insContent);
+	auto *insLayout = new QVBoxLayout(insContent);
+	insLayout->setContentsMargins(10, 6, 10, 8);
+	insLayout->setSpacing(6);
 
 	// Project-level metadata + actions (collapsible, above the per-clip panels).
 	buildProjectInspector(insLayout);
@@ -1543,13 +1570,43 @@ void VideoEditorWindow::rebuildScriptParams()
 	auto *form = qobject_cast<QFormLayout *>(scriptParamBox_->layout());
 	if (!form)
 		return;
-	while (form->rowCount() > 0)
-		form->removeRow(0);
 
 	const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
-	if (!c || c->scriptName.isEmpty())
+	const QString want = c ? c->scriptName : QString();
+
+	// The controls only need rebuilding when the script itself changes. Doing it
+	// on every refresh would destroy the very slider the user is dragging, and
+	// this runs once per mouse-move while reframing a clip in the preview.
+	if (want == scriptParamsBuiltFor_) {
+		if (!c || want.isEmpty())
+			return;
+		for (const ShaderParam &p : scriptParamDefs_.value(want)) {
+			const double val = c->scriptParams.value(p.uniform, p.def);
+			if (QCheckBox *cb = scriptParamChecks_.value(p.uniform)) {
+				const QSignalBlocker b(cb);
+				cb->setChecked(val != 0.0);
+			}
+			if (QSlider *sl = scriptParamSliders_.value(p.uniform)) {
+				const double span = (p.max > p.min) ? (p.max - p.min) : 1.0;
+				const QSignalBlocker b(sl);
+				sl->setValue(int(std::clamp((val - p.min) / span, 0.0, 1.0) * 1000.0));
+			}
+			if (QLabel *vl = scriptParamValues_.value(p.uniform))
+				vl->setText(QString::number(val, 'g', 3));
+		}
 		return;
-	for (const ShaderParam &p : scriptParamDefs_.value(c->scriptName)) {
+	}
+
+	while (form->rowCount() > 0)
+		form->removeRow(0);
+	scriptParamSliders_.clear();
+	scriptParamValues_.clear();
+	scriptParamChecks_.clear();
+	scriptParamsBuiltFor_ = want;
+
+	if (!c || want.isEmpty())
+		return;
+	for (const ShaderParam &p : scriptParamDefs_.value(want)) {
 		const double val = c->scriptParams.value(p.uniform, p.def);
 		auto *key = new QLabel(p.label, scriptParamBox_);
 		key->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
@@ -1561,6 +1618,7 @@ void VideoEditorWindow::rebuildScriptParams()
 					return;
 				editSelectedClip([&](TlClip &cl) { cl.scriptParams[u] = on ? 1.0 : 0.0; });
 			});
+			scriptParamChecks_.insert(p.uniform, cb);
 			form->addRow(key, cb);
 		} else {
 			auto *row = new QWidget(scriptParamBox_);
@@ -1584,6 +1642,8 @@ void VideoEditorWindow::rebuildScriptParams()
 					vlab->setText(QString::number(d, 'g', 3));
 					editSelectedClip([&](TlClip &cl) { cl.scriptParams[u] = d; });
 				});
+			scriptParamSliders_.insert(p.uniform, sl);
+			scriptParamValues_.insert(p.uniform, vlab);
 			form->addRow(key, row);
 		}
 	}
@@ -2187,6 +2247,10 @@ void VideoEditorWindow::syncClipInspector()
 	if (!c)
 		return;
 
+	// Save/restore rather than clear: a live edit can reach here while an outer
+	// sync is already in progress, and clearing the flag would let the widgets
+	// being repopulated write back into the clip.
+	const bool wasSyncing = syncingClip_;
 	syncingClip_ = true;
 	const qint64 ph = timelinePlayheadMs();
 	const TlTransform tf = c->transformAt(ph);
@@ -2218,7 +2282,11 @@ void VideoEditorWindow::syncClipInspector()
 	if (isText) {
 		if (textEdit_->toPlainText() != c->text.text)
 			textEdit_->setPlainText(c->text.text);
-		if (!c->text.fontFamily.isEmpty())
+		// Only when it actually differs: setCurrentFont on every refresh makes the
+		// combo re-resolve the family, which is needless work now that this runs
+		// on each mouse-move of a drag.
+		if (!c->text.fontFamily.isEmpty() &&
+		    fontCombo_->currentFont().family() != c->text.fontFamily)
 			fontCombo_->setCurrentFont(QFont(c->text.fontFamily));
 		fontSizeSpin_->setValue(c->text.fontPx);
 		boldChk_->setChecked(c->text.bold);
@@ -2231,7 +2299,7 @@ void VideoEditorWindow::syncClipInspector()
 		styleSwatch(outlineColorBtn_, c->text.outlineColor);
 		styleSwatch(boxColorBtn_, c->text.boxColor);
 	}
-	syncingClip_ = false;
+	syncingClip_ = wasSyncing;
 }
 
 void VideoEditorWindow::addKeyframeAtPlayhead()
@@ -2376,6 +2444,10 @@ void VideoEditorWindow::applySelectedClipTransform(const TlTransform &tf)
 	timelineView_->updateSelectedClip(c);
 	syncPreviewTransformTarget();
 	showTimelineFrame(timelinePlayheadMs());
+	// Dragging in the preview is an edit like any other, so the Inspector's
+	// position/zoom/rotation must track the mouse rather than going stale until
+	// the next reselect.
+	syncClipInspector();
 	scheduleSnapshot();
 }
 

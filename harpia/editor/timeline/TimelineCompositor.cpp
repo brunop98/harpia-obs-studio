@@ -245,6 +245,14 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 		if (ci < 0)
 			continue;
 		const TlClip &c = t.clips[ci];
+
+		// Decode before scripting, not after: a script needs the clip's pixel size
+		// to work out where a point in the picture lands on the canvas, and that
+		// is only known once the frame (or the measured caption) exists.
+		QImage frame;
+		if (c.type == TlClip::Type::Video || c.type == TlClip::Type::Image)
+			frame = fp.frameFor(c.sourceId, c.srcAtOutput(outMs));
+
 		// Base pose / keyframes first, then the clip's script overrides whichever
 		// channels it defines.
 		TlTransform tf = c.transformAt(outMs);
@@ -252,6 +260,14 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 			ScriptContext sctx;
 			sctx.canvasW = canvas.width();
 			sctx.canvasH = canvas.height();
+			QSize natural = frame.size();
+			if (c.type == TlClip::Type::Text)
+				natural = textNaturalSize(c.text, canvas);
+			if (!c.crop.isNull() && c.crop.width() > 1 && c.crop.height() > 1 &&
+			    !frame.isNull())
+				natural = c.crop.intersected(QRect(QPoint(0, 0), frame.size())).size();
+			sctx.clipW = natural.width();
+			sctx.clipH = natural.height();
 			sctx.fps = fps;
 			sctx.index = ci;
 			sctx.globalTime = double(outMs) / 1000.0;
@@ -264,9 +280,6 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 				tf = eval->apply(ClipScript{s.name, s.params}, tf, c, outMs, sctx);
 			}
 		}
-		QImage frame;
-		if (c.type == TlClip::Type::Video || c.type == TlClip::Type::Image)
-			frame = fp.frameFor(c.sourceId, c.srcAtOutput(outMs));
 		drawClip(p, c, tf, canvas, frame);
 	}
 	p.end();

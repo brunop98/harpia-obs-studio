@@ -1488,8 +1488,8 @@ QString VideoEditorWindow::scriptsDirPath()
 	}
 	QDir().mkpath(scriptsDir_);
 	// Seed the bundled examples when missing (never overwrite user edits).
-	for (const QString &name : {QStringLiteral("zoom-in"), QStringLiteral("fade-in-out"),
-				    QStringLiteral("shake")}) {
+	for (const QString &name : {QStringLiteral("tutorial-zoom"), QStringLiteral("zoom-in"),
+				    QStringLiteral("fade-in-out"), QStringLiteral("shake")}) {
 		const QString dst = scriptsDir_ + QLatin1Char('/') + name + QStringLiteral(".js");
 		if (QFile::exists(dst))
 			continue;

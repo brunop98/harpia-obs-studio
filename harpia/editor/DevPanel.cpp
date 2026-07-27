@@ -6,6 +6,7 @@
 #include "timeline/TimelineView.hpp"
 // PreviewCanvas + PreviewLayoutParams come from EditorWidgets.hpp.
 
+#include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFrame>
@@ -38,6 +39,8 @@ EditorChromeParams DevPanel::loadChrome()
 	p.inspectorFontPx = s.value(QStringLiteral("win/insFont"), d.inspectorFontPx).toInt();
 	p.speedSliderMinW = s.value(QStringLiteral("win/speedW"), d.speedSliderMinW).toInt();
 	p.speedSpinW = s.value(QStringLiteral("win/spinW"), d.speedSpinW).toInt();
+	p.powerSaveOnBlur =
+		s.value(QStringLiteral("win/powerSave"), d.powerSaveOnBlur).toBool();
 	s.endGroup();
 	return p;
 }
@@ -51,6 +54,7 @@ void DevPanel::saveChrome(const EditorChromeParams &p)
 	s.setValue(QStringLiteral("win/insFont"), p.inspectorFontPx);
 	s.setValue(QStringLiteral("win/speedW"), p.speedSliderMinW);
 	s.setValue(QStringLiteral("win/spinW"), p.speedSpinW);
+	s.setValue(QStringLiteral("win/powerSave"), p.powerSaveOnBlur);
 	s.endGroup();
 }
 
@@ -244,6 +248,18 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 			winSpeedW_ = spin(60, 600, ch.speedSliderMinW, &DevPanel::applyChrome));
 	winForm->addRow(QStringLiteral("Speed value box width"),
 			winSpinW_ = spin(48, 160, ch.speedSpinW, &DevPanel::applyChrome));
+	winPowerSave_ = new QCheckBox(QStringLiteral("Pause playback when the app is in the background"),
+				      this);
+	winPowerSave_->setChecked(ch.powerSaveOnBlur);
+	winPowerSave_->setToolTip(QStringLiteral(
+		"Preview playback is the only thing that keeps working on its own, so pausing it "
+		"is what stops the editor draining the battery while you are in another app. "
+		"Recording and exporting are never interrupted."));
+	connect(winPowerSave_, &QCheckBox::toggled, this, [this]() {
+		if (!loading_)
+			applyChrome();
+	});
+	winForm->addRow(QString(), winPowerSave_);
 
 	const TimelineLayoutParams tl = timeline_->layoutParams();
 	QFormLayout *tlForm = addPage(QStringLiteral("Trim"),
@@ -470,6 +486,7 @@ void DevPanel::applyChrome()
 	p.inspectorFontPx = winInsFont_->value();
 	p.speedSliderMinW = winSpeedW_->value();
 	p.speedSpinW = winSpinW_->value();
+	p.powerSaveOnBlur = winPowerSave_->isChecked();
 	saveChrome(p);
 	emit chromeChanged(p);
 }
@@ -513,6 +530,7 @@ void DevPanel::resetDefaults()
 	winInsFont_->setValue(ch.inspectorFontPx);
 	winSpeedW_->setValue(ch.speedSliderMinW);
 	winSpinW_->setValue(ch.speedSpinW);
+	winPowerSave_->setChecked(ch.powerSaveOnBlur);
 	const TimelineViewParams ft; // Full-editing timeline defaults
 	if (ftGutterW_) {
 		ftGutterW_->setValue(ft.gutterW);

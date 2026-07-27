@@ -462,6 +462,16 @@ private:
 	// (playAnchorMs_ = source ms at clock zero). Multi-Cut: the assembled output
 	// (playAnchorMs_ = OUTPUT-time ms at clock zero; playSeg_ tracks the segment
 	// currently being decoded so segment changes trigger one seek).
+	// ---- Background power saving ----
+	// Preview playback is the only thing in the editor that keeps working with no
+	// input, so it is what costs battery while the user is in another app. On
+	// losing application focus it pauses; on returning it resumes, but only if it
+	// was us that paused it. Recording and exporting are never touched.
+	void setPowerSaving(bool on);
+	bool powerSaving_ = false;
+	bool resumeOnFocus_ = false;
+	bool powerSaveEnabled_ = true; // Dev panel: "Pause playback in the background"
+
 	QTimer *playTimer_ = nullptr;
 	bool playing_ = false;
 	QElapsedTimer playClock_;

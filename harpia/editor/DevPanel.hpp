@@ -4,6 +4,7 @@
 
 #include <functional>
 
+class QCheckBox;
 class QDoubleSpinBox;
 class QSpinBox;
 
@@ -18,6 +19,10 @@ struct EditorChromeParams {
 	int inspectorFontPx = 13; // the inspector's value readouts
 	int speedSliderMinW = 140; // speed slider minimum width
 	int speedSpinW = 72;       // editable speed-value box width
+	// Pause preview playback while the app is in the background. Playback is the
+	// only thing in the editor that runs continuously on its own, so this is
+	// what "idle in the background" costs.
+	bool powerSaveOnBlur = true;
 };
 
 class PreviewCanvas;
@@ -83,6 +88,7 @@ private:
 	QSpinBox *winInsFont_ = nullptr;
 	QSpinBox *winSpeedW_ = nullptr;
 	QSpinBox *winSpinW_ = nullptr;
+	QCheckBox *winPowerSave_ = nullptr;
 
 	// Simple Trim timeline.
 	QSpinBox *tlPad_ = nullptr;

@@ -913,10 +913,20 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// own buttons are excluded) and apply the saved Dev-tunable chrome.
 	uiButtons_ = findChildren<QPushButton *>();
 	applyChrome(DevPanel::loadChrome());
+
+	// Battery saving keys off the APPLICATION losing focus, not this window's.
+	// Window focus would also fire for the editor's own Sources panel and its
+	// dialogs, pausing playback every time one of them is clicked.
+	connect(qApp, &QGuiApplication::applicationStateChanged, this,
+		[this](Qt::ApplicationState st) { setPowerSaving(st != Qt::ApplicationActive); });
 }
 
 void VideoEditorWindow::applyChrome(const EditorChromeParams &p)
 {
+	powerSaveEnabled_ = p.powerSaveOnBlur;
+	if (!powerSaveEnabled_ && powerSaving_)
+		setPowerSaving(false); // turned off while already saving: come back now
+
 	if (p.buttonH > 0)
 		for (QPushButton *b : uiButtons_)
 			if (b)
@@ -3998,6 +4008,33 @@ void VideoEditorWindow::updateUndoRedoButtons()
 		undoBtn_->setEnabled(histIndex_ > 0);
 	if (redoBtn_)
 		redoBtn_->setEnabled(histIndex_ + 1 < history_.size());
+}
+
+void VideoEditorWindow::setPowerSaving(bool on)
+{
+	if (on == powerSaving_)
+		return;
+	// Never interrupt work that has to keep running: a microphone take would lose
+	// audio, and an export runs on its own thread with a progress dialog up.
+	if (on && (voRecording_ || exportThread_.joinable() || !powerSaveEnabled_))
+		return;
+	powerSaving_ = on;
+
+	if (on) {
+		if (playing_) {
+			resumeOnFocus_ = true; // only resume what WE paused
+			stopPlayback();
+		}
+		// Drop any debounced preview still queued: nobody is looking at it.
+		if (previewTimer_)
+			previewTimer_->stop();
+		pendingMs_ = -1;
+		return;
+	}
+	if (resumeOnFocus_) {
+		resumeOnFocus_ = false;
+		startPlayback();
+	}
 }
 
 void VideoEditorWindow::startPlayback()

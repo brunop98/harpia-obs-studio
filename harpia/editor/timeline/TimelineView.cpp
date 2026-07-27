@@ -8,6 +8,8 @@
 #include <QTimer>
 #include <QWheelEvent>
 
+#include <limits>
+
 namespace harpia {
 
 namespace {
@@ -26,6 +28,8 @@ const QColor kVidFill(0x2e, 0x4d, 0x6e);
 const QColor kVidFillSel(0x3a, 0x6e, 0xa5);
 const QColor kAudFill(0x2c, 0x50, 0x45);
 const QColor kAudFillSel(0x37, 0x74, 0x63);
+const QColor kTextFill(0x4a, 0x3a, 0x5e);
+const QColor kTextFillSel(0x6b, 0x51, 0x8c);
 const QColor kWave(0x6f, 0xd0, 0xb0);
 const QColor kPlayhead(0xe5, 0x48, 0x4d);
 } // namespace
@@ -371,13 +375,18 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 {
 	const TlTrack &t = model_.tracks[track];
 	const TlClip &c = t.clips[clip];
-	const bool video = t.kind == TlTrack::Kind::Video;
+	const bool isText = c.type == TlClip::Type::Text;
+	const bool video = t.kind == TlTrack::Kind::Video && !isText;
 	const bool sel = (track == selTrack_ && clip == selClip_);
 	const QRect r = clipRect(track, clip);
 	QPainterPath path;
 	path.addRoundedRect(r, 4, 4);
 	p.setPen(Qt::NoPen);
-	p.setBrush(video ? (sel ? kVidFillSel : kVidFill) : (sel ? kAudFillSel : kAudFill));
+	if (isText)
+		p.setBrush(sel ? kTextFillSel : kTextFill);
+	else
+		p.setBrush(t.kind == TlTrack::Kind::Video ? (sel ? kVidFillSel : kVidFill)
+							  : (sel ? kAudFillSel : kAudFill));
 	p.drawPath(path);
 
 	p.save();
@@ -414,6 +423,24 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 			p.drawLine(x, midY - hh, x, midY + hh);
 		}
 	}
+	// Keyframe diamonds along the top edge, so an animated clip reads as such.
+	if (!c.keys.isEmpty() && c.outDurationMs() > 0) {
+		p.setPen(Qt::NoPen);
+		p.setBrush(QColor(0xff, 0xd4, 0x4f));
+		for (const TlKeyframe &k : c.keys) {
+			const double f = std::clamp(double(k.tMs) / double(c.outDurationMs()), 0.0, 1.0);
+			const int kx = r.x() + int(f * r.width());
+			const int ky = r.y() + 5;
+			QPainterPath d;
+			d.moveTo(kx, ky - 4);
+			d.lineTo(kx + 4, ky);
+			d.lineTo(kx, ky + 4);
+			d.lineTo(kx - 4, ky);
+			d.closeSubpath();
+			p.drawPath(d);
+		}
+	}
+
 	// Label bar along the bottom.
 	if (r.width() >= 28) {
 		QFont sf = p.font();
@@ -421,8 +448,14 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 		p.setFont(sf);
 		p.fillRect(QRect(r.x(), r.bottom() - 12, r.width(), 13), QColor(0, 0, 0, 150));
 		p.setPen(QColor(0xe6, 0xe6, 0xe6));
-		const QString label = QStringLiteral("%1 · %2s").arg(c.sourceId).arg(c.outDurationMs() / 1000.0,
-									       0, 'f', 1);
+		QString what;
+		if (isText)
+			what = QStringLiteral("T  %1").arg(
+				c.text.text.split(QLatin1Char('\n')).value(0));
+		else
+			what = QStringLiteral("#%1").arg(c.sourceId);
+		const QString label =
+			QStringLiteral("%1 · %2s").arg(what).arg(c.outDurationMs() / 1000.0, 0, 'f', 1);
 		p.drawText(QRect(r.x() + 3, r.bottom() - 12, r.width() - 5, 13),
 			   Qt::AlignVCenter | Qt::AlignLeft,
 			   p.fontMetrics().elidedText(label, Qt::ElideRight, r.width() - 5));
@@ -574,7 +607,12 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 		if (!dragMoved_)
 			return;
 		TlClip &c = model_.tracks[dragTrack_].clips[dragClip_];
-		const qint64 srcTotal = srcThumbDur_.value(dragOrig_.sourceId, dragOrig_.srcEndMs + (1 << 30));
+		// Media clips can't be trimmed past their source; text clips have no
+		// source, so they stretch freely.
+		const qint64 srcTotal =
+			(dragOrig_.type == TlClip::Type::Text)
+				? std::numeric_limits<qint64>::max() / 4
+				: srcThumbDur_.value(dragOrig_.sourceId, dragOrig_.srcEndMs + (1 << 30));
 
 		if (mode_ == Mode::Move) {
 			qint64 ns = std::max<qint64>(0, xToMs(pos.x()) - dragGrabOffsetMs_);

@@ -37,10 +37,14 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QAction>
+#include <QColorDialog>
+#include <QFontComboBox>
 #include <QLabel>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPlainTextEdit>
 #include <QProcess>
+#include <QSpinBox>
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QSettings>
@@ -479,6 +483,14 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	controls->addWidget(cropToggle_);
 	auto *resetCrop = new QPushButton(QStringLiteral("Reset crop"), this);
 	controls->addWidget(resetCrop);
+	// Full editing: drop a styled text/caption clip on the timeline.
+	addTextBtn_ = new QPushButton(QStringLiteral("Add text"), this);
+	addTextBtn_->setToolTip(
+		QStringLiteral("Add a text clip at the playhead (font, colour, outline and background "
+			       "box are set in the Inspector)"));
+	addTextBtn_->setVisible(false); // shown only in Full editing
+	connect(addTextBtn_, &QPushButton::clicked, this, &VideoEditorWindow::addTextClip);
+	controls->addWidget(addTextBtn_);
 	controls->addStretch(1);
 	infoLabel_ = new QLabel(this);
 	infoLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
@@ -623,6 +635,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	inspHint_->setWordWrap(true);
 	inspHint_->setStyleSheet(QStringLiteral("color:#7f858e;"));
 	insLayout->addWidget(inspHint_);
+
+	// Full-editing: per-clip zoom/position/keyframes and text styling.
+	buildClipInspector(insLayout);
 
 	insLayout->addStretch(1);
 
@@ -1180,6 +1195,405 @@ void VideoEditorWindow::onTimelineHoverScrub(qint64 outMs)
 	previewTimer_->start();
 }
 
+// ---- Full-editing clip inspector ----------------------------------------
+
+namespace {
+// A swatch button that opens a colour picker.
+void styleSwatch(QPushButton *b, const QColor &c)
+{
+	b->setStyleSheet(QStringLiteral("QPushButton{background:%1;border:1px solid #4a4f57;"
+					"min-width:36px;min-height:18px;}")
+				 .arg(c.name(QColor::HexRgb)));
+}
+} // namespace
+
+void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
+{
+	clipBox_ = new QWidget(this);
+	clipBox_->setVisible(false);
+	auto *v = new QVBoxLayout(clipBox_);
+	v->setContentsMargins(0, 6, 0, 0);
+	v->setSpacing(5);
+
+	auto *hdr = new QLabel(QStringLiteral("Transform"), clipBox_);
+	hdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
+	v->addWidget(hdr);
+
+	auto *hint = new QLabel(
+		QStringLiteral("Scroll on the preview to zoom, drag to reposition."), clipBox_);
+	hint->setWordWrap(true);
+	hint->setStyleSheet(QStringLiteral("color:#7f858e;"));
+	v->addWidget(hint);
+
+	auto *form = new QFormLayout;
+	form->setContentsMargins(0, 2, 0, 0);
+	form->setHorizontalSpacing(8);
+	form->setVerticalSpacing(4);
+	auto mkSpin = [this](double lo, double hi, double step, int dec) {
+		auto *s = new QDoubleSpinBox(clipBox_);
+		s->setRange(lo, hi);
+		s->setSingleStep(step);
+		s->setDecimals(dec);
+		s->setKeyboardTracking(false);
+		return s;
+	};
+	zoomSpin_ = mkSpin(0.05, 20.0, 0.05, 2);
+	posXSpin_ = mkSpin(-2.0, 3.0, 0.01, 3);
+	posYSpin_ = mkSpin(-2.0, 3.0, 0.01, 3);
+	opacitySpin_ = mkSpin(0.0, 1.0, 0.05, 2);
+	form->addRow(QStringLiteral("Zoom"), zoomSpin_);
+	form->addRow(QStringLiteral("Position X"), posXSpin_);
+	form->addRow(QStringLiteral("Position Y"), posYSpin_);
+	form->addRow(QStringLiteral("Opacity"), opacitySpin_);
+	v->addLayout(form);
+
+	auto applyPose = [this]() {
+		if (syncingClip_)
+			return;
+		TlTransform tf;
+		tf.posX = posXSpin_->value();
+		tf.posY = posYSpin_->value();
+		tf.scale = zoomSpin_->value();
+		tf.opacity = opacitySpin_->value();
+		applySelectedClipTransform(tf);
+	};
+	for (QDoubleSpinBox *s : {zoomSpin_, posXSpin_, posYSpin_, opacitySpin_})
+		connect(s, &QDoubleSpinBox::valueChanged, this, [applyPose](double) { applyPose(); });
+
+	auto *resetBtn = new QPushButton(QStringLiteral("Reset transform"), clipBox_);
+	connect(resetBtn, &QPushButton::clicked, this, [this]() {
+		editSelectedClip([](TlClip &c) {
+			c.setBaseTransform(TlTransform{});
+			c.keys.clear();
+		});
+	});
+	v->addWidget(resetBtn);
+
+	// ---- Keyframes -------------------------------------------------------
+	auto *kfHdr = new QLabel(QStringLiteral("Animation"), clipBox_);
+	kfHdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed; margin-top:6px;"));
+	v->addWidget(kfHdr);
+	autoKeyChk_ = new QCheckBox(QStringLiteral("Auto-keyframe"), clipBox_);
+	autoKeyChk_->setToolTip(QStringLiteral(
+		"Record a keyframe at the playhead whenever the zoom/position changes, so the clip "
+		"animates between them (e.g. slowly zoom into a menu)."));
+	connect(autoKeyChk_, &QCheckBox::toggled, this, [this](bool on) { autoKeyframe_ = on; });
+	v->addWidget(autoKeyChk_);
+
+	auto *kfRow = new QHBoxLayout;
+	auto *kfPrev = new QPushButton(QStringLiteral("◀"), clipBox_);
+	auto *kfAdd = new QPushButton(QStringLiteral("◆ Key"), clipBox_);
+	auto *kfDel = new QPushButton(QStringLiteral("✕"), clipBox_);
+	auto *kfNext = new QPushButton(QStringLiteral("▶"), clipBox_);
+	kfPrev->setToolTip(QStringLiteral("Jump to the previous keyframe"));
+	kfAdd->setToolTip(QStringLiteral("Add/update a keyframe at the playhead"));
+	kfDel->setToolTip(QStringLiteral("Delete the keyframe at the playhead"));
+	kfNext->setToolTip(QStringLiteral("Jump to the next keyframe"));
+	kfPrev->setFixedWidth(30);
+	kfDel->setFixedWidth(30);
+	kfNext->setFixedWidth(30);
+	kfRow->addWidget(kfPrev);
+	kfRow->addWidget(kfAdd, 1);
+	kfRow->addWidget(kfDel);
+	kfRow->addWidget(kfNext);
+	v->addLayout(kfRow);
+	connect(kfAdd, &QPushButton::clicked, this, &VideoEditorWindow::addKeyframeAtPlayhead);
+	connect(kfDel, &QPushButton::clicked, this, &VideoEditorWindow::removeKeyframeAtPlayhead);
+	connect(kfPrev, &QPushButton::clicked, this, [this]() { stepKeyframe(-1); });
+	connect(kfNext, &QPushButton::clicked, this, [this]() { stepKeyframe(1); });
+	keyInfo_ = new QLabel(QString(), clipBox_);
+	keyInfo_->setStyleSheet(QStringLiteral("color:#7f858e;"));
+	v->addWidget(keyInfo_);
+
+	// ---- Text style (text clips only) ------------------------------------
+	textBox_ = new QWidget(clipBox_);
+	textBox_->setVisible(false);
+	auto *tv = new QVBoxLayout(textBox_);
+	tv->setContentsMargins(0, 6, 0, 0);
+	tv->setSpacing(4);
+	auto *tHdr = new QLabel(QStringLiteral("Text"), textBox_);
+	tHdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
+	tv->addWidget(tHdr);
+
+	textEdit_ = new QPlainTextEdit(textBox_);
+	textEdit_->setPlaceholderText(QStringLiteral("Type your caption… (Enter for a new line)"));
+	textEdit_->setFixedHeight(56);
+	tv->addWidget(textEdit_);
+	connect(textEdit_, &QPlainTextEdit::textChanged, this, [this]() {
+		if (syncingClip_)
+			return;
+		const QString t = textEdit_->toPlainText();
+		editSelectedClip([&t](TlClip &c) { c.text.text = t; });
+	});
+
+	fontCombo_ = new QFontComboBox(textBox_);
+	tv->addWidget(fontCombo_);
+	connect(fontCombo_, &QFontComboBox::currentFontChanged, this, [this](const QFont &f) {
+		if (syncingClip_)
+			return;
+		editSelectedClip([&f](TlClip &c) { c.text.fontFamily = f.family(); });
+	});
+
+	auto *tForm = new QFormLayout;
+	tForm->setContentsMargins(0, 0, 0, 0);
+	tForm->setHorizontalSpacing(8);
+	tForm->setVerticalSpacing(4);
+
+	fontSizeSpin_ = new QSpinBox(textBox_);
+	fontSizeSpin_->setRange(6, 400);
+	fontSizeSpin_->setKeyboardTracking(false);
+	tForm->addRow(QStringLiteral("Size"), fontSizeSpin_);
+	connect(fontSizeSpin_, &QSpinBox::valueChanged, this, [this](int v) {
+		if (syncingClip_)
+			return;
+		editSelectedClip([v](TlClip &c) { c.text.fontPx = v; });
+	});
+
+	auto *styleRow = new QHBoxLayout;
+	boldChk_ = new QCheckBox(QStringLiteral("Bold"), textBox_);
+	italicChk_ = new QCheckBox(QStringLiteral("Italic"), textBox_);
+	styleRow->addWidget(boldChk_);
+	styleRow->addWidget(italicChk_);
+	styleRow->addStretch(1);
+	tForm->addRow(QStringLiteral("Style"), [&] {
+		auto *w = new QWidget(textBox_);
+		w->setLayout(styleRow);
+		return w;
+	}());
+	connect(boldChk_, &QCheckBox::toggled, this, [this](bool on) {
+		if (syncingClip_)
+			return;
+		editSelectedClip([on](TlClip &c) { c.text.bold = on; });
+	});
+	connect(italicChk_, &QCheckBox::toggled, this, [this](bool on) {
+		if (syncingClip_)
+			return;
+		editSelectedClip([on](TlClip &c) { c.text.italic = on; });
+	});
+
+	alignCombo_ = new QComboBox(textBox_);
+	alignCombo_->addItems({QStringLiteral("Left"), QStringLiteral("Centre"), QStringLiteral("Right")});
+	tForm->addRow(QStringLiteral("Align"), alignCombo_);
+	connect(alignCombo_, &QComboBox::currentIndexChanged, this, [this](int i) {
+		if (syncingClip_)
+			return;
+		editSelectedClip([i](TlClip &c) { c.text.align = i; });
+	});
+
+	textColorBtn_ = new QPushButton(textBox_);
+	tForm->addRow(QStringLiteral("Colour"), textColorBtn_);
+	connect(textColorBtn_, &QPushButton::clicked, this, [this]() {
+		const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+		if (!sel)
+			return;
+		const QColor c = QColorDialog::getColor(sel->text.color, this,
+							QStringLiteral("Text colour"));
+		if (c.isValid())
+			editSelectedClip([c](TlClip &cl) { cl.text.color = c; });
+	});
+
+	outlineWSpin_ = new QDoubleSpinBox(textBox_);
+	outlineWSpin_->setRange(0.0, 30.0);
+	outlineWSpin_->setSingleStep(0.5);
+	outlineWSpin_->setDecimals(1);
+	outlineWSpin_->setKeyboardTracking(false);
+	tForm->addRow(QStringLiteral("Outline"), outlineWSpin_);
+	connect(outlineWSpin_, &QDoubleSpinBox::valueChanged, this, [this](double w) {
+		if (syncingClip_)
+			return;
+		editSelectedClip([w](TlClip &c) { c.text.outlineWidth = w; });
+	});
+
+	outlineColorBtn_ = new QPushButton(textBox_);
+	tForm->addRow(QStringLiteral("Outline colour"), outlineColorBtn_);
+	connect(outlineColorBtn_, &QPushButton::clicked, this, [this]() {
+		const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+		if (!sel)
+			return;
+		const QColor c = QColorDialog::getColor(sel->text.outlineColor, this,
+							QStringLiteral("Outline colour"));
+		if (c.isValid())
+			editSelectedClip([c](TlClip &cl) { cl.text.outlineColor = c; });
+	});
+
+	boxChk_ = new QCheckBox(QStringLiteral("Background box"), textBox_);
+	tForm->addRow(QString(), boxChk_);
+	connect(boxChk_, &QCheckBox::toggled, this, [this](bool on) {
+		if (syncingClip_)
+			return;
+		editSelectedClip([on](TlClip &c) { c.text.boxEnabled = on; });
+	});
+
+	boxColorBtn_ = new QPushButton(textBox_);
+	tForm->addRow(QStringLiteral("Box colour"), boxColorBtn_);
+	connect(boxColorBtn_, &QPushButton::clicked, this, [this]() {
+		const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+		if (!sel)
+			return;
+		const QColor c = QColorDialog::getColor(sel->text.boxColor, this,
+							QStringLiteral("Box colour"),
+							QColorDialog::ShowAlphaChannel);
+		if (c.isValid())
+			editSelectedClip([c](TlClip &cl) { cl.text.boxColor = c; });
+	});
+
+	boxPadSpin_ = new QSpinBox(textBox_);
+	boxPadSpin_->setRange(0, 100);
+	boxPadSpin_->setKeyboardTracking(false);
+	tForm->addRow(QStringLiteral("Box padding"), boxPadSpin_);
+	connect(boxPadSpin_, &QSpinBox::valueChanged, this, [this](int v) {
+		if (syncingClip_)
+			return;
+		editSelectedClip([v](TlClip &c) { c.text.boxPadding = v; });
+	});
+
+	tv->addLayout(tForm);
+	v->addWidget(textBox_);
+
+	into->addWidget(clipBox_);
+}
+
+void VideoEditorWindow::editSelectedClip(const std::function<void(TlClip &)> &fn)
+{
+	if (!timelineView_)
+		return;
+	const TlClip *sel = timelineView_->selectedClipPtr();
+	if (!sel)
+		return;
+	TlClip c = *sel;
+	fn(c);
+	timelineView_->updateSelectedClip(c);
+	syncPreviewTransformTarget();
+	showTimelineFrame(timelinePlayheadMs());
+	syncClipInspector();
+	scheduleSnapshot();
+}
+
+void VideoEditorWindow::syncClipInspector()
+{
+	if (!clipBox_ || !timelineView_)
+		return;
+	const TlClip *c = fullEdit() ? timelineView_->selectedClipPtr() : nullptr;
+	clipBox_->setVisible(c != nullptr);
+	if (!c)
+		return;
+
+	syncingClip_ = true;
+	const qint64 ph = timelinePlayheadMs();
+	const TlTransform tf = c->transformAt(ph);
+	posXSpin_->setValue(tf.posX);
+	posYSpin_->setValue(tf.posY);
+	zoomSpin_->setValue(tf.scale);
+	opacitySpin_->setValue(tf.opacity);
+	autoKeyChk_->setChecked(autoKeyframe_);
+	const int here = c->keyframeIndexAt(ph);
+	keyInfo_->setText(c->keys.isEmpty()
+				  ? QStringLiteral("No animation — the clip holds one fixed framing.")
+				  : QStringLiteral("%1 keyframe%2%3")
+					    .arg(c->keys.size())
+					    .arg(c->keys.size() == 1 ? QString() : QStringLiteral("s"))
+					    .arg(here >= 0 ? QStringLiteral(" · on one now") : QString()));
+
+	const bool isText = c->type == TlClip::Type::Text;
+	textBox_->setVisible(isText);
+	if (isText) {
+		if (textEdit_->toPlainText() != c->text.text)
+			textEdit_->setPlainText(c->text.text);
+		if (!c->text.fontFamily.isEmpty())
+			fontCombo_->setCurrentFont(QFont(c->text.fontFamily));
+		fontSizeSpin_->setValue(c->text.fontPx);
+		boldChk_->setChecked(c->text.bold);
+		italicChk_->setChecked(c->text.italic);
+		alignCombo_->setCurrentIndex(std::clamp(c->text.align, 0, 2));
+		outlineWSpin_->setValue(c->text.outlineWidth);
+		boxChk_->setChecked(c->text.boxEnabled);
+		boxPadSpin_->setValue(c->text.boxPadding);
+		styleSwatch(textColorBtn_, c->text.color);
+		styleSwatch(outlineColorBtn_, c->text.outlineColor);
+		styleSwatch(boxColorBtn_, c->text.boxColor);
+	}
+	syncingClip_ = false;
+}
+
+void VideoEditorWindow::addKeyframeAtPlayhead()
+{
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!sel)
+		return;
+	const qint64 ph = std::clamp<qint64>(timelinePlayheadMs(), sel->outStartMs, sel->outEndMs());
+	const TlTransform tf = sel->transformAt(ph);
+	editSelectedClip([ph, tf](TlClip &c) {
+		if (c.keys.isEmpty()) {
+			TlKeyframe seed;
+			seed.tMs = 0;
+			seed.tf = c.baseTransform();
+			c.keys.append(seed);
+		}
+		c.setKeyframeAt(ph, tf);
+	});
+}
+
+void VideoEditorWindow::removeKeyframeAtPlayhead()
+{
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!sel)
+		return;
+	const int idx = sel->keyframeIndexAt(timelinePlayheadMs());
+	if (idx < 0)
+		return;
+	editSelectedClip([idx](TlClip &c) {
+		c.keys.remove(idx);
+		if (c.keys.size() == 1) { // a single key is just a static pose
+			c.setBaseTransform(c.keys.front().tf);
+			c.keys.clear();
+		}
+	});
+}
+
+void VideoEditorWindow::stepKeyframe(int dir)
+{
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!sel || sel->keys.isEmpty())
+		return;
+	const qint64 rel = timelinePlayheadMs() - sel->outStartMs;
+	qint64 target = -1;
+	if (dir > 0) {
+		for (const TlKeyframe &k : sel->keys)
+			if (k.tMs > rel + 1) {
+				target = k.tMs;
+				break;
+			}
+	} else {
+		for (int i = sel->keys.size() - 1; i >= 0; --i)
+			if (sel->keys[i].tMs < rel - 1) {
+				target = sel->keys[i].tMs;
+				break;
+			}
+	}
+	if (target < 0)
+		return;
+	onTimelineScrub(sel->outStartMs + target);
+	syncClipInspector();
+}
+
+void VideoEditorWindow::addTextClip()
+{
+	if (!timelineView_)
+		return;
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	TlClip c;
+	c.type = TlClip::Type::Text;
+	c.srcStartMs = 0;
+	c.srcEndMs = 4000; // a 4s caption by default
+	c.outStartMs = timelinePlayheadMs();
+	c.text.text = QStringLiteral("Your text");
+	timelineView_->addClip(TlTrack::Kind::Video, c);
+	syncPreviewTransformTarget();
+	syncClipInspector();
+	showTimelineFrame(timelinePlayheadMs());
+}
+
 qint64 VideoEditorWindow::timelinePlayheadMs() const
 {
 	if (!timelineView_)
@@ -1461,6 +1875,8 @@ void VideoEditorWindow::setEditMode(EditMode m)
 			canvas_->setCropEnabled(false);
 		}
 	}
+	if (addTextBtn_)
+		addTextBtn_->setVisible(full);
 	syncPreviewTransformTarget();
 	if (full)
 		showTimelineFrame(timelinePlayheadMs());
@@ -1494,6 +1910,7 @@ void VideoEditorWindow::updateInfoLabel()
 
 void VideoEditorWindow::updateInspector()
 {
+	syncClipInspector(); // Full-editing per-clip controls (hidden in other modes)
 	if (!inspector_)
 		return;
 	auto setRange = [this](qint64 inMs, qint64 outMs, double sp, qint64 outLen) {

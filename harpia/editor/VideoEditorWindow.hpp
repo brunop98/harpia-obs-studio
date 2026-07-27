@@ -15,6 +15,7 @@
 #include <QVector>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -31,6 +32,10 @@ class QSlider;
 class QStackedWidget;
 class QTimer;
 class QFileSystemWatcher;
+class QSpinBox;
+class QPlainTextEdit;
+class QFontComboBox;
+class QVBoxLayout;
 class QDragEnterEvent;
 class QDropEvent;
 class QEvent;
@@ -271,6 +276,40 @@ private:
 	QLabel *inspHint_ = nullptr;
 	void updateInspector(); // refresh the inspector from the current selection
 	QString baseInfo_; // static file info; extended with cut stats in Multi-Cut
+
+	// ---- Full-editing clip inspector (transform + keyframes + text style) ----
+	// Built once and kept in sync with the selected clip (shown only in Full
+	// editing when a clip is selected), so dragging a slider never rebuilds it.
+	QWidget *clipBox_ = nullptr;
+	QDoubleSpinBox *posXSpin_ = nullptr;
+	QDoubleSpinBox *posYSpin_ = nullptr;
+	QDoubleSpinBox *zoomSpin_ = nullptr;
+	QDoubleSpinBox *opacitySpin_ = nullptr;
+	QCheckBox *autoKeyChk_ = nullptr;
+	QLabel *keyInfo_ = nullptr;
+	QWidget *textBox_ = nullptr; // text-clip style controls
+	QPlainTextEdit *textEdit_ = nullptr;
+	QFontComboBox *fontCombo_ = nullptr;
+	QSpinBox *fontSizeSpin_ = nullptr;
+	QCheckBox *boldChk_ = nullptr;
+	QCheckBox *italicChk_ = nullptr;
+	QComboBox *alignCombo_ = nullptr;
+	QPushButton *textColorBtn_ = nullptr;
+	QDoubleSpinBox *outlineWSpin_ = nullptr;
+	QPushButton *outlineColorBtn_ = nullptr;
+	QCheckBox *boxChk_ = nullptr;
+	QPushButton *boxColorBtn_ = nullptr;
+	QSpinBox *boxPadSpin_ = nullptr;
+	QPushButton *addTextBtn_ = nullptr; // bottom controls row, Full mode only
+	bool syncingClip_ = false;          // guard while pushing values into the UI
+
+	void buildClipInspector(QVBoxLayout *into);
+	void syncClipInspector();                       // selected clip -> controls
+	void editSelectedClip(const std::function<void(TlClip &)> &fn); // controls -> clip
+	void addTextClip();                             // new text clip at the playhead
+	void addKeyframeAtPlayhead();
+	void removeKeyframeAtPlayhead();
+	void stepKeyframe(int dir); // move the playhead to the prev/next keyframe
 
 	// ---- Post-processing effect stack (preview + baked into export) ----
 	// An ordered list of GLSL effects drives both the live preview (via

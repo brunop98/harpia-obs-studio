@@ -6,8 +6,12 @@ cmake_minimum_required(VERSION 3.28...3.30)
 
 # Multimedia provides the editor's voiceover microphone capture (QAudioSource).
 # OpenGL provides the offscreen GPU shader pipeline (post-processing effects);
-# Qml provides QJSEngine, which runs the per-clip transform scripts.
-find_package(Qt6 REQUIRED Widgets Gui Multimedia OpenGL Qml)
+find_package(Qt6 REQUIRED Widgets Gui Multimedia OpenGL)
+
+# Qml provides QJSEngine, which runs the per-clip transform scripts. It is
+# OPTIONAL: the trimmed obs-deps Qt used for Windows builds ships no Qml module,
+# and the rest of the app must still build there — scripting just goes inert.
+find_package(Qt6 QUIET COMPONENTS Qml)
 
 # FFmpeg (bundled with OBS deps) is used to extract clip thumbnails.
 find_package(FFmpeg REQUIRED COMPONENTS avcodec avformat avutil swscale swresample avfilter)
@@ -27,7 +31,6 @@ target_link_libraries(
     Qt::Gui
     Qt::Multimedia
     Qt::OpenGL
-    Qt::Qml
     FFmpeg::avcodec
     FFmpeg::avformat
     FFmpeg::avutil
@@ -35,6 +38,14 @@ target_link_libraries(
     FFmpeg::swresample
     FFmpeg::avfilter
 )
+
+if(TARGET Qt6::Qml)
+  target_link_libraries(harpia-recorder PRIVATE Qt::Qml)
+  target_compile_definitions(harpia-recorder PRIVATE HARPIA_HAVE_QJS=1)
+  message(STATUS "Harpia: per-clip transform scripting ENABLED (Qt6::Qml found)")
+else()
+  message(STATUS "Harpia: per-clip transform scripting DISABLED (this Qt has no Qml module)")
+endif()
 
 set_target_properties(
   harpia-recorder

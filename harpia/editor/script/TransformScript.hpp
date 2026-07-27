@@ -29,14 +29,19 @@
 // preview, the export worker) owns its own TransformEvaluator compiled from the
 // same source.
 
+// The engine lives entirely behind a PIMPL, so this header pulls in no
+// scripting types and the backend can be swapped without touching callers.
+// available() is false when the app was built against a Qt with no Qml module
+// (the trimmed obs-deps Qt is one) — scripting then no-ops cleanly.
+
 #include "../shader/ShaderEffect.hpp" // ShaderParam + parseShaderParams (same //@param format)
 #include "../timeline/TimelineModel.hpp"
 
-#include <QJSEngine>
-#include <QJSValue>
 #include <QMap>
 #include <QString>
 #include <QVector>
+
+#include <memory>
 
 namespace harpia {
 
@@ -62,13 +67,20 @@ struct ScriptContext {
 class TransformEvaluator {
 public:
 	TransformEvaluator();
+	~TransformEvaluator();
+	TransformEvaluator(const TransformEvaluator &) = delete;
+	TransformEvaluator &operator=(const TransformEvaluator &) = delete;
+
+	// False when this build has no scripting engine: compile() then fails with a
+	// clear message and apply() returns the transform untouched.
+	static bool available();
 
 	// Compile `source` under `name`. Returns false + *err on a syntax error or if
 	// the script throws while being evaluated. Compiled scripts are cached by
 	// name, so re-setting the same name replaces it (used by live reload).
 	bool compile(const QString &name, const QString &source, QString *err = nullptr);
-	bool has(const QString &name) const { return scripts_.contains(name); }
-	void forget(const QString &name) { scripts_.remove(name); }
+	bool has(const QString &name) const;
+	void forget(const QString &name);
 
 	// Apply `script` to `base` for a clip at `outMs`. Channels the script doesn't
 	// define are left as they are in `base`. Never throws: a script error is
@@ -76,21 +88,12 @@ public:
 	TlTransform apply(const ClipScript &script, const TlTransform &base, const TlClip &clip,
 			  qint64 outMs, const ScriptContext &ctx);
 
-	QString lastError() const { return lastError_; }
-	void clearError() { lastError_.clear(); }
+	QString lastError() const;
+	void clearError();
 
 private:
-	struct Compiled {
-		QJSValue position, scale, rotation, opacity;
-		QJSValue paramsObj; // the //@param values, injected before each call
-	};
-	QJSEngine engine_;
-	QMap<QString, Compiled> scripts_;
-	QString lastError_;
-
-	// Call one channel function; returns an undefined QJSValue when absent.
-	QJSValue callChannel(const QJSValue &fn, double t, double u, double dur,
-			     const ScriptContext &ctx);
+	struct Impl;
+	std::unique_ptr<Impl> d_;
 };
 
 } // namespace harpia

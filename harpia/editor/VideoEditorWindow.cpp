@@ -1962,7 +1962,22 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	scHint->setStyleSheet(QStringLiteral("color:#7f858e;"));
 	v->addWidget(scHint);
 
+	// Some Qt builds (the trimmed obs-deps Qt used for Windows releases) ship no
+	// Qml module, so there is no JS engine to run scripts with. Say so plainly
+	// rather than letting the picker look broken.
+	if (!TransformEvaluator::available()) {
+		auto *scOff = new QLabel(
+			QStringLiteral("Unavailable in this build — it was compiled against a Qt "
+				       "with no Qml module, so there is no scripting engine. "
+				       "Keyframes and the controls above still work."),
+			clipBox_);
+		scOff->setWordWrap(true);
+		scOff->setStyleSheet(QStringLiteral("color:#d5a642;"));
+		v->addWidget(scOff);
+	}
+
 	scriptCombo_ = new QComboBox(clipBox_);
+	scriptCombo_->setEnabled(TransformEvaluator::available());
 	v->addWidget(scriptCombo_);
 	connect(scriptCombo_, &QComboBox::currentTextChanged, this, [this](const QString &t) {
 		if (syncingClip_)

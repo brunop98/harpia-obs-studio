@@ -585,7 +585,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	auto *insScroll = new QScrollArea(inspector_);
 	insScroll->setWidgetResizable(true);
 	insScroll->setFrameShape(QFrame::NoFrame);
-	insScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	// AsNeeded, not AlwaysOff: the panel can be dragged narrower than a row's
+	// minimum width, and with no bar those controls would just be cut off.
+	insScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 	insScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 	insScroll->viewport()->setAutoFillBackground(false);
 	insScroll->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; }"));
@@ -1537,19 +1539,16 @@ void VideoEditorWindow::refreshScriptList()
 void VideoEditorWindow::applyScriptOrderFromList()
 {
 	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
-	if (!scriptList_ || !sel || scriptList_->count() != sel->scripts.size())
+	if (!scriptList_ || !sel)
 		return;
-	// The item text carries the entry's ORIGINAL 1-based position, which is what
-	// maps a moved row back to the script it represents.
-	QVector<TlScript> reordered;
-	reordered.reserve(sel->scripts.size());
-	for (int row = 0; row < scriptList_->count(); ++row) {
-		const QString label = scriptList_->item(row)->text();
-		const int from = label.section(QLatin1Char('.'), 0, 0).trimmed().toInt() - 1;
-		if (from < 0 || from >= sel->scripts.size())
-			return; // unparseable — leave the stack alone rather than scramble it
-		reordered.append(sel->scripts[from]);
-	}
+	QStringList labels;
+	labels.reserve(scriptList_->count());
+	for (int row = 0; row < scriptList_->count(); ++row)
+		labels << scriptList_->item(row)->text();
+
+	const QVector<TlScript> reordered = reorderScriptsByLabel(labels, sel->scripts);
+	if (reordered.isEmpty() || reordered == sel->scripts)
+		return; // mid-drop, unreadable, or nothing actually moved
 	scriptSel_ = scriptList_->currentRow();
 	editSelectedClip([&](TlClip &c) { c.scripts = reordered; });
 	refreshScriptList(); // renumber the labels for the new order
@@ -1574,8 +1573,12 @@ void VideoEditorWindow::addScriptToClip(const QString &name)
 	s.name = name;
 	for (const ShaderParam &p : scriptParamDefs_.value(name))
 		s.params[p.uniform] = p.def; // start from the declared defaults
-	editSelectedClip([&](TlClip &c) { c.scripts.append(s); });
-	scriptSel_ = scriptList_ ? scriptList_->count() : 0; // select what was just added
+	int added = 0;
+	editSelectedClip([&](TlClip &c) {
+		c.scripts.append(s);
+		added = int(c.scripts.size()) - 1;
+	});
+	scriptSel_ = added; // select what was just added
 	refreshScriptList();
 	rebuildScriptParams();
 }
@@ -2120,12 +2123,27 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		rebuildScriptParams(); // show the newly selected entry's controls
 	});
 	// A drag finishing rewrites the clip's stack in the list's new order.
-	connect(scriptList_->model(), &QAbstractItemModel::rowsMoved, this,
-		[this](const QModelIndex &, int, int, const QModelIndex &, int) {
-			if (syncingClip_)
-				return;
+	//
+	// Which signal that is depends on how Qt implements the move: QListWidget's
+	// InternalMove drop goes through dropMimeData and emits rowsInserted (plus a
+	// separate removal of the source row) rather than rowsMoved, so listening for
+	// rowsMoved alone silently never fired. Listen for every mutation and read
+	// the order back on the next event-loop turn, once the drop has settled —
+	// applyScriptOrderFromList ignores the half-finished states in between.
+	const auto onListMutated = [this]() {
+		if (syncingClip_ || scriptOrderSyncPending_)
+			return;
+		scriptOrderSyncPending_ = true;
+		QTimer::singleShot(0, this, [this]() {
+			scriptOrderSyncPending_ = false;
 			applyScriptOrderFromList();
 		});
+	};
+	connect(scriptList_->model(), &QAbstractItemModel::rowsMoved, this, onListMutated);
+	connect(scriptList_->model(), &QAbstractItemModel::rowsInserted, this, onListMutated);
+	connect(scriptList_->model(), &QAbstractItemModel::rowsRemoved, this, onListMutated);
+	connect(scriptList_->model(), &QAbstractItemModel::layoutChanged, this, onListMutated);
+	connect(scriptList_->model(), &QAbstractItemModel::modelReset, this, onListMutated);
 
 	auto *stkBtns = new QHBoxLayout;
 	addScriptBtn_ = new QPushButton(QStringLiteral("Add script  ▾"), clipBox_);

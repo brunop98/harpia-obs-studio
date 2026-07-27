@@ -13,6 +13,7 @@
 #include <QMap>
 #include <QRect>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
 #include <algorithm>
@@ -83,6 +84,30 @@ struct TlScript {
 	bool operator==(const TlScript &o) const { return name == o.name && params == o.params; }
 	bool operator!=(const TlScript &o) const { return !(*this == o); }
 };
+
+// Rebuild a script stack from list-widget labels of the form "<n>.  <name>",
+// where <n> is the entry's ORIGINAL 1-based position. Reordering a list widget
+// moves the labels with the rows, so the numbers say where each row came from.
+// Returns an empty vector if the labels don't describe a permutation of
+// `current` — callers must then leave the stack alone rather than scramble it.
+inline QVector<TlScript> reorderScriptsByLabel(const QStringList &labels,
+					       const QVector<TlScript> &current)
+{
+	if (labels.size() != current.size())
+		return {};
+	QVector<TlScript> out;
+	out.reserve(current.size());
+	QVector<bool> used(current.size(), false);
+	for (const QString &label : labels) {
+		bool ok = false;
+		const int from = label.section(QLatin1Char('.'), 0, 0).trimmed().toInt(&ok) - 1;
+		if (!ok || from < 0 || from >= current.size() || used[from])
+			return {}; // unparseable, out of range, or a duplicate
+		used[from] = true;
+		out.append(current[from]);
+	}
+	return out;
+}
 
 // One clip placed on a track. Video and Text clips use the transform/keyframes;
 // audio clips use volume/fades (+ cached peaks for the waveform). `sourceId`

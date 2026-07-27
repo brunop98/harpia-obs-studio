@@ -370,6 +370,7 @@ private:
 	QListWidget *scriptList_ = nullptr;
 	QPushButton *addScriptBtn_ = nullptr;
 	int scriptSel_ = -1; // row whose parameters scriptParamBox_ is showing
+	bool scriptOrderSyncPending_ = false; // one deferred read per drop, not several
 	QWidget *scriptParamBox_ = nullptr;
 	QLabel *scriptError_ = nullptr;
 	QFileSystemWatcher *scriptWatch_ = nullptr;

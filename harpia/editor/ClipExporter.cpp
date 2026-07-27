@@ -1436,7 +1436,7 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 		}
 	}
 
-	// Transform scripts run on THIS thread (a QJSEngine can't be shared), from
+	// Transform scripts run on THIS thread (a script runtime cannot be shared), from
 	// the sources carried on Options rather than off disk.
 	TransformEvaluator scriptEval;
 	for (auto it = opts.timelineScripts.constBegin(); it != opts.timelineScripts.constEnd(); ++it) {

@@ -862,6 +862,9 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 {
 	const QPoint pos = e->pos();
 	setFocus();
+	// The hover marker tracks the preview, which stops following the pointer the
+	// moment a drag starts — leaving it drawn would point at nothing.
+	hoverMs_ = -1;
 
 	// Ruler or gutter → scrub / nothing.
 	if (pos.y() < lp_.margin + lp_.rulerH && pos.x() >= contentRect().x()) {
@@ -1141,6 +1144,15 @@ void TimelineView::keyPressEvent(QKeyEvent *e)
 		return;
 	}
 	QWidget::keyPressEvent(e);
+}
+
+void TimelineView::changeEvent(QEvent *e)
+{
+	// The cached fonts derive from the widget font, so a style or font change
+	// has to invalidate them or the timeline keeps painting with the old ones.
+	if (e->type() == QEvent::FontChange)
+		fontsForPx_ = -1;
+	QWidget::changeEvent(e);
 }
 
 void TimelineView::leaveEvent(QEvent *)

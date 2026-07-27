@@ -114,6 +114,7 @@ private:
 	mutable QFont toggleFont_; // L/H/M chips
 	mutable QFont clipFont_;   // clip label bar
 	mutable int fontsForPx_ = -1; // segFontPx the cached fonts were built for
+	void changeEvent(QEvent *e) override; // drop the cache when the widget font changes
 
 	void drawRuler(QPainter &p) const;
 	void drawClip(QPainter &p, int track, int clip) const;

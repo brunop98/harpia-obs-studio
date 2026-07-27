@@ -162,10 +162,13 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 
 	QPainter p(&out);
 	p.setRenderHint(QPainter::Antialiasing, true);
-	// Bottom-to-top: a later video track composites over the earlier ones.
-	for (int ti = 0; ti < m.tracks.size(); ++ti) {
+	// Index order is display order (0 = top lane) and the HIGHER lane renders in
+	// FRONT, so walk the tracks back-to-front: the last index is drawn first and
+	// index 0 lands on top. `hidden` skips a video track without touching its
+	// audio; `muted` only affects the mix.
+	for (int ti = m.tracks.size() - 1; ti >= 0; --ti) {
 		const TlTrack &t = m.tracks[ti];
-		if (t.kind != TlTrack::Kind::Video || t.muted)
+		if (t.kind != TlTrack::Kind::Video || t.hidden)
 			continue;
 		const int ci = t.clipAt(outMs);
 		if (ci < 0)

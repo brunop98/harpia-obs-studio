@@ -199,7 +199,15 @@ struct TlTrack {
 	enum class Kind { Video, Audio };
 	Kind kind = Kind::Video;
 	QString name;
+	// Per-track switches. `hidden` only applies to video (keeps the audio), and
+	// `muted` silences the track's audio (a video track has both). `locked`
+	// blocks every edit but still previews/renders. `ripple` closes the gap when
+	// a clip is deleted from this track.
 	bool muted = false;
+	bool hidden = false;
+	bool locked = false;
+	bool ripple = false;
+	QColor color = QColor(0x3a, 0x6e, 0xa5); // clip tint (random pastel when created)
 	QVector<TlClip> clips; // unordered; painting/compositing sorts by outStartMs
 
 	// The clip covering an output-time position (topmost = last added wins on
@@ -214,14 +222,25 @@ struct TlTrack {
 
 	bool operator==(const TlTrack &o) const
 	{
-		return kind == o.kind && name == o.name && muted == o.muted && clips == o.clips;
+		return kind == o.kind && name == o.name && muted == o.muted && hidden == o.hidden &&
+		       locked == o.locked && ripple == o.ripple && color == o.color && clips == o.clips;
 	}
 };
 
-// The whole timeline. Video tracks come first (index = compositing z-order; a
-// later index is drawn on top), then audio tracks.
+// The whole timeline. Video tracks come first, then audio tracks. Index order IS
+// the display order (index 0 is the top lane) and, for video, the compositing
+// order: the HIGHER lane renders in FRONT, so index 0 is drawn last/on top.
 struct TimelineModel {
 	QVector<TlTrack> tracks;
+
+	int videoTrackCount() const
+	{
+		int n = 0;
+		for (const TlTrack &t : tracks)
+			if (t.kind == TlTrack::Kind::Video)
+				++n;
+		return n;
+	}
 
 	qint64 durationMs() const
 	{

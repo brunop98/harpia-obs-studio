@@ -15,15 +15,16 @@ namespace harpia {
 
 // Runtime-tweakable geometry for the multi-track timeline (Dev-panel tunable).
 struct TimelineViewParams {
-	int gutterW = 96;     // left column: track headers
+	int gutterW = 124;    // left column: track headers (name + lock/hide/mute)
 	int rulerH = 18;      // top time ruler
-	int videoLaneH = 46;  // per video-track height
-	int audioLaneH = 40;  // per audio-track height
+	int videoLaneH = 48;  // per video-track height
+	int audioLaneH = 44;  // per audio-track height
 	int laneGap = 3;
 	int margin = 6;
 	int minClipW = 6;     // don't let a clip shrink below this on screen
 	int snapPx = 8;       // snap threshold in pixels
 	int segFontPx = 10;
+	int dropBandPx = 7;   // edge band that means "make a new track here"
 	double maxZoom = 64.0;
 };
 
@@ -59,6 +60,14 @@ public:
 	const TlClip *selectedClipPtr() const;
 	void updateSelectedClip(const TlClip &c); // Inspector edits push back here
 
+	// Magnet: snap clip edges to the playhead, 0 and other clips while dragging.
+	void setSnapEnabled(bool on);
+	bool snapEnabled() const { return snap_; }
+
+	// Track operations (also available from the header's right-click menu).
+	void addTrack(TlTrack::Kind kind, int atIndex = -1); // -1 = top of that kind's group
+	void deleteTrack(int index);
+
 	const TimelineViewParams &layoutParams() const { return lp_; }
 	void setLayoutParams(const TimelineViewParams &p);
 
@@ -67,6 +76,7 @@ signals:
 	void selectionChanged(int track, int clip);
 	void scrub(qint64 outMs);      // preview at this output time (click/drag)
 	void hoverScrub(qint64 outMs); // preview while hovering (no click)
+	void inspectClipRequested();   // "Show in inspector" from a clip's menu
 
 protected:
 	void paintEvent(QPaintEvent *) override;
@@ -98,6 +108,24 @@ private:
 	int clipAtPoint(const QPoint &p, int *trackOut) const; // clip index or -1
 	qint64 snap(qint64 ms, int ignoreTrack, int ignoreClip) const;
 
+	// Where a dragged clip would land: an existing lane, or a brand-new track
+	// inserted at `newTrackAt` (dragging past a lane edge creates one).
+	struct DropTarget {
+		int track = -1;
+		int newTrackAt = -1;
+		bool valid() const { return track >= 0 || newTrackAt >= 0; }
+	};
+	DropTarget dropTargetAt(int y, TlTrack::Kind kind) const;
+	int insertYFor(int newTrackAt) const; // y of the "new track here" indicator
+
+	// Header widgets: the small lock / hide / mute toggles in the gutter.
+	enum class HeaderHit { None, Lock, Hide, Mute };
+	QRect headerToggleRect(int track, HeaderHit which) const;
+	HeaderHit headerHitAt(int track, const QPoint &p) const;
+	void showTrackMenu(int track, const QPoint &globalPos);
+	void renumberTracks(); // V1..Vn bottom-up, A1..An top-down
+	static QColor randomPastel();
+
 	// ---- data ----
 	TimelineModel model_;
 	QHash<int, QVector<QImage>> srcThumbs_;
@@ -128,6 +156,8 @@ private:
 	int dragTrack_ = -1, dragClip_ = -1;
 	double dragSrcPerPx_ = 0.0;
 	qint64 dragGrabOffsetMs_ = 0; // cursor->clip-start at grab
+	DropTarget drop_;             // live drop target while moving a clip
+	bool snap_ = true;            // magnet
 
 	TimelineViewParams lp_;
 

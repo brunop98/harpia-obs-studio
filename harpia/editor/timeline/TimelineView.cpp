@@ -1,10 +1,12 @@
 #include "TimelineView.hpp"
 
+#include <QColorDialog>
 #include <QKeyEvent>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QRandomGenerator>
 #include <QTimer>
 #include <QWheelEvent>
 
@@ -104,6 +106,72 @@ void TimelineView::setSourceThumbs(int sourceId, const QVector<QImage> &thumbs, 
 	update();
 }
 
+QColor TimelineView::randomPastel()
+{
+	// Random hue, gentle saturation: distinct but never garish, and dark enough
+	// that white clip text stays readable.
+	const int hue = QRandomGenerator::global()->bounded(360);
+	return QColor::fromHsv(hue, 90, 150);
+}
+
+void TimelineView::renumberTracks()
+{
+	// Video lanes are numbered bottom-up (V1 is the bottom/background layer,
+	// matching the convention that a higher lane renders in front); audio
+	// top-down.
+	const int nv = model_.videoTrackCount();
+	int a = 0;
+	for (int i = 0; i < model_.tracks.size(); ++i) {
+		TlTrack &t = model_.tracks[i];
+		if (t.kind == TlTrack::Kind::Video)
+			t.name = QStringLiteral("V%1").arg(nv - i);
+		else
+			t.name = QStringLiteral("A%1").arg(++a);
+	}
+}
+
+void TimelineView::addTrack(TlTrack::Kind kind, int atIndex)
+{
+	const int nv = model_.videoTrackCount();
+	// Video tracks live above audio tracks; clamp the insertion into that group.
+	const int lo = (kind == TlTrack::Kind::Video) ? 0 : nv;
+	const int hi = (kind == TlTrack::Kind::Video) ? nv : model_.tracks.size();
+	int at = (atIndex < 0) ? lo : std::clamp(atIndex, lo, hi);
+
+	TlTrack t;
+	t.kind = kind;
+	t.color = randomPastel();
+	model_.tracks.insert(at, t);
+	if (selTrack_ >= at)
+		++selTrack_;
+	renumberTracks();
+	updateGeometry();
+	update();
+	emit clipsChanged();
+}
+
+void TimelineView::deleteTrack(int index)
+{
+	if (index < 0 || index >= model_.tracks.size())
+		return;
+	model_.tracks.remove(index);
+	if (selTrack_ == index)
+		selTrack_ = selClip_ = -1;
+	else if (selTrack_ > index)
+		--selTrack_;
+	renumberTracks();
+	clampView();
+	updateGeometry();
+	update();
+	emit selectionChanged(selTrack_, selClip_);
+	emit clipsChanged();
+}
+
+void TimelineView::setSnapEnabled(bool on)
+{
+	snap_ = on;
+}
+
 void TimelineView::addClip(TlTrack::Kind kind, const TlClip &clip)
 {
 	int idx = -1;
@@ -113,31 +181,13 @@ void TimelineView::addClip(TlTrack::Kind kind, const TlClip &clip)
 			break;
 		}
 	if (idx < 0) {
+		const int nv = model_.videoTrackCount();
 		TlTrack t;
 		t.kind = kind;
-		if (kind == TlTrack::Kind::Video) {
-			int firstAudio = model_.tracks.size();
-			for (int i = 0; i < model_.tracks.size(); ++i)
-				if (model_.tracks[i].kind == TlTrack::Kind::Audio) {
-					firstAudio = i;
-					break;
-				}
-			int nVid = 0;
-			for (const TlTrack &tr : model_.tracks)
-				if (tr.kind == TlTrack::Kind::Video)
-					++nVid;
-			t.name = QStringLiteral("V%1").arg(nVid + 1);
-			model_.tracks.insert(firstAudio, t);
-			idx = firstAudio;
-		} else {
-			int nAud = 0;
-			for (const TlTrack &tr : model_.tracks)
-				if (tr.kind == TlTrack::Kind::Audio)
-					++nAud;
-			t.name = QStringLiteral("A%1").arg(nAud + 1);
-			model_.tracks.append(t);
-			idx = model_.tracks.size() - 1;
-		}
+		t.color = randomPastel();
+		idx = (kind == TlTrack::Kind::Video) ? nv : model_.tracks.size();
+		model_.tracks.insert(idx, t);
+		renumberTracks();
 	}
 	model_.tracks[idx].clips.append(clip);
 	selTrack_ = idx;
@@ -288,8 +338,163 @@ int TimelineView::clipAtPoint(const QPoint &p, int *trackOut) const
 	return -1;
 }
 
+TimelineView::DropTarget TimelineView::dropTargetAt(int y, TlTrack::Kind kind) const
+{
+	DropTarget d;
+	const int nv = model_.videoTrackCount();
+	// Video tracks occupy [0,nv), audio [nv,n). A clip can only land in its own
+	// group, and a new track can only be inserted inside that group's range.
+	const int lo = (kind == TlTrack::Kind::Video) ? 0 : nv;
+	const int hi = (kind == TlTrack::Kind::Video) ? nv : model_.tracks.size();
+	if (lo >= hi) { // no lane of this kind yet — the drop makes the first one
+		d.newTrackAt = lo;
+		return d;
+	}
+	const int band = std::max(3, lp_.dropBandPx);
+	const QRect first = laneRect(lo);
+	const QRect last = laneRect(hi - 1);
+
+	if (y < first.top() + band) {
+		d.newTrackAt = lo; // above the top lane of the group
+		return d;
+	}
+	if (y > last.bottom() - band) {
+		d.newTrackAt = hi; // below the bottom lane of the group
+		return d;
+	}
+	for (int i = lo; i < hi; ++i) {
+		const QRect l = laneRect(i);
+		if (y < l.top() || y > l.bottom())
+			continue;
+		if (y < l.top() + band && i > lo) {
+			d.newTrackAt = i; // between i-1 and i
+			return d;
+		}
+		if (y > l.bottom() - band && i + 1 < hi) {
+			d.newTrackAt = i + 1;
+			return d;
+		}
+		d.track = i;
+		return d;
+	}
+	// In a gap between lanes: insert there.
+	for (int i = lo; i + 1 < hi; ++i)
+		if (y > laneRect(i).bottom() && y < laneRect(i + 1).top()) {
+			d.newTrackAt = i + 1;
+			return d;
+		}
+	d.track = std::clamp(laneAtY(y), lo, hi - 1);
+	return d;
+}
+
+int TimelineView::insertYFor(int newTrackAt) const
+{
+	if (model_.tracks.isEmpty())
+		return contentRect().y();
+	if (newTrackAt <= 0)
+		return laneRect(0).top() - lp_.laneGap / 2;
+	if (newTrackAt >= model_.tracks.size())
+		return laneRect(model_.tracks.size() - 1).bottom() + lp_.laneGap / 2;
+	return laneRect(newTrackAt).top() - lp_.laneGap / 2;
+}
+
+QRect TimelineView::headerToggleRect(int track, HeaderHit which) const
+{
+	const QRect h = trackHeaderRect(track);
+	const int sz = 16;
+	const int y = h.bottom() - sz - 3;
+	int slot = 0;
+	switch (which) {
+	case HeaderHit::Lock:
+		slot = 0;
+		break;
+	case HeaderHit::Hide:
+		slot = 1;
+		break;
+	case HeaderHit::Mute:
+		slot = (model_.tracks[track].kind == TlTrack::Kind::Video) ? 2 : 1;
+		break;
+	default:
+		return QRect();
+	}
+	return QRect(h.x() + 8 + slot * (sz + 4), y, sz, sz);
+}
+
+TimelineView::HeaderHit TimelineView::headerHitAt(int track, const QPoint &p) const
+{
+	if (track < 0 || track >= model_.tracks.size())
+		return HeaderHit::None;
+	const bool video = model_.tracks[track].kind == TlTrack::Kind::Video;
+	if (headerToggleRect(track, HeaderHit::Lock).contains(p))
+		return HeaderHit::Lock;
+	if (video && headerToggleRect(track, HeaderHit::Hide).contains(p))
+		return HeaderHit::Hide;
+	if (headerToggleRect(track, HeaderHit::Mute).contains(p))
+		return HeaderHit::Mute;
+	return HeaderHit::None;
+}
+
+void TimelineView::showTrackMenu(int track, const QPoint &globalPos)
+{
+	if (track < 0 || track >= model_.tracks.size())
+		return;
+	TlTrack &t = model_.tracks[track];
+	const bool video = t.kind == TlTrack::Kind::Video;
+
+	QMenu menu(this);
+	QAction *lock = menu.addAction(t.locked ? QStringLiteral("Unlock track")
+						: QStringLiteral("Lock track"));
+	QAction *hide = video ? menu.addAction(t.hidden ? QStringLiteral("Show track")
+							: QStringLiteral("Hide track"))
+			      : nullptr;
+	QAction *mute = menu.addAction(t.muted ? QStringLiteral("Unmute track")
+					       : QStringLiteral("Mute track"));
+	QAction *ripple = menu.addAction(QStringLiteral("Auto ripple on delete"));
+	ripple->setCheckable(true);
+	ripple->setChecked(t.ripple);
+	menu.addSeparator();
+	QAction *colour = menu.addAction(QStringLiteral("Track colour…"));
+	QAction *reroll = menu.addAction(QStringLiteral("Random colour"));
+	menu.addSeparator();
+	QAction *addAbove = menu.addAction(QStringLiteral("Add track above"));
+	QAction *addBelow = menu.addAction(QStringLiteral("Add track below"));
+	QAction *del = menu.addAction(QStringLiteral("Delete track"));
+
+	QAction *chosen = menu.exec(globalPos);
+	if (!chosen)
+		return;
+	if (chosen == lock) {
+		t.locked = !t.locked;
+	} else if (hide && chosen == hide) {
+		t.hidden = !t.hidden;
+	} else if (chosen == mute) {
+		t.muted = !t.muted;
+	} else if (chosen == ripple) {
+		t.ripple = !t.ripple;
+	} else if (chosen == colour) {
+		const QColor c = QColorDialog::getColor(t.color, this, QStringLiteral("Track colour"));
+		if (c.isValid())
+			t.color = c;
+	} else if (chosen == reroll) {
+		t.color = randomPastel();
+	} else if (chosen == addAbove) {
+		addTrack(t.kind, track);
+		return;
+	} else if (chosen == addBelow) {
+		addTrack(t.kind, track + 1);
+		return;
+	} else if (chosen == del) {
+		deleteTrack(track);
+		return;
+	}
+	update();
+	emit clipsChanged();
+}
+
 qint64 TimelineView::snap(qint64 ms, int ignoreTrack, int ignoreClip) const
 {
+	if (!snap_)
+		return ms;
 	const qint64 tol = xToMs(contentRect().x() + lp_.snapPx) - xToMs(contentRect().x());
 	qint64 best = ms;
 	qint64 bestD = tol + 1;
@@ -382,11 +587,17 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	QPainterPath path;
 	path.addRoundedRect(r, 4, 4);
 	p.setPen(Qt::NoPen);
+	// Clips take their track's colour (selection brightens it); text clips get a
+	// slight violet lean so they still read as captions.
+	QColor fill = t.color.isValid() ? t.color
+					: (t.kind == TlTrack::Kind::Video ? kVidFill : kAudFill);
 	if (isText)
-		p.setBrush(sel ? kTextFillSel : kTextFill);
-	else
-		p.setBrush(t.kind == TlTrack::Kind::Video ? (sel ? kVidFillSel : kVidFill)
-							  : (sel ? kAudFillSel : kAudFill));
+		fill = QColor::fromHsv(fill.hue(), fill.saturation(), fill.value()).darker(105);
+	if (sel)
+		fill = fill.lighter(145);
+	if (t.hidden || t.muted)
+		fill = fill.darker(160);
+	p.setBrush(fill);
 	p.drawPath(path);
 
 	p.save();
@@ -423,8 +634,12 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 			p.drawLine(x, midY - hh, x, midY + hh);
 		}
 	}
+	// While dragging, drop the per-clip decoration so the drop indicator reads
+	// clearly.
+	const bool dragging = (mode_ == Mode::Move && dragMoved_);
+
 	// Keyframe diamonds along the top edge, so an animated clip reads as such.
-	if (!c.keys.isEmpty() && c.outDurationMs() > 0) {
+	if (!dragging && !c.keys.isEmpty() && c.outDurationMs() > 0) {
 		p.setPen(Qt::NoPen);
 		p.setBrush(QColor(0xff, 0xd4, 0x4f));
 		for (const TlKeyframe &k : c.keys) {
@@ -442,7 +657,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	}
 
 	// Label bar along the bottom.
-	if (r.width() >= 28) {
+	if (!dragging && r.width() >= 28) {
 		QFont sf = p.font();
 		sf.setPixelSize(std::max(6, lp_.segFontPx));
 		p.setFont(sf);
@@ -476,27 +691,79 @@ void TimelineView::paintEvent(QPaintEvent *)
 	clampView();
 	viewTarget_ = viewStart_;
 
+	const bool dragging = (mode_ == Mode::Move && dragMoved_);
+
 	// Lanes + headers.
 	for (int i = 0; i < model_.tracks.size(); ++i) {
 		const TlTrack &t = model_.tracks[i];
 		const QRect lane = laneRect(i);
 		p.setPen(Qt::NoPen);
-		p.setBrush((i % 2) ? kLaneAlt : kLane);
+		// Highlight the lane a dragged clip would land on.
+		const bool dropHere = dragging && drop_.track == i;
+		p.setBrush(dropHere ? QColor(kAccent.red(), kAccent.green(), kAccent.blue(), 40)
+				    : ((i % 2) ? kLaneAlt : kLane));
 		p.drawRect(lane);
+		if (t.locked) { // faint hatch so a locked lane reads as untouchable
+			p.setBrush(QBrush(QColor(0xff, 0xff, 0xff, 10), Qt::BDiagPattern));
+			p.drawRect(lane);
+		}
 
 		const QRect hdr = trackHeaderRect(i);
 		p.setBrush(kGutter);
 		p.drawRect(hdr);
-		p.setPen(t.muted ? kCaption : QColor(0xe8, 0xea, 0xed));
+		// Colour chip down the left edge of the header.
+		p.setBrush(t.color);
+		p.drawRect(QRect(hdr.x(), hdr.y() + 1, 4, hdr.height() - 2));
+
+		p.setPen((t.hidden || t.muted) ? kCaption : QColor(0xe8, 0xea, 0xed));
 		QFont hf = p.font();
 		hf.setPixelSize(11);
 		hf.setBold(true);
 		p.setFont(hf);
-		p.drawText(hdr.adjusted(8, 0, -4, 0), Qt::AlignVCenter | Qt::AlignLeft,
-			   t.name + (t.muted ? QStringLiteral(" (muted)") : QString()));
+		p.drawText(hdr.adjusted(10, 2, -4, 0), Qt::AlignTop | Qt::AlignLeft, t.name);
+
+		// Lock / hide / mute toggles (hidden while dragging to cut clutter).
+		if (!dragging) {
+			QFont gf = p.font();
+			gf.setPixelSize(11);
+			gf.setBold(false);
+			p.setFont(gf);
+			auto drawToggle = [&](HeaderHit which, const QString &glyph, bool on) {
+				const QRect r = headerToggleRect(i, which);
+				if (r.isEmpty())
+					return;
+				p.setPen(Qt::NoPen);
+				p.setBrush(on ? kAccent : QColor(0x2b, 0x2f, 0x36));
+				p.drawRoundedRect(r, 3, 3);
+				p.setPen(on ? QColor(0xff, 0xff, 0xff) : kCaption);
+				p.drawText(r, Qt::AlignCenter, glyph);
+			};
+			drawToggle(HeaderHit::Lock, QStringLiteral("L"), t.locked);
+			if (t.kind == TlTrack::Kind::Video)
+				drawToggle(HeaderHit::Hide, QStringLiteral("H"), t.hidden);
+			drawToggle(HeaderHit::Mute, QStringLiteral("M"), t.muted);
+		}
 
 		for (int ci = 0; ci < t.clips.size(); ++ci)
 			drawClip(p, i, ci);
+	}
+
+	// "Release here to make a new track" indicator.
+	if (dragging && drop_.newTrackAt >= 0) {
+		const QRect c = contentRect();
+		const int y = insertYFor(drop_.newTrackAt);
+		p.setPen(QPen(kAccent, 3));
+		p.drawLine(c.x(), y, c.right(), y);
+		p.setPen(Qt::NoPen);
+		p.setBrush(kAccent);
+		const QRect tag(c.x() + 6, y - 9, 104, 18);
+		p.drawRoundedRect(tag, 3, 3);
+		QFont tf = p.font();
+		tf.setPixelSize(10);
+		tf.setBold(true);
+		p.setFont(tf);
+		p.setPen(QColor(0xff, 0xff, 0xff));
+		p.drawText(tag, Qt::AlignCenter, QStringLiteral("+ New track here"));
 	}
 
 	if (model_.tracks.isEmpty()) {
@@ -536,8 +803,35 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 		update();
 		return;
 	}
-	if (pos.x() < contentRect().x())
-		return; // gutter clicks ignored for now
+	// ---- Track header (gutter): toggles + track menu ----
+	if (pos.x() < contentRect().x()) {
+		const int hTrack = laneAtY(pos.y());
+		if (hTrack < 0)
+			return;
+		if (e->button() == Qt::RightButton) {
+			showTrackMenu(hTrack, e->globalPosition().toPoint());
+			return;
+		}
+		if (e->button() != Qt::LeftButton)
+			return;
+		TlTrack &ht = model_.tracks[hTrack];
+		switch (headerHitAt(hTrack, pos)) {
+		case HeaderHit::Lock:
+			ht.locked = !ht.locked;
+			break;
+		case HeaderHit::Hide:
+			ht.hidden = !ht.hidden;
+			break;
+		case HeaderHit::Mute:
+			ht.muted = !ht.muted;
+			break;
+		case HeaderHit::None:
+			return;
+		}
+		update();
+		emit clipsChanged(); // repaints the preview + records an undo step
+		return;
+	}
 
 	int track = -1;
 	const int clip = clipAtPoint(pos, &track);
@@ -571,6 +865,13 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	selTrack_ = track;
 	selClip_ = clip;
 	emit selectionChanged(selTrack_, selClip_);
+	// A locked track still selects (so you can inspect it) but never edits.
+	if (model_.tracks[track].locked) {
+		mode_ = Mode::None;
+		emitScrubAt(xToMs(pos.x()));
+		update();
+		return;
+	}
 	pressPos_ = pos;
 	dragMoved_ = false;
 	dragTrack_ = track;
@@ -622,6 +923,9 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 			const qint64 snapEnd = snap(ns + dur, dragTrack_, dragClip_) - dur;
 			ns = (std::llabs(snapEnd - ns) < std::llabs(snapStart - ns)) ? snapEnd : snapStart;
 			c.outStartMs = std::max<qint64>(0, ns);
+			// Vertical position picks the landing lane — or, past a lane edge,
+			// a brand-new track (drawn as the "+ New track here" bar).
+			drop_ = dropTargetAt(pos.y(), model_.tracks[dragTrack_].kind);
 			emitScrubAt(c.outStartMs);
 			setCursor(Qt::ClosedHandCursor);
 		} else if (mode_ == Mode::ResizeLeft) {
@@ -675,16 +979,44 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 		return;
 	}
 	if (mode_ != Mode::None && dragTrack_ >= 0) {
-		// On a move drag, if the cursor is over a different SAME-KIND lane, move
-		// the clip element to that track.
+		// Land the clip: on another same-kind lane, or on a NEW track created at
+		// the insertion point the drop indicator was showing.
 		if (mode_ == Mode::Move && dragMoved_) {
-			const int target = laneAtY(e->pos().y());
-			if (target >= 0 && target != dragTrack_ &&
-			    model_.tracks[target].kind == model_.tracks[dragTrack_].kind) {
+			const TlTrack::Kind kind = model_.tracks[dragTrack_].kind;
+			int target = -1;
+			if (drop_.newTrackAt >= 0) {
+				const int at = drop_.newTrackAt;
+				TlTrack nt;
+				nt.kind = kind;
+				nt.color = randomPastel();
+				model_.tracks.insert(at, nt);
+				if (dragTrack_ >= at)
+					++dragTrack_; // the source lane shifted down
+				target = at;
+			} else if (drop_.track >= 0 && drop_.track != dragTrack_ &&
+				   model_.tracks[drop_.track].kind == kind &&
+				   !model_.tracks[drop_.track].locked) {
+				target = drop_.track;
+			}
+			if (target >= 0) {
 				TlClip moved = model_.tracks[dragTrack_].clips.takeAt(dragClip_);
 				model_.tracks[target].clips.append(moved);
 				selTrack_ = target;
 				selClip_ = model_.tracks[target].clips.size() - 1;
+				// Tidy up: if moving the clip emptied its old lane, drop that
+				// lane — unless it's the last one of its kind.
+				if (model_.tracks[dragTrack_].clips.isEmpty()) {
+					int ofKind = 0;
+					for (const TlTrack &tr : model_.tracks)
+						if (tr.kind == kind)
+							++ofKind;
+					if (ofKind > 1) {
+						model_.tracks.remove(dragTrack_);
+						if (selTrack_ > dragTrack_)
+							--selTrack_;
+					}
+				}
+				renumberTracks();
 				emit selectionChanged(selTrack_, selClip_);
 			}
 		}
@@ -692,6 +1024,7 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 		mode_ = Mode::None;
 		dragTrack_ = dragClip_ = -1;
 		dragMoved_ = false;
+		drop_ = DropTarget();
 		unsetCursor();
 		clampView();
 		updateGeometry();
@@ -747,9 +1080,19 @@ void TimelineView::deleteSelected()
 	if (selTrack_ < 0 || selTrack_ >= model_.tracks.size())
 		return;
 	TlTrack &t = model_.tracks[selTrack_];
+	if (t.locked)
+		return;
 	if (selClip_ < 0 || selClip_ >= t.clips.size())
 		return;
+	// Auto ripple: close the gap by pulling every later clip on this track left.
+	const qint64 gapStart = t.clips[selClip_].outStartMs;
+	const qint64 gapLen = t.clips[selClip_].outDurationMs();
 	t.clips.remove(selClip_);
+	if (t.ripple) {
+		for (TlClip &c : t.clips)
+			if (c.outStartMs >= gapStart)
+				c.outStartMs = std::max<qint64>(0, c.outStartMs - gapLen);
+	}
 	selClip_ = -1;
 	emit selectionChanged(selTrack_, -1);
 	clampView();
@@ -763,7 +1106,7 @@ void TimelineView::splitClip(int track, int clip, qint64 atOutMs)
 	if (track < 0 || track >= model_.tracks.size())
 		return;
 	TlTrack &t = model_.tracks[track];
-	if (clip < 0 || clip >= t.clips.size())
+	if (t.locked || clip < 0 || clip >= t.clips.size())
 		return;
 	TlClip &a = t.clips[clip];
 	if (atOutMs <= a.outStartMs + kMinClipMs || atOutMs >= a.outEndMs() - kMinClipMs)
@@ -782,16 +1125,26 @@ void TimelineView::splitClip(int track, int clip, qint64 atOutMs)
 
 void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qint64 atOutMs)
 {
+	const bool locked = model_.tracks[track].locked;
 	QMenu menu(this);
+	QAction *inspect = menu.addAction(QStringLiteral("Show in inspector"));
+	menu.addSeparator();
 	QAction *split = menu.addAction(QStringLiteral("Split here"));
 	const TlClip &c = model_.tracks[track].clips[clip];
-	split->setEnabled(atOutMs > c.outStartMs + kMinClipMs && atOutMs < c.outEndMs() - kMinClipMs);
+	split->setEnabled(!locked && atOutMs > c.outStartMs + kMinClipMs &&
+			  atOutMs < c.outEndMs() - kMinClipMs);
 	QAction *dup = menu.addAction(QStringLiteral("Duplicate"));
+	dup->setEnabled(!locked);
 	QAction *mute = menu.addAction(model_.tracks[track].muted ? QStringLiteral("Unmute track")
 								 : QStringLiteral("Mute track"));
 	menu.addSeparator();
 	QAction *del = menu.addAction(QStringLiteral("Delete clip"));
+	del->setEnabled(!locked);
 	QAction *chosen = menu.exec(globalPos);
+	if (chosen == inspect) {
+		emit inspectClipRequested();
+		return;
+	}
 	if (chosen == split) {
 		splitClip(track, clip, atOutMs);
 	} else if (chosen == dup) {

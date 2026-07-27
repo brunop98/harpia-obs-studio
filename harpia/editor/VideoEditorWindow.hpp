@@ -302,6 +302,7 @@ private:
 	QPushButton *boxColorBtn_ = nullptr;
 	QSpinBox *boxPadSpin_ = nullptr;
 	QPushButton *addTextBtn_ = nullptr; // bottom controls row, Full mode only
+	QPushButton *snapBtn_ = nullptr;    // magnet toggle, Full mode only
 	bool syncingClip_ = false;          // guard while pushing values into the UI
 
 	void buildClipInspector(QVBoxLayout *into);

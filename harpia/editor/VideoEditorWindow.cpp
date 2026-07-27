@@ -357,6 +357,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		syncPreviewTransformTarget();
 		updateInspector();
 	});
+	// "Show in inspector" from a clip's right-click menu.
+	connect(timelineView_, &TimelineView::inspectClipRequested, this, [this]() {
+		if (inspectorBtn_ && !inspectorBtn_->isChecked())
+			inspectorBtn_->setChecked(true); // reveals the panel
+		updateInspector();
+	});
 	// Direct manipulation of the selected clip straight in the preview.
 	connect(canvas_, &PreviewCanvas::transformDragged, this,
 		&VideoEditorWindow::onPreviewTransformDrag);
@@ -491,6 +497,17 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	addTextBtn_->setVisible(false); // shown only in Full editing
 	connect(addTextBtn_, &QPushButton::clicked, this, &VideoEditorWindow::addTextClip);
 	controls->addWidget(addTextBtn_);
+	// Magnet: snap dragged clips to the playhead, 0 and other clips' edges.
+	snapBtn_ = new QPushButton(QStringLiteral("🧲 Snap"), this);
+	snapBtn_->setCheckable(true);
+	snapBtn_->setChecked(true);
+	snapBtn_->setToolTip(QStringLiteral("Snap clips to the playhead and to other clips' edges"));
+	snapBtn_->setVisible(false); // Full editing only
+	connect(snapBtn_, &QPushButton::toggled, this, [this](bool on) {
+		if (timelineView_)
+			timelineView_->setSnapEnabled(on);
+	});
+	controls->addWidget(snapBtn_);
 	controls->addStretch(1);
 	infoLabel_ = new QLabel(this);
 	infoLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
@@ -1662,6 +1679,11 @@ void VideoEditorWindow::onPreviewTransformDrag(double dxNorm, double dyNorm)
 	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
 	if (!sel)
 		return;
+	// Framing a clip while the playhead runs would apply each delta against a
+	// different interpolated pose (and scatter keyframes across the timeline), so
+	// the clip appears not to follow the mouse. Pause first, like scrubbing does.
+	if (playing_)
+		stopPlayback();
 	TlTransform tf = sel->transformAt(timelinePlayheadMs());
 	tf.posX += dxNorm;
 	tf.posY += dyNorm;
@@ -1673,6 +1695,8 @@ void VideoEditorWindow::onPreviewTransformZoom(double factor, double cursorXNorm
 	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
 	if (!sel)
 		return;
+	if (playing_) // see onPreviewTransformDrag: reframe against a still playhead
+		stopPlayback();
 	TlTransform tf = sel->transformAt(timelinePlayheadMs());
 	const double newScale = std::clamp(tf.scale * factor, 0.05, 20.0);
 	const double k = newScale / std::max(0.0001, tf.scale); // actual applied factor
@@ -1877,6 +1901,8 @@ void VideoEditorWindow::setEditMode(EditMode m)
 	}
 	if (addTextBtn_)
 		addTextBtn_->setVisible(full);
+	if (snapBtn_)
+		snapBtn_->setVisible(full);
 	syncPreviewTransformTarget();
 	if (full)
 		showTimelineFrame(timelinePlayheadMs());
@@ -2370,6 +2396,10 @@ void VideoEditorWindow::onSaveProject()
 							       : QStringLiteral("audio");
 			to[QStringLiteral("name")] = t.name;
 			to[QStringLiteral("muted")] = t.muted;
+			to[QStringLiteral("hidden")] = t.hidden;
+			to[QStringLiteral("locked")] = t.locked;
+			to[QStringLiteral("ripple")] = t.ripple;
+			to[QStringLiteral("color")] = t.color.name(QColor::HexRgb);
 			QJsonArray clipArr;
 			for (const TlClip &c : t.clips) {
 				QJsonObject co;
@@ -2601,6 +2631,11 @@ void VideoEditorWindow::onOpenProject()
 				 : TlTrack::Kind::Video;
 		t.name = to.value(QStringLiteral("name")).toString();
 		t.muted = to.value(QStringLiteral("muted")).toBool(false);
+		t.hidden = to.value(QStringLiteral("hidden")).toBool(false);
+		t.locked = to.value(QStringLiteral("locked")).toBool(false);
+		t.ripple = to.value(QStringLiteral("ripple")).toBool(false);
+		if (const QColor tc(to.value(QStringLiteral("color")).toString()); tc.isValid())
+			t.color = tc;
 		for (const QJsonValue &cv : to.value(QStringLiteral("clips")).toArray()) {
 			const QJsonObject co = cv.toObject();
 			TlClip c;

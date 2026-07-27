@@ -105,8 +105,11 @@ void TimelineCompositor::drawTextClip(QPainter &p, const TlClip &c, const TlTran
 
 	p.save();
 	p.setOpacity(std::clamp(tf.opacity, 0.0, 1.0));
-	// Position + zoom: the text scales about its own centre, like a video clip.
+	// Position, spin and zoom: the text transforms about its own centre, like a
+	// video clip (the path below is already built centred on the origin).
 	p.translate(tf.posX * canvas.width(), tf.posY * canvas.height());
+	if (std::abs(tf.rotation) > 0.001)
+		p.rotate(tf.rotation);
 	p.scale(std::max(0.001, tf.scale), std::max(0.001, tf.scale));
 	p.setRenderHint(QPainter::Antialiasing, true);
 
@@ -149,6 +152,12 @@ void TimelineCompositor::drawClip(QPainter &p, const TlClip &c, const TlTransfor
 	p.save();
 	p.setOpacity(std::clamp(tf.opacity, 0.0, 1.0));
 	p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+	if (std::abs(tf.rotation) > 0.001) { // spin about the clip's own centre
+		const QPointF c = dst.center();
+		p.translate(c);
+		p.rotate(tf.rotation);
+		p.translate(-c);
+	}
 	p.drawImage(dst, img);
 	p.restore();
 }

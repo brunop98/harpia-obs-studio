@@ -300,6 +300,7 @@ private:
 	QDoubleSpinBox *posXSpin_ = nullptr;
 	QDoubleSpinBox *posYSpin_ = nullptr;
 	QDoubleSpinBox *zoomSpin_ = nullptr;
+	QDoubleSpinBox *rotationSpin_ = nullptr;  // degrees about the clip's centre
 	QDoubleSpinBox *opacitySpin_ = nullptr;
 	QDoubleSpinBox *clipSpeedSpin_ = nullptr; // per-clip playback speed
 	QCheckBox *autoKeyChk_ = nullptr;

@@ -1621,6 +1621,8 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	posXSpin_ = mkSpin(-2.0, 3.0, 0.01, 3);
 	posYSpin_ = mkSpin(-2.0, 3.0, 0.01, 3);
 	opacitySpin_ = mkSpin(0.0, 1.0, 0.05, 2);
+	rotationSpin_ = mkSpin(-3600.0, 3600.0, 1.0, 1);
+	rotationSpin_->setSuffix(QStringLiteral("°"));
 	clipSpeedSpin_ = mkSpin(0.1, 20.0, 0.1, 2);
 	clipSpeedSpin_->setToolTip(QStringLiteral(
 		"Playback speed for this clip. Its length on the timeline changes to match, and "
@@ -1628,6 +1630,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	form->addRow(QStringLiteral("Zoom"), zoomSpin_);
 	form->addRow(QStringLiteral("Position X"), posXSpin_);
 	form->addRow(QStringLiteral("Position Y"), posYSpin_);
+	form->addRow(QStringLiteral("Rotation"), rotationSpin_);
 	form->addRow(QStringLiteral("Opacity"), opacitySpin_);
 	form->addRow(QStringLiteral("Speed"), clipSpeedSpin_);
 	v->addLayout(form);
@@ -1644,10 +1647,11 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		tf.posX = posXSpin_->value();
 		tf.posY = posYSpin_->value();
 		tf.scale = zoomSpin_->value();
+		tf.rotation = rotationSpin_->value();
 		tf.opacity = opacitySpin_->value();
 		applySelectedClipTransform(tf);
 	};
-	for (QDoubleSpinBox *s : {zoomSpin_, posXSpin_, posYSpin_, opacitySpin_})
+	for (QDoubleSpinBox *s : {zoomSpin_, posXSpin_, posYSpin_, rotationSpin_, opacitySpin_})
 		connect(s, &QDoubleSpinBox::valueChanged, this, [applyPose](double) { applyPose(); });
 
 	auto *resetBtn = new QPushButton(QStringLiteral("Reset transform"), clipBox_);
@@ -1874,6 +1878,7 @@ void VideoEditorWindow::syncClipInspector()
 	posXSpin_->setValue(tf.posX);
 	posYSpin_->setValue(tf.posY);
 	zoomSpin_->setValue(tf.scale);
+	rotationSpin_->setValue(tf.rotation);
 	opacitySpin_->setValue(tf.opacity);
 	clipSpeedSpin_->setValue(c->speed);
 	clipSpeedSpin_->setEnabled(c->type != TlClip::Type::Text); // text has no source
@@ -2856,6 +2861,7 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 				co[QStringLiteral("posX")] = c.posX;
 				co[QStringLiteral("posY")] = c.posY;
 				co[QStringLiteral("scale")] = c.scale;
+				co[QStringLiteral("rotation")] = c.rotation;
 				co[QStringLiteral("opacity")] = c.opacity;
 				if (!c.crop.isNull()) {
 					QJsonObject cr;
@@ -2873,6 +2879,7 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 						ko[QStringLiteral("posX")] = k.tf.posX;
 						ko[QStringLiteral("posY")] = k.tf.posY;
 						ko[QStringLiteral("scale")] = k.tf.scale;
+						ko[QStringLiteral("rotation")] = k.tf.rotation;
 						ko[QStringLiteral("opacity")] = k.tf.opacity;
 						ko[QStringLiteral("ease")] =
 							k.ease == TlKeyframe::Ease::Linear ? 0 : 1;
@@ -3093,6 +3100,7 @@ void VideoEditorWindow::onOpenProject()
 			c.posX = co.value(QStringLiteral("posX")).toDouble(0.5);
 			c.posY = co.value(QStringLiteral("posY")).toDouble(0.5);
 			c.scale = co.value(QStringLiteral("scale")).toDouble(1.0);
+			c.rotation = co.value(QStringLiteral("rotation")).toDouble(0.0);
 			c.opacity = co.value(QStringLiteral("opacity")).toDouble(1.0);
 			if (co.contains(QStringLiteral("crop"))) {
 				const QJsonObject cr = co.value(QStringLiteral("crop")).toObject();
@@ -3108,6 +3116,7 @@ void VideoEditorWindow::onOpenProject()
 				k.tf.posX = ko.value(QStringLiteral("posX")).toDouble(0.5);
 				k.tf.posY = ko.value(QStringLiteral("posY")).toDouble(0.5);
 				k.tf.scale = ko.value(QStringLiteral("scale")).toDouble(1.0);
+				k.tf.rotation = ko.value(QStringLiteral("rotation")).toDouble(0.0);
 				k.tf.opacity = ko.value(QStringLiteral("opacity")).toDouble(1.0);
 				k.ease = ko.value(QStringLiteral("ease")).toInt(1) == 0
 						 ? TlKeyframe::Ease::Linear

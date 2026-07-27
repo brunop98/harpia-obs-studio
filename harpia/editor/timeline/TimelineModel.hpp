@@ -22,9 +22,10 @@ namespace harpia {
 // The animatable pose of a clip on the output canvas. Resolved per output frame
 // (from the clip's base pose, or interpolated between its keyframes).
 struct TlTransform {
-	double posX = 0.5;  // centre X (0..1 across the canvas)
-	double posY = 0.5;  // centre Y (0..1 down the canvas)
-	double scale = 1.0; // 1 = fit the canvas; >1 zooms in; <1 = picture-in-picture
+	double posX = 0.5;    // centre X (0..1 across the canvas)
+	double posY = 0.5;    // centre Y (0..1 down the canvas)
+	double scale = 1.0;   // 1 = fit the canvas; >1 zooms in; <1 = picture-in-picture
+	double rotation = 0.0; // degrees clockwise, about the clip's own centre
 	double opacity = 1.0;
 };
 
@@ -40,7 +41,8 @@ struct TlKeyframe {
 	bool operator==(const TlKeyframe &o) const
 	{
 		return tMs == o.tMs && tf.posX == o.tf.posX && tf.posY == o.tf.posY &&
-		       tf.scale == o.tf.scale && tf.opacity == o.tf.opacity && ease == o.ease;
+		       tf.scale == o.tf.scale && tf.rotation == o.tf.rotation &&
+		       tf.opacity == o.tf.opacity && ease == o.ease;
 	}
 };
 
@@ -89,6 +91,7 @@ struct TlClip {
 	double posX = 0.5;
 	double posY = 0.5;
 	double scale = 1.0;
+	double rotation = 0.0; // degrees clockwise
 	double opacity = 1.0;
 	QRect crop;          // source-pixel crop (null/empty = whole frame)
 
@@ -119,12 +122,16 @@ struct TlClip {
 		return srcStartMs + qint64(std::llround(double(off) * (speed > 0.01 ? speed : 1.0)));
 	}
 
-	TlTransform baseTransform() const { return TlTransform{posX, posY, scale, opacity}; }
+	TlTransform baseTransform() const
+	{
+		return TlTransform{posX, posY, scale, rotation, opacity};
+	}
 	void setBaseTransform(const TlTransform &t)
 	{
 		posX = t.posX;
 		posY = t.posY;
 		scale = t.scale;
+		rotation = t.rotation;
 		opacity = t.opacity;
 	}
 
@@ -150,8 +157,9 @@ struct TlClip {
 		if (a.ease == TlKeyframe::Ease::EaseInOut)
 			u = u * u * (3.0 - 2.0 * u); // smoothstep
 		auto mix = [u](double p, double q) { return p + (q - p) * u; };
-		return TlTransform{mix(a.tf.posX, b.tf.posX), mix(a.tf.posY, b.tf.posY),
-				   mix(a.tf.scale, b.tf.scale), mix(a.tf.opacity, b.tf.opacity)};
+		return TlTransform{mix(a.tf.posX, b.tf.posX),   mix(a.tf.posY, b.tf.posY),
+				   mix(a.tf.scale, b.tf.scale), mix(a.tf.rotation, b.tf.rotation),
+				   mix(a.tf.opacity, b.tf.opacity)};
 	}
 
 	// Insert (or replace) a keyframe at an output-time position. The first
@@ -189,7 +197,8 @@ struct TlClip {
 	{
 		return type == o.type && sourceId == o.sourceId && srcStartMs == o.srcStartMs &&
 		       srcEndMs == o.srcEndMs && speed == o.speed && outStartMs == o.outStartMs &&
-		       posX == o.posX && posY == o.posY && scale == o.scale && opacity == o.opacity &&
+		       posX == o.posX && posY == o.posY && scale == o.scale &&
+		       rotation == o.rotation && opacity == o.opacity &&
 		       crop == o.crop && keys == o.keys && text == o.text && volume == o.volume &&
 		       fadeInMs == o.fadeInMs && fadeOutMs == o.fadeOutMs;
 	}

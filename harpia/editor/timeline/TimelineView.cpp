@@ -172,6 +172,15 @@ void TimelineView::setSnapEnabled(bool on)
 	snap_ = on;
 }
 
+void TimelineView::zoomToFit()
+{
+	zoom_ = zoomTarget_ = 1.0; // zoom 1 == the whole span across the view
+	viewStart_ = viewTarget_ = 0;
+	if (anim_)
+		anim_->stop();
+	update();
+}
+
 void TimelineView::addClip(TlTrack::Kind kind, const TlClip &clip)
 {
 	int idx = -1;

@@ -2,9 +2,12 @@
 
 #include <QFile>
 #include <QFileInfo>
+#include <QStringList>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavfilter/buffersink.h>
+#include <libavfilter/buffersrc.h>
 #include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/opt.h>
@@ -13,6 +16,7 @@ extern "C" {
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace harpia {
 
@@ -105,9 +109,114 @@ std::vector<float> decodeToFloat(const QString &path)
 }
 } // namespace
 
-bool VoiceoverMixer::decodeToWav(const QString &inPath, const QString &outWav)
+namespace {
+// Pitch-preserving time stretch of interleaved stereo float @ 48 kHz, using
+// FFmpeg's atempo filter. speed > 1 shortens the audio. atempo only accepts
+// 0.5..2.0 per instance, so larger changes are chained.
+std::vector<float> atempoStretch(const std::vector<float> &in, double speed)
 {
-	const std::vector<float> s = decodeToFloat(inPath); // interleaved stereo @ 48k
+	speed = std::clamp(speed, 0.05, 50.0);
+	if (in.empty() || std::abs(speed - 1.0) <= 0.001)
+		return in;
+
+	// Factor the requested speed into a chain of legal atempo steps.
+	QStringList steps;
+	double remaining = speed;
+	while (remaining > 2.0) {
+		steps << QStringLiteral("atempo=2.0");
+		remaining /= 2.0;
+	}
+	while (remaining < 0.5) {
+		steps << QStringLiteral("atempo=0.5");
+		remaining /= 0.5;
+	}
+	steps << QStringLiteral("atempo=%1").arg(remaining, 0, 'f', 6);
+
+	AVFilterGraph *graph = avfilter_graph_alloc();
+	if (!graph)
+		return in;
+	std::vector<float> out;
+	AVFilterContext *src = nullptr;
+	AVFilterContext *sink = nullptr;
+	AVFrame *inFrame = av_frame_alloc();
+	AVFrame *outFrame = av_frame_alloc();
+
+	auto cleanup = [&]() {
+		if (inFrame)
+			av_frame_free(&inFrame);
+		if (outFrame)
+			av_frame_free(&outFrame);
+		avfilter_graph_free(&graph);
+	};
+
+	const QString args = QStringLiteral("time_base=1/%1:sample_rate=%1:sample_fmt=flt:"
+					    "channel_layout=stereo")
+				     .arg(kRate);
+	if (avfilter_graph_create_filter(&src, avfilter_get_by_name("abuffer"), "in",
+					 args.toUtf8().constData(), nullptr, graph) < 0 ||
+	    avfilter_graph_create_filter(&sink, avfilter_get_by_name("abuffersink"), "out", nullptr,
+					 nullptr, graph) < 0) {
+		cleanup();
+		return in;
+	}
+	static const enum AVSampleFormat kFmts[] = {AV_SAMPLE_FMT_FLT, AV_SAMPLE_FMT_NONE};
+	av_opt_set_int_list(sink, "sample_fmts", kFmts, AV_SAMPLE_FMT_NONE, AV_OPT_SEARCH_CHILDREN);
+
+	// Chain: in -> atempo... -> out
+	AVFilterContext *prev = src;
+	for (int i = 0; i < steps.size(); ++i) {
+		const QString spec = steps[i];
+		const int eq = spec.indexOf(QLatin1Char('='));
+		AVFilterContext *f = nullptr;
+		if (avfilter_graph_create_filter(&f, avfilter_get_by_name("atempo"),
+						 QStringLiteral("t%1").arg(i).toUtf8().constData(),
+						 spec.mid(eq + 1).toUtf8().constData(), nullptr,
+						 graph) < 0 ||
+		    avfilter_link(prev, 0, f, 0) < 0) {
+			cleanup();
+			return in;
+		}
+		prev = f;
+	}
+	if (avfilter_link(prev, 0, sink, 0) < 0 || avfilter_graph_config(graph, nullptr) < 0) {
+		cleanup();
+		return in;
+	}
+
+	// Push everything in one frame, then flush.
+	const int frames = int(in.size() / kCh);
+	inFrame->format = AV_SAMPLE_FMT_FLT;
+	inFrame->sample_rate = kRate;
+	av_channel_layout_from_mask(&inFrame->ch_layout, AV_CH_LAYOUT_STEREO);
+	inFrame->nb_samples = frames;
+	if (av_frame_get_buffer(inFrame, 0) < 0) {
+		cleanup();
+		return in;
+	}
+	std::memcpy(inFrame->data[0], in.data(), in.size() * sizeof(float));
+	if (av_buffersrc_add_frame(src, inFrame) < 0) {
+		cleanup();
+		return in;
+	}
+	av_buffersrc_add_frame(src, nullptr); // EOF
+
+	while (av_buffersink_get_frame(sink, outFrame) >= 0) {
+		const auto *p = reinterpret_cast<const float *>(outFrame->data[0]);
+		out.insert(out.end(), p, p + size_t(outFrame->nb_samples) * kCh);
+		av_frame_unref(outFrame);
+	}
+	cleanup();
+	return out.empty() ? in : out;
+}
+} // namespace
+
+bool VoiceoverMixer::decodeToWav(const QString &inPath, const QString &outWav, double speed)
+{
+	std::vector<float> s = decodeToFloat(inPath); // interleaved stereo @ 48k
+	if (s.empty())
+		return false;
+	if (std::abs(speed - 1.0) > 0.001)
+		s = atempoStretch(s, speed);
 	if (s.empty())
 		return false;
 	const qint64 frames = (qint64)s.size() / kCh;

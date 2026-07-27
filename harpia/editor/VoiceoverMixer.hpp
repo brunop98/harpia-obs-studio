@@ -33,8 +33,9 @@ public:
 
 	// Decode any audio file to a 16-bit PCM WAV (48 kHz stereo) at `outWav`, so an
 	// imported track becomes a normal voiceover take (waveform + trim + mix all
-	// work uniformly). Returns true on success.
-	static bool decodeToWav(const QString &inPath, const QString &outWav);
+	// work uniformly). `speed` > 1 shortens the result (pitch preserved via
+	// atempo), matching a clip played faster. Returns true on success.
+	static bool decodeToWav(const QString &inPath, const QString &outWav, double speed = 1.0);
 
 	// Exposed for unit testing: apply gain + linear fades to one take and add it
 	// into `mix` (interleaved stereo) at `startFrame`; and build the ducking gain

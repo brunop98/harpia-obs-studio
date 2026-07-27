@@ -189,28 +189,58 @@ void ClipExporter::run(const QString &inPath, const QString &outPath, const Opti
 	cancel_.store(false);
 
 	if (opts.format == Format::Gif) {
-		if (!opts.cuts.empty() || !opts.timeline.isEmpty()) {
+		if (!opts.cuts.empty()) {
 			emit finished(false, false,
-				      QStringLiteral("GIF export is not available in Multi-Cut or Full "
-						     "editing yet — choose MP4, MKV or MOV."));
+				      QStringLiteral("GIF export is not available in Multi-Cut mode yet — "
+						     "choose MP4, MKV or MOV."));
 			return;
+		}
+		// A timeline can't be handed to the palette encoder directly (it reads one
+		// input file), so render the composite to a temp video first and GIF that.
+		QString gifIn = inPath;
+		QTemporaryDir tlTmp;
+		Options gifOpts = opts;
+		if (!opts.timeline.isEmpty()) {
+			if (!tlTmp.isValid()) {
+				emit finished(false, false,
+					      QStringLiteral("Could not create a temporary folder."));
+				return;
+			}
+			gifIn = tlTmp.filePath(QStringLiteral("timeline.mp4"));
+			Options pre = opts;
+			pre.format = Format::Mp4;
+			const QString rerr = runTimeline(gifIn, pre);
+			if (cancel_.load()) {
+				emit finished(false, true, QString());
+				return;
+			}
+			if (!rerr.isEmpty()) {
+				emit finished(false, false, rerr);
+				return;
+			}
+			// The render already applied trim/crop/speed, so the GIF pass just
+			// re-encodes the whole thing.
+			gifOpts.startMs = 0;
+			gifOpts.endMs = 0;
+			gifOpts.crop = false;
+			gifOpts.speed = 1.0;
 		}
 		// Delegate to the avfilter-based GIF encoder; bridge its callbacks to our
 		// Qt signals.
 		GifEncoder::Params gp;
-		gp.startMs = opts.startMs;
-		gp.endMs = opts.endMs;
-		gp.crop = opts.crop;
-		gp.cropX = opts.cropX;
-		gp.cropY = opts.cropY;
-		gp.cropW = opts.cropW;
-		gp.cropH = opts.cropH;
-		gp.fps = opts.gifFps;
-		gp.width = opts.gifWidth;
-		gp.speed = opts.speed;
+		gp.startMs = gifOpts.startMs;
+		gp.endMs = gifOpts.endMs;
+		gp.crop = gifOpts.crop;
+		gp.cropX = gifOpts.cropX;
+		gp.cropY = gifOpts.cropY;
+		gp.cropW = gifOpts.cropW;
+		gp.cropH = gifOpts.cropH;
+		gp.fps = gifOpts.gifFps;
+		gp.width = gifOpts.gifWidth;
+		gp.speed = gifOpts.speed;
 		QString err;
 		const bool ok = GifEncoder::encode(
-			inPath, outPath, gp, [this]() { return cancel_.load(); },
+			gifIn, outPath, gp, [this]() { return cancel_.load(); },
 			[this](int pct, qint64 eta, qint64 bytes) { emit progress(pct, eta, bytes); }, &err);
 		if (cancel_.load())
 			emit finished(false, true, QString());
@@ -1559,8 +1589,11 @@ QString ClipExporter::mixTimelineAudio(const QString &videoPath, const Options &
 	if (!tmp.isValid())
 		return QStringLiteral("Could not create a temporary folder for the audio mix.");
 
-	std::map<int, QString> wavForSource; // sourceId -> decoded WAV ("" = no audio)
+	// Cached per (source, speed): a clip played at 1.5x needs its own atempo'd
+	// render, but every 1x clip of the same source shares one decode.
+	std::map<std::pair<int, int>, QString> wavCache; // (sourceId, speed*1000) -> WAV
 	std::vector<VoiceoverMixer::Take> takes;
+	int nextWav = 0;
 
 	for (const TlTrack &t : opts.timeline.tracks) {
 		if (t.muted)
@@ -1568,31 +1601,32 @@ QString ClipExporter::mixTimelineAudio(const QString &videoPath, const Options &
 		for (const TlClip &c : t.clips) {
 			if (c.type == TlClip::Type::Text)
 				continue; // text has no audio
-			// Speed-changed clips would need atempo to stay in sync; the timeline
-			// UI only creates 1x clips today, so skip anything else rather than
-			// emit audio that drifts against the picture.
-			if (std::abs(c.speed - 1.0) > 0.01)
-				continue;
-			auto it = wavForSource.find(c.sourceId);
-			if (it == wavForSource.end()) {
+			const double speed = (c.speed > 0.01) ? c.speed : 1.0;
+			const auto key = std::make_pair(c.sourceId, int(std::lround(speed * 1000.0)));
+			auto it = wavCache.find(key);
+			if (it == wavCache.end()) {
 				const auto sit = opts.timelineSources.find(c.sourceId);
 				QString wav;
 				if (sit != opts.timelineSources.end()) {
 					const QString cand =
-						tmp.filePath(QStringLiteral("src%1.wav").arg(c.sourceId));
+						tmp.filePath(QStringLiteral("a%1.wav").arg(nextWav++));
+					// Time-stretched (pitch preserved) so sped-up clips stay
+					// locked to the picture.
 					if (VoiceoverMixer::decodeToWav(
-						    QString::fromStdString(sit->second), cand))
+						    QString::fromStdString(sit->second), cand, speed))
 						wav = cand;
 				}
-				it = wavForSource.emplace(c.sourceId, wav).first;
+				it = wavCache.emplace(key, wav).first;
 			}
 			if (it->second.isEmpty())
 				continue; // that source has no usable audio
 			VoiceoverMixer::Take tk;
 			tk.path = it->second;
 			tk.outStartMs = c.outStartMs;
-			tk.srcStartMs = c.srcStartMs;
-			tk.playMs = c.srcLenMs();
+			// The cached WAV is already in OUTPUT time, so the clip's source
+			// offsets scale by the same factor.
+			tk.srcStartMs = qint64(std::llround(c.srcStartMs / speed));
+			tk.playMs = c.outDurationMs();
 			tk.volume = (t.kind == TlTrack::Kind::Audio) ? c.volume : 1.0;
 			tk.fadeInMs = c.fadeInMs;
 			tk.fadeOutMs = c.fadeOutMs;

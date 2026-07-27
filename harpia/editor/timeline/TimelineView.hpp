@@ -68,6 +68,9 @@ public:
 	void addTrack(TlTrack::Kind kind, int atIndex = -1); // -1 = top of that kind's group
 	void deleteTrack(int index);
 
+	// Fit the whole timeline in the view (zoom out to 1:1 on the full span).
+	void zoomToFit();
+
 	const TimelineViewParams &layoutParams() const { return lp_; }
 	void setLayoutParams(const TimelineViewParams &p);
 

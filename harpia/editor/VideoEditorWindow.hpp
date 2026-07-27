@@ -210,6 +210,18 @@ private:
 	void showTimelineFrame(qint64 outMs);
 	QSize timelineCanvasSize() const; // primary source's resolution (fallback 1920x1080)
 	void addActiveSourceToTimeline(); // "Add to timeline" for the active source
+	// ---- Audio on the timeline (Full editing) ----
+	// Register an audio-only file as a source (decoded to a session WAV so the
+	// waveform, trimming and the export mix all work uniformly). -1 on failure.
+	int addAudioSource(const QString &path);
+	// The 48k WAV proxy for a source's audio, decoding it on first use. Empty if
+	// that source has no audio. Used for clip waveforms.
+	QString audioProxyFor(int sourceId);
+	QHash<int, QString> audioProxy_;
+	void addAudioClipFromSource(int sourceId); // put a source's audio on an audio lane
+	void onAddAudioClicked();                  // "Add audio ▾" menu
+	QPushButton *addAudioBtn_ = nullptr;
+	QString sessionAudioDir(); // per-session temp dir for decoded proxies
 
 	// ---- Direct manipulation of the selected clip in the preview ----
 	// Drag repositions, wheel zooms about the cursor. When the clip is
@@ -289,6 +301,7 @@ private:
 	QDoubleSpinBox *posYSpin_ = nullptr;
 	QDoubleSpinBox *zoomSpin_ = nullptr;
 	QDoubleSpinBox *opacitySpin_ = nullptr;
+	QDoubleSpinBox *clipSpeedSpin_ = nullptr; // per-clip playback speed
 	QCheckBox *autoKeyChk_ = nullptr;
 	QLabel *keyInfo_ = nullptr;
 	QWidget *textBox_ = nullptr; // text-clip style controls
@@ -306,6 +319,7 @@ private:
 	QSpinBox *boxPadSpin_ = nullptr;
 	QPushButton *addTextBtn_ = nullptr; // bottom controls row, Full mode only
 	QPushButton *snapBtn_ = nullptr;    // magnet toggle, Full mode only
+	QPushButton *fitBtn_ = nullptr;     // zoom-to-fit, Full mode only
 	bool syncingClip_ = false;          // guard while pushing values into the UI
 
 	// ---- Project inspector (metadata for the whole edit, not one clip) ----

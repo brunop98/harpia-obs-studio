@@ -23,9 +23,11 @@ struct EditorChromeParams {
 class PreviewCanvas;
 class Timeline;
 class TrackEditor;
+class TimelineView;
 class VoiceoverTrack;
 struct PreviewLayoutParams;
 struct TimelineLayoutParams;
+struct TimelineViewParams;
 struct TrackLayoutParams;
 struct VoiceoverLayoutParams;
 
@@ -37,7 +39,8 @@ class DevPanel : public QDialog {
 	Q_OBJECT
 public:
 	DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voice,
-		 PreviewCanvas *preview, QWidget *parent = nullptr);
+		 PreviewCanvas *preview, TimelineView *fullTimeline = nullptr,
+		 QWidget *parent = nullptr);
 
 	// Persisted tweaks: the editor calls loadInto() at startup to restore the
 	// saved layout; the panel calls saveFrom() after every change.
@@ -60,12 +63,14 @@ private:
 	void applyVoice();
 	void applyPreview();
 	void applyChrome();
+	void applyFullTimeline();
 	void resetDefaults();
 
 	Timeline *timeline_ = nullptr;
 	TrackEditor *tracks_ = nullptr;
 	VoiceoverTrack *voice_ = nullptr;
 	PreviewCanvas *preview_ = nullptr;
+	TimelineView *fullTimeline_ = nullptr;
 
 	// Editor window (toolbar/transport chrome).
 	QSpinBox *winBtnH_ = nullptr;
@@ -100,6 +105,19 @@ private:
 	// Preview canvas (shared by both modes).
 	QSpinBox *pvW_ = nullptr;
 	QSpinBox *pvH_ = nullptr;
+
+	// Full-editing multi-track timeline.
+	QSpinBox *ftGutterW_ = nullptr;
+	QSpinBox *ftRulerH_ = nullptr;
+	QSpinBox *ftVideoLaneH_ = nullptr;
+	QSpinBox *ftAudioLaneH_ = nullptr;
+	QSpinBox *ftLaneGap_ = nullptr;
+	QSpinBox *ftMargin_ = nullptr;
+	QSpinBox *ftMinClipW_ = nullptr;
+	QSpinBox *ftSnapPx_ = nullptr;
+	QSpinBox *ftDropBandPx_ = nullptr;
+	QSpinBox *ftSegFontPx_ = nullptr;
+	QDoubleSpinBox *ftMaxZoom_ = nullptr;
 
 	// Voiceover track.
 	QSpinBox *voMargin_ = nullptr;

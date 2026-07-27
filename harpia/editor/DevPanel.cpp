@@ -3,6 +3,7 @@
 #include "EditorWidgets.hpp"
 #include "TrackEditor.hpp"
 #include "VoiceoverTrack.hpp"
+#include "timeline/TimelineView.hpp"
 // PreviewCanvas + PreviewLayoutParams come from EditorWidgets.hpp.
 
 #include <QDoubleSpinBox>
@@ -122,8 +123,9 @@ void DevPanel::saveFrom(const TimelineLayoutParams &tl, const TrackLayoutParams 
 }
 
 DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voice,
-		   PreviewCanvas *preview, QWidget *parent)
-	: QDialog(parent), timeline_(timeline), tracks_(tracks), voice_(voice), preview_(preview)
+		   PreviewCanvas *preview, TimelineView *fullTimeline, QWidget *parent)
+	: QDialog(parent), timeline_(timeline), tracks_(tracks), voice_(voice), preview_(preview),
+	  fullTimeline_(fullTimeline)
 {
 	setWindowTitle(QStringLiteral("Developer Panel — timeline layout"));
 	// A floating tool window: stays above the editor but never blocks it, so
@@ -240,6 +242,36 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 	root->addWidget(trBox);
 
 	const VoiceoverLayoutParams vo = voice_->layoutParams();
+	// Full-editing multi-track timeline (only when that widget exists).
+	if (fullTimeline_) {
+		const TimelineViewParams ft = fullTimeline_->layoutParams();
+		auto *ftBox = new QGroupBox(QStringLiteral("Full-editing timeline"), inner);
+		auto *ftForm = new QFormLayout(ftBox);
+		ftForm->addRow(QStringLiteral("Track header width"),
+			       ftGutterW_ = spin(60, 320, ft.gutterW, &DevPanel::applyFullTimeline));
+		ftForm->addRow(QStringLiteral("Ruler height"),
+			       ftRulerH_ = spin(10, 60, ft.rulerH, &DevPanel::applyFullTimeline));
+		ftForm->addRow(QStringLiteral("Video lane height"),
+			       ftVideoLaneH_ = spin(20, 200, ft.videoLaneH, &DevPanel::applyFullTimeline));
+		ftForm->addRow(QStringLiteral("Audio lane height"),
+			       ftAudioLaneH_ = spin(20, 200, ft.audioLaneH, &DevPanel::applyFullTimeline));
+		ftForm->addRow(QStringLiteral("Lane gap"),
+			       ftLaneGap_ = spin(0, 24, ft.laneGap, &DevPanel::applyFullTimeline));
+		ftForm->addRow(QStringLiteral("Margin"),
+			       ftMargin_ = spin(0, 40, ft.margin, &DevPanel::applyFullTimeline));
+		ftForm->addRow(QStringLiteral("Min clip width"),
+			       ftMinClipW_ = spin(2, 80, ft.minClipW, &DevPanel::applyFullTimeline));
+		ftForm->addRow(QStringLiteral("Snap distance (px)"),
+			       ftSnapPx_ = spin(0, 40, ft.snapPx, &DevPanel::applyFullTimeline));
+		ftForm->addRow(QStringLiteral("New-track drop band (px)"),
+			       ftDropBandPx_ = spin(2, 30, ft.dropBandPx, &DevPanel::applyFullTimeline));
+		ftForm->addRow(QStringLiteral("Clip label font size"),
+			       ftSegFontPx_ = spin(6, 40, ft.segFontPx, &DevPanel::applyFullTimeline));
+		ftForm->addRow(QStringLiteral("Max zoom"),
+			       ftMaxZoom_ = dspin(1.0, 512.0, ft.maxZoom, &DevPanel::applyFullTimeline));
+		root->addWidget(ftBox);
+	}
+
 	auto *voBox = new QGroupBox(QStringLiteral("Voiceover track"), inner);
 	auto *voForm = new QFormLayout(voBox);
 	voForm->addRow(QStringLiteral("Margin"),
@@ -309,6 +341,25 @@ void DevPanel::applyTracks()
 	p.maxZoom = trMaxZoom_->value();
 	tracks_->setLayoutParams(p);
 	saveFrom(timeline_->layoutParams(), p, voice_->layoutParams(), preview_->layoutParams());
+}
+
+void DevPanel::applyFullTimeline()
+{
+	if (!fullTimeline_ || !ftGutterW_)
+		return;
+	TimelineViewParams p;
+	p.gutterW = ftGutterW_->value();
+	p.rulerH = ftRulerH_->value();
+	p.videoLaneH = ftVideoLaneH_->value();
+	p.audioLaneH = ftAudioLaneH_->value();
+	p.laneGap = ftLaneGap_->value();
+	p.margin = ftMargin_->value();
+	p.minClipW = ftMinClipW_->value();
+	p.snapPx = ftSnapPx_->value();
+	p.dropBandPx = ftDropBandPx_->value();
+	p.segFontPx = ftSegFontPx_->value();
+	p.maxZoom = ftMaxZoom_->value();
+	fullTimeline_->setLayoutParams(p);
 }
 
 void DevPanel::applyPreview()

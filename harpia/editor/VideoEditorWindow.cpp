@@ -326,7 +326,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		"Developer Panel — tweak timeline spacing, thumbnail size, padding and zoom live"));
 	connect(devBtn, &QPushButton::clicked, this, [this]() {
 		if (!devPanel_) {
-			devPanel_ = new DevPanel(timeline_, tracks_, voTrack_, canvas_, this);
+			devPanel_ = new DevPanel(timeline_, tracks_, voTrack_, canvas_,
+						 timelineView_, this);
 			connect(devPanel_, &DevPanel::chromeChanged, this,
 				&VideoEditorWindow::applyChrome);
 		}
@@ -500,6 +501,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	addTextBtn_->setVisible(false); // shown only in Full editing
 	connect(addTextBtn_, &QPushButton::clicked, this, &VideoEditorWindow::addTextClip);
 	controls->addWidget(addTextBtn_);
+	addAudioBtn_ = new QPushButton(QStringLiteral("Add audio  ▾"), this);
+	addAudioBtn_->setToolTip(QStringLiteral(
+		"Put audio on its own timeline track — a source's own audio, an imported file, "
+		"or an empty track"));
+	addAudioBtn_->setVisible(false); // Full editing only
+	connect(addAudioBtn_, &QPushButton::clicked, this, &VideoEditorWindow::onAddAudioClicked);
+	controls->addWidget(addAudioBtn_);
 	// Magnet: snap dragged clips to the playhead, 0 and other clips' edges.
 	snapBtn_ = new QPushButton(QStringLiteral("🧲 Snap"), this);
 	snapBtn_->setCheckable(true);
@@ -511,6 +519,14 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			timelineView_->setSnapEnabled(on);
 	});
 	controls->addWidget(snapBtn_);
+	fitBtn_ = new QPushButton(QStringLiteral("Fit"), this);
+	fitBtn_->setToolTip(QStringLiteral("Zoom the timeline out so the whole edit fits"));
+	fitBtn_->setVisible(false); // Full editing only
+	connect(fitBtn_, &QPushButton::clicked, this, [this]() {
+		if (timelineView_)
+			timelineView_->zoomToFit();
+	});
+	controls->addWidget(fitBtn_);
 	controls->addStretch(1);
 	infoLabel_ = new QLabel(this);
 	infoLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
@@ -1153,6 +1169,129 @@ void VideoEditorWindow::onSourceDoubleClicked(QListWidgetItem *item)
 	scheduleSnapshot();
 }
 
+// ---- Audio on the timeline -----------------------------------------------
+
+QString VideoEditorWindow::sessionAudioDir()
+{
+	// Reuse the voiceover session dir: same lifetime, cleaned up on close.
+	return voiceoverTempDir();
+}
+
+QString VideoEditorWindow::audioProxyFor(int sourceId)
+{
+	if (const auto it = audioProxy_.constFind(sourceId); it != audioProxy_.constEnd())
+		return it.value();
+	QString wav;
+	if (EditorSource *s = sourceById(sourceId)) {
+		const QString dir = sessionAudioDir();
+		if (!dir.isEmpty()) {
+			const QString cand =
+				dir + QStringLiteral("/proxy_%1.wav").arg(sourceId);
+			QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+			const bool ok = VoiceoverMixer::decodeToWav(s->path, cand);
+			QGuiApplication::restoreOverrideCursor();
+			if (ok)
+				wav = cand;
+		}
+	}
+	audioProxy_.insert(sourceId, wav);
+	return wav;
+}
+
+int VideoEditorWindow::addAudioSource(const QString &path)
+{
+	// Audio-only files have no video stream, so FrameSeeker can't open them.
+	// Decode to a session WAV and register that as the source: the waveform,
+	// duration and the export mix all read it uniformly.
+	const QString dir = sessionAudioDir();
+	if (dir.isEmpty())
+		return -1;
+	const int id = nextSourceId_++;
+	const QString wav = dir + QStringLiteral("/import_%1.wav").arg(id);
+	QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+	const bool ok = VoiceoverMixer::decodeToWav(path, wav);
+	QGuiApplication::restoreOverrideCursor();
+	if (!ok) {
+		--nextSourceId_;
+		QMessageBox::warning(this, QStringLiteral("Add audio"),
+				     QStringLiteral("Could not read any audio from that file."));
+		return -1;
+	}
+	EditorSource s;
+	s.id = id;
+	s.path = wav; // the decoded proxy IS the source (export decodes it again)
+	s.name = QFileInfo(path).fileName();
+	s.durationMs = VoiceoverTrack::wavDurationMs(wav);
+	s.width = s.height = 0; // audio-only: no seeker, no filmstrip
+	sources_.push_back(std::move(s));
+	audioProxy_.insert(id, wav);
+	refreshSourceList();
+	return id;
+}
+
+void VideoEditorWindow::addAudioClipFromSource(int sourceId)
+{
+	EditorSource *s = sourceById(sourceId);
+	if (!s || !timelineView_)
+		return;
+	const QString wav = audioProxyFor(sourceId);
+	if (wav.isEmpty()) {
+		QMessageBox::information(this, QStringLiteral("Add audio"),
+					 QStringLiteral("\"%1\" has no audio track.").arg(s->name));
+		return;
+	}
+	qint64 dur = s->durationMs;
+	if (dur <= 0)
+		dur = VoiceoverTrack::wavDurationMs(wav);
+	if (dur <= 0)
+		return;
+
+	TlClip c;
+	c.type = TlClip::Type::Video; // "media clip"; the track kind makes it audio
+	c.sourceId = sourceId;
+	c.srcStartMs = 0;
+	c.srcEndMs = dur;
+	c.outStartMs = timelinePlayheadMs();
+	c.peaks = VoiceoverTrack::loadPeaks(wav, 600); // waveform
+	timelineView_->addClip(TlTrack::Kind::Audio, c);
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	updateInfoLabel();
+	showTimelineFrame(timelinePlayheadMs());
+}
+
+void VideoEditorWindow::onAddAudioClicked()
+{
+	QMenu menu(this);
+	// The active clip's own audio, so it can be moved/faded on its own lane.
+	if (EditorSource *s = activeSource()) {
+		QAction *a = menu.addAction(
+			QStringLiteral("Audio from \"%1\"").arg(s->name));
+		const int id = s->id;
+		connect(a, &QAction::triggered, this, [this, id]() { addAudioClipFromSource(id); });
+	}
+	QAction *imp = menu.addAction(QStringLiteral("Import audio file…"));
+	menu.addSeparator();
+	QAction *empty = menu.addAction(QStringLiteral("Add empty audio track"));
+
+	QAction *chosen = menu.exec(addAudioBtn_->mapToGlobal(QPoint(0, addAudioBtn_->height())));
+	if (chosen == imp) {
+		const QString f = QFileDialog::getOpenFileName(
+			this, QStringLiteral("Import audio"), QFileInfo(inPath_).absolutePath(),
+			QStringLiteral("Audio files (*.wav *.mp3 *.m4a *.aac *.flac *.ogg *.opus);;"
+				       "All files (*)"));
+		if (f.isEmpty())
+			return;
+		const int id = addAudioSource(f);
+		if (id >= 0)
+			addAudioClipFromSource(id);
+	} else if (chosen == empty) {
+		if (!fullEdit())
+			setEditMode(EditMode::Full);
+		timelineView_->addTrack(TlTrack::Kind::Audio);
+	}
+}
+
 void VideoEditorWindow::addActiveSourceToTimeline()
 {
 	EditorSource *s = activeSource();
@@ -1481,11 +1620,21 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	posXSpin_ = mkSpin(-2.0, 3.0, 0.01, 3);
 	posYSpin_ = mkSpin(-2.0, 3.0, 0.01, 3);
 	opacitySpin_ = mkSpin(0.0, 1.0, 0.05, 2);
+	clipSpeedSpin_ = mkSpin(0.1, 20.0, 0.1, 2);
+	clipSpeedSpin_->setToolTip(QStringLiteral(
+		"Playback speed for this clip. Its length on the timeline changes to match, and "
+		"its audio is time-stretched (pitch preserved) on export."));
 	form->addRow(QStringLiteral("Zoom"), zoomSpin_);
 	form->addRow(QStringLiteral("Position X"), posXSpin_);
 	form->addRow(QStringLiteral("Position Y"), posYSpin_);
 	form->addRow(QStringLiteral("Opacity"), opacitySpin_);
+	form->addRow(QStringLiteral("Speed"), clipSpeedSpin_);
 	v->addLayout(form);
+	connect(clipSpeedSpin_, &QDoubleSpinBox::valueChanged, this, [this](double sp) {
+		if (syncingClip_)
+			return;
+		editSelectedClip([sp](TlClip &c) { c.speed = std::clamp(sp, 0.1, 20.0); });
+	});
 
 	auto applyPose = [this]() {
 		if (syncingClip_)
@@ -1725,6 +1874,8 @@ void VideoEditorWindow::syncClipInspector()
 	posYSpin_->setValue(tf.posY);
 	zoomSpin_->setValue(tf.scale);
 	opacitySpin_->setValue(tf.opacity);
+	clipSpeedSpin_->setValue(c->speed);
+	clipSpeedSpin_->setEnabled(c->type != TlClip::Type::Text); // text has no source
 	autoKeyChk_->setChecked(autoKeyframe_);
 	const int here = c->keyframeIndexAt(ph);
 	keyInfo_->setText(c->keys.isEmpty()
@@ -2124,8 +2275,12 @@ void VideoEditorWindow::setEditMode(EditMode m)
 	}
 	if (addTextBtn_)
 		addTextBtn_->setVisible(full);
+	if (addAudioBtn_)
+		addAudioBtn_->setVisible(full);
 	if (snapBtn_)
 		snapBtn_->setVisible(full);
+	if (fitBtn_)
+		fitBtn_->setVisible(full);
 	syncPreviewTransformTarget();
 	if (full)
 		showTimelineFrame(timelinePlayheadMs());
@@ -2382,6 +2537,22 @@ void VideoEditorWindow::finishVoiceover()
 	voRecordBtn_->setText(QStringLiteral("●  Record voiceover"));
 	if (path.isEmpty())
 		return; // nothing captured
+	// In Full editing the voiceover track is hidden — narration belongs on its
+	// own timeline audio lane instead.
+	if (fullEdit() && timelineView_) {
+		const int id = addAudioSource(path);
+		if (id >= 0) {
+			TlClip c;
+			c.sourceId = id;
+			c.srcStartMs = 0;
+			c.srcEndMs = durMs;
+			c.outStartMs = voClipStartMs_;
+			c.peaks = VoiceoverTrack::loadPeaks(path, 600);
+			timelineView_->addClip(TlTrack::Kind::Audio, c);
+			updateInfoLabel();
+		}
+		return;
+	}
 	VoiceoverClip clip;
 	clip.path = path;
 	clip.outStartMs = voClipStartMs_;

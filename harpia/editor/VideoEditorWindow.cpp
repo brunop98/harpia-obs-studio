@@ -8,6 +8,8 @@
 #include "FrameSeeker.hpp"
 #include "LevelMeter.hpp"
 #include "SceneDetector.hpp"
+#include "AudioPreview.hpp"
+#include "TimelineAudio.hpp"
 #include "TimelineThumbs.hpp"
 #include "TrackEditor.hpp"
 #include "VoiceoverMixer.hpp"
@@ -242,6 +244,25 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	bar->addWidget(cursorTimeLabel_);
 	bar->addSpacing(16);
 
+	// Monitor toggle. Preview audio is Full-editing only for now, so it hides
+	// with the other Full-only controls.
+	audioPreview_ = new AudioPreview(this);
+	muteBtn_ = new QPushButton(QStringLiteral("🔊"), this);
+	muteBtn_->setCheckable(true);
+	muteBtn_->setFixedWidth(34);
+	const bool canHear = AudioPreview::available();
+	muteBtn_->setEnabled(canHear);
+	muteBtn_->setToolTip(canHear ? QStringLiteral("Mute the preview (the export is unaffected)")
+				     : QStringLiteral("No audio output device was found"));
+	connect(muteBtn_, &QPushButton::toggled, this, [this](bool off) {
+		muteBtn_->setText(off ? QStringLiteral("🔇") : QStringLiteral("🔊"));
+		audioPreview_->setMuted(off);
+		if (!off && playing_ && fullEdit())
+			startPreviewAudio(timelinePlayheadMs()); // catch up to the picture
+	});
+	bar->addWidget(muteBtn_);
+	bar->addSpacing(10);
+
 	// Speed: label · slider (stretches) · editable value · per-cut count.
 	// Full editing has per-clip speed in the Inspector instead, so the whole group
 	// hides there rather than sitting greyed out taking up the toolbar.
@@ -364,6 +385,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		updateInfoLabel();
 		syncPreviewTransformTarget();
 		scriptScanDirty_ = true;
+		invalidateAudioMix(); // clips moved/trimmed: the mix no longer matches
 		// Moving or trimming a clip on the timeline changes where the playhead
 		// falls inside it, so the pose and keyframe readout the Inspector shows
 		// have to follow along live.
@@ -2911,6 +2933,10 @@ void VideoEditorWindow::setEditMode(EditMode m)
 		snapBtn_->setVisible(full);
 	if (fitBtn_)
 		fitBtn_->setVisible(full);
+	if (muteBtn_)
+		muteBtn_->setVisible(full); // only Full editing has a timeline to mix
+	if (!full && audioPreview_)
+		audioPreview_->stop();
 	syncPreviewTransformTarget();
 	if (full)
 		showTimelineFrame(timelinePlayheadMs());
@@ -3058,6 +3084,12 @@ VideoEditorWindow::~VideoEditorWindow()
 	if (sceneThread_.joinable()) {
 		sceneCancel_.store(true);
 		sceneThread_.join();
+	}
+	// The mixing worker captures `this` for its completion callback, so it must
+	// be finished before the window goes away.
+	if (audioMixThread_.joinable()) {
+		audioMixCancel_.store(true);
+		audioMixThread_.join();
 	}
 	joinExport();
 	// Voiceover takes are session-only — clear the temp dir on close.
@@ -3984,6 +4016,7 @@ void VideoEditorWindow::restoreSnapshot(const EditorSnapshot &s)
 	restoring_ = true;
 	stopPlayback();
 	scriptScanDirty_ = true; // the whole timeline is being swapped out
+	invalidateAudioMix();
 
 	tracks_->setSegments(s.segments);
 
@@ -4112,6 +4145,115 @@ void VideoEditorWindow::setPowerSaving(bool on)
 	}
 }
 
+// What the mix depends on. Anything that changes the sound changes this string,
+// so a cached mix is reused across plays but thrown away after a real edit.
+QString VideoEditorWindow::audioMixKey() const
+{
+	if (!timelineView_)
+		return QString();
+	QString k;
+	for (const TlTrack &t : timelineView_->model().tracks) {
+		if (t.muted)
+			continue;
+		k += (t.kind == TlTrack::Kind::Audio) ? QLatin1Char('A') : QLatin1Char('V');
+		for (const TlClip &c : t.clips) {
+			if (c.type == TlClip::Type::Text || c.type == TlClip::Type::Image)
+				continue;
+			k += QStringLiteral("|%1,%2,%3,%4,%5,%6,%7,%8")
+				     .arg(c.sourceId)
+				     .arg(c.srcStartMs)
+				     .arg(c.srcEndMs)
+				     .arg(c.outStartMs)
+				     .arg(c.speed, 0, 'f', 4)
+				     .arg(c.volume, 0, 'f', 4)
+				     .arg(c.fadeInMs)
+				     .arg(c.fadeOutMs);
+		}
+	}
+	return k;
+}
+
+void VideoEditorWindow::invalidateAudioMix()
+{
+	audioMixValid_ = false;
+	if (audioPreview_)
+		audioPreview_->clear();
+}
+
+void VideoEditorWindow::startPreviewAudio(qint64 fromMs)
+{
+	if (!audioPreview_ || !fullEdit() || audioPreview_->isMuted())
+		return;
+	const QString key = audioMixKey();
+	if (key.isEmpty()) // nothing audible on the timeline
+		return;
+
+	if (audioMixValid_ && key == audioMixKeyBuilt_) {
+		audioPreview_->start(fromMs);
+		return;
+	}
+
+	// Needs (re)mixing: decoding every source is far too slow for the GUI thread,
+	// so the picture starts now and the sound joins when the mix lands.
+	audioStartMs_ = fromMs;
+	startAudioWhenReady_ = true;
+	if (audioMixRunning_.load()) {
+		if (key != audioMixKeyWanted_)
+			audioMixCancel_.store(true); // stale: restart when it unwinds
+		return;
+	}
+
+	audioMixKeyWanted_ = key;
+	audioMixCancel_.store(false);
+	audioMixRunning_.store(true);
+	if (audioMixThread_.joinable())
+		audioMixThread_.join();
+
+	// Snapshot everything the worker touches: it must not read editor state.
+	const TimelineModel model = timelineView_->model();
+	QMap<int, QString> paths;
+	for (const EditorSource &es : sources_)
+		paths.insert(es.id, es.path);
+
+	audioMixThread_ = std::thread([this, model, paths]() {
+		std::vector<float> pcm = TimelineAudio::mixToBuffer(
+			model, [&paths](int id) { return paths.value(id); }, &audioMixCancel_);
+		QMetaObject::invokeMethod(
+			this,
+			[this, pcm = std::move(pcm)]() mutable {
+				pendingMix_ = std::move(pcm);
+				onAudioMixReady();
+			},
+			Qt::QueuedConnection);
+	});
+}
+
+void VideoEditorWindow::onAudioMixReady()
+{
+	audioMixRunning_.store(false);
+	const bool wasCanceled = audioMixCancel_.load();
+	audioMixCancel_.store(false);
+
+	if (wasCanceled) { // the timeline moved on: mix again for where it is now
+		pendingMix_.clear();
+		if (startAudioWhenReady_ && playing_)
+			startPreviewAudio(audioStartMs_);
+		return;
+	}
+
+	audioPreview_->setBuffer(std::move(pendingMix_));
+	pendingMix_.clear();
+	audioMixKeyBuilt_ = audioMixKeyWanted_;
+	audioMixValid_ = true;
+
+	if (!startAudioWhenReady_ || !playing_)
+		return;
+	startAudioWhenReady_ = false;
+	// Join at where the picture has ALREADY reached, not where it was asked to
+	// start, or the sound would come in behind by however long the mix took.
+	audioPreview_->start(timelinePlayheadMs());
+}
+
 void VideoEditorWindow::startPlayback()
 {
 	if (!valid_)
@@ -4128,6 +4270,7 @@ void VideoEditorWindow::startPlayback()
 		playAnchorMs_ = pos; // output-time
 		playClock_.restart();
 		playTimer_->start();
+		startPreviewAudio(pos);
 		return;
 	}
 	if (multiCut()) {
@@ -4165,6 +4308,9 @@ void VideoEditorWindow::stopPlayback()
 	playing_ = false;
 	playBtn_->setText(QStringLiteral("▶"));
 	playTimer_->stop();
+	startAudioWhenReady_ = false; // a mix still running must not start on arrival
+	if (audioPreview_)
+		audioPreview_->stop();
 	if (voTrack_ && !voRecording_)
 		voTrack_->clearPlayhead();
 }
@@ -4180,11 +4326,21 @@ void VideoEditorWindow::onPlayTick()
 			stopPlayback();
 			return;
 		}
+		// The sound card is the clock whenever it is playing: a wall-clock timer
+		// and an audio device drift apart, and drift is audible long before it is
+		// visible. Without audio, fall back to the elapsed timer.
 		qint64 outPos = playAnchorMs_ + playClock_.elapsed();
+		if (audioPreview_ && audioPreview_->isPlaying()) {
+			const qint64 apos = audioPreview_->positionMs();
+			if (apos >= 0)
+				outPos = apos;
+		}
 		if (outPos >= total) { // loop
 			playAnchorMs_ = 0;
 			playClock_.restart();
 			outPos = 0;
+			if (audioPreview_)
+				audioPreview_->start(0); // restart the sound with the picture
 		}
 		timelineView_->setPlayhead(outPos);
 		cursorTimeLabel_->setText(previewTimeText(outPos));

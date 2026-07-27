@@ -3,6 +3,7 @@
 #include "AudioRetimer.hpp"
 #include "FrameSeeker.hpp"
 #include "GifEncoder.hpp"
+#include "TimelineAudio.hpp"
 #include "VoiceoverMixer.hpp"
 #include "script/TransformScript.hpp"
 #include "shader/ShaderRenderer.hpp"
@@ -1606,58 +1607,19 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 
 QString ClipExporter::mixTimelineAudio(const QString &videoPath, const Options &opts)
 {
-	// Every clip contributes its source audio at its own output position: video
-	// clips bring the footage's sound, audio-track clips their own. Decoding each
-	// source once to a 48k stereo WAV lets VoiceoverMixer do positional,
-	// sample-domain mixing (the same path narration already uses).
+	// Placement, speed, gain and fades come from TimelineAudio so the export
+	// matches what the preview plays — the same reason the picture goes through
+	// TimelineCompositor twice rather than being described twice.
 	QTemporaryDir tmp;
 	if (!tmp.isValid())
 		return QStringLiteral("Could not create a temporary folder for the audio mix.");
 
-	// Cached per (source, speed): a clip played at 1.5x needs its own atempo'd
-	// render, but every 1x clip of the same source shares one decode.
-	std::map<std::pair<int, int>, QString> wavCache; // (sourceId, speed*1000) -> WAV
-	std::vector<VoiceoverMixer::Take> takes;
-	int nextWav = 0;
-
-	for (const TlTrack &t : opts.timeline.tracks) {
-		if (t.muted)
-			continue;
-		for (const TlClip &c : t.clips) {
-			if (c.type == TlClip::Type::Text || c.type == TlClip::Type::Image)
-				continue; // captions and stills have no audio
-			const double speed = (c.speed > 0.01) ? c.speed : 1.0;
-			const auto key = std::make_pair(c.sourceId, int(std::lround(speed * 1000.0)));
-			auto it = wavCache.find(key);
-			if (it == wavCache.end()) {
-				const auto sit = opts.timelineSources.find(c.sourceId);
-				QString wav;
-				if (sit != opts.timelineSources.end()) {
-					const QString cand =
-						tmp.filePath(QStringLiteral("a%1.wav").arg(nextWav++));
-					// Time-stretched (pitch preserved) so sped-up clips stay
-					// locked to the picture.
-					if (VoiceoverMixer::decodeToWav(
-						    QString::fromStdString(sit->second), cand, speed))
-						wav = cand;
-				}
-				it = wavCache.emplace(key, wav).first;
-			}
-			if (it->second.isEmpty())
-				continue; // that source has no usable audio
-			VoiceoverMixer::Take tk;
-			tk.path = it->second;
-			tk.outStartMs = c.outStartMs;
-			// The cached WAV is already in OUTPUT time, so the clip's source
-			// offsets scale by the same factor.
-			tk.srcStartMs = qint64(std::llround(c.srcStartMs / speed));
-			tk.playMs = c.outDurationMs();
-			tk.volume = (t.kind == TlTrack::Kind::Audio) ? c.volume : 1.0;
-			tk.fadeInMs = c.fadeInMs;
-			tk.fadeOutMs = c.fadeOutMs;
-			takes.push_back(tk);
-		}
-	}
+	const std::vector<VoiceoverMixer::Take> takes =
+		TimelineAudio::buildTakes(opts.timeline, [&opts](int id) {
+			const auto it = opts.timelineSources.find(id);
+			return it == opts.timelineSources.end() ? QString()
+								: QString::fromStdString(it->second);
+		}, tmp.path());
 
 	if (takes.empty())
 		return QString(); // a silent timeline is fine — leave the video as-is

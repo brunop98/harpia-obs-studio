@@ -91,6 +91,7 @@ class ThumbnailCache;
 class ShaderRenderer;
 class TimelineView;
 class TransformEvaluator;
+class AudioPreview;
 
 // One video the editor can cut from. The first source is the file the editor
 // was launched on; more are added via the sidebar / drag-and-drop. Each owns
@@ -483,6 +484,27 @@ private:
 	bool powerSaving_ = false;
 	bool resumeOnFocus_ = false;
 	bool powerSaveEnabled_ = true; // Dev panel: "Pause playback in the background"
+
+	// ---- Preview audio (Full editing) ----
+	// The timeline is pre-mixed to one PCM buffer on a worker thread and played
+	// through AudioPreview, which then acts as the playback clock. Mixing is
+	// cached and only redone when something audible about the timeline changes.
+	void startPreviewAudio(qint64 fromMs); // mix if needed, then play
+	void invalidateAudioMix();             // an edit changed what it should sound like
+	void onAudioMixReady();                // worker finished
+	QString audioMixKey() const;           // what the cached mix was built from
+
+	AudioPreview *audioPreview_ = nullptr;
+	QPushButton *muteBtn_ = nullptr;
+	std::thread audioMixThread_;
+	std::atomic<bool> audioMixCancel_{false};
+	std::atomic<bool> audioMixRunning_{false};
+	std::vector<float> pendingMix_; // handed over on the GUI thread when done
+	QString audioMixKeyBuilt_;      // key the current buffer was mixed from
+	QString audioMixKeyWanted_;     // key the running/next mix is for
+	bool audioMixValid_ = false;
+	bool startAudioWhenReady_ = false;
+	qint64 audioStartMs_ = 0;
 
 	QTimer *playTimer_ = nullptr;
 	bool playing_ = false;

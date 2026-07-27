@@ -322,6 +322,56 @@ std::vector<float> VoiceoverMixer::duckEnvelope(long long totalFrames,
 	return env;
 }
 
+std::vector<float> VoiceoverMixer::renderTakes(const std::vector<Take> &takes,
+					      std::atomic<bool> *cancel)
+{
+	auto canceled = [&]() { return cancel && cancel->load(); };
+	struct Rendered {
+		std::vector<float> samples;
+		long long startFrame = 0;
+		double volume = 1.0;
+		int fadeIn = 0, fadeOut = 0;
+	};
+	std::vector<Rendered> rendered;
+	rendered.reserve(takes.size());
+	long long totalFrames = 0;
+
+	for (const Take &t : takes) {
+		if (canceled())
+			return {};
+		const std::vector<float> full = decodeToFloat(t.path);
+		if (full.empty())
+			continue;
+		// Honor trim/split: take only [srcStart, srcStart+play] of the source.
+		const long long totalF = (long long)full.size() / kCh;
+		const long long s0 = std::clamp<long long>(t.srcStartMs * kRate / 1000, 0, totalF);
+		long long len = t.playMs > 0 ? t.playMs * kRate / 1000 : totalF - s0;
+		len = std::clamp<long long>(len, 0, totalF - s0);
+		if (len <= 0)
+			continue;
+		Rendered r;
+		r.samples.assign(full.begin() + s0 * kCh, full.begin() + (s0 + len) * kCh);
+		r.startFrame = t.outStartMs * kRate / 1000;
+		r.volume = t.volume;
+		r.fadeIn = std::max(0, t.fadeInMs) * kRate / 1000;
+		r.fadeOut = std::max(0, t.fadeOutMs) * kRate / 1000;
+		totalFrames = std::max(totalFrames, r.startFrame + len);
+		rendered.push_back(std::move(r));
+	}
+	if (totalFrames <= 0)
+		return {};
+
+	std::vector<float> mixbuf(size_t(totalFrames) * kCh, 0.0f);
+	for (const Rendered &r : rendered) {
+		if (canceled())
+			return {};
+		addTake(mixbuf, r.samples, r.startFrame, r.volume, r.fadeIn, r.fadeOut);
+	}
+	for (float &s : mixbuf)
+		s = std::clamp(s, -1.0f, 1.0f);
+	return mixbuf;
+}
+
 QString VoiceoverMixer::mix(const QString &videoPath, double originalVolume, bool duck,
 			    const std::vector<Take> &takes, std::atomic<bool> *cancel)
 {

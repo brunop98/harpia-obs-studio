@@ -31,6 +31,13 @@ public:
 	static QString mix(const QString &videoPath, double originalVolume, bool duck,
 			   const std::vector<Take> &takes, std::atomic<bool> *cancel);
 
+	// Decode and place `takes` into one interleaved stereo 48 kHz float buffer,
+	// with no base track under them. Same placement, gain and fade rules mix()
+	// uses, so what the preview plays is what the export renders. Returns an
+	// empty buffer if nothing decodes or *cancel is set.
+	static std::vector<float> renderTakes(const std::vector<Take> &takes,
+					      std::atomic<bool> *cancel = nullptr);
+
 	// Decode any audio file to a 16-bit PCM WAV (48 kHz stereo) at `outWav`, so an
 	// imported track becomes a normal voiceover take (waveform + trim + mix all
 	// work uniformly). `speed` > 1 shortens the result (pitch preserved via

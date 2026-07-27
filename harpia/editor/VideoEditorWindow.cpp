@@ -2359,6 +2359,87 @@ void VideoEditorWindow::onSaveProject()
 	}
 	root[QStringLiteral("voiceovers")] = voArr;
 
+	// "Full editing" multi-track timeline (project v3). Clip source ids are
+	// remapped through the same `sources` array as the Multi-Cut segments.
+	if (!s.timeline.isEmpty()) {
+		QJsonArray trackArr;
+		for (const TlTrack &t : s.timeline.tracks) {
+			QJsonObject to;
+			to[QStringLiteral("kind")] =
+				t.kind == TlTrack::Kind::Video ? QStringLiteral("video")
+							       : QStringLiteral("audio");
+			to[QStringLiteral("name")] = t.name;
+			to[QStringLiteral("muted")] = t.muted;
+			QJsonArray clipArr;
+			for (const TlClip &c : t.clips) {
+				QJsonObject co;
+				co[QStringLiteral("type")] = c.type == TlClip::Type::Text
+								     ? QStringLiteral("text")
+								     : QStringLiteral("video");
+				co[QStringLiteral("source")] = c.sourceId;
+				co[QStringLiteral("srcStart")] = double(c.srcStartMs);
+				co[QStringLiteral("srcEnd")] = double(c.srcEndMs);
+				co[QStringLiteral("speed")] = c.speed;
+				co[QStringLiteral("outStart")] = double(c.outStartMs);
+				co[QStringLiteral("posX")] = c.posX;
+				co[QStringLiteral("posY")] = c.posY;
+				co[QStringLiteral("scale")] = c.scale;
+				co[QStringLiteral("opacity")] = c.opacity;
+				if (!c.crop.isNull()) {
+					QJsonObject cr;
+					cr[QStringLiteral("x")] = c.crop.x();
+					cr[QStringLiteral("y")] = c.crop.y();
+					cr[QStringLiteral("w")] = c.crop.width();
+					cr[QStringLiteral("h")] = c.crop.height();
+					co[QStringLiteral("crop")] = cr;
+				}
+				if (!c.keys.isEmpty()) {
+					QJsonArray keyArr;
+					for (const TlKeyframe &k : c.keys) {
+						QJsonObject ko;
+						ko[QStringLiteral("t")] = double(k.tMs);
+						ko[QStringLiteral("posX")] = k.tf.posX;
+						ko[QStringLiteral("posY")] = k.tf.posY;
+						ko[QStringLiteral("scale")] = k.tf.scale;
+						ko[QStringLiteral("opacity")] = k.tf.opacity;
+						ko[QStringLiteral("ease")] =
+							k.ease == TlKeyframe::Ease::Linear ? 0 : 1;
+						keyArr.append(ko);
+					}
+					co[QStringLiteral("keys")] = keyArr;
+				}
+				if (c.type == TlClip::Type::Text) {
+					QJsonObject tx;
+					tx[QStringLiteral("text")] = c.text.text;
+					tx[QStringLiteral("font")] = c.text.fontFamily;
+					tx[QStringLiteral("size")] = c.text.fontPx;
+					tx[QStringLiteral("bold")] = c.text.bold;
+					tx[QStringLiteral("italic")] = c.text.italic;
+					tx[QStringLiteral("color")] = c.text.color.name(QColor::HexArgb);
+					tx[QStringLiteral("outlineW")] = c.text.outlineWidth;
+					tx[QStringLiteral("outlineColor")] =
+						c.text.outlineColor.name(QColor::HexArgb);
+					tx[QStringLiteral("box")] = c.text.boxEnabled;
+					tx[QStringLiteral("boxColor")] =
+						c.text.boxColor.name(QColor::HexArgb);
+					tx[QStringLiteral("boxPad")] = c.text.boxPadding;
+					tx[QStringLiteral("boxRadius")] = c.text.boxRadius;
+					tx[QStringLiteral("align")] = c.text.align;
+					co[QStringLiteral("textStyle")] = tx;
+				} else {
+					co[QStringLiteral("volume")] = c.volume;
+					co[QStringLiteral("fadeIn")] = c.fadeInMs;
+					co[QStringLiteral("fadeOut")] = c.fadeOutMs;
+				}
+				clipArr.append(co);
+			}
+			to[QStringLiteral("clips")] = clipArr;
+			trackArr.append(to);
+		}
+		root[QStringLiteral("tracks")] = trackArr;
+		root[QStringLiteral("harpiaProject")] = 3; // timelines need a v3 reader
+	}
+
 	// Post-processing effect stack (names reference .frag files in the user folder).
 	if (!s.effects.isEmpty()) {
 		QJsonArray fxArr;
@@ -2510,6 +2591,84 @@ void VideoEditorWindow::onOpenProject()
 		s.voiceClips.push_back(v);
 	}
 
+	// "Full editing" timeline (project v3). Absent in v1/v2 projects, which just
+	// restore an empty timeline.
+	for (const QJsonValue &tv : root.value(QStringLiteral("tracks")).toArray()) {
+		const QJsonObject to = tv.toObject();
+		TlTrack t;
+		t.kind = to.value(QStringLiteral("kind")).toString() == QLatin1String("audio")
+				 ? TlTrack::Kind::Audio
+				 : TlTrack::Kind::Video;
+		t.name = to.value(QStringLiteral("name")).toString();
+		t.muted = to.value(QStringLiteral("muted")).toBool(false);
+		for (const QJsonValue &cv : to.value(QStringLiteral("clips")).toArray()) {
+			const QJsonObject co = cv.toObject();
+			TlClip c;
+			c.type = co.value(QStringLiteral("type")).toString() == QLatin1String("text")
+					 ? TlClip::Type::Text
+					 : TlClip::Type::Video;
+			const int pid = co.value(QStringLiteral("source")).toInt(defaultSrcId);
+			c.sourceId = srcMap.isEmpty() ? defaultSrcId : srcMap.value(pid, defaultSrcId);
+			c.srcStartMs = qint64(co.value(QStringLiteral("srcStart")).toDouble());
+			c.srcEndMs = qint64(co.value(QStringLiteral("srcEnd")).toDouble());
+			c.speed = co.value(QStringLiteral("speed")).toDouble(1.0);
+			c.outStartMs = qint64(co.value(QStringLiteral("outStart")).toDouble());
+			c.posX = co.value(QStringLiteral("posX")).toDouble(0.5);
+			c.posY = co.value(QStringLiteral("posY")).toDouble(0.5);
+			c.scale = co.value(QStringLiteral("scale")).toDouble(1.0);
+			c.opacity = co.value(QStringLiteral("opacity")).toDouble(1.0);
+			if (co.contains(QStringLiteral("crop"))) {
+				const QJsonObject cr = co.value(QStringLiteral("crop")).toObject();
+				c.crop = QRect(cr.value(QStringLiteral("x")).toInt(),
+					       cr.value(QStringLiteral("y")).toInt(),
+					       cr.value(QStringLiteral("w")).toInt(),
+					       cr.value(QStringLiteral("h")).toInt());
+			}
+			for (const QJsonValue &kv : co.value(QStringLiteral("keys")).toArray()) {
+				const QJsonObject ko = kv.toObject();
+				TlKeyframe k;
+				k.tMs = qint64(ko.value(QStringLiteral("t")).toDouble());
+				k.tf.posX = ko.value(QStringLiteral("posX")).toDouble(0.5);
+				k.tf.posY = ko.value(QStringLiteral("posY")).toDouble(0.5);
+				k.tf.scale = ko.value(QStringLiteral("scale")).toDouble(1.0);
+				k.tf.opacity = ko.value(QStringLiteral("opacity")).toDouble(1.0);
+				k.ease = ko.value(QStringLiteral("ease")).toInt(1) == 0
+						 ? TlKeyframe::Ease::Linear
+						 : TlKeyframe::Ease::EaseInOut;
+				c.keys.append(k);
+			}
+			if (c.type == TlClip::Type::Text) {
+				const QJsonObject tx = co.value(QStringLiteral("textStyle")).toObject();
+				c.text.text = tx.value(QStringLiteral("text")).toString();
+				c.text.fontFamily = tx.value(QStringLiteral("font")).toString();
+				c.text.fontPx = tx.value(QStringLiteral("size")).toInt(64);
+				c.text.bold = tx.value(QStringLiteral("bold")).toBool(false);
+				c.text.italic = tx.value(QStringLiteral("italic")).toBool(false);
+				c.text.color = QColor(tx.value(QStringLiteral("color")).toString());
+				c.text.outlineWidth = tx.value(QStringLiteral("outlineW")).toDouble(3.0);
+				c.text.outlineColor =
+					QColor(tx.value(QStringLiteral("outlineColor")).toString());
+				c.text.boxEnabled = tx.value(QStringLiteral("box")).toBool(false);
+				c.text.boxColor = QColor(tx.value(QStringLiteral("boxColor")).toString());
+				c.text.boxPadding = tx.value(QStringLiteral("boxPad")).toInt(14);
+				c.text.boxRadius = tx.value(QStringLiteral("boxRadius")).toInt(6);
+				c.text.align = tx.value(QStringLiteral("align")).toInt(1);
+				if (!c.text.color.isValid())
+					c.text.color = QColor(0xff, 0xff, 0xff);
+				if (!c.text.outlineColor.isValid())
+					c.text.outlineColor = QColor(0, 0, 0);
+				if (!c.text.boxColor.isValid())
+					c.text.boxColor = QColor(0, 0, 0, 150);
+			} else {
+				c.volume = co.value(QStringLiteral("volume")).toDouble(1.0);
+				c.fadeInMs = co.value(QStringLiteral("fadeIn")).toInt(15);
+				c.fadeOutMs = co.value(QStringLiteral("fadeOut")).toInt(15);
+			}
+			t.clips.append(c);
+		}
+		s.timeline.tracks.append(t);
+	}
+
 	// Post-processing effect stack (restored by restoreSnapshot below). Back-compat:
 	// older projects stored a single "shader" object instead of an "effects" array.
 	auto readEffect = [](const QJsonObject &fo) {
@@ -2536,8 +2695,14 @@ void VideoEditorWindow::onOpenProject()
 	// restore the trim range / segments on top).
 	setActiveSource(defaultSrcId);
 	restoreSnapshot(s);
-	if (!s.segments.isEmpty() && !multiCut())
+	// Open in the mode the project was authored in.
+	if (!s.timeline.isEmpty()) {
+		timelineSeeded_ = true; // don't seed over the loaded timeline
+		if (!fullEdit())
+			setEditMode(EditMode::Full);
+	} else if (!s.segments.isEmpty() && !multiCut()) {
 		setEditMode(EditMode::MultiCut);
+	}
 	captureSnapshot(); // make the load an undo step
 	updateUndoRedoButtons();
 	QMessageBox::information(this, QStringLiteral("Open project"),
@@ -2627,6 +2792,8 @@ EditorSnapshot VideoEditorWindow::snapshot() const
 	s.voiceClips = voTrack_->clips();
 	for (const EditorEffect &e : effects_)
 		s.effects.push_back(ShaderState{e.name, e.params});
+	if (timelineView_)
+		s.timeline = timelineView_->model();
 	return s;
 }
 
@@ -2691,6 +2858,11 @@ void VideoEditorWindow::restoreSnapshot(const EditorSnapshot &s)
 	rebuildEffectsUI();
 	updateShaderWatch();
 
+	if (timelineView_) {
+		timelineView_->setModel(s.timeline);
+		syncPreviewTransformTarget();
+	}
+
 	// Refresh derived UI + speed controls for the current mode.
 	if (multiCut()) {
 		onSegmentSelected(tracks_->selectedIndex());
@@ -2705,7 +2877,10 @@ void VideoEditorWindow::restoreSnapshot(const EditorSnapshot &s)
 	updateVoiceoverAxis();
 
 	// Repaint the preview at a sensible frame.
-	if (multiCut()) {
+	if (fullEdit()) {
+		showTimelineFrame(timelinePlayheadMs());
+		syncClipInspector();
+	} else if (multiCut()) {
 		qint64 srcMs = 0;
 		const int seg = tracks_->sourceForOutput(0, &srcMs);
 		if (seg >= 0)

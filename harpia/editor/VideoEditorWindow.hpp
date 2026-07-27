@@ -54,12 +54,13 @@ struct EditorSnapshot {
 	QRect cropRect;
 	QVector<VoiceoverClip> voiceClips;
 	QVector<ShaderState> effects; // post-processing stack (name + params), in order
+	TimelineModel timeline;       // "Full editing" multi-track timeline
 
 	bool operator==(const EditorSnapshot &o) const
 	{
 		return segments == o.segments && trimStart == o.trimStart && trimEnd == o.trimEnd &&
 		       speed == o.speed && cropEnabled == o.cropEnabled && cropRect == o.cropRect &&
-		       voiceClips == o.voiceClips && effects == o.effects;
+		       voiceClips == o.voiceClips && effects == o.effects && timeline == o.timeline;
 	}
 };
 

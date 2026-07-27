@@ -159,10 +159,12 @@ std::vector<float> atempoStretch(const std::vector<float> &in, double speed)
 		cleanup();
 		return in;
 	}
-	static const enum AVSampleFormat kFmts[] = {AV_SAMPLE_FMT_FLT, AV_SAMPLE_FMT_NONE};
-	av_opt_set_int_list(sink, "sample_fmts", kFmts, AV_SAMPLE_FMT_NONE, AV_OPT_SEARCH_CHILDREN);
+	// The sink format is pinned with an aformat filter rather than the sink's
+	// own sample_fmts option, because setting that needs av_opt_set_int_list,
+	// whose deprecated helper MSVC rejects under warnings-as-errors. Same
+	// approach as AudioRetimer.
 
-	// Chain: in -> atempo... -> out
+	// Chain: in -> atempo... -> aformat -> out
 	AVFilterContext *prev = src;
 	for (int i = 0; i < steps.size(); ++i) {
 		const QString spec = steps[i];
@@ -178,6 +180,18 @@ std::vector<float> atempoStretch(const std::vector<float> &in, double speed)
 		}
 		prev = f;
 	}
+
+	AVFilterContext *fmt = nullptr;
+	const QString fmtArgs = QStringLiteral("sample_fmts=flt:sample_rates=%1:channel_layouts=stereo")
+					.arg(kRate);
+	if (avfilter_graph_create_filter(&fmt, avfilter_get_by_name("aformat"), "fmt",
+					 fmtArgs.toUtf8().constData(), nullptr, graph) < 0 ||
+	    avfilter_link(prev, 0, fmt, 0) < 0) {
+		cleanup();
+		return in;
+	}
+	prev = fmt;
+
 	if (avfilter_link(prev, 0, sink, 0) < 0 || avfilter_graph_config(graph, nullptr) < 0) {
 		cleanup();
 		return in;
@@ -198,7 +212,10 @@ std::vector<float> atempoStretch(const std::vector<float> &in, double speed)
 		cleanup();
 		return in;
 	}
-	av_buffersrc_add_frame(src, nullptr); // EOF
+	if (av_buffersrc_add_frame(src, nullptr) < 0) { // EOF
+		cleanup();
+		return in;
+	}
 
 	while (av_buffersink_get_frame(sink, outFrame) >= 0) {
 		const auto *p = reinterpret_cast<const float *>(outFrame->data[0]);

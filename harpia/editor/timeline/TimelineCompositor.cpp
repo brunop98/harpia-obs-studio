@@ -189,14 +189,21 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 		// Base pose / keyframes first, then the clip's script overrides whichever
 		// channels it defines.
 		TlTransform tf = c.transformAt(outMs);
-		if (eval && !c.scriptName.isEmpty()) {
+		if (eval && !c.scripts.isEmpty()) {
 			ScriptContext sctx;
 			sctx.canvasW = canvas.width();
 			sctx.canvasH = canvas.height();
 			sctx.fps = fps;
 			sctx.index = ci;
 			sctx.globalTime = double(outMs) / 1000.0;
-			tf = eval->apply(ClipScript{c.scriptName, c.scriptParams}, tf, c, outMs, sctx);
+			// Stacked: each script starts from what the previous one produced, so
+			// scripts driving different channels compose and a later one wins on a
+			// channel they share.
+			for (const TlScript &s : c.scripts) {
+				if (s.name.isEmpty())
+					continue;
+				tf = eval->apply(ClipScript{s.name, s.params}, tf, c, outMs, sctx);
+			}
 		}
 		QImage frame;
 		if (c.type == TlClip::Type::Video || c.type == TlClip::Type::Image)

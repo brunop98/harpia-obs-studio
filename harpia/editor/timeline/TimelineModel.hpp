@@ -74,6 +74,16 @@ struct TlText {
 	}
 };
 
+// One entry in a clip's transform-script stack: which script (file stem in the
+// user's scripts folder) and the //@param values it was given.
+struct TlScript {
+	QString name;
+	QMap<QString, double> params;
+
+	bool operator==(const TlScript &o) const { return name == o.name && params == o.params; }
+	bool operator!=(const TlScript &o) const { return !(*this == o); }
+};
+
 // One clip placed on a track. Video and Text clips use the transform/keyframes;
 // audio clips use volume/fades (+ cached peaks for the waveform). `sourceId`
 // refers to an EditorSource in the window's media pool (unused for Text).
@@ -108,11 +118,11 @@ struct TlClip {
 	// Text clips only.
 	TlText text;
 
-	// Optional transform script (file stem in the user's scripts folder) and its
-	// //@param values. Evaluated per frame by the compositor; channels the script
-	// doesn't define fall through to the base pose / keyframes above.
-	QString scriptName;
-	QMap<QString, double> scriptParams;
+	// Transform scripts, applied in order. Each one starts from what the previous
+	// left behind, so a script that only defines scale() composes with one that
+	// only defines position(); where two define the same channel, the later entry
+	// wins. Channels no script defines fall through to the pose/keyframes above.
+	QVector<TlScript> scripts;
 
 	// Audio-only.
 	double volume = 1.0;
@@ -213,7 +223,7 @@ struct TlClip {
 		       posX == o.posX && posY == o.posY && scale == o.scale &&
 		       rotation == o.rotation && opacity == o.opacity &&
 		       crop == o.crop && keys == o.keys && text == o.text &&
-		       scriptName == o.scriptName && scriptParams == o.scriptParams &&
+		       scripts == o.scripts &&
 		       volume == o.volume && fadeInMs == o.fadeInMs && fadeOutMs == o.fadeOutMs;
 	}
 };

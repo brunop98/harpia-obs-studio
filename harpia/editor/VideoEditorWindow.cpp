@@ -1439,8 +1439,9 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 	if (scriptEval_) {
 		for (const TlTrack &t : timelineView_->model().tracks)
 			for (const TlClip &c : t.clips)
-				if (!c.scriptName.isEmpty() && !scriptEval_->has(c.scriptName))
-					ensureScriptCompiled(c.scriptName, nullptr);
+				for (const TlScript &s : c.scripts)
+					if (!s.name.isEmpty() && !scriptEval_->has(s.name))
+						ensureScriptCompiled(s.name, nullptr);
 	}
 	double fps = 30.0;
 	if (!sources_.empty() && sources_.front().seeker && sources_.front().seeker->fps() > 1.0)
@@ -1507,20 +1508,83 @@ QStringList VideoEditorWindow::availableScripts()
 	return names;
 }
 
+// Repopulate the stack list from the selected clip. The names of the scripts on
+// disk only matter when the "Add script" menu opens, so nothing to refresh here
+// beyond the clip's own stack.
 void VideoEditorWindow::refreshScriptList()
 {
-	if (!scriptCombo_)
+	if (!scriptList_)
 		return;
 	const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
-	const QString keep = c ? c->scriptName : QString();
 	const bool wasSyncing = syncingClip_;
 	syncingClip_ = true; // repopulating must not rewrite the clip
-	scriptCombo_->clear();
-	scriptCombo_->addItem(QStringLiteral("None"));
-	scriptCombo_->addItems(availableScripts());
-	const int idx = keep.isEmpty() ? 0 : scriptCombo_->findText(keep);
-	scriptCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
+	scriptList_->clear();
+	if (c)
+		for (int i = 0; i < c->scripts.size(); ++i)
+			scriptList_->addItem(
+				QStringLiteral("%1.  %2").arg(i + 1).arg(c->scripts[i].name));
+	const int n = scriptList_->count();
+	scriptSel_ = n == 0 ? -1 : std::clamp(scriptSel_, 0, n - 1);
+	scriptList_->setCurrentRow(scriptSel_);
 	syncingClip_ = wasSyncing;
+}
+
+// A drag finished: rebuild the clip's stack to match the list's new order.
+void VideoEditorWindow::applyScriptOrderFromList()
+{
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!scriptList_ || !sel || scriptList_->count() != sel->scripts.size())
+		return;
+	// The item text carries the entry's ORIGINAL 1-based position, which is what
+	// maps a moved row back to the script it represents.
+	QVector<TlScript> reordered;
+	reordered.reserve(sel->scripts.size());
+	for (int row = 0; row < scriptList_->count(); ++row) {
+		const QString label = scriptList_->item(row)->text();
+		const int from = label.section(QLatin1Char('.'), 0, 0).trimmed().toInt() - 1;
+		if (from < 0 || from >= sel->scripts.size())
+			return; // unparseable — leave the stack alone rather than scramble it
+		reordered.append(sel->scripts[from]);
+	}
+	scriptSel_ = scriptList_->currentRow();
+	editSelectedClip([&](TlClip &c) { c.scripts = reordered; });
+	refreshScriptList(); // renumber the labels for the new order
+	rebuildScriptParams();
+}
+
+void VideoEditorWindow::addScriptToClip(const QString &name)
+{
+	if (name.isEmpty())
+		return;
+	QString err;
+	if (!ensureScriptCompiled(name, &err)) {
+		if (scriptError_) {
+			scriptError_->setText(err);
+			scriptError_->setVisible(true);
+		}
+		return;
+	}
+	if (scriptError_)
+		scriptError_->setVisible(false);
+	TlScript s;
+	s.name = name;
+	for (const ShaderParam &p : scriptParamDefs_.value(name))
+		s.params[p.uniform] = p.def; // start from the declared defaults
+	editSelectedClip([&](TlClip &c) { c.scripts.append(s); });
+	scriptSel_ = scriptList_ ? scriptList_->count() : 0; // select what was just added
+	refreshScriptList();
+	rebuildScriptParams();
+}
+
+void VideoEditorWindow::removeScriptFromClip(int index)
+{
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!sel || index < 0 || index >= sel->scripts.size())
+		return;
+	editSelectedClip([index](TlClip &c) { c.scripts.removeAt(index); });
+	scriptSel_ = index - 1; // fall back to the entry above the removed one
+	refreshScriptList();
+	rebuildScriptParams();
 }
 
 bool VideoEditorWindow::ensureScriptCompiled(const QString &name, QString *err)
@@ -1541,28 +1605,6 @@ bool VideoEditorWindow::ensureScriptCompiled(const QString &name, QString *err)
 	return scriptEval_->compile(name, src, err);
 }
 
-void VideoEditorWindow::onClipScriptChanged(const QString &name)
-{
-	const QString pick = (name == QStringLiteral("None")) ? QString() : name;
-	QString err;
-	if (!pick.isEmpty() && !ensureScriptCompiled(pick, &err)) {
-		if (scriptError_) {
-			scriptError_->setText(err);
-			scriptError_->setVisible(true);
-		}
-		return;
-	}
-	if (scriptError_)
-		scriptError_->setVisible(false);
-	editSelectedClip([&](TlClip &c) {
-		c.scriptName = pick;
-		c.scriptParams.clear();
-		for (const ShaderParam &p : scriptParamDefs_.value(pick))
-			c.scriptParams[p.uniform] = p.def; // start from the declared defaults
-	});
-	rebuildScriptParams();
-}
-
 void VideoEditorWindow::rebuildScriptParams()
 {
 	if (!scriptParamBox_)
@@ -1572,16 +1614,22 @@ void VideoEditorWindow::rebuildScriptParams()
 		return;
 
 	const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
-	const QString want = c ? c->scriptName : QString();
+	// Controls belong to ONE entry in the stack: the selected row. Two entries can
+	// run the same script with different values, so the identity that decides
+	// whether a rebuild is needed is (row, name), not the name alone.
+	const bool haveSel = c && scriptSel_ >= 0 && scriptSel_ < c->scripts.size();
+	const QString name = haveSel ? c->scripts[scriptSel_].name : QString();
+	const QString want = haveSel ? QStringLiteral("%1/%2").arg(scriptSel_).arg(name) : QString();
 
-	// The controls only need rebuilding when the script itself changes. Doing it
-	// on every refresh would destroy the very slider the user is dragging, and
-	// this runs once per mouse-move while reframing a clip in the preview.
+	// The controls only need rebuilding when that identity changes. Doing it on
+	// every refresh would destroy the very slider the user is dragging, and this
+	// runs once per mouse-move while reframing a clip in the preview.
 	if (want == scriptParamsBuiltFor_) {
-		if (!c || want.isEmpty())
+		if (!haveSel)
 			return;
-		for (const ShaderParam &p : scriptParamDefs_.value(want)) {
-			const double val = c->scriptParams.value(p.uniform, p.def);
+		const TlScript &entry = c->scripts[scriptSel_];
+		for (const ShaderParam &p : scriptParamDefs_.value(name)) {
+			const double val = entry.params.value(p.uniform, p.def);
 			if (QCheckBox *cb = scriptParamChecks_.value(p.uniform)) {
 				const QSignalBlocker b(cb);
 				cb->setChecked(val != 0.0);
@@ -1604,19 +1652,23 @@ void VideoEditorWindow::rebuildScriptParams()
 	scriptParamChecks_.clear();
 	scriptParamsBuiltFor_ = want;
 
-	if (!c || want.isEmpty())
+	if (!haveSel)
 		return;
-	for (const ShaderParam &p : scriptParamDefs_.value(want)) {
-		const double val = c->scriptParams.value(p.uniform, p.def);
+	const int idx = scriptSel_;
+	for (const ShaderParam &p : scriptParamDefs_.value(name)) {
+		const double val = c->scripts[idx].params.value(p.uniform, p.def);
 		auto *key = new QLabel(p.label, scriptParamBox_);
 		key->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 		if (p.type == ShaderParam::Type::Bool) {
 			auto *cb = new QCheckBox(scriptParamBox_);
 			cb->setChecked(val != 0.0);
-			connect(cb, &QCheckBox::toggled, this, [this, u = p.uniform](bool on) {
+			connect(cb, &QCheckBox::toggled, this, [this, idx, u = p.uniform](bool on) {
 				if (syncingClip_)
 					return;
-				editSelectedClip([&](TlClip &cl) { cl.scriptParams[u] = on ? 1.0 : 0.0; });
+				editSelectedClip([&](TlClip &cl) {
+					if (idx < cl.scripts.size())
+						cl.scripts[idx].params[u] = on ? 1.0 : 0.0;
+				});
 			});
 			scriptParamChecks_.insert(p.uniform, cb);
 			form->addRow(key, cb);
@@ -1635,12 +1687,15 @@ void VideoEditorWindow::rebuildScriptParams()
 			rl->addWidget(sl, 1);
 			rl->addWidget(vlab);
 			connect(sl, &QSlider::valueChanged, this,
-				[this, u = p.uniform, mn = p.min, sp = span, vlab](int v) {
+				[this, idx, u = p.uniform, mn = p.min, sp = span, vlab](int v) {
 					if (syncingClip_)
 						return;
 					const double d = mn + (double(v) / 1000.0) * sp;
 					vlab->setText(QString::number(d, 'g', 3));
-					editSelectedClip([&](TlClip &cl) { cl.scriptParams[u] = d; });
+					editSelectedClip([&](TlClip &cl) {
+						if (idx < cl.scripts.size())
+							cl.scripts[idx].params[u] = d;
+					});
 				});
 			scriptParamSliders_.insert(p.uniform, sl);
 			scriptParamValues_.insert(p.uniform, vlab);
@@ -1658,10 +1713,11 @@ void VideoEditorWindow::reloadScriptsFromDisk()
 		scriptEval_->forget(n);
 	scriptParamDefs_.clear();
 	QString err;
-	if (const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
-	    c && !c->scriptName.isEmpty())
-		ensureScriptCompiled(c->scriptName, &err);
-	// Any other clip's script recompiles lazily on its next frame.
+	if (const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr; c)
+		for (const TlScript &sc : c->scripts)
+			if (!sc.name.isEmpty() && !ensureScriptCompiled(sc.name, &err))
+				break; // report the first failure; the rest retry lazily
+	// Any other clip's scripts recompile lazily on their next frame.
 	if (scriptError_) {
 		scriptError_->setText(err);
 		scriptError_->setVisible(!err.isEmpty());
@@ -2036,14 +2092,59 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		v->addWidget(scOff);
 	}
 
-	scriptCombo_ = new QComboBox(clipBox_);
-	scriptCombo_->setEnabled(TransformEvaluator::available());
-	v->addWidget(scriptCombo_);
-	connect(scriptCombo_, &QComboBox::currentTextChanged, this, [this](const QString &t) {
+	// The stack. Scripts run top-to-bottom, so the list order IS the evaluation
+	// order; InternalMove gives real drag-and-drop reordering for free, which is
+	// far steadier than hand-rolled card dragging.
+	scriptList_ = new QListWidget(clipBox_);
+	scriptList_->setEnabled(TransformEvaluator::available());
+	scriptList_->setDragDropMode(QAbstractItemView::InternalMove);
+	scriptList_->setDefaultDropAction(Qt::MoveAction);
+	scriptList_->setSelectionMode(QAbstractItemView::SingleSelection);
+	scriptList_->setUniformItemSizes(true);
+	scriptList_->setMaximumHeight(112);
+	scriptList_->setToolTip(QStringLiteral(
+		"Scripts run top to bottom — drag to reorder. Each starts from what the one above "
+		"produced, so scripts driving different channels combine, and on a shared channel "
+		"the lower one wins."));
+	v->addWidget(scriptList_);
+
+	connect(scriptList_, &QListWidget::currentRowChanged, this, [this](int row) {
 		if (syncingClip_)
 			return;
-		onClipScriptChanged(t);
+		scriptSel_ = row;
+		rebuildScriptParams(); // show the newly selected entry's controls
 	});
+	// A drag finishing rewrites the clip's stack in the list's new order.
+	connect(scriptList_->model(), &QAbstractItemModel::rowsMoved, this,
+		[this](const QModelIndex &, int, int, const QModelIndex &, int) {
+			if (syncingClip_)
+				return;
+			applyScriptOrderFromList();
+		});
+
+	auto *stkBtns = new QHBoxLayout;
+	addScriptBtn_ = new QPushButton(QStringLiteral("Add script  ▾"), clipBox_);
+	addScriptBtn_->setEnabled(TransformEvaluator::available());
+	addScriptBtn_->setToolTip(QStringLiteral("Stack another transform script on this clip"));
+	auto *scDel = new QPushButton(QStringLiteral("✕"), clipBox_);
+	scDel->setFixedWidth(28);
+	scDel->setToolTip(QStringLiteral("Remove the selected script"));
+	stkBtns->addWidget(addScriptBtn_, 1);
+	stkBtns->addWidget(scDel);
+	v->addLayout(stkBtns);
+
+	connect(addScriptBtn_, &QPushButton::clicked, this, [this]() {
+		QMenu menu(this);
+		const QStringList names = availableScripts();
+		if (names.isEmpty())
+			menu.addAction(QStringLiteral("(no scripts in folder)"))->setEnabled(false);
+		for (const QString &n : names) {
+			QAction *a = menu.addAction(n);
+			connect(a, &QAction::triggered, this, [this, n]() { addScriptToClip(n); });
+		}
+		menu.exec(addScriptBtn_->mapToGlobal(QPoint(0, addScriptBtn_->height())));
+	});
+	connect(scDel, &QPushButton::clicked, this, [this]() { removeScriptFromClip(scriptSel_); });
 
 	auto *scBtns = new QHBoxLayout;
 	auto *scReload = new QPushButton(QStringLiteral("Reload"), clipBox_);
@@ -2270,11 +2371,8 @@ void VideoEditorWindow::syncClipInspector()
 					    .arg(c->keys.size() == 1 ? QString() : QStringLiteral("s"))
 					    .arg(here >= 0 ? QStringLiteral(" · on one now") : QString()));
 
-	// Transform script picker + its parameter controls.
-	if (scriptCombo_) {
-		const int si = c->scriptName.isEmpty() ? 0 : scriptCombo_->findText(c->scriptName);
-		scriptCombo_->setCurrentIndex(si >= 0 ? si : 0);
-	}
+	// Transform script stack + the selected entry's parameter controls.
+	refreshScriptList();
 	rebuildScriptParams();
 
 	const bool isText = c->type == TlClip::Type::Text;
@@ -3287,15 +3385,19 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 					}
 					co[QStringLiteral("keys")] = keyArr;
 				}
-				if (!c.scriptName.isEmpty()) {
-					QJsonObject sc;
-					sc[QStringLiteral("name")] = c.scriptName;
-					QJsonObject sp;
-					for (auto it = c.scriptParams.constBegin();
-					     it != c.scriptParams.constEnd(); ++it)
-						sp[it.key()] = it.value();
-					sc[QStringLiteral("params")] = sp;
-					co[QStringLiteral("script")] = sc;
+				if (!c.scripts.isEmpty()) {
+					QJsonArray scArr;
+					for (const TlScript &s : c.scripts) {
+						QJsonObject sc;
+						sc[QStringLiteral("name")] = s.name;
+						QJsonObject sp;
+						for (auto it = s.params.constBegin();
+						     it != s.params.constEnd(); ++it)
+							sp[it.key()] = it.value();
+						sc[QStringLiteral("params")] = sp;
+						scArr.append(sc);
+					}
+					co[QStringLiteral("scripts")] = scArr;
 				}
 				if (c.type == TlClip::Type::Text) {
 					QJsonObject tx;
@@ -3534,12 +3636,26 @@ void VideoEditorWindow::onOpenProject()
 						 : TlKeyframe::Ease::EaseInOut;
 				c.keys.append(k);
 			}
-			if (co.contains(QStringLiteral("script"))) {
-				const QJsonObject sc = co.value(QStringLiteral("script")).toObject();
-				c.scriptName = sc.value(QStringLiteral("name")).toString();
+			// Scripts became a stack; projects written before that carry a single
+			// "script" object, which reads as a one-entry stack.
+			auto readScript = [](const QJsonObject &sc) {
+				TlScript s;
+				s.name = sc.value(QStringLiteral("name")).toString();
 				const QJsonObject sp = sc.value(QStringLiteral("params")).toObject();
 				for (auto it = sp.constBegin(); it != sp.constEnd(); ++it)
-					c.scriptParams[it.key()] = it.value().toDouble();
+					s.params[it.key()] = it.value().toDouble();
+				return s;
+			};
+			if (co.contains(QStringLiteral("scripts"))) {
+				for (const QJsonValue &sv : co.value(QStringLiteral("scripts")).toArray()) {
+					const TlScript s = readScript(sv.toObject());
+					if (!s.name.isEmpty())
+						c.scripts.append(s);
+				}
+			} else if (co.contains(QStringLiteral("script"))) {
+				const TlScript s = readScript(co.value(QStringLiteral("script")).toObject());
+				if (!s.name.isEmpty())
+					c.scripts.append(s);
 			}
 			if (c.type == TlClip::Type::Text) {
 				const QJsonObject tx = co.value(QStringLiteral("textStyle")).toObject();
@@ -4438,15 +4554,16 @@ void VideoEditorWindow::onSave()
 		// Ship each referenced script's SOURCE so the worker compiles its own
 		// engine without touching the scripts folder mid-render.
 		for (const TlTrack &t : o.timeline.tracks)
-			for (const TlClip &c : t.clips) {
-				if (c.scriptName.isEmpty() || o.timelineScripts.contains(c.scriptName))
-					continue;
-				QFile sf(scriptsDirPath() + QLatin1Char('/') + c.scriptName +
-					 QStringLiteral(".js"));
-				if (sf.open(QIODevice::ReadOnly))
-					o.timelineScripts.insert(c.scriptName,
-								 QString::fromUtf8(sf.readAll()));
-			}
+			for (const TlClip &c : t.clips)
+				for (const TlScript &s : c.scripts) {
+					if (s.name.isEmpty() || o.timelineScripts.contains(s.name))
+						continue;
+					QFile sf(scriptsDirPath() + QLatin1Char('/') + s.name +
+						 QStringLiteral(".js"));
+					if (sf.open(QIODevice::ReadOnly))
+						o.timelineScripts.insert(s.name,
+									 QString::fromUtf8(sf.readAll()));
+				}
 		const QSize canvas = timelineCanvasSize();
 		o.canvasW = canvas.width();
 		o.canvasH = canvas.height();

@@ -362,7 +362,11 @@ private:
 	// The GUI-thread evaluator (the exporter makes its own on its worker). Script
 	// files live beside the shaders, with the same //@param convention.
 	std::unique_ptr<TransformEvaluator> scriptEval_;
-	QComboBox *scriptCombo_ = nullptr;
+	// The stack: scripts run top-to-bottom, list order IS evaluation order, and
+	// the list reorders by drag (InternalMove).
+	QListWidget *scriptList_ = nullptr;
+	QPushButton *addScriptBtn_ = nullptr;
+	int scriptSel_ = -1; // row whose parameters scriptParamBox_ is showing
 	QWidget *scriptParamBox_ = nullptr;
 	QLabel *scriptError_ = nullptr;
 	QFileSystemWatcher *scriptWatch_ = nullptr;
@@ -372,16 +376,18 @@ private:
 	// those controls. Keeping them lets a refresh update values in place instead
 	// of tearing the widgets down — which otherwise happens under the user's
 	// cursor mid-drag, and once per mouse-move while reframing in the preview.
-	QString scriptParamsBuiltFor_;
+	QString scriptParamsBuiltFor_; // "<row>/<script name>"
 	QHash<QString, QSlider *> scriptParamSliders_;
 	QHash<QString, QLabel *> scriptParamValues_;
 	QHash<QString, QCheckBox *> scriptParamChecks_;
 	QString scriptsDirPath();          // ensure + seed the folder
 	QStringList availableScripts();
-	void refreshScriptList(); // rescan the folder into the combo
+	void refreshScriptList(); // selected clip's stack -> the list widget
 	bool ensureScriptCompiled(const QString &name, QString *err); // compile into scriptEval_
-	void onClipScriptChanged(const QString &name);
-	void rebuildScriptParams();        // controls for the selected clip's script
+	void addScriptToClip(const QString &name);   // append to the selected clip's stack
+	void removeScriptFromClip(int index);
+	void applyScriptOrderFromList();             // after a drag: list order -> clip
+	void rebuildScriptParams();        // controls for the selected stack entry
 	void reloadScriptsFromDisk();      // live reload: recompile + repaint
 
 	void buildClipInspector(QVBoxLayout *into);

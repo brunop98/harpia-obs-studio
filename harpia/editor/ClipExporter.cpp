@@ -1396,9 +1396,12 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 	// access pattern of a linear render.
 	struct Provider : TimelineCompositor::FrameProvider {
 		std::map<int, std::unique_ptr<FrameSeeker>> seekers;
+		std::map<int, QImage> stills; // image clips: same picture at every time
 		int w = 0, h = 0;
 		QImage frameFor(int sourceId, qint64 srcMs) override
 		{
+			if (const auto sit = stills.find(sourceId); sit != stills.end())
+				return sit->second;
 			auto it = seekers.find(sourceId);
 			if (it == seekers.end() || !it->second)
 				return QImage();
@@ -1411,13 +1414,23 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 		if (t.kind != TlTrack::Kind::Video)
 			continue;
 		for (const TlClip &c : t.clips) {
-			if (c.type != TlClip::Type::Video || provider.seekers.count(c.sourceId))
-				continue;
 			const auto sit = opts.timelineSources.find(c.sourceId);
 			if (sit == opts.timelineSources.end())
 				continue;
+			const QString path = QString::fromStdString(sit->second);
+			if (c.type == TlClip::Type::Image) {
+				if (provider.stills.count(c.sourceId))
+					continue;
+				QImage img(path);
+				if (!img.isNull())
+					provider.stills[c.sourceId] =
+						img.convertToFormat(QImage::Format_RGBA8888);
+				continue;
+			}
+			if (c.type != TlClip::Type::Video || provider.seekers.count(c.sourceId))
+				continue;
 			auto fs = std::make_unique<FrameSeeker>();
-			if (fs->open(QString::fromStdString(sit->second)))
+			if (fs->open(path))
 				provider.seekers[c.sourceId] = std::move(fs);
 		}
 	}
@@ -1599,8 +1612,8 @@ QString ClipExporter::mixTimelineAudio(const QString &videoPath, const Options &
 		if (t.muted)
 			continue;
 		for (const TlClip &c : t.clips) {
-			if (c.type == TlClip::Type::Text)
-				continue; // text has no audio
+			if (c.type == TlClip::Type::Text || c.type == TlClip::Type::Image)
+				continue; // captions and stills have no audio
 			const double speed = (c.speed > 0.01) ? c.speed : 1.0;
 			const auto key = std::make_pair(c.sourceId, int(std::lround(speed * 1000.0)));
 			auto it = wavCache.find(key);

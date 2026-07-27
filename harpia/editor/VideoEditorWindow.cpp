@@ -508,6 +508,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	addAudioBtn_->setVisible(false); // Full editing only
 	connect(addAudioBtn_, &QPushButton::clicked, this, &VideoEditorWindow::onAddAudioClicked);
 	controls->addWidget(addAudioBtn_);
+	addImageBtn_ = new QPushButton(QStringLiteral("Add image"), this);
+	addImageBtn_->setToolTip(
+		QStringLiteral("Place a still image (logo, arrow, callout) on the timeline"));
+	addImageBtn_->setVisible(false); // Full editing only
+	connect(addImageBtn_, &QPushButton::clicked, this, &VideoEditorWindow::addImageClip);
+	controls->addWidget(addImageBtn_);
 	// Magnet: snap dragged clips to the playhead, 0 and other clips' edges.
 	snapBtn_ = new QPushButton(QStringLiteral("🧲 Snap"), this);
 	snapBtn_->setCheckable(true);
@@ -1170,6 +1176,54 @@ void VideoEditorWindow::onSourceDoubleClicked(QListWidgetItem *item)
 	scheduleSnapshot();
 }
 
+// ---- Still images ---------------------------------------------------------
+
+int VideoEditorWindow::addImageSource(const QString &path)
+{
+	QImage img(path);
+	if (img.isNull()) {
+		QMessageBox::warning(this, QStringLiteral("Add image"),
+				     QStringLiteral("Could not read that image."));
+		return -1;
+	}
+	img = img.convertToFormat(QImage::Format_RGBA8888);
+	EditorSource s;
+	s.id = nextSourceId_++;
+	s.path = path;
+	s.name = QFileInfo(path).fileName();
+	s.durationMs = 5000; // a still has no length of its own; 5s is the default
+	s.width = img.width();
+	s.height = img.height();
+	stillImages_.insert(s.id, img);
+	const int id = s.id;
+	sources_.push_back(std::move(s));
+	refreshSourceList();
+	return id;
+}
+
+void VideoEditorWindow::addImageClip()
+{
+	const QString f = QFileDialog::getOpenFileName(
+		this, QStringLiteral("Add image"), QFileInfo(inPath_).absolutePath(),
+		QStringLiteral("Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;All files (*)"));
+	if (f.isEmpty())
+		return;
+	const int id = addImageSource(f);
+	if (id < 0)
+		return;
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	TlClip c;
+	c.type = TlClip::Type::Image;
+	c.sourceId = id;
+	c.srcStartMs = 0;
+	c.srcEndMs = 5000; // freely stretchable, like a caption
+	c.outStartMs = timelinePlayheadMs();
+	timelineView_->addClip(TlTrack::Kind::Video, c);
+	updateInfoLabel();
+	showTimelineFrame(timelinePlayheadMs());
+}
+
 // ---- Audio on the timeline -----------------------------------------------
 
 QString VideoEditorWindow::sessionAudioDir()
@@ -1326,6 +1380,10 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 		VideoEditorWindow *w = nullptr;
 		QImage frameFor(int sourceId, qint64 srcMs) override
 		{
+			// A still serves the same picture at every timestamp.
+			if (const auto it = w->stillImages_.constFind(sourceId);
+			    it != w->stillImages_.constEnd())
+				return it.value();
 			FrameSeeker *fs = w->seekerFor(sourceId);
 			return fs ? fs->frameAt(srcMs, 1920, 1080) : QImage();
 		}
@@ -1881,7 +1939,7 @@ void VideoEditorWindow::syncClipInspector()
 	rotationSpin_->setValue(tf.rotation);
 	opacitySpin_->setValue(tf.opacity);
 	clipSpeedSpin_->setValue(c->speed);
-	clipSpeedSpin_->setEnabled(c->type != TlClip::Type::Text); // text has no source
+	clipSpeedSpin_->setEnabled(!c->freeDuration()); // stills/captions have no source clock
 	autoKeyChk_->setChecked(autoKeyframe_);
 	const int here = c->keyframeIndexAt(ph);
 	keyInfo_->setText(c->keys.isEmpty()
@@ -2015,6 +2073,9 @@ void VideoEditorWindow::syncPreviewTransformTarget()
 	QSize natural;
 	if (c->type == TlClip::Type::Text) {
 		natural = TimelineCompositor::textNaturalSize(c->text, canvasSize);
+	} else if (const auto it = stillImages_.constFind(c->sourceId);
+		   it != stillImages_.constEnd()) {
+		natural = it.value().size();
 	} else if (EditorSource *s = sourceById(c->sourceId)) {
 		natural = (!c->crop.isNull() && c->crop.width() > 1) ? c->crop.size()
 								    : QSize(s->width, s->height);
@@ -2283,6 +2344,8 @@ void VideoEditorWindow::setEditMode(EditMode m)
 		addTextBtn_->setVisible(full);
 	if (addAudioBtn_)
 		addAudioBtn_->setVisible(full);
+	if (addImageBtn_)
+		addImageBtn_->setVisible(full);
 	if (snapBtn_)
 		snapBtn_->setVisible(full);
 	if (fitBtn_)
@@ -2850,9 +2913,10 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 			QJsonArray clipArr;
 			for (const TlClip &c : t.clips) {
 				QJsonObject co;
-				co[QStringLiteral("type")] = c.type == TlClip::Type::Text
-								     ? QStringLiteral("text")
-								     : QStringLiteral("video");
+				co[QStringLiteral("type")] =
+					c.type == TlClip::Type::Text    ? QStringLiteral("text")
+					: c.type == TlClip::Type::Image ? QStringLiteral("image")
+									: QStringLiteral("video");
 				co[QStringLiteral("source")] = c.sourceId;
 				co[QStringLiteral("srcStart")] = double(c.srcStartMs);
 				co[QStringLiteral("srcEnd")] = double(c.srcEndMs);
@@ -3088,9 +3152,10 @@ void VideoEditorWindow::onOpenProject()
 		for (const QJsonValue &cv : to.value(QStringLiteral("clips")).toArray()) {
 			const QJsonObject co = cv.toObject();
 			TlClip c;
-			c.type = co.value(QStringLiteral("type")).toString() == QLatin1String("text")
-					 ? TlClip::Type::Text
-					 : TlClip::Type::Video;
+			const QString ct = co.value(QStringLiteral("type")).toString();
+			c.type = (ct == QLatin1String("text"))    ? TlClip::Type::Text
+				 : (ct == QLatin1String("image")) ? TlClip::Type::Image
+								  : TlClip::Type::Video;
 			const int pid = co.value(QStringLiteral("source")).toInt(defaultSrcId);
 			c.sourceId = srcMap.isEmpty() ? defaultSrcId : srcMap.value(pid, defaultSrcId);
 			c.srcStartMs = qint64(co.value(QStringLiteral("srcStart")).toDouble());

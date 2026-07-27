@@ -77,8 +77,14 @@ struct TlText {
 // audio clips use volume/fades (+ cached peaks for the waveform). `sourceId`
 // refers to an EditorSource in the window's media pool (unused for Text).
 struct TlClip {
-	enum class Type { Video, Text };
+	// Video = a decoded media clip (also used for audio-track clips); Image = a
+	// still whose duration is free; Text = a rendered caption.
+	enum class Type { Video, Text, Image };
 	Type type = Type::Video;
+
+	// Stills and captions have no source timeline, so their length is whatever
+	// the user drags it to rather than being capped by a decoder.
+	bool freeDuration() const { return type == Type::Text || type == Type::Image; }
 
 	int sourceId = 0;
 	qint64 srcStartMs = 0;

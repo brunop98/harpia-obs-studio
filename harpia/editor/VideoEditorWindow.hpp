@@ -218,9 +218,17 @@ private:
 	// that source has no audio. Used for clip waveforms.
 	QString audioProxyFor(int sourceId);
 	QHash<int, QString> audioProxy_;
+	// ---- Still images as clips ----
+	// Registered as sources with no decoder; the frame providers serve the cached
+	// QImage for every timestamp. -1 on failure.
+	int addImageSource(const QString &path);
+	QHash<int, QImage> stillImages_; // sourceId -> decoded still
+	void addImageClip();             // "Add image…" -> pick a file + drop a clip
+
 	void addAudioClipFromSource(int sourceId); // put a source's audio on an audio lane
 	void onAddAudioClicked();                  // "Add audio ▾" menu
 	QPushButton *addAudioBtn_ = nullptr;
+	QPushButton *addImageBtn_ = nullptr;
 	QString sessionAudioDir(); // per-session temp dir for decoded proxies
 
 	// ---- Direct manipulation of the selected clip in the preview ----

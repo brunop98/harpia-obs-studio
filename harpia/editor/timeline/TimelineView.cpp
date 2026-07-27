@@ -590,7 +590,8 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	const TlTrack &t = model_.tracks[track];
 	const TlClip &c = t.clips[clip];
 	const bool isText = c.type == TlClip::Type::Text;
-	const bool video = t.kind == TlTrack::Kind::Video && !isText;
+	const bool isImage = c.type == TlClip::Type::Image;
+	const bool video = t.kind == TlTrack::Kind::Video && !isText && !isImage;
 	const bool sel = (track == selTrack_ && clip == selClip_);
 	const QRect r = clipRect(track, clip);
 	QPainterPath path;
@@ -676,6 +677,8 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 		if (isText)
 			what = QStringLiteral("T  %1").arg(
 				c.text.text.split(QLatin1Char('\n')).value(0));
+		else if (isImage)
+			what = QStringLiteral("IMG #%1").arg(c.sourceId);
 		else
 			what = QStringLiteral("#%1").arg(c.sourceId);
 		const QString label =
@@ -920,7 +923,7 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 		// Media clips can't be trimmed past their source; text clips have no
 		// source, so they stretch freely.
 		const qint64 srcTotal =
-			(dragOrig_.type == TlClip::Type::Text)
+			dragOrig_.freeDuration()
 				? std::numeric_limits<qint64>::max() / 4
 				: srcThumbDur_.value(dragOrig_.sourceId, dragOrig_.srcEndMs + (1 << 30));
 

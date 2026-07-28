@@ -41,12 +41,17 @@ QImage lerpImages(const QImage &a, const QImage &b, double u)
 	QImage out = toRGBA(a);
 	const QImage bb = toRGBA(b);
 	const int w = std::min(out.width(), bb.width()), h = std::min(out.height(), bb.height());
-	const double k = std::clamp(u, 0.0, 1.0);
+	// 0.16 fixed point. std::lround on every byte of every frame was most of the
+	// cost here: this is the same round-to-nearest as an integer add and shift,
+	// and it is exact for the range a byte lerp can produce.
+	const int k = int(std::lround(std::clamp(u, 0.0, 1.0) * 65536.0));
+	if (k == 0)
+		return out;
 	for (int y = 0; y < h; ++y) {
 		unsigned char *o = out.scanLine(y);
 		const unsigned char *s = bb.scanLine(y);
 		for (int x = 0; x < w * 4; ++x)
-			o[x] = (unsigned char)std::lround(o[x] + (s[x] - o[x]) * k);
+			o[x] = (unsigned char)(o[x] + (((s[x] - o[x]) * k + 32768) >> 16));
 	}
 	return out;
 }
@@ -192,14 +197,16 @@ QImage Transitions::blend(const QImage &outgoingIn, const QImage &incomingIn, do
 					pos = fy;
 				// The edge sweeps from -band to 1; a pixel is fully
 				// incoming once the edge has passed it by `band`.
-				const double k = std::clamp(
+				const double kf = std::clamp(
 					(uIn * (1.0 + band) - pos) / band, 0.0, 1.0);
-				if (k <= 0.0)
+				if (kf <= 0.0)
 					continue;
-				for (int c = 0; c < 4; ++c)
-					o[x * 4 + c] = (unsigned char)std::lround(
-						o[x * 4 + c] +
-						(s[x * 4 + c] - o[x * 4 + c]) * k);
+				const int k = int(kf * 65536.0 + 0.5);
+				for (int c = 0; c < 4; ++c) {
+					const int i = x * 4 + c;
+					o[i] = (unsigned char)(o[i] +
+							       (((s[i] - o[i]) * k + 32768) >> 16));
+				}
 			}
 		}
 		return out;

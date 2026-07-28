@@ -530,6 +530,44 @@ struct TlTrack {
 		return best;
 	}
 
+	// overlapBefore() for EVERY clip at once, in one pass.
+	//
+	// Painting the track and hit-testing its transitions both need the answer
+	// for every clip, and calling overlapBefore() in a loop is O(clips²) — on a
+	// busy track that showed up directly in the paint and in every mouse-move.
+	// Sorted by start, the answer is just "the furthest end reached by anything
+	// that starts strictly earlier", which one sweep carries along.
+	QVector<qint64> overlapsBefore() const
+	{
+		QVector<qint64> out(clips.size(), 0);
+		QVector<int> order(clips.size());
+		for (int i = 0; i < clips.size(); ++i)
+			order[i] = i;
+		std::sort(order.begin(), order.end(), [this](int a, int b) {
+			return clips[a].outStartMs < clips[b].outStartMs;
+		});
+		qint64 reach = std::numeric_limits<qint64>::min(); // furthest end so far
+		int i = 0;
+		while (i < order.size()) {
+			// Clips sharing a start must all see the same `reach`: none of
+			// them is "strictly earlier" than another.
+			int j = i;
+			const qint64 start = clips[order[i]].outStartMs;
+			while (j < order.size() && clips[order[j]].outStartMs == start)
+				++j;
+			for (int k = i; k < j; ++k) {
+				const TlClip &me = clips[order[k]];
+				if (reach > std::numeric_limits<qint64>::min())
+					out[order[k]] = std::max<qint64>(
+						0, std::min(reach, me.outEndMs()) - me.outStartMs);
+			}
+			for (int k = i; k < j; ++k)
+				reach = std::max(reach, clips[order[k]].outEndMs());
+			i = j;
+		}
+		return out;
+	}
+
 	bool operator==(const TlTrack &o) const
 	{
 		return kind == o.kind && name == o.name && muted == o.muted && hidden == o.hidden &&

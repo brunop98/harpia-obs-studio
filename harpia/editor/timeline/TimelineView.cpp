@@ -319,6 +319,8 @@ int TimelineView::laneAtY(int y) const
 
 qint64 TimelineView::spanMs() const
 {
+	if (spanCache_ >= 0)
+		return spanCache_; // held by a SpanGuard, see the header
 	return std::max<qint64>(kMinSpanMs, model_.durationMs() + kTailMs);
 }
 
@@ -560,7 +562,16 @@ QRect TimelineView::transitionRect(int track, int incoming) const
 	const TlTrack &t = model_.tracks[track];
 	if (incoming < 0 || incoming >= t.clips.size())
 		return {};
-	const qint64 span = t.overlapBefore(incoming);
+	return transitionRect(track, incoming, t.overlapBefore(incoming));
+}
+
+QRect TimelineView::transitionRect(int track, int incoming, qint64 span) const
+{
+	if (track < 0 || track >= model_.tracks.size())
+		return {};
+	const TlTrack &t = model_.tracks[track];
+	if (incoming < 0 || incoming >= t.clips.size())
+		return {};
 	if (span <= 0)
 		return {};
 	const TlClip &c = t.clips[incoming];
@@ -578,10 +589,13 @@ int TimelineView::transitionAtPoint(const QPoint &p, int *trackOut) const
 	const TlTrack &t = model_.tracks[track];
 	if (t.kind != TlTrack::Kind::Video)
 		return -1; // only picture tracks show a transition
+	// One sweep for the track, not one scan per clip: this runs on every single
+	// mouse-move over the timeline.
+	const QVector<qint64> spans = t.overlapsBefore();
 	for (int i = 0; i < t.clips.size(); ++i) {
-		if (t.overlapBefore(i) <= 0 || !t.clips[i].transition.enabled)
+		if (spans[i] <= 0 || !t.clips[i].transition.enabled)
 			continue;
-		if (transitionRect(track, i).contains(p)) {
+		if (transitionRect(track, i, spans[i]).contains(p)) {
 			if (trackOut)
 				*trackOut = track;
 			return i;
@@ -590,9 +604,9 @@ int TimelineView::transitionAtPoint(const QPoint &p, int *trackOut) const
 	return -1;
 }
 
-void TimelineView::drawTransition(QPainter &p, int track, int incoming) const
+void TimelineView::drawTransition(QPainter &p, int track, int incoming, qint64 span) const
 {
-	const QRect r = transitionRect(track, incoming);
+	const QRect r = transitionRect(track, incoming, span);
 	if (r.isEmpty() || r.right() < contentRect().x() || r.x() > contentRect().right())
 		return;
 	const bool sel = selTransition_ && selTrack_ == track && selClip_ == incoming;
@@ -801,6 +815,22 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	if (t.hidden || t.muted)
 		fill = fill.darker(160);
 	p.setBrush(fill);
+
+	// A clip with nothing inside it — no filmstrip, no waveform, no keyframes,
+	// no fades, too narrow for a label — is just a rounded rectangle, and zoomed
+	// out that is most of them. Painting it as one call instead of a fill path,
+	// a clip path and a border path is three rasterisations saved per clip.
+	const bool dragging = (mode_ == Mode::Move && dragMoved_);
+	const bool wantsInside =
+		isFx || (video && srcThumbs_.contains(c.sourceId)) || !c.peaks.isEmpty() ||
+		(!dragging && !c.keys.isEmpty()) || clipTakesFades(track, clip) ||
+		(!dragging && r.width() >= 28);
+	if (!wantsInside) {
+		p.setPen(sel ? QPen(cl_.accent, 2) : QPen(cl_.border, 1));
+		p.drawRoundedRect(r, 4, 4);
+		return;
+	}
+
 	p.drawPath(path);
 
 	p.save();
@@ -845,10 +875,6 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 			p.drawLine(x, midY - hh, x, midY + hh);
 		}
 	}
-	// While dragging, drop the per-clip decoration so the drop indicator reads
-	// clearly.
-	const bool dragging = (mode_ == Mode::Move && dragMoved_);
-
 	// Keyframe diamonds along the top edge, so an animated clip reads as such.
 	if (!dragging && !c.keys.isEmpty() && c.outDurationMs() > 0) {
 		p.setPen(Qt::NoPen);
@@ -1047,6 +1073,8 @@ void TimelineView::drawFades(QPainter &p, int track, int clip) const
 
 void TimelineView::paintEvent(QPaintEvent *)
 {
+	// Measure the axis once for the whole paint instead of once per msToX call.
+	const SpanGuard span(this);
 	QPainter p(this);
 	p.setRenderHint(QPainter::Antialiasing);
 	p.fillRect(rect(), cl_.timelineBg);
@@ -1113,10 +1141,12 @@ void TimelineView::paintEvent(QPaintEvent *)
 
 		// Overlaps last, over both clips: the band has to read as belonging to
 		// neither of them.
-		if (t.kind == TlTrack::Kind::Video)
+		if (t.kind == TlTrack::Kind::Video) {
+			const QVector<qint64> spans = t.overlapsBefore();
 			for (int ci = 0; ci < t.clips.size(); ++ci)
-				if (t.overlapBefore(ci) > 0 && t.clips[ci].transition.enabled)
-					drawTransition(p, i, ci);
+				if (spans[ci] > 0 && t.clips[ci].transition.enabled)
+					drawTransition(p, i, ci, spans[ci]);
+		}
 	}
 
 	// "Release here to make a new track" indicator.

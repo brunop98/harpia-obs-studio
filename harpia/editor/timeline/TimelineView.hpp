@@ -164,6 +164,27 @@ private:
 	int laneAtY(int y) const;              // track index for a y, else -1
 	qint64 spanMs() const;                 // total axis length (duration + tail)
 	qint64 visibleMs() const;              // spanMs / zoom
+
+	// spanMs() asks the model for its duration, which walks every clip in the
+	// project — and msToX() asks spanMs() on every single call. A paint does
+	// that twice per clip, so the axis cost grew with the SQUARE of the clip
+	// count and dominated the paint on a busy timeline.
+	//
+	// The model cannot change while a paint is running, so a paint measures the
+	// span once and answers from that. The guard is RAII so an early return
+	// cannot leave a stale value behind; outside its lifetime spanMs() goes
+	// back to measuring, which keeps every editing path exact.
+	class SpanGuard {
+	public:
+		explicit SpanGuard(const TimelineView *v) : v_(v) { v_->spanCache_ = v_->spanMs(); }
+		~SpanGuard() { v_->spanCache_ = -1; }
+		SpanGuard(const SpanGuard &) = delete;
+		SpanGuard &operator=(const SpanGuard &) = delete;
+
+	private:
+		const TimelineView *v_;
+	};
+	mutable qint64 spanCache_ = -1;
 	int msToX(qint64 ms) const;
 	qint64 xToMs(int x) const;
 	QRect clipRect(int track, int clip) const;
@@ -210,7 +231,10 @@ private:
 	// The overlap under a point: the INCOMING clip's index, or -1.
 	int transitionAtPoint(const QPoint &p, int *trackOut) const;
 	QRect transitionRect(int track, int incoming) const;
-	void drawTransition(QPainter &p, int track, int incoming) const;
+	// Same, when the caller already has the whole track's overlaps in hand
+	// (TlTrack::overlapsBefore) — asking per clip is O(clips²) across a track.
+	QRect transitionRect(int track, int incoming, qint64 span) const;
+	void drawTransition(QPainter &p, int track, int incoming, qint64 span) const;
 	// Nearest snap candidate to `ms`, or `ms` itself when nothing is in range.
 	// `hit` (optional) reports whether a candidate was actually taken — the
 	// caller uses it to light up the guide line.

@@ -803,8 +803,14 @@ void TimelineView::paintEvent(QPaintEvent *)
 			drawToggle(HeaderHit::Mute, QStringLiteral("M"), t.muted);
 		}
 
+		// Clips are painted after the header, and a clip that starts before the
+		// visible range has an x inside the gutter — so without this it draws
+		// straight over the track's name and its L/H/M toggles.
+		p.save();
+		p.setClipRect(contentRect());
 		for (int ci = 0; ci < t.clips.size(); ++ci)
 			drawClip(p, i, ci);
+		p.restore();
 	}
 
 	// "Release here to make a new track" indicator.

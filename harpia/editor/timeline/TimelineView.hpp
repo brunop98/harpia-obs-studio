@@ -56,6 +56,7 @@ public:
 	void clearPlayhead();
 	qint64 playhead() const { return playheadMs_; }
 	qint64 durationMs() const { return model_.durationMs(); }
+	qint64 viewStartMs() const { return viewStart_; } // leftmost visible time
 
 	// One clip on the clipboard, with the track it came from so a paste can put
 	// it back where it belongs rather than always on the first track.

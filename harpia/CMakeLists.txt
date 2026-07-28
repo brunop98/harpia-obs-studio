@@ -182,6 +182,7 @@ target_sources(
     editor/timeline/TimelineView.hpp
     editor/timeline/TimelineCompositor.cpp
     editor/timeline/TimelineCompositor.hpp
+    editor/timeline/TextStyleJson.hpp
     # Per-clip transform scripting (QJSEngine).
     editor/script/TransformScript.cpp
     editor/script/TransformScript.hpp

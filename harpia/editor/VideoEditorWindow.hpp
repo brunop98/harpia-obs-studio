@@ -407,6 +407,17 @@ private:
 	QFileSystemWatcher *scriptWatch_ = nullptr;
 	// Clip inspector: a picture clip and an audio clip need different controls,
 	// so each group shows only for the kind of clip that has them.
+	// Text style presets: a named TlText (style only — a preset never carries
+	// the caption's words), stored as readable JSON beside the other user files.
+	QComboBox *textPresetCombo_ = nullptr;
+	QString textPresetsPath() const;
+	QMap<QString, TlText> loadTextPresets() const;
+	void saveTextPresets(const QMap<QString, TlText> &presets) const;
+	void refreshTextPresets();
+	void applyTextPreset(const QString &name);
+	void saveTextPresetFromSelection();
+	void deleteSelectedTextPreset();
+
 	QWidget *videoClipBox_ = nullptr;
 	QWidget *audioClipBox_ = nullptr;
 	QDoubleSpinBox *clipVolSpin_ = nullptr;

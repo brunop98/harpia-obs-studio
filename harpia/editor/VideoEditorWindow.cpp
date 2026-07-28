@@ -11,6 +11,7 @@
 #include "AudioPreview.hpp"
 #include "TimelineAudio.hpp"
 #include "TimelineThumbs.hpp"
+#include "timeline/TextStyleJson.hpp"
 #include "TrackEditor.hpp"
 #include "VoiceoverMixer.hpp"
 #include "VoiceoverTrack.hpp"
@@ -48,6 +49,7 @@
 #include <QAction>
 #include <QColorDialog>
 #include <QFontComboBox>
+#include <QInputDialog>
 #include <QLabel>
 #include <QMenu>
 #include <QMessageBox>
@@ -79,6 +81,8 @@
 #include <QVBoxLayout>
 
 namespace harpia {
+
+
 
 namespace {
 // Accepted source video extensions (drag-drop + Add video filter).
@@ -2427,6 +2431,29 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	tHdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
 	tv->addWidget(tHdr);
 
+	// Style presets: save the look you settled on, apply it to any other caption.
+	auto *presetRow = new QHBoxLayout;
+	textPresetCombo_ = new QComboBox(textBox_);
+	textPresetCombo_->setToolTip(
+		QStringLiteral("Apply a saved text style. The caption keeps its own words."));
+	auto *presetSave = new QPushButton(QStringLiteral("Save…"), textBox_);
+	presetSave->setToolTip(QStringLiteral("Save this caption's style under a name"));
+	auto *presetDel = new QPushButton(QStringLiteral("✕"), textBox_);
+	presetDel->setFixedWidth(28);
+	presetDel->setToolTip(QStringLiteral("Delete the selected style"));
+	presetRow->addWidget(textPresetCombo_, 1);
+	presetRow->addWidget(presetSave);
+	presetRow->addWidget(presetDel);
+	tv->addLayout(presetRow);
+	connect(textPresetCombo_, &QComboBox::activated, this, [this](int i) {
+		if (i > 0 && !syncingClip_)
+			applyTextPreset(textPresetCombo_->currentText());
+	});
+	connect(presetSave, &QPushButton::clicked, this,
+		&VideoEditorWindow::saveTextPresetFromSelection);
+	connect(presetDel, &QPushButton::clicked, this, &VideoEditorWindow::deleteSelectedTextPreset);
+	refreshTextPresets();
+
 	textEdit_ = new QPlainTextEdit(textBox_);
 	textEdit_->setPlaceholderText(QStringLiteral("Type your caption… (Enter for a new line)"));
 	textEdit_->setFixedHeight(56);
@@ -2710,6 +2737,7 @@ void VideoEditorWindow::syncClipInspector()
 	const bool isText = !onAudioTrack && c->type == TlClip::Type::Text;
 	textBox_->setVisible(isText);
 	if (isText) {
+		refreshTextPresets();
 		if (textEdit_->toPlainText() != c->text.text)
 			textEdit_->setPlainText(c->text.text);
 		// Only when it actually differs: setCurrentFont on every refresh makes the
@@ -3058,6 +3086,113 @@ void VideoEditorWindow::reject()
 			return; // keep editing
 	}
 	QDialog::reject();
+}
+
+QString VideoEditorWindow::textPresetsPath() const
+{
+	const QString base = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+	QDir().mkpath(base + QStringLiteral("/harpia"));
+	return base + QStringLiteral("/harpia/text-presets.json");
+}
+
+// name -> style. A plain readable file, so a preset can be shared by copying it.
+QMap<QString, TlText> VideoEditorWindow::loadTextPresets() const
+{
+	QMap<QString, TlText> out;
+	QFile f(textPresetsPath());
+	if (!f.open(QIODevice::ReadOnly))
+		return out;
+	const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
+	for (auto it = root.constBegin(); it != root.constEnd(); ++it) {
+		TlText t;
+		applyTextStyleFromJson(it.value().toObject(), t);
+		out.insert(it.key(), t);
+	}
+	return out;
+}
+
+void VideoEditorWindow::saveTextPresets(const QMap<QString, TlText> &presets) const
+{
+	QJsonObject root;
+	for (auto it = presets.constBegin(); it != presets.constEnd(); ++it)
+		root.insert(it.key(), textStyleToJson(it.value()));
+	QFile f(textPresetsPath());
+	if (f.open(QIODevice::WriteOnly))
+		f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+}
+
+void VideoEditorWindow::refreshTextPresets()
+{
+	if (!textPresetCombo_)
+		return;
+	const QString keep = textPresetCombo_->currentIndex() > 0 ? textPresetCombo_->currentText()
+								  : QString();
+	const QSignalBlocker b(textPresetCombo_);
+	textPresetCombo_->clear();
+	textPresetCombo_->addItem(QStringLiteral("Style preset…"));
+	textPresetCombo_->addItems(loadTextPresets().keys()); // QMap keys are sorted
+	const int i = keep.isEmpty() ? 0 : textPresetCombo_->findText(keep);
+	textPresetCombo_->setCurrentIndex(i >= 0 ? i : 0);
+}
+
+void VideoEditorWindow::applyTextPreset(const QString &name)
+{
+	const auto presets = loadTextPresets();
+	const auto it = presets.constFind(name);
+	if (it == presets.constEnd())
+		return;
+	// Style only: the clip keeps its own words, which is the whole point of a
+	// preset — apply the look you settled on to whatever this caption says.
+	const TlText style = it.value();
+	editSelectedClip([&style](TlClip &c) {
+		const QString words = c.text.text;
+		c.text = style;
+		c.text.text = words;
+	});
+	syncClipInspector();
+}
+
+void VideoEditorWindow::saveTextPresetFromSelection()
+{
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!sel || sel->type != TlClip::Type::Text)
+		return;
+	auto presets = loadTextPresets();
+	bool ok = false;
+	const QString name =
+		QInputDialog::getText(this, QStringLiteral("Save text style"),
+				      QStringLiteral("Name for this style:"), QLineEdit::Normal,
+				      QString(), &ok)
+			.trimmed();
+	if (!ok || name.isEmpty())
+		return;
+	if (presets.contains(name) &&
+	    QMessageBox::question(this, QStringLiteral("Replace style"),
+				  QStringLiteral("\"%1\" already exists. Replace it?").arg(name)) !=
+		    QMessageBox::Yes)
+		return;
+	presets.insert(name, sel->text); // t.text rides along but is ignored on apply
+	saveTextPresets(presets);
+	refreshTextPresets();
+	if (textPresetCombo_) {
+		const QSignalBlocker b(textPresetCombo_);
+		textPresetCombo_->setCurrentIndex(textPresetCombo_->findText(name));
+	}
+}
+
+void VideoEditorWindow::deleteSelectedTextPreset()
+{
+	if (!textPresetCombo_ || textPresetCombo_->currentIndex() <= 0)
+		return;
+	const QString name = textPresetCombo_->currentText();
+	if (QMessageBox::question(this, QStringLiteral("Delete style"),
+				  QStringLiteral("Delete the text style \"%1\"?").arg(name)) !=
+	    QMessageBox::Yes)
+		return;
+	auto presets = loadTextPresets();
+	presets.remove(name);
+	saveTextPresets(presets);
+	refreshTextPresets();
 }
 
 void VideoEditorWindow::copySelectedClips(bool cut)
@@ -3847,22 +3982,8 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 					co[QStringLiteral("scripts")] = scArr;
 				}
 				if (c.type == TlClip::Type::Text) {
-					QJsonObject tx;
-					tx[QStringLiteral("text")] = c.text.text;
-					tx[QStringLiteral("font")] = c.text.fontFamily;
-					tx[QStringLiteral("size")] = c.text.fontPx;
-					tx[QStringLiteral("bold")] = c.text.bold;
-					tx[QStringLiteral("italic")] = c.text.italic;
-					tx[QStringLiteral("color")] = c.text.color.name(QColor::HexArgb);
-					tx[QStringLiteral("outlineW")] = c.text.outlineWidth;
-					tx[QStringLiteral("outlineColor")] =
-						c.text.outlineColor.name(QColor::HexArgb);
-					tx[QStringLiteral("box")] = c.text.boxEnabled;
-					tx[QStringLiteral("boxColor")] =
-						c.text.boxColor.name(QColor::HexArgb);
-					tx[QStringLiteral("boxPad")] = c.text.boxPadding;
-					tx[QStringLiteral("boxRadius")] = c.text.boxRadius;
-					tx[QStringLiteral("align")] = c.text.align;
+					QJsonObject tx = textStyleToJson(c.text);
+					tx[QStringLiteral("text")] = c.text.text; // words too, here
 					co[QStringLiteral("textStyle")] = tx;
 				} else {
 					co[QStringLiteral("volume")] = c.volume;
@@ -4115,20 +4236,8 @@ void VideoEditorWindow::onOpenProject()
 			}
 			if (c.type == TlClip::Type::Text) {
 				const QJsonObject tx = co.value(QStringLiteral("textStyle")).toObject();
+				applyTextStyleFromJson(tx, c.text);
 				c.text.text = tx.value(QStringLiteral("text")).toString();
-				c.text.fontFamily = tx.value(QStringLiteral("font")).toString();
-				c.text.fontPx = tx.value(QStringLiteral("size")).toInt(64);
-				c.text.bold = tx.value(QStringLiteral("bold")).toBool(false);
-				c.text.italic = tx.value(QStringLiteral("italic")).toBool(false);
-				c.text.color = QColor(tx.value(QStringLiteral("color")).toString());
-				c.text.outlineWidth = tx.value(QStringLiteral("outlineW")).toDouble(3.0);
-				c.text.outlineColor =
-					QColor(tx.value(QStringLiteral("outlineColor")).toString());
-				c.text.boxEnabled = tx.value(QStringLiteral("box")).toBool(false);
-				c.text.boxColor = QColor(tx.value(QStringLiteral("boxColor")).toString());
-				c.text.boxPadding = tx.value(QStringLiteral("boxPad")).toInt(14);
-				c.text.boxRadius = tx.value(QStringLiteral("boxRadius")).toInt(6);
-				c.text.align = tx.value(QStringLiteral("align")).toInt(1);
 				if (!c.text.color.isValid())
 					c.text.color = QColor(0xff, 0xff, 0xff);
 				if (!c.text.outlineColor.isValid())

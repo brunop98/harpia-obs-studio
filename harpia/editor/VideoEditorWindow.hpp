@@ -212,6 +212,7 @@ private:
 	QSplitter *vsplit_ = nullptr;   // preview / editing area
 	QWidget *bottomPane_ = nullptr; // mode bar + mode stack + audio + buttons
 
+	void refreshPreviewAtPlayhead(); // re-render at the current position
 	void showFrame(int sourceId, qint64 ms);
 	void joinExport();
 	void startPlayback();
@@ -263,6 +264,17 @@ private:
 	// previewed, so the two can never disagree.
 	qint64 timelineEditMs() const;
 	double timelineFps() const; // project frame rate (the first source's)
+
+	// ---- Preview quality ----
+	// Compositing, decoding and the shader chain all scale with the rendered
+	// size, so dropping it is the cheapest way to make a heavy timeline scrub
+	// smoothly. The project's real size is untouched — this only affects what is
+	// drawn on screen, never the export.
+	enum class PreviewQuality { Auto = 0, Full, Half, Quarter };
+	PreviewQuality previewQuality_ = PreviewQuality::Auto;
+	QComboBox *previewQualityCombo_ = nullptr;
+	// Size to render the preview at, for a given project canvas.
+	QSize previewRenderSize(QSize canvas) const;
 	bool autoKeyframe_ = false; // record a keyframe on every transform edit
 	void updateInfoLabel();
 	bool hasUnsavedEdits() const;

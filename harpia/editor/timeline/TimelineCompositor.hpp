@@ -33,8 +33,13 @@ public:
 	// `eval` (optional) applies each clip's transform script on top of its base
 	// pose / keyframes. A QJSEngine isn't thread-safe, so pass the evaluator
 	// belonging to the CALLING thread (the preview's, or the export worker's).
+	// `canvas` is what actually gets rendered. `logicalCanvas` is the project's
+	// real output size, reported to scripts as ctx.canvasW/H — pass it when
+	// rendering a reduced-size preview so a script doing pixel maths behaves the
+	// same on screen as it will in the export. Defaults to `canvas`.
 	static QImage compose(const TimelineModel &m, qint64 outMs, QSize canvas, FrameProvider &fp,
-			      class TransformEvaluator *eval = nullptr, double fps = 30.0);
+			      class TransformEvaluator *eval = nullptr, double fps = 30.0,
+			      QSize logicalCanvas = QSize());
 
 	// Where a clip is drawn on the canvas at this pose, in canvas pixels. Used by
 	// the preview to hit-test and drag the selected clip. `srcSize` is the clip's

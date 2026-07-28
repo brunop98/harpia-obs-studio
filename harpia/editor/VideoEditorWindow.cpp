@@ -244,6 +244,34 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	bar->addWidget(cursorTimeLabel_);
 	bar->addSpacing(16);
 
+	// Preview quality. Everything in a preview frame — decode, composite, text,
+	// shaders — scales with the rendered size, so this is the one knob that
+	// speeds all of them up at once.
+	previewQualityCombo_ = new QComboBox(this);
+	previewQualityCombo_->addItem(QStringLiteral("Preview: Auto"), int(PreviewQuality::Auto));
+	previewQualityCombo_->addItem(QStringLiteral("Preview: Full"), int(PreviewQuality::Full));
+	previewQualityCombo_->addItem(QStringLiteral("Preview: ½"), int(PreviewQuality::Half));
+	previewQualityCombo_->addItem(QStringLiteral("Preview: ¼"), int(PreviewQuality::Quarter));
+	previewQualityCombo_->setToolTip(QStringLiteral(
+		"How large a frame the preview renders. Auto matches the preview area, so it looks "
+		"identical and skips work you cannot see. Lower settings scrub faster on heavy "
+		"timelines. The export is never affected."));
+	{
+		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		const int q = st.value(QStringLiteral("editor/previewQuality"), 0).toInt();
+		previewQuality_ = PreviewQuality(std::clamp(q, 0, 3));
+		QSignalBlocker b(previewQualityCombo_);
+		previewQualityCombo_->setCurrentIndex(int(previewQuality_));
+	}
+	connect(previewQualityCombo_, &QComboBox::currentIndexChanged, this, [this](int i) {
+		previewQuality_ = PreviewQuality(std::clamp(i, 0, 3));
+		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		st.setValue(QStringLiteral("editor/previewQuality"), i);
+		refreshPreviewAtPlayhead();
+	});
+	bar->addWidget(previewQualityCombo_);
+	bar->addSpacing(8);
+
 	// Monitor toggle. Preview audio is Full-editing only for now, so it hides
 	// with the other Full-only controls.
 	audioPreview_ = new AudioPreview(this);
@@ -1556,6 +1584,36 @@ double VideoEditorWindow::timelineFps() const
 	return 30.0;
 }
 
+QSize VideoEditorWindow::previewRenderSize(QSize canvas) const
+{
+	if (canvas.isEmpty())
+		return canvas;
+	switch (previewQuality_) {
+	case PreviewQuality::Full:
+		return canvas;
+	case PreviewQuality::Half:
+		return canvas / 2;
+	case PreviewQuality::Quarter:
+		return canvas / 4;
+	case PreviewQuality::Auto:
+		break;
+	}
+	// Auto: no more than the preview widget can actually show. Rendering 1920
+	// wide into an 800px area throws away more than half the pixels drawn, and
+	// the difference is invisible by definition. Device pixel ratio is included
+	// so it stays sharp on a HiDPI screen.
+	if (!canvas_ || canvas_->width() <= 0)
+		return canvas;
+	const double dpr = canvas_->devicePixelRatioF() > 0.0 ? canvas_->devicePixelRatioF() : 1.0;
+	const int wantW = int(std::lround(canvas_->width() * dpr));
+	if (wantW >= canvas.width())
+		return canvas; // the area is bigger than the project: nothing to save
+	// Keep the aspect exactly, and never go below a size that is still legible.
+	const double k = std::max(0.2, double(wantW) / canvas.width());
+	return QSize(std::max(160, int(std::lround(canvas.width() * k))),
+		     std::max(90, int(std::lround(canvas.height() * k))));
+}
+
 QSize VideoEditorWindow::timelineCanvasSize() const
 {
 	// The first source defines the output canvas (like the multi-source export).
@@ -1571,6 +1629,7 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 	// Feeds the compositor from the editor's per-source decoders (GUI thread).
 	struct Provider : TimelineCompositor::FrameProvider {
 		VideoEditorWindow *w = nullptr;
+		int decodeW = 1920, decodeH = 1080;
 		QImage frameFor(int sourceId, qint64 srcMs) override
 		{
 			// A still serves the same picture at every timestamp.
@@ -1578,10 +1637,11 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 			    it != w->stillImages_.constEnd())
 				return it.value();
 			FrameSeeker *fs = w->seekerFor(sourceId);
-			return fs ? fs->frameAt(srcMs, 1920, 1080) : QImage();
+			// Decoding straight to the size actually being composited saves both
+			// the scale and the memory traffic behind it.
+			return fs ? fs->frameAt(srcMs, decodeW, decodeH) : QImage();
 		}
 	} fp;
-	fp.w = this;
 
 	// Any clip script that hasn't been compiled in this evaluator yet (e.g. after
 	// loading a project) is brought up before the frame is composed.
@@ -1598,9 +1658,15 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 	const double fps = timelineFps();
 
 	const QSize canvasSize = timelineCanvasSize();
+	// The canvas keeps the PROJECT size: crop rectangles and preview-drag maths
+	// are expressed against it, and must not move when preview quality changes.
 	canvas_->setVideoSize(canvasSize.width(), canvasSize.height());
-	const QImage composed = TimelineCompositor::compose(timelineView_->model(), outMs, canvasSize,
-							    fp, scriptEval_.get(), fps);
+	const QSize renderSize = previewRenderSize(canvasSize);
+	fp.w = this;
+	fp.decodeW = renderSize.width();
+	fp.decodeH = renderSize.height();
+	const QImage composed = TimelineCompositor::compose(timelineView_->model(), outMs, renderSize,
+							    fp, scriptEval_.get(), fps, canvasSize);
 	setPreviewFrame(composed, outMs);
 }
 
@@ -4988,6 +5054,19 @@ void VideoEditorWindow::onPreviewTick()
 	pendingMs_ = -1;
 }
 
+// Re-render whatever the preview is currently showing (after a change that
+// alters HOW it is rendered rather than what).
+void VideoEditorWindow::refreshPreviewAtPlayhead()
+{
+	if (!valid_)
+		return;
+	if (fullEdit()) {
+		showTimelineFrame(timelinePlayheadMs());
+		return;
+	}
+	showFrame(activeSourceId_, std::max<qint64>(0, lastPreviewMs_));
+}
+
 void VideoEditorWindow::showFrame(int sourceId, qint64 ms)
 {
 	if (!valid_)
@@ -4997,7 +5076,10 @@ void VideoEditorWindow::showFrame(int sourceId, qint64 ms)
 		fs = seeker_; // fall back to the active source
 	if (!fs)
 		return;
-	const QImage img = fs->frameAt(ms, 1280, 720);
+	// Trim / Multi-Cut show one source frame; the same quality setting applies,
+	// against the 720p these modes have always previewed at.
+	const QSize dec = previewRenderSize(QSize(1280, 720));
+	const QImage img = fs->frameAt(ms, dec.width(), dec.height());
 	if (!img.isNull())
 		setPreviewFrame(img, ms);
 }

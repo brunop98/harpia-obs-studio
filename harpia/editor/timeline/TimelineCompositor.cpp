@@ -224,10 +224,12 @@ void TimelineCompositor::drawClip(QPainter &p, const TlClip &c, const TlTransfor
 }
 
 QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize canvas, FrameProvider &fp,
-				   TransformEvaluator *eval, double fps)
+				   TransformEvaluator *eval, double fps, QSize logicalCanvas)
 {
 	if (canvas.width() <= 0 || canvas.height() <= 0)
 		return QImage();
+	if (!logicalCanvas.isValid() || logicalCanvas.isEmpty())
+		logicalCanvas = canvas;
 	QImage out(canvas, QImage::Format_RGBA8888);
 	out.fill(Qt::black); // gaps and letterbox areas read as black
 
@@ -258,16 +260,19 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 		TlTransform tf = c.transformAt(outMs);
 		if (eval && !c.scripts.isEmpty()) {
 			ScriptContext sctx;
-			sctx.canvasW = canvas.width();
-			sctx.canvasH = canvas.height();
+			// The project's size, not the render size: a preview at half
+			// resolution must not change what a script computes.
+			sctx.canvasW = logicalCanvas.width();
+			sctx.canvasH = logicalCanvas.height();
 			QSize natural = frame.size();
 			if (c.type == TlClip::Type::Text)
 				natural = textNaturalSize(c.text, canvas);
 			if (!c.crop.isNull() && c.crop.width() > 1 && c.crop.height() > 1 &&
 			    !frame.isNull())
 				natural = c.crop.intersected(QRect(QPoint(0, 0), frame.size())).size();
-			sctx.clipW = natural.width();
-			sctx.clipH = natural.height();
+			const double k = double(logicalCanvas.width()) / std::max(1, canvas.width());
+			sctx.clipW = int(std::lround(natural.width() * k));
+			sctx.clipH = int(std::lround(natural.height() * k));
 			sctx.fps = fps;
 			sctx.index = ci;
 			sctx.globalTime = double(outMs) / 1000.0;

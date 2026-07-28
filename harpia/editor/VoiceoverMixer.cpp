@@ -526,8 +526,23 @@ QString VoiceoverMixer::mix(const QString &videoPath, double originalVolume, boo
 	if (!(out->oformat->flags & AVFMT_NOFILE) &&
 	    avio_open(&out->pb, tmp.toUtf8().constData(), AVIO_FLAG_WRITE) < 0)
 		return fail(QStringLiteral("Voiceover mix: could not open the output file."));
-	if (avformat_write_header(out, nullptr) < 0)
-		return fail(QStringLiteral("Voiceover mix: could not write the header."));
+	// This pass REPLACES the exported file, so whatever the exporter asked its
+	// muxer for has to be asked for again here or it is undone. +faststart is
+	// the one that matters: without it every export carrying narration — and
+	// every timeline export, whose audio is mixed the same way — shipped with
+	// its index at the end of the file and would not start playing until fully
+	// downloaded.
+	{
+		AVDictionary *mux = nullptr;
+		const QString ext = QFileInfo(videoPath).suffix().toLower();
+		if (ext == QLatin1String("mp4") || ext == QLatin1String("mov") ||
+		    ext == QLatin1String("m4v"))
+			av_dict_set(&mux, "movflags", "+faststart", 0);
+		const int hr = avformat_write_header(out, &mux);
+		av_dict_free(&mux);
+		if (hr < 0)
+			return fail(QStringLiteral("Voiceover mix: could not write the header."));
+	}
 
 	const int frameSize = enc->frame_size > 0 ? enc->frame_size : 1024;
 	long long mixPos = 0; // frame cursor into mixbuf

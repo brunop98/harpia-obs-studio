@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build and run the A/V sync check.
+# Build and run the export checks: A/V sync, and all four export paths.
 #
 #   harpia/tests/run_avsync.sh [workdir]
 #
@@ -43,15 +43,22 @@ LF="$(pkg-config --libs $PKGS)"
 
 "$MOC" -I"$H" "$H/editor/ClipExporter.hpp" -o "$WORK/moc_ClipExporter.cpp"
 
-g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
-	"$HERE/avsync_test.cpp" \
-	"$H/editor/ClipExporter.cpp" "$H/editor/TimelineAudio.cpp" \
-	"$H/editor/VoiceoverMixer.cpp" "$H/editor/AudioRetimer.cpp" \
-	"$H/editor/GifEncoder.cpp" "$H/editor/FrameSeeker.cpp" \
-	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Spotlight.cpp" \
-	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
-	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/ShaderRenderer.cpp" \
-	"$WORK/moc_ClipExporter.cpp" \
-	-o "$WORK/avsync_test" $LF
+build() { # source-file output-name
+	g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
+		"$1" \
+		"$H/editor/ClipExporter.cpp" "$H/editor/TimelineAudio.cpp" \
+		"$H/editor/VoiceoverMixer.cpp" "$H/editor/AudioRetimer.cpp" \
+		"$H/editor/GifEncoder.cpp" "$H/editor/FrameSeeker.cpp" \
+		"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Spotlight.cpp" \
+		"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
+		"$H/editor/script/TransformScript.cpp" "$H/editor/shader/ShaderRenderer.cpp" \
+		"$WORK/moc_ClipExporter.cpp" \
+		-o "$WORK/$2" $LF
+}
+build "$HERE/avsync_test.cpp" avsync_test
+build "$HERE/exportpaths_test.cpp" exportpaths_test
 
-QT_QPA_PLATFORM=offscreen "$WORK/avsync_test" "$WORK"
+rc=0
+QT_QPA_PLATFORM=offscreen "$WORK/avsync_test" "$WORK" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/exportpaths_test" "$WORK" || rc=1
+exit $rc

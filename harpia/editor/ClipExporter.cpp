@@ -100,6 +100,88 @@ struct VideoState {
 	}
 };
 
+// ---- The output side, once -------------------------------------------------
+//
+// All four export paths — plain trim, multi-cut, multi-source and the Full
+// editing timeline — end in the same place: an H.264 or VP9 encoder writing
+// into a container. Each used to spell that out itself, which is how the
+// timeline path ended up as the only one NOT asking for +faststart on its MP4s.
+// Four copies of a setup means the fifth thing you fix reaches one of them.
+//
+// What genuinely differs between the paths is the time base, the frame rate and
+// the GOP length, so those are arguments; everything else is the same by
+// definition and now only exists once.
+
+// Create the encoder, the output container and the video stream. On success
+// `s.venc`, `s.ofmt` and `s.vOut` are live. Returns "" or an error to show.
+QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const QByteArray &outPath,
+			 int w, int h, AVRational timeBase, AVRational frameRate, int gopSize)
+{
+	const bool webm = opts.format == ClipExporter::Format::WebM;
+	const AVCodec *vc = avcodec_find_encoder_by_name(webm ? "libvpx-vp9" : "libx264");
+	if (!vc)
+		return QStringLiteral("The output video encoder is not available in this build.");
+	s.venc = avcodec_alloc_context3(vc);
+	if (!s.venc)
+		return QStringLiteral("Could not allocate the video encoder.");
+	s.venc->width = w;
+	s.venc->height = h;
+	s.venc->pix_fmt = AV_PIX_FMT_YUV420P;
+	s.venc->time_base = timeBase;
+	s.venc->framerate = frameRate;
+	s.venc->gop_size = gopSize;
+
+	// The container has to exist before the encoder opens: whether it wants a
+	// global header changes a flag on the encoder.
+	if (avformat_alloc_output_context2(&s.ofmt, nullptr, nullptr, outPath.constData()) < 0 ||
+	    !s.ofmt)
+		return QStringLiteral("Could not create the output file.");
+	if (s.ofmt->oformat->flags & AVFMT_GLOBALHEADER)
+		s.venc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+
+	if (webm) {
+		s.venc->bit_rate = 0; // constant-quality VP9
+		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
+		av_opt_set(s.venc->priv_data, "deadline", "good", 0);
+		av_opt_set_int(s.venc->priv_data, "cpu-used", 5, 0);
+		av_opt_set(s.venc->priv_data, "row-mt", "1", 0);
+	} else {
+		av_opt_set(s.venc->priv_data, "preset", "veryfast", 0);
+		av_opt_set(s.venc->priv_data, "profile", "high", 0);
+		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
+	}
+	if (avcodec_open2(s.venc, vc, nullptr) < 0)
+		return QStringLiteral("Could not open the video encoder.");
+
+	s.vOut = avformat_new_stream(s.ofmt, nullptr);
+	if (!s.vOut || avcodec_parameters_from_context(s.vOut->codecpar, s.venc) < 0)
+		return QStringLiteral("Could not create the output video stream.");
+	s.vOut->time_base = s.venc->time_base;
+	return {};
+}
+
+// Open the file and write the container header. Call once every stream has been
+// added — a stream added after this is not in the file.
+//
+// +faststart moves the MP4 index to the front so the file plays before it has
+// fully downloaded. Three of the four paths asked for it and the timeline path
+// did not, which is precisely the kind of difference that survives in copies.
+QString openOutputFile(VideoState &s, const ClipExporter::Options &opts, const QByteArray &outPath)
+{
+	if (!(s.ofmt->oformat->flags & AVFMT_NOFILE) &&
+	    avio_open(&s.ofmt->pb, outPath.constData(), AVIO_FLAG_WRITE) < 0)
+		return QStringLiteral("Could not open the output file for writing.");
+	AVDictionary *mux = nullptr;
+	if (opts.format == ClipExporter::Format::Mp4 || opts.format == ClipExporter::Format::Mov)
+		av_dict_set(&mux, "movflags", "+faststart", 0);
+	const int hr = avformat_write_header(s.ofmt, &mux);
+	av_dict_free(&mux);
+	if (hr < 0)
+		return QStringLiteral("Could not start writing the output file.");
+	s.headerWritten = true;
+	return {};
+}
+
 // Applies a compiled post-processing shader to output frames on the export
 // worker thread. YUV420P -> RGBA -> shader -> YUV420P, in place on the frame
 // about to be encoded, so the baked file matches the editor's live preview.
@@ -345,47 +427,15 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 	// the encoder; the per-frame full-image copy is skipped entirely.
 	const bool cropNeeded = (cx != 0 || cy != 0 || cw != s.vdec->width || ch != s.vdec->height);
 
-	// ---- Video encoder ----
-	const char *encName = (opts.format == Format::WebM) ? "libvpx-vp9" : "libx264";
-	const AVCodec *vc = avcodec_find_encoder_by_name(encName);
-	if (!vc)
-		return QStringLiteral("The output video encoder is not available in this build.");
-	s.venc = avcodec_alloc_context3(vc);
-	if (!s.venc)
-		return QStringLiteral("Could not allocate the video encoder.");
-
+	// ---- Video encoder + output container ----
+	// The source's own time base and frame rate: a straight trim re-encodes on
+	// the same clock it decoded from.
 	const AVRational fr = av_guess_frame_rate(s.ifmt, vin, nullptr);
-	s.venc->width = cw;
-	s.venc->height = ch;
-	s.venc->pix_fmt = AV_PIX_FMT_YUV420P;
-	s.venc->time_base = vin->time_base;
-	s.venc->framerate = fr;
-	s.venc->gop_size = (fr.num > 0 && fr.den > 0) ? std::max(1, int(av_q2d(fr) * 2.0)) : 60;
-
-	// ---- Output container ----
-	if (avformat_alloc_output_context2(&s.ofmt, nullptr, nullptr, out.constData()) < 0 || !s.ofmt)
-		return QStringLiteral("Could not create the output file.");
-	if (s.ofmt->oformat->flags & AVFMT_GLOBALHEADER)
-		s.venc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-
-	if (opts.format == Format::WebM) {
-		s.venc->bit_rate = 0; // constant-quality VP9
-		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
-		av_opt_set(s.venc->priv_data, "deadline", "good", 0);
-		av_opt_set_int(s.venc->priv_data, "cpu-used", 5, 0);
-		av_opt_set(s.venc->priv_data, "row-mt", "1", 0);
-	} else {
-		av_opt_set(s.venc->priv_data, "preset", "veryfast", 0);
-		av_opt_set(s.venc->priv_data, "profile", "high", 0);
-		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
-	}
-	if (avcodec_open2(s.venc, vc, nullptr) < 0)
-		return QStringLiteral("Could not open the video encoder.");
-
-	s.vOut = avformat_new_stream(s.ofmt, nullptr);
-	if (!s.vOut || avcodec_parameters_from_context(s.vOut->codecpar, s.venc) < 0)
-		return QStringLiteral("Could not create the output video stream.");
-	s.vOut->time_base = s.venc->time_base;
+	if (const QString e = openVideoEncoder(
+		    s, opts, out, cw, ch, vin->time_base, fr,
+		    (fr.num > 0 && fr.den > 0) ? std::max(1, int(av_q2d(fr) * 2.0)) : 60);
+	    !e.isEmpty())
+		return e;
 
 	if (ain) {
 		s.aOut = avformat_new_stream(s.ofmt, nullptr);
@@ -404,20 +454,8 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 		return QStringLiteral("Out of memory.");
 
 	// ---- Open + write header (+faststart for MP4) ----
-	if (!(s.ofmt->oformat->flags & AVFMT_NOFILE)) {
-		if (avio_open(&s.ofmt->pb, out.constData(), AVIO_FLAG_WRITE) < 0)
-			return QStringLiteral("Could not open the output file for writing.");
-	}
-	{
-		AVDictionary *mux = nullptr;
-		if (opts.format == Format::Mp4 || opts.format == Format::Mov)
-			av_dict_set(&mux, "movflags", "+faststart", 0);
-		int hr = avformat_write_header(s.ofmt, &mux);
-		av_dict_free(&mux);
-		if (hr < 0)
-			return QStringLiteral("Could not start writing the output file.");
-	}
-	s.headerWritten = true;
+	if (const QString e = openOutputFile(s, opts, out); !e.isEmpty())
+		return e;
 
 	// ---- Trim range in each stream's time base ----
 	const int64_t startV = av_rescale_q(opts.startMs, {1, 1000}, vin->time_base);
@@ -689,46 +727,13 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 	const bool cropNeeded = (cx != 0 || cy != 0 || cw != s.vdec->width || ch != s.vdec->height);
 
 	// ---- Video encoder ----
-	const char *encName = (opts.format == Format::WebM) ? "libvpx-vp9" : "libx264";
-	const AVCodec *vc = avcodec_find_encoder_by_name(encName);
-	if (!vc)
-		return QStringLiteral("The output video encoder is not available in this build.");
-	s.venc = avcodec_alloc_context3(vc);
-	if (!s.venc)
-		return QStringLiteral("Could not allocate the video encoder.");
-
+	// Same clock as the source: the cuts are re-timed by pts, not by the base.
 	const AVRational fr = av_guess_frame_rate(s.ifmt, vin, nullptr);
-	s.venc->width = cw;
-	s.venc->height = ch;
-	s.venc->pix_fmt = AV_PIX_FMT_YUV420P;
-	s.venc->time_base = vin->time_base;
-	s.venc->framerate = fr;
-	s.venc->gop_size = (fr.num > 0 && fr.den > 0) ? std::max(1, int(av_q2d(fr) * 2.0)) : 60;
-
-	// ---- Output container ----
-	if (avformat_alloc_output_context2(&s.ofmt, nullptr, nullptr, out.constData()) < 0 || !s.ofmt)
-		return QStringLiteral("Could not create the output file.");
-	if (s.ofmt->oformat->flags & AVFMT_GLOBALHEADER)
-		s.venc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-
-	if (opts.format == Format::WebM) {
-		s.venc->bit_rate = 0; // constant-quality VP9
-		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
-		av_opt_set(s.venc->priv_data, "deadline", "good", 0);
-		av_opt_set_int(s.venc->priv_data, "cpu-used", 5, 0);
-		av_opt_set(s.venc->priv_data, "row-mt", "1", 0);
-	} else {
-		av_opt_set(s.venc->priv_data, "preset", "veryfast", 0);
-		av_opt_set(s.venc->priv_data, "profile", "high", 0);
-		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
-	}
-	if (avcodec_open2(s.venc, vc, nullptr) < 0)
-		return QStringLiteral("Could not open the video encoder.");
-
-	s.vOut = avformat_new_stream(s.ofmt, nullptr);
-	if (!s.vOut || avcodec_parameters_from_context(s.vOut->codecpar, s.venc) < 0)
-		return QStringLiteral("Could not create the output video stream.");
-	s.vOut->time_base = s.venc->time_base;
+	if (const QString e = openVideoEncoder(
+		    s, opts, out, cw, ch, vin->time_base, fr,
+		    (fr.num > 0 && fr.den > 0) ? std::max(1, int(av_q2d(fr) * 2.0)) : 60);
+	    !e.isEmpty())
+		return e;
 
 	// ---- Audio: decode → atempo per cut → one continuous AAC track ----
 	AudioRetimer retimer;
@@ -760,20 +765,8 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 		return QStringLiteral("Out of memory.");
 
 	// ---- Open + write header (+faststart for MP4) ----
-	if (!(s.ofmt->oformat->flags & AVFMT_NOFILE)) {
-		if (avio_open(&s.ofmt->pb, out.constData(), AVIO_FLAG_WRITE) < 0)
-			return QStringLiteral("Could not open the output file for writing.");
-	}
-	{
-		AVDictionary *mux = nullptr;
-		if (opts.format == Format::Mp4 || opts.format == Format::Mov)
-			av_dict_set(&mux, "movflags", "+faststart", 0);
-		int hr = avformat_write_header(s.ofmt, &mux);
-		av_dict_free(&mux);
-		if (hr < 0)
-			return QStringLiteral("Could not start writing the output file.");
-	}
-	s.headerWritten = true;
+	if (const QString e = openOutputFile(s, opts, out); !e.isEmpty())
+		return e;
 
 	// ---- Shared encode helpers ----
 	AVPacket *pkt = av_packet_alloc();
@@ -1091,41 +1084,13 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 	// Output container + H.264/VP9 encoder at the canvas size (VideoState owns
 	// the output side; its input fields stay null).
 	VideoState s;
-	const char *encName = (opts.format == Format::WebM) ? "libvpx-vp9" : "libx264";
-	const AVCodec *vc = avcodec_find_encoder_by_name(encName);
-	if (!vc)
-		return QStringLiteral("The output video encoder is not available in this build.");
-	s.venc = avcodec_alloc_context3(vc);
-	if (!s.venc)
-		return QStringLiteral("Could not allocate the video encoder.");
-	s.venc->width = cw;
-	s.venc->height = ch;
-	s.venc->pix_fmt = AV_PIX_FMT_YUV420P;
-	s.venc->time_base = AVRational{1, 90000}; // common output tick (multi-source)
-	s.venc->framerate = fr;
-	s.venc->gop_size = (fr.num > 0 && fr.den > 0) ? std::max(1, int(av_q2d(fr) * 2.0)) : 60;
-
-	if (avformat_alloc_output_context2(&s.ofmt, nullptr, nullptr, out.constData()) < 0 || !s.ofmt)
-		return QStringLiteral("Could not create the output file.");
-	if (s.ofmt->oformat->flags & AVFMT_GLOBALHEADER)
-		s.venc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-	if (opts.format == Format::WebM) {
-		s.venc->bit_rate = 0;
-		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
-		av_opt_set(s.venc->priv_data, "deadline", "good", 0);
-		av_opt_set_int(s.venc->priv_data, "cpu-used", 5, 0);
-		av_opt_set(s.venc->priv_data, "row-mt", "1", 0);
-	} else {
-		av_opt_set(s.venc->priv_data, "preset", "veryfast", 0);
-		av_opt_set(s.venc->priv_data, "profile", "high", 0);
-		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
-	}
-	if (avcodec_open2(s.venc, vc, nullptr) < 0)
-		return QStringLiteral("Could not open the video encoder.");
-	s.vOut = avformat_new_stream(s.ofmt, nullptr);
-	if (!s.vOut || avcodec_parameters_from_context(s.vOut->codecpar, s.venc) < 0)
-		return QStringLiteral("Could not create the output video stream.");
-	s.vOut->time_base = s.venc->time_base;
+	// A common 90 kHz tick rather than any one source's: the cuts can come from
+	// files with different time bases.
+	if (const QString e = openVideoEncoder(
+		    s, opts, out, cw, ch, AVRational{1, 90000}, fr,
+		    (fr.num > 0 && fr.den > 0) ? std::max(1, int(av_q2d(fr) * 2.0)) : 60);
+	    !e.isEmpty())
+		return e;
 
 	// Audio: one retimer switched between sources — only if EVERY used source
 	// has an audio stream (otherwise a gap would desync; export video-only).
@@ -1163,20 +1128,8 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 	if (av_frame_get_buffer(s.cropFrame, 0) < 0)
 		return QStringLiteral("Out of memory.");
 
-	if (!(s.ofmt->oformat->flags & AVFMT_NOFILE)) {
-		if (avio_open(&s.ofmt->pb, out.constData(), AVIO_FLAG_WRITE) < 0)
-			return QStringLiteral("Could not open the output file for writing.");
-	}
-	{
-		AVDictionary *mux = nullptr;
-		if (opts.format == Format::Mp4 || opts.format == Format::Mov)
-			av_dict_set(&mux, "movflags", "+faststart", 0);
-		int hr = avformat_write_header(s.ofmt, &mux);
-		av_dict_free(&mux);
-		if (hr < 0)
-			return QStringLiteral("Could not start writing the output file.");
-	}
-	s.headerWritten = true;
+	if (const QString e = openOutputFile(s, opts, out); !e.isEmpty())
+		return e;
 
 	AVPacket *pkt = av_packet_alloc();
 	AVFrame *frame = av_frame_alloc();
@@ -1469,48 +1422,17 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 
 	// ---- Output container + encoder (mirrors the multi-source path) -------
 	VideoState s;
-	const char *encName = (opts.format == Format::WebM) ? "libvpx-vp9" : "libx264";
-	const AVCodec *vc = avcodec_find_encoder_by_name(encName);
-	if (!vc)
-		return QStringLiteral("The output video encoder is not available in this build.");
-	s.venc = avcodec_alloc_context3(vc);
-	if (!s.venc)
-		return QStringLiteral("Could not allocate the video encoder.");
-	s.venc->width = cw;
-	s.venc->height = ch;
-	s.venc->pix_fmt = AV_PIX_FMT_YUV420P;
-	s.venc->time_base = AVRational{1, 90000};
-	s.venc->framerate = av_d2q(fps, 1000000);
-	s.venc->gop_size = std::max(1, int(fps * 2.0));
-
 	const QByteArray out = outPath.toUtf8();
-	if (avformat_alloc_output_context2(&s.ofmt, nullptr, nullptr, out.constData()) < 0 || !s.ofmt)
-		return QStringLiteral("Could not create the output file.");
-	if (s.ofmt->oformat->flags & AVFMT_GLOBALHEADER)
-		s.venc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-	if (opts.format == Format::WebM) {
-		s.venc->bit_rate = 0;
-		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
-		av_opt_set(s.venc->priv_data, "deadline", "good", 0);
-		av_opt_set_int(s.venc->priv_data, "cpu-used", 5, 0);
-		av_opt_set(s.venc->priv_data, "row-mt", "1", 0);
-	} else {
-		av_opt_set(s.venc->priv_data, "preset", "veryfast", 0);
-		av_opt_set(s.venc->priv_data, "profile", "high", 0);
-		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
-	}
-	if (avcodec_open2(s.venc, vc, nullptr) < 0)
-		return QStringLiteral("Could not open the video encoder.");
-	s.vOut = avformat_new_stream(s.ofmt, nullptr);
-	if (!s.vOut || avcodec_parameters_from_context(s.vOut->codecpar, s.venc) < 0)
-		return QStringLiteral("Could not create the output video stream.");
-	s.vOut->time_base = s.venc->time_base;
-	if (!(s.ofmt->oformat->flags & AVFMT_NOFILE) &&
-	    avio_open(&s.ofmt->pb, out.constData(), AVIO_FLAG_WRITE) < 0)
-		return QStringLiteral("Could not open the output file for writing.");
-	if (avformat_write_header(s.ofmt, nullptr) < 0)
-		return QStringLiteral("Could not write the output header.");
-	s.headerWritten = true;
+	// The timeline sets its own frame rate, so the GOP comes from that rather
+	// than from any source file.
+	if (const QString e = openVideoEncoder(s, opts, out, cw, ch, AVRational{1, 90000},
+					       av_d2q(fps, 1000000), std::max(1, int(fps * 2.0)));
+	    !e.isEmpty())
+		return e;
+	// This path used to write its header by hand, and was the only one that did
+	// not ask for +faststart. Going through the shared helper fixes that.
+	if (const QString e = openOutputFile(s, opts, out); !e.isEmpty())
+		return e;
 
 	// RGBA (composited) -> YUV420P (encoder).
 	SwsContext *toYuv = sws_getContext(cw, ch, AV_PIX_FMT_RGBA, cw, ch, AV_PIX_FMT_YUV420P,

@@ -7,6 +7,7 @@
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QKeyEvent>
+#include <QHash>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
@@ -473,7 +474,7 @@ TimelineView::HeaderHit TimelineView::headerHitAt(int track, const QPoint &p) co
 	return HeaderHit::None;
 }
 
-void TimelineView::showTrackMenu(int track, const QPoint &globalPos)
+void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOutMs)
 {
 	if (track < 0 || track >= model_.tracks.size())
 		return;
@@ -481,6 +482,24 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos)
 	const bool video = t.kind == TlTrack::Kind::Video;
 
 	QMenu menu(this);
+	// An effect track's whole purpose is to carry effects, so putting one on it
+	// is the first thing its menu should offer. The submenu lists the types
+	// directly: choosing one is otherwise "add a Brightness, then change it".
+	QMenu *addFxMenu = nullptr;
+	QHash<QAction *, int> addFxActions;
+	if (t.kind == TlTrack::Kind::Effect && !t.locked) {
+		addFxMenu = menu.addMenu(QStringLiteral("Add effect"));
+		for (int i = 0; i < kFxTypeCount; ++i) {
+			const FxType ft = FxType(i);
+			// Inverse Selection is configured in the Spotlight panel, not by
+			// dropping a clip, so offering it here would lead nowhere.
+			if (ft == FxType::InverseSelection)
+				continue;
+			addFxActions.insert(addFxMenu->addAction(QString::fromLatin1(fxTypeName(ft))),
+					    i);
+		}
+		menu.addSeparator();
+	}
 	QAction *lock = menu.addAction(t.locked ? QStringLiteral("Unlock track")
 						: QStringLiteral("Lock track"));
 	QAction *hide = video ? menu.addAction(t.hidden ? QStringLiteral("Show track")
@@ -508,6 +527,10 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos)
 	QAction *chosen = menu.exec(globalPos);
 	if (!chosen)
 		return;
+	if (const auto it = addFxActions.constFind(chosen); it != addFxActions.constEnd()) {
+		addEffectClipAt(track, atOutMs, FxType(it.value()));
+		return;
+	}
 	if (chosen == lock) {
 		t.locked = !t.locked;
 	} else if (hide && chosen == hide) {
@@ -1288,7 +1311,7 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 		if (hTrack < 0)
 			return;
 		if (e->button() == Qt::RightButton) {
-			showTrackMenu(hTrack, e->globalPosition().toPoint());
+			showTrackMenu(hTrack, e->globalPosition().toPoint(), playheadMs_);
 			return;
 		}
 		if (e->button() != Qt::LeftButton)
@@ -1322,6 +1345,11 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 			emit selectionChanged(selTrack_, selClip_);
 			update();
 			showClipMenu(track, clip, e->globalPosition().toPoint(), xToMs(pos.x()));
+		} else if (track >= 0) {
+			// Empty space on a lane used to do nothing on right-click. The
+			// track's menu is what you want there -- and on an effect track
+			// it is how you add an effect where you clicked.
+			showTrackMenu(track, e->globalPosition().toPoint(), xToMs(pos.x()));
 		}
 		return;
 	}
@@ -2060,6 +2088,35 @@ void TimelineView::splitClip(int track, int clip, qint64 atOutMs)
 	update();
 	emit selectionChanged(track, selClip_);
 	commitEdit();
+}
+
+// Put a new effect clip on `track` starting at `atOutMs`. Used by the effect
+// track's context menu, so the clip lands on the track you right-clicked and at
+// the point you clicked -- not on whichever track a generic "add" would pick.
+void TimelineView::addEffectClipAt(int track, qint64 atOutMs, FxType type)
+{
+	if (track < 0 || track >= model_.tracks.size())
+		return;
+	TlTrack &t = model_.tracks[track];
+	if (t.locked || t.kind != TlTrack::Kind::Effect)
+		return;
+	TlClip c;
+	c.type = TlClip::Type::Effect;
+	c.srcStartMs = 0;
+	c.srcEndMs = 3000; // freely stretchable, like a caption
+	c.outStartMs = std::max<qint64>(0, atOutMs);
+	c.fx.type = type;
+	c.fx.params = fxDefaults(type);
+	t.clips.append(c);
+	selTrack_ = track;
+	selClip_ = t.clips.size() - 1;
+	extraSel_.clear();
+	selTransition_ = false;
+	clampView();
+	updateGeometry();
+	update();
+	emit selectionChanged(selTrack_, selClip_);
+	commitEdit(); // repaints the preview and records one undo step
 }
 
 void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qint64 atOutMs)

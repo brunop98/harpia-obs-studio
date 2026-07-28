@@ -441,6 +441,18 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		// falls inside it, so the pose and keyframe readout the Inspector shows
 		// have to follow along live.
 		syncClipInspector();
+		// The composed picture depends on the clips, so a change to them has to
+		// re-render it. Dragging and trimming got away without this because the
+		// mouse is also scrubbing, which refreshes the preview as a side effect
+		// — but DELETING does not scrub, so removing a clip (an effect clip
+		// most visibly, since it grades everything under it) left the old frame
+		// on screen until something else happened to repaint it.
+		//
+		// Through requestPreview rather than rendering here: this signal fires
+		// on every mouse-move of a drag, and requestPreview renders the first
+		// one at once, paces the rest, and keeps only the newest.
+		if (fullEdit())
+			requestPreview(-1, timelinePlayheadMs());
 		scheduleSnapshot();
 	});
 	// A finished timeline action closes its undo entry at once. Without this,

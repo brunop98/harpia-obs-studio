@@ -86,6 +86,8 @@ public:
 	// Cut every unlocked clip the playhead runs through, on every track.
 	void splitAtPlayhead();
 	void deleteSelected(); // every selected clip, honouring per-track ripple
+	// Add an effect clip to a specific effect track at a specific time.
+	void addEffectClipAt(int track, qint64 atOutMs, FxType type);
 	// Markers: add one at the playhead, or remove the one already there.
 	void toggleMarkerAtPlayhead();
 	// Nearest marker before/after `fromMs`, or -1 when there is none that way.
@@ -254,7 +256,8 @@ private:
 	enum class HeaderHit { None, Lock, Hide, Mute };
 	QRect headerToggleRect(int track, HeaderHit which) const;
 	HeaderHit headerHitAt(int track, const QPoint &p) const;
-	void showTrackMenu(int track, const QPoint &globalPos);
+	// `atOutMs` is where the new-effect entries place their clip.
+	void showTrackMenu(int track, const QPoint &globalPos, qint64 atOutMs);
 	// Every selected clip as (track, clip), primary first, in timeline order.
 	QVector<QPair<int, int>> selectedPairs() const;
 

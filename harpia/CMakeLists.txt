@@ -85,6 +85,8 @@ target_sources(
     core/EncoderFactory.hpp
     core/RecordingController.cpp
     core/RecordingController.hpp
+    core/RegionWatch.cpp
+    core/RegionWatch.hpp
     core/Remuxer.cpp
     core/Remuxer.hpp
     core/ShareExporter.cpp

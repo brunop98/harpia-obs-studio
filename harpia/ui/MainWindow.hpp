@@ -3,6 +3,7 @@
 #include "core/AudioManager.hpp"
 #include "core/CaptureManager.hpp"
 #include "core/RecordingController.hpp"
+#include "core/RegionWatch.hpp"
 #include "core/WebcamRecorder.hpp"
 #include "library/ClipLibrary.hpp"
 #include "library/ThumbnailCache.hpp"
@@ -11,6 +12,7 @@
 #include "platform/IdleMonitor.hpp"
 
 #include <QHash>
+#include <QPoint>
 #include <QMainWindow>
 #include <QSize>
 #include <cstdint>
@@ -116,6 +118,7 @@ private slots:
 	void refreshWebcamRow(); // populate/reflect the webcam device combo
 	void onRegionChanged(const CaptureRegion &region);
 	void onIdleSettingChanged();
+	void onRegionLeaveSettingChanged();
 	void onCountdownSettingChanged();
 	void onAudioChanged();
 	void onPresetChanged();
@@ -221,7 +224,19 @@ private:
 	QComboBox *monitorCombo_ = nullptr; // which display to record (owns preset.monitorIndex)
 	void reloadMonitorCombo();          // refresh the display list, keep selection
 	void applyMonitorIndex(int index);  // persist + re-anchor capture/canvas/overlays
-	QComboBox *idleCombo_ = nullptr; // idle auto-pause timeout; first item = Off
+	QComboBox *idleCombo_ = nullptr;
+	// Region-mode-only auto-stop. See RegionWatch.
+	QComboBox *regionLeaveCombo_ = nullptr;
+	QWidget *regionLeaveGroup_ = nullptr;
+	bool regionLeaveNarrow_ = false; // the window is too narrow for this row
+	RegionWatch regionWatch_;
+	// Screen geometry resolved once when the watch arms; see tickRegionWatch.
+	bool regionWatchArmed_ = false;
+	QPoint regionWatchOrigin_;
+	double regionWatchDpr_ = 1.0;
+	void updateRegionLeaveVisibility();
+	void tickRegionWatch();
+	QTimer *regionWatchTimer_ = nullptr; // idle auto-pause timeout; first item = Off
 	QWidget *idleGroup_ = nullptr;   // label + combo, hidden when very narrow
 	QComboBox *countdownCombo_ = nullptr;
 	QWidget *countdownGroup_ = nullptr; // label + combo, hidden when narrow

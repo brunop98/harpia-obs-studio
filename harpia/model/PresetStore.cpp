@@ -41,6 +41,7 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_int(d, "audio_bitrate_kbps", p.audioBitrateKbps);
 	obs_data_set_string(d, "filename_template", p.filenameTemplate.c_str());
 	obs_data_set_int(d, "idle_timeout_seconds", p.idleTimeoutSeconds);
+	obs_data_set_int(d, "region_leave_stop_seconds", p.regionLeaveStopSeconds);
 	obs_data_set_bool(d, "pause_on_focus_loss", p.pauseOnFocusLoss);
 	obs_data_set_int(d, "recording_counter", p.recordingCounter);
 	obs_data_set_int(d, "countdown_seconds", p.countdownSeconds);
@@ -107,6 +108,11 @@ Preset presetFromData(obs_data_t *d)
 	p.audioBitrateKbps = (int)obs_data_get_int(d, "audio_bitrate_kbps");
 	p.filenameTemplate = obs_data_get_string(d, "filename_template");
 	p.idleTimeoutSeconds = (int)obs_data_get_int(d, "idle_timeout_seconds");
+	// Default -1 (off), not obs_data_get_int's 0 — 0 here means "stop the moment
+	// the pointer leaves", so a preset written before this existed would come
+	// back with the feature not merely on but at its most aggressive setting.
+	obs_data_set_default_int(d, "region_leave_stop_seconds", -1);
+	p.regionLeaveStopSeconds = (int)obs_data_get_int(d, "region_leave_stop_seconds");
 	p.pauseOnFocusLoss = obs_data_get_bool(d, "pause_on_focus_loss");
 	if (obs_data_has_user_value(d, "recording_counter"))
 		p.recordingCounter = (int)obs_data_get_int(d, "recording_counter");

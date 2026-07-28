@@ -1,5 +1,7 @@
 #include "MainWindow.hpp"
 
+#include "core/Logger.hpp"
+
 #include "UiIcons.hpp"
 #include "UiText.hpp"
 
@@ -70,6 +72,7 @@
 #include <QProcess>
 #include <QPushButton>
 #include <QRunnable>
+#include <QCursor>
 #include <QScreen>
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -282,6 +285,19 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		"Auto-pause the recording after this many seconds without mouse/keyboard "
 		"input, and resume on input. Off records regardless of activity."));
 
+	// Region recording only: stop once the pointer has been outside the region
+	// long enough. "Off" is -1 rather than 0 because 0 is a real choice here
+	// meaning "the moment it leaves".
+	regionLeaveCombo_ = new QComboBox(central);
+	regionLeaveCombo_->addItem(QStringLiteral("Off"), kRegionWatchOff);
+	for (int s : kRegionWatchSeconds)
+		regionLeaveCombo_->addItem(QStringLiteral("%1 s").arg(s), s);
+	regionLeaveCombo_->setFixedWidth(kBehaviorComboW);
+	regionLeaveCombo_->setToolTip(QStringLiteral(
+		"Stop the recording once the mouse pointer has been outside the "
+		"recording region for this long. 0 s stops as soon as it leaves. "
+		"Only applies to Custom Region capture."));
+
 	auto behaviorRow = [&](const QString &text, QWidget *control) -> QWidget * {
 		auto *roww = new QWidget(central);
 		auto *h = new QHBoxLayout(roww);
@@ -303,6 +319,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	behaviorRow(QStringLiteral("Focus app"), appCombo_);
 	behaviorRow(QStringLiteral("Webcam"), webcamCombo_);
 	idleGroup_ = behaviorRow(QStringLiteral("Pause when idle"), idleCombo_);
+	regionLeaveGroup_ = behaviorRow(QStringLiteral("Stop off-region"), regionLeaveCombo_);
 	behaviorCol->addStretch(1);
 	middle->addLayout(behaviorCol);
 
@@ -536,6 +553,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(errorLogsButton_, &QPushButton::clicked, this, &MainWindow::onOpenErrorLogs);
 	connect(captureModeCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onCaptureModeChanged);
 	connect(idleCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onIdleSettingChanged);
+	connect(regionLeaveCombo_, &QComboBox::currentIndexChanged, this,
+		&MainWindow::onRegionLeaveSettingChanged);
 	connect(countdownCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onCountdownSettingChanged);
 	connect(presetCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onPresetChanged);
 	connect(presetCombo_, &QComboBox::customContextMenuRequested, this, &MainWindow::showPresetMenu);
@@ -608,6 +627,14 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	idleTimer_->setInterval(1000);
 	connect(idleTimer_, &QTimer::timeout, this, &MainWindow::tickIdle);
 	idleTimer_->start();
+
+	// Faster than the idle tick: with the timeout set to 0 s the stop should
+	// feel like it happened when the pointer crossed the edge, and a one-second
+	// poll would be up to a second late.
+	regionWatchTimer_ = new QTimer(this);
+	regionWatchTimer_->setInterval(250);
+	connect(regionWatchTimer_, &QTimer::timeout, this, &MainWindow::tickRegionWatch);
+	regionWatchTimer_->start();
 
 	// Live audio meters refresh often for a responsive VU bar.
 	meterTimer_ = new QTimer(this);
@@ -704,7 +731,7 @@ void MainWindow::setLayoutParams(const MainLayoutParams &p)
 		monitorCombo_->setMinimumWidth(p.monitorComboMinW);
 		monitorCombo_->setMaximumWidth(p.monitorComboMaxW);
 	}
-	for (QComboBox *c : {appCombo_, webcamCombo_, idleCombo_}) {
+	for (QComboBox *c : {appCombo_, webcamCombo_, idleCombo_, regionLeaveCombo_}) {
 		if (c)
 			c->setFixedWidth(p.behaviorComboW);
 	}
@@ -791,6 +818,12 @@ void MainWindow::applyResponsiveLayout(int width)
 		countdownGroup_->setVisible(width >= 700);
 	if (idleGroup_)
 		idleGroup_->setVisible(width >= 640);
+	// This row has two reasons to be hidden — the window is narrow, or we are
+	// not in Region mode — and they arrive from different places. Record the
+	// width verdict and let one function combine them, so whichever fires last
+	// cannot undo the other.
+	regionLeaveNarrow_ = width < 640;
+	updateRegionLeaveVisibility();
 }
 
 const Preset &MainWindow::activePreset() const
@@ -1895,6 +1928,7 @@ void MainWindow::onCaptureModeChanged()
 		capture_.setRegion(currentRegion_);
 	}
 	updateRegionToolVisibility();
+	updateRegionLeaveVisibility();
 	updateButtons();
 	refreshReadiness();
 }
@@ -2170,6 +2204,73 @@ void MainWindow::onIdleSettingChanged()
 		presets_.upsert(updated);
 }
 
+// Polled rather than event-driven: the pointer spends most of this feature's
+// life over OTHER applications' windows, where no Qt event of ours fires. A
+// quarter second keeps the 0 s setting feeling immediate without the cost
+// mattering — it is one cursor-position query.
+void MainWindow::tickRegionWatch()
+{
+	regionWatch_.setTimeoutSeconds(activePreset().regionLeaveStopSeconds);
+
+	// Armed only while a region recording is actually running. Not while
+	// starting or stopping (the region and the recorder are mid-change), and
+	// not while paused — a paused recording is one the user has deliberately
+	// suspended, and ending it because they also walked away would be a
+	// surprise they cannot undo.
+	const bool armed = captureMode_ == CaptureMode::Region && currentRegion_.enabled &&
+			   recorder_.isRecording() && !recorder_.isPaused() && !starting_ && !stopping_;
+
+	bool inside = true;
+	if (armed) {
+		// Resolve the screen once per recording, not four times a second: on
+		// Windows screenForActivePreset() enumerates monitors and does GDI
+		// lookups to match OBS's display order to Qt's, which is far too much
+		// to repeat on a poll. The monitor cannot change under a running
+		// recording, so caching it while armed is safe.
+		if (!regionWatchArmed_) {
+			const QScreen *scr = screenForActivePreset();
+			regionWatchOrigin_ = scr ? scr->geometry().topLeft() : QPoint(0, 0);
+			regionWatchDpr_ = scr ? scr->devicePixelRatio() : 1.0;
+			regionWatchArmed_ = true;
+		}
+		inside = RegionWatch::contains(currentRegion_,
+					       RegionWatch::toRegionSpace(QCursor::pos(),
+									  regionWatchOrigin_,
+									  regionWatchDpr_));
+	} else {
+		regionWatchArmed_ = false;
+	}
+
+	if (regionWatch_.tick(armed, inside, QDateTime::currentMSecsSinceEpoch())) {
+		Logger::instance().log(LogLevel::Info,
+				       "Auto-stop: pointer left the recording region for " +
+					       std::to_string(regionWatch_.timeoutSeconds()) +
+					       "s — stopping");
+		beginStop();
+	}
+}
+
+void MainWindow::onRegionLeaveSettingChanged()
+{
+	const Preset *cur = presets_.find(activePresetId_);
+	if (!cur)
+		return;
+	Preset updated = *cur;
+	updated.regionLeaveStopSeconds = regionLeaveCombo_->currentData().toInt();
+	if (updated.regionLeaveStopSeconds != cur->regionLeaveStopSeconds)
+		presets_.upsert(updated);
+}
+
+// The control only means anything for Custom Region capture, so it is hidden
+// rather than disabled in the other modes — a greyed-out row invites you to
+// wonder what would enable it.
+void MainWindow::updateRegionLeaveVisibility()
+{
+	if (regionLeaveGroup_)
+		regionLeaveGroup_->setVisible(captureMode_ == CaptureMode::Region &&
+					      (!regionLeaveNarrow_));
+}
+
 void MainWindow::onCountdownSettingChanged()
 {
 	// Persist the countdown onto the active preset (read at record start).
@@ -2239,6 +2340,11 @@ void MainWindow::syncIdleControls()
 		idx = idleCombo_->count() - 1;
 	}
 	idleCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
+
+	QSignalBlocker b2(regionLeaveCombo_);
+	const int ri = regionLeaveCombo_->findData(p.regionLeaveStopSeconds);
+	regionLeaveCombo_->setCurrentIndex(ri >= 0 ? ri : 0); // unknown value reads as Off
+	updateRegionLeaveVisibility();
 
 	// The countdown control lives on the toolbar too; keep it in sync with the
 	// active preset.
@@ -2597,6 +2703,7 @@ void MainWindow::updateButtons()
 	// auto-paused would strand it paused forever (tickIdle bails on timeout <= 0
 	// and never resumes).
 	idleCombo_->setEnabled(!locked);
+	regionLeaveCombo_->setEnabled(!locked);
 	countdownCombo_->setEnabled(!locked);
 
 	updateFloatingControls();

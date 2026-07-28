@@ -121,6 +121,7 @@ Preset Preset::makeDefault(const std::string &outputFolder)
 	p.audioBitrateKbps = 160;
 	p.filenameTemplate = "Recording_{Year}-{Month}-{Day}_{Hour}-{Minute}-{Second}";
 	p.idleTimeoutSeconds = 0;
+	p.regionLeaveStopSeconds = -1;
 	p.countdownSeconds = 0; // countdown is opt-in — never on by default
 	return p;
 }

@@ -182,6 +182,11 @@ private:
 	void applySpeed(double value);
 	void syncSpeedControls(double value); // set slider + spin without re-applying
 
+	// Preview request pacing (see requestPreview in the .cpp): render the first
+	// request at once, then at most one per timer interval, always the newest.
+	void requestPreview(int sourceId, qint64 ms);
+	void renderPendingPreview();
+
 	// Undo/redo history (snapshot-based, coalesced via histTimer_).
 	EditorSnapshot snapshot() const;
 	void restoreSnapshot(const EditorSnapshot &s);

@@ -1746,18 +1746,14 @@ void VideoEditorWindow::onTimelineScrub(qint64 outMs)
 		stopPlayback();
 	timelineView_->setPlayhead(outMs);
 	cursorTimeLabel_->setText(previewTimeText(outMs));
-	pendingSource_ = -1; // -1 = "composite the timeline" (see onPreviewTick)
-	pendingMs_ = outMs;
-	previewTimer_->start();
+	requestPreview(-1, outMs); // -1 = "composite the timeline"
 }
 
 void VideoEditorWindow::onTimelineHoverScrub(qint64 outMs)
 {
 	if (playing_)
 		return;
-	pendingSource_ = -1;
-	pendingMs_ = outMs;
-	previewTimer_->start();
+	requestPreview(-1, outMs);
 }
 
 // ---- Per-clip transform scripting ----------------------------------------
@@ -4269,11 +4265,8 @@ void VideoEditorWindow::onScrub(qint64 ms)
 		stopPlayback();
 	// Multi-Cut scrubs come from the Output/Source track and carry the segment's
 	// source; Simple-Trim scrubs are always the active source.
-	pendingSource_ = multiCut() ? tracks_->scrubSourceId() : activeSourceId_;
-	pendingMs_ = ms;
 	cursorTimeLabel_->setText(previewTimeText(ms));
-	if (!previewTimer_->isActive())
-		previewTimer_->start();
+	requestPreview(multiCut() ? tracks_->scrubSourceId() : activeSourceId_, ms);
 }
 
 void VideoEditorWindow::onHoverScrub(qint64 ms)
@@ -4282,11 +4275,8 @@ void VideoEditorWindow::onHoverScrub(qint64 ms)
 	// active playback preview.
 	if (!valid_ || playing_)
 		return;
-	pendingSource_ = multiCut() ? tracks_->scrubSourceId() : activeSourceId_;
-	pendingMs_ = ms;
 	cursorTimeLabel_->setText(previewTimeText(ms));
-	if (!previewTimer_->isActive())
-		previewTimer_->start();
+	requestPreview(multiCut() ? tracks_->scrubSourceId() : activeSourceId_, ms);
 }
 
 void VideoEditorWindow::onPlayPause()
@@ -5112,17 +5102,47 @@ void VideoEditorWindow::refreshPreviewFrame()
 		canvas_->setFrame(runShader(lastPreviewRaw_, lastPreviewMs_));
 }
 
+// Render whatever position is pending, right now.
+void VideoEditorWindow::renderPendingPreview()
+{
+	if (pendingMs_ < 0)
+		return;
+	const qint64 ms = pendingMs_;
+	const int src = pendingSource_;
+	pendingMs_ = -1; // consumed before rendering, so a request made DURING the
+			 // decode is seen as new rather than swallowed
+	// src == -1 means "composite the whole timeline at this OUTPUT time"
+	// (Full editing); otherwise it's a single source frame.
+	if (src < 0)
+		showTimelineFrame(ms);
+	else
+		showFrame(src, ms);
+}
+
+// Ask for a preview at `ms`. The first request renders immediately, so a scrub
+// tracks the cursor from the very first pixel; the ones behind it are rate
+// limited to the timer's interval and only the NEWEST survives, so a fast drag
+// never queues up stale frames it would have to catch up on.
+//
+// The timer must never be restarted while requests keep arriving -- restarting a
+// single-shot timer on every mouse-move is exactly how the preview ends up
+// frozen until the mouse stops.
+void VideoEditorWindow::requestPreview(int sourceId, qint64 ms)
+{
+	pendingSource_ = sourceId;
+	pendingMs_ = ms;
+	if (previewTimer_->isActive())
+		return; // still cooling down; the tick will pick up this position
+	renderPendingPreview();
+	previewTimer_->start(); // cooldown before the next one
+}
+
 void VideoEditorWindow::onPreviewTick()
 {
-	if (pendingMs_ >= 0) {
-		// pendingSource_ == -1 means "composite the whole timeline at this
-		// OUTPUT time" (Full editing); otherwise it's a single source frame.
-		if (pendingSource_ < 0)
-			showTimelineFrame(pendingMs_);
-		else
-			showFrame(pendingSource_, pendingMs_);
-	}
-	pendingMs_ = -1;
+	if (pendingMs_ < 0)
+		return; // nothing new arrived while cooling down
+	renderPendingPreview();
+	previewTimer_->start(); // keep pacing while the drag continues
 }
 
 // Re-render whatever the preview is currently showing (after a change that

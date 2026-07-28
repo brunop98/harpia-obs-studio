@@ -25,6 +25,8 @@ public:
 
 	void setVideoSize(int w, int h); // source dimensions (px)
 	void setFrame(const QImage &img);
+	// What is on screen right now (empty before the first frame).
+	const QImage &currentFrame() const { return frame_; }
 
 	void setCropEnabled(bool on);
 	bool cropEnabled() const { return cropEnabled_; }

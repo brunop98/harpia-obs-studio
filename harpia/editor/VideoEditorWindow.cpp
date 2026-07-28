@@ -19,6 +19,8 @@
 #include "script/TransformScript.hpp"
 #include "shader/ShaderRenderer.hpp"
 #include "timeline/TimelineCompositor.hpp"
+#include "ShortcutPanel.hpp"
+#include "ShortcutRegistry.hpp"
 #include "timeline/KeyframeEditor.hpp"
 #include "timeline/TimelineView.hpp"
 #include "timeline/Transitions.hpp"
@@ -644,6 +646,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			timelineView_->zoomToFit();
 	});
 	controls->addWidget(fitBtn_);
+	// View > Keyboard Shortcuts, always available (not just in Full editing):
+	// the panel is the reference for every mode.
+	auto *keysBtn = new QPushButton(QStringLiteral("⌨"), this);
+	keysBtn->setToolTip(QStringLiteral("Keyboard shortcuts (Ctrl+/)"));
+	keysBtn->setFixedWidth(30);
+	connect(keysBtn, &QPushButton::clicked, this, &VideoEditorWindow::openShortcutPanel);
+	controls->addWidget(keysBtn);
 	controls->addStretch(1);
 	infoLabel_ = new QLabel(this);
 	infoLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
@@ -941,18 +950,14 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	histTimer_->setSingleShot(true);
 	histTimer_->setInterval(350);
 	connect(histTimer_, &QTimer::timeout, this, &VideoEditorWindow::captureSnapshot);
-	new QShortcut(QKeySequence::Undo, this, this, &VideoEditorWindow::undo);
-	new QShortcut(QKeySequence::Redo, this, this, &VideoEditorWindow::redo);
-	new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Y), this, this, &VideoEditorWindow::redo);
-	// Spacebar toggles play/pause of the current preview (the assembled output
-	// in Multi-Cut). A window shortcut so it works regardless of which control
-	// has focus.
-	new QShortcut(QKeySequence(Qt::Key_Space), this, this, &VideoEditorWindow::onPlayPause);
-
-	// ---- Full-editing timeline shortcuts --------------------------------
-	// All of them no-op outside Full editing, so they never surprise you in the
-	// other modes. Frame-sized steps come from the project frame rate, so a
-	// nudge always lands on a frame boundary rather than a round number of ms.
+	// ---- Shortcuts -------------------------------------------------------
+	// Every binding is registered rather than hard-wired, so the Keyboard
+	// Shortcuts panel can list it, rebind it live and spot a collision. The
+	// timeline commands no-op outside Full editing, so they never surprise you
+	// in the other modes. Frame-sized steps come from the project frame rate,
+	// so a nudge always lands on a frame boundary rather than a round number
+	// of ms.
+	shortcuts_ = new ShortcutRegistry(this, this);
 	auto onTimeline = [this]() { return fullEdit() && timelineView_; };
 	auto frameMs = [this]() {
 		const double fps = timelineFps();
@@ -963,94 +968,127 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		timelineView_->setPlayhead(t);
 		onTimelineScrub(t);
 	};
-	auto add = [this](QKeySequence k, auto fn) {
-		auto *sc = new QShortcut(k, this);
-		sc->setContext(Qt::WindowShortcut);
-		connect(sc, &QShortcut::activated, this, fn);
+	auto cmd = [this](const char *id, const char *label, const char *category,
+			  QVector<QKeySequence> keys, std::function<void()> fn) {
+		ShortcutCommand c;
+		c.id = QLatin1String(id);
+		c.label = QLatin1String(label);
+		c.category = QLatin1String(category);
+		c.defaults = std::move(keys);
+		c.run = std::move(fn);
+		shortcuts_->addCommand(c);
+	};
+	auto tlCmd = [&](const char *id, const char *label, const char *category,
+			 QVector<QKeySequence> keys, std::function<void()> fn) {
+		cmd(id, label, category, std::move(keys), [onTimeline, fn]() {
+			if (onTimeline())
+				fn();
+		});
 	};
 
-	add(QKeySequence(Qt::Key_S), [this, onTimeline]() {
-		if (onTimeline())
-			timelineView_->splitAtPlayhead();
-	});
-	add(QKeySequence(Qt::CTRL | Qt::Key_K), [this, onTimeline]() {
-		if (onTimeline())
-			timelineView_->splitAtPlayhead();
-	});
-	add(QKeySequence(Qt::CTRL | Qt::Key_A), [this, onTimeline]() {
-		if (onTimeline())
-			timelineView_->selectAllClips();
-	});
-	add(QKeySequence::Copy, [this, onTimeline]() {
-		if (onTimeline())
-			copySelectedClips(false);
-	});
-	add(QKeySequence::Cut, [this, onTimeline]() {
-		if (onTimeline())
-			copySelectedClips(true);
-	});
-	add(QKeySequence::Paste, [this, onTimeline]() {
-		if (onTimeline())
-			pasteClips();
-	});
-	add(QKeySequence(Qt::Key_M), [this, onTimeline]() {
-		if (onTimeline())
-			timelineView_->toggleMarkerAtPlayhead();
-	});
+	cmd("edit.undo", "Undo", "Editing", {QKeySequence::Undo}, [this]() { undo(); });
+	cmd("edit.redo", "Redo", "Editing",
+	    {QKeySequence::Redo, QKeySequence(Qt::CTRL | Qt::Key_Y)}, [this]() { redo(); });
+	cmd("playback.playPause", "Play / Pause", "Playback", {QKeySequence(Qt::Key_Space)},
+	    [this]() { onPlayPause(); });
+	cmd("project.save", "Save project", "Project", {QKeySequence::Save},
+	    [this]() { onSaveProject(); });
+	cmd("project.export", "Export…", "Export", {QKeySequence(Qt::CTRL | Qt::Key_E)},
+	    [this]() { onSave(); });
+	cmd("view.shortcuts", "Keyboard shortcuts…", "View",
+	    {QKeySequence(Qt::CTRL | Qt::Key_Slash)}, [this]() { openShortcutPanel(); });
+	cmd("view.inspector", "Show inspector", "View", {QKeySequence(Qt::CTRL | Qt::Key_I)},
+	    [this]() { revealInspector(); });
+
+	tlCmd("timeline.split", "Split clip at playhead", "Timeline",
+	      {QKeySequence(Qt::Key_S), QKeySequence(Qt::CTRL | Qt::Key_K)},
+	      [this]() { timelineView_->splitAtPlayhead(); });
+	tlCmd("selection.all", "Select all clips", "Selection",
+	      {QKeySequence(Qt::CTRL | Qt::Key_A)}, [this]() { timelineView_->selectAllClips(); });
+	tlCmd("edit.copy", "Copy clips", "Editing", {QKeySequence::Copy},
+	      [this]() { copySelectedClips(false); });
+	tlCmd("edit.cut", "Cut clips", "Editing", {QKeySequence::Cut},
+	      [this]() { copySelectedClips(true); });
+	tlCmd("edit.paste", "Paste clips", "Editing", {QKeySequence::Paste},
+	      [this]() { pasteClips(); });
+	tlCmd("edit.delete", "Delete selection", "Editing",
+	      {QKeySequence(Qt::Key_Delete), QKeySequence(Qt::Key_Backspace)},
+	      [this]() { timelineView_->deleteSelected(); });
+	tlCmd("marker.toggle", "Add / remove marker", "Markers", {QKeySequence(Qt::Key_M)},
+	      [this]() { timelineView_->toggleMarkerAtPlayhead(); });
 	// N, not S — S already splits. (Resolve uses N for the magnet too.)
-	add(QKeySequence(Qt::Key_N), [this, onTimeline]() {
-		if (onTimeline() && snapBtn_)
+	tlCmd("timeline.snap", "Toggle snapping", "Timeline", {QKeySequence(Qt::Key_N)}, [this]() {
+		if (snapBtn_)
 			snapBtn_->toggle();
 	});
+	tlCmd("timeline.fit", "Zoom to fit", "View", {QKeySequence(Qt::Key_F)},
+	      [this]() { timelineView_->zoomToFit(); });
 
 	// Arrows nudge a selection, or step the playhead when nothing is selected —
 	// the same key doing the obvious thing for what you have in hand.
-	auto arrow = [this, onTimeline, frameMs, seekTo](int dir, int frames) {
-		if (!onTimeline())
-			return;
+	auto arrow = [this, frameMs, seekTo](int dir, int frames) {
 		const qint64 step = frameMs() * frames * dir;
 		if (timelineView_->hasSelection())
 			timelineView_->nudgeSelection(step);
 		else
 			seekTo(timelinePlayheadMs() + step);
 	};
-	add(QKeySequence(Qt::Key_Left), [arrow]() { arrow(-1, 1); });
-	add(QKeySequence(Qt::Key_Right), [arrow]() { arrow(+1, 1); });
-	add(QKeySequence(Qt::SHIFT | Qt::Key_Left), [arrow]() { arrow(-1, 10); });
-	add(QKeySequence(Qt::SHIFT | Qt::Key_Right), [arrow]() { arrow(+1, 10); });
+	tlCmd("nudge.left", "Nudge / step back one frame", "Timeline",
+	      {QKeySequence(Qt::Key_Left)}, [arrow]() { arrow(-1, 1); });
+	tlCmd("nudge.right", "Nudge / step forward one frame", "Timeline",
+	      {QKeySequence(Qt::Key_Right)}, [arrow]() { arrow(+1, 1); });
+	tlCmd("nudge.left10", "Nudge / step back ten frames", "Timeline",
+	      {QKeySequence(Qt::SHIFT | Qt::Key_Left)}, [arrow]() { arrow(-1, 10); });
+	tlCmd("nudge.right10", "Nudge / step forward ten frames", "Timeline",
+	      {QKeySequence(Qt::SHIFT | Qt::Key_Right)}, [arrow]() { arrow(+1, 10); });
 
 	// Frame stepping, always the playhead whatever is selected.
-	add(QKeySequence(Qt::Key_Comma), [this, onTimeline, frameMs, seekTo]() {
-		if (onTimeline())
-			seekTo(timelinePlayheadMs() - frameMs());
-	});
-	add(QKeySequence(Qt::Key_Period), [this, onTimeline, frameMs, seekTo]() {
-		if (onTimeline())
-			seekTo(timelinePlayheadMs() + frameMs());
-	});
-	add(QKeySequence(Qt::Key_Home), [this, onTimeline, seekTo]() {
-		if (onTimeline())
-			seekTo(0);
-	});
-	add(QKeySequence(Qt::Key_End), [this, onTimeline, seekTo]() {
-		if (onTimeline())
-			seekTo(timelineView_->durationMs());
-	});
-	// Jump between markers.
-	add(QKeySequence(Qt::CTRL | Qt::Key_Left), [this, onTimeline, seekTo]() {
-		if (!onTimeline())
-			return;
-		const qint64 m = timelineView_->markerNear(timelinePlayheadMs(), false);
-		if (m >= 0)
-			seekTo(m);
-	});
-	add(QKeySequence(Qt::CTRL | Qt::Key_Right), [this, onTimeline, seekTo]() {
-		if (!onTimeline())
-			return;
-		const qint64 m = timelineView_->markerNear(timelinePlayheadMs(), true);
-		if (m >= 0)
-			seekTo(m);
-	});
+	tlCmd("playhead.prevFrame", "Previous frame", "Playback",
+	      {QKeySequence(Qt::Key_Comma)},
+	      [this, frameMs, seekTo]() { seekTo(timelinePlayheadMs() - frameMs()); });
+	tlCmd("playhead.nextFrame", "Next frame", "Playback", {QKeySequence(Qt::Key_Period)},
+	      [this, frameMs, seekTo]() { seekTo(timelinePlayheadMs() + frameMs()); });
+	tlCmd("playhead.start", "Go to start", "Playback", {QKeySequence(Qt::Key_Home)},
+	      [seekTo]() { seekTo(0); });
+	tlCmd("playhead.end", "Go to end", "Playback", {QKeySequence(Qt::Key_End)},
+	      [this, seekTo]() { seekTo(timelineView_->durationMs()); });
+	tlCmd("marker.prev", "Previous marker", "Markers",
+	      {QKeySequence(Qt::CTRL | Qt::Key_Left)}, [this, seekTo]() {
+		      const qint64 m = timelineView_->markerNear(timelinePlayheadMs(), false);
+		      if (m >= 0)
+			      seekTo(m);
+	      });
+	tlCmd("marker.next", "Next marker", "Markers", {QKeySequence(Qt::CTRL | Qt::Key_Right)},
+	      [this, seekTo]() {
+		      const qint64 m = timelineView_->markerNear(timelinePlayheadMs(), true);
+		      if (m >= 0)
+			      seekTo(m);
+	      });
+
+	// Gestures the mouse owns. Listed so the panel is a complete reference,
+	// but not rebindable: the widget reads the mouse directly.
+	shortcuts_->addMouseGesture(QStringLiteral("timeline.zoom"), QStringLiteral("Zoom timeline"),
+				    QStringLiteral("View"), QStringLiteral("Ctrl + Mouse wheel"));
+	shortcuts_->addMouseGesture(QStringLiteral("timeline.pan"), QStringLiteral("Pan timeline"),
+				    QStringLiteral("View"),
+				    QStringLiteral("Shift + Mouse wheel / Middle-drag"));
+	shortcuts_->addMouseGesture(QStringLiteral("preview.zoomClip"),
+				    QStringLiteral("Zoom the selected clip"),
+				    QStringLiteral("Video"),
+				    QStringLiteral("Mouse wheel on the preview"));
+	shortcuts_->addMouseGesture(QStringLiteral("preview.moveClip"),
+				    QStringLiteral("Reposition the selected clip"),
+				    QStringLiteral("Video"), QStringLiteral("Drag on the preview"));
+	shortcuts_->addMouseGesture(QStringLiteral("timeline.fine"),
+				    QStringLiteral("Precise drag (bypass snapping)"),
+				    QStringLiteral("Timeline"), QStringLiteral("Hold Shift"));
+
+	shortcuts_->load(); // apply anything the user rebound previously
+	// Tooltips carry the live binding, so a rebind is visible without opening
+	// the panel.
+	connect(shortcuts_, &ShortcutRegistry::bindingsChanged, this,
+		&VideoEditorWindow::refreshShortcutHints);
+	refreshShortcutHints();
 
 	connect(timeline_, &Timeline::scrub, this, &VideoEditorWindow::onScrub);
 	connect(timeline_, &Timeline::hoverScrub, this, &VideoEditorWindow::onHoverScrub);
@@ -3489,6 +3527,46 @@ void VideoEditorWindow::editSelectedClip(const std::function<void(TlClip &)> &fn
 // copy and pushes each change straight back through updateSelectedClip, which is
 // the same path the Inspector uses — so the preview refreshes and each edit is
 // one undo step. Closing it therefore cannot lose anything.
+// The floating shortcuts panel. Kept once created, so it remembers where it was
+// and what was being searched for.
+void VideoEditorWindow::openShortcutPanel()
+{
+	if (!shortcutPanel_)
+		shortcutPanel_ = new ShortcutPanel(shortcuts_, this);
+	shortcutPanel_->show();
+	shortcutPanel_->raise();
+	shortcutPanel_->activateWindow();
+}
+
+// Put each button's current shortcut in its tooltip. Driven by the registry, so
+// rebinding one updates the tooltip immediately rather than leaving a stale
+// hint baked in at construction.
+void VideoEditorWindow::refreshShortcutHints()
+{
+	if (!shortcuts_)
+		return;
+	struct Hint {
+		QPushButton *btn;
+		const char *id;
+		const char *base;
+	};
+	const Hint hints[] = {
+		{playBtn_, "playback.playPause", "Play / pause the preview"},
+		{undoBtn_, "edit.undo", "Undo"},
+		{redoBtn_, "edit.redo", "Redo"},
+		{snapBtn_, "timeline.snap", nullptr}, // has its own on/off tooltip
+		{fitBtn_, "timeline.fit", "Zoom the timeline out so the whole edit fits"},
+	};
+	for (const Hint &h : hints) {
+		if (!h.btn || !h.base)
+			continue;
+		const QString keys = shortcuts_->displayText(QLatin1String(h.id));
+		h.btn->setToolTip(keys.isEmpty() ? QLatin1String(h.base)
+						 : QStringLiteral("%1 (%2)")
+							   .arg(QLatin1String(h.base), keys));
+	}
+}
+
 void VideoEditorWindow::openKeyframeEditor()
 {
 	if (!timelineView_)

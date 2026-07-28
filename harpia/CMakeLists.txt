@@ -148,6 +148,10 @@ target_sources(
     editor/EditorWidgets.hpp
     editor/TrackEditor.cpp
     editor/TrackEditor.hpp
+    editor/ShortcutRegistry.cpp
+    editor/ShortcutRegistry.hpp
+    editor/ShortcutPanel.cpp
+    editor/ShortcutPanel.hpp
     editor/DevPanel.cpp
     editor/DevPanel.hpp
     editor/AudioRecorder.cpp

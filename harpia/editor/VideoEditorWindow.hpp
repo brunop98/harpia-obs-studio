@@ -94,6 +94,8 @@ class ThumbnailCache;
 class ShaderRenderer;
 class TimelineView;
 class KeyframeEditor;
+class ShortcutRegistry;
+class ShortcutPanel;
 class TransformEvaluator;
 class AudioPreview;
 
@@ -183,6 +185,15 @@ private:
 	// the count label. Callers keep the slider + spin box in sync.
 	void applySpeed(double value);
 	void syncSpeedControls(double value); // set slider + spin without re-applying
+
+	// Every keyboard shortcut, registered rather than hard-wired, so the panel
+	// can list and rebind them live.
+	ShortcutRegistry *shortcuts_ = nullptr;
+	ShortcutPanel *shortcutPanel_ = nullptr;
+	void openShortcutPanel();
+	// Append " (Ctrl+E)" to a button's tooltip from the registry, and keep it
+	// right when the binding changes.
+	void refreshShortcutHints();
 
 	// The floating keyframe editor, created the first time it is asked for and
 	// then kept, so it remembers its size and place.

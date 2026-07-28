@@ -2992,21 +2992,61 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
 		if (!sel)
 			return;
+		// No alpha channel here: the transparency is its own control below, so
+		// two places can't disagree about how see-through the box is.
 		const QColor c = QColorDialog::getColor(sel->text.boxColor, this,
-							QStringLiteral("Box colour"),
-							QColorDialog::ShowAlphaChannel);
+							QStringLiteral("Box colour"));
 		if (c.isValid())
 			editSelectedClip([c](TlClip &cl) { cl.text.boxColor = c; });
 	});
 
-	boxPadSpin_ = new QSpinBox(textBox_);
-	boxPadSpin_->setRange(0, 100);
-	boxPadSpin_->setKeyboardTracking(false);
-	tForm->addRow(QStringLiteral("Box padding"), boxPadSpin_);
-	connect(boxPadSpin_, &QSpinBox::valueChanged, this, [this](int v) {
+	boxOpacitySpin_ = new QDoubleSpinBox(textBox_);
+	boxOpacitySpin_->setRange(0.0, 1.0);
+	boxOpacitySpin_->setSingleStep(0.05);
+	boxOpacitySpin_->setDecimals(2);
+	boxOpacitySpin_->setKeyboardTracking(false);
+	tForm->addRow(QStringLiteral("Box opacity"), boxOpacitySpin_);
+	connect(boxOpacitySpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
 		if (syncingClip_)
 			return;
-		editSelectedClip([v](TlClip &c) { c.text.boxPadding = v; });
+		editSelectedClip([v](TlClip &c) { c.text.boxOpacity = v; });
+	});
+
+	// Horizontal and vertical padding separately: a caption usually wants more
+	// breathing room at the sides than above and below.
+	boxPadXSpin_ = new QSpinBox(textBox_);
+	boxPadXSpin_->setRange(0, 200);
+	boxPadXSpin_->setKeyboardTracking(false);
+	boxPadXSpin_->setToolTip(QStringLiteral(
+		"In the same units as the font size, so the box keeps its proportions "
+		"whatever the output resolution."));
+	tForm->addRow(QStringLiteral("Box padding X"), boxPadXSpin_);
+	connect(boxPadXSpin_, &QSpinBox::valueChanged, this, [this](int v) {
+		if (syncingClip_)
+			return;
+		editSelectedClip([v](TlClip &c) { c.text.boxPadX = v; });
+	});
+	boxPadYSpin_ = new QSpinBox(textBox_);
+	boxPadYSpin_->setRange(0, 200);
+	boxPadYSpin_->setKeyboardTracking(false);
+	tForm->addRow(QStringLiteral("Box padding Y"), boxPadYSpin_);
+	connect(boxPadYSpin_, &QSpinBox::valueChanged, this, [this](int v) {
+		if (syncingClip_)
+			return;
+		editSelectedClip([v](TlClip &c) { c.text.boxPadY = v; });
+	});
+
+	boxRadiusSpin_ = new QSpinBox(textBox_);
+	boxRadiusSpin_->setRange(0, 200);
+	boxRadiusSpin_->setKeyboardTracking(false);
+	boxRadiusSpin_->setToolTip(QStringLiteral(
+		"Corner radius. Clamped to half the shorter side, so turning it up gives "
+		"a clean pill rather than an artefact."));
+	tForm->addRow(QStringLiteral("Corner radius"), boxRadiusSpin_);
+	connect(boxRadiusSpin_, &QSpinBox::valueChanged, this, [this](int v) {
+		if (syncingClip_)
+			return;
+		editSelectedClip([v](TlClip &c) { c.text.boxRadius = v; });
 	});
 
 	tv->addLayout(tForm);
@@ -3308,7 +3348,10 @@ void VideoEditorWindow::syncClipInspector()
 		alignCombo_->setCurrentIndex(std::clamp(c->text.align, 0, 2));
 		outlineWSpin_->setValue(c->text.outlineWidth);
 		boxChk_->setChecked(c->text.boxEnabled);
-		boxPadSpin_->setValue(c->text.boxPadding);
+		boxPadXSpin_->setValue(c->text.boxPadX);
+		boxPadYSpin_->setValue(c->text.boxPadY);
+		boxRadiusSpin_->setValue(c->text.boxRadius);
+		boxOpacitySpin_->setValue(c->text.boxOpacity);
 		styleSwatch(textColorBtn_, c->text.color);
 		styleSwatch(outlineColorBtn_, c->text.outlineColor);
 		styleSwatch(boxColorBtn_, c->text.boxColor);

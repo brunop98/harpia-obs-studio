@@ -22,13 +22,20 @@ namespace {
 // size when the output resolution changes.
 constexpr double kTextRefHeight = 1080.0;
 
+// Everything about a caption is authored against a 1080-tall canvas and scaled
+// by this on the way out — the font, and (so they stay in proportion with it)
+// the background's padding and corner radius.
+double textScale(QSize canvas)
+{
+	return canvas.height() > 0 ? double(canvas.height()) / kTextRefHeight : 1.0;
+}
+
 QFont buildFont(const TlText &t, QSize canvas)
 {
 	QFont f;
 	if (!t.fontFamily.isEmpty())
 		f.setFamily(t.fontFamily);
-	const double k = canvas.height() > 0 ? double(canvas.height()) / kTextRefHeight : 1.0;
-	f.setPixelSize(std::max(4, int(std::llround(t.fontPx * k))));
+	f.setPixelSize(std::max(4, int(std::llround(t.fontPx * textScale(canvas)))));
 	f.setBold(t.bold);
 	f.setItalic(t.italic);
 	return f;
@@ -131,9 +138,13 @@ QSize TimelineCompositor::textNaturalSize(const TlText &t, QSize canvas)
 {
 	const QFont f = buildFont(t, canvas);
 	const QRectF block = cachedText(t, f, canvas).block;
-	const double pad = t.boxEnabled ? t.boxPadding * 2.0 : 0.0;
-	return QSize(std::max(1, int(std::ceil(block.width() + pad))),
-		     std::max(1, int(std::ceil(block.height() + pad))));
+	// The natural size INCLUDES the background, so the preview's selection
+	// outline and hit-testing wrap the sticker rather than just the glyphs.
+	const double k = textScale(canvas);
+	const double px = t.boxEnabled ? t.boxPadX * k * 2.0 : 0.0;
+	const double py = t.boxEnabled ? t.boxPadY * k * 2.0 : 0.0;
+	return QSize(std::max(1, int(std::ceil(block.width() + px))),
+		     std::max(1, int(std::ceil(block.height() + py))));
 }
 
 QRectF TimelineCompositor::clipRectOnCanvas(const TlTransform &tf, QSize canvas, QSize srcSize)
@@ -173,10 +184,24 @@ void TimelineCompositor::drawTextClip(QPainter &p, const TlClip &c, const TlTran
 	p.setRenderHint(QPainter::Antialiasing, true);
 
 	if (t.boxEnabled) {
-		const QRectF box = block.adjusted(-t.boxPadding, -t.boxPadding, t.boxPadding, t.boxPadding);
+		// `block` is the union box of every line, so a multi-line caption gets one
+		// continuous sticker rather than a bar per line. Padding and radius are
+		// scaled by the same factor as the font, so the shape keeps its
+		// proportions at any canvas size.
+		const double k = textScale(canvas);
+		const QRectF box =
+			block.adjusted(-t.boxPadX * k, -t.boxPadY * k, t.boxPadX * k, t.boxPadY * k);
+		// Past half the shorter side a rounded rect stops making sense; clamping
+		// there turns a big radius into a clean pill instead of an artefact.
+		const double r = std::min(t.boxRadius * k,
+					  std::min(box.width(), box.height()) / 2.0);
+		QColor fill = t.boxColor;
+		// Opacity is its own property: the colour picker sets the hue, this sets
+		// how much of the picture shows through, and neither clobbers the other.
+		fill.setAlphaF(float(std::clamp(t.boxOpacity, 0.0, 1.0)));
 		p.setPen(Qt::NoPen);
-		p.setBrush(t.boxColor);
-		p.drawRoundedRect(box, t.boxRadius, t.boxRadius);
+		p.setBrush(fill);
+		p.drawRoundedRect(box, r, r);
 	}
 	if (t.outlineWidth > 0.01) {
 		if (ct.strokeWidth != t.outlineWidth) {

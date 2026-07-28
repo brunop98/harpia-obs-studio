@@ -27,7 +27,9 @@ inline QJsonObject textStyleToJson(const TlText &t)
 	o[QStringLiteral("outlineColor")] = t.outlineColor.name(QColor::HexArgb);
 	o[QStringLiteral("box")] = t.boxEnabled;
 	o[QStringLiteral("boxColor")] = t.boxColor.name(QColor::HexArgb);
-	o[QStringLiteral("boxPad")] = t.boxPadding;
+	o[QStringLiteral("boxPadX")] = t.boxPadX;
+	o[QStringLiteral("boxPadY")] = t.boxPadY;
+	o[QStringLiteral("boxOpacity")] = t.boxOpacity;
 	o[QStringLiteral("boxRadius")] = t.boxRadius;
 	o[QStringLiteral("align")] = t.align;
 	return o;
@@ -47,7 +49,12 @@ inline void applyTextStyleFromJson(const QJsonObject &o, TlText &t)
 	t.outlineColor = QColor(o.value(QStringLiteral("outlineColor")).toString());
 	t.boxEnabled = o.value(QStringLiteral("box")).toBool(false);
 	t.boxColor = QColor(o.value(QStringLiteral("boxColor")).toString());
-	t.boxPadding = o.value(QStringLiteral("boxPad")).toInt(14);
+	// "boxPad" was one number for both axes; it seeds them both so an older
+	// preset or project keeps the spacing it was saved with.
+	const int legacyPad = o.value(QStringLiteral("boxPad")).toInt(-1);
+	t.boxPadX = o.value(QStringLiteral("boxPadX")).toInt(legacyPad >= 0 ? legacyPad : 22);
+	t.boxPadY = o.value(QStringLiteral("boxPadY")).toInt(legacyPad >= 0 ? legacyPad : 12);
+	t.boxOpacity = o.value(QStringLiteral("boxOpacity")).toDouble(0.6);
 	t.boxRadius = o.value(QStringLiteral("boxRadius")).toInt(6);
 	t.align = o.value(QStringLiteral("align")).toInt(1);
 
@@ -60,7 +67,9 @@ inline void applyTextStyleFromJson(const QJsonObject &o, TlText &t)
 	t.fontPx = std::clamp(t.fontPx, 6, 400);
 	t.align = std::clamp(t.align, 0, 2);
 	t.outlineWidth = std::clamp(t.outlineWidth, 0.0, 200.0);
-	t.boxPadding = std::clamp(t.boxPadding, 0, 400);
+	t.boxPadX = std::clamp(t.boxPadX, 0, 400);
+	t.boxPadY = std::clamp(t.boxPadY, 0, 400);
+	t.boxOpacity = std::clamp(t.boxOpacity, 0.0, 1.0);
 	t.boxRadius = std::clamp(t.boxRadius, 0, 200);
 }
 

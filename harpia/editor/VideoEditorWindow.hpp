@@ -379,7 +379,10 @@ private:
 	QPushButton *outlineColorBtn_ = nullptr;
 	QCheckBox *boxChk_ = nullptr;
 	QPushButton *boxColorBtn_ = nullptr;
-	QSpinBox *boxPadSpin_ = nullptr;
+	QSpinBox *boxPadXSpin_ = nullptr;
+	QSpinBox *boxPadYSpin_ = nullptr;
+	QSpinBox *boxRadiusSpin_ = nullptr;
+	QDoubleSpinBox *boxOpacitySpin_ = nullptr;
 	QPushButton *addTextBtn_ = nullptr; // bottom controls row, Full mode only
 	QPushButton *snapBtn_ = nullptr;    // magnet toggle, Full mode only
 	QPushButton *fitBtn_ = nullptr;     // zoom-to-fit, Full mode only

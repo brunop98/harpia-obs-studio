@@ -110,10 +110,22 @@ struct TlText {
 	QColor color = QColor(0xff, 0xff, 0xff);
 	double outlineWidth = 3.0;   // 0 = no outline
 	QColor outlineColor = QColor(0x00, 0x00, 0x00);
-	bool boxEnabled = false;     // caption-style background box
-	QColor boxColor = QColor(0, 0, 0, 150);
-	int boxPadding = 14;
-	int boxRadius = 6;
+	// Background "sticker" behind the text, the Instagram/TikTok kind: one
+	// continuous rounded shape wrapping the whole block, however many lines it
+	// has, sized from the text and re-measured whenever the text changes.
+	//
+	// Padding and radius are in the SAME reference units as fontPx (relative to
+	// a 1080-tall canvas) and are scaled by the same factor when rendering, so
+	// the corners and the breathing room track the text size instead of
+	// shrinking away on a big canvas.
+	bool boxEnabled = false;
+	QColor boxColor = QColor(0, 0, 0);
+	double boxOpacity = 0.6;  // independent of boxColor, so the colour picker
+				  // and the transparency don't fight each other
+	int boxPadX = 22;         // horizontal breathing room
+	int boxPadY = 12;         // vertical
+	int boxRadius = 16;       // corner radius; clamped to half the shorter side,
+				  // so a large value gives a clean pill
 	int align = 1; // 0 = left, 1 = centre, 2 = right (multi-line blocks)
 
 	bool operator==(const TlText &o) const
@@ -122,7 +134,8 @@ struct TlText {
 		       bold == o.bold && italic == o.italic && color == o.color &&
 		       outlineWidth == o.outlineWidth && outlineColor == o.outlineColor &&
 		       boxEnabled == o.boxEnabled && boxColor == o.boxColor &&
-		       boxPadding == o.boxPadding && boxRadius == o.boxRadius && align == o.align;
+		       boxOpacity == o.boxOpacity && boxPadX == o.boxPadX && boxPadY == o.boxPadY &&
+		       boxRadius == o.boxRadius && align == o.align;
 	}
 };
 

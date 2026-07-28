@@ -1,4 +1,5 @@
 #include "TrackEditor.hpp"
+#include "TimeText.hpp"
 
 #include <QKeyEvent>
 #include <QMenu>
@@ -215,12 +216,7 @@ void TrackEditor::drawTimeRuler(QPainter &p, const QRect &bar, qint64 viewStart,
 		}
 	}
 
-	auto label = [](qint64 ms) {
-		const qint64 m = ms / 60000, s = (ms / 1000) % 60;
-		if (ms % 1000 && ms < 60000)
-			return QStringLiteral("%1.%2s").arg(ms / 1000).arg((ms % 1000) / 100);
-		return QStringLiteral("%1:%2").arg(m).arg(s, 2, 10, QLatin1Char('0'));
-	};
+	const auto label = timeTextRuler;
 	auto toX = [&](qint64 t) {
 		return bar.left() + int(double(t - viewStart) / double(visible) * bar.width());
 	};

@@ -1,4 +1,5 @@
 #include "EditorWidgets.hpp"
+#include "TimeText.hpp"
 
 #include <QMouseEvent>
 #include <QPainter>
@@ -919,12 +920,7 @@ void Timeline::paintEvent(QPaintEvent *)
 		tf.setPixelSize(std::max(6, lp_.fontPx));
 		p.setFont(tf);
 	}
-	auto t = [](qint64 ms) {
-		return QStringLiteral("%1:%2.%3")
-			.arg(ms / 60000, 2, 10, QLatin1Char('0'))
-			.arg((ms / 1000) % 60, 2, 10, QLatin1Char('0'))
-			.arg((ms % 1000) / 100);
-	};
+	const auto t = timeTextTenths;
 	p.drawText(rect().adjusted(lp_.pad, bar.bottom() + 6, -lp_.pad, 0), Qt::AlignLeft,
 		   QStringLiteral("Start %1").arg(t(start_)));
 	p.drawText(rect().adjusted(lp_.pad, bar.bottom() + 6, -lp_.pad, 0), Qt::AlignRight,

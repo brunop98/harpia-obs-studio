@@ -1,4 +1,5 @@
 #include "TimelineView.hpp"
+#include "../TimeText.hpp"
 
 #include <QColorDialog>
 #include <QInputDialog>
@@ -754,11 +755,7 @@ void TimelineView::drawRuler(QPainter &p) const
 		p.setPen(QColor(0xff, 0xff, 0xff, 40));
 		p.drawLine(x, bar.top(), x, height() - lp_.margin); // faint gridline
 		p.setPen(cl_.caption);
-		const qint64 m = t / 60000, sec = (t / 1000) % 60;
-		const QString lab = (t % 1000 && t < 60000)
-					    ? QStringLiteral("%1.%2s").arg(t / 1000).arg((t % 1000) / 100)
-					    : QStringLiteral("%1:%2").arg(m).arg(sec, 2, 10, QLatin1Char('0'));
-		p.drawText(x + 2, bar.bottom() - 4, lab);
+		p.drawText(x + 2, bar.bottom() - 4, timeTextRuler(t));
 	}
 }
 
@@ -1228,12 +1225,7 @@ void TimelineView::paintEvent(QPaintEvent *)
 			p.setPen(hp);
 			p.drawLine(hx, lp_.margin, hx, height() - lp_.margin);
 
-			const qint64 mm = hoverMs_ / 60000, ss = (hoverMs_ / 1000) % 60,
-				     cs = (hoverMs_ % 1000) / 10;
-			const QString lab = QStringLiteral("%1:%2.%3")
-						    .arg(mm)
-						    .arg(ss, 2, 10, QLatin1Char('0'))
-						    .arg(cs, 2, 10, QLatin1Char('0'));
+			const QString lab = timeTextCentis(hoverMs_);
 			p.setFont(toggleFont_);
 			const int tw = p.fontMetrics().horizontalAdvance(lab) + 8;
 			// Flip the tag to the left near the right edge so it stays readable.

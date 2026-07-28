@@ -1,5 +1,7 @@
 #include "ClipLibrary.hpp"
 
+#include "../editor/TimeText.hpp"
+
 #include <QDir>
 #include <QFileInfo>
 #include <QLocale>
@@ -65,16 +67,7 @@ QString ClipInfo::durationString(qint64 ms)
 {
 	if (ms <= 0)
 		return {};
-	const qint64 totalSecs = ms / 1000;
-	const qint64 h = totalSecs / 3600;
-	const qint64 m = (totalSecs % 3600) / 60;
-	const qint64 s = totalSecs % 60;
-	if (h > 0)
-		return QStringLiteral("%1:%2:%3")
-			.arg(h)
-			.arg(m, 2, 10, QLatin1Char('0'))
-			.arg(s, 2, 10, QLatin1Char('0'));
-	return QStringLiteral("%1:%2").arg(m, 2, 10, QLatin1Char('0')).arg(s, 2, 10, QLatin1Char('0'));
+	return timeTextDuration(ms);
 }
 
 QStringList ClipLibrary::videoExtensions()

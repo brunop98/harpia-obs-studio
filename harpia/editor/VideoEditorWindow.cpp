@@ -1,4 +1,5 @@
 #include "VideoEditorWindow.hpp"
+#include "TimeText.hpp"
 
 #include "AudioRecorder.hpp"
 #include "ClipExporter.hpp"
@@ -107,10 +108,7 @@ bool isVideoFile(const QString &path)
 
 QString previewTimeText(qint64 ms)
 {
-	return QStringLiteral("%1:%2.%3")
-		.arg(ms / 60000)
-		.arg((ms / 1000) % 60, 2, 10, QLatin1Char('0'))
-		.arg(ms % 1000, 3, 10, QLatin1Char('0'));
+	return timeTextMs(ms);
 }
 
 // Speed control: 0.1×..50×, mapped exponentially onto the slider so each step

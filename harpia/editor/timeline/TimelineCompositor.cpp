@@ -230,13 +230,18 @@ void TimelineCompositor::drawClip(QPainter &p, const TlClip &c, const TlTransfor
 	if (sourceFrame.isNull())
 		return;
 	// Per-clip crop first, then fit+zoom+position the remaining region.
-	QImage img = sourceFrame;
+	//
+	// The crop is a source RECTANGLE handed to drawImage, not a cropped copy of
+	// the frame: copying allocated and blitted the whole cropped region on every
+	// frame of every cropped clip, and QPainter can read the sub-rectangle
+	// directly for nothing.
+	QRect srcRect(QPoint(0, 0), sourceFrame.size());
 	if (!c.crop.isNull() && c.crop.width() > 1 && c.crop.height() > 1) {
-		const QRect r = c.crop.intersected(QRect(QPoint(0, 0), img.size()));
+		const QRect r = c.crop.intersected(srcRect);
 		if (r.width() > 1 && r.height() > 1)
-			img = img.copy(r);
+			srcRect = r;
 	}
-	const QRectF dst = clipRectOnCanvas(tf, canvas, img.size());
+	const QRectF dst = clipRectOnCanvas(tf, canvas, srcRect.size());
 	if (dst.isEmpty())
 		return;
 	p.save();
@@ -248,7 +253,7 @@ void TimelineCompositor::drawClip(QPainter &p, const TlClip &c, const TlTransfor
 		p.rotate(tf.rotation);
 		p.translate(-c);
 	}
-	p.drawImage(dst, img);
+	p.drawImage(dst, sourceFrame, srcRect);
 	p.restore();
 }
 

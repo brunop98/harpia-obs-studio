@@ -132,6 +132,8 @@ target_sources(
     ui/ErrorLogsPanel.cpp
     ui/ErrorLogsPanel.hpp
     ui/MainDevPanel.cpp
+	ui/UiIcons.cpp
+	ui/UiIcons.hpp
     ui/MainDevPanel.hpp
     ui/RegionTool.cpp
     ui/RegionTool.hpp

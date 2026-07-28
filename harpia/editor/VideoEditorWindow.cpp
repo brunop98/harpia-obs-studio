@@ -1,4 +1,6 @@
 #include "VideoEditorWindow.hpp"
+
+#include "../ui/UiIcons.hpp"
 #include "TimeText.hpp"
 
 #include "AudioRecorder.hpp"
@@ -220,13 +222,15 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	auto *urBox = new QHBoxLayout;
 	urBox->setSpacing(2);
 	urBox->setContentsMargins(0, 0, 0, 0);
-	undoBtn_ = new QPushButton(QStringLiteral("↶"), this);
+	undoBtn_ = new QPushButton(this);
+	undoBtn_->setIcon(uiIcon(Glyph::Undo));
 	undoBtn_->setToolTip(QStringLiteral("Undo (Ctrl+Z)"));
 	undoBtn_->setFixedWidth(34);
 	undoBtn_->setEnabled(false);
 	connect(undoBtn_, &QPushButton::clicked, this, &VideoEditorWindow::undo);
 	urBox->addWidget(undoBtn_);
-	redoBtn_ = new QPushButton(QStringLiteral("↷"), this);
+	redoBtn_ = new QPushButton(this);
+	redoBtn_->setIcon(uiIcon(Glyph::Redo));
 	redoBtn_->setToolTip(QStringLiteral("Redo (Ctrl+Shift+Z)"));
 	redoBtn_->setFixedWidth(34);
 	redoBtn_->setEnabled(false);
@@ -236,12 +240,14 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	bar->addSpacing(12);
 
 	// Transport: reset · play · a big monospace timecode.
-	auto *resetBtn = new QPushButton(QStringLiteral("⏮"), this);
+	auto *resetBtn = new QPushButton(this);
 	resetBtn->setToolTip(QStringLiteral("Move the playhead back to the start"));
+	resetBtn->setIcon(uiIcon(Glyph::SkipStart));
 	resetBtn->setFixedWidth(40);
 	connect(resetBtn, &QPushButton::clicked, this, &VideoEditorWindow::onResetMarker);
 	bar->addWidget(resetBtn);
-	playBtn_ = new QPushButton(QStringLiteral("▶"), this);
+	playBtn_ = new QPushButton(this);
+	playBtn_->setIcon(uiIcon(Glyph::Play));
 	playBtn_->setToolTip(QStringLiteral("Play from the marker at the current speed"));
 	playBtn_->setFixedWidth(40);
 	bar->addWidget(playBtn_);
@@ -286,7 +292,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// Monitor toggle. Preview audio is Full-editing only for now, so it hides
 	// with the other Full-only controls.
 	audioPreview_ = new AudioPreview(this);
-	muteBtn_ = new QPushButton(QStringLiteral("🔊"), this);
+	muteBtn_ = new QPushButton(this);
+	muteBtn_->setIcon(uiIcon(Glyph::Speaker));
 	muteBtn_->setCheckable(true);
 	muteBtn_->setFixedWidth(34);
 	const bool canHear = AudioPreview::available();
@@ -294,7 +301,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	muteBtn_->setToolTip(canHear ? QStringLiteral("Mute the preview (the export is unaffected)")
 				     : QStringLiteral("No audio output device was found"));
 	connect(muteBtn_, &QPushButton::toggled, this, [this](bool off) {
-		muteBtn_->setText(off ? QStringLiteral("🔇") : QStringLiteral("🔊"));
+		muteBtn_->setIcon(uiIcon(off ? Glyph::SpeakerMuted : Glyph::Speaker));
 		audioPreview_->setMuted(off);
 		if (!off && playing_ && fullEdit())
 			startPreviewAudio(timelinePlayheadMs()); // catch up to the picture
@@ -490,7 +497,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	audioLayout->addWidget(voTrack_);
 
 	auto *voRow = new QHBoxLayout;
-	voRecordBtn_ = new QPushButton(QStringLiteral("●  Record voiceover"), this);
+	voRecordBtn_ = new QPushButton(QStringLiteral("Record voiceover"), this);
+	voRecordBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
 	voRecordBtn_->setToolTip(QStringLiteral("Record narration from your microphone onto the Voiceover track"));
 	voRow->addWidget(voRecordBtn_);
 	voImportBtn_ = new QPushButton(QStringLiteral("Import audio…"), this);
@@ -546,9 +554,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		const bool expanded = s.value(QStringLiteral("editor/audioExpanded"), false).toBool();
 		auto apply = [audioHeader, audioBody](bool on) {
 			audioBody->setVisible(on);
-			audioHeader->setText(on
-				? QStringLiteral("▾  Audio — record voiceover over the video")
-				: QStringLiteral("▸  Audio — record voiceover over the video"));
+			audioHeader->setText(
+				QStringLiteral("Audio — record voiceover over the video"));
+			audioHeader->setIcon(
+				uiIcon(on ? Glyph::ChevronDown : Glyph::ChevronRight, 12));
 		};
 		apply(expanded);
 		connect(audioHeader, &QPushButton::clicked, this, [audioBody, apply]() {
@@ -598,7 +607,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	addTextBtn_->setVisible(false); // shown only in Full editing
 	connect(addTextBtn_, &QPushButton::clicked, this, &VideoEditorWindow::addTextClip);
 	controls->addWidget(addTextBtn_);
-	addAudioBtn_ = new QPushButton(QStringLiteral("Add audio  ▾"), this);
+	addAudioBtn_ = new QPushButton(QStringLiteral("Add audio"), this);
 	addAudioBtn_->setToolTip(QStringLiteral(
 		"Put audio on its own timeline track — a source's own audio, an imported file, "
 		"or an empty track"));
@@ -620,14 +629,14 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	controls->addWidget(addFxClipBtn_);
 	// Magnet: snap dragged clips to the playhead, 0 and other clips' edges.
 	// A sticky toggle — whichever way you leave it is how the next session opens.
-	snapBtn_ = new QPushButton(QStringLiteral("🧲 Snap"), this);
+	snapBtn_ = new QPushButton(QStringLiteral("Snap"), this);
 	snapBtn_->setCheckable(true);
 	snapBtn_->setVisible(false); // Full editing only
 	auto applySnap = [this](bool on) {
 		if (timelineView_)
 			timelineView_->setSnapEnabled(on);
-		snapBtn_->setText(on ? QStringLiteral("🧲 Snap on")
-				     : QStringLiteral("🧲 Snap off"));
+		snapBtn_->setText(on ? QStringLiteral("Snap on")
+				     : QStringLiteral("Snap off"));
 		snapBtn_->setToolTip(
 			on ? QStringLiteral("Magnet ON (N) — dragging a clip or trimming an "
 					    "edge sticks to the playhead, to 0 and to other "
@@ -658,7 +667,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	controls->addWidget(fitBtn_);
 	// View > Keyboard Shortcuts, always available (not just in Full editing):
 	// the panel is the reference for every mode.
-	auto *keysBtn = new QPushButton(QStringLiteral("⌨"), this);
+	auto *keysBtn = new QPushButton(this);
+	keysBtn->setIcon(uiIcon(Glyph::Keyboard));
 	keysBtn->setToolTip(QStringLiteral("Keyboard shortcuts (Ctrl+/)"));
 	keysBtn->setFixedWidth(30);
 	connect(keysBtn, &QPushButton::clicked, this, &VideoEditorWindow::openShortcutPanel);
@@ -739,7 +749,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		insLayout->addWidget(fxHdr);
 
 		auto *fxBtns = new QHBoxLayout;
-		addEffectBtn_ = new QPushButton(QStringLiteral("Add effect  ▾"), this);
+		addEffectBtn_ = new QPushButton(QStringLiteral("Add effect"), this);
+		addEffectBtn_->setIcon(uiIcon(Glyph::ChevronDown, 11));
 		addEffectBtn_->setToolTip(QStringLiteral(
 			"Add a post-processing shader. Effects stack top-to-bottom and bake into export."));
 		auto *folderBtn = new QPushButton(QStringLiteral("Folder"), this);
@@ -2177,11 +2188,13 @@ QWidget *VideoEditorWindow::addSection(QVBoxLayout *into, const QString &title, 
 	bl->setContentsMargins(2, 2, 2, 6);
 	bl->setSpacing(4);
 	body->setVisible(expanded);
-	head->setText((expanded ? QStringLiteral("▾  ") : QStringLiteral("▸  ")) + title);
+	head->setText(title);
+	head->setIcon(uiIcon(expanded ? Glyph::ChevronDown : Glyph::ChevronRight, 12));
 	connect(head, &QPushButton::clicked, this, [head, body, title]() {
 		const bool on = !body->isVisible();
 		body->setVisible(on);
-		head->setText((on ? QStringLiteral("▾  ") : QStringLiteral("▸  ")) + title);
+		head->setText(title);
+		head->setIcon(uiIcon(on ? Glyph::ChevronDown : Glyph::ChevronRight, 12));
 	});
 	into->addWidget(head);
 	into->addWidget(body);
@@ -2660,7 +2673,21 @@ void VideoEditorWindow::applyProjectFormat()
 
 	if (timelineView_)
 		timelineView_->setFrameRate(timelineFps());
-	refreshPreviewFrame();
+
+	// Re-COMPOSE, not just re-shade. refreshPreviewFrame() runs the effect chain
+	// over the last composited frame, which is still the old canvas — so the
+	// readouts would change and the picture would not, which is the one thing
+	// this panel exists to show you.
+	//
+	// The canvas is told its new size first: it letterboxes to that aspect, and
+	// the crop rectangle and the preview-drag maths are expressed against it.
+	const QSize c = timelineCanvasSize();
+	if (canvas_)
+		canvas_->setVideoSize(c.width(), c.height());
+	if (fullEdit())
+		showTimelineFrame(timelinePlayheadMs());
+	else
+		refreshPreviewFrame();
 	refreshProjectInspector();
 }
 
@@ -3488,10 +3515,14 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	v->addWidget(autoKeyChk_);
 
 	auto *kfRow = new QHBoxLayout;
-	auto *kfPrev = new QPushButton(QStringLiteral("◀"), clipBox_);
-	auto *kfAdd = new QPushButton(QStringLiteral("◆ Key"), clipBox_);
-	auto *kfDel = new QPushButton(QStringLiteral("✕"), clipBox_);
-	auto *kfNext = new QPushButton(QStringLiteral("▶"), clipBox_);
+	auto *kfPrev = new QPushButton(clipBox_);
+	kfPrev->setIcon(uiIcon(Glyph::StepBack, 13));
+	auto *kfAdd = new QPushButton(QStringLiteral("Key"), clipBox_);
+	kfAdd->setIcon(uiIcon(Glyph::Diamond, 13));
+	auto *kfDel = new QPushButton(clipBox_);
+	kfDel->setIcon(uiIcon(Glyph::Cross, 13));
+	auto *kfNext = new QPushButton(clipBox_);
+	kfNext->setIcon(uiIcon(Glyph::StepForward, 13));
 	kfPrev->setToolTip(QStringLiteral("Jump to the previous keyframe"));
 	kfAdd->setToolTip(QStringLiteral("Add/update a keyframe at the playhead"));
 	kfDel->setToolTip(QStringLiteral("Delete the keyframe at the playhead"));
@@ -3584,10 +3615,11 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(scriptList_->model(), &QAbstractItemModel::modelReset, this, onListMutated);
 
 	auto *stkBtns = new QHBoxLayout;
-	addScriptBtn_ = new QPushButton(QStringLiteral("Add script  ▾"), clipBox_);
+	addScriptBtn_ = new QPushButton(QStringLiteral("Add script"), clipBox_);
 	addScriptBtn_->setEnabled(TransformEvaluator::available());
 	addScriptBtn_->setToolTip(QStringLiteral("Stack another transform script on this clip"));
-	auto *scDel = new QPushButton(QStringLiteral("✕"), clipBox_);
+	auto *scDel = new QPushButton(clipBox_);
+	scDel->setIcon(uiIcon(Glyph::Cross, 13));
 	scDel->setFixedWidth(28);
 	scDel->setToolTip(QStringLiteral("Remove the selected script"));
 	stkBtns->addWidget(addScriptBtn_, 1);
@@ -3653,7 +3685,8 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		QStringLiteral("Apply a saved text style. The caption keeps its own words."));
 	auto *presetSave = new QPushButton(QStringLiteral("Save…"), textBox_);
 	presetSave->setToolTip(QStringLiteral("Save this caption's style under a name"));
-	auto *presetDel = new QPushButton(QStringLiteral("✕"), textBox_);
+	auto *presetDel = new QPushButton(textBox_);
+	presetDel->setIcon(uiIcon(Glyph::Cross, 13));
 	presetDel->setFixedWidth(28);
 	presetDel->setToolTip(QStringLiteral("Delete the selected style"));
 	presetRow->addWidget(textPresetCombo_, 1);
@@ -5145,7 +5178,8 @@ void VideoEditorWindow::onVoiceoverRecordClicked()
 	if (voCountdownTimer_->isActive()) {
 		voCountdownTimer_->stop();
 		voStatus_->clear();
-		voRecordBtn_->setText(QStringLiteral("●  Record voiceover"));
+		voRecordBtn_->setText(QStringLiteral("Record voiceover"));
+	voRecordBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
 		return;
 	}
 	if (voRecording_) {
@@ -5170,15 +5204,17 @@ void VideoEditorWindow::startVoiceoverCapture()
 	voRecorder_->setDeviceId(voDevice_->currentData().toString());
 	if (!voRecorder_->start(voiceoverTempDir())) {
 		voStatus_->clear();
-		voRecordBtn_->setText(QStringLiteral("●  Record voiceover"));
+		voRecordBtn_->setText(QStringLiteral("Record voiceover"));
+	voRecordBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
 		return;
 	}
 	voRecording_ = true;
 	// Anchor the take at the output-time under the playhead (0 when idle).
 	voClipStartMs_ = currentOutputMs();
-	voRecordBtn_->setText(QStringLiteral("■  Stop"));
+	voRecordBtn_->setText(QStringLiteral("Stop"));
+	voRecordBtn_->setIcon(uiIcon(Glyph::Stop, 12));
 	voStatus_->setStyleSheet(QStringLiteral("color:#e5484d;"));
-	voStatus_->setText(QStringLiteral("● Recording"));
+	voStatus_->setText(QStringLiteral("Recording"));
 	voTrack_->setPlayhead(voClipStartMs_);
 	// Talk-along: play the video (silently — the editor preview has no audio)
 	// so you can narrate to what you see.
@@ -5197,7 +5233,8 @@ void VideoEditorWindow::finishVoiceover()
 	voMeter_->reset();
 	voStatus_->clear();
 	voStatus_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
-	voRecordBtn_->setText(QStringLiteral("●  Record voiceover"));
+	voRecordBtn_->setText(QStringLiteral("Record voiceover"));
+	voRecordBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
 	if (path.isEmpty())
 		return; // nothing captured
 	// In Full editing the voiceover track is hidden — narration belongs on its
@@ -6167,7 +6204,7 @@ void VideoEditorWindow::startPlayback()
 		if (timelineView_->durationMs() <= 0)
 			return; // empty timeline
 		playing_ = true;
-		playBtn_->setText(QStringLiteral("⏸"));
+		playBtn_->setIcon(uiIcon(Glyph::Pause));
 		const qint64 total = timelineView_->durationMs();
 		qint64 pos = timelineView_->playhead();
 		if (pos < 0 || pos >= total)
@@ -6182,7 +6219,7 @@ void VideoEditorWindow::startPlayback()
 		if (tracks_->segments().isEmpty())
 			return; // nothing to assemble yet
 		playing_ = true;
-		playBtn_->setText(QStringLiteral("⏸"));
+		playBtn_->setIcon(uiIcon(Glyph::Pause));
 		// Start from the marker (output-time); fall back to the start if it's
 		// unset or past the end.
 		const qint64 total = tracks_->totalOutputMs();
@@ -6196,7 +6233,7 @@ void VideoEditorWindow::startPlayback()
 		return;
 	}
 	playing_ = true;
-	playBtn_->setText(QStringLiteral("⏸"));
+	playBtn_->setIcon(uiIcon(Glyph::Pause));
 	// Start from the marker (source-time), clamped into the trimmed region.
 	const qint64 start = timeline_->start(), end = timeline_->end();
 	qint64 pos = timeline_->playhead();
@@ -6211,7 +6248,7 @@ void VideoEditorWindow::startPlayback()
 void VideoEditorWindow::stopPlayback()
 {
 	playing_ = false;
-	playBtn_->setText(QStringLiteral("▶"));
+	playBtn_->setIcon(uiIcon(Glyph::Play));
 	playTimer_->stop();
 	startAudioWhenReady_ = false; // a mix still running must not start on arrival
 	if (audioPreview_)
@@ -6560,9 +6597,12 @@ void VideoEditorWindow::rebuildEffectsUI()
 		auto *title = new QLabel(QStringLiteral("%1. %2").arg(i + 1).arg(e.name), card);
 		title->setStyleSheet(QStringLiteral("color:#e8eaed; font-weight:bold;"));
 		hdr->addWidget(title, 1);
-		auto *up = new QPushButton(QStringLiteral("↑"), card);
-		auto *down = new QPushButton(QStringLiteral("↓"), card);
-		auto *del = new QPushButton(QStringLiteral("✕"), card);
+		auto *up = new QPushButton(card);
+		up->setIcon(uiIcon(Glyph::ArrowUp, 13));
+		auto *down = new QPushButton(card);
+		down->setIcon(uiIcon(Glyph::ArrowDown, 13));
+		auto *del = new QPushButton(card);
+		del->setIcon(uiIcon(Glyph::Cross, 13));
 		up->setFixedWidth(26);
 		down->setFixedWidth(26);
 		del->setFixedWidth(26);

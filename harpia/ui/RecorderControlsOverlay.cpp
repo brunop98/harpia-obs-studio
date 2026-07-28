@@ -1,5 +1,7 @@
 #include "RecorderControlsOverlay.hpp"
 
+#include "UiIcons.hpp"
+
 #include <QApplication>
 #include <QEnterEvent>
 #include <QGuiApplication>
@@ -59,7 +61,8 @@ RecorderControlsOverlay::RecorderControlsOverlay(QWidget *parent) : QWidget(pare
 		"QPushButton{color:#f2f3f5;border:none;border-radius:9px;font-size:15px;font-weight:bold;}"
 		"QPushButton:disabled{color:#7d828b;}");
 
-	pauseButton_ = new QPushButton(QStringLiteral("⏸"), this);
+	pauseButton_ = new QPushButton(this);
+	pauseButton_->setIcon(uiIcon(Glyph::Pause, 14));
 	pauseButton_->setCursor(Qt::PointingHandCursor);
 	pauseButton_->setFixedSize(32, 32);
 	pauseButton_->setStyleSheet(btnBase + QStringLiteral("QPushButton{background:#3a3f47;}"
@@ -67,7 +70,8 @@ RecorderControlsOverlay::RecorderControlsOverlay(QWidget *parent) : QWidget(pare
 							     "QPushButton:disabled{background:#2a2d33;}"));
 	row->addWidget(pauseButton_);
 
-	stopButton_ = new QPushButton(QStringLiteral("■"), this);
+	stopButton_ = new QPushButton(this);
+	stopButton_->setIcon(uiIcon(Glyph::Stop, 14));
 	stopButton_->setCursor(Qt::PointingHandCursor);
 	stopButton_->setFixedSize(32, 32);
 	stopButton_->setStyleSheet(btnBase + QStringLiteral("QPushButton{background:#e5484d;}"
@@ -93,7 +97,7 @@ RecorderControlsOverlay::RecorderControlsOverlay(QWidget *parent) : QWidget(pare
 void RecorderControlsOverlay::setState(bool paused, bool pauseEnabled, bool stopEnabled)
 {
 	paused_ = paused;
-	pauseButton_->setText(paused ? QStringLiteral("▶") : QStringLiteral("⏸"));
+	pauseButton_->setIcon(uiIcon(paused ? Glyph::Play : Glyph::Pause, 14));
 	pauseButton_->setToolTip(paused ? QStringLiteral("Resume recording") : QStringLiteral("Pause recording"));
 	pauseButton_->setEnabled(pauseEnabled);
 	stopButton_->setToolTip(QStringLiteral("Stop recording"));

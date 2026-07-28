@@ -1,5 +1,7 @@
 #include "MainWindow.hpp"
 
+#include "UiIcons.hpp"
+
 #include "AudioPanel.hpp"
 #include "ClipLibraryWindow.hpp"
 #include "ErrorLogsPanel.hpp"
@@ -1801,7 +1803,8 @@ void MainWindow::refreshReadiness()
 			auto *row = new QWidget(warningsBox_);
 			auto *rl = new QHBoxLayout(row);
 			rl->setContentsMargins(0, 0, 0, 0);
-			auto *icon = new QLabel(QStringLiteral("⚠"), row);
+			auto *icon = new QLabel(row);
+			icon->setPixmap(uiIcon(Glyph::Warning, 14, QColor(0xe2, 0xa0, 0x3f)).pixmap(14, 14));
 			icon->setStyleSheet(QStringLiteral("color:#d29922;"));
 			auto *msg = new QLabel(w.message, row);
 			msg->setWordWrap(true);
@@ -2534,11 +2537,13 @@ void MainWindow::updateButtons()
 		primaryButton_->setEnabled(false);
 		primaryButton_->setToolTip(QString());
 	} else if (recording) {
-		primaryButton_->setText(QStringLiteral("■  Stop"));
+		primaryButton_->setText(QStringLiteral("Stop"));
+		primaryButton_->setIcon(uiIcon(Glyph::Stop, 14));
 		primaryButton_->setEnabled(true);
 		primaryButton_->setToolTip(QString());
 	} else {
-		primaryButton_->setText(QStringLiteral("●  Record"));
+		primaryButton_->setText(QStringLiteral("Record"));
+		primaryButton_->setIcon(uiIcon(Glyph::Record, 14, QColor(0xe5, 0x48, 0x4d)));
 		primaryButton_->setEnabled(!recordingBlocked_);
 		primaryButton_->setToolTip(recordingBlocked_
 						   ? QStringLiteral("Resolve the warnings above before recording")
@@ -2550,21 +2555,25 @@ void MainWindow::updateButtons()
 	// its green Resume styling so it can't read as clickable.
 	pauseButton_->setEnabled(recording && !stopping_);
 	if (stopping_ && !pauseButton_->styleSheet().isEmpty()) {
-		pauseButton_->setText(QStringLiteral("⏸  Pause"));
+		pauseButton_->setText(QStringLiteral("Pause"));
+		pauseButton_->setIcon(uiIcon(Glyph::Pause, 14));
 		pauseButton_->setStyleSheet(QString());
 	} else if (recording && pauseUiChanged) {
 		if (paused) {
-			pauseButton_->setText(QStringLiteral("▶  Resume"));
+			pauseButton_->setText(QStringLiteral("Resume"));
+		pauseButton_->setIcon(uiIcon(Glyph::Play, 14));
 			pauseButton_->setStyleSheet(QStringLiteral(
 				"background:#3fb950;border:none;color:white;border-radius:10px;"));
 		} else {
-			pauseButton_->setText(QStringLiteral("⏸  Pause"));
+			pauseButton_->setText(QStringLiteral("Pause"));
+		pauseButton_->setIcon(uiIcon(Glyph::Pause, 14));
 			pauseButton_->setStyleSheet(QStringLiteral(
 				"background:#d29922;border:none;color:white;border-radius:10px;"));
 		}
 	} else if (!recording && !pauseButton_->styleSheet().isEmpty()) {
 		// Back to the idle look (theme's default disabled button).
-		pauseButton_->setText(QStringLiteral("⏸  Pause"));
+		pauseButton_->setText(QStringLiteral("Pause"));
+		pauseButton_->setIcon(uiIcon(Glyph::Pause, 14));
 		pauseButton_->setStyleSheet(QString());
 	}
 

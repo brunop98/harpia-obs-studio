@@ -1,4 +1,6 @@
 #include "TimelineView.hpp"
+
+#include "../../ui/UiIcons.hpp"
 #include "../TimeText.hpp"
 
 #include <QColorDialog>
@@ -895,11 +897,20 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	if (isFx) {
 		p.setFont(clipFont_);
 		p.setPen(c.fx.enabled ? QColor(0xf2, 0xf4, 0xf7) : cl_.caption);
-		const QString label = QStringLiteral("✦ %1%2")
-					      .arg(c.fx.label())
-					      .arg(c.fx.enabled ? QString() : QStringLiteral("  (off)"));
-		p.drawText(r.adjusted(5, 0, -4, 0), Qt::AlignVCenter | Qt::AlignLeft,
-			   p.fontMetrics().elidedText(label, Qt::ElideRight, r.width() - 9));
+		// Painted, not typed: the star this used to spell out is missing from
+		// the default Windows UI font, so the badge showed a blank box.
+		const int bs = std::min(11, r.height() - 6);
+		if (bs > 4 && r.width() > bs + 12)
+			paintGlyph(p, Glyph::Sparkle,
+				   QRectF(r.x() + 5, r.center().y() - bs / 2.0, bs, bs),
+				   c.fx.enabled ? QColor(0xf2, 0xf4, 0xf7) : cl_.caption);
+		const int textX = (bs > 4 ? bs + 4 : 0);
+		const QString label = QStringLiteral("%1%2").arg(c.fx.label()).arg(
+			c.fx.enabled ? QString() : QStringLiteral("  (off)"));
+		p.setPen(c.fx.enabled ? QColor(0xf2, 0xf4, 0xf7) : cl_.caption);
+		p.drawText(r.adjusted(5 + textX, 0, -4, 0), Qt::AlignVCenter | Qt::AlignLeft,
+			   p.fontMetrics().elidedText(label, Qt::ElideRight,
+						      r.width() - 9 - textX));
 		// A downward chevron on the lower edge: this reaches DOWN the stack.
 		p.setPen(QPen(QColor(0xff, 0xff, 0xff, 90), 1));
 		for (int x = r.x() + 6; x < r.right() - 4; x += 10) {

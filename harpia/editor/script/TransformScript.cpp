@@ -118,9 +118,21 @@ struct TransformEvaluator::Impl {
 		return self->watchdog.elapsed() > self->budgetMs ? 1 : 0;
 	}
 
-	JSValue callChannel(JSValueConst fn, double t, double u, double dur, const ScriptContext &sc)
+	JSValue callChannel(JSValueConst fn, double t, double u, double dur, const ScriptContext &sc,
+			    const TlTransform &base)
 	{
 		JSValue c = JS_NewObject(ctx);
+		// What the clip would be framed at WITHOUT this script: its Inspector
+		// pose, or its keyframes at this instant. A script that reads it composes
+		// with hand work instead of overriding it; one that ignores it keeps the
+		// old absolute behaviour, so nothing already written changes.
+		JSValue b = JS_NewObject(ctx);
+		JS_SetPropertyStr(ctx, b, "x", JS_NewFloat64(ctx, base.posX));
+		JS_SetPropertyStr(ctx, b, "y", JS_NewFloat64(ctx, base.posY));
+		JS_SetPropertyStr(ctx, b, "scale", JS_NewFloat64(ctx, base.scale));
+		JS_SetPropertyStr(ctx, b, "rotation", JS_NewFloat64(ctx, base.rotation));
+		JS_SetPropertyStr(ctx, b, "opacity", JS_NewFloat64(ctx, base.opacity));
+		JS_SetPropertyStr(ctx, c, "base", b);
 		JS_SetPropertyStr(ctx, c, "clipW", JS_NewInt32(ctx, sc.clipW));
 		JS_SetPropertyStr(ctx, c, "clipH", JS_NewInt32(ctx, sc.clipH));
 		JS_SetPropertyStr(ctx, c, "canvasW", JS_NewInt32(ctx, sc.canvasW));
@@ -245,6 +257,23 @@ bool TransformEvaluator::has(const QString &name) const
 	return d_->scripts.contains(name);
 }
 
+int TransformEvaluator::channelsOf(const QString &name) const
+{
+	const auto it = d_->scripts.constFind(name);
+	if (it == d_->scripts.constEnd())
+		return 0;
+	int m = 0;
+	if (!JS_IsUndefined(it.value().position))
+		m |= ChanPosition;
+	if (!JS_IsUndefined(it.value().scale))
+		m |= ChanScale;
+	if (!JS_IsUndefined(it.value().rotation))
+		m |= ChanRotation;
+	if (!JS_IsUndefined(it.value().opacity))
+		m |= ChanOpacity;
+	return m;
+}
+
 void TransformEvaluator::forget(const QString &name)
 {
 	const auto it = d_->scripts.find(name);
@@ -293,7 +322,7 @@ TlTransform TransformEvaluator::apply(const ClipScript &script, const TlTransfor
 	// Returns a value the caller must free; on a script error it records the
 	// message and flags the whole apply() as failed.
 	auto run = [&](JSValueConst fn) -> JSValue {
-		JSValue v = d_->callChannel(fn, t, u, dur, ctx);
+		JSValue v = d_->callChannel(fn, t, u, dur, ctx, base);
 		if (JS_IsException(v)) {
 			JS_FreeValue(jc, v);
 			d_->lastError = takeError(jc);

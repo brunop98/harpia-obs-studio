@@ -544,9 +544,17 @@ qint64 TimelineView::snap(qint64 ms, int ignoreTrack, int ignoreClip, bool *hit)
 	consider(0);
 	if (playheadMs_ >= 0)
 		consider(playheadMs_);
+	// Every clip on every track is a candidate -- the magnet is deliberately
+	// cross-track, so a cut on V2 can be lined up with one on V1.
 	for (int ti = 0; ti < model_.tracks.size(); ++ti)
 		for (int ci = 0; ci < model_.tracks[ti].clips.size(); ++ci) {
 			if (ti == ignoreTrack && ci == ignoreClip)
+				continue;
+			// ...except the rest of a group being dragged. Those are moving by
+			// the same delta, so their edges are not standing still and
+			// snapping to one just pins the group to its own shape.
+			if (mode_ == Mode::Move && dragStarts_.size() > 1 &&
+			    dragStarts_.contains(qMakePair(ti, ci)))
 				continue;
 			consider(model_.tracks[ti].clips[ci].outStartMs);
 			consider(model_.tracks[ti].clips[ci].outEndMs());
@@ -1270,15 +1278,26 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 		if (mode_ == Mode::Move) {
 			qint64 ns = std::max<qint64>(0, xToMs(pos.x()) - dragGrabOffsetMs_);
 			const qint64 dur = c.outDurationMs();
-			// Snap the start; if snapping the END lands closer, use that instead.
+			// Try both edges and take whichever actually caught something.
+			//
+			// Comparing the two distances alone does NOT work: when an edge
+			// finds nothing, snap() hands back the position unchanged, i.e. a
+			// distance of zero -- which beats every real candidate. That is why
+			// dragging a clip's START up against another clip's END did nothing
+			// unless its far edge happened to find a candidate too.
 			bool hitStart = false, hitEnd = false;
 			const qint64 snapStart = snap(ns, dragTrack_, dragClip_, &hitStart);
 			const qint64 snapEnd = snap(ns + dur, dragTrack_, dragClip_, &hitEnd) - dur;
-			const bool useEnd = std::llabs(snapEnd - ns) < std::llabs(snapStart - ns);
-			ns = useEnd ? snapEnd : snapStart;
+			bool useEnd = false, hit = hitStart || hitEnd;
+			if (hitStart && hitEnd)
+				useEnd = std::llabs(snapEnd - ns) < std::llabs(snapStart - ns);
+			else if (hitEnd)
+				useEnd = true;
+			if (hit)
+				ns = useEnd ? snapEnd : snapStart;
 			c.outStartMs = std::max<qint64>(0, ns);
 			// Only claim a snap if the clamp to 0 didn't move the edge away again.
-			snapLineMs_ = ((useEnd ? hitEnd : hitStart) && c.outStartMs == ns)
+			snapLineMs_ = (hit && c.outStartMs == ns)
 					      ? (useEnd ? c.outStartMs + dur : c.outStartMs)
 					      : -1;
 			// Carry the rest of the selection along by the same delta. Only the

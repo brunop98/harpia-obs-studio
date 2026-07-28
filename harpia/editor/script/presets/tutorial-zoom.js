@@ -12,8 +12,14 @@
 // or stops. The zoomed picture is kept covering the canvas, so a focus point
 // near an edge pans as far as it can instead of exposing black bars.
 //
+// This builds ON TOP of the clip's own framing rather than replacing it:
+// ctx.base is the Zoom / Position the Inspector shows (or the keyframes at this
+// instant), so a clip set to 0.8 and zoom 2 ends up at 1.6, and repositioning
+// the clip by hand still moves where the move starts from.
+//
 //   t   seconds into this clip      u   progress 0..1
-//   dur clip length in seconds      ctx { clipW, clipH, canvasW, canvasH, ... }
+//   dur clip length in seconds      ctx { clipW, clipH, canvasW, canvasH,
+//                                         base:{x,y,scale,rotation,opacity}, ... }
 //
 //@param zoom    float 1.0 8.0 2.0  Zoom level
 //@param focusX  float 0.0 1.0 0.5  Focus X (0 = left, 1 = right)
@@ -37,14 +43,20 @@ function amount(t, dur) {
     return Math.min(rampIn, rampOut);
 }
 
+// The clip's own zoom is the baseline this multiplies into.
+function baseScale(ctx) { return ctx.base ? ctx.base.scale : 1; }
+
 function scale(t, u, dur, ctx) {
-    return 1 + (zoom - 1) * amount(t, dur);
+    return baseScale(ctx) * (1 + (zoom - 1) * amount(t, dur));
 }
 
 function position(t, u, dur, ctx) {
+    const bx = ctx.base ? ctx.base.x : 0.5;
+    const by = ctx.base ? ctx.base.y : 0.5;
     const k = amount(t, dur);
-    if (k <= 0) return { x: 0.5, y: 0.5 };
-    const s = 1 + (zoom - 1) * k;
+    // Not zoomed yet: sit exactly where the clip is framed.
+    if (k <= 0) return { x: bx, y: by };
+    const s = baseScale(ctx) * (1 + (zoom - 1) * k);
 
     // How much of the canvas the picture covers at scale 1. The compositor fits
     // the source inside the canvas preserving aspect, so for a source shaped
@@ -59,9 +71,12 @@ function position(t, u, dur, ctx) {
     // A point at fraction f across the picture sits at centre + (f - 0.5) * span.
     // Solve for the centre that puts the focus point in the middle of the frame,
     // then blend in from 0.5 so nothing moves before the zoom starts.
+    // Ease from the clip's own framing towards "focus point in the middle of the
+    // frame" as the zoom comes in. With the clip centred this is the same move
+    // it always was.
     const spanX = w1 * s, spanY = h1 * s;
-    let x = 0.5 - (focusX - 0.5) * spanX * k;
-    let y = 0.5 - (focusY - 0.5) * spanY * k;
+    let x = bx + k * (0.5 - (focusX - 0.5) * spanX - bx);
+    let y = by + k * (0.5 - (focusY - 0.5) * spanY - by);
 
     // Don't pan past the edge of the picture: once it covers the canvas, keep it
     // covering. (If it doesn't cover, leave it centred rather than jam it to a side.)

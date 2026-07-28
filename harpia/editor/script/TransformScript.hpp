@@ -15,11 +15,20 @@
 //   t   — seconds into the clip
 //   u   — normalised progress through the clip, 0..1
 //   dur — clip length in seconds
-//   ctx — { clipW, clipH, canvasW, canvasH, fps, index, globalTime }
+//   ctx — { clipW, clipH, canvasW, canvasH, fps, index, globalTime,
+//           base: { x, y, scale, rotation, opacity } }
 //
 // A channel with no function falls through to the clip's own value (its
 // Inspector setting, or its keyframes), so scripts compose with hand work and
 // new channels can be added later without touching existing scripts.
+//
+// A channel the script DOES define replaces that value — which would make the
+// Inspector's Zoom and Position dead controls on a clip running a zoom script.
+// `ctx.base` is how a script avoids that: it holds exactly what the clip would
+// be framed at without this script (its pose, or its keyframes at this
+// instant), so a well-behaved script multiplies or offsets from it rather than
+// ignoring it. The bundled scripts all do. Reading it is optional: a script
+// that doesn't keeps the plain absolute behaviour.
 //
 // Scripts MUST be pure — output depending only on the arguments. The preview
 // and the exporter call them in different orders, so anything that accumulates
@@ -83,6 +92,12 @@ public:
 	bool compile(const QString &name, const QString &source, QString *err = nullptr);
 	bool has(const QString &name) const;
 	void forget(const QString &name);
+
+	// Which channels a compiled script defines, as a Channels mask. The
+	// Inspector uses it to mark the rows a script is driving; 0 for a name that
+	// isn't compiled.
+	enum Channel { ChanPosition = 1, ChanScale = 2, ChanRotation = 4, ChanOpacity = 8 };
+	int channelsOf(const QString &name) const;
 
 	// Apply `script` to `base` for a clip at `outMs`. Channels the script doesn't
 	// define are left as they are in `base`. Never throws: a script error is

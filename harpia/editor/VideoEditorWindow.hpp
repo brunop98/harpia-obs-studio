@@ -182,6 +182,11 @@ private:
 	void applySpeed(double value);
 	void syncSpeedControls(double value); // set slider + spin without re-applying
 
+	// Transform rows (Zoom / Pos X / Pos Y / Rotation / Opacity) in order, so a
+	// script running on the clip can mark the ones it drives.
+	QVector<QLabel *> poseLabels_;
+	void markScriptDrivenRows(const TlClip &c);
+
 	// Preview request pacing (see requestPreview in the .cpp): render the first
 	// request at once, then at most one per timer interval, always the newest.
 	void requestPreview(int sourceId, qint64 ms);

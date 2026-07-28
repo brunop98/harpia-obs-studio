@@ -10,5 +10,8 @@ function opacity(t, u, dur, ctx) {
         a = Math.min(a, t / inSec);
     if (outSec > 0.001)
         a = Math.min(a, (dur - t) / outSec);
-    return Math.max(0, Math.min(1, a));
+    // Scale the clip's own opacity rather than override it, so a clip set to
+    // 50% fades up to 50% instead of jumping to full.
+    const b = ctx.base ? ctx.base.opacity : 1;
+    return Math.max(0, Math.min(1, a)) * b;
 }

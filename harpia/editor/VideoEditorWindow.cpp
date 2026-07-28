@@ -60,6 +60,8 @@
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QCryptographicHash>
+#include <QSet>
 #include <QSettings>
 #include <QShortcut>
 #include <QSlider>
@@ -1770,19 +1772,62 @@ QString VideoEditorWindow::scriptsDirPath()
 		scriptsDir_ = base + QStringLiteral("/harpia/scripts");
 	}
 	QDir().mkpath(scriptsDir_);
-	// Seed the bundled examples when missing (never overwrite user edits).
+	// Seed the bundled examples, and refresh a copy the user hasn't touched.
+	//
+	// "Never overwrite" alone isn't enough: a fix to a shipped script would only
+	// ever reach a fresh install, and everyone else would keep running the old
+	// one with no way to know. So the hash of what was last written out is
+	// remembered — if the file on disk still matches it, nobody has edited it and
+	// it is safe to replace. Anything else is the user's, and is left alone.
+	QSettings seedSt(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	seedSt.beginGroup(QStringLiteral("scriptSeed"));
 	for (const QString &name : {QStringLiteral("tutorial-zoom"), QStringLiteral("zoom-in"),
 				    QStringLiteral("fade-in-out"), QStringLiteral("shake")}) {
 		const QString dst = scriptsDir_ + QLatin1Char('/') + name + QStringLiteral(".js");
-		if (QFile::exists(dst))
-			continue;
 		QFile res(QStringLiteral(":/scripts/") + name + QStringLiteral(".js"));
-		if (res.open(QIODevice::ReadOnly)) {
-			QFile out(dst);
-			if (out.open(QIODevice::WriteOnly))
-				out.write(res.readAll());
+		if (!res.open(QIODevice::ReadOnly))
+			continue;
+		const QByteArray shipped = res.readAll();
+		const QString shippedHash = QString::fromLatin1(
+			QCryptographicHash::hash(shipped, QCryptographicHash::Sha1).toHex());
+
+		if (QFile::exists(dst)) {
+			QFile cur(dst);
+			if (!cur.open(QIODevice::ReadOnly))
+				continue;
+			const QString curHash = QString::fromLatin1(
+				QCryptographicHash::hash(cur.readAll(), QCryptographicHash::Sha1)
+					.toHex());
+			cur.close();
+			if (curHash == shippedHash)
+				continue; // already up to date
+			// Only replace it if it is byte-for-byte something WE wrote.
+			// Installs made before the hash was recorded have nothing in
+			// settings, so every version ever shipped is listed here too --
+			// otherwise a fix would reach new installs only.
+			static const QSet<QString> kShippedBefore = {
+				// tutorial-zoom
+				QStringLiteral("50b80228b02fcda7a9560dc4258e80f15a930a0d"),
+				// zoom-in (v0.1.131, then v0.1.124)
+				QStringLiteral("9fbe7e0da22a52bdea20450471851e3e9a4d2493"),
+				QStringLiteral("477848758b167f01e04326f4eb424159c6b0adfa"),
+				// fade-in-out
+				QStringLiteral("8b357f0a220c370b064b366c6c938bf4c87f2e0e"),
+				// shake
+				QStringLiteral("c40093071a95eb30877cdf2e919cde0c350bdb3e"),
+			};
+			if (curHash != seedSt.value(name).toString() &&
+			    !kShippedBefore.contains(curHash))
+				continue; // the user has edited this one: it is theirs
+		}
+		QFile out(dst);
+		if (out.open(QIODevice::WriteOnly)) {
+			out.write(shipped);
+			out.close();
+			seedSt.setValue(name, shippedHash);
 		}
 	}
+	seedSt.endGroup();
 	return scriptsDir_;
 }
 
@@ -2298,6 +2343,14 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	form->addRow(QStringLiteral("Rotation"), rotationSpin_);
 	form->addRow(QStringLiteral("Opacity"), opacitySpin_);
 	form->addRow(QStringLiteral("Speed"), clipSpeedSpin_);
+	// Kept so syncClipInspector can mark the rows a script is driving. Without
+	// this the value in the box and the framing on screen disagree with no
+	// explanation anywhere.
+	poseLabels_ = {qobject_cast<QLabel *>(form->labelForField(zoomSpin_)),
+		       qobject_cast<QLabel *>(form->labelForField(posXSpin_)),
+		       qobject_cast<QLabel *>(form->labelForField(posYSpin_)),
+		       qobject_cast<QLabel *>(form->labelForField(rotationSpin_)),
+		       qobject_cast<QLabel *>(form->labelForField(opacitySpin_))};
 	v->addLayout(form);
 	connect(clipSpeedSpin_, &QDoubleSpinBox::valueChanged, this, [this](double sp) {
 		if (syncingClip_)
@@ -2765,6 +2818,51 @@ void VideoEditorWindow::editSelectedClip(const std::function<void(TlClip &)> &fn
 	scheduleSnapshot();
 }
 
+// A script that defines a channel computes that channel's final value, so the
+// number in the Inspector box is no longer what you see on screen — it becomes
+// the script's STARTING point (the script reads it as ctx.base). Say so on the
+// row instead of leaving the mismatch to be discovered.
+void VideoEditorWindow::markScriptDrivenRows(const TlClip &c)
+{
+	if (poseLabels_.isEmpty())
+		return;
+	int mask = 0;
+	QStringList driving;
+	if (scriptEval_) {
+		for (const TlScript &s : c.scripts) {
+			if (s.name.isEmpty())
+				continue;
+			const int m = scriptEval_->channelsOf(s.name);
+			if (m) {
+				mask |= m;
+				driving << s.name;
+			}
+		}
+	}
+	driving.removeDuplicates();
+	// Same order the rows were added in.
+	const int chan[5] = {TransformEvaluator::ChanScale,    TransformEvaluator::ChanPosition,
+			     TransformEvaluator::ChanPosition, TransformEvaluator::ChanRotation,
+			     TransformEvaluator::ChanOpacity};
+	static const char *names[5] = {"Zoom", "Position X", "Position Y", "Rotation", "Opacity"};
+	for (int i = 0; i < poseLabels_.size() && i < 5; ++i) {
+		QLabel *lb = poseLabels_[i];
+		if (!lb)
+			continue;
+		const bool driven = (mask & chan[i]) != 0;
+		lb->setText(driven ? QStringLiteral("%1  ⟡").arg(QLatin1String(names[i]))
+				   : QLatin1String(names[i]));
+		lb->setStyleSheet(driven ? QStringLiteral("color:#ffd44f;") : QString());
+		lb->setToolTip(driven ? QStringLiteral(
+					       "Driven by %1. This value is where the script "
+					       "starts from (it reads it as ctx.base), not the "
+					       "framing you see — change it and the whole move "
+					       "shifts with it.")
+					       .arg(driving.join(QStringLiteral(", ")))
+				      : QString());
+	}
+}
+
 void VideoEditorWindow::syncClipInspector()
 {
 	if (!clipBox_ || !timelineView_)
@@ -2800,6 +2898,7 @@ void VideoEditorWindow::syncClipInspector()
 	// Transform script stack + the selected entry's parameter controls.
 	refreshScriptList();
 	rebuildScriptParams();
+	markScriptDrivenRows(*c);
 
 	// Which half of the panel applies. A clip on an audio track has no picture,
 	// so showing it zoom/rotation controls that do nothing would be a lie.

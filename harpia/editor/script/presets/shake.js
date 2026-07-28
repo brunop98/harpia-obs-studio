@@ -11,13 +11,19 @@ function noise(x) {
     return (s - Math.floor(s)) * 2 - 1;
 }
 
+// The shake is an OFFSET from wherever the clip is framed, not an absolute
+// position — so it layers over a reposition, a keyframed move, or a zoom script
+// earlier in the stack instead of throwing it away.
 function position(t, u, dur, ctx) {
+    const bx = ctx.base ? ctx.base.x : 0.5;
+    const by = ctx.base ? ctx.base.y : 0.5;
     return {
-        x: 0.5 + noise(t * speed) * amount,
-        y: 0.5 + noise(t * speed + 19.7) * amount,
+        x: bx + noise(t * speed) * amount,
+        y: by + noise(t * speed + 19.7) * amount,
     };
 }
 
 function rotation(t, u, dur, ctx) {
-    return noise(t * speed + 5.3) * spin;
+    const br = ctx.base ? ctx.base.rotation : 0;
+    return br + noise(t * speed + 5.3) * spin;
 }

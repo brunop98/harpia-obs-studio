@@ -17,14 +17,20 @@ function ease(x) {
     return x * x * (3 - 2 * x); // smoothstep
 }
 
+// Multiplies into the clip's own zoom rather than replacing it, so the
+// Inspector's Zoom still means something with this script attached.
+function baseScale(ctx) { return ctx.base ? ctx.base.scale : 1; }
+
 function scale(t, u, dur, ctx) {
-    return 1 + (zoom - 1) * ease(u / Math.max(0.001, holdU));
+    return baseScale(ctx) * (1 + (zoom - 1) * ease(u / Math.max(0.001, holdU)));
 }
 
 function position(t, u, dur, ctx) {
+    const bx = ctx.base ? ctx.base.x : 0.5;
+    const by = ctx.base ? ctx.base.y : 0.5;
     const k = ease(u / Math.max(0.001, holdU));
-    if (k <= 0) return { x: 0.5, y: 0.5 };
-    const s = 1 + (zoom - 1) * k;
+    if (k <= 0) return { x: bx, y: by };
+    const s = baseScale(ctx) * (1 + (zoom - 1) * k);
 
     // Focus X/Y is a point in the PICTURE; to put it in the middle of the frame
     // the picture has to move the OTHER way, by the zoomed distance from centre.
@@ -35,8 +41,8 @@ function position(t, u, dur, ctx) {
         h1 = (ctx.clipH * fit) / ctx.canvasH;
     }
     const spanX = w1 * s, spanY = h1 * s;
-    let x = 0.5 - (focusX - 0.5) * spanX * k;
-    let y = 0.5 - (focusY - 0.5) * spanY * k;
+    let x = bx + k * (0.5 - (focusX - 0.5) * spanX - bx);
+    let y = by + k * (0.5 - (focusY - 0.5) * spanY - by);
 
     // Keep the picture covering the canvas rather than panning off its edge.
     const halfX = spanX / 2, halfY = spanY / 2;

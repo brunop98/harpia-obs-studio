@@ -36,6 +36,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <QApplication>
 #include <QClipboard>
 #include <QDir>
@@ -458,6 +459,17 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		&VideoEditorWindow::onPreviewTransformDrag);
 	connect(canvas_, &PreviewCanvas::transformZoomed, this,
 		&VideoEditorWindow::onPreviewTransformZoom);
+	// Spotlight masks, placed by looking at the picture rather than by typing
+	// four numbers into the panel.
+	connect(canvas_, &PreviewCanvas::spotlightPoseChanged, this,
+		&VideoEditorWindow::onSpotlightPoseDragged);
+	connect(canvas_, &PreviewCanvas::spotlightSelected, this, [this](int i) {
+		if (spotList_ && i >= 0 && i < spotList_->count())
+			spotList_->setCurrentRow(i);
+	});
+	// One undo entry per gesture: the drag itself only updated the model.
+	connect(canvas_, &PreviewCanvas::spotlightEditFinished, this,
+		[this]() { commitSnapshot(); });
 
 	// ---- Voiceover: a collapsible narration section (record over the video).
 	// Collapsed by default so detailed cut work keeps the vertical space; the
@@ -1731,7 +1743,10 @@ void VideoEditorWindow::addActiveSourceToTimeline()
 
 double VideoEditorWindow::timelineFps() const
 {
-	// The first source sets the project frame rate, like the canvas size does.
+	// A frame rate the project pins wins. Otherwise the first source sets it,
+	// like the canvas size does.
+	if (projFps_ >= 1.0)
+		return projFps_;
 	if (!sources_.empty() && sources_.front().seeker && sources_.front().seeker->fps() > 1.0)
 		return sources_.front().seeker->fps();
 	return 30.0;
@@ -1769,7 +1784,10 @@ QSize VideoEditorWindow::previewRenderSize(QSize canvas) const
 
 QSize VideoEditorWindow::timelineCanvasSize() const
 {
-	// The first source defines the output canvas (like the multi-source export).
+	// A canvas the project pins wins; otherwise the first source defines it
+	// (like the multi-source export).
+	if (projCanvas_.isValid() && !projCanvas_.isEmpty())
+		return projCanvas_;
 	if (!sources_.empty() && sources_.front().width > 0 && sources_.front().height > 0)
 		return QSize(sources_.front().width, sources_.front().height);
 	return QSize(1920, 1080);
@@ -2199,6 +2217,103 @@ qint64 dirSize(const QString &path)
 }
 } // namespace
 
+namespace {
+
+// The output-format presets. Both lists are ordered the way an editor thinks
+// about them — the common ones first, the specialist ones after — and both are
+// bracketed by "Auto" at the top and "Custom" at the bottom.
+struct ResPreset {
+	const char *label;
+	int w, h;
+};
+const ResPreset kResPresets[] = {
+	{"3840 × 2160  (4K UHD)", 3840, 2160},
+	{"2560 × 1440  (QHD)", 2560, 1440},
+	{"1920 × 1080  (Full HD)", 1920, 1080},
+	{"1280 × 720  (HD)", 1280, 720},
+	{"854 × 480  (SD)", 854, 480},
+	{"1080 × 1920  (Vertical 9:16)", 1080, 1920},
+	{"720 × 1280  (Vertical 720)", 720, 1280},
+	{"1080 × 1080  (Square 1:1)", 1080, 1080},
+	{"1080 × 1350  (Portrait 4:5)", 1080, 1350},
+	{"2560 × 1080  (Ultrawide 21:9)", 2560, 1080},
+};
+constexpr int kResPresetCount = int(sizeof(kResPresets) / sizeof(kResPresets[0]));
+
+struct FpsPreset {
+	const char *label;
+	double fps;
+};
+const FpsPreset kFpsPresets[] = {
+	{"23.976  (film, NTSC)", 24000.0 / 1001.0},
+	{"24  (film)", 24.0},
+	{"25  (PAL)", 25.0},
+	{"29.97  (NTSC)", 30000.0 / 1001.0},
+	{"30", 30.0},
+	{"48", 48.0},
+	{"50  (PAL HD)", 50.0},
+	{"59.94  (NTSC HD)", 60000.0 / 1001.0},
+	{"60", 60.0},
+	{"120", 120.0},
+};
+constexpr int kFpsPresetCount = int(sizeof(kFpsPresets) / sizeof(kFpsPresets[0]));
+
+// "1920 × 1080" -> "16:9". Reduced by the greatest common divisor, and the
+// handful of ratios that reduce to something unhelpful (683:384 for 2048×1152)
+// are snapped to the name people actually use.
+QString aspectLabel(QSize s)
+{
+	if (s.width() <= 0 || s.height() <= 0)
+		return QStringLiteral("—");
+	const double r = double(s.width()) / double(s.height());
+	struct Named {
+		const char *name;
+		double ratio;
+	};
+	static const Named known[] = {{"16:9", 16.0 / 9.0},  {"9:16", 9.0 / 16.0},
+				      {"4:3", 4.0 / 3.0},    {"3:4", 3.0 / 4.0},
+				      {"1:1", 1.0},          {"21:9", 21.0 / 9.0},
+				      {"4:5", 4.0 / 5.0},    {"5:4", 5.0 / 4.0},
+				      {"3:2", 3.0 / 2.0},    {"2:3", 2.0 / 3.0}};
+	for (const Named &n : known)
+		if (std::abs(r - n.ratio) < 0.01)
+			return QString::fromLatin1(n.name);
+	const int g = std::gcd(s.width(), s.height());
+	return QStringLiteral("%1:%2").arg(s.width() / g).arg(s.height() / g);
+}
+
+// 29.97 is 30000/1001, and showing it as "29.97" is right while showing
+// "30.00" for it is not — so trailing zeros go, and the rest keeps two places.
+QString fpsLabel(double fps)
+{
+	QString s = QString::number(fps, 'f', 3);
+	while (s.endsWith(QLatin1Char('0')))
+		s.chop(1);
+	if (s.endsWith(QLatin1Char('.')))
+		s.chop(1);
+	return s;
+}
+
+// Hiding a widget inside a QFormLayout leaves its label sitting there on its
+// own, so a row has to be hidden AS a row.
+//
+// The form is passed in rather than looked up from the widget: this form is a
+// SUB-layout of the section's vertical layout, so parentWidget()->layout()
+// answers with the vertical one and the row is never found. The row index
+// itself is looked up each time, so inserting a row above cannot stale it.
+void setFormRowVisible(QFormLayout *f, QWidget *w, bool on)
+{
+	if (!f || !w)
+		return;
+	int row = -1;
+	QFormLayout::ItemRole role{};
+	f->getWidgetPosition(w, &row, &role);
+	if (row >= 0)
+		f->setRowVisible(row, on);
+}
+
+} // namespace
+
 void VideoEditorWindow::buildProjectInspector(QVBoxLayout *into)
 {
 	QWidget *body = addSection(into, QStringLiteral("Project"), true);
@@ -2240,11 +2355,157 @@ void VideoEditorWindow::buildProjectInspector(QVBoxLayout *into)
 	form->addRow(mkKey(QStringLiteral("Created")), pjCreated_);
 	form->addRow(mkKey(QStringLiteral("Last saved")), pjSaved_);
 	form->addRow(mkKey(QStringLiteral("Author")), pjAuthor_);
-	form->addRow(mkKey(QStringLiteral("Format")), pjFormat_);
 	form->addRow(mkKey(QStringLiteral("Version")), pjVersion_);
 	form->addRow(mkKey(QStringLiteral("Size")), pjSize_);
 	form->addRow(mkKey(QStringLiteral("Autosave")), pjAutosave_);
 	v->addLayout(form);
+
+	// ---- Output format: resolution + frame rate --------------------------
+	// Editable, unlike the rest of this section, because these two decide what
+	// the preview and the export actually produce.
+	auto *fmtHdr = new QLabel(QStringLiteral("Output"), this);
+	fmtHdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed; margin-top:6px;"));
+	v->addWidget(fmtHdr);
+
+	auto *fmt = new QFormLayout;
+	pjFmtForm_ = fmt; // kept so the Custom rows can be shown and hidden as rows
+	fmt->setContentsMargins(0, 0, 0, 0);
+	fmt->setHorizontalSpacing(8);
+	fmt->setVerticalSpacing(3);
+	fmt->setLabelAlignment(Qt::AlignLeft);
+
+	pjResCombo_ = new QComboBox(this);
+	pjResCombo_->addItem(QStringLiteral("Auto — match the first clip"));
+	// fromUtf8, not fromLatin1: these labels contain a multiplication sign, and
+	// Latin-1 decodes its two UTF-8 bytes as two separate characters.
+	for (const ResPreset &p : kResPresets)
+		pjResCombo_->addItem(QString::fromUtf8(p.label));
+	pjResCombo_->addItem(QStringLiteral("Custom…"));
+	pjResCombo_->setToolTip(QStringLiteral(
+		"The canvas every clip is composited onto, and the size the export writes."));
+	fmt->addRow(mkKey(QStringLiteral("Resolution")), pjResCombo_);
+
+	// The two spin boxes only appear for Custom, so the common case is one row.
+	pjResCustom_ = new QWidget(this);
+	auto *rc = new QHBoxLayout(pjResCustom_);
+	rc->setContentsMargins(0, 0, 0, 0);
+	rc->setSpacing(4);
+	pjResW_ = new QSpinBox(pjResCustom_);
+	pjResH_ = new QSpinBox(pjResCustom_);
+	for (QSpinBox *sb : {pjResW_, pjResH_}) {
+		// Even numbers only: H.264 cannot encode an odd dimension with 4:2:0
+		// chroma, so an odd value here would fail at export rather than here.
+		sb->setRange(16, 7680);
+		sb->setSingleStep(2);
+		sb->setKeyboardTracking(false);
+	}
+	pjResW_->setToolTip(QStringLiteral("Width in pixels (even numbers only — H.264 requires it)"));
+	pjResH_->setToolTip(QStringLiteral("Height in pixels (even numbers only)"));
+	rc->addWidget(pjResW_);
+	rc->addWidget(new QLabel(QStringLiteral("×"), pjResCustom_));
+	rc->addWidget(pjResH_);
+	fmt->addRow(mkKey(QString()), pjResCustom_);
+
+	pjFpsCombo_ = new QComboBox(this);
+	pjFpsCombo_->addItem(QStringLiteral("Auto — match the first clip"));
+	for (const FpsPreset &p : kFpsPresets)
+		pjFpsCombo_->addItem(QString::fromUtf8(p.label));
+	pjFpsCombo_->addItem(QStringLiteral("Custom…"));
+	pjFpsCombo_->setToolTip(QStringLiteral(
+		"Frames per second for the export, and the step the arrow keys nudge the playhead by."));
+	fmt->addRow(mkKey(QStringLiteral("Frame rate")), pjFpsCombo_);
+
+	pjFpsSpin_ = new QDoubleSpinBox(this);
+	pjFpsSpin_->setRange(1.0, 240.0);
+	pjFpsSpin_->setDecimals(3);
+	pjFpsSpin_->setSingleStep(1.0);
+	pjFpsSpin_->setSuffix(QStringLiteral(" fps"));
+	pjFpsSpin_->setKeyboardTracking(false);
+	fmt->addRow(mkKey(QString()), pjFpsSpin_);
+
+	pjAspect_ = mkVal();
+	fmt->addRow(mkKey(QStringLiteral("Aspect")), pjAspect_);
+	pjFormat_ = mkVal();
+	fmt->addRow(mkKey(QStringLiteral("Effective")), pjFormat_);
+	v->addLayout(fmt);
+
+	pjFormatWarn_ = new QLabel(this);
+	pjFormatWarn_->setWordWrap(true);
+	pjFormatWarn_->setStyleSheet(QStringLiteral("color:#e2a03f; font-size:11px;"));
+	pjFormatWarn_->setVisible(false);
+	v->addWidget(pjFormatWarn_);
+
+	auto *fmtRow = new QHBoxLayout;
+	auto *matchBtn = new QPushButton(QStringLiteral("Match first clip"), this);
+	matchBtn->setToolTip(QStringLiteral("Pin the canvas and frame rate to what the first "
+					    "clip actually is, instead of following it."));
+	fmtRow->addWidget(matchBtn);
+	fmtRow->addStretch(1);
+	v->addLayout(fmtRow);
+	connect(matchBtn, &QPushButton::clicked, this, [this]() {
+		// Freeze what Auto is resolving to right now, rather than leaving it
+		// to change when another clip becomes the first one.
+		projCanvas_ = timelineCanvasSize();
+		projFps_ = timelineFps();
+		projResCustom_ = projFpsCustom_ = false; // show the preset if one fits
+		syncProjectFormatControls();
+		applyProjectFormat();
+	});
+
+	auto onRes = [this](int) {
+		if (syncingProject_)
+			return;
+		const int idx = pjResCombo_->currentIndex();
+		projResCustom_ = (idx == kResPresetCount + 1);
+		if (idx == 0) {
+			projCanvas_ = QSize(); // auto
+		} else if (idx == kResPresetCount + 1) {
+			// Entering Custom keeps whatever is on screen, so the boxes start
+			// from the size you were just looking at instead of jumping.
+			const QSize cur = timelineCanvasSize();
+			projCanvas_ = QSize(pjResW_->value() > 16 ? pjResW_->value() : cur.width(),
+					    pjResH_->value() > 16 ? pjResH_->value() : cur.height());
+		} else {
+			const ResPreset &p = kResPresets[idx - 1];
+			projCanvas_ = QSize(p.w, p.h);
+		}
+		syncProjectFormatControls();
+		applyProjectFormat();
+	};
+	connect(pjResCombo_, &QComboBox::currentIndexChanged, this, onRes);
+
+	auto onCustomRes = [this]() {
+		if (syncingProject_)
+			return;
+		// Round to even here rather than rejecting the keystroke: typing "1081"
+		// should land on something valid, not refuse to accept the digit.
+		projCanvas_ = QSize(pjResW_->value() & ~1, pjResH_->value() & ~1);
+		syncProjectFormatControls();
+		applyProjectFormat();
+	};
+	connect(pjResW_, &QSpinBox::valueChanged, this, onCustomRes);
+	connect(pjResH_, &QSpinBox::valueChanged, this, onCustomRes);
+
+	connect(pjFpsCombo_, &QComboBox::currentIndexChanged, this, [this](int idx) {
+		if (syncingProject_)
+			return;
+		projFpsCustom_ = (idx == kFpsPresetCount + 1);
+		if (idx == 0)
+			projFps_ = 0.0; // auto
+		else if (idx == kFpsPresetCount + 1)
+			projFps_ = pjFpsSpin_->value();
+		else
+			projFps_ = kFpsPresets[idx - 1].fps;
+		syncProjectFormatControls();
+		applyProjectFormat();
+	});
+	connect(pjFpsSpin_, &QDoubleSpinBox::valueChanged, this, [this](double f) {
+		if (syncingProject_)
+			return;
+		projFps_ = f;
+		syncProjectFormatControls();
+		applyProjectFormat();
+	});
 
 	autosaveChk_ = new QCheckBox(QStringLiteral("Autosave every 5 minutes"), this);
 	autosaveChk_->setToolTip(QStringLiteral(
@@ -2288,6 +2549,121 @@ void VideoEditorWindow::buildProjectInspector(QVBoxLayout *into)
 	autosaveChk_->setChecked(wantAutosave);
 	if (wantAutosave)
 		autosaveTimer_->start();
+
+	// A new project starts on whatever format you last chose, because the next
+	// video is usually for the same place as the last one. Auto stays the
+	// default until you pick something, and a project you OPEN overrides this.
+	const QSettings st;
+	const int rw = st.value(QStringLiteral("editor/projectW"), 0).toInt();
+	const int rh = st.value(QStringLiteral("editor/projectH"), 0).toInt();
+	if (rw >= 16 && rh >= 16)
+		projCanvas_ = QSize(rw & ~1, rh & ~1);
+	const double sf = st.value(QStringLiteral("editor/projectFps"), 0.0).toDouble();
+	if (sf >= 1.0 && sf <= 240.0)
+		projFps_ = sf;
+	syncProjectFormatControls();
+}
+
+// Push the current resolution/frame rate into the widgets, and work out
+// everything derived from them (which rows are visible, the aspect, the
+// warnings). One function so the controls cannot disagree with the values.
+void VideoEditorWindow::syncProjectFormatControls()
+{
+	if (!pjResCombo_)
+		return;
+	const QSignalBlocker b1(pjResCombo_), b2(pjResW_), b3(pjResH_), b4(pjFpsCombo_),
+		b5(pjFpsSpin_);
+	syncingProject_ = true;
+
+	// --- resolution
+	int resIdx = 0; // Auto
+	if (projCanvas_.isValid() && !projCanvas_.isEmpty()) {
+		resIdx = kResPresetCount + 1; // Custom, unless a preset matches exactly
+		if (!projResCustom_)
+			for (int i = 0; i < kResPresetCount; ++i)
+				if (kResPresets[i].w == projCanvas_.width() &&
+				    kResPresets[i].h == projCanvas_.height()) {
+					resIdx = i + 1;
+					break;
+				}
+	}
+	pjResCombo_->setCurrentIndex(resIdx);
+	const QSize eff = timelineCanvasSize();
+	pjResW_->setValue(eff.width());
+	pjResH_->setValue(eff.height());
+	setFormRowVisible(pjFmtForm_, pjResCustom_, resIdx == kResPresetCount + 1);
+
+	// --- frame rate
+	int fpsIdx = 0;
+	if (projFps_ >= 1.0) {
+		fpsIdx = kFpsPresetCount + 1;
+		if (!projFpsCustom_)
+			for (int i = 0; i < kFpsPresetCount; ++i)
+				if (std::abs(kFpsPresets[i].fps - projFps_) < 0.005) {
+					fpsIdx = i + 1;
+					break;
+				}
+	}
+	pjFpsCombo_->setCurrentIndex(fpsIdx);
+	pjFpsSpin_->setValue(timelineFps());
+	setFormRowVisible(pjFmtForm_, pjFpsSpin_, fpsIdx == kFpsPresetCount + 1);
+
+	// --- derived readouts
+	pjAspect_->setText(QStringLiteral("%1   (%2 × %3)")
+				   .arg(aspectLabel(eff))
+				   .arg(eff.width())
+				   .arg(eff.height()));
+	pjFormat_->setText(QStringLiteral("%1 × %2 @ %3 fps%4")
+				   .arg(eff.width())
+				   .arg(eff.height())
+				   .arg(fpsLabel(timelineFps()))
+				   .arg(projCanvas_.isValid() || projFps_ >= 1.0 ? QString()
+										: QStringLiteral(" (auto)")));
+
+	// --- warnings, worth saying because they cost quality rather than failing
+	QStringList warn;
+	if (!sources_.empty() && sources_.front().width > 0 && sources_.front().height > 0) {
+		const QSize src(sources_.front().width, sources_.front().height);
+		if (aspectLabel(src) != aspectLabel(eff))
+			warn << QStringLiteral("Your first clip is %1 (%2×%3) — it will be "
+					       "letterboxed onto a %4 canvas.")
+					.arg(aspectLabel(src))
+					.arg(src.width())
+					.arg(src.height())
+					.arg(aspectLabel(eff));
+		if (eff.width() > src.width() * 2)
+			warn << QStringLiteral("The canvas is more than twice your source's width; "
+					       "the extra pixels are upscaled, not real detail.");
+	}
+	if (eff.width() % 2 || eff.height() % 2)
+		warn << QStringLiteral("Odd dimensions cannot be encoded as H.264.");
+	pjFormatWarn_->setText(warn.join(QLatin1Char('\n')));
+	pjFormatWarn_->setVisible(!warn.isEmpty());
+
+	syncingProject_ = false;
+}
+
+// A format change moves everything downstream: the compositor's canvas, the
+// preview render size, the timeline's frame step, and what export will write.
+void VideoEditorWindow::applyProjectFormat()
+{
+	QSettings st;
+	if (projCanvas_.isValid() && !projCanvas_.isEmpty()) {
+		st.setValue(QStringLiteral("editor/projectW"), projCanvas_.width());
+		st.setValue(QStringLiteral("editor/projectH"), projCanvas_.height());
+	} else {
+		st.remove(QStringLiteral("editor/projectW"));
+		st.remove(QStringLiteral("editor/projectH"));
+	}
+	if (projFps_ >= 1.0)
+		st.setValue(QStringLiteral("editor/projectFps"), projFps_);
+	else
+		st.remove(QStringLiteral("editor/projectFps"));
+
+	if (timelineView_)
+		timelineView_->setFrameRate(timelineFps());
+	refreshPreviewFrame();
+	refreshProjectInspector();
 }
 
 void VideoEditorWindow::refreshProjectInspector()
@@ -2307,15 +2683,6 @@ void VideoEditorWindow::refreshProjectInspector()
 	pjAuthor_->setText(projectAuthor_);
 	pjVersion_->setText(QStringLiteral("Harpia project v3 · app %1").arg(appVersion()));
 
-	const QSize c = timelineCanvasSize();
-	double fps = 0.0;
-	if (!sources_.empty() && sources_.front().seeker)
-		fps = sources_.front().seeker->fps();
-	pjFormat_->setText(fps > 1.0 ? QStringLiteral("%1 × %2 @ %3 fps")
-					       .arg(c.width())
-					       .arg(c.height())
-					       .arg(fps, 0, 'f', 2)
-				     : QStringLiteral("%1 × %2").arg(c.width()).arg(c.height()));
 
 	// Project size = the project file + its assets folder (voiceover takes).
 	qint64 bytes = 0;
@@ -2332,6 +2699,11 @@ void VideoEditorWindow::refreshProjectInspector()
 	pjSize_->setText(saved ? QStringLiteral("%1  (media %2)")
 					 .arg(humanBytes(bytes), humanBytes(media))
 			       : QStringLiteral("—  (media %1)").arg(humanBytes(media)));
+
+	// The Auto values and the letterbox warning both read the first source, so
+	// they are recomputed whenever anything about the project is refreshed.
+	if (!syncingProject_)
+		syncProjectFormatControls();
 
 	if (!autosaveChk_ || !autosaveChk_->isChecked())
 		pjAutosave_->setText(QStringLiteral("Off"));
@@ -2875,6 +3247,14 @@ int VideoEditorWindow::selectedMaskRow() const
 // and land as one undo step -- the same contract the clip editors have.
 void VideoEditorWindow::editSpotlight(const std::function<void(SpotlightSpec &)> &fn)
 {
+	editSpotlight(fn, /*commit=*/true);
+}
+
+// `commit` false is for the middle of a drag: the model and the preview update
+// on every mouse-move, but the undo entry is written once, when the mouse comes
+// up. Without that a single gesture would leave a hundred entries behind.
+void VideoEditorWindow::editSpotlight(const std::function<void(SpotlightSpec &)> &fn, bool commit)
+{
 	if (!timelineView_)
 		return;
 	TimelineModel m = timelineView_->model();
@@ -2882,7 +3262,41 @@ void VideoEditorWindow::editSpotlight(const std::function<void(SpotlightSpec &)>
 	timelineView_->setModel(m);
 	syncSpotlightInspector();
 	showTimelineFrame(timelinePlayheadMs());
-	commitSnapshot();
+	if (commit)
+		commitSnapshot();
+}
+
+// A mask dragged in the preview. Where the new pose goes depends on whether the
+// mask is animated: an un-keyframed mask just moves, but writing a resting pose
+// onto a KEYFRAMED mask would be invisible — the keys would immediately
+// override it — so for those the drag lands on a key at the playhead, replacing
+// one if it is already there. This is the same rule the clip transform follows,
+// which is why dragging a mask and dragging a clip feel the same.
+void VideoEditorWindow::onSpotlightPoseDragged(int index, const SpotPose &pose)
+{
+	const qint64 now = timelinePlayheadMs();
+	editSpotlight(
+		[&](SpotlightSpec &s) {
+			if (index < 0 || index >= s.masks.size())
+				return;
+			SpotMask &m = s.masks[index];
+			if (m.keys.isEmpty()) {
+				m.pose = pose;
+				return;
+			}
+			for (SpotKey &k : m.keys)
+				if (k.tMs == now) {
+					k.pose = pose;
+					return;
+				}
+			SpotKey k;
+			k.tMs = now;
+			k.pose = pose;
+			m.keys.append(k);
+			std::sort(m.keys.begin(), m.keys.end(),
+				  [](const SpotKey &a, const SpotKey &b) { return a.tMs < b.tMs; });
+		},
+		/*commit=*/false);
 }
 
 void VideoEditorWindow::syncSpotlightInspector()
@@ -2949,6 +3363,24 @@ void VideoEditorWindow::syncSpotlightInspector()
 		spotRot_->setValue(m.pose.rotation);
 		spotRadius_->setValue(m.pose.radius);
 		spotRadius_->setEnabled(m.shape == SpotShape::RoundRect);
+	}
+
+	// Hand the preview what to draw handles for. The poses are resolved AT THE
+	// PLAYHEAD, so a keyframed mask's handles sit on the shape you can see
+	// rather than on its resting pose.
+	if (canvas_) {
+		const qint64 now = timelinePlayheadMs();
+		QVector<PreviewCanvas::SpotDraw> draw;
+		draw.reserve(s.masks.size());
+		for (const SpotMask &m : s.masks) {
+			PreviewCanvas::SpotDraw sd;
+			sd.shape = m.shape;
+			sd.pose = m.poseAt(now);
+			sd.enabled = m.enabled;
+			draw.append(sd);
+		}
+		canvas_->setSpotlightMode(fullEdit() && s.enabled && !s.masks.isEmpty());
+		canvas_->setSpotlightMasks(draw, r);
 	}
 	syncingSpot_ = wasSyncing;
 }
@@ -4073,6 +4505,8 @@ bool VideoEditorWindow::hasUnsavedEdits() const
 		return true; // recorded narration would be lost
 	if (timelineView_ && !timelineView_->model().isEmpty())
 		return true; // Full-editing timeline in progress
+	if (projCanvas_.isValid() || projFps_ >= 1.0)
+		return true; // a pinned output format is a decision worth keeping
 	return false;
 }
 
@@ -4995,6 +5429,15 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 	root[QStringLiteral("saved")] = QDateTime::currentDateTime().toString(Qt::ISODate);
 	if (!projectAuthor_.isEmpty())
 		root[QStringLiteral("author")] = projectAuthor_;
+	// Output format. Only written when PINNED: an absent key means "auto", so a
+	// project saved before this existed still follows its first clip, and one
+	// left on Auto keeps doing so on another machine.
+	if (projCanvas_.isValid() && !projCanvas_.isEmpty()) {
+		root[QStringLiteral("canvasW")] = projCanvas_.width();
+		root[QStringLiteral("canvasH")] = projCanvas_.height();
+	}
+	if (projFps_ >= 1.0)
+		root[QStringLiteral("fps")] = projFps_;
 	// All sources (index by stable id; segments reference these ids).
 	QJsonArray srcArr;
 	for (const EditorSource &es : sources_) {
@@ -5110,6 +5553,9 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 	return QString();
 }
 
+// The file dialog, the read and the parse. Applying what was parsed is
+// applyProjectJson() below -- separated so opening a project can be driven
+// without a dialog in front of it.
 void VideoEditorWindow::onOpenProject()
 {
 	if (!valid_)
@@ -5134,7 +5580,31 @@ void VideoEditorWindow::onOpenProject()
 				     QStringLiteral("This is not a valid Harpia project file."));
 		return;
 	}
-	const QJsonObject root = doc.object();
+	applyProjectJson(doc.object(), path, /*quiet=*/false);
+}
+
+// Open a project from a known path. Same validation as the menu item, without
+// the dialog and without a message box on failure.
+bool VideoEditorWindow::openProjectAt(const QString &path)
+{
+	if (!valid_)
+		return false;
+	QFile f(path);
+	if (!f.open(QIODevice::ReadOnly))
+		return false;
+	QJsonParseError perr;
+	const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &perr);
+	f.close();
+	if (perr.error != QJsonParseError::NoError || !doc.isObject() ||
+	    !doc.object().contains(QStringLiteral("harpiaProject")))
+		return false;
+	applyProjectJson(doc.object(), path, /*quiet=*/true);
+	return true;
+}
+
+// Rebuild the whole editor from a parsed project document.
+void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString &path, bool quiet)
+{
 	const int ver = root.value(QStringLiteral("harpiaProject")).toInt(1);
 
 	// v2 projects carry their own list of sources — open (or relink) each and
@@ -5157,7 +5627,9 @@ void VideoEditorWindow::onOpenProject()
 					break;
 				}
 			if (eid < 0) {
-				if (!QFileInfo::exists(spath)) {
+				// A quiet open never puts a dialog up: a missing file is
+				// left missing rather than stopping an automated caller.
+				if (!quiet && !QFileInfo::exists(spath)) {
 					const QString picked = QFileDialog::getOpenFileName(
 						this,
 						QStringLiteral("Locate \"%1\"")
@@ -5181,7 +5653,8 @@ void VideoEditorWindow::onOpenProject()
 		}
 	} else {
 		const QString projSourceName = root.value(QStringLiteral("sourceName")).toString();
-		if (!projSourceName.isEmpty() && projSourceName != QFileInfo(inPath_).fileName()) {
+		if (!quiet && !projSourceName.isEmpty() &&
+		    projSourceName != QFileInfo(inPath_).fileName()) {
 			const auto ret = QMessageBox::question(
 				this, QStringLiteral("Open project"),
 				QStringLiteral(
@@ -5296,6 +5769,22 @@ void VideoEditorWindow::onOpenProject()
 	projectAuthor_ = root.value(QStringLiteral("author")).toString();
 	projectCreated_ =
 		QDateTime::fromString(root.value(QStringLiteral("created")).toString(), Qt::ISODate);
+	// The project's own format beats the remembered one -- opening someone
+	// else's 4K vertical edit must not quietly render it at your last setting.
+	// Absent keys mean auto, which is also what every pre-v0.1.156 project says.
+	{
+		const int cw = root.value(QStringLiteral("canvasW")).toInt();
+		const int chh = root.value(QStringLiteral("canvasH")).toInt();
+		projCanvas_ = (cw >= 16 && chh >= 16) ? QSize(cw & ~1, chh & ~1) : QSize();
+		const double f = root.value(QStringLiteral("fps")).toDouble();
+		projFps_ = (f >= 1.0 && f <= 240.0) ? f : 0.0;
+		// A project stores numbers, not which dropdown entry produced them, so
+		// a saved size that matches a preset comes back showing that preset.
+		projResCustom_ = projFpsCustom_ = false;
+		if (timelineView_)
+			timelineView_->setFrameRate(timelineFps());
+		syncProjectFormatControls();
+	}
 	refreshProjectInspector();
 
 	// Open in the mode the project was authored in.
@@ -5308,8 +5797,9 @@ void VideoEditorWindow::onOpenProject()
 	}
 	captureSnapshot(); // make the load an undo step
 	updateUndoRedoButtons();
-	QMessageBox::information(this, QStringLiteral("Open project"),
-				QStringLiteral("Project loaded."));
+	if (!quiet)
+		QMessageBox::information(this, QStringLiteral("Open project"),
+					 QStringLiteral("Project loaded."));
 }
 
 void VideoEditorWindow::joinExport()
@@ -6345,11 +6835,9 @@ void VideoEditorWindow::onSave()
 		const QSize canvas = timelineCanvasSize();
 		o.canvasW = canvas.width();
 		o.canvasH = canvas.height();
-		// Match the primary source's frame rate when we know it.
-		double fps = 30.0;
-		if (!sources_.empty() && sources_.front().seeker && sources_.front().seeker->fps() > 1.0)
-			fps = sources_.front().seeker->fps();
-		o.timelineFps = fps;
+		// Through the same resolver the preview uses, so the export cannot end
+		// up on a different frame rate from the one you were watching.
+		o.timelineFps = timelineFps();
 		o.cuts.clear();
 		o.inputs.clear();
 		o.crop = false;

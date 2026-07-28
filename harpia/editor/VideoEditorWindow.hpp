@@ -46,6 +46,7 @@ class QDragEnterEvent;
 class QDropEvent;
 class QEvent;
 class QShowEvent;
+class QJsonObject;
 
 namespace harpia {
 
@@ -135,6 +136,17 @@ public:
 	~VideoEditorWindow() override;
 
 	bool isValid() const { return valid_; }
+
+	// The project's output format, after resolving "Auto" against the first
+	// source. Everything that renders or encodes goes through these two, so the
+	// preview and the export can never disagree about the canvas or the rate.
+	QSize timelineCanvasSize() const;
+	double timelineFps() const;
+
+	// Save to / open from an explicit path, with no dialog. The menu items wrap
+	// these; tests and the autosave timer use them directly.
+	QString saveProjectTo(const QString &path, bool quiet);
+	bool openProjectAt(const QString &path);
 
 	// Called for every close path (title-bar X, Close button, Esc). When there
 	// are unsaved edits, asks: Cancel (keep editing) or Close window (discard).
@@ -263,7 +275,6 @@ private:
 	void onTimelineScrub(qint64 outMs);
 	void onTimelineHoverScrub(qint64 outMs);
 	void showTimelineFrame(qint64 outMs);
-	QSize timelineCanvasSize() const; // primary source's resolution (fallback 1920x1080)
 	void addActiveSourceToTimeline(); // "Add to timeline" for the active source
 	// ---- Audio on the timeline (Full editing) ----
 	// Register an audio-only file as a source (decoded to a session WAV so the
@@ -315,7 +326,6 @@ private:
 	// Playhead clamped inside the selected clip: where an edit applies AND is
 	// previewed, so the two can never disagree.
 	qint64 timelineEditMs() const;
-	double timelineFps() const; // project frame rate (the first source's)
 
 	// ---- Preview quality ----
 	// Compositing, decoding and the shader chain all scale with the rendered
@@ -438,10 +448,38 @@ private:
 	QLabel *pjAutosave_ = nullptr;
 	QLineEdit *pjAuthor_ = nullptr;
 	QCheckBox *autosaveChk_ = nullptr;
+
+	// ---- Project output format -------------------------------------------
+	// Both are "unset means follow the first source", which is what the editor
+	// always did. Setting either pins it: the canvas and the frame rate stop
+	// changing under you when you add a clip shot on a different camera.
+	QSize projCanvas_;         // invalid = auto
+	double projFps_ = 0.0;     // <= 0 = auto
+	// "Custom" is a CHOICE, not a deduction. Inferring it from the value alone
+	// meant that picking Custom while the size happened to equal a preset
+	// bounced the combo straight back to that preset, so the width and height
+	// boxes could never be opened at all.
+	bool projResCustom_ = false;
+	bool projFpsCustom_ = false;
+	QComboBox *pjResCombo_ = nullptr;
+	QSpinBox *pjResW_ = nullptr;
+	QSpinBox *pjResH_ = nullptr;
+	QWidget *pjResCustom_ = nullptr;
+	QComboBox *pjFpsCombo_ = nullptr;
+	QDoubleSpinBox *pjFpsSpin_ = nullptr;
+	QFormLayout *pjFmtForm_ = nullptr; // owns the two Custom rows
+	QLabel *pjAspect_ = nullptr;
+	QLabel *pjFormatWarn_ = nullptr;
+	bool syncingProject_ = false;
+
 	void buildProjectInspector(QVBoxLayout *into);
 	void refreshProjectInspector();
+	void syncProjectFormatControls(); // push the current values into the widgets
+	void applyProjectFormat();        // read the widgets, re-render, re-measure
 	void onSaveProjectAs();
-	QString saveProjectTo(const QString &path, bool quiet);
+	// `quiet` suppresses every dialog: the relink picker, the wrong-source
+	// question and the "Project loaded" confirmation. openProjectAt() is quiet.
+	void applyProjectJson(const QJsonObject &root, const QString &path, bool quiet);
 	void doAutosave();
 	void revealProjectFolder();
 	// A collapsible "▾ Title" section; returns the body to fill in.
@@ -526,6 +564,10 @@ private:
 	void buildSpotlightInspector(QVBoxLayout *into);
 	void syncSpotlightInspector();
 	void editSpotlight(const std::function<void(SpotlightSpec &)> &fn);
+	void editSpotlight(const std::function<void(SpotlightSpec &)> &fn, bool commit);
+	// A mask was dragged in the preview: write the pose (as a keyframe when the
+	// mask is animated, otherwise as its resting pose).
+	void onSpotlightPoseDragged(int index, const SpotPose &pose);
 	int selectedMaskRow() const;
 	QWidget *spotBox_ = nullptr;
 	QCheckBox *spotOn_ = nullptr;

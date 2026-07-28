@@ -114,6 +114,9 @@ void PreviewCanvas::paintEvent(QPaintEvent *)
 		p.drawRect(r);
 	}
 
+	if (spotMode_)
+		drawSpotlight(p);
+
 	if (!cropEnabled_)
 		return;
 
@@ -191,6 +194,217 @@ void PreviewCanvas::setTransformRect(const QRectF &canvasRect)
 	update();
 }
 
+// ---- Spotlight handles ------------------------------------------------------
+//
+// The Spotlight model has always been keyframable and pixel-exact; what it did
+// not have was a way to place a mask by looking at the picture. Everything here
+// is that: the shape drawn where it really is, eight grips, a rotation arm, and
+// snapping to the canvas's own landmarks.
+//
+// All coordinates are normalised to the canvas (0..1) because that is what the
+// model stores — the same numbers render identically at preview size and at
+// export size, which is the guarantee the whole compositor is built on.
+
+namespace {
+constexpr int kSpotGrip = 5;       // half-size of a grip square, widget px
+constexpr int kSpotGrab = 9;       // how close the cursor has to be to grab one
+constexpr int kSpotRotateArm = 26; // distance from the top edge to the rotate knob
+constexpr double kSnapTolPx = 7.0; // snapping reach, in widget pixels
+} // namespace
+
+void PreviewCanvas::setSpotlightMode(bool on)
+{
+	if (spotMode_ == on)
+		return;
+	spotMode_ = on;
+	spotDrag_ = SpotZone::None;
+	spotGuideHOn_ = spotGuideVOn_ = false;
+	setMouseTracking(true); // so the cursor can change over a grip
+	setCursor(Qt::ArrowCursor);
+	update();
+}
+
+void PreviewCanvas::setSpotlightMasks(const QVector<SpotDraw> &masks, int selected)
+{
+	// A drag owns the pose it is editing; letting the window push a new one
+	// mid-gesture would fight the mouse.
+	if (spotDrag_ != SpotZone::None)
+		return;
+	spotMasks_ = masks;
+	spotSel_ = selected;
+	update();
+}
+
+QPointF PreviewCanvas::canvasToWidgetF(double nx, double ny) const
+{
+	const QRect d = displayRect();
+	return QPointF(d.x() + nx * d.width(), d.y() + ny * d.height());
+}
+
+QPointF PreviewCanvas::widgetToCanvasF(const QPointF &p) const
+{
+	const QRect d = displayRect();
+	if (d.width() <= 0 || d.height() <= 0)
+		return QPointF();
+	return QPointF((p.x() - d.x()) / d.width(), (p.y() - d.y()) / d.height());
+}
+
+// Widget pixels -> the mask's own axes, in widget-pixel units with the origin at
+// the mask's centre. Un-rotating here is what makes a grip on a turned mask
+// behave the way it looks: dragging the right edge widens it along ITS width.
+QPointF PreviewCanvas::maskLocal(int i, const QPointF &widgetPt) const
+{
+	if (i < 0 || i >= spotMasks_.size())
+		return QPointF();
+	const SpotPose &po = spotMasks_[i].pose;
+	const QPointF c = canvasToWidgetF(po.cx, po.cy);
+	const QPointF v = widgetPt - c;
+	const double a = -po.rotation * M_PI / 180.0;
+	return QPointF(v.x() * std::cos(a) - v.y() * std::sin(a),
+		       v.x() * std::sin(a) + v.y() * std::cos(a));
+}
+
+// The eight grips plus the rotation knob, in WIDGET coordinates, already turned
+// by the mask's rotation. Order: TL, T, TR, L, R, BL, B, BR, Rotate.
+QVector<QPointF> PreviewCanvas::spotHandlePoints(int i) const
+{
+	QVector<QPointF> out;
+	if (i < 0 || i >= spotMasks_.size())
+		return out;
+	const QRect d = displayRect();
+	const SpotPose &po = spotMasks_[i].pose;
+	// A Circle takes its height from its width in PIXELS, exactly as the
+	// renderer does, or the handles would sit off the shape on a non-square
+	// canvas.
+	const double wpx = po.w * d.width();
+	const double hpx = (spotMasks_[i].shape == SpotShape::Circle) ? wpx : po.h * d.height();
+	const double hw = wpx / 2.0, hh = hpx / 2.0;
+	const QPointF local[9] = {{-hw, -hh}, {0, -hh},  {hw, -hh},
+				  {-hw, 0},   {hw, 0},   {-hw, hh},
+				  {0, hh},    {hw, hh},  {0, -hh - kSpotRotateArm}};
+	const QPointF c = canvasToWidgetF(po.cx, po.cy);
+	const double a = po.rotation * M_PI / 180.0;
+	for (const QPointF &l : local)
+		out.append(c + QPointF(l.x() * std::cos(a) - l.y() * std::sin(a),
+				       l.x() * std::sin(a) + l.y() * std::cos(a)));
+	return out;
+}
+
+PreviewCanvas::SpotZone PreviewCanvas::spotZoneAt(const QPoint &pos, int *maskOut) const
+{
+	// The selected mask is tested first and on its own: its grips must win over
+	// another mask's body, or a mask sitting under a grip would steal the drag.
+	auto testGrips = [&](int i) -> SpotZone {
+		const QVector<QPointF> h = spotHandlePoints(i);
+		static const SpotZone zones[9] = {SpotZone::TL, SpotZone::T,  SpotZone::TR,
+						  SpotZone::L,  SpotZone::R,  SpotZone::BL,
+						  SpotZone::B,  SpotZone::BR, SpotZone::Rotate};
+		for (int k = 0; k < h.size(); ++k) {
+			const QPointF v = h[k] - QPointF(pos);
+			if (std::abs(v.x()) <= kSpotGrab && std::abs(v.y()) <= kSpotGrab)
+				return zones[k];
+		}
+		return SpotZone::None;
+	};
+	if (spotSel_ >= 0 && spotSel_ < spotMasks_.size()) {
+		const SpotZone z = testGrips(spotSel_);
+		if (z != SpotZone::None) {
+			if (maskOut)
+				*maskOut = spotSel_;
+			return z;
+		}
+	}
+	// Then bodies, front to back — later masks are drawn over earlier ones, so
+	// they should be picked first.
+	for (int i = spotMasks_.size() - 1; i >= 0; --i) {
+		SpotMask m;
+		m.shape = spotMasks_[i].shape;
+		if (Spotlight::maskPath(m, spotMasks_[i].pose, displayRect().size())
+			    .translated(displayRect().topLeft())
+			    .contains(QPointF(pos))) {
+			if (maskOut)
+				*maskOut = i;
+			return SpotZone::Move;
+		}
+	}
+	if (maskOut)
+		*maskOut = -1;
+	return SpotZone::None;
+}
+
+// Snap to the canvas's own landmarks: the edges, the middle, and the thirds
+// (which is where a spotlight usually wants to sit). The tolerance is in widget
+// pixels so it feels the same however far the preview is zoomed.
+double PreviewCanvas::snapNorm(double v, bool horizontal) const
+{
+	if (!spotSnap_)
+		return v;
+	const QRect d = displayRect();
+	const double px = horizontal ? d.width() : d.height();
+	if (px <= 0)
+		return v;
+	const double tol = kSnapTolPx / px;
+	static const double marks[] = {0.0, 1.0 / 3.0, 0.5, 2.0 / 3.0, 1.0};
+	for (double m : marks)
+		if (std::abs(v - m) <= tol)
+			return m;
+	return v;
+}
+
+void PreviewCanvas::drawSpotlight(QPainter &p) const
+{
+	const QRect d = displayRect();
+	if (d.width() <= 0 || spotMasks_.isEmpty())
+		return;
+	p.save();
+	p.setRenderHint(QPainter::Antialiasing, true);
+	for (int i = 0; i < spotMasks_.size(); ++i) {
+		SpotMask m;
+		m.shape = spotMasks_[i].shape;
+		const QPainterPath path =
+			Spotlight::maskPath(m, spotMasks_[i].pose, d.size()).translated(d.topLeft());
+		const bool sel = (i == spotSel_);
+		const bool off = !spotMasks_[i].enabled;
+		// A disabled mask is still shown, dashed and grey, because "it is there
+		// but doing nothing" is otherwise indistinguishable from "it is gone".
+		QColor c = off ? QColor(0x7f, 0x85, 0x8e)
+			       : (sel ? QColor(0x00, 0xae, 0xef) : QColor(0xff, 0xd4, 0x4f));
+		p.setBrush(Qt::NoBrush);
+		// A dark line under the bright one, so the outline reads on a light
+		// picture as well as a dark one.
+		p.setPen(QPen(QColor(0, 0, 0, 140), sel ? 3.5 : 2.5));
+		p.drawPath(path);
+		p.setPen(QPen(c, sel ? 2.0 : 1.2, off ? Qt::DashLine : Qt::SolidLine));
+		p.drawPath(path);
+
+		if (!sel)
+			continue;
+		const QVector<QPointF> h = spotHandlePoints(i);
+		if (h.size() < 9)
+			continue;
+		// The rotation arm, then the knob at the end of it.
+		p.setPen(QPen(c, 1.2));
+		p.drawLine(h[1], h[8]);
+		p.setBrush(c);
+		p.setPen(QPen(QColor(0x10, 0x12, 0x16), 1.2));
+		p.drawEllipse(h[8], kSpotGrip, kSpotGrip);
+		for (int k = 0; k < 8; ++k)
+			p.drawRect(QRectF(h[k].x() - kSpotGrip, h[k].y() - kSpotGrip,
+					  kSpotGrip * 2, kSpotGrip * 2));
+	}
+	// Snap guides, drawn only while a snap is actually holding.
+	if (spotDrag_ != SpotZone::None && (spotGuideHOn_ || spotGuideVOn_)) {
+		p.setPen(QPen(QColor(0x3d, 0xdc, 0x97), 1, Qt::DashLine));
+		if (spotGuideVOn_)
+			p.drawLine(QPointF(spotGuideV_.x(), d.top()),
+				   QPointF(spotGuideV_.x(), d.bottom()));
+		if (spotGuideHOn_)
+			p.drawLine(QPointF(d.left(), spotGuideH_.y()),
+				   QPointF(d.right(), spotGuideH_.y()));
+	}
+	p.restore();
+}
+
 void PreviewCanvas::wheelEvent(QWheelEvent *e)
 {
 	// Wheel zooms the clip under the cursor (Full editing). Anything else keeps
@@ -219,6 +433,29 @@ void PreviewCanvas::wheelEvent(QWheelEvent *e)
 
 void PreviewCanvas::mousePressEvent(QMouseEvent *e)
 {
+	// Spotlight editing takes precedence over clip transform: both drag with the
+	// left button, and while the Spotlight panel is open the masks are what you
+	// mean to move.
+	if (spotMode_ && !cropEnabled_ && e->button() == Qt::LeftButton) {
+		int mask = -1;
+		const SpotZone z = spotZoneAt(e->pos(), &mask);
+		if (mask != spotSel_)
+			emit spotlightSelected(mask);
+		if (z == SpotZone::None || mask < 0) {
+			spotSel_ = mask;
+			update();
+			return;
+		}
+		spotSel_ = mask;
+		spotDrag_ = z;
+		spotDragMask_ = mask;
+		spotStartPose_ = spotMasks_[mask].pose;
+		spotStartLocal_ = maskLocal(mask, QPointF(e->pos()));
+		spotStartCanvas_ = widgetToCanvasF(QPointF(e->pos()));
+		spotSnap_ = !(e->modifiers() & Qt::ShiftModifier);
+		update();
+		return;
+	}
 	if (transformMode_ && !cropEnabled_ && e->button() == Qt::LeftButton) {
 		transformDragging_ = true;
 		transformLast_ = e->pos();
@@ -234,6 +471,144 @@ void PreviewCanvas::mousePressEvent(QMouseEvent *e)
 
 void PreviewCanvas::mouseMoveEvent(QMouseEvent *e)
 {
+	if (spotMode_ && !cropEnabled_) {
+		if (spotDrag_ == SpotZone::None) {
+			// Not dragging: just tell the cursor what it is over.
+			int mask = -1;
+			const SpotZone z = spotZoneAt(e->pos(), &mask);
+			switch (z) {
+			case SpotZone::Move: setCursor(Qt::SizeAllCursor); break;
+			case SpotZone::L:
+			case SpotZone::R: setCursor(Qt::SizeHorCursor); break;
+			case SpotZone::T:
+			case SpotZone::B: setCursor(Qt::SizeVerCursor); break;
+			case SpotZone::TL:
+			case SpotZone::BR: setCursor(Qt::SizeFDiagCursor); break;
+			case SpotZone::TR:
+			case SpotZone::BL: setCursor(Qt::SizeBDiagCursor); break;
+			case SpotZone::Rotate: setCursor(Qt::CrossCursor); break;
+			case SpotZone::None: setCursor(Qt::ArrowCursor); break;
+			}
+			return;
+		}
+		if (!(e->buttons() & Qt::LeftButton))
+			return;
+		spotSnap_ = !(e->modifiers() & Qt::ShiftModifier);
+		const QRect d = displayRect();
+		if (d.width() <= 0 || d.height() <= 0 || spotDragMask_ < 0)
+			return;
+		SpotPose po = spotStartPose_;
+		spotGuideHOn_ = spotGuideVOn_ = false;
+
+		if (spotDrag_ == SpotZone::Move) {
+			const QPointF now = widgetToCanvasF(QPointF(e->pos()));
+			double cx = spotStartPose_.cx + (now.x() - spotStartCanvas_.x());
+			double cy = spotStartPose_.cy + (now.y() - spotStartCanvas_.y());
+			// Snap the CENTRE and both edges: lining a spotlight up with the
+			// middle of the frame and lining its edge up with the frame's edge
+			// are both things people do.
+			const double halfW = po.w / 2.0, halfH = po.h / 2.0;
+			const double sc = snapNorm(cx, true);
+			const double sl = snapNorm(cx - halfW, true) + halfW;
+			const double sr = snapNorm(cx + halfW, true) - halfW;
+			for (double cand : {sc, sl, sr})
+				if (cand != cx) {
+					cx = cand;
+					spotGuideVOn_ = true;
+					break;
+				}
+			const double scv = snapNorm(cy, false);
+			const double st = snapNorm(cy - halfH, false) + halfH;
+			const double sb = snapNorm(cy + halfH, false) - halfH;
+			for (double cand : {scv, st, sb})
+				if (cand != cy) {
+					cy = cand;
+					spotGuideHOn_ = true;
+					break;
+				}
+			po.cx = cx;
+			po.cy = cy;
+			spotGuideV_ = canvasToWidgetF(po.cx, po.cy);
+			spotGuideH_ = spotGuideV_;
+		} else if (spotDrag_ == SpotZone::Rotate) {
+			const QPointF c = canvasToWidgetF(spotStartPose_.cx, spotStartPose_.cy);
+			const QPointF v = QPointF(e->pos()) - c;
+			// The knob sits ABOVE the shape, so zero degrees is straight up.
+			double deg = std::atan2(v.x(), -v.y()) * 180.0 / M_PI;
+			if (spotSnap_) {
+				// Every 15 degrees, the same increment every editor uses.
+				const double step = 15.0;
+				const double snapped = std::round(deg / step) * step;
+				if (std::abs(deg - snapped) < 4.0)
+					deg = snapped;
+			}
+			po.rotation = deg;
+		} else {
+			// A resize works in the mask's own axes: how far the grip moved
+			// from where it was grabbed, measured after un-rotating.
+			const QPointF now = maskLocal(spotDragMask_, QPointF(e->pos()));
+			const QPointF delta = now - spotStartLocal_;
+			const double startWpx = spotStartPose_.w * d.width();
+			const double startHpx = (spotMasks_[spotDragMask_].shape == SpotShape::Circle)
+							? startWpx
+							: spotStartPose_.h * d.height();
+			double left = -startWpx / 2.0, right = startWpx / 2.0;
+			double top = -startHpx / 2.0, bottom = startHpx / 2.0;
+			const bool wl = spotDrag_ == SpotZone::L || spotDrag_ == SpotZone::TL ||
+					spotDrag_ == SpotZone::BL;
+			const bool wr = spotDrag_ == SpotZone::R || spotDrag_ == SpotZone::TR ||
+					spotDrag_ == SpotZone::BR;
+			const bool wt = spotDrag_ == SpotZone::T || spotDrag_ == SpotZone::TL ||
+					spotDrag_ == SpotZone::TR;
+			const bool wb = spotDrag_ == SpotZone::B || spotDrag_ == SpotZone::BL ||
+					spotDrag_ == SpotZone::BR;
+			if (wl)
+				left += delta.x();
+			if (wr)
+				right += delta.x();
+			if (wt)
+				top += delta.y();
+			if (wb)
+				bottom += delta.y();
+			// Never let an edge cross its opposite: a mask with negative size
+			// is not a thing the renderer can draw.
+			const double minPx = 8.0;
+			if (right - left < minPx) {
+				if (wl)
+					left = right - minPx;
+				else
+					right = left + minPx;
+			}
+			if (bottom - top < minPx) {
+				if (wt)
+					top = bottom - minPx;
+				else
+					bottom = top + minPx;
+			}
+			const double newWpx = right - left, newHpx = bottom - top;
+			// The centre moves by half of whatever the edge moved, in the
+			// mask's axes, then back into canvas terms.
+			const QPointF shiftLocal((left + right) / 2.0, (top + bottom) / 2.0);
+			const double a = spotStartPose_.rotation * M_PI / 180.0;
+			const QPointF shiftWidget(
+				shiftLocal.x() * std::cos(a) - shiftLocal.y() * std::sin(a),
+				shiftLocal.x() * std::sin(a) + shiftLocal.y() * std::cos(a));
+			po.cx = spotStartPose_.cx + shiftWidget.x() / d.width();
+			po.cy = spotStartPose_.cy + shiftWidget.y() / d.height();
+			po.w = newWpx / d.width();
+			po.h = (spotMasks_[spotDragMask_].shape == SpotShape::Circle)
+					? po.w
+					: newHpx / d.height();
+		}
+		// Keep the model's own bounds: a pose outside them would render, but it
+		// would also come back from a project file clamped and appear to jump.
+		po.w = std::clamp(po.w, 0.01, 4.0);
+		po.h = std::clamp(po.h, 0.01, 4.0);
+		spotMasks_[spotDragMask_].pose = po;
+		emit spotlightPoseChanged(spotDragMask_, po);
+		update();
+		return;
+	}
 	if (transformDragging_ && (e->buttons() & Qt::LeftButton)) {
 		const QRect d = displayRect();
 		if (d.width() > 0 && d.height() > 0) {
@@ -284,6 +659,14 @@ void PreviewCanvas::mouseMoveEvent(QMouseEvent *e)
 
 void PreviewCanvas::mouseReleaseEvent(QMouseEvent *)
 {
+	if (spotDrag_ != SpotZone::None) {
+		spotDrag_ = SpotZone::None;
+		spotDragMask_ = -1;
+		spotGuideHOn_ = spotGuideVOn_ = false;
+		emit spotlightEditFinished(); // one undo step for the whole gesture
+		update();
+		return;
+	}
 	drag_ = Zone::None;
 	if (transformDragging_) {
 		transformDragging_ = false;

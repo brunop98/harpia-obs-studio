@@ -1,6 +1,9 @@
 #pragma once
 
+#include "timeline/Spotlight.hpp"
+
 #include <QImage>
+#include <QPointF>
 #include <QPixmap>
 #include <QRect>
 #include <QVector>
@@ -48,6 +51,19 @@ public:
 	const PreviewLayoutParams &layoutParams() const { return lp_; }
 	void setLayoutParams(const PreviewLayoutParams &p);
 
+	// ---- Spotlight masks (Inverse Selection) ----------------------------
+	// The masks are handed over whole rather than by reference: the canvas draws
+	// and drags them, the window owns them. Poses are already resolved for the
+	// playhead, so a keyframed mask's handles sit where the mask actually is.
+	struct SpotDraw {
+		SpotShape shape = SpotShape::RoundRect;
+		SpotPose pose;
+		bool enabled = true;
+	};
+	void setSpotlightMode(bool on);
+	bool spotlightMode() const { return spotMode_; }
+	void setSpotlightMasks(const QVector<SpotDraw> &masks, int selected);
+
 signals:
 	void cropChanged(const QRect &videoRect);
 	// Incremental move, as a fraction of the canvas (add to posX/posY).
@@ -55,6 +71,12 @@ signals:
 	// Zoom by `factor` while holding the point under the cursor fixed; the
 	// cursor is given in normalised canvas coordinates.
 	void transformZoomed(double factor, double cursorXNorm, double cursorYNorm);
+	// A mask was clicked (-1 = the click missed every mask).
+	void spotlightSelected(int index);
+	// Live, once per mouse-move: the mask's new pose in normalised canvas terms.
+	void spotlightPoseChanged(int index, const SpotPose &pose);
+	// The drag ended — one undo step per gesture, not one per pixel.
+	void spotlightEditFinished();
 
 protected:
 	void paintEvent(QPaintEvent *) override;
@@ -86,6 +108,33 @@ private:
 	bool transformDragging_ = false;
 	QPoint transformLast_;
 	QRectF transformRect_; // canvas px; empty = no outline
+
+	// ---- Spotlight editing ----------------------------------------------
+	// A mask's own frame: everything is computed in UNROTATED mask space and
+	// then turned by the pose's rotation, so a corner drag on a turned mask
+	// resizes along the mask's axes rather than the screen's.
+	enum class SpotZone { None, Move, L, R, T, B, TL, TR, BL, BR, Rotate };
+	QPointF canvasToWidgetF(double nx, double ny) const;
+	QPointF widgetToCanvasF(const QPointF &p) const; // normalised, unclamped
+	QPointF maskLocal(int i, const QPointF &widgetPt) const; // widget -> mask axes
+	QVector<QPointF> spotHandlePoints(int i) const;          // 8 grips + rotate
+	SpotZone spotZoneAt(const QPoint &p, int *maskOut) const;
+	void drawSpotlight(QPainter &p) const;
+	// Snap an edge or a centre to the canvas's own landmarks (edges, middle,
+	// thirds). Returns the value unchanged when nothing is within reach.
+	double snapNorm(double v, bool horizontal) const;
+
+	bool spotMode_ = false;
+	QVector<SpotDraw> spotMasks_;
+	int spotSel_ = -1;
+	SpotZone spotDrag_ = SpotZone::None;
+	int spotDragMask_ = -1;
+	SpotPose spotStartPose_;   // pose at mouse-down, so a drag is absolute
+	QPointF spotStartLocal_;   // press point in mask axes
+	QPointF spotStartCanvas_;  // press point in normalised canvas terms
+	bool spotSnap_ = true;     // Shift bypasses it, as everywhere else
+	QPointF spotGuideH_, spotGuideV_; // where a snap landed, for the guide lines
+	bool spotGuideHOn_ = false, spotGuideVOn_ = false;
 };
 
 // Runtime-tweakable layout parameters for the trim Timeline (edited live from

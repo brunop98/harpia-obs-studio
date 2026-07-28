@@ -1078,6 +1078,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		voTrack_->setLayoutParams(vo);
 		canvas_->setLayoutParams(pv);
 		timelineView_->setLayoutParams(DevPanel::loadFullTimeline());
+		// One palette for all three track widgets.
+		const EditorColors cl = DevPanel::loadColors();
+		timelineView_->setColors(cl);
+		tracks_->setColors(cl);
+		voTrack_->setColors(cl);
 	}
 
 	// Open the launch file as the first source.

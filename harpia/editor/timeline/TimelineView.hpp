@@ -1,6 +1,7 @@
 #pragma once
 
 #include "TimelineModel.hpp"
+#include "../EditorColors.hpp"
 
 #include <QFont>
 
@@ -108,6 +109,13 @@ public:
 
 	// Fit the whole timeline in the view (zoom out to 1:1 on the full span).
 	void zoomToFit();
+
+	const EditorColors &colors() const { return cl_; }
+	void setColors(const EditorColors &c)
+	{
+		cl_ = c;
+		update();
+	}
 
 	const TimelineViewParams &layoutParams() const { return lp_; }
 	void setLayoutParams(const TimelineViewParams &p);
@@ -260,6 +268,7 @@ private:
 	double fps_ = 30.0;
 
 	TimelineViewParams lp_;
+	EditorColors cl_;
 
 	void showClipMenu(int track, int clip, const QPoint &globalPos, qint64 atOutMs);
 	void splitClip(int track, int clip, qint64 atOutMs);

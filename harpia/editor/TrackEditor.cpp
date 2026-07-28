@@ -17,13 +17,7 @@ namespace {
 // tweak them at runtime; only non-layout constants remain here.
 constexpr qint64 kMinCutMs = 150;
 
-const QColor kBarBg(0x20, 0x22, 0x25);
-const QColor kBarBorder(0x30, 0x33, 0x38);
-const QColor kCaption(0x9a, 0x9f, 0xa8);
-const QColor kAccent(0x00, 0xae, 0xef);
-const QColor kSegFill(0x2e, 0x4d, 0x6e);
-const QColor kSegFillSel(0x3a, 0x6e, 0xa5);
-const QColor kPlayhead(0xe5, 0x48, 0x4d);
+// Colours all live in EditorColors (cl_), edited live from the Developer Panel.
 } // namespace
 
 TrackEditor::TrackEditor(QWidget *parent) : QWidget(parent)
@@ -169,8 +163,8 @@ void TrackEditor::ensureStripCache(const QRect &src)
 	QPainter cp(&stripCache_);
 	cp.setRenderHint(QPainter::Antialiasing);
 	const QRect local(0, 0, src.width(), src.height());
-	cp.setPen(kBarBorder);
-	cp.setBrush(kBarBg);
+	cp.setPen(cl_.border);
+	cp.setBrush(cl_.panelBg);
 	cp.drawRoundedRect(local, 5, 5);
 
 	if (!thumbs_.isEmpty() && duration_ > 0) {
@@ -580,7 +574,7 @@ void TrackEditor::paintEvent(QPaintEvent *)
 	const QRect out = outputRect();
 
 	// ---- Captions --------------------------------------------------------
-	p.setPen(kCaption);
+	p.setPen(cl_.caption);
 	p.drawText(QRect(src.x(), lp_.margin, src.width(), lp_.captionH),
 		   Qt::AlignVCenter | Qt::AlignLeft,
 		   QStringLiteral("Source — press and drag to select a section to keep"));
@@ -613,7 +607,7 @@ void TrackEditor::paintEvent(QPaintEvent *)
 				continue;
 			const int x1 = msToX(segs_[i].srcStartMs);
 			const int x2 = msToX(segs_[i].srcEndMs);
-			QColor fill = kAccent;
+			QColor fill = cl_.accent;
 			fill.setAlpha(i == selected_ ? 110 : 60);
 			p.setPen(Qt::NoPen);
 			p.setBrush(fill);
@@ -623,9 +617,9 @@ void TrackEditor::paintEvent(QPaintEvent *)
 		if (mode_ == Mode::CreatingCut) {
 			const int x1 = msToX(std::min(dragStartMs_, dragCurMs_));
 			const int x2 = msToX(std::max(dragStartMs_, dragCurMs_));
-			QColor fill = kAccent;
+			QColor fill = cl_.accent;
 			fill.setAlpha(140);
-			p.setPen(QPen(kAccent, 1));
+			p.setPen(QPen(cl_.accent, 1));
 			p.setBrush(fill);
 			p.drawRect(QRect(QPoint(x1, src.y() + 1), QPoint(x2, src.bottom() - 1)));
 		}
@@ -644,21 +638,21 @@ void TrackEditor::paintEvent(QPaintEvent *)
 	if (zoom_ > 1.001 && duration_ > 0) {
 		const int y = src.bottom() + 2;
 		p.setPen(Qt::NoPen);
-		p.setBrush(kBarBg);
+		p.setBrush(cl_.panelBg);
 		p.drawRect(QRect(src.left(), y, src.width(), 2));
-		p.setBrush(kCaption);
+		p.setBrush(cl_.caption);
 		const int ix = src.left() + int(double(viewStart_) / duration_ * src.width());
 		const int iw = std::max(8, int(double(visibleMs()) / duration_ * src.width()));
 		p.drawRect(QRect(ix, y, iw, 2));
 	}
 
 	// ---- Output track ----------------------------------------------------
-	p.setPen(kBarBorder);
-	p.setBrush(kBarBg);
+	p.setPen(cl_.border);
+	p.setBrush(cl_.panelBg);
 	p.drawRoundedRect(out, 5, 5);
 
 	if (segs_.isEmpty()) {
-		p.setPen(kCaption);
+		p.setPen(cl_.caption);
 		p.drawText(out, Qt::AlignCenter,
 			   QStringLiteral("Cuts you select above appear here in order"));
 	}
@@ -672,7 +666,7 @@ void TrackEditor::paintEvent(QPaintEvent *)
 		const QRect r = rects[i].adjusted(0, 3, 0, -3);
 		const bool sel = multiSel_.contains(i);
 		p.setPen(Qt::NoPen);
-		p.setBrush(sel ? kSegFillSel : kSegFill);
+		p.setBrush(sel ? cl_.videoClipSel : cl_.videoClip);
 		p.drawRoundedRect(r, 4, 4);
 
 		// Filmstrip across the whole cut, sampled from the cut's OWN source, so a
@@ -726,7 +720,7 @@ void TrackEditor::paintEvent(QPaintEvent *)
 		}
 
 		// Selection border on top so it stays visible over the thumbnail.
-		p.setPen(sel ? QPen(kAccent, 2) : QPen(kBarBorder, 1));
+		p.setPen(sel ? QPen(cl_.accent, 2) : QPen(cl_.border, 1));
 		p.setBrush(Qt::NoBrush);
 		p.drawRoundedRect(r, 4, 4);
 	}
@@ -752,7 +746,7 @@ void TrackEditor::paintEvent(QPaintEvent *)
 			cx = rects.last().right() + lp_.segGap / 2 + 1;
 		else
 			cx = rects[dragInsertSlot_].left() - lp_.segGap / 2 - 1;
-		p.setPen(QPen(kAccent, 3));
+		p.setPen(QPen(cl_.accent, 3));
 		p.drawLine(cx, out.y(), cx, out.bottom());
 		QPainterPath caret;
 		caret.moveTo(cx - 5, out.y());
@@ -764,7 +758,7 @@ void TrackEditor::paintEvent(QPaintEvent *)
 		caret.lineTo(cx, out.bottom() - 6);
 		caret.closeSubpath();
 		p.setPen(Qt::NoPen);
-		p.setBrush(kAccent);
+		p.setBrush(cl_.accent);
 		p.drawPath(caret);
 
 		// A translucent ghost of the dragged segment following the cursor.
@@ -773,8 +767,8 @@ void TrackEditor::paintEvent(QPaintEvent *)
 			QRect g(dragGhostX_ - gw / 2, out.y() + 2, gw, out.height() - 4);
 			p.save();
 			p.setOpacity(0.8);
-			p.setPen(QPen(kAccent, 2));
-			p.setBrush(QColor(kAccent.red(), kAccent.green(), kAccent.blue(), 70));
+			p.setPen(QPen(cl_.accent, 2));
+			p.setBrush(QColor(cl_.accent.red(), cl_.accent.green(), cl_.accent.blue(), 70));
 			p.drawRoundedRect(g, 4, 4);
 			p.setPen(QColor(0xff, 0xff, 0xff));
 			p.drawText(g, Qt::AlignCenter, QStringLiteral("#%1").arg(selected_ + 1));
@@ -785,7 +779,7 @@ void TrackEditor::paintEvent(QPaintEvent *)
 	// Output playhead (mapped through the output zoom/view).
 	if (playheadOutMs_ >= 0 && !segs_.isEmpty()) {
 		const int px = outMsToX(playheadOutMs_);
-		p.setPen(QPen(kPlayhead, 2));
+		p.setPen(QPen(cl_.playhead, 2));
 		p.drawLine(px, out.y() + 1, px, out.bottom() - 1);
 	}
 
@@ -807,9 +801,9 @@ void TrackEditor::paintEvent(QPaintEvent *)
 	if (outZoom_ > 1.001 && totalOutputMs() > 0) {
 		const int y = out.bottom() + 2;
 		p.setPen(Qt::NoPen);
-		p.setBrush(kBarBg);
+		p.setBrush(cl_.panelBg);
 		p.drawRect(QRect(out.left(), y, out.width(), 2));
-		p.setBrush(kCaption);
+		p.setBrush(cl_.caption);
 		const int ix = out.left() + int(double(outViewStart_) / totalOutputMs() * out.width());
 		const int iw = std::max(8, int(double(outVisibleMs()) / totalOutputMs() * out.width()));
 		p.drawRect(QRect(ix, y, iw, 2));

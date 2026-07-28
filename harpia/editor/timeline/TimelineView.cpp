@@ -23,28 +23,7 @@ constexpr qint64 kMinClipMs = 100;
 constexpr qint64 kTailMs = 5000;   // draggable space past the end
 constexpr qint64 kMinSpanMs = 8000;
 
-const QColor kBg(0x15, 0x17, 0x1a);
-const QColor kGutter(0x1b, 0x1e, 0x23);
-const QColor kLane(0x1f, 0x22, 0x27);
-const QColor kLaneAlt(0x23, 0x27, 0x2d);
-const QColor kBorder(0x30, 0x33, 0x38);
-const QColor kCaption(0x9a, 0x9f, 0xa8);
-const QColor kAccent(0x00, 0xae, 0xef);
-const QColor kVidFill(0x2e, 0x4d, 0x6e);
-const QColor kVidFillSel(0x3a, 0x6e, 0xa5);
-const QColor kAudFill(0x2c, 0x50, 0x45);
-const QColor kAudFillSel(0x37, 0x74, 0x63);
-const QColor kTextFill(0x4a, 0x3a, 0x5e);
-const QColor kTextFillSel(0x6b, 0x51, 0x8c);
-const QColor kWave(0x6f, 0xd0, 0xb0);
-const QColor kPlayhead(0xe5, 0x48, 0x4d);
-// Distinct from the playhead on purpose: the hover marker is where the PREVIEW
-// is looking right now, which is not where an edit will land.
-const QColor kHover(0xf5, 0xc0, 0x42);
-// Project markers: green, so they read as "a place", not "a time now".
-const QColor kMarker(0x5c, 0xd6, 0x8a);
-// The magnet guide, shown only for as long as a drag is actually held there.
-const QColor kSnap(0xff, 0xff, 0xff);
+// Colours all live in EditorColors (cl_), edited live from the Developer Panel.
 } // namespace
 
 TimelineView::TimelineView(QWidget *parent) : QWidget(parent)
@@ -602,7 +581,7 @@ void TimelineView::drawRuler(QPainter &p) const
 {
 	const QRect c = contentRect();
 	const QRect bar(c.x(), lp_.margin, c.width(), lp_.rulerH);
-	p.fillRect(bar, kGutter);
+	p.fillRect(bar, cl_.gutter);
 	const qint64 vis = visibleMs();
 	static const qint64 kSteps[] = {200,   500,   1000,  2000,   5000,   10000,  15000, 30000,
 					60000, 120000, 300000, 600000, 900000, 1800000, 3600000};
@@ -626,7 +605,7 @@ void TimelineView::drawRuler(QPainter &p) const
 			continue;
 		p.setPen(QColor(0xff, 0xff, 0xff, 40));
 		p.drawLine(x, bar.top(), x, height() - lp_.margin); // faint gridline
-		p.setPen(kCaption);
+		p.setPen(cl_.caption);
 		const qint64 m = t / 60000, sec = (t / 1000) % 60;
 		const QString lab = (t % 1000 && t < 60000)
 					    ? QStringLiteral("%1.%2s").arg(t / 1000).arg((t % 1000) / 100)
@@ -671,7 +650,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	// Clips take their track's colour (selection brightens it); text clips get a
 	// slight violet lean so they still read as captions.
 	QColor fill = t.color.isValid() ? t.color
-					: (t.kind == TlTrack::Kind::Video ? kVidFill : kAudFill);
+					: (t.kind == TlTrack::Kind::Video ? cl_.videoClip : cl_.audioClip);
 	if (isText)
 		fill = QColor::fromHsv(fill.hue(), fill.saturation(), fill.value()).darker(105);
 	if (sel)
@@ -709,7 +688,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 			}
 		}
 	} else if (!c.peaks.isEmpty() && c.srcEndMs > 0) {
-		p.setPen(QPen(kWave, 1));
+		p.setPen(QPen(cl_.waveform, 1));
 		const int midY = r.center().y();
 		const int halfH = r.height() / 2 - 3;
 		const qint64 total = std::max<qint64>(1, srcThumbDur_.value(c.sourceId, c.srcEndMs));
@@ -770,7 +749,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	}
 	p.restore();
 
-	p.setPen(sel ? QPen(kAccent, 2) : QPen(kBorder, 1));
+	p.setPen(sel ? QPen(cl_.accent, 2) : QPen(cl_.border, 1));
 	p.setBrush(Qt::NoBrush);
 	p.drawRoundedRect(r, 4, 4);
 }
@@ -862,7 +841,7 @@ void TimelineView::drawFades(QPainter &p, int track, int clip) const
 		return;
 	const double perMs = double(r.width()) / double(std::max<qint64>(1, c.outDurationMs()));
 
-	const QColor line(0xff, 0xd9, 0x6b);
+	const QColor line = cl_.fade;
 	const QColor wash(0x00, 0x00, 0x00, 110);
 
 	auto envelope = [&](int fadeMs, FadeCurve curve, bool in) {
@@ -909,7 +888,7 @@ void TimelineView::paintEvent(QPaintEvent *)
 {
 	QPainter p(this);
 	p.setRenderHint(QPainter::Antialiasing);
-	p.fillRect(rect(), kBg);
+	p.fillRect(rect(), cl_.timelineBg);
 
 	clampView();
 	viewTarget_ = viewStart_;
@@ -924,8 +903,8 @@ void TimelineView::paintEvent(QPaintEvent *)
 		p.setPen(Qt::NoPen);
 		// Highlight the lane a dragged clip would land on.
 		const bool dropHere = dragging && drop_.track == i;
-		p.setBrush(dropHere ? QColor(kAccent.red(), kAccent.green(), kAccent.blue(), 40)
-				    : ((i % 2) ? kLaneAlt : kLane));
+		p.setBrush(dropHere ? QColor(cl_.accent.red(), cl_.accent.green(), cl_.accent.blue(), 40)
+				    : ((i % 2) ? cl_.laneAlt : cl_.lane));
 		p.drawRect(lane);
 		if (t.locked) { // faint hatch so a locked lane reads as untouchable
 			p.setBrush(QBrush(QColor(0xff, 0xff, 0xff, 10), Qt::BDiagPattern));
@@ -933,13 +912,13 @@ void TimelineView::paintEvent(QPaintEvent *)
 		}
 
 		const QRect hdr = trackHeaderRect(i);
-		p.setBrush(kGutter);
+		p.setBrush(cl_.gutter);
 		p.drawRect(hdr);
 		// Colour chip down the left edge of the header.
 		p.setBrush(t.color);
 		p.drawRect(QRect(hdr.x(), hdr.y() + 1, 4, hdr.height() - 2));
 
-		p.setPen((t.hidden || t.muted) ? kCaption : QColor(0xe8, 0xea, 0xed));
+		p.setPen((t.hidden || t.muted) ? cl_.caption : QColor(0xe8, 0xea, 0xed));
 		p.setFont(hdrFont_);
 		p.drawText(hdr.adjusted(10, 2, -4, 0), Qt::AlignTop | Qt::AlignLeft, t.name);
 
@@ -951,9 +930,9 @@ void TimelineView::paintEvent(QPaintEvent *)
 				if (r.isEmpty())
 					return;
 				p.setPen(Qt::NoPen);
-				p.setBrush(on ? kAccent : QColor(0x2b, 0x2f, 0x36));
+				p.setBrush(on ? cl_.accent : QColor(0x2b, 0x2f, 0x36));
 				p.drawRoundedRect(r, 3, 3);
-				p.setPen(on ? QColor(0xff, 0xff, 0xff) : kCaption);
+				p.setPen(on ? QColor(0xff, 0xff, 0xff) : cl_.caption);
 				p.drawText(r, Qt::AlignCenter, glyph);
 			};
 			drawToggle(HeaderHit::Lock, QStringLiteral("L"), t.locked);
@@ -976,10 +955,10 @@ void TimelineView::paintEvent(QPaintEvent *)
 	if (dragging && drop_.newTrackAt >= 0) {
 		const QRect c = contentRect();
 		const int y = insertYFor(drop_.newTrackAt);
-		p.setPen(QPen(kAccent, 3));
+		p.setPen(QPen(cl_.accent, 3));
 		p.drawLine(c.x(), y, c.right(), y);
 		p.setPen(Qt::NoPen);
-		p.setBrush(kAccent);
+		p.setBrush(cl_.accent);
 		const QRect tag(c.x() + 6, y - 9, 104, 18);
 		p.drawRoundedRect(tag, 3, 3);
 		QFont tf = p.font();
@@ -1000,12 +979,12 @@ void TimelineView::paintEvent(QPaintEvent *)
 		if (sx >= c.x() - 1 && sx <= c.right() + 1) {
 			p.save();
 			p.setClipRect(c);
-			p.setPen(QPen(kSnap, 1));
+			p.setPen(QPen(cl_.snapGuide, 1));
 			p.drawLine(sx, c.y(), sx, c.bottom());
 			// Two small nubs, so the line reads as a magnet rather than
 			// as another playhead.
 			p.setPen(Qt::NoPen);
-			p.setBrush(kSnap);
+			p.setBrush(cl_.snapGuide);
 			p.drawRect(QRect(sx - 2, c.y(), 5, 3));
 			p.drawRect(QRect(sx - 2, c.bottom() - 2, 5, 3));
 			p.restore();
@@ -1013,7 +992,7 @@ void TimelineView::paintEvent(QPaintEvent *)
 	}
 
 	if (model_.tracks.isEmpty()) {
-		p.setPen(kCaption);
+		p.setPen(cl_.caption);
 		p.drawText(contentRect(), Qt::AlignCenter,
 			   QStringLiteral("Add a source to the timeline to start editing."));
 	}
@@ -1027,10 +1006,10 @@ void TimelineView::paintEvent(QPaintEvent *)
 		const QRect c = contentRect();
 		if (mx < c.x() - 1 || mx > c.right() + 1)
 			continue;
-		p.setPen(QPen(kMarker, 1, Qt::DotLine));
+		p.setPen(QPen(cl_.marker, 1, Qt::DotLine));
 		p.drawLine(mx, lp_.margin + lp_.rulerH, mx, height() - lp_.margin);
 		p.setPen(Qt::NoPen);
-		p.setBrush(kMarker);
+		p.setBrush(cl_.marker);
 		QPainterPath flag;
 		flag.moveTo(mx, lp_.margin + 2);
 		flag.lineTo(mx + 9, lp_.margin + 6);
@@ -1047,7 +1026,7 @@ void TimelineView::paintEvent(QPaintEvent *)
 		const int hx = msToX(hoverMs_);
 		const QRect c = contentRect();
 		if (hx >= c.x() - 1 && hx <= c.right() + 1) {
-			QPen hp(kHover, 1, Qt::DashLine);
+			QPen hp(cl_.hover, 1, Qt::DashLine);
 			p.setPen(hp);
 			p.drawLine(hx, lp_.margin, hx, height() - lp_.margin);
 
@@ -1063,7 +1042,7 @@ void TimelineView::paintEvent(QPaintEvent *)
 			const bool flip = hx + tw + 2 > c.right();
 			const QRect tag(flip ? hx - tw - 2 : hx + 2, lp_.margin + 1, tw, 14);
 			p.setPen(Qt::NoPen);
-			p.setBrush(kHover);
+			p.setBrush(cl_.hover);
 			p.drawRoundedRect(tag, 2, 2);
 			p.setPen(QColor(0x15, 0x17, 0x1a));
 			p.drawText(tag, Qt::AlignCenter, lab);
@@ -1074,13 +1053,13 @@ void TimelineView::paintEvent(QPaintEvent *)
 	if (playheadMs_ >= 0) {
 		const int x = msToX(playheadMs_);
 		if (x >= contentRect().x() - 1 && x <= contentRect().right() + 1) {
-			p.setPen(QPen(kPlayhead, 2));
+			p.setPen(QPen(cl_.playhead, 2));
 			p.drawLine(x, lp_.margin, x, height() - lp_.margin);
 		}
 	}
 
 	// Left gutter separator.
-	p.setPen(kBorder);
+	p.setPen(cl_.border);
 	p.drawLine(lp_.margin + lp_.gutterW, lp_.margin, lp_.margin + lp_.gutterW, height() - lp_.margin);
 }
 

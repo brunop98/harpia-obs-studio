@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EditorColors.hpp"
+
 #include <QString>
 #include <QVector>
 #include <QWidget>
@@ -70,6 +72,13 @@ public:
 	void setPlayhead(qint64 outMs); // output-time marker during playback
 	void clearPlayhead();
 
+	const EditorColors &colors() const { return cl_; }
+	void setColors(const EditorColors &c)
+	{
+		cl_ = c;
+		update();
+	}
+
 	// Developer Panel: tweak the layout live.
 	const VoiceoverLayoutParams &layoutParams() const { return lp_; }
 	void setLayoutParams(const VoiceoverLayoutParams &p);
@@ -101,6 +110,7 @@ private:
 	void showClipMenu(int index, const QPoint &globalPos, qint64 outMs);
 
 	VoiceoverLayoutParams lp_;
+	EditorColors cl_;
 	QVector<VoiceoverClip> clips_;
 	qint64 outputMs_ = 0;
 	qint64 playheadMs_ = -1;

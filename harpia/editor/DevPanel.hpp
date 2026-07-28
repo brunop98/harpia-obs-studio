@@ -1,11 +1,17 @@
 #pragma once
 
+#include "EditorColors.hpp"
+
+#include <QColor>
 #include <QDialog>
+#include <QString>
+#include <QVector>
 
 #include <functional>
 
 class QCheckBox;
 class QDoubleSpinBox;
+class QPushButton;
 class QSpinBox;
 
 namespace harpia {
@@ -79,6 +85,11 @@ public:
 	static TimelineViewParams loadFullTimeline();
 	static void saveFullTimeline(const TimelineViewParams &p);
 
+	// The editor palette, shared by all three track widgets. Same deal: the
+	// editor loads it at startup and follows colorsChanged() live.
+	static EditorColors loadColors();
+	static void saveColors(const EditorColors &c);
+
 signals:
 	void chromeChanged(const EditorChromeParams &p);
 	void inspectorChanged(const EditorInspectorParams &p);
@@ -90,7 +101,19 @@ private:
 	void applyPreview();
 	void applyChrome();
 	void applyFullTimeline();
+	void applyColors();
 	void resetDefaults();
+
+	// One swatch button per palette entry, keyed by the same name used in
+	// QSettings, so adding a colour means touching one table and nothing else.
+	struct ColorRow {
+		QString key;
+		QPushButton *btn = nullptr;
+		QColor EditorColors::*field = nullptr;
+	};
+	QVector<ColorRow> colorRows_;
+	EditorColors colors_;
+	void paintSwatch(const ColorRow &r) const; // button face = the colour itself
 
 	Timeline *timeline_ = nullptr;
 	TrackEditor *tracks_ = nullptr;

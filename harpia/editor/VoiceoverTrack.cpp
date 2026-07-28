@@ -20,14 +20,7 @@ namespace {
 // tweak them at runtime; only non-layout constants remain here.
 constexpr qint64 kMinClipMs = 100; // shortest a clip can be trimmed to
 
-const QColor kBarBg(0x20, 0x22, 0x25);
-const QColor kBarBorder(0x30, 0x33, 0x38);
-const QColor kCaption(0x9a, 0x9f, 0xa8);
-const QColor kClipFill(0x2c, 0x50, 0x45);
-const QColor kClipFillSel(0x37, 0x74, 0x63);
-const QColor kWave(0x6f, 0xd0, 0xb0);
-const QColor kAccent(0x00, 0xae, 0xef);
-const QColor kPlayhead(0xe5, 0x48, 0x4d);
+// Colours all live in EditorColors (cl_), edited live from the Developer Panel.
 } // namespace
 
 VoiceoverTrack::VoiceoverTrack(QWidget *parent) : QWidget(parent)
@@ -240,16 +233,16 @@ void VoiceoverTrack::paintEvent(QPaintEvent *)
 
 	const QRect r = trackRect();
 
-	p.setPen(kCaption);
+	p.setPen(cl_.caption);
 	p.drawText(QRect(r.x(), lp_.margin, r.width(), lp_.captionH), Qt::AlignVCenter | Qt::AlignLeft,
 		   QStringLiteral("Voiceover"));
 
-	p.setPen(kBarBorder);
-	p.setBrush(kBarBg);
+	p.setPen(cl_.border);
+	p.setBrush(cl_.panelBg);
 	p.drawRoundedRect(r, 5, 5);
 
 	if (clips_.isEmpty()) {
-		p.setPen(kCaption);
+		p.setPen(cl_.caption);
 		p.drawText(r, Qt::AlignCenter,
 			   QStringLiteral("Record narration to add it here"));
 	}
@@ -261,7 +254,7 @@ void VoiceoverTrack::paintEvent(QPaintEvent *)
 		QPainterPath clip;
 		clip.addRoundedRect(cr, 4, 4);
 		p.setPen(Qt::NoPen);
-		p.setBrush(sel ? kClipFillSel : kClipFill);
+		p.setBrush(sel ? cl_.audioClipSel : cl_.audioClip);
 		p.drawPath(clip);
 
 		// Waveform centered vertically — draw only the trimmed source slice
@@ -271,7 +264,7 @@ void VoiceoverTrack::paintEvent(QPaintEvent *)
 		if (!pk.isEmpty() && cr.width() > 2 && vc.srcTotalMs > 0) {
 			p.save();
 			p.setClipPath(clip);
-			p.setPen(QPen(kWave, 1));
+			p.setPen(QPen(cl_.waveform, 1));
 			const int midY = cr.center().y();
 			const int halfH = cr.height() / 2 - 2;
 			for (int x = cr.left() + 1; x < cr.right() - 1; ++x) {
@@ -285,7 +278,7 @@ void VoiceoverTrack::paintEvent(QPaintEvent *)
 			p.restore();
 		}
 
-		p.setPen(sel ? QPen(kAccent, 2) : QPen(kBarBorder, 1));
+		p.setPen(sel ? QPen(cl_.accent, 2) : QPen(cl_.border, 1));
 		p.setBrush(Qt::NoBrush);
 		p.drawRoundedRect(cr, 4, 4);
 	}
@@ -293,7 +286,7 @@ void VoiceoverTrack::paintEvent(QPaintEvent *)
 	// Output playhead.
 	if (playheadMs_ >= 0 && outputMs_ > 0) {
 		const int px = msToX(playheadMs_);
-		p.setPen(QPen(kPlayhead, 2));
+		p.setPen(QPen(cl_.playhead, 2));
 		p.drawLine(px, r.top() + 1, px, r.bottom() - 1);
 	}
 }

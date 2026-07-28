@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EditorColors.hpp"
+
 #include <QHash>
 #include <QImage>
 #include <QPixmap>
@@ -109,6 +111,13 @@ public:
 	void clearPlayhead();
 	qint64 playhead() const { return playheadOutMs_; } // -1 when none
 
+	const EditorColors &colors() const { return cl_; }
+	void setColors(const EditorColors &c)
+	{
+		cl_ = c;
+		update();
+	}
+
 	// Developer Panel: tweak the layout live (invalidates the strip cache).
 	const TrackLayoutParams &layoutParams() const { return lp_; }
 	void setLayoutParams(const TrackLayoutParams &p);
@@ -175,6 +184,7 @@ private:
 	}
 
 	TrackLayoutParams lp_;
+	EditorColors cl_;
 	QVector<CutSegment> segs_;
 	qint64 duration_ = 0;
 	int activeSourceId_ = 0;    // stamped onto new cuts from the Source track

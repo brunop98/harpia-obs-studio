@@ -7,6 +7,7 @@
 // PreviewCanvas + PreviewLayoutParams come from EditorWidgets.hpp.
 
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFrame>
@@ -101,6 +102,97 @@ void DevPanel::saveChrome(const EditorChromeParams &p)
 	s.setValue(QStringLiteral("win/spinW"), p.speedSpinW);
 	s.setValue(QStringLiteral("win/powerSave"), p.powerSaveOnBlur);
 	s.endGroup();
+}
+
+// The palette table: one row per colour, used for the settings keys, the panel
+// rows and the reset, so the three can never disagree about what exists.
+namespace {
+struct ColorDef {
+	const char *key;
+	const char *label;
+	QColor EditorColors::*field;
+	const char *hint;
+};
+const ColorDef kColorDefs[] = {
+	{"timelineBg", "Timeline background", &EditorColors::timelineBg,
+	 "Behind the multi-track timeline"},
+	{"panelBg", "Bar background", &EditorColors::panelBg,
+	 "The Trim / Multi-Cut / voiceover bars"},
+	{"gutter", "Track header column", &EditorColors::gutter, ""},
+	{"lane", "Track lane", &EditorColors::lane, ""},
+	{"laneAlt", "Track lane (alternate)", &EditorColors::laneAlt,
+	 "Every other lane, so the rows read apart"},
+	{"border", "Border", &EditorColors::border, ""},
+	{"caption", "Secondary text", &EditorColors::caption, ""},
+	{"accent", "Accent", &EditorColors::accent, "Selection and drop targets"},
+	{"videoClip", "Video clip", &EditorColors::videoClip,
+	 "Full editing: only for tracks with no colour of their own — a track's own "
+	 "colour wins. Also the Multi-Cut segment fill."},
+	{"videoClipSel", "Video clip (selected)", &EditorColors::videoClipSel, ""},
+	{"audioClip", "Audio clip", &EditorColors::audioClip,
+	 "Same: the fallback for a track with no colour, and the voiceover clip fill."},
+	{"audioClipSel", "Audio clip (selected)", &EditorColors::audioClipSel, ""},
+	{"textClip", "Text clip", &EditorColors::textClip, ""},
+	{"textClipSel", "Text clip (selected)", &EditorColors::textClipSel, ""},
+	{"waveform", "Waveform", &EditorColors::waveform, ""},
+	{"playhead", "Playhead", &EditorColors::playhead, "Where an edit will land"},
+	{"hover", "Hover marker", &EditorColors::hover, "Where the preview is looking"},
+	{"marker", "Project marker", &EditorColors::marker, ""},
+	{"snapGuide", "Snap guide", &EditorColors::snapGuide,
+	 "The magnet line, while a drag is held on it"},
+	{"fade", "Audio fade", &EditorColors::fade, "Fade envelope and its grips"},
+};
+} // namespace
+
+EditorColors DevPanel::loadColors()
+{
+	const EditorColors d; // struct defaults ARE the shipped palette
+	EditorColors c;
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout"));
+	for (const ColorDef &cd : kColorDefs) {
+		const QString key = QStringLiteral("color/") + QLatin1String(cd.key);
+		const QString saved = s.value(key).toString();
+		const QColor parsed(saved);
+		// An unset or unparseable entry keeps the shipped colour rather than
+		// painting the editor black.
+		c.*(cd.field) = parsed.isValid() ? parsed : d.*(cd.field);
+	}
+	s.endGroup();
+	return c;
+}
+
+void DevPanel::saveColors(const EditorColors &c)
+{
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout"));
+	for (const ColorDef &cd : kColorDefs)
+		s.setValue(QStringLiteral("color/") + QLatin1String(cd.key),
+			   (c.*(cd.field)).name(QColor::HexRgb));
+	s.endGroup();
+}
+
+void DevPanel::paintSwatch(const ColorRow &r) const
+{
+	const QColor c = colors_.*(r.field);
+	// Readable label whichever way the colour goes.
+	const QString fg = (c.lightness() > 140) ? QStringLiteral("#101214")
+						 : QStringLiteral("#f0f0f0");
+	r.btn->setText(c.name(QColor::HexRgb).toUpper());
+	r.btn->setStyleSheet(QStringLiteral("background:%1; color:%2; border:1px solid #444; "
+					    "padding:4px 8px; text-align:left;")
+				     .arg(c.name(QColor::HexRgb), fg));
+}
+
+void DevPanel::applyColors()
+{
+	saveColors(colors_);
+	if (fullTimeline_)
+		fullTimeline_->setColors(colors_);
+	if (tracks_)
+		tracks_->setColors(colors_);
+	if (voice_)
+		voice_->setColors(colors_);
 }
 
 TimelineViewParams DevPanel::loadFullTimeline()
@@ -427,6 +519,40 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 	voForm->addRow(QStringLiteral("Trim edge zone"),
 		       voEdgeZone_ = spin(2, 24, vo.edgeZone, &DevPanel::applyVoice));
 
+	// ---- Colours -------------------------------------------------------
+	// One swatch per palette entry. The button IS the colour, so the page reads
+	// as a palette rather than as a list of hex strings.
+	colors_ = loadColors();
+	QFormLayout *colForm = addPage(
+		QStringLiteral("Colors"),
+		QStringLiteral("The editor palette, shared by all three track widgets. Click a "
+			       "swatch to pick a new colour — it applies to the timeline "
+			       "immediately."));
+	for (const ColorDef &cd : kColorDefs) {
+		ColorRow row;
+		row.key = QLatin1String(cd.key);
+		row.field = cd.field;
+		row.btn = new QPushButton(this);
+		row.btn->setAutoFillBackground(true);
+		if (cd.hint[0])
+			row.btn->setToolTip(QLatin1String(cd.hint));
+		colForm->addRow(QLatin1String(cd.label), row.btn);
+		colorRows_.append(row);
+		const int idx = colorRows_.size() - 1;
+		connect(row.btn, &QPushButton::clicked, this, [this, idx]() {
+			const ColorRow &r = colorRows_[idx];
+			const QColor cur = colors_.*(r.field);
+			const QColor picked = QColorDialog::getColor(
+				cur, this, QStringLiteral("Pick a colour"));
+			if (!picked.isValid() || picked == cur)
+				return; // cancelled, or the same colour again
+			colors_.*(r.field) = picked;
+			paintSwatch(r);
+			applyColors();
+		});
+		paintSwatch(colorRows_.back());
+	}
+
 	// Come back to the tab you were last on, like every other value here.
 	{
 		QSettings st = devSettings();
@@ -466,7 +592,9 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 	btnRow->addWidget(closeBtn);
 	outer->addLayout(btnRow);
 
-	resize(380, 620);
+	// Wide enough for all eight tab labels; below this the tab bar turns into a
+	// pair of scroll arrows and half the sections stop being discoverable.
+	resize(660, 680);
 }
 
 void DevPanel::applyTimeline()
@@ -558,6 +686,11 @@ void DevPanel::applyChrome()
 
 void DevPanel::resetDefaults()
 {
+	colors_ = EditorColors(); // the struct's defaults are the shipped palette
+	for (const ColorRow &r : colorRows_)
+		paintSwatch(r);
+	applyColors();
+
 	const TimelineLayoutParams tl; // struct defaults ARE the app defaults
 	const TrackLayoutParams tr;
 	const VoiceoverLayoutParams vo;

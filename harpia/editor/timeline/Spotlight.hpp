@@ -197,8 +197,14 @@ public:
 	static QPainterPath maskPath(const SpotMask &m, const SpotPose &pose, QSize canvas);
 
 	// Dim `frame` in place. `outMs` drives the masks' keyframes. Does nothing
-	// when the spec is inactive, so the cost of "off" is one branch.
+	// when the spec is inactive, so the cost of "off" is one branch. Runs on the
+	// GPU when this thread can have a context and falls back to applyCpu.
 	static void apply(QImage &frame, const SpotlightSpec &spec, qint64 outMs);
+
+	// The CPU implementation, and the reference the GPU one is held against.
+	// Exposed so a test can render both and compare; production code should
+	// call apply() and let it choose.
+	static void applyCpu(QImage &frame, const SpotlightSpec &spec, qint64 outMs);
 
 	// Separable box blur, run three times to approximate a Gaussian. Exposed for
 	// testing; `radius` is in pixels.

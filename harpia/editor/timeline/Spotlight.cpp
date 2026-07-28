@@ -1,5 +1,7 @@
 #include "Spotlight.hpp"
 
+#include "../shader/SpotlightGl.hpp"
+
 #include <QPainter>
 #include <QStringList>
 #include <QTransform>
@@ -163,6 +165,21 @@ void Spotlight::blurInPlace(QImage &img, int radius)
 }
 
 void Spotlight::apply(QImage &frame, const SpotlightSpec &spec, qint64 outMs)
+{
+	if (!spec.active() || frame.isNull())
+		return;
+
+	// The GPU does the whole thing when it can. Dispatching HERE rather than at
+	// the call sites is deliberate: the compositor and the effect-clip path both
+	// arrive through this function, so neither can end up on a different path
+	// from the other, and preview and export cannot drift apart. A false return
+	// means nothing was touched and the CPU code below is the answer.
+	if (SpotlightGl::tryApply(frame, spec, outMs))
+		return;
+	applyCpu(frame, spec, outMs);
+}
+
+void Spotlight::applyCpu(QImage &frame, const SpotlightSpec &spec, qint64 outMs)
 {
 	if (!spec.active() || frame.isNull())
 		return;

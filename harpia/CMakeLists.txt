@@ -188,6 +188,8 @@ target_sources(
     editor/VideoEditorWindow.hpp
     # User-authored GLSL post-processing shaders (preview + baked into export).
     editor/shader/ShaderEffect.hpp
+    editor/shader/SpotlightGl.cpp
+    editor/shader/SpotlightGl.hpp
     editor/shader/ShaderRenderer.cpp
     editor/shader/ShaderRenderer.hpp
     # "Full editing" multi-track NLE timeline.

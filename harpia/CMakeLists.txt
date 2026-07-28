@@ -134,6 +134,8 @@ target_sources(
     ui/MainDevPanel.cpp
 	ui/UiIcons.cpp
 	ui/UiIcons.hpp
+	ui/UiText.cpp
+	ui/UiText.hpp
     ui/MainDevPanel.hpp
     ui/RegionTool.cpp
     ui/RegionTool.hpp

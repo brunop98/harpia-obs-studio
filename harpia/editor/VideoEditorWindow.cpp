@@ -1,6 +1,7 @@
 #include "VideoEditorWindow.hpp"
 
 #include "../ui/UiIcons.hpp"
+#include "../ui/UiText.hpp"
 #include "KeyList.hpp"
 #include "ParamSlider.hpp"
 #include "TimeText.hpp"
@@ -261,7 +262,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// and monospace so it reads as the editor's primary timecode.
 	cursorTimeLabel_ = new QLabel(QStringLiteral("0:00.000"), this);
 	cursorTimeLabel_->setStyleSheet(QStringLiteral(
-		"color:#e8eaed; font-family:monospace; font-size:18px; font-weight:bold;"));
+		"color:#e8eaed; font-family:monospace; font-weight:bold; font-size:%1px;")
+						.arg(uiTimecodePx()));
 	cursorTimeLabel_->setToolTip(QStringLiteral("Time of the frame shown in the preview"));
 	bar->addWidget(cursorTimeLabel_);
 	bar->addSpacing(16);
@@ -789,7 +791,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		shaderError_ = new QLabel(QString(), this);
 		shaderError_->setWordWrap(true);
 		shaderError_->setStyleSheet(
-			QStringLiteral("color:#e5484d; font-family:monospace; font-size:11px;"));
+			QStringLiteral("color:#e5484d; font-family:monospace; font-size:%1px;").arg(uiCaptionPx()));
 		shaderError_->setVisible(false);
 		insLayout->addWidget(shaderError_);
 
@@ -2469,7 +2471,7 @@ void VideoEditorWindow::buildProjectInspector(QVBoxLayout *into)
 
 	pjFormatWarn_ = new QLabel(this);
 	pjFormatWarn_->setWordWrap(true);
-	pjFormatWarn_->setStyleSheet(QStringLiteral("color:#e2a03f; font-size:11px;"));
+	pjFormatWarn_->setStyleSheet(QStringLiteral("color:#e2a03f; font-size:%1px;").arg(uiCaptionPx()));
 	pjFormatWarn_->setVisible(false);
 	v->addWidget(pjFormatWarn_);
 
@@ -3788,7 +3790,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	scriptError_ = new QLabel(QString(), clipBox_);
 	scriptError_->setWordWrap(true);
 	scriptError_->setStyleSheet(
-		QStringLiteral("color:#e5484d; font-family:monospace; font-size:11px;"));
+		QStringLiteral("color:#e5484d; font-family:monospace; font-size:%1px;").arg(uiCaptionPx()));
 	scriptError_->setVisible(false);
 	v->addWidget(scriptError_);
 
@@ -4741,7 +4743,7 @@ bool VideoEditorWindow::confirmDiscardOnClose()
 	auto *col = new QVBoxLayout;
 	col->setSpacing(8);
 	auto *head = new QLabel(QStringLiteral("You have unsaved changes to this project."), &dlg);
-	head->setStyleSheet(QStringLiteral("font-size:14px; font-weight:bold; color:#e8eaed;"));
+	head->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed; font-size:%1px;").arg(uiHeadingPx()));
 	head->setWordWrap(true);
 	col->addWidget(head);
 	auto *body = new QLabel(

@@ -7,6 +7,8 @@
 #include <QString>
 #include <QVector>
 
+#include "../ui/UiText.hpp"
+
 #include <functional>
 
 class QCheckBox;
@@ -21,8 +23,10 @@ namespace harpia {
 // chromeChanged() live from the Developer Panel.
 struct EditorChromeParams {
 	int buttonH = 28;         // toolbar/transport button height
-	int timecodeFontPx = 18;  // the big monospace playhead timecode
-	int inspectorFontPx = 13; // the inspector's value readouts
+	// Derived from the app's base font rather than fixed, so these follow the
+	// global text scale; the Dev panel still overrides them per-install.
+	int timecodeFontPx = uiTimecodePx(); // the big monospace playhead timecode
+	int inspectorFontPx = uiReadoutPx(); // the inspector's value readouts
 	int speedSliderMinW = 96; // speed slider minimum width (drives the toolbar's
 				  // own minimum, so it caps how narrow the window can get)
 	int speedSpinW = 72;       // editable speed-value box width

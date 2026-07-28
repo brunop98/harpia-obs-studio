@@ -1,6 +1,7 @@
 #include "MainWindow.hpp"
 
 #include "UiIcons.hpp"
+#include "UiText.hpp"
 
 #include "AudioPanel.hpp"
 #include "ClipLibraryWindow.hpp"
@@ -474,8 +475,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	driveLinkButton_->setFlat(true);
 	driveLinkButton_->setCursor(Qt::PointingHandCursor);
 	driveLinkButton_->setStyleSheet(QStringLiteral(
-		"QPushButton{color:#3d84b8; background:transparent; border:none; font-size:11px; padding:2px 8px;}"
-		"QPushButton:hover{color:#5aa9e6; text-decoration:underline;}"));
+		"QPushButton{color:#3d84b8; background:transparent; border:none; font-size:%1px; padding:2px 8px;}"
+		"QPushButton:hover{color:#5aa9e6; text-decoration:underline;}")
+							.arg(uiCaptionPx()));
 	driveLinkButton_->setVisible(false);
 	statusBar()->addWidget(driveLinkButton_);
 	connect(driveLinkButton_, &QPushButton::clicked, this, [this]() {
@@ -488,8 +490,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	devButton->setFlat(true);
 	devButton->setCursor(Qt::PointingHandCursor);
 	devButton->setStyleSheet(QStringLiteral(
-		"QPushButton{color:#9a9fa8; background:transparent; border:none; font-size:11px; padding:2px 8px;}"
-		"QPushButton:hover{color:#e6e6e6;}"));
+		"QPushButton{color:#9a9fa8; background:transparent; border:none; font-size:%1px; padding:2px 8px;}"
+		"QPushButton:hover{color:#e6e6e6;}")
+							.arg(uiCaptionPx()));
 	devButton->setToolTip(QStringLiteral("Developer Panel — live-tweak the window layout sizes (auto-saved)"));
 	statusBar()->addPermanentWidget(devButton);
 	connect(devButton, &QPushButton::clicked, this, &MainWindow::openDevPanel);
@@ -498,11 +501,12 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	errorLogsButton_->setFlat(true);
 	errorLogsButton_->setCursor(Qt::PointingHandCursor);
 	errorLogsButton_->setStyleSheet(QStringLiteral(
-		"QPushButton{color:#9a9fa8; background:transparent; border:none; font-size:11px; padding:2px 8px;}"
-		"QPushButton:hover{color:#e6e6e6;}"));
+		"QPushButton{color:#9a9fa8; background:transparent; border:none; font-size:%1px; padding:2px 8px;}"
+		"QPushButton:hover{color:#e6e6e6;}")
+							.arg(uiCaptionPx()));
 	statusBar()->addPermanentWidget(errorLogsButton_);
 	auto *versionLabel = new QLabel(QStringLiteral("v%1").arg(QString::fromUtf8(appVersion())), this);
-	versionLabel->setStyleSheet(QStringLiteral("color:#6b6f76; font-size:11px; padding-right:6px;"));
+	versionLabel->setStyleSheet(QStringLiteral("color:#6b6f76; padding-right:6px; font-size:%1px;").arg(uiCaptionPx()));
 	statusBar()->addPermanentWidget(versionLabel);
 	statusBar()->setSizeGripEnabled(false);
 	statusBar()->setStyleSheet(QStringLiteral("QStatusBar{background:transparent;} QStatusBar::item{border:none;}"));

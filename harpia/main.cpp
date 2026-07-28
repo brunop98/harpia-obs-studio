@@ -3,6 +3,7 @@
 #include "core/ObsContext.hpp"
 #include "model/PresetStore.hpp"
 #include "ui/MainWindow.hpp"
+#include "ui/UiText.hpp"
 
 #include <util/bmem.h>
 #include <util/platform.h>
@@ -91,6 +92,9 @@ int main(int argc, char *argv[])
 	// comes from resources/harpia.rc compiled into the binary.
 	QApplication::setWindowIcon(QIcon(QStringLiteral(":/harpia.png")));
 	applyDarkPalette(app);
+	// Before any window exists: the role sizes in UiText are read off the base
+	// font, so a widget built first would keep the platform default.
+	harpia::applyTextScale(app);
 
 	// Start logging before anything else so startup and any early crash are
 	// captured to disk (flushed per line).

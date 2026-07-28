@@ -34,8 +34,13 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/paramslider_test.cpp" "$H/editor/ParamSlider.cpp" \
 	"$WORK/moc_ParamSlider.cpp" -o "$WORK/paramslider_test" $LF
 
+# The app-wide text scale and the role sizes derived from it.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/uitext_test.cpp" "$H/ui/UiText.cpp" -o "$WORK/uitext_test" $LF
+
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/paramslider_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1
 exit $rc

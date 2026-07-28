@@ -4,6 +4,7 @@
 #include "VoiceoverTrack.hpp"     // VoiceoverClip (stored in EditorSnapshot)
 #include "shader/ShaderEffect.hpp"    // ShaderState / ShaderParam (post-processing)
 #include "timeline/TimelineModel.hpp" // TlClip / TlTransform (Full-editing timeline)
+#include "DevPanel.hpp"                 // EditorChromeParams / EditorInspectorParams
 #include "timeline/TimelineView.hpp"    // ClipboardEntry (timeline copy/paste)
 
 #include <QDateTime>
@@ -495,6 +496,10 @@ private:
 	// Apply the Dev-tunable window chrome (button height, text sizes, speed
 	// slider/value widths) live.
 	void applyChrome(const struct EditorChromeParams &p);
+	// Inspector sizing, live-tunable from the Dev panel.
+	void applyInspectorParams(const struct EditorInspectorParams &p);
+	EditorInspectorParams inspectorParams_;
+	QVBoxLayout *insContentLayout_ = nullptr;
 	QVector<EditorSnapshot> history_;
 	int histIndex_ = -1;    // current position in history_
 	bool restoring_ = false; // guard: restoring must not schedule new snapshots

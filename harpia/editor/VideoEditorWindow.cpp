@@ -12,6 +12,7 @@
 #include "TimelineAudio.hpp"
 #include "TimelineThumbs.hpp"
 #include "timeline/TextStyleJson.hpp"
+#include "timeline/TimelineJson.hpp"
 #include "TrackEditor.hpp"
 #include "VoiceoverMixer.hpp"
 #include "VoiceoverTrack.hpp"
@@ -385,6 +386,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		if (!devPanel_) {
 			devPanel_ = new DevPanel(timeline_, tracks_, voTrack_, canvas_,
 						 timelineView_, this);
+			connect(devPanel_, &DevPanel::inspectorChanged, this,
+				&VideoEditorWindow::applyInspectorParams);
 			connect(devPanel_, &DevPanel::chromeChanged, this,
 				&VideoEditorWindow::applyChrome);
 		}
@@ -628,7 +631,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	inspector_ = new QWidget(this);
 	// 180 was narrow enough to clip the value fields, the Save/Save As row and
 	// several hints, leaving a horizontal scrollbar to reach them.
-	inspector_->setMinimumWidth(250);
+	inspector_->setMinimumWidth(inspectorParams_.minWidth);
 	inspector_->setVisible(false); // collapsed until the Inspector button opens it
 	auto *insOuter = new QVBoxLayout(inspector_);
 	insOuter->setContentsMargins(0, 0, 0, 0);
@@ -658,6 +661,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	insContent->setAutoFillBackground(false);
 	insScroll->setWidget(insContent);
 	auto *insLayout = new QVBoxLayout(insContent);
+	insContentLayout_ = insLayout;
 	insLayout->setContentsMargins(10, 6, 10, 8);
 	insLayout->setSpacing(6);
 
@@ -1073,12 +1077,41 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// own buttons are excluded) and apply the saved Dev-tunable chrome.
 	uiButtons_ = findChildren<QPushButton *>();
 	applyChrome(DevPanel::loadChrome());
+	applyInspectorParams(DevPanel::loadInspector());
 
 	// Battery saving keys off the APPLICATION losing focus, not this window's.
 	// Window focus would also fire for the editor's own Sources panel and its
 	// dialogs, pausing playback every time one of them is clicked.
 	connect(qApp, &QGuiApplication::applicationStateChanged, this,
 		[this](Qt::ApplicationState st) { setPowerSaving(st != Qt::ApplicationActive); });
+}
+
+void VideoEditorWindow::applyInspectorParams(const EditorInspectorParams &p)
+{
+	inspectorParams_ = p;
+	if (!inspector_)
+		return;
+	inspector_->setMinimumWidth(std::max(120, p.minWidth));
+	if (insContentLayout_) {
+		insContentLayout_->setContentsMargins(p.margin, p.spacing, p.margin, p.margin);
+		insContentLayout_->setSpacing(p.spacing);
+	}
+	// Every form inside the panel, wherever it was built — the clip transform,
+	// the text style, the audio levels, the script parameters.
+	for (QFormLayout *f : inspector_->findChildren<QFormLayout *>()) {
+		f->setHorizontalSpacing(p.labelSpacing);
+		f->setVerticalSpacing(p.rowSpacing);
+	}
+	if (scriptList_)
+		scriptList_->setMaximumHeight(std::max(48, p.scriptListH));
+	// If it is already open and now narrower than its own minimum, widen it.
+	if (inspector_->isVisible() && hsplit_) {
+		const QList<int> sizes = hsplit_->sizes();
+		if (sizes.size() == 2 && sizes[1] < p.minWidth) {
+			const int total = sizes[0] + sizes[1];
+			hsplit_->setSizes({total - p.minWidth, p.minWidth});
+		}
+	}
 }
 
 void VideoEditorWindow::applyChrome(const EditorChromeParams &p)
@@ -3261,7 +3294,8 @@ void VideoEditorWindow::showInspector(bool on)
 		if (sizes.size() != 2)
 			return;
 		const int total = sizes[0] + sizes[1];
-		const int want = std::clamp(320, inspector_->minimumWidth(), std::max(260, total / 3));
+		const int want = std::clamp(inspectorParams_.openWidth, inspector_->minimumWidth(),
+					    std::max(inspector_->minimumWidth(), total / 3));
 		if (sizes[1] < want)
 			hsplit_->setSizes({total - want, want});
 	});
@@ -3915,86 +3949,8 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 	// remapped through the same `sources` array as the Multi-Cut segments.
 	if (!s.timeline.isEmpty()) {
 		QJsonArray trackArr;
-		for (const TlTrack &t : s.timeline.tracks) {
-			QJsonObject to;
-			to[QStringLiteral("kind")] =
-				t.kind == TlTrack::Kind::Video ? QStringLiteral("video")
-							       : QStringLiteral("audio");
-			to[QStringLiteral("name")] = t.name;
-			to[QStringLiteral("muted")] = t.muted;
-			to[QStringLiteral("hidden")] = t.hidden;
-			to[QStringLiteral("locked")] = t.locked;
-			to[QStringLiteral("ripple")] = t.ripple;
-			to[QStringLiteral("color")] = t.color.name(QColor::HexRgb);
-			QJsonArray clipArr;
-			for (const TlClip &c : t.clips) {
-				QJsonObject co;
-				co[QStringLiteral("type")] =
-					c.type == TlClip::Type::Text    ? QStringLiteral("text")
-					: c.type == TlClip::Type::Image ? QStringLiteral("image")
-									: QStringLiteral("video");
-				co[QStringLiteral("source")] = c.sourceId;
-				co[QStringLiteral("srcStart")] = double(c.srcStartMs);
-				co[QStringLiteral("srcEnd")] = double(c.srcEndMs);
-				co[QStringLiteral("speed")] = c.speed;
-				co[QStringLiteral("outStart")] = double(c.outStartMs);
-				co[QStringLiteral("posX")] = c.posX;
-				co[QStringLiteral("posY")] = c.posY;
-				co[QStringLiteral("scale")] = c.scale;
-				co[QStringLiteral("rotation")] = c.rotation;
-				co[QStringLiteral("opacity")] = c.opacity;
-				if (!c.crop.isNull()) {
-					QJsonObject cr;
-					cr[QStringLiteral("x")] = c.crop.x();
-					cr[QStringLiteral("y")] = c.crop.y();
-					cr[QStringLiteral("w")] = c.crop.width();
-					cr[QStringLiteral("h")] = c.crop.height();
-					co[QStringLiteral("crop")] = cr;
-				}
-				if (!c.keys.isEmpty()) {
-					QJsonArray keyArr;
-					for (const TlKeyframe &k : c.keys) {
-						QJsonObject ko;
-						ko[QStringLiteral("t")] = double(k.tMs);
-						ko[QStringLiteral("posX")] = k.tf.posX;
-						ko[QStringLiteral("posY")] = k.tf.posY;
-						ko[QStringLiteral("scale")] = k.tf.scale;
-						ko[QStringLiteral("rotation")] = k.tf.rotation;
-						ko[QStringLiteral("opacity")] = k.tf.opacity;
-						ko[QStringLiteral("ease")] =
-							k.ease == TlKeyframe::Ease::Linear ? 0 : 1;
-						keyArr.append(ko);
-					}
-					co[QStringLiteral("keys")] = keyArr;
-				}
-				if (!c.scripts.isEmpty()) {
-					QJsonArray scArr;
-					for (const TlScript &s : c.scripts) {
-						QJsonObject sc;
-						sc[QStringLiteral("name")] = s.name;
-						QJsonObject sp;
-						for (auto it = s.params.constBegin();
-						     it != s.params.constEnd(); ++it)
-							sp[it.key()] = it.value();
-						sc[QStringLiteral("params")] = sp;
-						scArr.append(sc);
-					}
-					co[QStringLiteral("scripts")] = scArr;
-				}
-				if (c.type == TlClip::Type::Text) {
-					QJsonObject tx = textStyleToJson(c.text);
-					tx[QStringLiteral("text")] = c.text.text; // words too, here
-					co[QStringLiteral("textStyle")] = tx;
-				} else {
-					co[QStringLiteral("volume")] = c.volume;
-					co[QStringLiteral("fadeIn")] = c.fadeInMs;
-					co[QStringLiteral("fadeOut")] = c.fadeOutMs;
-				}
-				clipArr.append(co);
-			}
-			to[QStringLiteral("clips")] = clipArr;
-			trackArr.append(to);
-		}
+		for (const TlTrack &t : s.timeline.tracks)
+			trackArr.append(trackToJson(t));
 		root[QStringLiteral("tracks")] = trackArr;
 		if (!s.timeline.markers.isEmpty()) {
 			QJsonArray mk;
@@ -4162,94 +4118,31 @@ void VideoEditorWindow::onOpenProject()
 		s.timeline.markers.append(qint64(mv.toDouble()));
 	std::sort(s.timeline.markers.begin(), s.timeline.markers.end());
 	for (const QJsonValue &tv : root.value(QStringLiteral("tracks")).toArray()) {
-		const QJsonObject to = tv.toObject();
-		TlTrack t;
-		t.kind = to.value(QStringLiteral("kind")).toString() == QLatin1String("audio")
-				 ? TlTrack::Kind::Audio
-				 : TlTrack::Kind::Video;
-		t.name = to.value(QStringLiteral("name")).toString();
-		t.muted = to.value(QStringLiteral("muted")).toBool(false);
-		t.hidden = to.value(QStringLiteral("hidden")).toBool(false);
-		t.locked = to.value(QStringLiteral("locked")).toBool(false);
-		t.ripple = to.value(QStringLiteral("ripple")).toBool(false);
-		if (const QColor tc(to.value(QStringLiteral("color")).toString()); tc.isValid())
-			t.color = tc;
-		for (const QJsonValue &cv : to.value(QStringLiteral("clips")).toArray()) {
-			const QJsonObject co = cv.toObject();
-			TlClip c;
-			const QString ct = co.value(QStringLiteral("type")).toString();
-			c.type = (ct == QLatin1String("text"))    ? TlClip::Type::Text
-				 : (ct == QLatin1String("image")) ? TlClip::Type::Image
-								  : TlClip::Type::Video;
-			const int pid = co.value(QStringLiteral("source")).toInt(defaultSrcId);
-			c.sourceId = srcMap.isEmpty() ? defaultSrcId : srcMap.value(pid, defaultSrcId);
-			c.srcStartMs = qint64(co.value(QStringLiteral("srcStart")).toDouble());
-			c.srcEndMs = qint64(co.value(QStringLiteral("srcEnd")).toDouble());
-			c.speed = co.value(QStringLiteral("speed")).toDouble(1.0);
-			c.outStartMs = qint64(co.value(QStringLiteral("outStart")).toDouble());
-			c.posX = co.value(QStringLiteral("posX")).toDouble(0.5);
-			c.posY = co.value(QStringLiteral("posY")).toDouble(0.5);
-			c.scale = co.value(QStringLiteral("scale")).toDouble(1.0);
-			c.rotation = co.value(QStringLiteral("rotation")).toDouble(0.0);
-			c.opacity = co.value(QStringLiteral("opacity")).toDouble(1.0);
-			if (co.contains(QStringLiteral("crop"))) {
-				const QJsonObject cr = co.value(QStringLiteral("crop")).toObject();
-				c.crop = QRect(cr.value(QStringLiteral("x")).toInt(),
-					       cr.value(QStringLiteral("y")).toInt(),
-					       cr.value(QStringLiteral("w")).toInt(),
-					       cr.value(QStringLiteral("h")).toInt());
-			}
-			for (const QJsonValue &kv : co.value(QStringLiteral("keys")).toArray()) {
-				const QJsonObject ko = kv.toObject();
-				TlKeyframe k;
-				k.tMs = qint64(ko.value(QStringLiteral("t")).toDouble());
-				k.tf.posX = ko.value(QStringLiteral("posX")).toDouble(0.5);
-				k.tf.posY = ko.value(QStringLiteral("posY")).toDouble(0.5);
-				k.tf.scale = ko.value(QStringLiteral("scale")).toDouble(1.0);
-				k.tf.rotation = ko.value(QStringLiteral("rotation")).toDouble(0.0);
-				k.tf.opacity = ko.value(QStringLiteral("opacity")).toDouble(1.0);
-				k.ease = ko.value(QStringLiteral("ease")).toInt(1) == 0
-						 ? TlKeyframe::Ease::Linear
-						 : TlKeyframe::Ease::EaseInOut;
-				c.keys.append(k);
-			}
-			// Scripts became a stack; projects written before that carry a single
-			// "script" object, which reads as a one-entry stack.
-			auto readScript = [](const QJsonObject &sc) {
-				TlScript s;
-				s.name = sc.value(QStringLiteral("name")).toString();
-				const QJsonObject sp = sc.value(QStringLiteral("params")).toObject();
-				for (auto it = sp.constBegin(); it != sp.constEnd(); ++it)
-					s.params[it.key()] = it.value().toDouble();
-				return s;
-			};
-			if (co.contains(QStringLiteral("scripts"))) {
-				for (const QJsonValue &sv : co.value(QStringLiteral("scripts")).toArray()) {
-					const TlScript s = readScript(sv.toObject());
-					if (!s.name.isEmpty())
-						c.scripts.append(s);
+		TlTrack t = trackFromJson(tv.toObject());
+		// Source ids in the file index the project's own `sources` array; map
+		// them onto whatever those files became in this session's media pool.
+		for (TlClip &c : t.clips)
+			c.sourceId = srcMap.isEmpty() ? defaultSrcId
+						      : srcMap.value(c.sourceId, defaultSrcId);
+
+		// Waveforms are a derived cache, so they are not stored in the project —
+		// but they DO have to be rebuilt, or an audio clip reopens as a blank bar.
+		// One decode per source, not per clip.
+		if (t.kind == TlTrack::Kind::Audio) {
+			QHash<int, QVector<float>> peaksBySource;
+			for (TlClip &c : t.clips) {
+				if (c.type == TlClip::Type::Text || c.type == TlClip::Type::Image)
+					continue;
+				auto it = peaksBySource.constFind(c.sourceId);
+				if (it == peaksBySource.constEnd()) {
+					const EditorSource *es = sourceById(c.sourceId);
+					it = peaksBySource.insert(
+						c.sourceId,
+						es ? VoiceoverTrack::loadPeaks(es->path, 600)
+						   : QVector<float>());
 				}
-			} else if (co.contains(QStringLiteral("script"))) {
-				const TlScript s = readScript(co.value(QStringLiteral("script")).toObject());
-				if (!s.name.isEmpty())
-					c.scripts.append(s);
+				c.peaks = it.value();
 			}
-			if (c.type == TlClip::Type::Text) {
-				const QJsonObject tx = co.value(QStringLiteral("textStyle")).toObject();
-				applyTextStyleFromJson(tx, c.text);
-				c.text.text = tx.value(QStringLiteral("text")).toString();
-				if (!c.text.color.isValid())
-					c.text.color = QColor(0xff, 0xff, 0xff);
-				if (!c.text.outlineColor.isValid())
-					c.text.outlineColor = QColor(0, 0, 0);
-				if (!c.text.boxColor.isValid())
-					c.text.boxColor = QColor(0, 0, 0, 150);
-			} else {
-				c.volume = co.value(QStringLiteral("volume")).toDouble(1.0);
-				c.fadeInMs = co.value(QStringLiteral("fadeIn")).toInt(15);
-				c.fadeOutMs = co.value(QStringLiteral("fadeOut")).toInt(15);
-			}
-			t.clips.append(c);
 		}
 		s.timeline.tracks.append(t);
 	}

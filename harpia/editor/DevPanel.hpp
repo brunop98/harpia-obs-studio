@@ -26,6 +26,18 @@ struct EditorChromeParams {
 	bool powerSaveOnBlur = true;
 };
 
+// Sizing for the right-hand Inspector panel. Like the chrome params, the editor
+// reads these at startup and follows inspectorChanged() live.
+struct EditorInspectorParams {
+	int minWidth = 250;    // narrowest the splitter will let it get
+	int openWidth = 320;   // width it opens at from the toolbar button
+	int margin = 10;       // content margin, left/right
+	int spacing = 6;       // gap between sections
+	int labelSpacing = 10; // form layouts: label -> control
+	int rowSpacing = 4;    // form layouts: row -> row
+	int scriptListH = 112; // height of the transform-script stack list
+};
+
 class PreviewCanvas;
 class Timeline;
 class TrackEditor;
@@ -59,6 +71,8 @@ public:
 	// the editor reads these at startup and follows chromeChanged() live.
 	static EditorChromeParams loadChrome();
 	static void saveChrome(const EditorChromeParams &p);
+	static EditorInspectorParams loadInspector();
+	static void saveInspector(const EditorInspectorParams &p);
 
 	// Full-editing timeline layout. Kept as its own pair (like the chrome above)
 	// so the older loadInto/saveFrom signature stays untouched.
@@ -67,6 +81,7 @@ public:
 
 signals:
 	void chromeChanged(const EditorChromeParams &p);
+	void inspectorChanged(const EditorInspectorParams &p);
 
 private:
 	void applyTimeline();
@@ -90,6 +105,14 @@ private:
 	QSpinBox *winSpeedW_ = nullptr;
 	QSpinBox *winSpinW_ = nullptr;
 	QCheckBox *winPowerSave_ = nullptr;
+	QSpinBox *insMinW_ = nullptr;
+	QSpinBox *insOpenW_ = nullptr;
+	QSpinBox *insMargin_ = nullptr;
+	QSpinBox *insSpacing_ = nullptr;
+	QSpinBox *insLabelSp_ = nullptr;
+	QSpinBox *insRowSp_ = nullptr;
+	QSpinBox *insScriptH_ = nullptr;
+	void applyInspector();
 
 	// Simple Trim timeline.
 	QSpinBox *tlPad_ = nullptr;

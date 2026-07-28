@@ -1,6 +1,8 @@
 #include "TimelineView.hpp"
 
 #include <QColorDialog>
+#include <QInputDialog>
+#include <QLineEdit>
 #include <QKeyEvent>
 #include <QMenu>
 #include <QMouseEvent>
@@ -467,6 +469,7 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos)
 	ripple->setCheckable(true);
 	ripple->setChecked(t.ripple);
 	menu.addSeparator();
+	QAction *rename = menu.addAction(QStringLiteral("Rename track…"));
 	QAction *colour = menu.addAction(QStringLiteral("Track colour…"));
 	QAction *reroll = menu.addAction(QStringLiteral("Random colour"));
 	menu.addSeparator();
@@ -485,6 +488,23 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos)
 		t.muted = !t.muted;
 	} else if (chosen == ripple) {
 		t.ripple = !t.ripple;
+	} else if (chosen == rename) {
+		bool ok = false;
+		const QString n = QInputDialog::getText(this, QStringLiteral("Rename track"),
+							QStringLiteral("Track name:"),
+							QLineEdit::Normal, t.name, &ok)
+					  .trimmed();
+		if (!ok)
+			return;
+		// An empty name would leave the header blank with no way back, so it
+		// falls back to the automatic V1/A1 numbering.
+		t.name = n;
+		if (t.name.isEmpty()) {
+			renumberTracks();
+			update();
+			emit clipsChanged();
+			return;
+		}
 	} else if (chosen == colour) {
 		const QColor c = QColorDialog::getColor(t.color, this, QStringLiteral("Track colour"));
 		if (c.isValid())

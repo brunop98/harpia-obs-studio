@@ -45,6 +45,51 @@ EditorChromeParams DevPanel::loadChrome()
 	return p;
 }
 
+EditorInspectorParams DevPanel::loadInspector()
+{
+	const EditorInspectorParams d; // struct defaults ARE the shipped defaults
+	EditorInspectorParams p;
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout"));
+	p.minWidth = s.value(QStringLiteral("ins/minW"), d.minWidth).toInt();
+	p.openWidth = s.value(QStringLiteral("ins/openW"), d.openWidth).toInt();
+	p.margin = s.value(QStringLiteral("ins/margin"), d.margin).toInt();
+	p.spacing = s.value(QStringLiteral("ins/spacing"), d.spacing).toInt();
+	p.labelSpacing = s.value(QStringLiteral("ins/labelSp"), d.labelSpacing).toInt();
+	p.rowSpacing = s.value(QStringLiteral("ins/rowSp"), d.rowSpacing).toInt();
+	p.scriptListH = s.value(QStringLiteral("ins/scriptH"), d.scriptListH).toInt();
+	s.endGroup();
+	return p;
+}
+
+void DevPanel::saveInspector(const EditorInspectorParams &p)
+{
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout"));
+	s.setValue(QStringLiteral("ins/minW"), p.minWidth);
+	s.setValue(QStringLiteral("ins/openW"), p.openWidth);
+	s.setValue(QStringLiteral("ins/margin"), p.margin);
+	s.setValue(QStringLiteral("ins/spacing"), p.spacing);
+	s.setValue(QStringLiteral("ins/labelSp"), p.labelSpacing);
+	s.setValue(QStringLiteral("ins/rowSp"), p.rowSpacing);
+	s.setValue(QStringLiteral("ins/scriptH"), p.scriptListH);
+	s.endGroup();
+}
+
+void DevPanel::applyInspector()
+{
+	EditorInspectorParams p;
+	p.minWidth = insMinW_->value();
+	p.openWidth = insOpenW_->value();
+	p.margin = insMargin_->value();
+	p.spacing = insSpacing_->value();
+	p.labelSpacing = insLabelSp_->value();
+	p.rowSpacing = insRowSp_->value();
+	p.scriptListH = insScriptH_->value();
+	saveInspector(p);
+	emit inspectorChanged(p);
+}
+
 void DevPanel::saveChrome(const EditorChromeParams &p)
 {
 	QSettings s = devSettings();
@@ -288,6 +333,26 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		       pvH_ = spin(90, 1080, pv.minH, &DevPanel::applyPreview));
 
 	const TrackLayoutParams tr = tracks_->layoutParams();
+	const EditorInspectorParams ip = loadInspector();
+	QFormLayout *insForm = addPage(
+		QStringLiteral("Inspector"),
+		QStringLiteral("The properties panel on the right. Open width is what it "
+			       "gets the first time you show it; drag the splitter to override."));
+	insForm->addRow(QStringLiteral("Minimum width"),
+			insMinW_ = spin(160, 700, ip.minWidth, &DevPanel::applyInspector));
+	insForm->addRow(QStringLiteral("Open width"),
+			insOpenW_ = spin(180, 900, ip.openWidth, &DevPanel::applyInspector));
+	insForm->addRow(QStringLiteral("Content margin"),
+			insMargin_ = spin(0, 40, ip.margin, &DevPanel::applyInspector));
+	insForm->addRow(QStringLiteral("Section spacing"),
+			insSpacing_ = spin(0, 30, ip.spacing, &DevPanel::applyInspector));
+	insForm->addRow(QStringLiteral("Label spacing"),
+			insLabelSp_ = spin(0, 40, ip.labelSpacing, &DevPanel::applyInspector));
+	insForm->addRow(QStringLiteral("Row spacing"),
+			insRowSp_ = spin(0, 24, ip.rowSpacing, &DevPanel::applyInspector));
+	insForm->addRow(QStringLiteral("Script list height"),
+			insScriptH_ = spin(48, 400, ip.scriptListH, &DevPanel::applyInspector));
+
 	QFormLayout *trForm = addPage(
 		QStringLiteral("Multi-Cut"),
 		QStringLiteral("The source and output tracks in Multi-Cut mode."));
@@ -531,6 +596,14 @@ void DevPanel::resetDefaults()
 	winSpeedW_->setValue(ch.speedSliderMinW);
 	winSpinW_->setValue(ch.speedSpinW);
 	winPowerSave_->setChecked(ch.powerSaveOnBlur);
+	const EditorInspectorParams ipd;
+	insMinW_->setValue(ipd.minWidth);
+	insOpenW_->setValue(ipd.openWidth);
+	insMargin_->setValue(ipd.margin);
+	insSpacing_->setValue(ipd.spacing);
+	insLabelSp_->setValue(ipd.labelSpacing);
+	insRowSp_->setValue(ipd.rowSpacing);
+	insScriptH_->setValue(ipd.scriptListH);
 	const TimelineViewParams ft; // Full-editing timeline defaults
 	if (ftGutterW_) {
 		ftGutterW_->setValue(ft.gutterW);
@@ -554,8 +627,10 @@ void DevPanel::resetDefaults()
 		fullTimeline_->setLayoutParams(ft);
 	saveFrom(tl, tr, vo, pv);
 	saveChrome(ch);
+	saveInspector(ipd);
 	saveFullTimeline(ft);
 	emit chromeChanged(ch);
+	emit inspectorChanged(ipd);
 }
 
 } // namespace harpia

@@ -10,6 +10,8 @@
 // exporter can all share it.
 
 #include "../FadeCurve.hpp"
+#include "Ease.hpp"
+#include "Spotlight.hpp"
 
 #include <QColor>
 #include <QMap>
@@ -37,54 +39,6 @@ struct TlTransform {
 // One animation keyframe: a pose pinned to a time inside the clip. `tMs` is an
 // offset from the clip's outStartMs, in OUTPUT time. `ease` shapes the curve
 // from this keyframe to the next.
-// How a keyframe hands over to the next one, per channel.
-enum class TlEase { Linear, EaseIn, EaseOut, EaseInOut, Bezier };
-
-inline constexpr int kTlEaseCount = 5;
-
-inline const char *tlEaseName(TlEase e)
-{
-	switch (e) {
-	case TlEase::Linear: return "Linear";
-	case TlEase::EaseIn: return "Ease In";
-	case TlEase::EaseOut: return "Ease Out";
-	case TlEase::EaseInOut: return "Ease In-Out";
-	case TlEase::Bezier: return "Bezier";
-	}
-	return "Linear";
-}
-
-inline TlEase tlEaseFromInt(int v)
-{
-	return (v >= 0 && v < kTlEaseCount) ? TlEase(v) : TlEase::Linear;
-}
-
-// Remap 0..1 progress through an ease. `p1`/`p2` are the Bezier handles (the
-// x of a standard CSS-style cubic-bezier(p1, p1, p2, p2) with the control
-// points on the diagonal, which is the shape a two-number handle can describe).
-inline double tlEaseAt(TlEase e, double u, double p1 = 0.42, double p2 = 0.58)
-{
-	u = std::clamp(u, 0.0, 1.0);
-	switch (e) {
-	case TlEase::Linear:
-		return u;
-	case TlEase::EaseIn:
-		return u * u;
-	case TlEase::EaseOut:
-		return 1.0 - (1.0 - u) * (1.0 - u);
-	case TlEase::EaseInOut:
-		return u * u * (3.0 - 2.0 * u); // smoothstep
-	case TlEase::Bezier: {
-		// Cubic Bezier with control points (p1,p1) and (p2,p2): symmetric in x
-		// and y, so y(u) is just the curve evaluated at u -- no root solve.
-		const double a = std::clamp(p1, 0.0, 1.0), b = std::clamp(p2, 0.0, 1.0);
-		const double v = 1.0 - u;
-		return 3.0 * v * v * u * a + 3.0 * v * u * u * b + u * u * u;
-	}
-	}
-	return u;
-}
-
 // One channel's presence at a keyframe. A key does not have to pin every
 // channel: the Position tab can hold a key at 1s that Scale knows nothing
 // about, and each channel interpolates only across the keys that carry it.
@@ -511,6 +465,10 @@ struct TlTrack {
 // the display order (index 0 is the top lane) and, for video, the compositing
 // order: the HIGHER lane renders in FRONT, so index 0 is drawn last/on top.
 struct TimelineModel {
+	// Inverse Selection (Spotlight). Project-wide: it dims the COMPOSITED frame,
+	// so it covers every visible track at once.
+	SpotlightSpec spotlight;
+
 	// Points of interest on the output timeline, sorted, in ms. Purely for
 	// navigation — nothing about the render depends on them.
 	QVector<qint64> markers;
@@ -545,7 +503,7 @@ struct TimelineModel {
 
 	bool operator==(const TimelineModel &o) const
 	{
-		return tracks == o.tracks && markers == o.markers;
+		return tracks == o.tracks && markers == o.markers && spotlight == o.spotlight;
 	}
 	bool operator!=(const TimelineModel &o) const { return !(*this == o); }
 };

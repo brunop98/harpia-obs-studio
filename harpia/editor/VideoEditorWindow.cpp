@@ -829,6 +829,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 
 	// Full-editing: per-clip zoom/position/keyframes and text styling.
 	buildClipInspector(insLayout);
+	buildSpotlightInspector(insLayout);
 
 	insLayout->addStretch(1);
 
@@ -2290,6 +2291,304 @@ void VideoEditorWindow::revealProjectFolder()
 	if (target.isEmpty())
 		return;
 	revealInFolder(target);
+}
+
+// Inverse Selection (Spotlight). Project-level rather than per-clip: it dims the
+// composited frame, so it applies to whatever is visible underneath it.
+void VideoEditorWindow::buildSpotlightInspector(QVBoxLayout *into)
+{
+	spotBox_ = new QWidget(this);
+	auto *v = new QVBoxLayout(spotBox_);
+	v->setContentsMargins(0, 6, 0, 0);
+	v->setSpacing(5);
+
+	auto *hdr = new QLabel(QStringLiteral("Inverse Selection"), spotBox_);
+	hdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
+	v->addWidget(hdr);
+	auto *hint = new QLabel(
+		QStringLiteral("Dim everything except the chosen areas — the tutorial "
+			       "spotlight. Applies to the whole composition, and renders "
+			       "identically in the export."),
+		spotBox_);
+	hint->setWordWrap(true);
+	hint->setStyleSheet(QStringLiteral("color:#7f858e;"));
+	v->addWidget(hint);
+
+	spotOn_ = new QCheckBox(QStringLiteral("Enabled"), spotBox_);
+	v->addWidget(spotOn_);
+	connect(spotOn_, &QCheckBox::toggled, this, [this](bool on) {
+		if (syncingSpot_)
+			return;
+		editSpotlight([on](SpotlightSpec &s) { s.enabled = on; });
+	});
+	spotInvert_ = new QCheckBox(QStringLiteral("Invert (dim inside instead)"), spotBox_);
+	v->addWidget(spotInvert_);
+	connect(spotInvert_, &QCheckBox::toggled, this, [this](bool on) {
+		if (syncingSpot_)
+			return;
+		editSpotlight([on](SpotlightSpec &s) { s.invert = on; });
+	});
+
+	auto mkSpin = [this](double lo, double hi, double step, int dec) {
+		auto *sp = new QDoubleSpinBox(spotBox_);
+		sp->setRange(lo, hi);
+		sp->setSingleStep(step);
+		sp->setDecimals(dec);
+		sp->setKeyboardTracking(false);
+		return sp;
+	};
+
+	auto *gf = new QFormLayout;
+	gf->setHorizontalSpacing(8);
+	gf->setVerticalSpacing(4);
+	spotDim_ = mkSpin(0.0, 1.0, 0.05, 2);
+	gf->addRow(QStringLiteral("Dim"), spotDim_);
+	connect(spotDim_, &QDoubleSpinBox::valueChanged, this, [this](double d) {
+		if (syncingSpot_)
+			return;
+		editSpotlight([d](SpotlightSpec &s) { s.dimOpacity = d; });
+	});
+	spotBlur_ = mkSpin(0.0, 1.0, 0.05, 2);
+	spotBlur_->setToolTip(QStringLiteral(
+		"Blur the dimmed part. Costs real time per frame — leave it at 0 unless you "
+		"want it."));
+	gf->addRow(QStringLiteral("Blur"), spotBlur_);
+	connect(spotBlur_, &QDoubleSpinBox::valueChanged, this, [this](double d) {
+		if (syncingSpot_)
+			return;
+		editSpotlight([d](SpotlightSpec &s) { s.blur = d; });
+	});
+	spotColor_ = new QPushButton(spotBox_);
+	gf->addRow(QStringLiteral("Colour"), spotColor_);
+	connect(spotColor_, &QPushButton::clicked, this, [this]() {
+		const QColor cur = timelineView_ ? timelineView_->model().spotlight.dimColor
+						 : QColor(Qt::black);
+		const QColor c = QColorDialog::getColor(cur, this, QStringLiteral("Dim colour"));
+		if (!c.isValid())
+			return;
+		editSpotlight([c](SpotlightSpec &s) { s.dimColor = c; });
+	});
+	v->addLayout(gf);
+
+	// ---- the areas ----
+	auto *areasHdr = new QLabel(QStringLiteral("Areas"), spotBox_);
+	areasHdr->setStyleSheet(QStringLiteral("color:#c8ccd2;"));
+	v->addWidget(areasHdr);
+
+	spotList_ = new QListWidget(spotBox_);
+	spotList_->setFixedHeight(90);
+	v->addWidget(spotList_);
+	connect(spotList_, &QListWidget::currentRowChanged, this,
+		[this](int) { syncSpotlightInspector(); });
+	// The checkbox in each row enables/disables that area on its own.
+	connect(spotList_, &QListWidget::itemChanged, this, [this](QListWidgetItem *it) {
+		if (syncingSpot_ || !it)
+			return;
+		const int row = spotList_->row(it);
+		const bool on = it->checkState() == Qt::Checked;
+		editSpotlight([row, on](SpotlightSpec &s) {
+			if (row >= 0 && row < s.masks.size())
+				s.masks[row].enabled = on;
+		});
+	});
+
+	auto *row = new QHBoxLayout;
+	spotPreset_ = new QComboBox(spotBox_);
+	for (const QString &n : Spotlight::presetNames())
+		spotPreset_->addItem(n);
+	row->addWidget(spotPreset_, 1);
+	auto *addBtn = new QPushButton(QStringLiteral("Add"), spotBox_);
+	connect(addBtn, &QPushButton::clicked, this, [this]() {
+		const QString name = spotPreset_->currentText();
+		editSpotlight([name](SpotlightSpec &s) {
+			s.masks.append(Spotlight::preset(name));
+			s.enabled = true; // adding the first area should just work
+		});
+		spotList_->setCurrentRow(spotList_->count() - 1);
+	});
+	row->addWidget(addBtn);
+	auto *dupBtn = new QPushButton(QStringLiteral("Duplicate"), spotBox_);
+	connect(dupBtn, &QPushButton::clicked, this, [this]() {
+		const int r = selectedMaskRow();
+		if (r < 0)
+			return;
+		editSpotlight([r](SpotlightSpec &s) {
+			SpotMask m = s.masks[r];
+			m.pose.cx = std::clamp(m.pose.cx + 0.05, 0.0, 1.0);
+			m.pose.cy = std::clamp(m.pose.cy + 0.05, 0.0, 1.0);
+			s.masks.insert(r + 1, m);
+		});
+	});
+	row->addWidget(dupBtn);
+	auto *delBtn = new QPushButton(QStringLiteral("Delete"), spotBox_);
+	connect(delBtn, &QPushButton::clicked, this, [this]() {
+		const int r = selectedMaskRow();
+		if (r < 0)
+			return;
+		editSpotlight([r](SpotlightSpec &s) { s.masks.remove(r); });
+	});
+	row->addWidget(delBtn);
+	v->addLayout(row);
+
+	// ---- the selected area ----
+	spotMaskBox_ = new QWidget(spotBox_);
+	auto *mf = new QFormLayout(spotMaskBox_);
+	mf->setContentsMargins(0, 0, 0, 0);
+	mf->setHorizontalSpacing(8);
+	mf->setVerticalSpacing(4);
+	spotShape_ = new QComboBox(spotMaskBox_);
+	for (int i = 0; i < kSpotShapeCount; ++i)
+		spotShape_->addItem(QString::fromLatin1(spotShapeName(SpotShape(i))));
+	mf->addRow(QStringLiteral("Shape"), spotShape_);
+	connect(spotShape_, &QComboBox::currentIndexChanged, this, [this](int idx) {
+		if (syncingSpot_)
+			return;
+		const int r = selectedMaskRow();
+		if (r < 0)
+			return;
+		editSpotlight([r, idx](SpotlightSpec &s) { s.masks[r].shape = spotShapeFromInt(idx); });
+	});
+	spotX_ = mkSpin(-1.0, 2.0, 0.01, 3);
+	spotY_ = mkSpin(-1.0, 2.0, 0.01, 3);
+	auto *pos = new QWidget(spotMaskBox_);
+	auto *ph = new QHBoxLayout(pos);
+	ph->setContentsMargins(0, 0, 0, 0);
+	ph->addWidget(spotX_, 1);
+	ph->addWidget(spotY_, 1);
+	mf->addRow(QStringLiteral("Centre"), pos);
+	spotW_ = mkSpin(0.01, 4.0, 0.01, 3);
+	spotH_ = mkSpin(0.01, 4.0, 0.01, 3);
+	auto *sz = new QWidget(spotMaskBox_);
+	auto *sh = new QHBoxLayout(sz);
+	sh->setContentsMargins(0, 0, 0, 0);
+	sh->addWidget(spotW_, 1);
+	sh->addWidget(spotH_, 1);
+	mf->addRow(QStringLiteral("Size"), sz);
+	spotRot_ = mkSpin(-360.0, 360.0, 1.0, 1);
+	spotRot_->setSuffix(QStringLiteral("°"));
+	mf->addRow(QStringLiteral("Rotation"), spotRot_);
+	spotRadius_ = mkSpin(0.0, 0.5, 0.01, 2);
+	spotRadius_->setToolTip(QStringLiteral(
+		"Corner radius as a fraction of the shorter side, so it scales with the shape."));
+	mf->addRow(QStringLiteral("Corner radius"), spotRadius_);
+	v->addWidget(spotMaskBox_);
+
+	auto applyPose = [this]() {
+		if (syncingSpot_)
+			return;
+		const int r = selectedMaskRow();
+		if (r < 0)
+			return;
+		SpotPose p;
+		p.cx = spotX_->value();
+		p.cy = spotY_->value();
+		p.w = spotW_->value();
+		p.h = spotH_->value();
+		p.rotation = spotRot_->value();
+		p.radius = spotRadius_->value();
+		editSpotlight([r, p](SpotlightSpec &s) {
+			// `visible` is only reachable from a keyframe, so the pose
+			// panel must not stamp over whatever it currently holds.
+			SpotPose q = p;
+			q.visible = s.masks[r].pose.visible;
+			s.masks[r].pose = q;
+		});
+	};
+	for (QDoubleSpinBox *sp : {spotX_, spotY_, spotW_, spotH_, spotRot_, spotRadius_})
+		connect(sp, &QDoubleSpinBox::valueChanged, this, [applyPose](double) { applyPose(); });
+
+	into->addWidget(spotBox_);
+	syncSpotlightInspector();
+}
+
+int VideoEditorWindow::selectedMaskRow() const
+{
+	if (!spotList_ || !timelineView_)
+		return -1;
+	const int r = spotList_->currentRow();
+	return (r >= 0 && r < timelineView_->model().spotlight.masks.size()) ? r : -1;
+}
+
+// Every spotlight change goes through here, so all of them repaint the preview
+// and land as one undo step -- the same contract the clip editors have.
+void VideoEditorWindow::editSpotlight(const std::function<void(SpotlightSpec &)> &fn)
+{
+	if (!timelineView_)
+		return;
+	TimelineModel m = timelineView_->model();
+	fn(m.spotlight);
+	timelineView_->setModel(m);
+	syncSpotlightInspector();
+	showTimelineFrame(timelinePlayheadMs());
+	commitSnapshot();
+}
+
+void VideoEditorWindow::syncSpotlightInspector()
+{
+	if (!spotBox_ || !timelineView_)
+		return;
+	// Only meaningful in Full editing: the other modes have no composition to
+	// dim.
+	spotBox_->setVisible(fullEdit());
+	if (!fullEdit())
+		return;
+	const SpotlightSpec &s = timelineView_->model().spotlight;
+	const bool wasSyncing = syncingSpot_;
+	syncingSpot_ = true;
+
+	spotOn_->setChecked(s.enabled);
+	spotInvert_->setChecked(s.invert);
+	spotDim_->setValue(s.dimOpacity);
+	spotBlur_->setValue(s.blur);
+	spotColor_->setText(s.dimColor.name(QColor::HexRgb).toUpper());
+	spotColor_->setStyleSheet(
+		QStringLiteral("background:%1; color:%2; border:1px solid #444; padding:3px;")
+			.arg(s.dimColor.name(QColor::HexRgb),
+			     s.dimColor.lightness() > 140 ? QStringLiteral("#101214")
+							  : QStringLiteral("#f0f0f0")));
+
+	// Rebuild the list only when it no longer matches: rebuilding on every sync
+	// would drop the selection mid-edit.
+	const int keep = spotList_->currentRow();
+	if (spotList_->count() != s.masks.size()) {
+		spotList_->clear();
+		for (int i = 0; i < s.masks.size(); ++i)
+			spotList_->addItem(new QListWidgetItem);
+	}
+	for (int i = 0; i < s.masks.size(); ++i) {
+		QListWidgetItem *it = spotList_->item(i);
+		const QString label = QStringLiteral("%1  ·  %2")
+					      .arg(s.masks[i].name.isEmpty()
+							   ? QStringLiteral("Area %1").arg(i + 1)
+							   : s.masks[i].name)
+					      .arg(QString::fromLatin1(spotShapeName(s.masks[i].shape)));
+		if (it->text() != label)
+			it->setText(label);
+		it->setFlags(it->flags() | Qt::ItemIsUserCheckable);
+		it->setCheckState(s.masks[i].enabled ? Qt::Checked : Qt::Unchecked);
+	}
+	if (keep >= 0 && keep < s.masks.size())
+		spotList_->setCurrentRow(keep);
+	else if (!s.masks.isEmpty() && spotList_->currentRow() < 0)
+		spotList_->setCurrentRow(0);
+
+	const int r = (spotList_->currentRow() >= 0 && spotList_->currentRow() < s.masks.size())
+			      ? spotList_->currentRow()
+			      : -1;
+	spotMaskBox_->setVisible(r >= 0);
+	if (r >= 0) {
+		const SpotMask &m = s.masks[r];
+		spotShape_->setCurrentIndex(int(m.shape));
+		spotX_->setValue(m.pose.cx);
+		spotY_->setValue(m.pose.cy);
+		spotW_->setValue(m.pose.w);
+		spotH_->setValue(m.pose.h);
+		spotH_->setEnabled(m.shape != SpotShape::Circle); // a circle is round
+		spotRot_->setValue(m.pose.rotation);
+		spotRadius_->setValue(m.pose.radius);
+		spotRadius_->setEnabled(m.shape == SpotShape::RoundRect);
+	}
+	syncingSpot_ = wasSyncing;
 }
 
 void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
@@ -4182,6 +4481,11 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 				mk.append(double(m));
 			root[QStringLiteral("markers")] = mk;
 		}
+		// Inverse Selection is project-level, so it sits next to the tracks
+		// rather than on any one clip. Only written when it differs from the
+		// default, to keep an untouched project's file clean.
+		if (s.timeline.spotlight != SpotlightSpec())
+			root[QStringLiteral("spotlight")] = spotlightToJson(s.timeline.spotlight);
 		root[QStringLiteral("harpiaProject")] = 3; // timelines need a v3 reader
 	}
 
@@ -4338,6 +4642,7 @@ void VideoEditorWindow::onOpenProject()
 
 	// "Full editing" timeline (project v3). Absent in v1/v2 projects, which just
 	// restore an empty timeline.
+	s.timeline.spotlight = spotlightFromJson(root.value(QStringLiteral("spotlight")).toObject());
 	for (const QJsonValue &mv : root.value(QStringLiteral("markers")).toArray())
 		s.timeline.markers.append(qint64(mv.toDouble()));
 	std::sort(s.timeline.markers.begin(), s.timeline.markers.end());

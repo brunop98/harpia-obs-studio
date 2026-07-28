@@ -182,6 +182,9 @@ target_sources(
     editor/timeline/TimelineModel.hpp
     editor/timeline/TimelineView.cpp
     editor/timeline/TimelineView.hpp
+    editor/timeline/Ease.hpp
+    editor/timeline/Spotlight.cpp
+    editor/timeline/Spotlight.hpp
     editor/timeline/KeyframeEditor.cpp
     editor/timeline/KeyframeEditor.hpp
     editor/timeline/TimelineCompositor.cpp

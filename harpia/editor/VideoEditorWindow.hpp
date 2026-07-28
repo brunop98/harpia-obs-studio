@@ -469,6 +469,30 @@ private:
 	void reloadScriptsFromDisk();      // live reload: recompile + repaint
 
 	void buildClipInspector(QVBoxLayout *into);
+
+	// Inverse Selection (Spotlight): a project-level effect, so its panel sits
+	// beside the project section rather than the clip one.
+	void buildSpotlightInspector(QVBoxLayout *into);
+	void syncSpotlightInspector();
+	void editSpotlight(const std::function<void(SpotlightSpec &)> &fn);
+	int selectedMaskRow() const;
+	QWidget *spotBox_ = nullptr;
+	QCheckBox *spotOn_ = nullptr;
+	QCheckBox *spotInvert_ = nullptr;
+	QListWidget *spotList_ = nullptr;
+	QComboBox *spotShape_ = nullptr;
+	QComboBox *spotPreset_ = nullptr;
+	QDoubleSpinBox *spotDim_ = nullptr;
+	QDoubleSpinBox *spotBlur_ = nullptr;
+	QPushButton *spotColor_ = nullptr;
+	QDoubleSpinBox *spotX_ = nullptr;
+	QDoubleSpinBox *spotY_ = nullptr;
+	QDoubleSpinBox *spotW_ = nullptr;
+	QDoubleSpinBox *spotH_ = nullptr;
+	QDoubleSpinBox *spotRot_ = nullptr;
+	QDoubleSpinBox *spotRadius_ = nullptr;
+	QWidget *spotMaskBox_ = nullptr;
+	bool syncingSpot_ = false;
 	void syncClipInspector();                       // selected clip -> controls
 	void editSelectedClip(const std::function<void(TlClip &)> &fn); // controls -> clip
 	void addTextClip();                             // new text clip at the playhead

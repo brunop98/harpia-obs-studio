@@ -229,4 +229,104 @@ inline TlTrack trackFromJson(const QJsonObject &to)
 	return t;
 }
 
+
+// ---- Inverse Selection (Spotlight) -----------------------------------------
+// Project-level, so it is written next to the tracks rather than on a clip.
+
+inline QJsonObject spotPoseToJson(const SpotPose &p)
+{
+	QJsonObject o;
+	o[QStringLiteral("cx")] = p.cx;
+	o[QStringLiteral("cy")] = p.cy;
+	o[QStringLiteral("w")] = p.w;
+	o[QStringLiteral("h")] = p.h;
+	o[QStringLiteral("rot")] = p.rotation;
+	o[QStringLiteral("radius")] = p.radius;
+	o[QStringLiteral("visible")] = p.visible;
+	return o;
+}
+
+inline SpotPose spotPoseFromJson(const QJsonObject &o)
+{
+	SpotPose p;
+	p.cx = o.value(QStringLiteral("cx")).toDouble(0.5);
+	p.cy = o.value(QStringLiteral("cy")).toDouble(0.5);
+	p.w = std::clamp(o.value(QStringLiteral("w")).toDouble(0.35), 0.001, 8.0);
+	p.h = std::clamp(o.value(QStringLiteral("h")).toDouble(0.35), 0.001, 8.0);
+	p.rotation = o.value(QStringLiteral("rot")).toDouble(0.0);
+	p.radius = std::clamp(o.value(QStringLiteral("radius")).toDouble(0.08), 0.0, 0.5);
+	p.visible = std::clamp(o.value(QStringLiteral("visible")).toDouble(1.0), 0.0, 1.0);
+	return p;
+}
+
+inline QJsonObject spotlightToJson(const SpotlightSpec &s)
+{
+	QJsonObject o;
+	o[QStringLiteral("enabled")] = s.enabled;
+	o[QStringLiteral("invert")] = s.invert;
+	o[QStringLiteral("dim")] = s.dimOpacity;
+	o[QStringLiteral("color")] = s.dimColor.name(QColor::HexRgb);
+	o[QStringLiteral("blur")] = s.blur;
+	QJsonArray ms;
+	for (const SpotMask &m : s.masks) {
+		QJsonObject mo;
+		mo[QStringLiteral("name")] = m.name;
+		mo[QStringLiteral("shape")] = int(m.shape);
+		mo[QStringLiteral("enabled")] = m.enabled;
+		mo[QStringLiteral("pose")] = spotPoseToJson(m.pose);
+		if (!m.keys.isEmpty()) {
+			QJsonArray ks;
+			for (const SpotKey &k : m.keys) {
+				QJsonObject ko;
+				ko[QStringLiteral("t")] = double(k.tMs);
+				ko[QStringLiteral("pose")] = spotPoseToJson(k.pose);
+				ko[QStringLiteral("ease")] = int(k.ease);
+				if (k.ease == TlEase::Bezier) {
+					ko[QStringLiteral("b1")] = k.bez1;
+					ko[QStringLiteral("b2")] = k.bez2;
+				}
+				ks.append(ko);
+			}
+			mo[QStringLiteral("keys")] = ks;
+		}
+		ms.append(mo);
+	}
+	o[QStringLiteral("masks")] = ms;
+	return o;
+}
+
+inline SpotlightSpec spotlightFromJson(const QJsonObject &o)
+{
+	SpotlightSpec s;
+	s.enabled = o.value(QStringLiteral("enabled")).toBool(false);
+	s.invert = o.value(QStringLiteral("invert")).toBool(false);
+	s.dimOpacity = std::clamp(o.value(QStringLiteral("dim")).toDouble(0.65), 0.0, 1.0);
+	const QColor c(o.value(QStringLiteral("color")).toString());
+	if (c.isValid())
+		s.dimColor = c;
+	s.blur = std::clamp(o.value(QStringLiteral("blur")).toDouble(0.0), 0.0, 1.0);
+	for (const QJsonValue &mv : o.value(QStringLiteral("masks")).toArray()) {
+		const QJsonObject mo = mv.toObject();
+		SpotMask m;
+		m.name = mo.value(QStringLiteral("name")).toString();
+		m.shape = spotShapeFromInt(mo.value(QStringLiteral("shape")).toInt(1));
+		m.enabled = mo.value(QStringLiteral("enabled")).toBool(true);
+		m.pose = spotPoseFromJson(mo.value(QStringLiteral("pose")).toObject());
+		for (const QJsonValue &kv : mo.value(QStringLiteral("keys")).toArray()) {
+			const QJsonObject ko = kv.toObject();
+			SpotKey k;
+			k.tMs = qint64(ko.value(QStringLiteral("t")).toDouble());
+			k.pose = spotPoseFromJson(ko.value(QStringLiteral("pose")).toObject());
+			k.ease = tlEaseFromInt(ko.value(QStringLiteral("ease")).toInt(3));
+			k.bez1 = std::clamp(ko.value(QStringLiteral("b1")).toDouble(0.42), 0.0, 1.0);
+			k.bez2 = std::clamp(ko.value(QStringLiteral("b2")).toDouble(0.58), 0.0, 1.0);
+			m.keys.append(k);
+		}
+		std::stable_sort(m.keys.begin(), m.keys.end(),
+				 [](const SpotKey &a, const SpotKey &b) { return a.tMs < b.tMs; });
+		s.masks.append(m);
+	}
+	return s;
+}
+
 } // namespace harpia

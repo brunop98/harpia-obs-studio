@@ -23,6 +23,7 @@ struct TimelineViewParams {
 	int rulerH = 18;      // top time ruler
 	int videoLaneH = 48;  // per video-track height
 	int audioLaneH = 44;  // per audio-track height
+	int effectLaneH = 30; // effect tracks are thinner: they carry no picture
 	int laneGap = 3;
 	int margin = 6;
 	int minClipW = 6;     // don't let a clip shrink below this on screen

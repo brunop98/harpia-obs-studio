@@ -21,11 +21,12 @@ std::vector<VoiceoverMixer::Take> TimelineAudio::buildTakes(const TimelineModel 
 	int nextWav = 0;
 
 	for (const TlTrack &t : m.tracks) {
-		if (t.muted)
-			continue;
+		if (t.muted || t.kind == TlTrack::Kind::Effect)
+			continue; // an effect track carries no sound
 		for (const TlClip &c : t.clips) {
-			if (c.type == TlClip::Type::Text || c.type == TlClip::Type::Image)
-				continue; // captions and stills have no audio
+			if (c.type == TlClip::Type::Text || c.type == TlClip::Type::Image ||
+			    c.type == TlClip::Type::Effect)
+				continue; // captions, stills and effects have no audio
 			const double speed = (c.speed > 0.01) ? c.speed : 1.0;
 			const auto key = std::make_pair(c.sourceId, int(std::lround(speed * 1000.0)));
 			auto it = wavCache.find(key);

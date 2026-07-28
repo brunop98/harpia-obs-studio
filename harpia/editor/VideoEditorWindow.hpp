@@ -26,6 +26,7 @@
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QFormLayout;
 class QLabel;
 class QListWidget;
 class QListWidgetItem;
@@ -262,12 +263,29 @@ private:
 	// QImage for every timestamp. -1 on failure.
 	int addImageSource(const QString &path);
 	QHash<int, QImage> stillImages_; // sourceId -> decoded still
-	void addImageClip();             // "Add image…" -> pick a file + drop a clip
+	void addImageClip();
+	void addEffectClip(); // toolbar: drop an effect clip on an effect track
+
+	// Effect-clip Inspector (the selected effect's type, parameters, name).
+	void buildEffectInspector(QVBoxLayout *into);
+	void syncEffectInspector();
+	void rebuildEffectParams();
+	QWidget *fxBox_ = nullptr;
+	QComboBox *fxType_ = nullptr;
+	QLineEdit *fxName_ = nullptr;
+	QCheckBox *fxEnabled_ = nullptr;
+	QWidget *fxParamBox_ = nullptr;
+	QFormLayout *fxParamForm_ = nullptr;
+	QVector<QDoubleSpinBox *> fxParamSpins_;
+	QStringList fxParamKeys_;
+	int fxParamsForType_ = -1;
+	bool syncingFx_ = false;             // "Add image…" -> pick a file + drop a clip
 
 	void addAudioClipFromSource(int sourceId); // put a source's audio on an audio lane
 	void onAddAudioClicked();                  // "Add audio ▾" menu
 	QPushButton *addAudioBtn_ = nullptr;
 	QPushButton *addImageBtn_ = nullptr;
+	QPushButton *addFxClipBtn_ = nullptr; // "Add effect" -> an effect CLIP
 	QString sessionAudioDir(); // per-session temp dir for decoded proxies
 
 	// ---- Direct manipulation of the selected clip in the preview ----

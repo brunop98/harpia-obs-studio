@@ -110,22 +110,33 @@ void TimelineView::renumberTracks()
 	// matching the convention that a higher lane renders in front); audio
 	// top-down.
 	const int nv = model_.videoTrackCount();
-	int a = 0;
+	int a = 0, e = 0, v = 0;
 	for (int i = 0; i < model_.tracks.size(); ++i) {
 		TlTrack &t = model_.tracks[i];
-		if (t.kind == TlTrack::Kind::Video)
-			t.name = QStringLiteral("V%1").arg(nv - i);
-		else
+		switch (t.kind) {
+		case TlTrack::Kind::Video:
+			// Numbered bottom-up, so V1 is the lowest picture track.
+			t.name = QStringLiteral("V%1").arg(nv - v++);
+			break;
+		case TlTrack::Kind::Effect:
+			t.name = QStringLiteral("FX%1").arg(++e);
+			break;
+		case TlTrack::Kind::Audio:
 			t.name = QStringLiteral("A%1").arg(++a);
+			break;
+		}
 	}
 }
 
 void TimelineView::addTrack(TlTrack::Kind kind, int atIndex)
 {
-	const int nv = model_.videoTrackCount();
-	// Video tracks live above audio tracks; clamp the insertion into that group.
-	const int lo = (kind == TlTrack::Kind::Video) ? 0 : nv;
-	const int hi = (kind == TlTrack::Kind::Video) ? nv : model_.tracks.size();
+	const int np = model_.pictureTrackCount();
+	// Picture tracks (video + effect) live above audio tracks; clamp the
+	// insertion into that group. An effect track is a picture track: it has to
+	// be able to sit between two video tracks, because where it sits is what
+	// decides what it grades.
+	const int lo = TimelineModel::isPictureKind(kind) ? 0 : np;
+	const int hi = TimelineModel::isPictureKind(kind) ? np : model_.tracks.size();
 	int at = (atIndex < 0) ? lo : std::clamp(atIndex, lo, hi);
 
 	TlTrack t;
@@ -185,11 +196,11 @@ void TimelineView::addClip(TlTrack::Kind kind, const TlClip &clip)
 			break;
 		}
 	if (idx < 0) {
-		const int nv = model_.videoTrackCount();
+		const int np = model_.pictureTrackCount();
 		TlTrack t;
 		t.kind = kind;
 		t.color = randomPastel();
-		idx = (kind == TlTrack::Kind::Video) ? nv : model_.tracks.size();
+		idx = TimelineModel::isPictureKind(kind) ? np : model_.tracks.size();
 		model_.tracks.insert(idx, t);
 		renumberTracks();
 	}
@@ -271,7 +282,12 @@ int TimelineView::laneHeight(int track) const
 {
 	if (track < 0 || track >= model_.tracks.size())
 		return lp_.videoLaneH;
-	return model_.tracks[track].kind == TlTrack::Kind::Video ? lp_.videoLaneH : lp_.audioLaneH;
+	switch (model_.tracks[track].kind) {
+	case TlTrack::Kind::Video: return lp_.videoLaneH;
+	case TlTrack::Kind::Effect: return lp_.effectLaneH;
+	case TlTrack::Kind::Audio: break;
+	}
+	return lp_.audioLaneH;
 }
 
 QRect TimelineView::laneRect(int track) const
@@ -357,11 +373,11 @@ int TimelineView::clipAtPoint(const QPoint &p, int *trackOut) const
 TimelineView::DropTarget TimelineView::dropTargetAt(int y, TlTrack::Kind kind) const
 {
 	DropTarget d;
-	const int nv = model_.videoTrackCount();
-	// Video tracks occupy [0,nv), audio [nv,n). A clip can only land in its own
-	// group, and a new track can only be inserted inside that group's range.
-	const int lo = (kind == TlTrack::Kind::Video) ? 0 : nv;
-	const int hi = (kind == TlTrack::Kind::Video) ? nv : model_.tracks.size();
+	const int np = model_.pictureTrackCount();
+	// Picture tracks occupy [0,np), audio [np,n). A clip can only land in its
+	// own group, and a new track can only be inserted inside that group's range.
+	const int lo = TimelineModel::isPictureKind(kind) ? 0 : np;
+	const int hi = TimelineModel::isPictureKind(kind) ? np : model_.tracks.size();
 	if (lo >= hi) { // no lane of this kind yet — the drop makes the first one
 		d.newTrackAt = lo;
 		return d;
@@ -475,6 +491,11 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos)
 	menu.addSeparator();
 	QAction *addAbove = menu.addAction(QStringLiteral("Add track above"));
 	QAction *addBelow = menu.addAction(QStringLiteral("Add track below"));
+	// An effect track can only go among the picture tracks: where it sits is
+	// what decides which tracks it grades.
+	QAction *addFx = TimelineModel::isPictureKind(t.kind)
+				 ? menu.addAction(QStringLiteral("Add effect track above"))
+				 : nullptr;
 	QAction *del = menu.addAction(QStringLiteral("Delete track"));
 
 	QAction *chosen = menu.exec(globalPos);
@@ -516,6 +537,9 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos)
 		return;
 	} else if (chosen == addBelow) {
 		addTrack(t.kind, track + 1);
+		return;
+	} else if (addFx && chosen == addFx) {
+		addTrack(TlTrack::Kind::Effect, track);
 		return;
 	} else if (chosen == del) {
 		deleteTrack(track);
@@ -643,7 +667,8 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	const TlClip &c = t.clips[clip];
 	const bool isText = c.type == TlClip::Type::Text;
 	const bool isImage = c.type == TlClip::Type::Image;
-	const bool video = t.kind == TlTrack::Kind::Video && !isText && !isImage;
+	const bool isFx = c.type == TlClip::Type::Effect;
+	const bool video = t.kind == TlTrack::Kind::Video && !isText && !isImage && !isFx;
 	const bool sel = isSelected(track, clip);
 	const QRect r = clipRect(track, clip);
 	// Scrolled-away clips cost the same as visible ones otherwise: the painter
@@ -659,6 +684,14 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	// slight violet lean so they still read as captions.
 	QColor fill = t.color.isValid() ? t.color
 					: (t.kind == TlTrack::Kind::Video ? cl_.videoClip : cl_.audioClip);
+	// An effect clip must not be mistakable for footage: it always takes the
+	// palette's effect colour, ignoring the track tint, and a disabled one is
+	// drained so "off" reads at a glance.
+	if (isFx) {
+		fill = cl_.effectClip;
+		if (!c.fx.enabled)
+			fill = QColor::fromHsv(fill.hue(), fill.saturation() / 3, fill.value() * 2 / 3);
+	}
 	if (isText)
 		fill = QColor::fromHsv(fill.hue(), fill.saturation(), fill.value()).darker(105);
 	if (sel)
@@ -732,12 +765,30 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 		}
 	}
 
+	// Effect clip: a marker glyph and the effect's name, so what it does is
+	// readable without selecting it. No filmstrip, no waveform -- it has neither.
+	if (isFx) {
+		p.setFont(clipFont_);
+		p.setPen(c.fx.enabled ? QColor(0xf2, 0xf4, 0xf7) : cl_.caption);
+		const QString label = QStringLiteral("✦ %1%2")
+					      .arg(c.fx.label())
+					      .arg(c.fx.enabled ? QString() : QStringLiteral("  (off)"));
+		p.drawText(r.adjusted(5, 0, -4, 0), Qt::AlignVCenter | Qt::AlignLeft,
+			   p.fontMetrics().elidedText(label, Qt::ElideRight, r.width() - 9));
+		// A downward chevron on the lower edge: this reaches DOWN the stack.
+		p.setPen(QPen(QColor(0xff, 0xff, 0xff, 90), 1));
+		for (int x = r.x() + 6; x < r.right() - 4; x += 10) {
+			p.drawLine(x, r.bottom() - 4, x + 3, r.bottom() - 1);
+			p.drawLine(x + 3, r.bottom() - 1, x + 6, r.bottom() - 4);
+		}
+	}
+
 	// Fade envelopes (audio clips): drawn over the waveform, under the label.
 	if (clipTakesFades(track, clip))
 		drawFades(p, track, clip);
 
 	// Label bar along the bottom.
-	if (!dragging && r.width() >= 28) {
+	if (!dragging && !isFx && r.width() >= 28) {
 		p.setFont(clipFont_);
 		p.fillRect(QRect(r.x(), r.bottom() - 12, r.width(), 13), QColor(0, 0, 0, 150));
 		p.setPen(QColor(0xe6, 0xe6, 0xe6));
@@ -1838,9 +1889,23 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 {
 	const bool locked = model_.tracks[track].locked;
 	QMenu menu(this);
+	const TlClip &menuClip = model_.tracks[track].clips[clip];
+	const bool isFx = menuClip.type == TlClip::Type::Effect;
+
 	QAction *inspect = menu.addAction(QStringLiteral("Show in inspector"));
 	QAction *keys = menu.addAction(QStringLiteral("Keyframes…"));
-	keys->setEnabled(!locked);
+	// An effect clip animates its own parameters, not a transform, so the
+	// transform keyframe editor would be empty and misleading.
+	keys->setEnabled(!locked && !isFx);
+	QAction *fxToggle = isFx ? menu.addAction(menuClip.fx.enabled
+							  ? QStringLiteral("Disable effect")
+							  : QStringLiteral("Enable effect"))
+				 : nullptr;
+	QAction *fxRename = isFx ? menu.addAction(QStringLiteral("Rename effect…")) : nullptr;
+	if (fxToggle)
+		fxToggle->setEnabled(!locked);
+	if (fxRename)
+		fxRename->setEnabled(!locked);
 	menu.addSeparator();
 	QAction *split = menu.addAction(QStringLiteral("Split here"));
 	const TlClip &c = model_.tracks[track].clips[clip];
@@ -1864,6 +1929,29 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		emit selectionChanged(selTrack_, selClip_);
 		update();
 		emit keyframeEditorRequested();
+		return;
+	}
+	if (fxToggle && chosen == fxToggle) {
+		TlClip &fc = model_.tracks[track].clips[clip];
+		fc.fx.enabled = !fc.fx.enabled;
+		update();
+		commitEdit();
+		return;
+	}
+	if (fxRename && chosen == fxRename) {
+		TlClip &fc = model_.tracks[track].clips[clip];
+		bool ok = false;
+		const QString n = QInputDialog::getText(this, QStringLiteral("Rename effect"),
+							QStringLiteral("Effect name:"),
+							QLineEdit::Normal, fc.fx.label(), &ok)
+					  .trimmed();
+		if (!ok)
+			return;
+		// Blank falls back to the effect type's own name, so a clip is never
+		// left nameless with no way back.
+		fc.fx.name = n;
+		update();
+		commitEdit();
 		return;
 	}
 	if (chosen == split) {

@@ -35,6 +35,9 @@ struct EditorColors {
 	QColor textClip{0x4a, 0x3a, 0x5e};
 	QColor textClipSel{0x6b, 0x51, 0x8c};
 	QColor waveform{0x6f, 0xd0, 0xb0};
+	// Effect clips: amber, and never tinted by the track, so an adjustment
+	// layer can't be mistaken for footage.
+	QColor effectClip{0x7a, 0x5c, 0x1e};
 
 	// Overlays. Each is deliberately unlike the others: they mean different
 	// things and are often on screen at the same time.
@@ -52,6 +55,7 @@ struct EditorColors {
 		       videoClipSel == o.videoClipSel && audioClip == o.audioClip &&
 		       audioClipSel == o.audioClipSel && textClip == o.textClip &&
 		       textClipSel == o.textClipSel && waveform == o.waveform &&
+		       effectClip == o.effectClip &&
 		       playhead == o.playhead && hover == o.hover && marker == o.marker &&
 		       snapGuide == o.snapGuide && fade == o.fade;
 	}

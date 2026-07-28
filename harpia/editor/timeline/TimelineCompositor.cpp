@@ -1,5 +1,6 @@
 #include "TimelineCompositor.hpp"
 
+#include "EffectClip.hpp"
 #include "Spotlight.hpp"
 
 #include "../script/TransformScript.hpp"
@@ -268,6 +269,30 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 	// audio; `muted` only affects the mix.
 	for (int ti = m.tracks.size() - 1; ti >= 0; --ti) {
 		const TlTrack &t = m.tracks[ti];
+
+		// An effect track grades everything composited SO FAR -- which, walking
+		// back-to-front, is exactly the tracks below it. Tracks above are drawn
+		// after this and are untouched, and two overlapping effect tracks stack
+		// in track order (top applied last). That order comes from the track
+		// list, so repeated exports are identical by construction.
+		if (t.kind == TlTrack::Kind::Effect) {
+			if (t.hidden)
+				continue;
+			const int ei = t.clipAt(outMs);
+			if (ei < 0)
+				continue;
+			const TlClip &ec = t.clips[ei];
+			if (ec.type != TlClip::Type::Effect || !ec.fx.enabled)
+				continue;
+			// The painter has to be closed before the pixels are touched
+			// directly, and reopened for whatever is drawn on top.
+			p.end();
+			Effects::apply(out, ec.fx, outMs - ec.outStartMs, outMs);
+			p.begin(&out);
+			p.setRenderHint(QPainter::Antialiasing, true);
+			continue;
+		}
+
 		if (t.kind != TlTrack::Kind::Video || t.hidden)
 			continue;
 		const int ci = t.clipAt(outMs);

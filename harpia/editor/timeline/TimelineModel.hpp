@@ -11,6 +11,7 @@
 
 #include "../FadeCurve.hpp"
 #include "Ease.hpp"
+#include "EffectClip.hpp"
 #include "Spotlight.hpp"
 
 #include <QColor>
@@ -178,13 +179,17 @@ inline QVector<TlScript> reorderScriptsByLabel(const QStringList &labels,
 // refers to an EditorSource in the window's media pool (unused for Text).
 struct TlClip {
 	// Video = a decoded media clip (also used for audio-track clips); Image = a
-	// still whose duration is free; Text = a rendered caption.
-	enum class Type { Video, Text, Image };
+	// still whose duration is free; Text = a rendered caption; Effect = a grade
+	// applied to everything composited below its track, for its own duration.
+	enum class Type { Video, Text, Image, Effect };
 	Type type = Type::Video;
 
-	// Stills and captions have no source timeline, so their length is whatever
-	// the user drags it to rather than being capped by a decoder.
-	bool freeDuration() const { return type == Type::Text || type == Type::Image; }
+	// Stills, captions and effects have no source timeline, so their length is
+	// whatever the user drags it to rather than being capped by a decoder.
+	bool freeDuration() const
+	{
+		return type == Type::Text || type == Type::Image || type == Type::Effect;
+	}
 
 	int sourceId = 0;
 	qint64 srcStartMs = 0;
@@ -212,6 +217,9 @@ struct TlClip {
 	// only defines position(); where two define the same channel, the later entry
 	// wins. Channels no script defines fall through to the pose/keyframes above.
 	QVector<TlScript> scripts;
+
+	// Effect clips only: which effect, its parameters and its keyframes.
+	FxSpec fx;
 
 	// Audio-only. The fades are non-destructive: nothing is written back to the
 	// media, they are evaluated as a gain at play/render time.
@@ -421,7 +429,7 @@ struct TlClip {
 		       posX == o.posX && posY == o.posY && scale == o.scale &&
 		       rotation == o.rotation && opacity == o.opacity &&
 		       crop == o.crop && keys == o.keys && text == o.text &&
-		       scripts == o.scripts &&
+		       scripts == o.scripts && fx == o.fx &&
 		       volume == o.volume && fadeInMs == o.fadeInMs &&
 		       fadeOutMs == o.fadeOutMs && fadeInCurve == o.fadeInCurve &&
 		       fadeOutCurve == o.fadeOutCurve;
@@ -443,7 +451,9 @@ inline void splitFades(TlClip &head, TlClip &tail)
 }
 
 struct TlTrack {
-	enum class Kind { Video, Audio };
+	// Effect is its own kind so the timeline can draw it apart, only accept
+	// effect clips onto it, and know where in the composite it belongs.
+	enum class Kind { Video, Audio, Effect };
 	Kind kind = Kind::Video;
 	QString name;
 	// Per-track switches. `hidden` only applies to video (keeps the audio), and
@@ -493,6 +503,28 @@ struct TimelineModel {
 		int n = 0;
 		for (const TlTrack &t : tracks)
 			if (t.kind == TlTrack::Kind::Video)
+				++n;
+		return n;
+	}
+
+	int audioTrackCount() const
+	{
+		int n = 0;
+		for (const TlTrack &t : tracks)
+			if (t.kind == TlTrack::Kind::Audio)
+				++n;
+		return n;
+	}
+
+	// Tracks that live in the picture half of the stack: video, and the effect
+	// tracks interleaved among them (an effect track has to be able to sit
+	// between two video tracks — that is what decides what it grades).
+	static bool isPictureKind(TlTrack::Kind k) { return k != TlTrack::Kind::Audio; }
+	int pictureTrackCount() const
+	{
+		int n = 0;
+		for (const TlTrack &t : tracks)
+			if (isPictureKind(t.kind))
 				++n;
 		return n;
 	}

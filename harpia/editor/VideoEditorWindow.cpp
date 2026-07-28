@@ -597,6 +597,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	addImageBtn_->setVisible(false); // Full editing only
 	connect(addImageBtn_, &QPushButton::clicked, this, &VideoEditorWindow::addImageClip);
 	controls->addWidget(addImageBtn_);
+	addFxClipBtn_ = new QPushButton(QStringLiteral("Add effect"), this);
+	addFxClipBtn_->setToolTip(
+		QStringLiteral("Drop an effect clip on its own track. It grades every track "
+			       "below it, for as long as the clip lasts."));
+	addFxClipBtn_->setVisible(false); // Full editing only
+	connect(addFxClipBtn_, &QPushButton::clicked, this, &VideoEditorWindow::addEffectClip);
+	controls->addWidget(addFxClipBtn_);
 	// Magnet: snap dragged clips to the playhead, 0 and other clips' edges.
 	// A sticky toggle — whichever way you leave it is how the next session opens.
 	snapBtn_ = new QPushButton(QStringLiteral("🧲 Snap"), this);
@@ -829,6 +836,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 
 	// Full-editing: per-clip zoom/position/keyframes and text styling.
 	buildClipInspector(insLayout);
+	buildEffectInspector(insLayout);
 	buildSpotlightInspector(insLayout);
 
 	insLayout->addStretch(1);
@@ -1517,6 +1525,28 @@ void VideoEditorWindow::addImageClip()
 	timelineView_->addClip(TlTrack::Kind::Video, c);
 	updateInfoLabel();
 	showTimelineFrame(timelinePlayheadMs());
+}
+
+// Drop an effect clip at the playhead, on its own Effect track. An effect
+// grades everything composited BELOW its track, so a fresh one goes on top of
+// the picture stack where it covers the whole composition.
+void VideoEditorWindow::addEffectClip()
+{
+	if (!timelineView_)
+		return;
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	TlClip c;
+	c.type = TlClip::Type::Effect;
+	c.srcStartMs = 0;
+	c.srcEndMs = 3000; // freely stretchable, like a caption
+	c.outStartMs = timelinePlayheadMs();
+	c.fx.type = FxType::Brightness;
+	c.fx.params = fxDefaults(c.fx.type);
+	timelineView_->addClip(TlTrack::Kind::Effect, c);
+	updateInfoLabel();
+	showTimelineFrame(timelinePlayheadMs());
+	revealInspector();
 }
 
 // ---- Audio on the timeline -----------------------------------------------
@@ -2295,6 +2325,150 @@ void VideoEditorWindow::revealProjectFolder()
 
 // Inverse Selection (Spotlight). Project-level rather than per-clip: it dims the
 // composited frame, so it applies to whatever is visible underneath it.
+// The selected effect clip: which effect, its parameters, its name, on/off and
+// a reset. Every change goes through editSelectedClip, so it repaints the
+// preview and lands as one undo step like every other clip edit.
+void VideoEditorWindow::buildEffectInspector(QVBoxLayout *into)
+{
+	fxBox_ = new QWidget(this);
+	fxBox_->setVisible(false);
+	auto *v = new QVBoxLayout(fxBox_);
+	v->setContentsMargins(0, 6, 0, 0);
+	v->setSpacing(5);
+
+	auto *hdr = new QLabel(QStringLiteral("Effect"), fxBox_);
+	hdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
+	v->addWidget(hdr);
+	auto *hint = new QLabel(
+		QStringLiteral("Grades every track below this one, for as long as the clip "
+			       "lasts. Move the effect track up or down to change what it "
+			       "covers."),
+		fxBox_);
+	hint->setWordWrap(true);
+	hint->setStyleSheet(QStringLiteral("color:#7f858e;"));
+	v->addWidget(hint);
+
+	auto *form = new QFormLayout;
+	form->setHorizontalSpacing(8);
+	form->setVerticalSpacing(4);
+
+	fxType_ = new QComboBox(fxBox_);
+	for (int i = 0; i < kFxTypeCount; ++i)
+		fxType_->addItem(QString::fromLatin1(fxTypeName(FxType(i))));
+	form->addRow(QStringLiteral("Effect"), fxType_);
+	connect(fxType_, &QComboBox::currentIndexChanged, this, [this](int idx) {
+		if (syncingFx_)
+			return;
+		const FxType t = fxTypeFromInt(idx);
+		// Changing the effect starts it from its own defaults: the previous
+		// effect's parameters mean nothing to this one.
+		editSelectedClip([t](TlClip &c) {
+			c.fx.type = t;
+			c.fx.params = fxDefaults(t);
+			c.fx.keys.clear();
+		});
+	});
+
+	fxName_ = new QLineEdit(fxBox_);
+	fxName_->setPlaceholderText(QStringLiteral("(the effect's own name)"));
+	form->addRow(QStringLiteral("Name"), fxName_);
+	connect(fxName_, &QLineEdit::editingFinished, this, [this]() {
+		if (syncingFx_)
+			return;
+		const QString n = fxName_->text().trimmed();
+		editSelectedClip([n](TlClip &c) { c.fx.name = n; });
+	});
+
+	fxEnabled_ = new QCheckBox(QStringLiteral("Enabled"), fxBox_);
+	form->addRow(QString(), fxEnabled_);
+	connect(fxEnabled_, &QCheckBox::toggled, this, [this](bool on) {
+		if (syncingFx_)
+			return;
+		editSelectedClip([on](TlClip &c) { c.fx.enabled = on; });
+	});
+	v->addLayout(form);
+
+	// The parameter rows are rebuilt only when the effect TYPE changes -- doing
+	// it on every sync would destroy the spin box under a drag in progress.
+	fxParamBox_ = new QWidget(fxBox_);
+	fxParamForm_ = new QFormLayout(fxParamBox_);
+	fxParamForm_->setContentsMargins(0, 0, 0, 0);
+	fxParamForm_->setHorizontalSpacing(8);
+	fxParamForm_->setVerticalSpacing(4);
+	v->addWidget(fxParamBox_);
+
+	auto *reset = new QPushButton(QStringLiteral("Reset parameters"), fxBox_);
+	connect(reset, &QPushButton::clicked, this, [this]() {
+		editSelectedClip([](TlClip &c) { c.fx.params = fxDefaults(c.fx.type); });
+	});
+	v->addWidget(reset);
+
+	into->addWidget(fxBox_);
+}
+
+void VideoEditorWindow::rebuildEffectParams()
+{
+	const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!c || c->type != TlClip::Type::Effect)
+		return;
+	if (fxParamsForType_ == int(c->fx.type))
+		return; // same effect: keep the widgets (and any drag) alive
+	fxParamsForType_ = int(c->fx.type);
+	fxParamSpins_.clear();
+	fxParamKeys_.clear();
+	while (fxParamForm_->rowCount() > 0)
+		fxParamForm_->removeRow(0);
+	for (const FxParamDef &d : fxParams(c->fx.type)) {
+		auto *sp = new QDoubleSpinBox(fxParamBox_);
+		sp->setRange(d.lo, d.hi);
+		sp->setDecimals(3);
+		sp->setSingleStep((d.hi - d.lo) / 40.0);
+		sp->setKeyboardTracking(false);
+		fxParamForm_->addRow(QString::fromLatin1(d.label), sp);
+		const QString key = QString::fromLatin1(d.key);
+		fxParamSpins_.append(sp);
+		fxParamKeys_.append(key);
+		connect(sp, &QDoubleSpinBox::valueChanged, this, [this, key](double val) {
+			if (syncingFx_)
+				return;
+			editSelectedClip([key, val](TlClip &cl) { cl.fx.params[key] = val; });
+		});
+	}
+	// Inverse Selection carries its own areas rather than plain numbers; the
+	// Spotlight panel edits those.
+	if (c->fx.type == FxType::InverseSelection) {
+		auto *note = new QLabel(
+			QStringLiteral("Edit the areas in the Inverse Selection section below."),
+			fxParamBox_);
+		note->setWordWrap(true);
+		note->setStyleSheet(QStringLiteral("color:#7f858e;"));
+		fxParamForm_->addRow(note);
+	}
+}
+
+void VideoEditorWindow::syncEffectInspector()
+{
+	if (!fxBox_ || !timelineView_)
+		return;
+	const TlClip *c = fullEdit() ? timelineView_->selectedClipPtr() : nullptr;
+	const bool isFx = c && c->type == TlClip::Type::Effect;
+	fxBox_->setVisible(isFx);
+	if (!isFx)
+		return;
+	const bool was = syncingFx_;
+	syncingFx_ = true;
+	fxType_->setCurrentIndex(int(c->fx.type));
+	if (fxName_->text() != c->fx.name)
+		fxName_->setText(c->fx.name);
+	fxEnabled_->setChecked(c->fx.enabled);
+	rebuildEffectParams();
+	// Show the values AT THE PLAYHEAD, so a keyframed effect reads honestly.
+	const QMap<QString, double> p = c->fx.paramsAt(timelinePlayheadMs() - c->outStartMs);
+	for (int i = 0; i < fxParamSpins_.size() && i < fxParamKeys_.size(); ++i)
+		fxParamSpins_[i]->setValue(p.value(fxParamKeys_[i], fxParamSpins_[i]->value()));
+	syncingFx_ = was;
+}
+
 void VideoEditorWindow::buildSpotlightInspector(QVBoxLayout *into)
 {
 	spotBox_ = new QWidget(this);
@@ -3330,7 +3504,14 @@ void VideoEditorWindow::syncClipInspector()
 		}
 	}
 
-	const bool isText = !onAudioTrack && c->type == TlClip::Type::Text;
+	// An effect clip has no picture of its own, so the transform half is a lie
+	// for it; its own panel takes over.
+	const bool isFx = c->type == TlClip::Type::Effect;
+	if (videoClipBox_)
+		videoClipBox_->setVisible(!onAudioTrack && !isFx);
+	syncEffectInspector();
+
+	const bool isText = !onAudioTrack && !isFx && c->type == TlClip::Type::Text;
 	textBox_->setVisible(isText);
 	if (isText) {
 		refreshTextPresets();
@@ -3948,6 +4129,8 @@ void VideoEditorWindow::setEditMode(EditMode m)
 		addAudioBtn_->setVisible(full);
 	if (addImageBtn_)
 		addImageBtn_->setVisible(full);
+	if (addFxClipBtn_)
+		addFxClipBtn_->setVisible(full);
 	if (snapBtn_)
 		snapBtn_->setVisible(full);
 	if (fitBtn_)

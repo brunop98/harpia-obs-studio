@@ -135,6 +135,8 @@ const ColorDef kColorDefs[] = {
 	{"textClip", "Text clip", &EditorColors::textClip, ""},
 	{"textClipSel", "Text clip (selected)", &EditorColors::textClipSel, ""},
 	{"waveform", "Waveform", &EditorColors::waveform, ""},
+	{"effectClip", "Effect clip", &EditorColors::effectClip,
+	 "Effect clips always use this, never the track's colour"},
 	{"playhead", "Playhead", &EditorColors::playhead, "Where an edit will land"},
 	{"hover", "Hover marker", &EditorColors::hover, "Where the preview is looking"},
 	{"marker", "Project marker", &EditorColors::marker, ""},

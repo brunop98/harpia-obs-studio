@@ -4,6 +4,7 @@
 #include "VoiceoverTrack.hpp"     // VoiceoverClip (stored in EditorSnapshot)
 #include "shader/ShaderEffect.hpp"    // ShaderState / ShaderParam (post-processing)
 #include "timeline/TimelineModel.hpp" // TlClip / TlTransform (Full-editing timeline)
+#include "timeline/TimelineView.hpp"    // ClipboardEntry (timeline copy/paste)
 
 #include <QDateTime>
 #include <QDialog>
@@ -201,6 +202,12 @@ private:
 	void showInspector(bool on);
 	// Size the preview/editing split to what the current mode actually needs.
 	void applyModeSplit();
+
+	// Timeline clipboard. Held by the window, not the view, so it survives
+	// selection changes and outlives any one clip.
+	void copySelectedClips(bool cut);
+	void pasteClips();
+	QVector<TimelineView::ClipboardEntry> clipboard_;
 	QSplitter *hsplit_ = nullptr;   // preview+editing | inspector
 	QSplitter *vsplit_ = nullptr;   // preview / editing area
 	QWidget *bottomPane_ = nullptr; // mode bar + mode stack + audio + buttons
@@ -255,6 +262,7 @@ private:
 	// Playhead clamped inside the selected clip: where an edit applies AND is
 	// previewed, so the two can never disagree.
 	qint64 timelineEditMs() const;
+	double timelineFps() const; // project frame rate (the first source's)
 	bool autoKeyframe_ = false; // record a keyframe on every transform edit
 	void updateInfoLabel();
 	bool hasUnsavedEdits() const;
@@ -385,6 +393,14 @@ private:
 	QWidget *scriptParamBox_ = nullptr;
 	QLabel *scriptError_ = nullptr;
 	QFileSystemWatcher *scriptWatch_ = nullptr;
+	// Clip inspector: a picture clip and an audio clip need different controls,
+	// so each group shows only for the kind of clip that has them.
+	QWidget *videoClipBox_ = nullptr;
+	QWidget *audioClipBox_ = nullptr;
+	QDoubleSpinBox *clipVolSpin_ = nullptr;
+	QSpinBox *clipFadeInSpin_ = nullptr;
+	QSpinBox *clipFadeOutSpin_ = nullptr;
+
 	QString scriptsDir_;
 	// Set whenever the timeline or the compiled set changes; makes the per-frame
 	// "is every script compiled?" sweep run on change instead of every frame.

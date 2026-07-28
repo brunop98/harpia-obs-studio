@@ -5,6 +5,7 @@
 #include <QFont>
 
 #include <QHash>
+#include <QSet>
 #include <QImage>
 #include <QPixmap>
 #include <QVector>
@@ -55,6 +56,34 @@ public:
 	void clearPlayhead();
 	qint64 playhead() const { return playheadMs_; }
 	qint64 durationMs() const { return model_.durationMs(); }
+
+	// One clip on the clipboard, with the track it came from so a paste can put
+	// it back where it belongs rather than always on the first track.
+	struct ClipboardEntry {
+		TlClip clip;
+		int track = 0;
+	};
+	// Everything selected, primary first, in timeline order.
+	QVector<ClipboardEntry> copySelection() const;
+	// Place `entries` with the earliest landing at `atMs`, keeping their relative
+	// times and tracks. The pasted clips become the new selection.
+	void pasteAt(const QVector<ClipboardEntry> &entries, qint64 atMs);
+	bool hasSelection() const { return selClip_ >= 0 || !extraSel_.isEmpty(); }
+	void selectAllClips();
+	// Select one clip as the primary, dropping any other selection.
+	void selectClip(int track, int clip);
+	// Add a clip to the selection without making it primary (what Ctrl-click does).
+	void addToSelection(int track, int clip);
+	// Shift every selected clip in time (arrow-key nudge). Locked tracks ignore it.
+	void nudgeSelection(qint64 deltaMs);
+	// Cut every unlocked clip the playhead runs through, on every track.
+	void splitAtPlayhead();
+	void deleteSelected(); // every selected clip, honouring per-track ripple
+	// Markers: add one at the playhead, or remove the one already there.
+	void toggleMarkerAtPlayhead();
+	// Nearest marker before/after `fromMs`, or -1 when there is none that way.
+	qint64 markerNear(qint64 fromMs, bool forward) const;
+	bool isSelected(int track, int clip) const;
 
 	// Selection (track index, clip index). {-1,-1} = nothing.
 	int selectedTrack() const { return selTrack_; }
@@ -137,6 +166,9 @@ private:
 	QRect headerToggleRect(int track, HeaderHit which) const;
 	HeaderHit headerHitAt(int track, const QPoint &p) const;
 	void showTrackMenu(int track, const QPoint &globalPos);
+	// Every selected clip as (track, clip), primary first, in timeline order.
+	QVector<QPair<int, int>> selectedPairs() const;
+
 	void renumberTracks(); // V1..Vn bottom-up, A1..An top-down
 	static QColor randomPastel();
 
@@ -147,6 +179,11 @@ private:
 	QHash<int, double> srcAspect_;
 
 	int selTrack_ = -1, selClip_ = -1;
+	// Clips selected ALONGSIDE the primary. The primary is what the Inspector
+	// edits; delete, copy and drag act on the primary plus these.
+	QSet<QPair<int, int>> extraSel_;
+	// Kept so a drag can move every selected clip by the same amount.
+	QHash<QPair<int, int>, qint64> dragStarts_;
 	qint64 playheadMs_ = -1;
 	qint64 hoverMs_ = -1;
 
@@ -177,7 +214,6 @@ private:
 
 	void showClipMenu(int track, int clip, const QPoint &globalPos, qint64 atOutMs);
 	void splitClip(int track, int clip, qint64 atOutMs);
-	void deleteSelected();
 	void emitScrubAt(qint64 outMs);
 };
 

@@ -289,6 +289,10 @@ struct TlTrack {
 // the display order (index 0 is the top lane) and, for video, the compositing
 // order: the HIGHER lane renders in FRONT, so index 0 is drawn last/on top.
 struct TimelineModel {
+	// Points of interest on the output timeline, sorted, in ms. Purely for
+	// navigation — nothing about the render depends on them.
+	QVector<qint64> markers;
+
 	QVector<TlTrack> tracks;
 
 	int videoTrackCount() const
@@ -317,7 +321,10 @@ struct TimelineModel {
 		return true;
 	}
 
-	bool operator==(const TimelineModel &o) const { return tracks == o.tracks; }
+	bool operator==(const TimelineModel &o) const
+	{
+		return tracks == o.tracks && markers == o.markers;
+	}
 	bool operator!=(const TimelineModel &o) const { return !(*this == o); }
 };
 

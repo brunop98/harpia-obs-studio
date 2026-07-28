@@ -37,6 +37,8 @@ const QColor kPlayhead(0xe5, 0x48, 0x4d);
 // Distinct from the playhead on purpose: the hover marker is where the PREVIEW
 // is looking right now, which is not where an edit will land.
 const QColor kHover(0xf5, 0xc0, 0x42);
+// Project markers: green, so they read as "a place", not "a time now".
+const QColor kMarker(0x5c, 0xd6, 0x8a);
 } // namespace
 
 TimelineView::TimelineView(QWidget *parent) : QWidget(parent)
@@ -610,7 +612,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	const bool isText = c.type == TlClip::Type::Text;
 	const bool isImage = c.type == TlClip::Type::Image;
 	const bool video = t.kind == TlTrack::Kind::Video && !isText && !isImage;
-	const bool sel = (track == selTrack_ && clip == selClip_);
+	const bool sel = isSelected(track, clip);
 	const QRect r = clipRect(track, clip);
 	// Scrolled-away clips cost the same as visible ones otherwise: the painter
 	// clips the output, but the filmstrip tiling and the per-pixel waveform loop
@@ -811,6 +813,25 @@ void TimelineView::paintEvent(QPaintEvent *)
 
 	drawRuler(p);
 
+	// Project markers: a flag on the ruler and a faint line down the lanes, so a
+	// noted moment stays findable while scrolling.
+	for (const qint64 mk : model_.markers) {
+		const int mx = msToX(mk);
+		const QRect c = contentRect();
+		if (mx < c.x() - 1 || mx > c.right() + 1)
+			continue;
+		p.setPen(QPen(kMarker, 1, Qt::DotLine));
+		p.drawLine(mx, lp_.margin + lp_.rulerH, mx, height() - lp_.margin);
+		p.setPen(Qt::NoPen);
+		p.setBrush(kMarker);
+		QPainterPath flag;
+		flag.moveTo(mx, lp_.margin + 2);
+		flag.lineTo(mx + 9, lp_.margin + 6);
+		flag.lineTo(mx, lp_.margin + 10);
+		flag.closeSubpath();
+		p.drawPath(flag);
+	}
+
 	// Hover marker: while the pointer is over a clip the preview follows it
 	// rather than the playhead, which is otherwise invisible and reads as the
 	// preview having jumped on its own. Dashed and amber so it can't be mistaken
@@ -924,6 +945,7 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 		// Empty area: move the playhead + scrub.
 		mode_ = Mode::Scrub;
 		playheadMs_ = xToMs(pos.x());
+		extraSel_.clear();
 		if (selTrack_ != -1 || selClip_ != -1) {
 			selTrack_ = selClip_ = -1;
 			emit selectionChanged(-1, -1);
@@ -933,6 +955,35 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 		return;
 	}
 
+	// Ctrl-click adds to (or removes from) the selection instead of replacing it.
+	if (e->modifiers() & Qt::ControlModifier) {
+		if (track == selTrack_ && clip == selClip_) {
+			// Dropping the primary promotes one of the extras, so a selection
+			// never ends up with members but no primary.
+			selTrack_ = selClip_ = -1;
+			if (!extraSel_.isEmpty()) {
+				const auto it = extraSel_.constBegin();
+				selTrack_ = it->first;
+				selClip_ = it->second;
+				extraSel_.erase(extraSel_.constBegin());
+			}
+		} else if (extraSel_.contains({track, clip})) {
+			extraSel_.remove({track, clip});
+		} else {
+			if (selTrack_ >= 0)
+				extraSel_.insert({selTrack_, selClip_});
+			selTrack_ = track;
+			selClip_ = clip;
+		}
+		mode_ = Mode::None;
+		emit selectionChanged(selTrack_, selClip_);
+		update();
+		return;
+	}
+	// A plain click on something already selected keeps the group, so a
+	// multi-selection can be dragged; otherwise it replaces the selection.
+	if (!isSelected(track, clip))
+		extraSel_.clear();
 	selTrack_ = track;
 	selClip_ = clip;
 	emit selectionChanged(selTrack_, selClip_);
@@ -951,6 +1002,11 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	const QRect r = clipRect(track, clip);
 	dragSrcPerPx_ = double(dragOrig_.srcLenMs()) / double(std::max(1, r.width()));
 	dragGrabOffsetMs_ = xToMs(pos.x()) - dragOrig_.outStartMs;
+	// A group drag moves everything by the same amount, so each member's
+	// starting position has to be remembered before the first delta is applied.
+	dragStarts_.clear();
+	for (const auto &sp : selectedPairs())
+		dragStarts_.insert(sp, model_.tracks[sp.first].clips[sp.second].outStartMs);
 	const int edge = std::min(8, r.width() / 3);
 	if (pos.x() - r.left() <= edge)
 		mode_ = Mode::ResizeLeft;
@@ -994,6 +1050,21 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 			const qint64 snapEnd = snap(ns + dur, dragTrack_, dragClip_) - dur;
 			ns = (std::llabs(snapEnd - ns) < std::llabs(snapStart - ns)) ? snapEnd : snapStart;
 			c.outStartMs = std::max<qint64>(0, ns);
+			// Carry the rest of the selection along by the same delta. Only the
+			// clip under the cursor changes lane; the others keep theirs, which
+			// keeps a cross-track group predictable.
+			if (dragStarts_.size() > 1) {
+				const qint64 delta = c.outStartMs - dragOrig_.outStartMs;
+				for (auto it = dragStarts_.constBegin(); it != dragStarts_.constEnd(); ++it) {
+					if (it.key() == qMakePair(dragTrack_, dragClip_))
+						continue;
+					TlTrack &ot = model_.tracks[it.key().first];
+					if (ot.locked || it.key().second >= ot.clips.size())
+						continue;
+					ot.clips[it.key().second].outStartMs =
+						std::max<qint64>(0, it.value() + delta);
+				}
+			}
 			// Vertical position picks the landing lane — or, past a lane edge,
 			// a brand-new track (drawn as the "+ New track here" bar).
 			drop_ = dropTargetAt(pos.y(), model_.tracks[dragTrack_].kind);
@@ -1161,24 +1232,254 @@ void TimelineView::leaveEvent(QEvent *)
 	update(); // drop the hover marker
 }
 
+// Every selected clip, primary included, as (track, clip).
+QVector<QPair<int, int>> TimelineView::selectedPairs() const
+{
+	QVector<QPair<int, int>> out;
+	if (selTrack_ >= 0 && selClip_ >= 0)
+		out.append({selTrack_, selClip_});
+	for (const auto &p : extraSel_)
+		if (p != qMakePair(selTrack_, selClip_))
+			out.append(p);
+	// Sorted by track then time so callers can rely on a stable order.
+	std::sort(out.begin(), out.end(), [this](const auto &a, const auto &b) {
+		if (a.first != b.first)
+			return a.first < b.first;
+		return model_.tracks[a.first].clips[a.second].outStartMs <
+		       model_.tracks[b.first].clips[b.second].outStartMs;
+	});
+	return out;
+}
+
+bool TimelineView::isSelected(int track, int clip) const
+{
+	return (track == selTrack_ && clip == selClip_) || extraSel_.contains({track, clip});
+}
+
+void TimelineView::selectClip(int track, int clip)
+{
+	extraSel_.clear();
+	if (track < 0 || track >= model_.tracks.size() || clip < 0 ||
+	    clip >= model_.tracks[track].clips.size()) {
+		selTrack_ = selClip_ = -1;
+	} else {
+		selTrack_ = track;
+		selClip_ = clip;
+	}
+	emit selectionChanged(selTrack_, selClip_);
+	update();
+}
+
+void TimelineView::addToSelection(int track, int clip)
+{
+	if (track < 0 || track >= model_.tracks.size() || clip < 0 ||
+	    clip >= model_.tracks[track].clips.size())
+		return;
+	if (selTrack_ < 0) { // nothing yet: this becomes the primary
+		selectClip(track, clip);
+		return;
+	}
+	if (track == selTrack_ && clip == selClip_)
+		return;
+	extraSel_.insert({track, clip});
+	update();
+}
+
+void TimelineView::selectAllClips()
+{
+	extraSel_.clear();
+	for (int t = 0; t < model_.tracks.size(); ++t)
+		for (int c = 0; c < model_.tracks[t].clips.size(); ++c) {
+			if (selTrack_ < 0) { // nothing was selected: make the first primary
+				selTrack_ = t;
+				selClip_ = c;
+				continue;
+			}
+			extraSel_.insert({t, c});
+		}
+	emit selectionChanged(selTrack_, selClip_);
+	update();
+}
+
+QVector<TimelineView::ClipboardEntry> TimelineView::copySelection() const
+{
+	QVector<ClipboardEntry> out;
+	for (const auto &p : selectedPairs())
+		out.append({model_.tracks[p.first].clips[p.second], p.first});
+	return out;
+}
+
+void TimelineView::pasteAt(const QVector<ClipboardEntry> &entries, qint64 atMs)
+{
+	if (entries.isEmpty())
+		return;
+	qint64 earliest = std::numeric_limits<qint64>::max();
+	for (const ClipboardEntry &e : entries)
+		earliest = std::min(earliest, e.clip.outStartMs);
+
+	extraSel_.clear();
+	selTrack_ = selClip_ = -1;
+	for (const ClipboardEntry &e : entries) {
+		// Back onto its own track when that still exists and accepts it,
+		// otherwise the nearest track of the right kind.
+		int track = e.track;
+		if (track < 0 || track >= model_.tracks.size() || model_.tracks[track].locked)
+			track = -1;
+		if (track < 0)
+			for (int i = 0; i < model_.tracks.size(); ++i)
+				if (!model_.tracks[i].locked) {
+					track = i;
+					break;
+				}
+		if (track < 0)
+			continue; // every track is locked
+		TlClip c = e.clip;
+		c.outStartMs = std::max<qint64>(0, atMs + (e.clip.outStartMs - earliest));
+		model_.tracks[track].clips.append(c);
+		const int idx = int(model_.tracks[track].clips.size()) - 1;
+		if (selTrack_ < 0) {
+			selTrack_ = track;
+			selClip_ = idx;
+		} else {
+			extraSel_.insert({track, idx});
+		}
+	}
+	emit selectionChanged(selTrack_, selClip_);
+	clampView();
+	updateGeometry();
+	update();
+	emit clipsChanged();
+}
+
+void TimelineView::nudgeSelection(qint64 deltaMs)
+{
+	const auto sel = selectedPairs();
+	if (sel.isEmpty() || deltaMs == 0)
+		return;
+	// All or nothing: shifting only the unlocked half of a selection would
+	// silently break the arrangement the user set up.
+	for (const auto &p : sel)
+		if (model_.tracks[p.first].locked)
+			return;
+	// Moving left is limited by whichever selected clip is nearest zero, so the
+	// group keeps its shape instead of collapsing against the start.
+	if (deltaMs < 0) {
+		qint64 room = std::numeric_limits<qint64>::max();
+		for (const auto &p : sel)
+			room = std::min(room, model_.tracks[p.first].clips[p.second].outStartMs);
+		deltaMs = -std::min(room, -deltaMs);
+		if (deltaMs == 0)
+			return;
+	}
+	for (const auto &p : sel)
+		model_.tracks[p.first].clips[p.second].outStartMs += deltaMs;
+	clampView();
+	updateGeometry();
+	update();
+	emit clipsChanged();
+}
+
+void TimelineView::toggleMarkerAtPlayhead()
+{
+	if (playheadMs_ < 0)
+		return;
+	// Within a few pixels counts as the same marker, so the key removes the one
+	// you can see rather than stacking a second on top of it.
+	const qint64 tol = std::max<qint64>(1, xToMs(contentRect().x() + 6) - xToMs(contentRect().x()));
+	for (int i = 0; i < model_.markers.size(); ++i)
+		if (std::llabs(model_.markers[i] - playheadMs_) <= tol) {
+			model_.markers.remove(i);
+			update();
+			emit clipsChanged();
+			return;
+		}
+	model_.markers.append(playheadMs_);
+	std::sort(model_.markers.begin(), model_.markers.end());
+	update();
+	emit clipsChanged();
+}
+
+qint64 TimelineView::markerNear(qint64 fromMs, bool forward) const
+{
+	qint64 best = -1;
+	for (const qint64 m : model_.markers) {
+		if (forward ? (m > fromMs + 1) : (m < fromMs - 1))
+			if (best < 0 || std::llabs(m - fromMs) < std::llabs(best - fromMs))
+				best = m;
+	}
+	return best;
+}
+
+void TimelineView::splitAtPlayhead()
+{
+	if (playheadMs_ < 0)
+		return;
+	bool any = false;
+	for (int ti = 0; ti < model_.tracks.size(); ++ti) {
+		TlTrack &t = model_.tracks[ti];
+		if (t.locked)
+			continue;
+		// Iterate over the original count: the halves appended below must not be
+		// re-split by this same pass.
+		const int n = int(t.clips.size());
+		for (int ci = 0; ci < n; ++ci) {
+			TlClip &c = t.clips[ci];
+			if (!c.coversOutput(playheadMs_))
+				continue;
+			const qint64 cut = playheadMs_ - c.outStartMs;
+			if (cut < kMinClipMs || c.outDurationMs() - cut < kMinClipMs)
+				continue; // too close to an edge to leave usable halves
+			TlClip right = c;
+			const qint64 srcCut = c.srcAtOutput(playheadMs_);
+			c.srcEndMs = srcCut;
+			right.srcStartMs = srcCut;
+			right.outStartMs = playheadMs_;
+			if (c.freeDuration()) { // stills/captions have no source clock
+				c.srcEndMs = c.srcStartMs + cut;
+				right.srcStartMs = 0;
+				right.srcEndMs = right.srcEndMs - c.srcEndMs;
+			}
+			t.clips.append(right);
+			any = true;
+		}
+	}
+	if (!any)
+		return;
+	extraSel_.clear();
+	update();
+	emit clipsChanged();
+}
+
 void TimelineView::deleteSelected()
 {
-	if (selTrack_ < 0 || selTrack_ >= model_.tracks.size())
+	const auto sel = selectedPairs();
+	if (sel.isEmpty())
 		return;
-	TlTrack &t = model_.tracks[selTrack_];
-	if (t.locked)
-		return;
-	if (selClip_ < 0 || selClip_ >= t.clips.size())
-		return;
-	// Auto ripple: close the gap by pulling every later clip on this track left.
-	const qint64 gapStart = t.clips[selClip_].outStartMs;
-	const qint64 gapLen = t.clips[selClip_].outDurationMs();
-	t.clips.remove(selClip_);
-	if (t.ripple) {
-		for (TlClip &c : t.clips)
-			if (c.outStartMs >= gapStart)
-				c.outStartMs = std::max<qint64>(0, c.outStartMs - gapLen);
+	// Remove from the highest index down so earlier indices stay valid.
+	QVector<QPair<int, int>> ordered = sel;
+	std::sort(ordered.begin(), ordered.end(), [](const auto &a, const auto &b) {
+		if (a.first != b.first)
+			return a.first > b.first;
+		return a.second > b.second;
+	});
+	bool removed = false;
+	for (const auto &p : ordered) {
+		TlTrack &t = model_.tracks[p.first];
+		if (t.locked || p.second < 0 || p.second >= t.clips.size())
+			continue;
+		// Auto ripple: close the gap by pulling every later clip on this track left.
+		const qint64 gapStart = t.clips[p.second].outStartMs;
+		const qint64 gapLen = t.clips[p.second].outDurationMs();
+		t.clips.remove(p.second);
+		if (t.ripple)
+			for (TlClip &c : t.clips)
+				if (c.outStartMs >= gapStart)
+					c.outStartMs = std::max<qint64>(0, c.outStartMs - gapLen);
+		removed = true;
 	}
+	if (!removed)
+		return;
+	extraSel_.clear();
 	selClip_ = -1;
 	emit selectionChanged(selTrack_, -1);
 	clampView();

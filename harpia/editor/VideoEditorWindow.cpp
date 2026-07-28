@@ -867,6 +867,104 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// has focus.
 	new QShortcut(QKeySequence(Qt::Key_Space), this, this, &VideoEditorWindow::onPlayPause);
 
+	// ---- Full-editing timeline shortcuts --------------------------------
+	// All of them no-op outside Full editing, so they never surprise you in the
+	// other modes. Frame-sized steps come from the project frame rate, so a
+	// nudge always lands on a frame boundary rather than a round number of ms.
+	auto onTimeline = [this]() { return fullEdit() && timelineView_; };
+	auto frameMs = [this]() {
+		const double fps = timelineFps();
+		return qint64(std::llround(1000.0 / (fps > 1.0 ? fps : 30.0)));
+	};
+	auto seekTo = [this](qint64 ms) {
+		const qint64 t = std::clamp<qint64>(ms, 0, timelineView_->durationMs());
+		timelineView_->setPlayhead(t);
+		onTimelineScrub(t);
+	};
+	auto add = [this](QKeySequence k, auto fn) {
+		auto *sc = new QShortcut(k, this);
+		sc->setContext(Qt::WindowShortcut);
+		connect(sc, &QShortcut::activated, this, fn);
+	};
+
+	add(QKeySequence(Qt::Key_S), [this, onTimeline]() {
+		if (onTimeline())
+			timelineView_->splitAtPlayhead();
+	});
+	add(QKeySequence(Qt::CTRL | Qt::Key_K), [this, onTimeline]() {
+		if (onTimeline())
+			timelineView_->splitAtPlayhead();
+	});
+	add(QKeySequence(Qt::CTRL | Qt::Key_A), [this, onTimeline]() {
+		if (onTimeline())
+			timelineView_->selectAllClips();
+	});
+	add(QKeySequence::Copy, [this, onTimeline]() {
+		if (onTimeline())
+			copySelectedClips(false);
+	});
+	add(QKeySequence::Cut, [this, onTimeline]() {
+		if (onTimeline())
+			copySelectedClips(true);
+	});
+	add(QKeySequence::Paste, [this, onTimeline]() {
+		if (onTimeline())
+			pasteClips();
+	});
+	add(QKeySequence(Qt::Key_M), [this, onTimeline]() {
+		if (onTimeline())
+			timelineView_->toggleMarkerAtPlayhead();
+	});
+
+	// Arrows nudge a selection, or step the playhead when nothing is selected —
+	// the same key doing the obvious thing for what you have in hand.
+	auto arrow = [this, onTimeline, frameMs, seekTo](int dir, int frames) {
+		if (!onTimeline())
+			return;
+		const qint64 step = frameMs() * frames * dir;
+		if (timelineView_->hasSelection())
+			timelineView_->nudgeSelection(step);
+		else
+			seekTo(timelinePlayheadMs() + step);
+	};
+	add(QKeySequence(Qt::Key_Left), [arrow]() { arrow(-1, 1); });
+	add(QKeySequence(Qt::Key_Right), [arrow]() { arrow(+1, 1); });
+	add(QKeySequence(Qt::SHIFT | Qt::Key_Left), [arrow]() { arrow(-1, 10); });
+	add(QKeySequence(Qt::SHIFT | Qt::Key_Right), [arrow]() { arrow(+1, 10); });
+
+	// Frame stepping, always the playhead whatever is selected.
+	add(QKeySequence(Qt::Key_Comma), [this, onTimeline, frameMs, seekTo]() {
+		if (onTimeline())
+			seekTo(timelinePlayheadMs() - frameMs());
+	});
+	add(QKeySequence(Qt::Key_Period), [this, onTimeline, frameMs, seekTo]() {
+		if (onTimeline())
+			seekTo(timelinePlayheadMs() + frameMs());
+	});
+	add(QKeySequence(Qt::Key_Home), [this, onTimeline, seekTo]() {
+		if (onTimeline())
+			seekTo(0);
+	});
+	add(QKeySequence(Qt::Key_End), [this, onTimeline, seekTo]() {
+		if (onTimeline())
+			seekTo(timelineView_->durationMs());
+	});
+	// Jump between markers.
+	add(QKeySequence(Qt::CTRL | Qt::Key_Left), [this, onTimeline, seekTo]() {
+		if (!onTimeline())
+			return;
+		const qint64 m = timelineView_->markerNear(timelinePlayheadMs(), false);
+		if (m >= 0)
+			seekTo(m);
+	});
+	add(QKeySequence(Qt::CTRL | Qt::Key_Right), [this, onTimeline, seekTo]() {
+		if (!onTimeline())
+			return;
+		const qint64 m = timelineView_->markerNear(timelinePlayheadMs(), true);
+		if (m >= 0)
+			seekTo(m);
+	});
+
 	connect(timeline_, &Timeline::scrub, this, &VideoEditorWindow::onScrub);
 	connect(timeline_, &Timeline::hoverScrub, this, &VideoEditorWindow::onHoverScrub);
 	connect(timeline_, &Timeline::startChanged, this, [this]() {
@@ -1450,6 +1548,14 @@ void VideoEditorWindow::addActiveSourceToTimeline()
 	updateInfoLabel();
 }
 
+double VideoEditorWindow::timelineFps() const
+{
+	// The first source sets the project frame rate, like the canvas size does.
+	if (!sources_.empty() && sources_.front().seeker && sources_.front().seeker->fps() > 1.0)
+		return sources_.front().seeker->fps();
+	return 30.0;
+}
+
 QSize VideoEditorWindow::timelineCanvasSize() const
 {
 	// The first source defines the output canvas (like the multi-source export).
@@ -1489,9 +1595,7 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 					if (!s.name.isEmpty() && !scriptEval_->has(s.name))
 						ensureScriptCompiled(s.name, nullptr);
 	}
-	double fps = 30.0;
-	if (!sources_.empty() && sources_.front().seeker && sources_.front().seeker->fps() > 1.0)
-		fps = sources_.front().seeker->fps();
+	const double fps = timelineFps();
 
 	const QSize canvasSize = timelineCanvasSize();
 	canvas_->setVideoSize(canvasSize.width(), canvasSize.height());
@@ -2006,8 +2110,17 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 {
 	clipBox_ = new QWidget(this);
 	clipBox_->setVisible(false);
-	auto *v = new QVBoxLayout(clipBox_);
-	v->setContentsMargins(0, 6, 0, 0);
+	auto *clipOuter = new QVBoxLayout(clipBox_);
+	clipOuter->setContentsMargins(0, 6, 0, 0);
+	clipOuter->setSpacing(5);
+
+	// Everything below applies to a picture: an audio clip has no transform,
+	// keyframes or scripts, so the whole group hides and the audio group below
+	// takes its place.
+	videoClipBox_ = new QWidget(clipBox_);
+	clipOuter->addWidget(videoClipBox_);
+	auto *v = new QVBoxLayout(videoClipBox_);
+	v->setContentsMargins(0, 0, 0, 0);
 	v->setSpacing(5);
 
 	auto *hdr = new QLabel(QStringLiteral("Transform"), clipBox_);
@@ -2383,6 +2496,70 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	tv->addLayout(tForm);
 	v->addWidget(textBox_);
 
+	// ---- Audio clip: level and fades -------------------------------------
+	// These already existed in the model, were saved with the project and were
+	// applied at export — there was simply no way to reach them.
+	audioClipBox_ = new QWidget(clipBox_);
+	audioClipBox_->setVisible(false);
+	clipOuter->addWidget(audioClipBox_);
+	auto *av = new QVBoxLayout(audioClipBox_);
+	av->setContentsMargins(0, 0, 0, 0);
+	av->setSpacing(5);
+	auto *aHdr = new QLabel(QStringLiteral("Audio"), audioClipBox_);
+	aHdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
+	av->addWidget(aHdr);
+
+	auto *aForm = new QFormLayout;
+	aForm->setContentsMargins(0, 2, 0, 0);
+	aForm->setHorizontalSpacing(10);
+	aForm->setVerticalSpacing(4);
+
+	clipVolSpin_ = new QDoubleSpinBox(audioClipBox_);
+	clipVolSpin_->setRange(0.0, 2.0);
+	clipVolSpin_->setDecimals(2);
+	clipVolSpin_->setSingleStep(0.05);
+	clipVolSpin_->setKeyboardTracking(false);
+	clipVolSpin_->setToolTip(QStringLiteral("Level for this clip. 1.00 leaves it as recorded."));
+	aForm->addRow(QStringLiteral("Volume"), clipVolSpin_);
+	connect(clipVolSpin_, &QDoubleSpinBox::valueChanged, this, [this](double val) {
+		if (syncingClip_)
+			return;
+		editSelectedClip([val](TlClip &c) { c.volume = val; });
+	});
+
+	clipFadeInSpin_ = new QSpinBox(audioClipBox_);
+	clipFadeInSpin_->setRange(0, 60000);
+	clipFadeInSpin_->setSuffix(QStringLiteral(" ms"));
+	clipFadeInSpin_->setSingleStep(50);
+	clipFadeInSpin_->setKeyboardTracking(false);
+	aForm->addRow(QStringLiteral("Fade in"), clipFadeInSpin_);
+	connect(clipFadeInSpin_, &QSpinBox::valueChanged, this, [this](int val) {
+		if (syncingClip_)
+			return;
+		editSelectedClip([val](TlClip &c) { c.fadeInMs = val; });
+	});
+
+	clipFadeOutSpin_ = new QSpinBox(audioClipBox_);
+	clipFadeOutSpin_->setRange(0, 60000);
+	clipFadeOutSpin_->setSuffix(QStringLiteral(" ms"));
+	clipFadeOutSpin_->setSingleStep(50);
+	clipFadeOutSpin_->setKeyboardTracking(false);
+	aForm->addRow(QStringLiteral("Fade out"), clipFadeOutSpin_);
+	connect(clipFadeOutSpin_, &QSpinBox::valueChanged, this, [this](int val) {
+		if (syncingClip_)
+			return;
+		editSelectedClip([val](TlClip &c) { c.fadeOutMs = val; });
+	});
+	av->addLayout(aForm);
+
+	auto *aHint = new QLabel(
+		QStringLiteral("Fades are applied to the mix, so the preview plays what the "
+			       "export will render."),
+		audioClipBox_);
+	aHint->setWordWrap(true);
+	aHint->setStyleSheet(QStringLiteral("color:#7f858e;"));
+	av->addWidget(aHint);
+
 	into->addWidget(clipBox_);
 }
 
@@ -2443,7 +2620,28 @@ void VideoEditorWindow::syncClipInspector()
 	refreshScriptList();
 	rebuildScriptParams();
 
-	const bool isText = c->type == TlClip::Type::Text;
+	// Which half of the panel applies. A clip on an audio track has no picture,
+	// so showing it zoom/rotation controls that do nothing would be a lie.
+	const int selTrack = timelineView_->selectedTrack();
+	const auto &tracks = timelineView_->model().tracks;
+	const bool onAudioTrack = selTrack >= 0 && selTrack < tracks.size() &&
+				  tracks[selTrack].kind == TlTrack::Kind::Audio;
+	if (videoClipBox_)
+		videoClipBox_->setVisible(!onAudioTrack);
+	if (audioClipBox_) {
+		audioClipBox_->setVisible(onAudioTrack);
+		if (onAudioTrack) {
+			clipVolSpin_->setValue(c->volume);
+			clipFadeInSpin_->setValue(c->fadeInMs);
+			clipFadeOutSpin_->setValue(c->fadeOutMs);
+			// A fade longer than half the clip would overlap itself.
+			const int half = int(std::max<qint64>(1, c->outDurationMs() / 2));
+			clipFadeInSpin_->setMaximum(half);
+			clipFadeOutSpin_->setMaximum(half);
+		}
+	}
+
+	const bool isText = !onAudioTrack && c->type == TlClip::Type::Text;
 	textBox_->setVisible(isText);
 	if (isText) {
 		if (textEdit_->toPlainText() != c->text.text)
@@ -2794,6 +2992,26 @@ void VideoEditorWindow::reject()
 			return; // keep editing
 	}
 	QDialog::reject();
+}
+
+void VideoEditorWindow::copySelectedClips(bool cut)
+{
+	if (!timelineView_)
+		return;
+	const auto sel = timelineView_->copySelection();
+	if (sel.isEmpty())
+		return;
+	clipboard_ = sel;
+	if (cut)
+		timelineView_->deleteSelected();
+}
+
+void VideoEditorWindow::pasteClips()
+{
+	if (!timelineView_ || clipboard_.isEmpty())
+		return;
+	// Land at the playhead, the one place the user is definitely looking.
+	timelineView_->pasteAt(clipboard_, timelinePlayheadMs());
 }
 
 void VideoEditorWindow::applyModeSplit()
@@ -3591,6 +3809,12 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 			trackArr.append(to);
 		}
 		root[QStringLiteral("tracks")] = trackArr;
+		if (!s.timeline.markers.isEmpty()) {
+			QJsonArray mk;
+			for (const qint64 m : s.timeline.markers)
+				mk.append(double(m));
+			root[QStringLiteral("markers")] = mk;
+		}
 		root[QStringLiteral("harpiaProject")] = 3; // timelines need a v3 reader
 	}
 
@@ -3747,6 +3971,9 @@ void VideoEditorWindow::onOpenProject()
 
 	// "Full editing" timeline (project v3). Absent in v1/v2 projects, which just
 	// restore an empty timeline.
+	for (const QJsonValue &mv : root.value(QStringLiteral("markers")).toArray())
+		s.timeline.markers.append(qint64(mv.toDouble()));
+	std::sort(s.timeline.markers.begin(), s.timeline.markers.end());
 	for (const QJsonValue &tv : root.value(QStringLiteral("tracks")).toArray()) {
 		const QJsonObject to = tv.toObject();
 		TlTrack t;

@@ -130,6 +130,7 @@ signals:
 	void scrub(qint64 outMs);      // preview at this output time (click/drag)
 	void hoverScrub(qint64 outMs); // preview while hovering (no click)
 	void inspectClipRequested();   // "Show in inspector" from a clip's menu
+	void keyframeEditorRequested();// "Keyframes…" from a clip's menu
 
 protected:
 	void paintEvent(QPaintEvent *) override;

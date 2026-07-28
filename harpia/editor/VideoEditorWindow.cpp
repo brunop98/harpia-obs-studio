@@ -19,6 +19,7 @@
 #include "script/TransformScript.hpp"
 #include "shader/ShaderRenderer.hpp"
 #include "timeline/TimelineCompositor.hpp"
+#include "timeline/KeyframeEditor.hpp"
 #include "timeline/TimelineView.hpp"
 
 #include "../Version.hpp"
@@ -441,10 +442,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(timelineView_, &TimelineView::selectionChanged, this, [this](int, int) {
 		syncPreviewTransformTarget();
 		updateInspector();
+		refreshKeyframeEditor(); // it follows the selection
 	});
 	// "Show in inspector" from a clip's right-click menu (any mode).
 	connect(timelineView_, &TimelineView::inspectClipRequested, this,
 		&VideoEditorWindow::revealInspector);
+	connect(timelineView_, &TimelineView::keyframeEditorRequested, this,
+		&VideoEditorWindow::openKeyframeEditor);
 	// Direct manipulation of the selected clip straight in the preview.
 	connect(canvas_, &PreviewCanvas::transformDragged, this,
 		&VideoEditorWindow::onPreviewTransformDrag);
@@ -2816,6 +2820,67 @@ void VideoEditorWindow::editSelectedClip(const std::function<void(TlClip &)> &fn
 	showTimelineFrame(at);
 	syncClipInspector();
 	scheduleSnapshot();
+}
+
+// The floating keyframe editor. Not modal and not owned by the clip: it edits a
+// copy and pushes each change straight back through updateSelectedClip, which is
+// the same path the Inspector uses — so the preview refreshes and each edit is
+// one undo step. Closing it therefore cannot lose anything.
+void VideoEditorWindow::openKeyframeEditor()
+{
+	if (!timelineView_)
+		return;
+	const TlClip *sel = timelineView_->selectedClipPtr();
+	if (!sel)
+		return;
+	if (!keyEditor_) {
+		keyEditor_ = new KeyframeEditor(this);
+		connect(keyEditor_, &KeyframeEditor::clipChanged, this, [this](const TlClip &c) {
+			if (!timelineView_ || !timelineView_->selectedClipPtr())
+				return;
+			timelineView_->updateSelectedClip(c);
+			syncPreviewTransformTarget();
+			// Show the frame the edit actually applies to, as the Inspector
+			// does, so the change is visible rather than off-screen.
+			const qint64 at = timelineEditMs();
+			timelineView_->setPlayhead(at);
+			showTimelineFrame(at);
+			syncClipInspector();
+			// A keyframe edit is a finished action: close its undo entry now
+			// rather than letting the next one join it.
+			commitSnapshot();
+		});
+		connect(keyEditor_, &KeyframeEditor::scrubRequested, this, [this](qint64 outMs) {
+			if (!timelineView_)
+				return;
+			timelineView_->setPlayhead(outMs);
+			requestPreview(-1, outMs);
+		});
+	}
+	refreshKeyframeEditor();
+	keyEditor_->show();
+	keyEditor_->raise();
+	keyEditor_->activateWindow();
+}
+
+void VideoEditorWindow::refreshKeyframeEditor()
+{
+	if (!keyEditor_ || !keyEditor_->isVisible() || !timelineView_)
+		return;
+	const TlClip *sel = timelineView_->selectedClipPtr();
+	if (!sel)
+		return;
+	const int t = timelineView_->selectedTrack();
+	const auto &tracks = timelineView_->model().tracks;
+	const QString label =
+		(t >= 0 && t < tracks.size())
+			? QStringLiteral("%1 · %2").arg(tracks[t].name).arg(
+				  sel->type == TlClip::Type::Text
+					  ? sel->text.text.split(QLatin1Char('\n')).value(0)
+					  : QStringLiteral("#%1").arg(sel->sourceId))
+			: QString();
+	keyEditor_->setClip(*sel, label);
+	keyEditor_->setPlayheadOut(timelinePlayheadMs());
 }
 
 // A script that defines a channel computes that channel's final value, so the

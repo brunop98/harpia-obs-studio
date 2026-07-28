@@ -37,19 +37,113 @@ struct TlTransform {
 // One animation keyframe: a pose pinned to a time inside the clip. `tMs` is an
 // offset from the clip's outStartMs, in OUTPUT time. `ease` shapes the curve
 // from this keyframe to the next.
+// How a keyframe hands over to the next one, per channel.
+enum class TlEase { Linear, EaseIn, EaseOut, EaseInOut, Bezier };
+
+inline constexpr int kTlEaseCount = 5;
+
+inline const char *tlEaseName(TlEase e)
+{
+	switch (e) {
+	case TlEase::Linear: return "Linear";
+	case TlEase::EaseIn: return "Ease In";
+	case TlEase::EaseOut: return "Ease Out";
+	case TlEase::EaseInOut: return "Ease In-Out";
+	case TlEase::Bezier: return "Bezier";
+	}
+	return "Linear";
+}
+
+inline TlEase tlEaseFromInt(int v)
+{
+	return (v >= 0 && v < kTlEaseCount) ? TlEase(v) : TlEase::Linear;
+}
+
+// Remap 0..1 progress through an ease. `p1`/`p2` are the Bezier handles (the
+// x of a standard CSS-style cubic-bezier(p1, p1, p2, p2) with the control
+// points on the diagonal, which is the shape a two-number handle can describe).
+inline double tlEaseAt(TlEase e, double u, double p1 = 0.42, double p2 = 0.58)
+{
+	u = std::clamp(u, 0.0, 1.0);
+	switch (e) {
+	case TlEase::Linear:
+		return u;
+	case TlEase::EaseIn:
+		return u * u;
+	case TlEase::EaseOut:
+		return 1.0 - (1.0 - u) * (1.0 - u);
+	case TlEase::EaseInOut:
+		return u * u * (3.0 - 2.0 * u); // smoothstep
+	case TlEase::Bezier: {
+		// Cubic Bezier with control points (p1,p1) and (p2,p2): symmetric in x
+		// and y, so y(u) is just the curve evaluated at u -- no root solve.
+		const double a = std::clamp(p1, 0.0, 1.0), b = std::clamp(p2, 0.0, 1.0);
+		const double v = 1.0 - u;
+		return 3.0 * v * v * u * a + 3.0 * v * u * u * b + u * u * u;
+	}
+	}
+	return u;
+}
+
+// One channel's presence at a keyframe. A key does not have to pin every
+// channel: the Position tab can hold a key at 1s that Scale knows nothing
+// about, and each channel interpolates only across the keys that carry it.
+struct TlKeyChannel {
+	bool on = true;
+	TlEase ease = TlEase::EaseInOut;
+	double bez1 = 0.42, bez2 = 0.58; // Bezier handles (TlEase::Bezier only)
+
+	bool operator==(const TlKeyChannel &o) const
+	{
+		return on == o.on && ease == o.ease && bez1 == o.bez1 && bez2 == o.bez2;
+	}
+};
+
 struct TlKeyframe {
 	qint64 tMs = 0;
 	TlTransform tf;
-	enum class Ease { Linear, EaseInOut };
-	Ease ease = Ease::EaseInOut;
+	// Which channels this key pins, and how each leaves it. Defaulting all four
+	// to on keeps a key created the old way (one pose, one ease) behaving
+	// exactly as it did.
+	TlKeyChannel pos, scale, rot, opacity;
+
+	// The channel record for a lane index (0 = position, 1 = scale, 2 = rotation,
+	// 3 = opacity), so the editor can drive all four through one code path.
+	TlKeyChannel &channel(int lane)
+	{
+		switch (lane) {
+		case 1: return scale;
+		case 2: return rot;
+		case 3: return opacity;
+		default: return pos;
+		}
+	}
+	const TlKeyChannel &channel(int lane) const
+	{
+		return const_cast<TlKeyframe *>(this)->channel(lane);
+	}
 
 	bool operator==(const TlKeyframe &o) const
 	{
 		return tMs == o.tMs && tf.posX == o.tf.posX && tf.posY == o.tf.posY &&
 		       tf.scale == o.tf.scale && tf.rotation == o.tf.rotation &&
-		       tf.opacity == o.tf.opacity && ease == o.ease;
+		       tf.opacity == o.tf.opacity && pos == o.pos && scale == o.scale &&
+		       rot == o.rot && opacity == o.opacity;
 	}
 };
+
+// The animatable channels, in the order the keyframe editor shows them.
+enum TlLane { TlLanePos = 0, TlLaneScale = 1, TlLaneRot = 2, TlLaneOpacity = 3 };
+inline constexpr int kTlLaneCount = 4;
+inline const char *tlLaneName(int lane)
+{
+	switch (lane) {
+	case TlLaneScale: return "Scale";
+	case TlLaneRot: return "Rotation";
+	case TlLaneOpacity: return "Opacity";
+	default: return "Position";
+	}
+}
 
 // Styling for a text clip. Rendered by TimelineCompositor with QPainter, so the
 // preview and the exported frames use identical text.
@@ -224,45 +318,124 @@ struct TlClip {
 		if (keys.isEmpty())
 			return baseTransform();
 		const qint64 t = outMs - outStartMs;
-		if (keys.size() == 1 || t <= keys.front().tMs)
-			return keys.front().tf;
-		if (t >= keys.back().tMs)
-			return keys.back().tf;
-		int i = 0;
-		while (i + 1 < keys.size() && keys[i + 1].tMs <= t)
-			++i;
-		const TlKeyframe &a = keys[i];
-		const TlKeyframe &b = keys[i + 1];
-		const qint64 span = std::max<qint64>(1, b.tMs - a.tMs);
-		double u = std::clamp(double(t - a.tMs) / double(span), 0.0, 1.0);
-		if (a.ease == TlKeyframe::Ease::EaseInOut)
-			u = u * u * (3.0 - 2.0 * u); // smoothstep
-		auto mix = [u](double p, double q) { return p + (q - p) * u; };
-		return TlTransform{mix(a.tf.posX, b.tf.posX),   mix(a.tf.posY, b.tf.posY),
-				   mix(a.tf.scale, b.tf.scale), mix(a.tf.rotation, b.tf.rotation),
-				   mix(a.tf.opacity, b.tf.opacity)};
+		TlTransform out = baseTransform();
+
+		// Each channel walks only the keys that actually pin it, so a Position
+		// key at 1s and a Scale key at 3s animate independently instead of one
+		// dragging the other along. Outside a channel's keyed range it holds the
+		// nearest key, as before.
+		auto solve = [&](int lane, double TlTransform::*field) {
+			int first = -1, last = -1;
+			for (int i = 0; i < keys.size(); ++i) {
+				if (!keys[i].channel(lane).on)
+					continue;
+				if (first < 0)
+					first = i;
+				last = i;
+			}
+			if (first < 0)
+				return; // this channel isn't keyed: keep the base pose
+			if (t <= keys[first].tMs) {
+				out.*field = keys[first].tf.*field;
+				return;
+			}
+			if (t >= keys[last].tMs) {
+				out.*field = keys[last].tf.*field;
+				return;
+			}
+			int a = first, b = -1;
+			for (int i = first; i <= last; ++i) {
+				if (!keys[i].channel(lane).on)
+					continue;
+				if (keys[i].tMs <= t)
+					a = i;
+				else {
+					b = i;
+					break;
+				}
+			}
+			if (b < 0) {
+				out.*field = keys[a].tf.*field;
+				return;
+			}
+			const qint64 span = std::max<qint64>(1, keys[b].tMs - keys[a].tMs);
+			const TlKeyChannel &ch = keys[a].channel(lane);
+			const double u = tlEaseAt(ch.ease,
+						  std::clamp(double(t - keys[a].tMs) / double(span),
+							     0.0, 1.0),
+						  ch.bez1, ch.bez2);
+			const double p = keys[a].tf.*field, q = keys[b].tf.*field;
+			out.*field = p + (q - p) * u;
+		};
+		// Position is one channel driving two fields, so X and Y can never
+		// disagree about which keys they are between.
+		solve(TlLanePos, &TlTransform::posX);
+		solve(TlLanePos, &TlTransform::posY);
+		solve(TlLaneScale, &TlTransform::scale);
+		solve(TlLaneRot, &TlTransform::rotation);
+		solve(TlLaneOpacity, &TlTransform::opacity);
+		return out;
+	}
+
+	// Keys that pin `lane`, in time order — what one tab of the keyframe editor
+	// shows.
+	QVector<int> keysOnLane(int lane) const
+	{
+		QVector<int> out;
+		for (int i = 0; i < keys.size(); ++i)
+			if (keys[i].channel(lane).on)
+				out.append(i);
+		return out;
 	}
 
 	// Insert (or replace) a keyframe at an output-time position. The first
 	// keyframe added seeds from the base pose so nothing jumps.
+	// `lanes` is a mask of 1<<TlLane... — which channels the new key pins.
+	// The default pins all of them, which is what the Inspector's one-button
+	// "Key" does and what every existing caller means.
 	void setKeyframeAt(qint64 outMs, const TlTransform &tf,
-			   TlKeyframe::Ease ease = TlKeyframe::Ease::EaseInOut)
+			   TlEase ease = TlEase::EaseInOut, int lanes = 0xF)
 	{
 		const qint64 t = std::clamp<qint64>(outMs - outStartMs, 0, outDurationMs());
 		for (TlKeyframe &k : keys) {
 			if (std::llabs(k.tMs - t) <= 1) { // replace the one at this time
 				k.tf = tf;
+				for (int l = 0; l < kTlLaneCount; ++l)
+					if (lanes & (1 << l))
+						k.channel(l).on = true;
 				return;
 			}
 		}
 		TlKeyframe k;
 		k.tMs = t;
 		k.tf = tf;
-		k.ease = ease;
+		for (int l = 0; l < kTlLaneCount; ++l) {
+			k.channel(l).on = (lanes & (1 << l)) != 0;
+			k.channel(l).ease = ease;
+		}
 		int at = 0;
 		while (at < keys.size() && keys[at].tMs < t)
 			++at;
 		keys.insert(at, k);
+	}
+
+	// Drop a channel from a key, removing the key entirely once it pins nothing.
+	void clearKeyLane(int index, int lane)
+	{
+		if (index < 0 || index >= keys.size())
+			return;
+		keys[index].channel(lane).on = false;
+		for (int l = 0; l < kTlLaneCount; ++l)
+			if (keys[index].channel(l).on)
+				return;
+		keys.remove(index);
+	}
+
+	// Put the keys back in time order (a drag can move one past its neighbour).
+	void sortKeys()
+	{
+		std::stable_sort(keys.begin(), keys.end(),
+				 [](const TlKeyframe &a, const TlKeyframe &b) { return a.tMs < b.tMs; });
 	}
 
 	int keyframeIndexAt(qint64 outMs, qint64 tolMs = 40) const

@@ -1839,6 +1839,8 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	const bool locked = model_.tracks[track].locked;
 	QMenu menu(this);
 	QAction *inspect = menu.addAction(QStringLiteral("Show in inspector"));
+	QAction *keys = menu.addAction(QStringLiteral("Keyframes…"));
+	keys->setEnabled(!locked);
 	menu.addSeparator();
 	QAction *split = menu.addAction(QStringLiteral("Split here"));
 	const TlClip &c = model_.tracks[track].clips[clip];
@@ -1854,6 +1856,14 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	QAction *chosen = menu.exec(globalPos);
 	if (chosen == inspect) {
 		emit inspectClipRequested();
+		return;
+	}
+	if (chosen == keys) {
+		selTrack_ = track;
+		selClip_ = clip;
+		emit selectionChanged(selTrack_, selClip_);
+		update();
+		emit keyframeEditorRequested();
 		return;
 	}
 	if (chosen == split) {

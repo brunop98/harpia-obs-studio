@@ -182,6 +182,8 @@ target_sources(
     editor/timeline/TimelineModel.hpp
     editor/timeline/TimelineView.cpp
     editor/timeline/TimelineView.hpp
+    editor/timeline/KeyframeEditor.cpp
+    editor/timeline/KeyframeEditor.hpp
     editor/timeline/TimelineCompositor.cpp
     editor/timeline/TimelineCompositor.hpp
     editor/timeline/TextStyleJson.hpp

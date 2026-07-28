@@ -52,7 +52,24 @@ inline QJsonObject clipToJson(const TlClip &c)
 			ko[QStringLiteral("scale")] = k.tf.scale;
 			ko[QStringLiteral("rotation")] = k.tf.rotation;
 			ko[QStringLiteral("opacity")] = k.tf.opacity;
-			ko[QStringLiteral("ease")] = k.ease == TlKeyframe::Ease::Linear ? 0 : 1;
+			// Per-channel: which channels this key pins and how each leaves.
+			// "ease" is still written as the old 0/1 flag so a project saved
+			// here can still be opened by an older build.
+			ko[QStringLiteral("ease")] =
+				k.pos.ease == TlEase::Linear ? 0 : 1;
+			QJsonArray chArr;
+			for (int l = 0; l < kTlLaneCount; ++l) {
+				const TlKeyChannel &ch = k.channel(l);
+				QJsonObject cho;
+				cho[QStringLiteral("on")] = ch.on;
+				cho[QStringLiteral("ease")] = int(ch.ease);
+				if (ch.ease == TlEase::Bezier) {
+					cho[QStringLiteral("b1")] = ch.bez1;
+					cho[QStringLiteral("b2")] = ch.bez2;
+				}
+				chArr.append(cho);
+			}
+			ko[QStringLiteral("chan")] = chArr;
 			keyArr.append(ko);
 		}
 		co[QStringLiteral("keys")] = keyArr;
@@ -119,8 +136,24 @@ inline TlClip clipFromJson(const QJsonObject &co)
 		k.tf.scale = ko.value(QStringLiteral("scale")).toDouble(1.0);
 		k.tf.rotation = ko.value(QStringLiteral("rotation")).toDouble(0.0);
 		k.tf.opacity = ko.value(QStringLiteral("opacity")).toDouble(1.0);
-		k.ease = ko.value(QStringLiteral("ease")).toInt(1) == 0 ? TlKeyframe::Ease::Linear
-									: TlKeyframe::Ease::EaseInOut;
+		// A project written before per-channel keys has only the old 0/1 flag:
+		// every channel is pinned by every key, which is exactly what it meant.
+		const TlEase legacy = ko.value(QStringLiteral("ease")).toInt(1) == 0
+					      ? TlEase::Linear
+					      : TlEase::EaseInOut;
+		for (int l = 0; l < kTlLaneCount; ++l) {
+			k.channel(l).on = true;
+			k.channel(l).ease = legacy;
+		}
+		const QJsonArray chArr = ko.value(QStringLiteral("chan")).toArray();
+		for (int l = 0; l < kTlLaneCount && l < chArr.size(); ++l) {
+			const QJsonObject cho = chArr[l].toObject();
+			TlKeyChannel &ch = k.channel(l);
+			ch.on = cho.value(QStringLiteral("on")).toBool(true);
+			ch.ease = tlEaseFromInt(cho.value(QStringLiteral("ease")).toInt(int(legacy)));
+			ch.bez1 = std::clamp(cho.value(QStringLiteral("b1")).toDouble(0.42), 0.0, 1.0);
+			ch.bez2 = std::clamp(cho.value(QStringLiteral("b2")).toDouble(0.58), 0.0, 1.0);
+		}
 		c.keys.append(k);
 	}
 	// Scripts became a stack; projects written before that carry a single

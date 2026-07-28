@@ -92,6 +92,7 @@ class ClipExporter;
 class ThumbnailCache;
 class ShaderRenderer;
 class TimelineView;
+class KeyframeEditor;
 class TransformEvaluator;
 class AudioPreview;
 
@@ -181,6 +182,12 @@ private:
 	// the count label. Callers keep the slider + spin box in sync.
 	void applySpeed(double value);
 	void syncSpeedControls(double value); // set slider + spin without re-applying
+
+	// The floating keyframe editor, created the first time it is asked for and
+	// then kept, so it remembers its size and place.
+	KeyframeEditor *keyEditor_ = nullptr;
+	void openKeyframeEditor();
+	void refreshKeyframeEditor(); // follow the selection / playhead
 
 	// Transform rows (Zoom / Pos X / Pos Y / Rotation / Opacity) in order, so a
 	// script running on the clip can mark the ones it drives.

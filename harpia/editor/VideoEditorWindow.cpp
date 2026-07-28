@@ -2,6 +2,7 @@
 
 #include "../ui/UiIcons.hpp"
 #include "KeyList.hpp"
+#include "ParamSlider.hpp"
 #include "TimeText.hpp"
 
 #include "AudioRecorder.hpp"
@@ -3059,16 +3060,15 @@ void VideoEditorWindow::rebuildEffectParams()
 	while (fxParamForm_->rowCount() > 0)
 		fxParamForm_->removeRow(0);
 	for (const FxParamDef &d : fxParams(c->fx.type)) {
-		auto *sp = new QDoubleSpinBox(fxParamBox_);
-		sp->setRange(d.lo, d.hi);
-		sp->setDecimals(3);
-		sp->setSingleStep((d.hi - d.lo) / 40.0);
-		sp->setKeyboardTracking(false);
+		// Every effect parameter declares a range, which is the case a slider
+		// is for: you sweep an amount and watch the picture rather than
+		// guessing a number. The spin box stays alongside for exact values.
+		auto *sp = new ParamSlider(d.lo, d.hi, 3, fxParamBox_);
 		fxParamForm_->addRow(QString::fromLatin1(d.label), sp);
 		const QString key = QString::fromLatin1(d.key);
 		fxParamSpins_.append(sp);
 		fxParamKeys_.append(key);
-		connect(sp, &QDoubleSpinBox::valueChanged, this, [this, key](double val) {
+		connect(sp, &ParamSlider::valueChanged, this, [this, key](double val) {
 			if (syncingFx_)
 				return;
 			editSelectedClip([key, val](TlClip &cl) { cl.fx.params[key] = val; });

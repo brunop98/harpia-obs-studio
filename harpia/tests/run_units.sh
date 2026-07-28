@@ -28,7 +28,14 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/editor/timeline/Spotlight.cpp" "$H/ui/UiIcons.cpp" \
 	"$WORK/moc_KeyList.cpp" -o "$WORK/keylist_test" $LF
 
+# The slider+spin pair behind every effect parameter.
+"$MOC" -I"$H" "$H/editor/ParamSlider.hpp" -o "$WORK/moc_ParamSlider.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/paramslider_test.cpp" "$H/editor/ParamSlider.cpp" \
+	"$WORK/moc_ParamSlider.cpp" -o "$WORK/paramslider_test" $LF
+
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/paramslider_test" || rc=1
 exit $rc

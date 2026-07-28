@@ -142,6 +142,8 @@ target_sources(
     # Built-in trim / crop / export editor (isolated module).
     editor/KeyList.cpp
     editor/KeyList.hpp
+    editor/ParamSlider.cpp
+    editor/ParamSlider.hpp
     editor/FrameSeeker.cpp
     editor/FrameSeeker.hpp
     editor/ClipExporter.cpp

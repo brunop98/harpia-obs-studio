@@ -99,6 +99,7 @@ class ShortcutRegistry;
 class ShortcutPanel;
 class TransformEvaluator;
 class KeyList;
+class ParamSlider;
 class AudioPreview;
 
 // One video the editor can cut from. The first source is the file the editor
@@ -303,7 +304,7 @@ private:
 	QCheckBox *fxEnabled_ = nullptr;
 	QWidget *fxParamBox_ = nullptr;
 	QFormLayout *fxParamForm_ = nullptr;
-	QVector<QDoubleSpinBox *> fxParamSpins_;
+	QVector<ParamSlider *> fxParamSpins_; // slider + spin box per parameter
 	QStringList fxParamKeys_;
 	int fxParamsForType_ = -1;
 	KeyList *fxKeys_ = nullptr;    // the selected effect clip's parameter keys

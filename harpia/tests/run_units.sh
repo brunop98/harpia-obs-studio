@@ -21,6 +21,14 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/shortcut_dupkey_test.cpp" "$H/editor/ShortcutRegistry.cpp" \
 	"$WORK/moc_ShortcutRegistry.cpp" -o "$WORK/shortcut_dupkey_test" $LF
 
+# The keyframe list, and the add/remove rules under it.
+"$MOC" -I"$H" "$H/editor/KeyList.hpp" -o "$WORK/moc_KeyList.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/keylist_test.cpp" "$H/editor/KeyList.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/ui/UiIcons.cpp" \
+	"$WORK/moc_KeyList.cpp" -o "$WORK/keylist_test" $LF
+
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
 exit $rc

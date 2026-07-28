@@ -453,6 +453,39 @@ QMap<QString, double> FxSpec::paramsAt(qint64 tMs) const
 	return out;
 }
 
+void FxSpec::setKeyAt(qint64 tMs, const QMap<QString, double> &values)
+{
+	for (FxKey &k : keys)
+		if (k.tMs == tMs) {
+			k.params = values;
+			return;
+		}
+	FxKey k;
+	k.tMs = tMs;
+	k.params = values;
+	keys.append(k);
+	std::sort(keys.begin(), keys.end(),
+		  [](const FxKey &a, const FxKey &b) { return a.tMs < b.tMs; });
+}
+
+void FxSpec::removeKeyAt(qint64 tMs)
+{
+	for (int i = 0; i < keys.size(); ++i) {
+		if (keys[i].tMs != tMs)
+			continue;
+		keys.remove(i);
+		// One key left is a static setting written in an awkward place: fold it
+		// back into params so the Inspector's spin boxes drive it again.
+		if (keys.size() == 1) {
+			for (auto it = keys.front().params.constBegin();
+			     it != keys.front().params.constEnd(); ++it)
+				params[it.key()] = it.value();
+			keys.clear();
+		}
+		return;
+	}
+}
+
 bool Effects::isNoOp(const FxSpec &fx, const QMap<QString, double> &p)
 {
 	if (!fx.enabled)

@@ -26,6 +26,8 @@
 #include <QString>
 #include <QVector>
 
+#include <algorithm>
+
 namespace harpia {
 
 enum class SpotShape { Rect, RoundRect, Circle, Ellipse };
@@ -112,6 +114,46 @@ struct SpotMask {
 		r.radius = mix(a.pose.radius, b.pose.radius);
 		r.visible = mix(a.pose.visible, b.pose.visible);
 		return r;
+	}
+
+	// Record the pose the mask HAS at `outMs` as a key there, replacing one
+	// already at that time. Taking poseAt() rather than `pose` is what makes
+	// "nudge it, then press Add key" do what it looks like on an already
+	// animated mask: the value you can see is the value that gets stored.
+	void setKeyAt(qint64 outMs)
+	{
+		const SpotPose p = poseAt(outMs);
+		for (SpotKey &k : keys)
+			if (k.tMs == outMs) {
+				k.pose = p;
+				return;
+			}
+		SpotKey k;
+		k.tMs = outMs;
+		k.pose = p;
+		keys.append(k);
+		std::sort(keys.begin(), keys.end(),
+			  [](const SpotKey &a, const SpotKey &b) { return a.tMs < b.tMs; });
+	}
+
+	// Remove the key at `outMs`. A mask left with ONE key is not animated — it
+	// is a static pose written in an awkward place — so the survivor is folded
+	// back into `pose` and the list cleared. Without that the panel's number
+	// fields stay inert forever, overwritten by a single key on every frame.
+	void removeKeyAt(qint64 outMs)
+	{
+		for (int i = 0; i < keys.size(); ++i) {
+			if (keys[i].tMs != outMs)
+				continue;
+			keys.remove(i);
+			if (keys.size() == 1) {
+				pose = keys.front().pose;
+				keys.clear();
+			} else if (keys.isEmpty()) {
+				pose = poseAt(outMs); // nothing left; keep what was showing
+			}
+			return;
+		}
 	}
 
 	bool operator==(const SpotMask &o) const

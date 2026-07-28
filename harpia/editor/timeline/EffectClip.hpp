@@ -96,6 +96,12 @@ struct FxSpec {
 	// static value, so adding a parameter later cannot break an old project.
 	QMap<QString, double> paramsAt(qint64 tMs) const;
 
+	// Record `values` as a key at `tMs` (CLIP time), replacing one already
+	// there. Same rule as a mask: one key is a static setting, not animation,
+	// so removing down to one folds it back into `params`.
+	void setKeyAt(qint64 tMs, const QMap<QString, double> &values);
+	void removeKeyAt(qint64 tMs);
+
 	bool operator==(const FxSpec &o) const
 	{
 		return type == o.type && name == o.name && enabled == o.enabled &&

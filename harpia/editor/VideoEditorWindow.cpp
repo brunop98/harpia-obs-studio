@@ -2988,30 +2988,11 @@ void VideoEditorWindow::buildEffectInspector(QVBoxLayout *into)
 		if (!sel)
 			return;
 		const qint64 t = timelinePlayheadMs() - sel->outStartMs;
-		editSelectedClip([t](TlClip &c) {
-			// Keys are stored in CLIP time, so moving the clip carries its
-			// animation with it.
-			for (FxKey &k : c.fx.keys)
-				if (k.tMs == t) {
-					k.params = c.fx.params;
-					return;
-				}
-			FxKey k;
-			k.tMs = t;
-			k.params = c.fx.params;
-			c.fx.keys.append(k);
-			std::sort(c.fx.keys.begin(), c.fx.keys.end(),
-				  [](const FxKey &a, const FxKey &b) { return a.tMs < b.tMs; });
-		});
+		// Clip time, so moving the clip carries its animation with it.
+		editSelectedClip([t](TlClip &c) { c.fx.setKeyAt(t, c.fx.params); });
 	});
 	connect(fxKeys_, &KeyList::removeRequested, this, [this](qint64 clipMs) {
-		editSelectedClip([clipMs](TlClip &c) {
-			for (int i = 0; i < c.fx.keys.size(); ++i)
-				if (c.fx.keys[i].tMs == clipMs) {
-					c.fx.keys.remove(i);
-					return;
-				}
-		});
+		editSelectedClip([clipMs](TlClip &c) { c.fx.removeKeyAt(clipMs); });
 	});
 	connect(fxKeys_, &KeyList::jumpRequested, this, [this](qint64 clipMs) {
 		const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
@@ -3321,45 +3302,15 @@ void VideoEditorWindow::buildSpotlightInspector(QVBoxLayout *into)
 		const int r = spotList_ ? spotList_->currentRow() : -1;
 		const qint64 now = timelinePlayheadMs();
 		editSpotlight([r, now](SpotlightSpec &sp) {
-			if (r < 0 || r >= sp.masks.size())
-				return;
-			SpotMask &m = sp.masks[r];
-			// The pose to record is whatever is on screen now, which for an
-			// already-animated mask is the interpolated one.
-			const SpotPose pose = m.poseAt(now);
-			for (SpotKey &k : m.keys)
-				if (k.tMs == now) {
-					k.pose = pose;
-					return;
-				}
-			SpotKey k;
-			k.tMs = now;
-			k.pose = pose;
-			m.keys.append(k);
-			std::sort(m.keys.begin(), m.keys.end(),
-				  [](const SpotKey &a, const SpotKey &b) { return a.tMs < b.tMs; });
+			if (r >= 0 && r < sp.masks.size())
+				sp.masks[r].setKeyAt(now);
 		});
 	});
 	connect(spotKeys_, &KeyList::removeRequested, this, [this](qint64 ms) {
 		const int r = spotList_ ? spotList_->currentRow() : -1;
 		editSpotlight([r, ms](SpotlightSpec &sp) {
-			if (r < 0 || r >= sp.masks.size())
-				return;
-			SpotMask &m = sp.masks[r];
-			for (int i = 0; i < m.keys.size(); ++i)
-				if (m.keys[i].tMs == ms) {
-					// Down to one key is a static pose, not an
-					// animation: fold it back into the mask so the
-					// panel's number fields drive it again.
-					if (m.keys.size() == 2)
-						m.pose = m.keys[i == 0 ? 1 : 0].pose;
-					m.keys.remove(i);
-					if (m.keys.size() == 1) {
-						m.pose = m.keys.front().pose;
-						m.keys.clear();
-					}
-					return;
-				}
+			if (r >= 0 && r < sp.masks.size())
+				sp.masks[r].removeKeyAt(ms);
 		});
 	});
 	connect(spotKeys_, &KeyList::jumpRequested, this, [this](qint64 ms) {
@@ -3383,12 +3334,35 @@ void VideoEditorWindow::buildSpotlightInspector(QVBoxLayout *into)
 		p.h = spotH_->value();
 		p.rotation = spotRot_->value();
 		p.radius = spotRadius_->value();
-		editSpotlight([r, p](SpotlightSpec &s) {
+		const qint64 now = timelinePlayheadMs();
+		editSpotlight([r, p, now](SpotlightSpec &s) {
+			SpotMask &m = s.masks[r];
 			// `visible` is only reachable from a keyframe, so the pose
 			// panel must not stamp over whatever it currently holds.
 			SpotPose q = p;
-			q.visible = s.masks[r].pose.visible;
-			s.masks[r].pose = q;
+			if (m.keys.isEmpty()) {
+				q.visible = m.pose.visible;
+				m.pose = q;
+				return;
+			}
+			// Once the mask is animated, `pose` is dead weight — poseAt()
+			// answers from the keys and never looks at it. Writing there
+			// would make typing a number do nothing at all, which is what it
+			// used to do. Edit the key at the playhead instead, adding one if
+			// there is none, so the fields stay live.
+			for (SpotKey &k : m.keys)
+				if (k.tMs == now) {
+					q.visible = k.pose.visible;
+					k.pose = q;
+					return;
+				}
+			SpotKey k;
+			k.tMs = now;
+			k.pose = q;
+			k.pose.visible = m.poseAt(now).visible;
+			m.keys.append(k);
+			std::sort(m.keys.begin(), m.keys.end(),
+				  [](const SpotKey &a, const SpotKey &b) { return a.tMs < b.tMs; });
 		});
 	};
 	for (QDoubleSpinBox *sp : {spotX_, spotY_, spotW_, spotH_, spotRot_, spotRadius_})
@@ -3530,10 +3504,11 @@ void VideoEditorWindow::syncSpotlightInspector()
 		// the numbers directly would be overwritten on the next frame.
 		const bool animated = !m.keys.isEmpty();
 		for (QDoubleSpinBox *sb : {spotX_, spotY_, spotW_, spotH_, spotRot_})
-			sb->setToolTip(animated ? QStringLiteral(
-							  "Animated: edit in the preview, then "
-							  "press Add key to record it here.")
-						: QString());
+			sb->setToolTip(animated
+					       ? QStringLiteral("Animated: this edits the key at "
+								"the playhead, adding one if there "
+								"is none.")
+					       : QString());
 	}
 	if (spotKeys_) {
 		QVector<qint64> times;

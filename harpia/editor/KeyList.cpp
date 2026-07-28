@@ -80,14 +80,16 @@ KeyList::KeyList(const QString &what, QWidget *parent) : QWidget(parent)
 
 void KeyList::setTimes(const QVector<qint64> &ms, qint64 playheadMs)
 {
+	// Keep the selection on the same TIME across a refresh, not the same row:
+	// adding an earlier key shifts every row down. Read it BEFORE times_ is
+	// replaced — indexing the new list with the old row is how this went wrong
+	// the first time, and it looks right until a key is added above.
+	const int was = list_->currentRow();
+	const qint64 wasTime = (was >= 0 && was < times_.size()) ? times_[was] : -1;
+
 	times_ = ms;
 	std::sort(times_.begin(), times_.end());
 	playhead_ = playheadMs;
-
-	// Keep the selection on the same TIME across a refresh, not the same row:
-	// adding an earlier key shifts every row down.
-	const int was = list_->currentRow();
-	const qint64 wasTime = (was >= 0 && was < times_.size()) ? times_[was] : -1;
 
 	const QSignalBlocker b(list_);
 	list_->clear();

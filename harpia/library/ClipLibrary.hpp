@@ -8,6 +8,12 @@
 
 namespace harpia {
 
+// Human "time ago" for any timestamp, e.g. "5 minutes ago". A free function so
+// anything that needs the phrasing (the library rows, the unsaved-changes
+// prompt) says it the same way.
+QString relativeAge(const QDateTime &when);
+
+
 // Metadata for one recording that exists on disk.
 struct ClipInfo {
 	QString filePath;

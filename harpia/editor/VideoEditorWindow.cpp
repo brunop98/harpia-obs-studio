@@ -64,6 +64,7 @@
 #include <QCryptographicHash>
 #include <QSet>
 #include <QSettings>
+#include <QStyle>
 #include <QShortcut>
 #include <QSlider>
 #include <QSplitter>
@@ -3844,27 +3845,158 @@ bool VideoEditorWindow::hasUnsavedEdits() const
 	return false;
 }
 
+QString VideoEditorWindow::autosaveProjectPath() const
+{
+	if (projectPath_.isEmpty())
+		return {};
+	const QFileInfo fi(projectPath_);
+	return fi.absolutePath() + QLatin1Char('/') + fi.completeBaseName() +
+	       QStringLiteral("_autosave.harpiaproj");
+}
+
+// The Unsaved Changes prompt. Three ways out, as in every editor: save and
+// then close, close and lose the changes, or go back to work.
+//
+// Hand-built rather than a QMessageBox: QMessageBox lays its buttons out by
+// role, in an order that differs per platform, and it would not keep
+// "Don't Save | Cancel | Save Project". Styling one button inside one also
+// made "Don't Save" read as disabled rather than destructive.
+//
+// Save Project is the default, so Enter cannot destroy anything; Esc is Cancel.
+// A failed save keeps the dialog up with the reason rather than closing and
+// silently losing the project, which is the whole point of the prompt.
+bool VideoEditorWindow::confirmDiscardOnClose()
+{
+	if (!hasUnsavedEdits())
+		return true; // nothing to lose: no prompt at all
+
+	stopPlayback();
+
+	// What the user needs in order to decide: which project, how much work is
+	// at stake, and whether anything was already written down.
+	QStringList facts;
+	facts << QStringLiteral("<span style='color:#e8eaed;'><b>%1</b></span>")
+			 .arg(projectPath_.isEmpty() ? QStringLiteral("Untitled project")
+						     : QFileInfo(projectPath_).fileName());
+	if (projectPath_.isEmpty()) {
+		facts << QStringLiteral("Not saved yet.");
+	} else {
+		const QDateTime saved = QFileInfo(projectPath_).lastModified();
+		facts << (saved.isValid() ? QStringLiteral("Last saved %1.").arg(relativeAge(saved))
+					  : QStringLiteral("Last saved time unknown."));
+	}
+	const QString autoPath = autosaveProjectPath();
+	if (!autoPath.isEmpty() && QFileInfo::exists(autoPath))
+		facts << QStringLiteral("An autosave from %1 is on disk, so recent work may be "
+					"recoverable from <i>%2</i>.")
+				 .arg(relativeAge(QFileInfo(autoPath).lastModified()),
+				      QFileInfo(autoPath).fileName());
+
+	QDialog dlg(this);
+	dlg.setWindowTitle(QStringLiteral("Unsaved Changes"));
+	dlg.setModal(true);
+	// Wide enough that the headline is one line: a wrapped warning reads as an
+	// afterthought.
+	dlg.setMinimumWidth(470);
+
+	auto *outer = new QVBoxLayout(&dlg);
+	outer->setContentsMargins(20, 18, 20, 16);
+	outer->setSpacing(16);
+
+	auto *top = new QHBoxLayout;
+	top->setSpacing(16);
+	auto *icon = new QLabel(&dlg);
+	// A warning, not an error: nothing has gone wrong, a choice is being asked.
+	icon->setPixmap(dlg.style()->standardIcon(QStyle::SP_MessageBoxWarning).pixmap(40, 40));
+	icon->setAlignment(Qt::AlignTop);
+	top->addWidget(icon, 0, Qt::AlignTop);
+
+	auto *col = new QVBoxLayout;
+	col->setSpacing(8);
+	auto *head = new QLabel(QStringLiteral("You have unsaved changes to this project."), &dlg);
+	head->setStyleSheet(QStringLiteral("font-size:14px; font-weight:bold; color:#e8eaed;"));
+	head->setWordWrap(true);
+	col->addWidget(head);
+	auto *body = new QLabel(
+		QStringLiteral("If you close the project now, all changes made since the last "
+			       "save will be permanently lost."),
+		&dlg);
+	body->setWordWrap(true);
+	col->addWidget(body);
+	auto *info = new QLabel(facts.join(QStringLiteral("<br>")), &dlg);
+	info->setTextFormat(Qt::RichText);
+	info->setWordWrap(true);
+	info->setStyleSheet(QStringLiteral("color:#9a9fa8; padding:8px 10px; background:#25272b; "
+					   "border-radius:5px;"));
+	col->addWidget(info);
+	auto *errLabel = new QLabel(&dlg);
+	errLabel->setWordWrap(true);
+	errLabel->setStyleSheet(QStringLiteral("color:#e5484d;"));
+	errLabel->setVisible(false);
+	col->addWidget(errLabel);
+	top->addLayout(col, 1);
+	outer->addLayout(top);
+
+	// Left-to-right exactly as asked, and laid out by hand so it stays that way
+	// on every platform.
+	auto *row = new QHBoxLayout;
+	row->setSpacing(8);
+	auto *dontBtn = new QPushButton(QStringLiteral("Don't Save"), &dlg);
+	dontBtn->setStyleSheet(QStringLiteral(
+		"QPushButton { color:#ff6b6f; border:1px solid #6b2f31; border-radius:4px; "
+		"padding:6px 16px; background:#2b2426; } "
+		"QPushButton:hover { background:#3a2c2e; }"));
+	row->addWidget(dontBtn);
+	row->addStretch(1);
+	auto *cancelBtn = new QPushButton(QStringLiteral("Cancel"), &dlg);
+	cancelBtn->setStyleSheet(QStringLiteral("padding:6px 16px;"));
+	row->addWidget(cancelBtn);
+	auto *saveBtn = new QPushButton(QStringLiteral("Save Project"), &dlg);
+	saveBtn->setDefault(true);
+	saveBtn->setAutoDefault(true);
+	saveBtn->setStyleSheet(QStringLiteral(
+		"QPushButton { font-weight:bold; color:#ffffff; border:1px solid #1a7fb5; "
+		"border-radius:4px; padding:6px 18px; background:#1c88c4; } "
+		"QPushButton:hover { background:#2596d6; }"));
+	row->addWidget(saveBtn);
+	outer->addLayout(row);
+
+	// 0 = cancel (also what Esc and the title-bar X give), 1 = discard, 2 = save.
+	connect(cancelBtn, &QPushButton::clicked, &dlg, [&dlg]() { dlg.done(0); });
+	connect(dontBtn, &QPushButton::clicked, &dlg, [&dlg]() { dlg.done(1); });
+	connect(saveBtn, &QPushButton::clicked, &dlg, [&dlg]() { dlg.done(2); });
+	saveBtn->setFocus();
+
+	// Looped, so a failed save leaves the dialog open with the reason on it.
+	for (;;) {
+		const int r = dlg.exec();
+		if (r == 1)
+			return true; // close now, changes discarded
+		if (r != 2)
+			return false; // Cancel / Esc / X: back to the editor, nothing lost
+		// Save Project: close only once it has actually worked.
+		if (projectPath_.isEmpty()) {
+			onSaveProjectAs();
+			if (projectPath_.isEmpty())
+				continue; // the file dialog was cancelled: ask again
+			return true;  // Save As has already written the file
+		}
+		const QString err = saveProjectTo(projectPath_, /*quiet=*/true);
+		if (err.isEmpty()) {
+			refreshProjectInspector();
+			return true;
+		}
+		errLabel->setText(QStringLiteral("Could not save: %1").arg(err));
+		errLabel->setVisible(true);
+	}
+}
+
 void VideoEditorWindow::reject()
 {
 	// Exports save to a NEW file, so "unsaved" means any edit that would be
 	// lost by closing now. A successful export closes via accept() instead.
-	if (hasUnsavedEdits()) {
-		stopPlayback();
-		QMessageBox box(this);
-		box.setWindowTitle(QStringLiteral("Discard changes?"));
-		box.setIcon(QMessageBox::Warning);
-		box.setText(QStringLiteral("You have unsaved edits in this video."));
-		box.setInformativeText(
-			QStringLiteral("Closing the window will discard everything. Use Save… to export first."));
-		QPushButton *closeBtn =
-			box.addButton(QStringLiteral("Close window"), QMessageBox::DestructiveRole);
-		QPushButton *cancelBtn =
-			box.addButton(QStringLiteral("Cancel"), QMessageBox::RejectRole);
-		box.setDefaultButton(cancelBtn);
-		box.exec();
-		if (box.clickedButton() != closeBtn)
-			return; // keep editing
-	}
+	if (!confirmDiscardOnClose())
+		return; // keep editing
 	QDialog::reject();
 }
 

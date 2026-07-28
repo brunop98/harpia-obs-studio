@@ -200,6 +200,10 @@ private:
 	void requestPreview(int sourceId, qint64 ms);
 	void renderPendingPreview();
 
+	// The Unsaved Changes prompt. Returns true when the caller may close.
+	bool confirmDiscardOnClose();
+	QString autosaveProjectPath() const; // "" when there is no project path yet
+
 	// Undo/redo history (snapshot-based, coalesced via histTimer_).
 	EditorSnapshot snapshot() const;
 	void restoreSnapshot(const EditorSnapshot &s);

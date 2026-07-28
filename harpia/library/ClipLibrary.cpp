@@ -11,6 +11,11 @@ namespace harpia {
 
 QString ClipInfo::relativeAge() const
 {
+	return harpia::relativeAge(modified);
+}
+
+QString relativeAge(const QDateTime &modified)
+{
 	if (!modified.isValid())
 		return QStringLiteral("unknown");
 

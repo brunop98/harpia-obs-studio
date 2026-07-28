@@ -111,10 +111,11 @@ struct FxSpec {
 
 class Effects {
 public:
-	// Grade `img` in place. `tMs` is the position INSIDE the effect clip (so a
-	// keyframe at 0 is the clip's start) and `outMs` is the timeline position,
-	// which the Spotlight's own masks are keyed against.
-	static void apply(QImage &img, const FxSpec &fx, qint64 tMs, qint64 outMs);
+	// Grade `img` in place. `tMs` is the position INSIDE the effect clip, so a
+	// keyframe at 0 is the clip's start — everything time-varying here, the
+	// parameters and the Spotlight's masks alike, is keyed against it, and so
+	// moving a clip carries its animation along.
+	static void apply(QImage &img, const FxSpec &fx, qint64 tMs);
 
 	// True when this effect at these parameters would not change a single pixel
 	// — the compositor skips it rather than paying for a no-op pass.

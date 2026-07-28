@@ -293,7 +293,7 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 			// The painter has to be closed before the pixels are touched
 			// directly, and reopened for whatever is drawn on top.
 			p.end();
-			Effects::apply(out, ec.fx, outMs - ec.outStartMs, outMs);
+			Effects::apply(out, ec.fx, outMs - ec.outStartMs);
 			p.begin(&out);
 			p.setRenderHint(QPainter::Antialiasing, true);
 			continue;

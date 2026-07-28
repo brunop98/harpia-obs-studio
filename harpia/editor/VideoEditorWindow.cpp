@@ -3080,7 +3080,8 @@ void VideoEditorWindow::rebuildEffectParams()
 	// Spotlight panel edits those.
 	if (c->fx.type == FxType::InverseSelection) {
 		auto *note = new QLabel(
-			QStringLiteral("Edit the areas in the Inverse Selection section below."),
+			QStringLiteral("This clip's areas are edited in the Inverse Selection "
+				       "section below, which follows the selection."),
 			fxParamBox_);
 		note->setWordWrap(true);
 		note->setStyleSheet(QStringLiteral("color:#7f858e;"));
@@ -3126,17 +3127,22 @@ void VideoEditorWindow::buildSpotlightInspector(QVBoxLayout *into)
 	v->setContentsMargins(0, 6, 0, 0);
 	v->setSpacing(5);
 
-	auto *hdr = new QLabel(QStringLiteral("Inverse Selection"), spotBox_);
-	hdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
-	v->addWidget(hdr);
+	// Both of these are rewritten by syncSpotlightInspector to name whichever
+	// of the two subjects is currently being edited.
+	spotHdr_ = new QLabel(QStringLiteral("Inverse Selection"), spotBox_);
+	spotHdr_->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
+	v->addWidget(spotHdr_);
 	auto *hint = new QLabel(
 		QStringLiteral("Dim everything except the chosen areas — the tutorial "
-			       "spotlight. Applies to the whole composition, and renders "
-			       "identically in the export."),
+			       "spotlight. Renders identically in the export."),
 		spotBox_);
 	hint->setWordWrap(true);
 	hint->setStyleSheet(QStringLiteral("color:#7f858e;"));
 	v->addWidget(hint);
+	spotScopeHint_ = new QLabel(spotBox_);
+	spotScopeHint_->setWordWrap(true);
+	spotScopeHint_->setStyleSheet(QStringLiteral("color:#7f858e;"));
+	v->addWidget(spotScopeHint_);
 
 	spotOn_ = new QCheckBox(QStringLiteral("Enabled"), spotBox_);
 	v->addWidget(spotOn_);
@@ -3374,12 +3380,29 @@ void VideoEditorWindow::buildSpotlightInspector(QVBoxLayout *into)
 	syncSpotlightInspector();
 }
 
+// An Inverse Selection effect clip carries its own areas. When one is selected
+// the panel edits THOSE; otherwise it edits the project-wide spec.
+bool VideoEditorWindow::spotTargetIsClip() const
+{
+	if (!fullEdit() || !timelineView_)
+		return false;
+	const TlClip *c = timelineView_->selectedClipPtr();
+	return c && c->type == TlClip::Type::Effect && c->fx.type == FxType::InverseSelection;
+}
+
+const SpotlightSpec &VideoEditorWindow::spotTarget() const
+{
+	if (spotTargetIsClip())
+		return timelineView_->selectedClipPtr()->fx.spot;
+	return timelineView_->model().spotlight;
+}
+
 int VideoEditorWindow::selectedMaskRow() const
 {
 	if (!spotList_ || !timelineView_)
 		return -1;
 	const int r = spotList_->currentRow();
-	return (r >= 0 && r < timelineView_->model().spotlight.masks.size()) ? r : -1;
+	return (r >= 0 && r < spotTarget().masks.size()) ? r : -1;
 }
 
 // Every spotlight change goes through here, so all of them repaint the preview
@@ -3396,6 +3419,14 @@ void VideoEditorWindow::editSpotlight(const std::function<void(SpotlightSpec &)>
 {
 	if (!timelineView_)
 		return;
+	if (spotTargetIsClip()) {
+		// editSelectedClip already repaints and snapshots — and its snapshot is
+		// debounced, which is exactly what `commit` is asking for during a drag,
+		// so the flag has nothing left to decide on this branch.
+		editSelectedClip([&fn](TlClip &c) { fn(c.fx.spot); });
+		syncSpotlightInspector();
+		return;
+	}
 	TimelineModel m = timelineView_->model();
 	fn(m.spotlight);
 	timelineView_->setModel(m);
@@ -3447,9 +3478,27 @@ void VideoEditorWindow::syncSpotlightInspector()
 	spotBox_->setVisible(fullEdit());
 	if (!fullEdit())
 		return;
-	const SpotlightSpec &s = timelineView_->model().spotlight;
+	const bool onClip = spotTargetIsClip();
+	const SpotlightSpec &s = spotTarget();
 	const bool wasSyncing = syncingSpot_;
 	syncingSpot_ = true;
+
+	// Say which of the two this panel is pointed at. Without it the controls
+	// look identical in both cases and there is no way to tell whether you are
+	// about to dim the whole project or just one clip's stretch of it.
+	if (spotHdr_)
+		spotHdr_->setText(onClip ? QStringLiteral("Inverse Selection — this clip")
+					 : QStringLiteral("Inverse Selection — whole project"));
+	if (spotScopeHint_)
+		spotScopeHint_->setText(
+			onClip ? QStringLiteral("These areas belong to the selected effect clip: "
+						"they last as long as it does and dim only the "
+						"tracks below it. Keyframes are in clip time, so "
+						"moving the clip takes the animation with it.")
+			       : QStringLiteral("Dims the whole composition for the whole "
+						"project. For a highlight that comes and goes, "
+						"add an Inverse Selection effect clip instead and "
+						"select it — this panel will edit that clip."));
 
 	spotOn_->setChecked(s.enabled);
 	spotInvert_->setChecked(s.invert);
@@ -5150,6 +5199,9 @@ void VideoEditorWindow::revealInspector()
 void VideoEditorWindow::updateInspector()
 {
 	syncClipInspector(); // Full-editing per-clip controls (hidden in other modes)
+	// The Spotlight panel's subject depends on what is selected, so it has to
+	// re-point on every selection change, not only when it is itself edited.
+	syncSpotlightInspector();
 	if (!inspector_)
 		return;
 	auto setRange = [this](qint64 inMs, qint64 outMs, double sp, qint64 outLen) {

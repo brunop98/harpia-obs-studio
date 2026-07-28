@@ -562,10 +562,17 @@ private:
 	QPushButton *trRemove_ = nullptr;
 	bool syncingTr_ = false;
 
-	// Inverse Selection (Spotlight): a project-level effect, so its panel sits
-	// beside the project section rather than the clip one.
+	// Inverse Selection (Spotlight). One panel, two possible subjects: the
+	// project-wide spec that dims the whole composition for its whole length,
+	// or — when an Inverse Selection effect clip is selected — that clip's own
+	// areas, which last only as long as the clip and cover only the tracks
+	// under it. Which one is in play is decided in exactly one place,
+	// spotTargetIsClip(), so the panel, the preview handles and the writes can
+	// never end up pointed at different objects.
 	void buildSpotlightInspector(QVBoxLayout *into);
 	void syncSpotlightInspector();
+	bool spotTargetIsClip() const;
+	const SpotlightSpec &spotTarget() const;
 	void editSpotlight(const std::function<void(SpotlightSpec &)> &fn);
 	void editSpotlight(const std::function<void(SpotlightSpec &)> &fn, bool commit);
 	// A mask was dragged in the preview: write the pose (as a keyframe when the
@@ -573,6 +580,8 @@ private:
 	void onSpotlightPoseDragged(int index, const SpotPose &pose);
 	int selectedMaskRow() const;
 	QWidget *spotBox_ = nullptr;
+	QLabel *spotHdr_ = nullptr;       // names the subject: this clip, or the project
+	QLabel *spotScopeHint_ = nullptr; // and explains what that means
 	QCheckBox *spotOn_ = nullptr;
 	QCheckBox *spotInvert_ = nullptr;
 	QListWidget *spotList_ = nullptr;

@@ -521,7 +521,7 @@ bool Effects::isNoOp(const FxSpec &fx, const QMap<QString, double> &p)
 	return false;
 }
 
-void Effects::apply(QImage &img, const FxSpec &fx, qint64 tMs, qint64 outMs)
+void Effects::apply(QImage &img, const FxSpec &fx, qint64 tMs)
 {
 	if (img.isNull())
 		return;
@@ -639,7 +639,10 @@ void Effects::apply(QImage &img, const FxSpec &fx, qint64 tMs, qint64 outMs)
 		applyChromatic(img, v("amount"));
 		break;
 	case FxType::InverseSelection:
-		Spotlight::apply(img, fx.spot, outMs);
+		// Clip time, not output time: the areas are part of the clip, so moving
+		// the clip has to carry their animation with it — the same rule every
+		// other effect parameter follows via paramsAt(tMs).
+		Spotlight::apply(img, fx.spot, tMs);
 		break;
 	case FxType::Count:
 		break;

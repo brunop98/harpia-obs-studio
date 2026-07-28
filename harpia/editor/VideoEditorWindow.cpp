@@ -583,15 +583,34 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(addImageBtn_, &QPushButton::clicked, this, &VideoEditorWindow::addImageClip);
 	controls->addWidget(addImageBtn_);
 	// Magnet: snap dragged clips to the playhead, 0 and other clips' edges.
+	// A sticky toggle — whichever way you leave it is how the next session opens.
 	snapBtn_ = new QPushButton(QStringLiteral("🧲 Snap"), this);
 	snapBtn_->setCheckable(true);
-	snapBtn_->setChecked(true);
-	snapBtn_->setToolTip(QStringLiteral("Snap clips to the playhead and to other clips' edges"));
 	snapBtn_->setVisible(false); // Full editing only
-	connect(snapBtn_, &QPushButton::toggled, this, [this](bool on) {
+	auto applySnap = [this](bool on) {
 		if (timelineView_)
 			timelineView_->setSnapEnabled(on);
-	});
+		snapBtn_->setText(on ? QStringLiteral("🧲 Snap on")
+				     : QStringLiteral("🧲 Snap off"));
+		snapBtn_->setToolTip(
+			on ? QStringLiteral("Magnet ON (N) — dragging a clip or trimming an "
+					    "edge sticks to the playhead, to 0 and to other "
+					    "clips' edges. A white guide shows the hold.")
+			   : QStringLiteral("Magnet OFF (N) — clips and trim edges follow the "
+					    "cursor exactly."));
+		QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+			.setValue(QStringLiteral("editor/timelineSnap"), on);
+	};
+	connect(snapBtn_, &QPushButton::toggled, this, applySnap);
+	{
+		// setChecked() only signals on a change, so apply the stored state by
+		// hand as well — otherwise "on" would leave the label unset.
+		const bool on = QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+					.value(QStringLiteral("editor/timelineSnap"), true)
+					.toBool();
+		snapBtn_->setChecked(on);
+		applySnap(on);
+	}
 	controls->addWidget(snapBtn_);
 	fitBtn_ = new QPushButton(QStringLiteral("Fit"), this);
 	fitBtn_->setToolTip(QStringLiteral("Zoom the timeline out so the whole edit fits"));
@@ -950,6 +969,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	add(QKeySequence(Qt::Key_M), [this, onTimeline]() {
 		if (onTimeline())
 			timelineView_->toggleMarkerAtPlayhead();
+	});
+	// N, not S — S already splits. (Resolve uses N for the magnet too.)
+	add(QKeySequence(Qt::Key_N), [this, onTimeline]() {
+		if (onTimeline() && snapBtn_)
+			snapBtn_->toggle();
 	});
 
 	// Arrows nudge a selection, or step the playhead when nothing is selected —

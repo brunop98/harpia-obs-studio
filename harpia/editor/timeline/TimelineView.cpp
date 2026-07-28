@@ -41,6 +41,8 @@ const QColor kPlayhead(0xe5, 0x48, 0x4d);
 const QColor kHover(0xf5, 0xc0, 0x42);
 // Project markers: green, so they read as "a place", not "a time now".
 const QColor kMarker(0x5c, 0xd6, 0x8a);
+// The magnet guide, shown only for as long as a drag is actually held there.
+const QColor kSnap(0xff, 0xff, 0xff);
 } // namespace
 
 TimelineView::TimelineView(QWidget *parent) : QWidget(parent)
@@ -176,7 +178,12 @@ void TimelineView::deleteTrack(int index)
 
 void TimelineView::setSnapEnabled(bool on)
 {
+	if (snap_ == on)
+		return;
 	snap_ = on;
+	if (!on)
+		snapLineMs_ = -1; // toggled off mid-drag: drop the guide too
+	update();
 }
 
 void TimelineView::zoomToFit()
@@ -525,8 +532,10 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos)
 	emit clipsChanged();
 }
 
-qint64 TimelineView::snap(qint64 ms, int ignoreTrack, int ignoreClip) const
+qint64 TimelineView::snap(qint64 ms, int ignoreTrack, int ignoreClip, bool *hit) const
 {
+	if (hit)
+		*hit = false;
 	if (!snap_)
 		return ms;
 	const qint64 tol = xToMs(contentRect().x() + lp_.snapPx) - xToMs(contentRect().x());
@@ -549,6 +558,8 @@ qint64 TimelineView::snap(qint64 ms, int ignoreTrack, int ignoreClip) const
 			consider(model_.tracks[ti].clips[ci].outStartMs);
 			consider(model_.tracks[ti].clips[ci].outEndMs());
 		}
+	if (hit)
+		*hit = (bestD <= tol);
 	return best;
 }
 
@@ -831,6 +842,28 @@ void TimelineView::paintEvent(QPaintEvent *)
 		p.drawText(tag, Qt::AlignCenter, QStringLiteral("+ New track here"));
 	}
 
+	// Magnet guide: while a drag is being held on a snap candidate, show the
+	// line it is stuck to. Without it the magnet is invisible — the clip just
+	// refuses to follow the cursor for a few pixels and reads as lag.
+	// (`dragging` above is move-only; a trim gets the guide too.)
+	if (dragMoved_ && snapLineMs_ >= 0) {
+		const int sx = msToX(snapLineMs_);
+		const QRect c = contentRect();
+		if (sx >= c.x() - 1 && sx <= c.right() + 1) {
+			p.save();
+			p.setClipRect(c);
+			p.setPen(QPen(kSnap, 1));
+			p.drawLine(sx, c.y(), sx, c.bottom());
+			// Two small nubs, so the line reads as a magnet rather than
+			// as another playhead.
+			p.setPen(Qt::NoPen);
+			p.setBrush(kSnap);
+			p.drawRect(QRect(sx - 2, c.y(), 5, 3));
+			p.drawRect(QRect(sx - 2, c.bottom() - 2, 5, 3));
+			p.restore();
+		}
+	}
+
 	if (model_.tracks.isEmpty()) {
 		p.setPen(kCaption);
 		p.drawText(contentRect(), Qt::AlignCenter,
@@ -1022,6 +1055,7 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	}
 	pressPos_ = pos;
 	dragMoved_ = false;
+	snapLineMs_ = -1;
 	dragTrack_ = track;
 	dragClip_ = clip;
 	dragOrig_ = model_.tracks[track].clips[clip];
@@ -1072,10 +1106,16 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 			qint64 ns = std::max<qint64>(0, xToMs(pos.x()) - dragGrabOffsetMs_);
 			const qint64 dur = c.outDurationMs();
 			// Snap the start; if snapping the END lands closer, use that instead.
-			const qint64 snapStart = snap(ns, dragTrack_, dragClip_);
-			const qint64 snapEnd = snap(ns + dur, dragTrack_, dragClip_) - dur;
-			ns = (std::llabs(snapEnd - ns) < std::llabs(snapStart - ns)) ? snapEnd : snapStart;
+			bool hitStart = false, hitEnd = false;
+			const qint64 snapStart = snap(ns, dragTrack_, dragClip_, &hitStart);
+			const qint64 snapEnd = snap(ns + dur, dragTrack_, dragClip_, &hitEnd) - dur;
+			const bool useEnd = std::llabs(snapEnd - ns) < std::llabs(snapStart - ns);
+			ns = useEnd ? snapEnd : snapStart;
 			c.outStartMs = std::max<qint64>(0, ns);
+			// Only claim a snap if the clamp to 0 didn't move the edge away again.
+			snapLineMs_ = ((useEnd ? hitEnd : hitStart) && c.outStartMs == ns)
+					      ? (useEnd ? c.outStartMs + dur : c.outStartMs)
+					      : -1;
 			// Carry the rest of the selection along by the same delta. Only the
 			// clip under the cursor changes lane; the others keep theirs, which
 			// keeps a cross-track group predictable.
@@ -1097,19 +1137,39 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 			emitScrubAt(c.outStartMs);
 			setCursor(Qt::ClosedHandCursor);
 		} else if (mode_ == Mode::ResizeLeft) {
-			const qint64 dMs = qint64(std::llround((pos.x() - pressPos_.x()) * dragSrcPerPx_));
+			const double sp = c.speed > 0.01 ? c.speed : 1.0;
+			qint64 dMs = qint64(std::llround((pos.x() - pressPos_.x()) * dragSrcPerPx_));
+			// The magnet works on the edge the user can see, so snap in OUTPUT
+			// time and convert the result back into the source delta.
+			bool hit = false;
+			const qint64 wantOut =
+				dragOrig_.outStartMs + qint64(std::llround(double(dMs) / sp));
+			const qint64 snapped = snap(wantOut, dragTrack_, dragClip_, &hit);
+			if (hit)
+				dMs = qint64(std::llround(double(snapped - dragOrig_.outStartMs) * sp));
 			// Move left edge in source-time; keep right (source end) fixed.
 			qint64 newSrcStart = std::clamp<qint64>(dragOrig_.srcStartMs + dMs, 0,
 								dragOrig_.srcEndMs - kMinClipMs);
 			const qint64 srcDelta = newSrcStart - dragOrig_.srcStartMs;
-			const qint64 outDelta = qint64(std::llround(double(srcDelta) / (c.speed > 0.01 ? c.speed : 1.0)));
+			const qint64 outDelta = qint64(std::llround(double(srcDelta) / sp));
 			c.srcStartMs = newSrcStart;
 			c.outStartMs = std::max<qint64>(0, dragOrig_.outStartMs + outDelta);
+			// Clamping to the source bounds can pull the edge back off the
+			// candidate — don't draw a guide the clip isn't actually on.
+			snapLineMs_ = (hit && c.outStartMs == snapped) ? snapped : -1;
 			emitScrubAt(c.outStartMs);
 		} else if (mode_ == Mode::ResizeRight) {
-			const qint64 dMs = qint64(std::llround((pos.x() - pressPos_.x()) * dragSrcPerPx_));
+			const double sp = c.speed > 0.01 ? c.speed : 1.0;
+			qint64 dMs = qint64(std::llround((pos.x() - pressPos_.x()) * dragSrcPerPx_));
+			bool hit = false;
+			const qint64 wantOut =
+				dragOrig_.outEndMs() + qint64(std::llround(double(dMs) / sp));
+			const qint64 snapped = snap(wantOut, dragTrack_, dragClip_, &hit);
+			if (hit)
+				dMs = qint64(std::llround(double(snapped - dragOrig_.outEndMs()) * sp));
 			c.srcEndMs = std::clamp<qint64>(dragOrig_.srcEndMs + dMs, dragOrig_.srcStartMs + kMinClipMs,
 							srcTotal);
+			snapLineMs_ = (hit && c.outEndMs() == snapped) ? snapped : -1;
 			emitScrubAt(c.outEndMs());
 		}
 		update();
@@ -1198,6 +1258,7 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 		dragTrack_ = dragClip_ = -1;
 		dragMoved_ = false;
 		drop_ = DropTarget();
+		snapLineMs_ = -1;
 		unsetCursor();
 		clampView();
 		updateGeometry();

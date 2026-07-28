@@ -57,6 +57,10 @@ public:
 	qint64 playhead() const { return playheadMs_; }
 	qint64 durationMs() const { return model_.durationMs(); }
 	qint64 viewStartMs() const { return viewStart_; } // leftmost visible time
+	// The time<->pixel mapping, so callers (and tests) can aim at a time on the
+	// widget instead of re-deriving the axis from the layout params.
+	int xForMs(qint64 ms) const { return msToX(ms); }
+	qint64 msForX(int x) const { return xToMs(x); }
 
 	// One clip on the clipboard, with the track it came from so a paste can put
 	// it back where it belongs rather than always on the first track.
@@ -150,7 +154,10 @@ private:
 	void drawClip(QPainter &p, int track, int clip) const;
 
 	int clipAtPoint(const QPoint &p, int *trackOut) const; // clip index or -1
-	qint64 snap(qint64 ms, int ignoreTrack, int ignoreClip) const;
+	// Nearest snap candidate to `ms`, or `ms` itself when nothing is in range.
+	// `hit` (optional) reports whether a candidate was actually taken — the
+	// caller uses it to light up the guide line.
+	qint64 snap(qint64 ms, int ignoreTrack, int ignoreClip, bool *hit = nullptr) const;
 
 	// Where a dragged clip would land: an existing lane, or a brand-new track
 	// inserted at `newTrackAt` (dragging past a lane edge creates one).
@@ -210,6 +217,9 @@ private:
 	qint64 dragGrabOffsetMs_ = 0; // cursor->clip-start at grab
 	DropTarget drop_;             // live drop target while moving a clip
 	bool snap_ = true;            // magnet
+	// Where the magnet is currently holding the dragged edge, so the drag can
+	// show it. -1 = not snapped right now (or not dragging).
+	qint64 snapLineMs_ = -1;
 
 	TimelineViewParams lp_;
 

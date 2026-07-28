@@ -12,10 +12,11 @@ namespace harpia {
 
 namespace {
 
-// The whole UI, one notch down from the platform default (Segoe UI 9pt on
-// Windows), and tooltips a further notch below that.
-constexpr double kBaseScale = 0.90;
-constexpr double kTooltipScale = 0.86;
+// The whole UI, well down from the platform default (Segoe UI 9pt on Windows),
+// and tooltips smaller again. These two numbers ARE the app's text size — turn
+// them up or down and everything follows, including the role sizes below.
+constexpr double kBaseScale = 0.82;
+constexpr double kTooltipScale = 0.72;
 
 // Below this the text stops being smaller and starts being unreadable, and on
 // a low-DPI display it turns to mush. Nothing derived here goes under it.

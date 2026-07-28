@@ -27,6 +27,25 @@ QSettings devSettings()
 {
 	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
 }
+// The editor's timecode and inspector font sizes were fixed at 18 and 13; they
+// now follow the app-wide text scale. Every existing install has those old
+// numbers written out from a previous shutdown, so without this they would
+// keep them forever and the one part of the UI the user looks at most would
+// never shrink.
+//
+// A one-shot flag rather than "ignore the value if it equals the old default":
+// that comparison would also silently revert anyone who later dialled the size
+// back to exactly 18, which is a much worse bug than the one it fixes. Must be
+// called inside the settings group the keys live in.
+void migrateFontSizes(QSettings &s)
+{
+	if (s.value(QStringLiteral("win/fontsFollowScale"), false).toBool())
+		return;
+	s.remove(QStringLiteral("win/tcFont"));
+	s.remove(QStringLiteral("win/insFont"));
+	s.setValue(QStringLiteral("win/fontsFollowScale"), true);
+}
+
 } // namespace
 
 EditorChromeParams DevPanel::loadChrome()
@@ -36,6 +55,7 @@ EditorChromeParams DevPanel::loadChrome()
 	QSettings s = devSettings();
 	s.beginGroup(QStringLiteral("devLayout"));
 	p.buttonH = s.value(QStringLiteral("win/btnH"), d.buttonH).toInt();
+	migrateFontSizes(s); // once: drop pre-text-scale sizes so the scale applies
 	p.timecodeFontPx = s.value(QStringLiteral("win/tcFont"), d.timecodeFontPx).toInt();
 	p.inspectorFontPx = s.value(QStringLiteral("win/insFont"), d.inspectorFontPx).toInt();
 	p.speedSliderMinW = s.value(QStringLiteral("win/speedW"), d.speedSliderMinW).toInt();

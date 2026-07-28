@@ -424,6 +424,8 @@ private:
 	QDoubleSpinBox *clipVolSpin_ = nullptr;
 	QSpinBox *clipFadeInSpin_ = nullptr;
 	QSpinBox *clipFadeOutSpin_ = nullptr;
+	QComboBox *clipFadeInCurve_ = nullptr;
+	QComboBox *clipFadeOutCurve_ = nullptr;
 
 	QString scriptsDir_;
 	// Set whenever the timeline or the compiled set changes; makes the per-frame

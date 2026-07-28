@@ -8,6 +8,8 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPolygonF>
+#include <QToolTip>
 #include <QRandomGenerator>
 #include <QTimer>
 #include <QWheelEvent>
@@ -731,6 +733,10 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 		}
 	}
 
+	// Fade envelopes (audio clips): drawn over the waveform, under the label.
+	if (clipTakesFades(track, clip))
+		drawFades(p, track, clip);
+
 	// Label bar along the bottom.
 	if (!dragging && r.width() >= 28) {
 		p.setFont(clipFont_);
@@ -755,6 +761,136 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	p.setPen(sel ? QPen(kAccent, 2) : QPen(kBorder, 1));
 	p.setBrush(Qt::NoBrush);
 	p.drawRoundedRect(r, 4, 4);
+}
+
+// ---- fade handles -----------------------------------------------------------
+
+namespace {
+// Below this the grips would be bigger than the clip and just get in the way,
+// so a clip this narrow shows its envelope but no handles.
+constexpr int kFadeMinClipW = 26;
+constexpr int kFadeGrip = 9;   // drawn size
+constexpr int kFadeGrab = 14;  // clickable half-width, so short clips stay usable
+} // namespace
+
+bool TimelineView::clipTakesFades(int track, int clip) const
+{
+	if (track < 0 || track >= model_.tracks.size())
+		return false;
+	const TlTrack &t = model_.tracks[track];
+	if (t.kind != TlTrack::Kind::Audio || clip < 0 || clip >= t.clips.size())
+		return false;
+	// Captions and stills carry no sound to fade.
+	return t.clips[clip].type == TlClip::Type::Video;
+}
+
+QRect TimelineView::fadeHandleRect(int track, int clip, FadeSide side) const
+{
+	if (side == FadeSide::None || !clipTakesFades(track, clip))
+		return {};
+	const TlClip &c = model_.tracks[track].clips[clip];
+	const QRect r = clipRect(track, clip);
+	if (r.width() < kFadeMinClipW)
+		return {};
+	const double perMs = double(r.width()) / double(std::max<qint64>(1, c.outDurationMs()));
+	const int x = (side == FadeSide::In)
+			      ? r.left() + int(std::lround(c.fadeInMs * perMs))
+			      : r.right() - int(std::lround(c.fadeOutMs * perMs));
+	const int y = r.top() + 1;
+	return QRect(x - kFadeGrip / 2, y, kFadeGrip, kFadeGrip);
+}
+
+TimelineView::FadeHit TimelineView::fadeHandleAt(const QPoint &pt) const
+{
+	for (int ti = 0; ti < model_.tracks.size(); ++ti) {
+		if (model_.tracks[ti].locked)
+			continue;
+		for (int ci = 0; ci < model_.tracks[ti].clips.size(); ++ci) {
+			if (!clipTakesFades(ti, ci))
+				continue;
+			const QRect r = clipRect(ti, ci);
+			// Only the top band of the clip belongs to the grips; the rest
+			// still moves and trims the clip as before.
+			if (pt.y() < r.top() || pt.y() > r.top() + kFadeGrab)
+				continue;
+			for (const FadeSide s : {FadeSide::In, FadeSide::Out}) {
+				const QRect h = fadeHandleRect(ti, ci, s);
+				if (h.isNull())
+					continue;
+				if (std::abs(pt.x() - h.center().x()) <= kFadeGrab / 2)
+					return FadeHit{ti, ci, s};
+			}
+		}
+	}
+	return {};
+}
+
+int TimelineView::fadeMsForX(const TlClip &c, const QRect &r, int x, FadeSide side,
+			     bool fine) const
+{
+	const qint64 dur = c.outDurationMs();
+	const double msPerPx = double(dur) / double(std::max(1, r.width()));
+	double ms = (side == FadeSide::In) ? (x - r.left()) * msPerPx : (r.right() - x) * msPerPx;
+	// Shift is the "let me place it exactly" modifier, matching the rest of the
+	// timeline; otherwise a fade lands on a frame like every other edit.
+	if (!fine && snap_) {
+		const double frame = 1000.0 / (fps_ > 1.0 ? fps_ : 30.0);
+		ms = std::round(ms / frame) * frame;
+	}
+	return int(std::clamp<double>(ms, 0.0, double(dur)));
+}
+
+void TimelineView::drawFades(QPainter &p, int track, int clip) const
+{
+	const TlClip &c = model_.tracks[track].clips[clip];
+	if (c.fadeInMs <= 0 && c.fadeOutMs <= 0 && !(fadeHover_.track == track && fadeHover_.clip == clip))
+		return;
+	const QRect r = clipRect(track, clip);
+	if (r.width() < 6)
+		return;
+	const double perMs = double(r.width()) / double(std::max<qint64>(1, c.outDurationMs()));
+
+	const QColor line(0xff, 0xd9, 0x6b);
+	const QColor wash(0x00, 0x00, 0x00, 110);
+
+	auto envelope = [&](int fadeMs, FadeCurve curve, bool in) {
+		if (fadeMs <= 0)
+			return;
+		const int w = std::max(1, int(std::lround(fadeMs * perMs)));
+		const int x0 = in ? r.left() : r.right() - w;
+		// Zoomed far out a sampled curve is a waste of segments and reads as a
+		// smudge — a single straight line says the same thing.
+		const int steps = (w < 18) ? 1 : std::min(w, 48);
+		QPolygonF curvePts;
+		for (int i = 0; i <= steps; ++i) {
+			const double t = double(i) / steps;
+			const double g = fadeGain(curve, in ? t : 1.0 - t);
+			curvePts << QPointF(x0 + t * w, r.bottom() - g * (r.height() - 2));
+		}
+		QPolygonF filled = curvePts;
+		filled << QPointF(x0 + w, r.top()) << QPointF(x0, r.top());
+		p.setPen(Qt::NoPen);
+		p.setBrush(wash);
+		p.drawPolygon(filled);
+		p.setPen(QPen(line, 2));
+		p.setBrush(Qt::NoBrush);
+		p.drawPolyline(curvePts);
+	};
+	envelope(c.fadeInMs, c.fadeInCurve, true);
+	envelope(c.fadeOutMs, c.fadeOutCurve, false);
+
+	if (r.width() < kFadeMinClipW)
+		return;
+	for (const FadeSide s : {FadeSide::In, FadeSide::Out}) {
+		const QRect h = fadeHandleRect(track, clip, s);
+		if (h.isNull())
+			continue;
+		const FadeHit me{track, clip, s};
+		const bool hot = (fadeDrag_ == me) || (fadeHover_ == me);
+		p.setPen(QPen(QColor(0x20, 0x20, 0x20), 1));
+		p.setBrush(hot ? QColor(0xff, 0xff, 0xff) : line);
+		p.drawEllipse(hot ? h.adjusted(-1, -1, 1, 1) : h);
+	}
 }
 
 void TimelineView::paintEvent(QPaintEvent *)
@@ -1000,6 +1136,23 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	if (e->button() != Qt::LeftButton)
 		return;
 
+	// A fade grip wins over the clip under it — it sits inside the clip, and
+	// the top corners are also where a trim would otherwise start.
+	if (const FadeHit fh = fadeHandleAt(pos); fh.valid()) {
+		fadeDrag_ = fh;
+		mode_ = Mode::Fade;
+		pressPos_ = pos;
+		dragMoved_ = false;
+		dragTrack_ = fh.track;
+		dragClip_ = fh.clip;
+		selTrack_ = fh.track;
+		selClip_ = fh.clip;
+		extraSel_.clear();
+		emit selectionChanged(selTrack_, selClip_);
+		update();
+		return;
+	}
+
 	if (clip < 0) {
 		// Empty area: move the playhead + scrub.
 		mode_ = Mode::Scrub;
@@ -1089,6 +1242,27 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 		return;
 	}
 
+	if (mode_ == Mode::Fade && fadeDrag_.valid() && (e->buttons() & Qt::LeftButton)) {
+		dragMoved_ = true;
+		TlTrack &t = model_.tracks[fadeDrag_.track];
+		if (fadeDrag_.clip < t.clips.size()) {
+			TlClip &c = t.clips[fadeDrag_.clip];
+			const QRect r = clipRect(fadeDrag_.track, fadeDrag_.clip);
+			const bool fine = e->modifiers() & Qt::ShiftModifier;
+			const int ms = fadeMsForX(c, r, pos.x(), fadeDrag_.side, fine);
+			if (fadeDrag_.side == FadeSide::In)
+				c.fadeInMs = ms;
+			else
+				c.fadeOutMs = ms;
+			QToolTip::showText(e->globalPosition().toPoint(),
+					   QStringLiteral("%1 s").arg(ms / 1000.0, 0, 'f', 2), this);
+			update();
+			// The Inspector's fade fields follow the drag.
+			emit selectionChanged(fadeDrag_.track, fadeDrag_.clip);
+		}
+		return;
+	}
+
 	if (mode_ != Mode::None && dragTrack_ >= 0 && (e->buttons() & Qt::LeftButton)) {
 		if (!dragMoved_ && (pos - pressPos_).manhattanLength() > 4)
 			dragMoved_ = true;
@@ -1157,6 +1331,7 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 			// Clamping to the source bounds can pull the edge back off the
 			// candidate — don't draw a guide the clip isn't actually on.
 			snapLineMs_ = (hit && c.outStartMs == snapped) ? snapped : -1;
+			c.clampFades(); // a shorter clip can't hold a longer fade
 			emitScrubAt(c.outStartMs);
 		} else if (mode_ == Mode::ResizeRight) {
 			const double sp = c.speed > 0.01 ? c.speed : 1.0;
@@ -1170,6 +1345,7 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 			c.srcEndMs = std::clamp<qint64>(dragOrig_.srcEndMs + dMs, dragOrig_.srcStartMs + kMinClipMs,
 							srcTotal);
 			snapLineMs_ = (hit && c.outEndMs() == snapped) ? snapped : -1;
+			c.clampFades();
 			emitScrubAt(c.outEndMs());
 		}
 		update();
@@ -1177,12 +1353,22 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 	}
 
 	// Idle: cursor hint + hover preview.
+	// A fade grip lights up under the cursor, and claims the cursor shape from
+	// the trim handle it overlaps.
+	const FadeHit fh = fadeHandleAt(pos);
+	if (!(fh == fadeHover_)) {
+		fadeHover_ = fh;
+		update();
+	}
+
 	int track = -1;
 	const int clip = clipAtPoint(pos, &track);
 	if (clip >= 0) {
 		const QRect r = clipRect(track, clip);
 		const int edge = std::min(8, r.width() / 3);
-		if (pos.x() - r.left() <= edge || r.right() - pos.x() <= edge)
+		if (fh.valid())
+			setCursor(Qt::SizeHorCursor);
+		else if (pos.x() - r.left() <= edge || r.right() - pos.x() <= edge)
 			setCursor(Qt::SizeHorCursor);
 		else
 			setCursor(Qt::OpenHandCursor);
@@ -1203,12 +1389,51 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 	}
 }
 
+// Double-clicking a fade grip clears that fade — the quickest way back to no
+// fade at all, and it matches how the other NLEs behave.
+void TimelineView::mouseDoubleClickEvent(QMouseEvent *e)
+{
+	if (e->button() != Qt::LeftButton)
+		return;
+	const FadeHit fh = fadeHandleAt(e->pos());
+	if (!fh.valid()) {
+		QWidget::mouseDoubleClickEvent(e);
+		return;
+	}
+	TlClip &c = model_.tracks[fh.track].clips[fh.clip];
+	if (fh.side == FadeSide::In)
+		c.fadeInMs = 0;
+	else
+		c.fadeOutMs = 0;
+	// A double-click also delivers a press, which armed a fade drag; drop it so
+	// the following release doesn't re-apply the length that was just cleared.
+	mode_ = Mode::None;
+	fadeDrag_ = FadeHit();
+	dragTrack_ = dragClip_ = -1;
+	dragMoved_ = false;
+	update();
+	emit selectionChanged(fh.track, fh.clip);
+	emit clipsChanged();
+}
+
 void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 {
 	if (e->button() != Qt::LeftButton)
 		return;
 	if (mode_ == Mode::Scrub) {
 		mode_ = Mode::None;
+		return;
+	}
+	if (mode_ == Mode::Fade) {
+		const bool changed = dragMoved_;
+		mode_ = Mode::None;
+		fadeDrag_ = FadeHit();
+		dragTrack_ = dragClip_ = -1;
+		dragMoved_ = false;
+		QToolTip::hideText();
+		update();
+		if (changed)
+			emit clipsChanged(); // repaint the preview + record one undo step
 		return;
 	}
 	if (mode_ != Mode::None && dragTrack_ >= 0) {
@@ -1526,6 +1751,7 @@ void TimelineView::splitAtPlayhead()
 				right.srcStartMs = 0;
 				right.srcEndMs = right.srcEndMs - c.srcEndMs;
 			}
+			splitFades(c, right);
 			t.clips.append(right);
 			any = true;
 		}
@@ -1590,6 +1816,7 @@ void TimelineView::splitClip(int track, int clip, qint64 atOutMs)
 	b.srcStartMs = splitSrc;
 	b.outStartMs = atOutMs;
 	a.srcEndMs = splitSrc;
+	splitFades(a, b);
 	t.clips.insert(clip + 1, b);
 	selClip_ = clip + 1;
 	update();

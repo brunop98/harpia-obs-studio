@@ -99,6 +99,8 @@ public:
 	// Magnet: snap clip edges to the playhead, 0 and other clips while dragging.
 	void setSnapEnabled(bool on);
 	bool snapEnabled() const { return snap_; }
+	// Frame grid a fade drag rounds to (the project frame rate).
+	void setFrameRate(double fps) { fps_ = (fps > 1.0) ? fps : 30.0; }
 
 	// Track operations (also available from the header's right-click menu).
 	void addTrack(TlTrack::Kind kind, int atIndex = -1); // -1 = top of that kind's group
@@ -122,6 +124,7 @@ protected:
 	void mousePressEvent(QMouseEvent *) override;
 	void mouseMoveEvent(QMouseEvent *) override;
 	void mouseReleaseEvent(QMouseEvent *) override;
+	void mouseDoubleClickEvent(QMouseEvent *) override;
 	void wheelEvent(QWheelEvent *) override;
 	void keyPressEvent(QKeyEvent *) override;
 	void leaveEvent(QEvent *) override;
@@ -152,6 +155,30 @@ private:
 
 	void drawRuler(QPainter &p) const;
 	void drawClip(QPainter &p, int track, int clip) const;
+
+	// ---- fade handles (audio clips) ----
+	// Two grips at the top corners of an audio clip: drag them inwards to set
+	// the fade, double-click to clear it. The envelope under them is the same
+	// curve the mixer applies, so what is drawn is what is heard.
+	enum class FadeSide { None, In, Out };
+	struct FadeHit {
+		int track = -1;
+		int clip = -1;
+		FadeSide side = FadeSide::None;
+		bool valid() const { return side != FadeSide::None && track >= 0; }
+		bool operator==(const FadeHit &o) const
+		{
+			return track == o.track && clip == o.clip && side == o.side;
+		}
+	};
+	bool clipTakesFades(int track, int clip) const; // audio-track media clips
+	// Where the grip sits: at the far end of the fade it controls.
+	QRect fadeHandleRect(int track, int clip, FadeSide side) const;
+	FadeHit fadeHandleAt(const QPoint &p) const;
+	void drawFades(QPainter &p, int track, int clip) const;
+	// Fade length for a cursor x on this clip, clamped and (unless Shift is
+	// held) rounded to the timeline's frame grid.
+	int fadeMsForX(const TlClip &c, const QRect &r, int x, FadeSide side, bool fine) const;
 
 	int clipAtPoint(const QPoint &p, int *trackOut) const; // clip index or -1
 	// Nearest snap candidate to `ms`, or `ms` itself when nothing is in range.
@@ -206,7 +233,7 @@ private:
 	void animateStep();
 
 	// ---- interaction ----
-	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub };
+	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade };
 	Mode mode_ = Mode::None;
 	QPoint pressPos_;
 	bool dragMoved_ = false;
@@ -220,6 +247,11 @@ private:
 	// Where the magnet is currently holding the dragged edge, so the drag can
 	// show it. -1 = not snapped right now (or not dragging).
 	qint64 snapLineMs_ = -1;
+	FadeHit fadeHover_; // grip under the cursor (drawn highlighted)
+	FadeHit fadeDrag_;  // grip being dragged
+	// Frames per second the fade grid rounds to. Set by the window from the
+	// project rate so a fade lands on a frame like every other edit does.
+	double fps_ = 30.0;
 
 	TimelineViewParams lp_;
 

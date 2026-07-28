@@ -277,7 +277,7 @@ bool VoiceoverMixer::decodeToWav(const QString &inPath, const QString &outWav, d
 
 void VoiceoverMixer::addTake(std::vector<float> &mix, const std::vector<float> &take,
 			     long long startFrame, double volume, int fadeInFrames,
-			     int fadeOutFrames)
+			     int fadeOutFrames, FadeCurve inCurve, FadeCurve outCurve)
 {
 	const long long frames = (long long)take.size() / kCh;
 	for (long long j = 0; j < frames; ++j) {
@@ -288,9 +288,9 @@ void VoiceoverMixer::addTake(std::vector<float> &mix, const std::vector<float> &
 			break;
 		double f = 1.0;
 		if (fadeInFrames > 0 && j < fadeInFrames)
-			f *= double(j) / fadeInFrames;
+			f *= fadeGain(inCurve, double(j) / fadeInFrames);
 		if (fadeOutFrames > 0 && j >= frames - fadeOutFrames)
-			f *= double(frames - 1 - j) / fadeOutFrames;
+			f *= fadeGain(outCurve, double(frames - 1 - j) / fadeOutFrames);
 		const float g = float(volume * std::clamp(f, 0.0, 1.0));
 		for (int c = 0; c < kCh; ++c)
 			mix[o * kCh + c] += take[j * kCh + c] * g;
@@ -331,6 +331,7 @@ std::vector<float> VoiceoverMixer::renderTakes(const std::vector<Take> &takes,
 		long long startFrame = 0;
 		double volume = 1.0;
 		int fadeIn = 0, fadeOut = 0;
+		FadeCurve inCurve = FadeCurve::Linear, outCurve = FadeCurve::Linear;
 	};
 	std::vector<Rendered> rendered;
 	rendered.reserve(takes.size());
@@ -355,6 +356,8 @@ std::vector<float> VoiceoverMixer::renderTakes(const std::vector<Take> &takes,
 		r.volume = t.volume;
 		r.fadeIn = std::max(0, t.fadeInMs) * kRate / 1000;
 		r.fadeOut = std::max(0, t.fadeOutMs) * kRate / 1000;
+		r.inCurve = t.fadeInCurve;
+		r.outCurve = t.fadeOutCurve;
 		totalFrames = std::max(totalFrames, r.startFrame + len);
 		rendered.push_back(std::move(r));
 	}
@@ -365,7 +368,8 @@ std::vector<float> VoiceoverMixer::renderTakes(const std::vector<Take> &takes,
 	for (const Rendered &r : rendered) {
 		if (canceled())
 			return {};
-		addTake(mixbuf, r.samples, r.startFrame, r.volume, r.fadeIn, r.fadeOut);
+		addTake(mixbuf, r.samples, r.startFrame, r.volume, r.fadeIn, r.fadeOut,
+			r.inCurve, r.outCurve);
 	}
 	for (float &s : mixbuf)
 		s = std::clamp(s, -1.0f, 1.0f);
@@ -386,6 +390,7 @@ QString VoiceoverMixer::mix(const QString &videoPath, double originalVolume, boo
 		long long startFrame = 0;
 		double volume = 1.0;
 		int fadeIn = 0, fadeOut = 0;
+		FadeCurve inCurve = FadeCurve::Linear, outCurve = FadeCurve::Linear;
 	};
 	std::vector<Rendered> rendered;
 	rendered.reserve(takes.size());
@@ -408,6 +413,8 @@ QString VoiceoverMixer::mix(const QString &videoPath, double originalVolume, boo
 		r.volume = t.volume;
 		r.fadeIn = std::max(0, t.fadeInMs) * kRate / 1000;
 		r.fadeOut = std::max(0, t.fadeOutMs) * kRate / 1000;
+		r.inCurve = t.fadeInCurve;
+		r.outCurve = t.fadeOutCurve;
 		rendered.push_back(std::move(r));
 		const long long end = rendered.back().startFrame +
 				      (long long)rendered.back().samples.size() / kCh;
@@ -436,7 +443,8 @@ QString VoiceoverMixer::mix(const QString &videoPath, double originalVolume, boo
 		}
 	}
 	for (const Rendered &r : rendered)
-		addTake(mixbuf, r.samples, r.startFrame, r.volume, r.fadeIn, r.fadeOut);
+		addTake(mixbuf, r.samples, r.startFrame, r.volume, r.fadeIn, r.fadeOut,
+			r.inCurve, r.outCurve);
 	for (float &s : mixbuf)
 		s = std::clamp(s, -1.0f, 1.0f);
 	base.clear();

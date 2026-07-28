@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QTemporaryDir>
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <utility>
@@ -54,8 +55,13 @@ std::vector<VoiceoverMixer::Take> TimelineAudio::buildTakes(const TimelineModel 
 			// A video track carries its footage's sound at unity; per-clip volume
 			// is an audio-track control.
 			tk.volume = (t.kind == TlTrack::Kind::Audio) ? c.volume : 1.0;
-			tk.fadeInMs = c.fadeInMs;
-			tk.fadeOutMs = c.fadeOutMs;
+			// Clamped here rather than trusted: a clip trimmed shorter than
+			// its fade would otherwise never reach full volume.
+			const int dur = int(std::min<qint64>(c.outDurationMs(), 1 << 30));
+			tk.fadeInMs = std::clamp(c.fadeInMs, 0, dur);
+			tk.fadeOutMs = std::clamp(c.fadeOutMs, 0, dur);
+			tk.fadeInCurve = c.fadeInCurve;
+			tk.fadeOutCurve = c.fadeOutCurve;
 			takes.push_back(tk);
 		}
 	}

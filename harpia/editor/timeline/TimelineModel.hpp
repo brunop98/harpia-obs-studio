@@ -9,6 +9,8 @@
 // GL-free and libav-free so the widget, the compositor, the window, and the
 // exporter can all share it.
 
+#include "../FadeCurve.hpp"
+
 #include <QColor>
 #include <QMap>
 #include <QRect>
@@ -18,6 +20,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace harpia {
 
@@ -149,11 +152,41 @@ struct TlClip {
 	// wins. Channels no script defines fall through to the pose/keyframes above.
 	QVector<TlScript> scripts;
 
-	// Audio-only.
+	// Audio-only. The fades are non-destructive: nothing is written back to the
+	// media, they are evaluated as a gain at play/render time.
 	double volume = 1.0;
 	int fadeInMs = 15;
 	int fadeOutMs = 15;
+	FadeCurve fadeInCurve = FadeCurve::Linear;
+	FadeCurve fadeOutCurve = FadeCurve::Linear;
 	QVector<float> peaks; // whole-source amplitude buckets (for the waveform)
+
+	// A fade can never be longer than the clip it lives on — trimming a clip
+	// shorter has to pull its fades in with it, or the gain would never reach
+	// full and the clip would sound broken for no visible reason.
+	void clampFades()
+	{
+		const int dur = int(std::min<qint64>(outDurationMs(), std::numeric_limits<int>::max()));
+		fadeInMs = std::clamp(fadeInMs, 0, dur);
+		fadeOutMs = std::clamp(fadeOutMs, 0, dur);
+	}
+
+	// Gain this clip's fades apply at `outMs`. Both fades are multiplied, so a
+	// clip too short to hold them separately dips in the middle instead of
+	// jumping — smooth either way, never a click.
+	double fadeGainAt(qint64 outMs) const
+	{
+		const qint64 off = outMs - outStartMs;
+		const qint64 dur = outDurationMs();
+		if (off < 0 || off > dur)
+			return 0.0;
+		double g = 1.0;
+		if (fadeInMs > 0 && off < fadeInMs)
+			g *= fadeGain(fadeInCurve, double(off) / double(fadeInMs));
+		if (fadeOutMs > 0 && off > dur - fadeOutMs)
+			g *= fadeGain(fadeOutCurve, double(dur - off) / double(fadeOutMs));
+		return std::clamp(g, 0.0, 1.0);
+	}
 
 	qint64 srcLenMs() const { return std::max<qint64>(0, srcEndMs - srcStartMs); }
 	qint64 outDurationMs() const
@@ -249,9 +282,25 @@ struct TlClip {
 		       rotation == o.rotation && opacity == o.opacity &&
 		       crop == o.crop && keys == o.keys && text == o.text &&
 		       scripts == o.scripts &&
-		       volume == o.volume && fadeInMs == o.fadeInMs && fadeOutMs == o.fadeOutMs;
+		       volume == o.volume && fadeInMs == o.fadeInMs &&
+		       fadeOutMs == o.fadeOutMs && fadeInCurve == o.fadeInCurve &&
+		       fadeOutCurve == o.fadeOutCurve;
 	}
 };
+
+// Hand a split clip's fades to the two halves it became: the head keeps the
+// fade-in, the tail keeps the fade-out, neither inherits the other's, and both
+// are pulled in to fit. Shared by the two split paths so a context-menu split
+// and a playhead split can't drift apart.
+inline void splitFades(TlClip &head, TlClip &tail)
+{
+	tail.fadeInMs = 0;
+	tail.fadeInCurve = head.fadeInCurve;
+	head.fadeOutMs = 0;
+	head.fadeOutCurve = tail.fadeOutCurve;
+	head.clampFades();
+	tail.clampFades();
+}
 
 struct TlTrack {
 	enum class Kind { Video, Audio };

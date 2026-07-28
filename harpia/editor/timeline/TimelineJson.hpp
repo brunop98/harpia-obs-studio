@@ -78,6 +78,8 @@ inline QJsonObject clipToJson(const TlClip &c)
 		co[QStringLiteral("volume")] = c.volume;
 		co[QStringLiteral("fadeIn")] = c.fadeInMs;
 		co[QStringLiteral("fadeOut")] = c.fadeOutMs;
+		co[QStringLiteral("fadeInCurve")] = int(c.fadeInCurve);
+		co[QStringLiteral("fadeOutCurve")] = int(c.fadeOutCurve);
 	}
 	// `peaks` is deliberately absent: it is a waveform cache derived from the
 	// source, rebuilt on load rather than stored.
@@ -150,6 +152,10 @@ inline TlClip clipFromJson(const QJsonObject &co)
 		c.volume = co.value(QStringLiteral("volume")).toDouble(1.0);
 		c.fadeInMs = co.value(QStringLiteral("fadeIn")).toInt(15);
 		c.fadeOutMs = co.value(QStringLiteral("fadeOut")).toInt(15);
+		// Older projects have no curve, and an out-of-range one is not trusted;
+		// both fall back to a straight line.
+		c.fadeInCurve = fadeCurveFromInt(co.value(QStringLiteral("fadeInCurve")).toInt(0));
+		c.fadeOutCurve = fadeCurveFromInt(co.value(QStringLiteral("fadeOutCurve")).toInt(0));
 	}
 	return c;
 }

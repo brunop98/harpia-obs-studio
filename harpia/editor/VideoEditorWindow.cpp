@@ -417,6 +417,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(timelineView_, &TimelineView::scrub, this, &VideoEditorWindow::onTimelineScrub);
 	connect(timelineView_, &TimelineView::hoverScrub, this, &VideoEditorWindow::onTimelineHoverScrub);
 	connect(timelineView_, &TimelineView::clipsChanged, this, [this]() {
+		// A fade drag rounds to the project frame, which only exists once a
+		// source is loaded — refresh it whenever the timeline changes.
+		timelineView_->setFrameRate(timelineFps());
 		updateInfoLabel();
 		syncPreviewTransformTarget();
 		scriptScanDirty_ = true;
@@ -2700,11 +2703,32 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 			return;
 		editSelectedClip([val](TlClip &c) { c.fadeOutMs = val; });
 	});
+
+	// Curve pickers. The list comes from FadeCurve.hpp so the combo can never
+	// drift from what the mixer actually implements.
+	auto addCurveCombo = [&](const QString &label, QComboBox *&out, bool isIn) {
+		out = new QComboBox(audioClipBox_);
+		for (int i = 0; i < kFadeCurveCount; ++i)
+			out->addItem(QString::fromLatin1(fadeCurveName(FadeCurve(i))));
+		aForm->addRow(label, out);
+		connect(out, &QComboBox::currentIndexChanged, this, [this, isIn](int idx) {
+			if (syncingClip_)
+				return;
+			const FadeCurve fc = fadeCurveFromInt(idx);
+			editSelectedClip([fc, isIn](TlClip &c) {
+				(isIn ? c.fadeInCurve : c.fadeOutCurve) = fc;
+			});
+		});
+	};
+	addCurveCombo(QStringLiteral("Fade in curve"), clipFadeInCurve_, true);
+	addCurveCombo(QStringLiteral("Fade out curve"), clipFadeOutCurve_, false);
 	av->addLayout(aForm);
 
 	auto *aHint = new QLabel(
-		QStringLiteral("Fades are applied to the mix, so the preview plays what the "
-			       "export will render."),
+		QStringLiteral("Drag the round grips in an audio clip's top corners to set "
+			       "the fades (double-click one to clear it, Shift for a "
+			       "precise drag). Fades are applied to the mix, so the "
+			       "preview plays what the export will render."),
 		audioClipBox_);
 	aHint->setWordWrap(true);
 	aHint->setStyleSheet(QStringLiteral("color:#7f858e;"));
@@ -2782,12 +2806,17 @@ void VideoEditorWindow::syncClipInspector()
 		audioClipBox_->setVisible(onAudioTrack);
 		if (onAudioTrack) {
 			clipVolSpin_->setValue(c->volume);
+			// Set the ceiling before the values, or a fade longer than the
+			// last clip's would be silently truncated on the way in.
+			// A fade may run the whole clip; overlapping fades multiply,
+			// which dips the middle rather than clicking.
+			const int full = int(std::max<qint64>(1, c->outDurationMs()));
+			clipFadeInSpin_->setMaximum(full);
+			clipFadeOutSpin_->setMaximum(full);
 			clipFadeInSpin_->setValue(c->fadeInMs);
 			clipFadeOutSpin_->setValue(c->fadeOutMs);
-			// A fade longer than half the clip would overlap itself.
-			const int half = int(std::max<qint64>(1, c->outDurationMs() / 2));
-			clipFadeInSpin_->setMaximum(half);
-			clipFadeOutSpin_->setMaximum(half);
+			clipFadeInCurve_->setCurrentIndex(int(c->fadeInCurve));
+			clipFadeOutCurve_->setCurrentIndex(int(c->fadeOutCurve));
 		}
 	}
 

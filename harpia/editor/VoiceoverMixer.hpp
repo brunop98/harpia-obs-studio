@@ -1,5 +1,7 @@
 #pragma once
 
+#include "FadeCurve.hpp"
+
 #include <QString>
 
 #include <atomic>
@@ -22,6 +24,9 @@ public:
 		double volume = 1.0;   // linear gain
 		int fadeInMs = 15;
 		int fadeOutMs = 15;
+		// Shape of those fades. Straight lines unless the clip says otherwise.
+		FadeCurve fadeInCurve = FadeCurve::Linear;
+		FadeCurve fadeOutCurve = FadeCurve::Linear;
 	};
 
 	// Mix `takes` over `videoPath`'s audio, replacing `videoPath` in place.
@@ -44,12 +49,13 @@ public:
 	// atempo), matching a clip played faster. Returns true on success.
 	static bool decodeToWav(const QString &inPath, const QString &outWav, double speed = 1.0);
 
-	// Exposed for unit testing: apply gain + linear fades to one take and add it
+	// Exposed for unit testing: apply gain + shaped fades to one take and add it
 	// into `mix` (interleaved stereo) at `startFrame`; and build the ducking gain
 	// envelope. Pure math, no libav.
 	static void addTake(std::vector<float> &mix, const std::vector<float> &take,
 			    long long startFrame, double volume, int fadeInFrames,
-			    int fadeOutFrames);
+			    int fadeOutFrames, FadeCurve inCurve = FadeCurve::Linear,
+			    FadeCurve outCurve = FadeCurve::Linear);
 	static std::vector<float> duckEnvelope(long long totalFrames,
 					       const std::vector<std::pair<long long, long long>> &spans,
 					       float duckLevel, int attackFrames, int releaseFrames);

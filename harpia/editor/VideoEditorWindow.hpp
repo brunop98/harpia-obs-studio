@@ -98,6 +98,7 @@ class KeyframeEditor;
 class ShortcutRegistry;
 class ShortcutPanel;
 class TransformEvaluator;
+class KeyList;
 class AudioPreview;
 
 // One video the editor can cut from. The first source is the file the editor
@@ -305,6 +306,7 @@ private:
 	QVector<QDoubleSpinBox *> fxParamSpins_;
 	QStringList fxParamKeys_;
 	int fxParamsForType_ = -1;
+	KeyList *fxKeys_ = nullptr;    // the selected effect clip's parameter keys
 	bool syncingFx_ = false;             // "Add image…" -> pick a file + drop a clip
 
 	void addAudioClipFromSource(int sourceId); // put a source's audio on an audio lane
@@ -585,6 +587,7 @@ private:
 	QDoubleSpinBox *spotRot_ = nullptr;
 	QDoubleSpinBox *spotRadius_ = nullptr;
 	QWidget *spotMaskBox_ = nullptr;
+	KeyList *spotKeys_ = nullptr;  // the selected mask's pose keys
 	bool syncingSpot_ = false;
 	void syncClipInspector();                       // selected clip -> controls
 	void editSelectedClip(const std::function<void(TlClip &)> &fn); // controls -> clip

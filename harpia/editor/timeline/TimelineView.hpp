@@ -88,6 +88,10 @@ public:
 	void deleteSelected(); // every selected clip, honouring per-track ripple
 	// Add an effect clip to a specific effect track at a specific time.
 	void addEffectClipAt(int track, qint64 atOutMs, FxType type);
+	// Overlap this clip with the next one, which is how a transition is made.
+	void makeTransitionWithNext(int track, int clip);
+	int clipAfter(int track, int clip) const;              // by start time, or -1
+	qint64 overlapWith(int track, int a, int b) const;     // ms, 0 when apart
 	// Markers: add one at the playhead, or remove the one already there.
 	void toggleMarkerAtPlayhead();
 	// Nearest marker before/after `fromMs`, or -1 when there is none that way.

@@ -1,6 +1,7 @@
 #include "VideoEditorWindow.hpp"
 
 #include "../ui/UiIcons.hpp"
+#include "KeyList.hpp"
 #include "TimeText.hpp"
 
 #include "AudioRecorder.hpp"
@@ -186,17 +187,20 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	trimModeBtn_ = new QPushButton(QStringLiteral("Simple Trim"), this);
 	trimModeBtn_->setCheckable(true);
 	trimModeBtn_->setChecked(true);
-	trimModeBtn_->setToolTip(QStringLiteral("Trim one start/end range"));
+	trimModeBtn_->setToolTip(QStringLiteral(
+		"Keep one section of one video. The quickest path when that is all you need."));
 	cutModeBtn_ = new QPushButton(QStringLiteral("Multi-Cut"), this);
 	cutModeBtn_->setCheckable(true);
 	cutModeBtn_->setToolTip(QStringLiteral(
-		"Drag on the Source track to select the sections to keep; they are joined in order. "
-		"Each cut gets its own playback speed."));
+		"Keep several sections of one video, joined in order, each at its own speed.\n\n"
+		"Full Editing can do all of this too — Multi-Cut is the faster route when you "
+		"only need to drop parts out."));
 	fullModeBtn_ = new QPushButton(QStringLiteral("Full Editing"), this);
 	fullModeBtn_->setCheckable(true);
 	fullModeBtn_->setToolTip(QStringLiteral(
-		"Multi-track timeline: place clips on stacked video/audio tracks, with overlays, "
-		"picture-in-picture and gaps (like a full video editor)."));
+		"Everything the other two modes do, plus stacked tracks: overlays, "
+		"picture-in-picture, captions, effect clips, transitions and separate audio.\n\n"
+		"Use this whenever more than one thing has to be on screen at once."));
 	auto *modeGroup = new QButtonGroup(this);
 	modeGroup->setExclusive(true); // only one mode active; can't un-check both
 	modeGroup->addButton(trimModeBtn_);
@@ -632,7 +636,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	addImageBtn_->setVisible(false); // Full editing only
 	connect(addImageBtn_, &QPushButton::clicked, this, &VideoEditorWindow::addImageClip);
 	controls->addWidget(addImageBtn_);
-	addFxClipBtn_ = new QPushButton(QStringLiteral("Add effect"), this);
+	addFxClipBtn_ = new QPushButton(QStringLiteral("Add effect clip"), this);
 	addFxClipBtn_->setToolTip(
 		QStringLiteral("Drop an effect clip on its own track. It grades every track "
 			       "below it, for as long as the clip lasts."));
@@ -756,12 +760,22 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// toolbar button). Effects stack top-to-bottom; each is a .frag in the user
 	// shaders folder with its own //@param controls.
 	{
-		auto *fxHdr = new QLabel(QStringLiteral("Effects"), this);
+		auto *fxHdr = new QLabel(QStringLiteral("Shader effects"), this);
 		fxHdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
 		insLayout->addWidget(fxHdr);
+		// There are four things in this app called some kind of "effect", and
+		// nothing used to say which was which. Each section now states its
+		// scope in one line.
+		auto *fxWhat = new QLabel(
+			QStringLiteral("GLSL shaders over the FINISHED picture, after "
+				       "everything else. Whole output, whole timeline."),
+			this);
+		fxWhat->setWordWrap(true);
+		fxWhat->setStyleSheet(QStringLiteral("color:#7f858e;"));
+		insLayout->addWidget(fxWhat);
 
 		auto *fxBtns = new QHBoxLayout;
-		addEffectBtn_ = new QPushButton(QStringLiteral("Add effect"), this);
+		addEffectBtn_ = new QPushButton(QStringLiteral("Add shader"), this);
 		addEffectBtn_->setIcon(uiIcon(Glyph::ChevronDown, 11));
 		addEffectBtn_->setToolTip(QStringLiteral(
 			"Add a post-processing shader. Effects stack top-to-bottom and bake into export."));
@@ -2966,6 +2980,47 @@ void VideoEditorWindow::buildEffectInspector(QVBoxLayout *into)
 		});
 	});
 
+	// The effect's parameters can be animated (FxKey), and until now there was
+	// no way to see or remove a key once it existed.
+	fxKeys_ = new KeyList(QStringLiteral("this effect's settings"), fxBox_);
+	connect(fxKeys_, &KeyList::addRequested, this, [this]() {
+		const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+		if (!sel)
+			return;
+		const qint64 t = timelinePlayheadMs() - sel->outStartMs;
+		editSelectedClip([t](TlClip &c) {
+			// Keys are stored in CLIP time, so moving the clip carries its
+			// animation with it.
+			for (FxKey &k : c.fx.keys)
+				if (k.tMs == t) {
+					k.params = c.fx.params;
+					return;
+				}
+			FxKey k;
+			k.tMs = t;
+			k.params = c.fx.params;
+			c.fx.keys.append(k);
+			std::sort(c.fx.keys.begin(), c.fx.keys.end(),
+				  [](const FxKey &a, const FxKey &b) { return a.tMs < b.tMs; });
+		});
+	});
+	connect(fxKeys_, &KeyList::removeRequested, this, [this](qint64 clipMs) {
+		editSelectedClip([clipMs](TlClip &c) {
+			for (int i = 0; i < c.fx.keys.size(); ++i)
+				if (c.fx.keys[i].tMs == clipMs) {
+					c.fx.keys.remove(i);
+					return;
+				}
+		});
+	});
+	connect(fxKeys_, &KeyList::jumpRequested, this, [this](qint64 clipMs) {
+		const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+		if (sel && timelineView_)
+			timelineView_->setPlayhead(sel->outStartMs + clipMs);
+		showTimelineFrame(timelinePlayheadMs());
+		syncClipInspector();
+	});
+
 	fxName_ = new QLineEdit(fxBox_);
 	fxName_->setPlaceholderText(QStringLiteral("(the effect's own name)"));
 	form->addRow(QStringLiteral("Name"), fxName_);
@@ -2993,6 +3048,13 @@ void VideoEditorWindow::buildEffectInspector(QVBoxLayout *into)
 	fxParamForm_->setHorizontalSpacing(8);
 	fxParamForm_->setVerticalSpacing(4);
 	v->addWidget(fxParamBox_);
+
+	{
+		auto *kh = new QLabel(QStringLiteral("Animation"), fxBox_);
+		kh->setStyleSheet(QStringLiteral("color:#9a9fa8; margin-top:4px;"));
+		v->addWidget(kh);
+	}
+	v->addWidget(fxKeys_);
 
 	auto *reset = new QPushButton(QStringLiteral("Reset parameters"), fxBox_);
 	connect(reset, &QPushButton::clicked, this, [this]() {
@@ -3063,6 +3125,14 @@ void VideoEditorWindow::syncEffectInspector()
 	const QMap<QString, double> p = c->fx.paramsAt(timelinePlayheadMs() - c->outStartMs);
 	for (int i = 0; i < fxParamSpins_.size() && i < fxParamKeys_.size(); ++i)
 		fxParamSpins_[i]->setValue(p.value(fxParamKeys_[i], fxParamSpins_[i]->value()));
+	if (fxKeys_) {
+		QVector<qint64> times;
+		times.reserve(c->fx.keys.size());
+		for (const FxKey &k : c->fx.keys)
+			times.append(k.tMs);
+		// Clip time, to match how the keys are stored.
+		fxKeys_->setTimes(times, timelinePlayheadMs() - c->outStartMs);
+	}
 	syncingFx_ = was;
 }
 
@@ -3244,6 +3314,62 @@ void VideoEditorWindow::buildSpotlightInspector(QVBoxLayout *into)
 	mf->addRow(QStringLiteral("Corner radius"), spotRadius_);
 	v->addWidget(spotMaskBox_);
 
+	// A mask's pose can be animated (SpotKey) — and dragging a keyframed mask in
+	// the preview writes one — but there was nowhere to see, retime or remove it.
+	spotKeys_ = new KeyList(QStringLiteral("this area's position and size"), spotBox_);
+	connect(spotKeys_, &KeyList::addRequested, this, [this]() {
+		const int r = spotList_ ? spotList_->currentRow() : -1;
+		const qint64 now = timelinePlayheadMs();
+		editSpotlight([r, now](SpotlightSpec &sp) {
+			if (r < 0 || r >= sp.masks.size())
+				return;
+			SpotMask &m = sp.masks[r];
+			// The pose to record is whatever is on screen now, which for an
+			// already-animated mask is the interpolated one.
+			const SpotPose pose = m.poseAt(now);
+			for (SpotKey &k : m.keys)
+				if (k.tMs == now) {
+					k.pose = pose;
+					return;
+				}
+			SpotKey k;
+			k.tMs = now;
+			k.pose = pose;
+			m.keys.append(k);
+			std::sort(m.keys.begin(), m.keys.end(),
+				  [](const SpotKey &a, const SpotKey &b) { return a.tMs < b.tMs; });
+		});
+	});
+	connect(spotKeys_, &KeyList::removeRequested, this, [this](qint64 ms) {
+		const int r = spotList_ ? spotList_->currentRow() : -1;
+		editSpotlight([r, ms](SpotlightSpec &sp) {
+			if (r < 0 || r >= sp.masks.size())
+				return;
+			SpotMask &m = sp.masks[r];
+			for (int i = 0; i < m.keys.size(); ++i)
+				if (m.keys[i].tMs == ms) {
+					// Down to one key is a static pose, not an
+					// animation: fold it back into the mask so the
+					// panel's number fields drive it again.
+					if (m.keys.size() == 2)
+						m.pose = m.keys[i == 0 ? 1 : 0].pose;
+					m.keys.remove(i);
+					if (m.keys.size() == 1) {
+						m.pose = m.keys.front().pose;
+						m.keys.clear();
+					}
+					return;
+				}
+		});
+	});
+	connect(spotKeys_, &KeyList::jumpRequested, this, [this](qint64 ms) {
+		if (timelineView_)
+			timelineView_->setPlayhead(ms);
+		showTimelineFrame(timelinePlayheadMs());
+		syncSpotlightInspector();
+	});
+	v->addWidget(spotKeys_);
+
 	auto applyPose = [this]() {
 		if (syncingSpot_)
 			return;
@@ -3400,6 +3526,24 @@ void VideoEditorWindow::syncSpotlightInspector()
 		spotRot_->setValue(m.pose.rotation);
 		spotRadius_->setValue(m.pose.radius);
 		spotRadius_->setEnabled(m.shape == SpotShape::RoundRect);
+		// Every pose field is driven by the keys once there are any, so editing
+		// the numbers directly would be overwritten on the next frame.
+		const bool animated = !m.keys.isEmpty();
+		for (QDoubleSpinBox *sb : {spotX_, spotY_, spotW_, spotH_, spotRot_})
+			sb->setToolTip(animated ? QStringLiteral(
+							  "Animated: edit in the preview, then "
+							  "press Add key to record it here.")
+						: QString());
+	}
+	if (spotKeys_) {
+		QVector<qint64> times;
+		if (r >= 0) {
+			times.reserve(s.masks[r].keys.size());
+			for (const SpotKey &k : s.masks[r].keys)
+				times.append(k.tMs);
+		}
+		spotKeys_->setVisible(r >= 0);
+		spotKeys_->setTimes(times, timelinePlayheadMs());
 	}
 
 	// Hand the preview what to draw handles for. The poses are resolved AT THE

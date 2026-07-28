@@ -1141,6 +1141,15 @@ void TimelineView::paintEvent(QPaintEvent *)
 		p.setPen((t.hidden || t.muted) ? cl_.caption : QColor(0xe8, 0xea, 0xed));
 		p.setFont(hdrFont_);
 		p.drawText(hdr.adjusted(10, 2, -4, 0), Qt::AlignTop | Qt::AlignLeft, t.name);
+		// An effect track acts DOWNWARDS, on the tracks under it. That is easy
+		// to state and hard to remember, especially since index 0 is the top
+		// lane — so the header says which way it points instead.
+		if (t.kind == TlTrack::Kind::Effect) {
+			const int as = 9;
+			paintGlyph(p, Glyph::ArrowDown,
+				   QRectF(hdr.right() - as - 6, hdr.center().y() - as / 2.0, as, as),
+				   t.hidden ? cl_.caption : cl_.effectClip);
+		}
 
 		// Lock / hide / mute toggles (hidden while dragging to cut clutter).
 		if (!dragging) {
@@ -1178,6 +1187,27 @@ void TimelineView::paintEvent(QPaintEvent *)
 				if (spans[ci] > 0 && t.clips[ci].transition.enabled)
 					drawTransition(p, i, ci, spans[ci]);
 		}
+	}
+
+	// While an effect track is selected, wash the lanes it covers. Saying
+	// "grades every track below" is one thing; showing which ones is another,
+	// and it settles the question the moment you move the track.
+	if (selTrack_ >= 0 && selTrack_ < model_.tracks.size() &&
+	    model_.tracks[selTrack_].kind == TlTrack::Kind::Effect &&
+	    !model_.tracks[selTrack_].hidden) {
+		p.save();
+		p.setClipRect(contentRect());
+		p.setPen(Qt::NoPen);
+		QColor wash = cl_.effectClip;
+		wash.setAlpha(26);
+		for (int i = selTrack_ + 1; i < model_.tracks.size(); ++i) {
+			// It grades the picture only; audio below it is untouched.
+			if (!TimelineModel::isPictureKind(model_.tracks[i].kind))
+				continue;
+			p.setBrush(wash);
+			p.drawRect(laneRect(i));
+		}
+		p.restore();
 	}
 
 	// "Release here to make a new track" indicator.
@@ -2119,6 +2149,74 @@ void TimelineView::addEffectClipAt(int track, qint64 atOutMs, FxType type)
 	commitEdit(); // repaints the preview and records one undo step
 }
 
+// The clip that starts next on this track, or -1. "Next" is by start time, not
+// by index: clips are stored unordered.
+int TimelineView::clipAfter(int track, int clip) const
+{
+	if (track < 0 || track >= model_.tracks.size())
+		return -1;
+	const TlTrack &t = model_.tracks[track];
+	if (clip < 0 || clip >= t.clips.size())
+		return -1;
+	const qint64 from = t.clips[clip].outStartMs;
+	int best = -1;
+	for (int i = 0; i < t.clips.size(); ++i) {
+		if (i == clip || t.clips[i].outStartMs <= from)
+			continue;
+		if (best < 0 || t.clips[i].outStartMs < t.clips[best].outStartMs)
+			best = i;
+	}
+	return best;
+}
+
+// How much two clips on a track already overlap, in ms (0 when they do not).
+qint64 TimelineView::overlapWith(int track, int a, int b) const
+{
+	if (track < 0 || track >= model_.tracks.size() || a < 0 || b < 0)
+		return 0;
+	const TlTrack &t = model_.tracks[track];
+	if (a >= t.clips.size() || b >= t.clips.size())
+		return 0;
+	const qint64 lo = std::max(t.clips[a].outStartMs, t.clips[b].outStartMs);
+	const qint64 hi = std::min(t.clips[a].outEndMs(), t.clips[b].outEndMs());
+	return std::max<qint64>(0, hi - lo);
+}
+
+// Slide the following clip back so it overlaps this one, which IS the
+// transition. Everything after it moves by the same amount, so the rest of the
+// track keeps its spacing rather than the next clip landing on top of it.
+void TimelineView::makeTransitionWithNext(int track, int clip)
+{
+	const int nx = clipAfter(track, clip);
+	if (track < 0 || track >= model_.tracks.size() || nx < 0)
+		return;
+	TlTrack &t = model_.tracks[track];
+	if (t.locked)
+		return;
+	// A second, or a third of the shorter clip if that is less -- an overlap
+	// longer than either clip has nothing left to fade from.
+	const qint64 shorter = std::min(t.clips[clip].outDurationMs(), t.clips[nx].outDurationMs());
+	const qint64 want = std::max<qint64>(kMinClipMs, std::min<qint64>(1000, shorter / 3));
+	// Close any gap first, then overlap by `want`.
+	const qint64 shift = t.clips[nx].outStartMs - (t.clips[clip].outEndMs() - want);
+	if (shift == 0)
+		return;
+	const qint64 from = t.clips[nx].outStartMs;
+	for (TlClip &c : t.clips)
+		if (c.outStartMs >= from)
+			c.outStartMs = std::max<qint64>(0, c.outStartMs - shift);
+	t.clips[nx].transition.enabled = true;
+	selTrack_ = track;
+	selClip_ = nx;
+	selTransition_ = true; // select the transition, so its settings are right there
+	extraSel_.clear();
+	clampView();
+	updateGeometry();
+	update();
+	emit selectionChanged(selTrack_, selClip_);
+	commitEdit();
+}
+
 void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qint64 atOutMs)
 {
 	const bool locked = model_.tracks[track].locked;
@@ -2147,6 +2245,22 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 			  atOutMs < c.outEndMs() - kMinClipMs);
 	QAction *dup = menu.addAction(QStringLiteral("Duplicate"));
 	dup->setEnabled(!locked);
+	// Transitions are made by OVERLAPPING two clips -- there is no transition
+	// object to create. That is a good model (moving a clip retimes the
+	// transition for free) but an invisible one: with no button anywhere, the
+	// reasonable conclusion is that the editor has no transitions. This command
+	// makes the overlap for you, and after using it once the model is obvious.
+	QAction *mkTr = nullptr;
+	const int nextClip = clipAfter(track, clip);
+	if (TimelineModel::isPictureKind(model_.tracks[track].kind)) {
+		const bool already = overlapWith(track, clip, nextClip) > 0;
+		mkTr = menu.addAction(already ? QStringLiteral("Transition already here")
+					      : QStringLiteral("Make transition with next clip"));
+		mkTr->setEnabled(!locked && nextClip >= 0 && !already);
+		mkTr->setToolTip(QStringLiteral(
+			"Slides the next clip back so the two overlap. The overlap IS the "
+			"transition — drag either clip to change its length."));
+	}
 	QAction *mute = menu.addAction(model_.tracks[track].muted ? QStringLiteral("Unmute track")
 								 : QStringLiteral("Mute track"));
 	menu.addSeparator();
@@ -2163,6 +2277,10 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		emit selectionChanged(selTrack_, selClip_);
 		update();
 		emit keyframeEditorRequested();
+		return;
+	}
+	if (mkTr && chosen == mkTr) {
+		makeTransitionWithNext(track, clip);
 		return;
 	}
 	if (fxToggle && chosen == fxToggle) {

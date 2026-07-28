@@ -140,6 +140,8 @@ target_sources(
     ui/RegionDialogs.cpp
     ui/RegionDialogs.hpp
     # Built-in trim / crop / export editor (isolated module).
+    editor/KeyList.cpp
+    editor/KeyList.hpp
     editor/FrameSeeker.cpp
     editor/FrameSeeker.hpp
     editor/ClipExporter.cpp

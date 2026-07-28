@@ -820,13 +820,16 @@ void Timeline::wheelEvent(QWheelEvent *e)
 
 void Timeline::setStart(qint64 ms)
 {
-	start_ = std::clamp<qint64>(ms, 0, end_ - 1);
+	// std::max on the upper bound, not for tidiness: std::clamp with hi < lo is
+	// undefined behaviour, and `end_` is 0 until setDuration() has run. Same
+	// below for setEnd(), where start_ + 1 can pass duration_.
+	start_ = std::clamp<qint64>(ms, 0, std::max<qint64>(0, end_ - 1));
 	update();
 }
 
 void Timeline::setEnd(qint64 ms)
 {
-	end_ = std::clamp<qint64>(ms, start_ + 1, duration_);
+	end_ = std::clamp<qint64>(ms, start_ + 1, std::max<qint64>(start_ + 1, duration_));
 	update();
 }
 
@@ -962,12 +965,12 @@ void Timeline::mouseMoveEvent(QMouseEvent *e)
 	hoverMs_ = -1; // a drag owns the preview
 	const qint64 ms = xToMs(e->pos().x());
 	if (grab_ == Grab::Start) {
-		start_ = std::clamp<qint64>(ms, 0, end_ - 1);
+		start_ = std::clamp<qint64>(ms, 0, std::max<qint64>(0, end_ - 1));
 		playhead_ = start_;
 		emit startChanged(start_);
 		emit scrub(start_);
 	} else if (grab_ == Grab::End) {
-		end_ = std::clamp<qint64>(ms, start_ + 1, duration_);
+		end_ = std::clamp<qint64>(ms, start_ + 1, std::max<qint64>(start_ + 1, duration_));
 		playhead_ = end_;
 		emit endChanged(end_);
 		emit scrub(end_);

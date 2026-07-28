@@ -22,9 +22,13 @@ const char *kNames[kTransitionTypeCount] = {
 
 // Deterministic per-pixel threshold for the noise dissolve, so two exports of
 // the same project match.
+// Unsigned throughout: these multiplies are MEANT to wrap, and wrapping a
+// signed int is undefined behaviour the compiler may assume never happens. It
+// overflows from x = 6 onwards, so every pixel of a dissolve past the seventh
+// column was relying on it.
 inline double hash01(int x, int y)
 {
-	unsigned int n = (unsigned int)(x * 374761393 + y * 668265263);
+	unsigned int n = unsigned(x) * 374761393u + unsigned(y) * 668265263u;
 	n = (n ^ (n >> 13)) * 1274126177u;
 	return double((n ^ (n >> 16)) & 0xffff) / 65535.0;
 }

@@ -3,6 +3,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
 #include <QSettings>
 #include <QShortcut>
 #include <QWidget>
@@ -159,18 +160,48 @@ void ShortcutRegistry::rebuild()
 	live_.clear();
 	if (!host_)
 		return;
+	// At most one live shortcut per key. Two QShortcuts on the same key in the
+	// same window is "ambiguous" to Qt, and an ambiguous shortcut fires
+	// NEITHER command -- so a single duplicate silently kills two features. The
+	// panel refuses to create one, but an imported profile or a hand-edited
+	// settings file can, and this is the one place every route passes through.
+	QSet<QKeySequence> taken;
 	for (const ShortcutCommand &c : cmds_) {
 		if (c.mouseOnly || !c.run)
 			continue;
 		for (const QKeySequence &k : binds_.value(c.id)) {
-			if (k.isEmpty())
+			if (k.isEmpty() || taken.contains(k))
 				continue;
+			taken.insert(k);
 			auto *s = new QShortcut(k, host_);
 			s->setContext(Qt::WindowShortcut);
 			const std::function<void()> fn = c.run;
 			QObject::connect(s, &QShortcut::activated, host_, [fn]() { fn(); });
 			live_.append(s);
 		}
+	}
+}
+
+// Strip any key already claimed by an earlier command, so what the panel shows
+// is what actually works. Registration order decides the winner, which is also
+// the order the panel lists them in.
+//
+// Done on the way IN rather than only in rebuild(): dropping the shortcut but
+// leaving the binding would show a command as bound to a key that does nothing.
+void ShortcutRegistry::dropDuplicateBindings()
+{
+	QSet<QKeySequence> taken;
+	for (const ShortcutCommand &c : cmds_) {
+		if (c.mouseOnly)
+			continue;
+		QVector<QKeySequence> keep;
+		for (const QKeySequence &k : binds_.value(c.id)) {
+			if (k.isEmpty() || taken.contains(k))
+				continue;
+			taken.insert(k);
+			keep.append(k);
+		}
+		binds_[c.id] = keep;
 	}
 }
 
@@ -195,6 +226,9 @@ void ShortcutRegistry::load()
 		binds_[c.id] = v;
 	}
 	s.endGroup();
+	// Settings are a file too, and a build that renamed a command can leave two
+	// of them holding the same key.
+	dropDuplicateBindings();
 	rebuild();
 	emit bindingsChanged();
 }
@@ -267,6 +301,8 @@ bool ShortcutRegistry::importProfile(const QByteArray &json, QString *err)
 		}
 		binds_[it.key()] = v;
 	}
+	// A profile is a file: nothing stops it naming the same key twice.
+	dropDuplicateBindings();
 	rebuild();
 	save();
 	emit bindingsChanged();

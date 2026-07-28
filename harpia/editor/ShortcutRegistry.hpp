@@ -91,6 +91,8 @@ signals:
 
 private:
 	void rebuild(); // recreate the QShortcut objects from the current bindings
+	// Remove any key a previously-registered command already claims.
+	void dropDuplicateBindings();
 
 	QWidget *host_ = nullptr;
 	QVector<ShortcutCommand> cmds_;

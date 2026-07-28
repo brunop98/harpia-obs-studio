@@ -114,6 +114,10 @@ public:
 
 signals:
 	void clipsChanged();
+	// A finished, discrete edit (drag released, split, delete, paste, track op).
+	// Always paired with clipsChanged; the window uses it to close an undo entry
+	// immediately instead of waiting out the coalescing timer.
+	void editCommitted();
 	void selectionChanged(int track, int clip);
 	void scrub(qint64 outMs);      // preview at this output time (click/drag)
 	void hoverScrub(qint64 outMs); // preview while hovering (no click)
@@ -152,6 +156,8 @@ private:
 	mutable QFont clipFont_;   // clip label bar
 	mutable int fontsForPx_ = -1; // segFontPx the cached fonts were built for
 	void changeEvent(QEvent *e) override; // drop the cache when the widget font changes
+
+	void commitEdit(); // clipsChanged + editCommitted, for a finished action
 
 	void drawRuler(QPainter &p) const;
 	void drawClip(QPainter &p, int track, int clip) const;

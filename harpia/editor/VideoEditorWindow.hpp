@@ -186,7 +186,8 @@ private:
 	EditorSnapshot snapshot() const;
 	void restoreSnapshot(const EditorSnapshot &s);
 	void scheduleSnapshot();  // debounced: records after edits settle
-	void captureSnapshot();   // histTimer_ fired — push if changed
+	void captureSnapshot(); // histTimer_ fired — push if changed
+	void commitSnapshot();  // capture immediately (a finished, discrete action)
 	void updateUndoRedoButtons();
 
 	// Voiceover helpers.

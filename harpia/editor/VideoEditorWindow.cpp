@@ -430,6 +430,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		syncClipInspector();
 		scheduleSnapshot();
 	});
+	// A finished timeline action closes its undo entry at once. Without this,
+	// two edits inside the 350ms coalescing window share one entry -- and a move
+	// followed by a move back collapses to no change at all, which is what made
+	// Ctrl+Z look broken.
+	connect(timelineView_, &TimelineView::editCommitted, this,
+		&VideoEditorWindow::commitSnapshot);
 	connect(timelineView_, &TimelineView::selectionChanged, this, [this](int, int) {
 		syncPreviewTransformTarget();
 		updateInspector();
@@ -4340,6 +4346,16 @@ void VideoEditorWindow::scheduleSnapshot()
 	if (restoring_ || !valid_)
 		return;
 	histTimer_->start(); // (re)start the coalescing timer
+}
+
+// Close the current undo entry now. Used for discrete actions, where waiting
+// out the coalescing timer would let the NEXT action join the same entry.
+void VideoEditorWindow::commitSnapshot()
+{
+	if (restoring_ || !valid_)
+		return;
+	histTimer_->stop();
+	captureSnapshot();
 }
 
 void VideoEditorWindow::captureSnapshot()

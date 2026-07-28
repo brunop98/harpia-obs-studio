@@ -158,7 +158,7 @@ void TimelineView::addTrack(TlTrack::Kind kind, int atIndex)
 	renumberTracks();
 	updateGeometry();
 	update();
-	emit clipsChanged();
+	commitEdit();
 }
 
 void TimelineView::deleteTrack(int index)
@@ -175,7 +175,7 @@ void TimelineView::deleteTrack(int index)
 	updateGeometry();
 	update();
 	emit selectionChanged(selTrack_, selClip_);
-	emit clipsChanged();
+	commitEdit();
 }
 
 void TimelineView::setSnapEnabled(bool on)
@@ -220,7 +220,7 @@ void TimelineView::addClip(TlTrack::Kind kind, const TlClip &clip)
 	clampView();
 	updateGeometry();
 	update();
-	emit clipsChanged();
+	commitEdit();
 	emit selectionChanged(selTrack_, selClip_);
 }
 
@@ -244,6 +244,18 @@ void TimelineView::updateSelectedClip(const TlClip &c)
 	t.clips[selClip_] = c;
 	update();
 	emit clipsChanged();
+}
+
+// One finished, discrete edit. Emitting the extra signal is what tells the
+// window to write an undo entry NOW rather than 350ms from now: two drags in
+// quick succession are two actions, and coalescing them into one entry is how
+// "undo does nothing" happens (a drag out and back cancels to no change at all).
+// The continuous streams -- an Inspector spin box, a held arrow key -- keep
+// using plain clipsChanged() so they still coalesce.
+void TimelineView::commitEdit()
+{
+	emit clipsChanged();
+	emit editCommitted();
 }
 
 void TimelineView::setPlayhead(qint64 outMs)
@@ -511,7 +523,7 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos)
 		if (t.name.isEmpty()) {
 			renumberTracks();
 			update();
-			emit clipsChanged();
+			commitEdit();
 			return;
 		}
 	} else if (chosen == colour) {
@@ -531,7 +543,7 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos)
 		return;
 	}
 	update();
-	emit clipsChanged();
+	commitEdit();
 }
 
 qint64 TimelineView::snap(qint64 ms, int ignoreTrack, int ignoreClip, bool *hit) const
@@ -1116,7 +1128,7 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 			return;
 		}
 		update();
-		emit clipsChanged(); // repaints the preview + records an undo step
+		commitEdit(); // repaints the preview + records an undo step
 		return;
 	}
 
@@ -1413,7 +1425,7 @@ void TimelineView::mouseDoubleClickEvent(QMouseEvent *e)
 	dragMoved_ = false;
 	update();
 	emit selectionChanged(fh.track, fh.clip);
-	emit clipsChanged();
+	commitEdit();
 }
 
 void TimelineView::mouseReleaseEvent(QMouseEvent *e)
@@ -1433,7 +1445,7 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 		QToolTip::hideText();
 		update();
 		if (changed)
-			emit clipsChanged(); // repaint the preview + record one undo step
+			commitEdit(); // repaint the preview + record one undo step
 		return;
 	}
 	if (mode_ != Mode::None && dragTrack_ >= 0) {
@@ -1489,7 +1501,7 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 		updateGeometry();
 		update();
 		if (changed)
-			emit clipsChanged();
+			commitEdit();
 	}
 }
 
@@ -1660,7 +1672,7 @@ void TimelineView::pasteAt(const QVector<ClipboardEntry> &entries, qint64 atMs)
 	clampView();
 	updateGeometry();
 	update();
-	emit clipsChanged();
+	commitEdit();
 }
 
 void TimelineView::nudgeSelection(qint64 deltaMs)
@@ -1702,13 +1714,13 @@ void TimelineView::toggleMarkerAtPlayhead()
 		if (std::llabs(model_.markers[i] - playheadMs_) <= tol) {
 			model_.markers.remove(i);
 			update();
-			emit clipsChanged();
+			commitEdit();
 			return;
 		}
 	model_.markers.append(playheadMs_);
 	std::sort(model_.markers.begin(), model_.markers.end());
 	update();
-	emit clipsChanged();
+	commitEdit();
 }
 
 qint64 TimelineView::markerNear(qint64 fromMs, bool forward) const
@@ -1760,7 +1772,7 @@ void TimelineView::splitAtPlayhead()
 		return;
 	extraSel_.clear();
 	update();
-	emit clipsChanged();
+	commitEdit();
 }
 
 void TimelineView::deleteSelected()
@@ -1798,7 +1810,7 @@ void TimelineView::deleteSelected()
 	clampView();
 	updateGeometry();
 	update();
-	emit clipsChanged();
+	commitEdit();
 }
 
 void TimelineView::splitClip(int track, int clip, qint64 atOutMs)
@@ -1821,7 +1833,7 @@ void TimelineView::splitClip(int track, int clip, qint64 atOutMs)
 	selClip_ = clip + 1;
 	update();
 	emit selectionChanged(track, selClip_);
-	emit clipsChanged();
+	commitEdit();
 }
 
 void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qint64 atOutMs)
@@ -1855,11 +1867,11 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		selClip_ = clip + 1;
 		emit selectionChanged(track, selClip_);
 		update();
-		emit clipsChanged();
+		commitEdit();
 	} else if (chosen == mute) {
 		model_.tracks[track].muted = !model_.tracks[track].muted;
 		update();
-		emit clipsChanged();
+		commitEdit();
 	} else if (chosen == del) {
 		selTrack_ = track;
 		selClip_ = clip;

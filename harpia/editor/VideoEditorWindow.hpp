@@ -495,6 +495,21 @@ private:
 
 	void buildClipInspector(QVBoxLayout *into);
 
+	// Transition Inspector: shown when a clip OVERLAP is selected.
+	void buildTransitionInspector(QVBoxLayout *into);
+	void syncTransitionInspector();
+	void editSelectedTransition(const std::function<void(TlTransition &)> &fn);
+	QWidget *trBox_ = nullptr;
+	QLabel *trInfo_ = nullptr;
+	QComboBox *trType_ = nullptr;
+	QComboBox *trEaseOut_ = nullptr;
+	QComboBox *trEaseIn_ = nullptr;
+	QCheckBox *trReverse_ = nullptr;
+	QCheckBox *trEnabled_ = nullptr;
+	QDoubleSpinBox *trSoftness_ = nullptr;
+	QPushButton *trRemove_ = nullptr;
+	bool syncingTr_ = false;
+
 	// Inverse Selection (Spotlight): a project-level effect, so its panel sits
 	// beside the project section rather than the clip one.
 	void buildSpotlightInspector(QVBoxLayout *into);

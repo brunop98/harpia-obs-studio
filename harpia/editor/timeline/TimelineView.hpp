@@ -92,6 +92,16 @@ public:
 	qint64 markerNear(qint64 fromMs, bool forward) const;
 	bool isSelected(int track, int clip) const;
 
+	// A transition is selected instead of a clip when the click lands in an
+	// overlap. It is identified by the INCOMING clip, which is where its
+	// settings live.
+	bool transitionSelected() const { return selTransition_; }
+	int selectedTransitionTrack() const { return selTransition_ ? selTrack_ : -1; }
+	int selectedTransitionClip() const { return selTransition_ ? selClip_ : -1; }
+	// Remove the selected transition by snapping the clips together: the overlap
+	// IS the transition, so closing it is how you delete one.
+	void removeSelectedTransition();
+
 	// Selection (track index, clip index). {-1,-1} = nothing.
 	int selectedTrack() const { return selTrack_; }
 	int selectedClip() const { return selClip_; }
@@ -197,6 +207,10 @@ private:
 	int fadeMsForX(const TlClip &c, const QRect &r, int x, FadeSide side, bool fine) const;
 
 	int clipAtPoint(const QPoint &p, int *trackOut) const; // clip index or -1
+	// The overlap under a point: the INCOMING clip's index, or -1.
+	int transitionAtPoint(const QPoint &p, int *trackOut) const;
+	QRect transitionRect(int track, int incoming) const;
+	void drawTransition(QPainter &p, int track, int incoming) const;
 	// Nearest snap candidate to `ms`, or `ms` itself when nothing is in range.
 	// `hit` (optional) reports whether a candidate was actually taken — the
 	// caller uses it to light up the guide line.
@@ -230,6 +244,11 @@ private:
 	QHash<int, double> srcAspect_;
 
 	int selTrack_ = -1, selClip_ = -1;
+	// True when the click landed in an overlap: the same (track, clip) pair, but
+	// meaning "the transition arriving on this clip" rather than the clip.
+	bool selTransition_ = false;
+	// The overlap under the cursor, for the hover highlight. {-1,-1} = none.
+	int hoverTrTrack_ = -1, hoverTrClip_ = -1;
 	// Clips selected ALONGSIDE the primary. The primary is what the Inspector
 	// edits; delete, copy and drag act on the primary plus these.
 	QSet<QPair<int, int>> extraSel_;

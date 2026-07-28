@@ -77,6 +77,8 @@ void TimelineView::setModel(const TimelineModel &m)
 {
 	model_ = m;
 	selTrack_ = selClip_ = -1;
+	selTransition_ = false;
+	hoverTrTrack_ = hoverTrClip_ = -1;
 	clampView();
 	update();
 	updateGeometry();
@@ -549,6 +551,106 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos)
 	commitEdit();
 }
 
+// ---- transitions (clip overlaps) --------------------------------------------
+
+QRect TimelineView::transitionRect(int track, int incoming) const
+{
+	if (track < 0 || track >= model_.tracks.size())
+		return {};
+	const TlTrack &t = model_.tracks[track];
+	if (incoming < 0 || incoming >= t.clips.size())
+		return {};
+	const qint64 span = t.overlapBefore(incoming);
+	if (span <= 0)
+		return {};
+	const TlClip &c = t.clips[incoming];
+	const QRect lane = laneRect(track);
+	const int x0 = msToX(c.outStartMs);
+	const int x1 = msToX(c.outStartMs + span);
+	return QRect(x0, lane.y() + 2, std::max(2, x1 - x0), lane.height() - 4);
+}
+
+int TimelineView::transitionAtPoint(const QPoint &p, int *trackOut) const
+{
+	const int track = laneAtY(p.y());
+	if (track < 0 || track >= model_.tracks.size())
+		return -1;
+	const TlTrack &t = model_.tracks[track];
+	if (t.kind != TlTrack::Kind::Video)
+		return -1; // only picture tracks show a transition
+	for (int i = 0; i < t.clips.size(); ++i) {
+		if (t.overlapBefore(i) <= 0 || !t.clips[i].transition.enabled)
+			continue;
+		if (transitionRect(track, i).contains(p)) {
+			if (trackOut)
+				*trackOut = track;
+			return i;
+		}
+	}
+	return -1;
+}
+
+void TimelineView::drawTransition(QPainter &p, int track, int incoming) const
+{
+	const QRect r = transitionRect(track, incoming);
+	if (r.isEmpty() || r.right() < contentRect().x() || r.x() > contentRect().right())
+		return;
+	const bool sel = selTransition_ && selTrack_ == track && selClip_ == incoming;
+	const bool hot = hoverTrTrack_ == track && hoverTrClip_ == incoming;
+
+	p.save();
+	p.setClipRect(contentRect());
+	// A shaded band so the overlap is unmistakably a region, not just two clips
+	// that happen to touch.
+	p.setPen(Qt::NoPen);
+	p.setBrush(QColor(0xff, 0xff, 0xff, sel ? 62 : (hot ? 42 : 26)));
+	p.drawRect(r);
+	// The classic crossing diagonals: one line falling, one rising, so which
+	// clip is leaving and which arriving is readable at a glance.
+	p.setPen(QPen(QColor(0xff, 0xff, 0xff, sel ? 235 : 165), sel ? 2 : 1));
+	p.drawLine(r.topLeft(), r.bottomRight());
+	p.drawLine(r.bottomLeft(), r.topRight());
+	p.setPen(QPen(QColor(0xff, 0xff, 0xff, sel ? 220 : 120), 1));
+	p.drawLine(r.topLeft(), r.bottomLeft());
+	p.drawLine(r.topRight(), r.bottomRight());
+	// Name it when there is room, so a wipe is not mistaken for a crossfade.
+	if (r.width() > 64) {
+		p.setFont(clipFont_);
+		p.setPen(QColor(0xff, 0xff, 0xff, 220));
+		p.drawText(r, Qt::AlignCenter,
+			   p.fontMetrics().elidedText(
+				   QString::fromLatin1(
+					   transitionName(model_.tracks[track].clips[incoming].transition.type)),
+				   Qt::ElideRight, r.width() - 8));
+	}
+	p.restore();
+}
+
+void TimelineView::removeSelectedTransition()
+{
+	if (!selTransition_ || selTrack_ < 0 || selTrack_ >= model_.tracks.size())
+		return;
+	TlTrack &t = model_.tracks[selTrack_];
+	if (t.locked || selClip_ < 0 || selClip_ >= t.clips.size())
+		return;
+	const qint64 span = t.overlapBefore(selClip_);
+	if (span <= 0)
+		return;
+	// The overlap IS the transition, so removing one means closing the overlap:
+	// slide the incoming clip (and everything after it on this track) right by
+	// the overlap, leaving the two butted together.
+	const qint64 from = t.clips[selClip_].outStartMs;
+	for (TlClip &c : t.clips)
+		if (c.outStartMs >= from)
+			c.outStartMs += span;
+	selTransition_ = false;
+	clampView();
+	updateGeometry();
+	update();
+	emit selectionChanged(selTrack_, selClip_);
+	commitEdit();
+}
+
 qint64 TimelineView::snap(qint64 ms, int ignoreTrack, int ignoreClip, bool *hit) const
 {
 	if (hit)
@@ -1008,6 +1110,13 @@ void TimelineView::paintEvent(QPaintEvent *)
 		for (int ci = 0; ci < t.clips.size(); ++ci)
 			drawClip(p, i, ci);
 		p.restore();
+
+		// Overlaps last, over both clips: the band has to read as belonging to
+		// neither of them.
+		if (t.kind == TlTrack::Kind::Video)
+			for (int ci = 0; ci < t.clips.size(); ++ci)
+				if (t.overlapBefore(ci) > 0 && t.clips[ci].transition.enabled)
+					drawTransition(p, i, ci);
 	}
 
 	// "Release here to make a new track" indicator.
@@ -1186,6 +1295,25 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	if (e->button() != Qt::LeftButton)
 		return;
 
+	// An overlap belongs to neither clip: clicking it selects the TRANSITION.
+	// Ctrl-click still falls through to the clips, so a group selection can
+	// still be built across an overlap.
+	if (!(e->modifiers() & Qt::ControlModifier)) {
+		int trTrack = -1;
+		const int trIncoming = transitionAtPoint(pos, &trTrack);
+		if (trIncoming >= 0) {
+			selTrack_ = trTrack;
+			selClip_ = trIncoming;
+			selTransition_ = true;
+			extraSel_.clear();
+			mode_ = Mode::None;
+			emit selectionChanged(selTrack_, selClip_);
+			emitScrubAt(xToMs(pos.x()));
+			update();
+			return;
+		}
+	}
+
 	// A fade grip wins over the clip under it — it sits inside the clip, and
 	// the top corners are also where a trim would otherwise start.
 	if (const FadeHit fh = fadeHandleAt(pos); fh.valid()) {
@@ -1202,6 +1330,8 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 		update();
 		return;
 	}
+
+	selTransition_ = false; // anything else selects a clip, not a transition
 
 	if (clip < 0) {
 		// Empty area: move the playhead + scrub.
@@ -1421,6 +1551,13 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 		fadeHover_ = fh;
 		update();
 	}
+	int hoverTr = -1;
+	const int hoverInc = transitionAtPoint(pos, &hoverTr);
+	if (hoverTr != hoverTrTrack_ || hoverInc != hoverTrClip_) {
+		hoverTrTrack_ = hoverInc >= 0 ? hoverTr : -1;
+		hoverTrClip_ = hoverInc;
+		update();
+	}
 
 	int track = -1;
 	const int clip = clipAtPoint(pos, &track);
@@ -1631,6 +1768,7 @@ bool TimelineView::isSelected(int track, int clip) const
 
 void TimelineView::selectClip(int track, int clip)
 {
+	selTransition_ = false;
 	extraSel_.clear();
 	if (track < 0 || track >= model_.tracks.size() || clip < 0 ||
 	    clip >= model_.tracks[track].clips.size()) {
@@ -1826,6 +1964,12 @@ void TimelineView::splitAtPlayhead()
 
 void TimelineView::deleteSelected()
 {
+	// Delete on a selected transition removes the TRANSITION -- the clips stay
+	// and snap together. Deleting the clip under it would be a nasty surprise.
+	if (selTransition_) {
+		removeSelectedTransition();
+		return;
+	}
 	const auto sel = selectedPairs();
 	if (sel.isEmpty())
 		return;

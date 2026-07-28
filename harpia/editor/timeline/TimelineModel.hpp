@@ -12,6 +12,7 @@
 #include "../FadeCurve.hpp"
 #include "Ease.hpp"
 #include "EffectClip.hpp"
+#include "Transitions.hpp"
 #include "Spotlight.hpp"
 
 #include <QColor>
@@ -221,6 +222,11 @@ struct TlClip {
 	// Effect clips only: which effect, its parameters and its keyframes.
 	FxSpec fx;
 
+	// How this clip ARRIVES when it overlaps the one before it on its track.
+	// The overlap itself is the transition's duration, so there is nothing here
+	// to keep in sync with the clips' positions.
+	TlTransition transition;
+
 	// Audio-only. The fades are non-destructive: nothing is written back to the
 	// media, they are evaluated as a gain at play/render time.
 	double volume = 1.0;
@@ -429,7 +435,7 @@ struct TlClip {
 		       posX == o.posX && posY == o.posY && scale == o.scale &&
 		       rotation == o.rotation && opacity == o.opacity &&
 		       crop == o.crop && keys == o.keys && text == o.text &&
-		       scripts == o.scripts && fx == o.fx &&
+		       scripts == o.scripts && fx == o.fx && transition == o.transition &&
 		       volume == o.volume && fadeInMs == o.fadeInMs &&
 		       fadeOutMs == o.fadeOutMs && fadeInCurve == o.fadeInCurve &&
 		       fadeOutCurve == o.fadeOutCurve;
@@ -475,6 +481,53 @@ struct TlTrack {
 			if (clips[i].coversOutput(outMs))
 				return i;
 		return -1;
+	}
+
+	// The two clips in an overlap at `outMs`, if there is one: `*outgoing` is
+	// the earlier, `*incoming` the later. Returns false when at most one clip
+	// covers this instant. Only ever two -- a three-way pile-up is not a
+	// transition anyone means, so the latest pair wins.
+	bool overlapAt(qint64 outMs, int *outgoing, int *incoming) const
+	{
+		int a = -1, b = -1;
+		for (int i = 0; i < clips.size(); ++i) {
+			if (!clips[i].coversOutput(outMs))
+				continue;
+			if (a < 0 || clips[i].outStartMs < clips[a].outStartMs) {
+				b = (a >= 0 && (b < 0 || clips[a].outStartMs > clips[b].outStartMs)) ? a : b;
+				a = i;
+			} else if (b < 0 || clips[i].outStartMs > clips[b].outStartMs) {
+				b = i;
+			}
+		}
+		if (a < 0 || b < 0 || a == b)
+			return false;
+		if (outgoing)
+			*outgoing = a;
+		if (incoming)
+			*incoming = b;
+		return true;
+	}
+
+	// Milliseconds the clip at `index` overlaps the clip that ends inside it —
+	// i.e. the length of its incoming transition. 0 when it has none.
+	qint64 overlapBefore(int index) const
+	{
+		if (index < 0 || index >= clips.size())
+			return 0;
+		const TlClip &me = clips[index];
+		qint64 best = 0;
+		for (int i = 0; i < clips.size(); ++i) {
+			if (i == index)
+				continue;
+			const TlClip &o = clips[i];
+			// Only a clip that STARTS earlier can be the outgoing one.
+			if (o.outStartMs >= me.outStartMs)
+				continue;
+			const qint64 ov = std::min(o.outEndMs(), me.outEndMs()) - me.outStartMs;
+			best = std::max(best, std::max<qint64>(0, ov));
+		}
+		return best;
 	}
 
 	bool operator==(const TlTrack &o) const

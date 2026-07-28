@@ -176,6 +176,18 @@ inline QJsonObject clipToJson(const TlClip &c)
 		}
 		co[QStringLiteral("keys")] = keyArr;
 	}
+	// Only written when it differs from the default, so a project full of plain
+	// cuts stays clean.
+	if (c.transition != TlTransition()) {
+		QJsonObject tr;
+		tr[QStringLiteral("type")] = int(c.transition.type);
+		tr[QStringLiteral("enabled")] = c.transition.enabled;
+		tr[QStringLiteral("easeOut")] = int(c.transition.easeOut);
+		tr[QStringLiteral("easeIn")] = int(c.transition.easeIn);
+		tr[QStringLiteral("reverse")] = c.transition.reverse;
+		tr[QStringLiteral("softness")] = c.transition.softness;
+		co[QStringLiteral("transition")] = tr;
+	}
 	if (c.type == TlClip::Type::Effect) {
 		QJsonObject fo;
 		fo[QStringLiteral("kind")] = int(c.fx.type);
@@ -289,6 +301,16 @@ inline TlClip clipFromJson(const QJsonObject &co)
 			ch.bez2 = std::clamp(cho.value(QStringLiteral("b2")).toDouble(0.58), 0.0, 1.0);
 		}
 		c.keys.append(k);
+	}
+	if (co.contains(QStringLiteral("transition"))) {
+		const QJsonObject tr = co.value(QStringLiteral("transition")).toObject();
+		c.transition.type = transitionFromInt(tr.value(QStringLiteral("type")).toInt(0));
+		c.transition.enabled = tr.value(QStringLiteral("enabled")).toBool(true);
+		c.transition.easeOut = tlEaseFromInt(tr.value(QStringLiteral("easeOut")).toInt(0));
+		c.transition.easeIn = tlEaseFromInt(tr.value(QStringLiteral("easeIn")).toInt(0));
+		c.transition.reverse = tr.value(QStringLiteral("reverse")).toBool(false);
+		c.transition.softness =
+			std::clamp(tr.value(QStringLiteral("softness")).toDouble(0.0), 0.0, 1.0);
 	}
 	if (c.type == TlClip::Type::Effect) {
 		const QJsonObject fo = co.value(QStringLiteral("fx")).toObject();

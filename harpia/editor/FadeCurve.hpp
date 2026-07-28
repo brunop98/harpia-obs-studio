@@ -19,9 +19,12 @@ enum class FadeCurve {
 	EaseInOut,   // smooth at both ends
 	Exponential, // stays quiet a long time (close to how loudness is heard)
 	Logarithmic, // rises fast, then creeps to full
+	// sin/cos pair: two clips crossfading on this curve keep constant POWER, so
+	// the mix does not dip in the middle the way two linear fades do.
+	EqualPower,
 };
 
-inline constexpr int kFadeCurveCount = 6;
+inline constexpr int kFadeCurveCount = 7;
 
 inline const char *fadeCurveName(FadeCurve c)
 {
@@ -32,6 +35,7 @@ inline const char *fadeCurveName(FadeCurve c)
 	case FadeCurve::EaseInOut: return "Ease In-Out";
 	case FadeCurve::Exponential: return "Exponential";
 	case FadeCurve::Logarithmic: return "Logarithmic";
+	case FadeCurve::EqualPower: return "Equal power";
 	}
 	return "Linear";
 }
@@ -65,6 +69,10 @@ inline double fadeGain(FadeCurve c, double t)
 		constexpr double k = 9.0;
 		return std::log1p(k * t) / std::log1p(k);
 	}
+	case FadeCurve::EqualPower:
+		// A fade-out is read as fadeGain(c, 1 - t), which turns this into
+		// cos(t*pi/2) -- so one curve gives both halves of the pair.
+		return std::sin(t * 3.14159265358979323846 / 2.0);
 	}
 	return t;
 }

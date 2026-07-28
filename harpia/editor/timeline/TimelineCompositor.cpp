@@ -1,6 +1,7 @@
 #include "TimelineCompositor.hpp"
 
 #include "EffectClip.hpp"
+#include "Transitions.hpp"
 #include "Spotlight.hpp"
 
 #include "../script/TransformScript.hpp"
@@ -295,49 +296,89 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 
 		if (t.kind != TlTrack::Kind::Video || t.hidden)
 			continue;
+
+		// Draw one of this track's clips onto an arbitrary painter. Pulled out
+		// so an overlap can render its two clips into their own layers and blend
+		// them, using exactly the same decode/script/transform path a lone clip
+		// takes -- a transition must not be a second, subtly different renderer.
+		auto renderClip = [&](QPainter &into, int ci) {
+			const TlClip &c = t.clips[ci];
+
+			// Decode before scripting, not after: a script needs the clip's pixel
+			// size to work out where a point in the picture lands on the canvas,
+			// and that is only known once the frame (or the caption) exists.
+			QImage frame;
+			if (c.type == TlClip::Type::Video || c.type == TlClip::Type::Image)
+				frame = fp.frameFor(c.sourceId, c.srcAtOutput(outMs));
+
+			// Base pose / keyframes first, then the clip's script overrides
+			// whichever channels it defines.
+			TlTransform tf = c.transformAt(outMs);
+			if (eval && !c.scripts.isEmpty()) {
+				ScriptContext sctx;
+				// The project's size, not the render size: a preview at half
+				// resolution must not change what a script computes.
+				sctx.canvasW = logicalCanvas.width();
+				sctx.canvasH = logicalCanvas.height();
+				QSize natural = frame.size();
+				if (c.type == TlClip::Type::Text)
+					natural = textNaturalSize(c.text, canvas);
+				if (!c.crop.isNull() && c.crop.width() > 1 && c.crop.height() > 1 &&
+				    !frame.isNull())
+					natural = c.crop.intersected(QRect(QPoint(0, 0), frame.size()))
+							  .size();
+				const double k =
+					double(logicalCanvas.width()) / std::max(1, canvas.width());
+				sctx.clipW = int(std::lround(natural.width() * k));
+				sctx.clipH = int(std::lround(natural.height() * k));
+				sctx.fps = fps;
+				sctx.index = ci;
+				sctx.globalTime = double(outMs) / 1000.0;
+				// Stacked: each script starts from what the previous one
+				// produced, so scripts driving different channels compose and a
+				// later one wins on a channel they share.
+				for (const TlScript &s : c.scripts) {
+					if (s.name.isEmpty())
+						continue;
+					tf = eval->apply(ClipScript{s.name, s.params}, tf, c, outMs, sctx);
+				}
+			}
+			drawClip(into, c, tf, canvas, frame);
+		};
+
+		// Two clips covering the same instant on one track IS a transition --
+		// there is no separate object to create or delete. Pull them apart and
+		// it stops happening on its own.
+		int oi = -1, ii = -1;
+		if (t.overlapAt(outMs, &oi, &ii) && t.clips[ii].transition.enabled) {
+			const TlClip &inc = t.clips[ii];
+			const qint64 span = t.overlapBefore(ii);
+			if (span > 0) {
+				QImage layerA(canvas, QImage::Format_RGBA8888);
+				QImage layerB(canvas, QImage::Format_RGBA8888);
+				layerA.fill(Qt::transparent);
+				layerB.fill(Qt::transparent);
+				{
+					QPainter pa(&layerA);
+					pa.setRenderHint(QPainter::Antialiasing, true);
+					renderClip(pa, oi);
+				}
+				{
+					QPainter pb(&layerB);
+					pb.setRenderHint(QPainter::Antialiasing, true);
+					renderClip(pb, ii);
+				}
+				const double u = std::clamp(
+					double(outMs - inc.outStartMs) / double(span), 0.0, 1.0);
+				p.drawImage(0, 0, Transitions::blend(layerA, layerB, u, inc.transition));
+				continue;
+			}
+		}
+
 		const int ci = t.clipAt(outMs);
 		if (ci < 0)
 			continue;
-		const TlClip &c = t.clips[ci];
-
-		// Decode before scripting, not after: a script needs the clip's pixel size
-		// to work out where a point in the picture lands on the canvas, and that
-		// is only known once the frame (or the measured caption) exists.
-		QImage frame;
-		if (c.type == TlClip::Type::Video || c.type == TlClip::Type::Image)
-			frame = fp.frameFor(c.sourceId, c.srcAtOutput(outMs));
-
-		// Base pose / keyframes first, then the clip's script overrides whichever
-		// channels it defines.
-		TlTransform tf = c.transformAt(outMs);
-		if (eval && !c.scripts.isEmpty()) {
-			ScriptContext sctx;
-			// The project's size, not the render size: a preview at half
-			// resolution must not change what a script computes.
-			sctx.canvasW = logicalCanvas.width();
-			sctx.canvasH = logicalCanvas.height();
-			QSize natural = frame.size();
-			if (c.type == TlClip::Type::Text)
-				natural = textNaturalSize(c.text, canvas);
-			if (!c.crop.isNull() && c.crop.width() > 1 && c.crop.height() > 1 &&
-			    !frame.isNull())
-				natural = c.crop.intersected(QRect(QPoint(0, 0), frame.size())).size();
-			const double k = double(logicalCanvas.width()) / std::max(1, canvas.width());
-			sctx.clipW = int(std::lround(natural.width() * k));
-			sctx.clipH = int(std::lround(natural.height() * k));
-			sctx.fps = fps;
-			sctx.index = ci;
-			sctx.globalTime = double(outMs) / 1000.0;
-			// Stacked: each script starts from what the previous one produced, so
-			// scripts driving different channels compose and a later one wins on a
-			// channel they share.
-			for (const TlScript &s : c.scripts) {
-				if (s.name.isEmpty())
-					continue;
-				tf = eval->apply(ClipScript{s.name, s.params}, tf, c, outMs, sctx);
-			}
-		}
-		drawClip(p, c, tf, canvas, frame);
+		renderClip(p, ci);
 	}
 	p.end();
 

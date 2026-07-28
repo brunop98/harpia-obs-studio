@@ -21,6 +21,7 @@
 #include "timeline/TimelineCompositor.hpp"
 #include "timeline/KeyframeEditor.hpp"
 #include "timeline/TimelineView.hpp"
+#include "timeline/Transitions.hpp"
 
 #include "../Version.hpp"
 
@@ -837,6 +838,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 
 	// Full-editing: per-clip zoom/position/keyframes and text styling.
 	buildClipInspector(insLayout);
+	buildTransitionInspector(insLayout);
 	buildEffectInspector(insLayout);
 	buildSpotlightInspector(insLayout);
 
@@ -2324,6 +2326,153 @@ void VideoEditorWindow::revealProjectFolder()
 	revealInFolder(target);
 }
 
+// The selected transition. There is no duration control: the overlap IS the
+// duration, so it is reported rather than edited — you change it by dragging
+// either clip, which is the whole point of the Vegas model.
+void VideoEditorWindow::buildTransitionInspector(QVBoxLayout *into)
+{
+	trBox_ = new QWidget(this);
+	trBox_->setVisible(false);
+	auto *v = new QVBoxLayout(trBox_);
+	v->setContentsMargins(0, 6, 0, 0);
+	v->setSpacing(5);
+
+	auto *hdr = new QLabel(QStringLiteral("Transition"), trBox_);
+	hdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
+	v->addWidget(hdr);
+	trInfo_ = new QLabel(trBox_);
+	trInfo_->setWordWrap(true);
+	trInfo_->setStyleSheet(QStringLiteral("color:#7f858e;"));
+	v->addWidget(trInfo_);
+
+	auto *form = new QFormLayout;
+	form->setHorizontalSpacing(8);
+	form->setVerticalSpacing(4);
+
+	trType_ = new QComboBox(trBox_);
+	for (int i = 0; i < kTransitionTypeCount; ++i)
+		trType_->addItem(QString::fromLatin1(transitionName(TransitionType(i))));
+	form->addRow(QStringLiteral("Type"), trType_);
+	connect(trType_, &QComboBox::currentIndexChanged, this, [this](int idx) {
+		if (syncingTr_)
+			return;
+		// Changing the type keeps the overlap, so the transition's length is
+		// unaffected — exactly as asked.
+		const TransitionType t = transitionFromInt(idx);
+		editSelectedTransition([t](TlTransition &tr) { tr.type = t; });
+	});
+
+	auto mkEase = [&](const QString &label, QComboBox *&out, bool incoming) {
+		out = new QComboBox(trBox_);
+		for (int i = 0; i < kTlEaseCount; ++i)
+			out->addItem(QString::fromLatin1(tlEaseName(TlEase(i))));
+		form->addRow(label, out);
+		connect(out, &QComboBox::currentIndexChanged, this, [this, incoming](int idx) {
+			if (syncingTr_)
+				return;
+			const TlEase e = tlEaseFromInt(idx);
+			editSelectedTransition([e, incoming](TlTransition &tr) {
+				(incoming ? tr.easeIn : tr.easeOut) = e;
+			});
+		});
+	};
+	mkEase(QStringLiteral("Outgoing curve"), trEaseOut_, false);
+	mkEase(QStringLiteral("Incoming curve"), trEaseIn_, true);
+
+	trSoftness_ = new QDoubleSpinBox(trBox_);
+	trSoftness_->setRange(0.0, 1.0);
+	trSoftness_->setSingleStep(0.05);
+	trSoftness_->setDecimals(2);
+	trSoftness_->setKeyboardTracking(false);
+	trSoftness_->setToolTip(QStringLiteral("Softens the moving edge. Only the types with "
+					       "an edge (wipes, iris, circle) use it."));
+	form->addRow(QStringLiteral("Softness"), trSoftness_);
+	connect(trSoftness_, &QDoubleSpinBox::valueChanged, this, [this](double d) {
+		if (syncingTr_)
+			return;
+		editSelectedTransition([d](TlTransition &tr) { tr.softness = d; });
+	});
+
+	trReverse_ = new QCheckBox(QStringLiteral("Reverse"), trBox_);
+	form->addRow(QString(), trReverse_);
+	connect(trReverse_, &QCheckBox::toggled, this, [this](bool on) {
+		if (syncingTr_)
+			return;
+		editSelectedTransition([on](TlTransition &tr) { tr.reverse = on; });
+	});
+	trEnabled_ = new QCheckBox(QStringLiteral("Enabled"), trBox_);
+	trEnabled_->setToolTip(QStringLiteral(
+		"Turn the transition off without moving the clips: the overlap stays, but the "
+		"later clip simply covers the earlier one."));
+	form->addRow(QString(), trEnabled_);
+	connect(trEnabled_, &QCheckBox::toggled, this, [this](bool on) {
+		if (syncingTr_)
+			return;
+		editSelectedTransition([on](TlTransition &tr) { tr.enabled = on; });
+	});
+	v->addLayout(form);
+
+	trRemove_ = new QPushButton(QStringLiteral("Remove transition (snap clips together)"),
+				    trBox_);
+	connect(trRemove_, &QPushButton::clicked, this, [this]() {
+		if (timelineView_)
+			timelineView_->removeSelectedTransition();
+	});
+	v->addWidget(trRemove_);
+
+	into->addWidget(trBox_);
+}
+
+void VideoEditorWindow::editSelectedTransition(const std::function<void(TlTransition &)> &fn)
+{
+	if (!timelineView_ || !timelineView_->transitionSelected())
+		return;
+	const int t = timelineView_->selectedTransitionTrack();
+	const int ci = timelineView_->selectedTransitionClip();
+	TimelineModel m = timelineView_->model();
+	if (t < 0 || t >= m.tracks.size() || ci < 0 || ci >= m.tracks[t].clips.size())
+		return;
+	fn(m.tracks[t].clips[ci].transition);
+	timelineView_->setModel(m);
+	// setModel drops the selection, so put the user back where they were.
+	timelineView_->selectClip(t, ci);
+	syncTransitionInspector();
+	showTimelineFrame(timelinePlayheadMs());
+	commitSnapshot();
+}
+
+void VideoEditorWindow::syncTransitionInspector()
+{
+	if (!trBox_ || !timelineView_)
+		return;
+	const bool on = fullEdit() && timelineView_->transitionSelected();
+	trBox_->setVisible(on);
+	if (!on)
+		return;
+	const int t = timelineView_->selectedTransitionTrack();
+	const int ci = timelineView_->selectedTransitionClip();
+	const auto &tracks = timelineView_->model().tracks;
+	if (t < 0 || t >= tracks.size() || ci < 0 || ci >= tracks[t].clips.size())
+		return;
+	const TlClip &c = tracks[t].clips[ci];
+	const qint64 span = tracks[t].overlapBefore(ci);
+
+	const bool was = syncingTr_;
+	syncingTr_ = true;
+	trInfo_->setText(QStringLiteral(
+				 "%1 s — the length of the overlap. Drag either clip to change it; "
+				 "pull them apart and the transition goes away.")
+				 .arg(span / 1000.0, 0, 'f', 2));
+	trType_->setCurrentIndex(int(c.transition.type));
+	trEaseOut_->setCurrentIndex(int(c.transition.easeOut));
+	trEaseIn_->setCurrentIndex(int(c.transition.easeIn));
+	trReverse_->setChecked(c.transition.reverse);
+	trEnabled_->setChecked(c.transition.enabled);
+	trSoftness_->setValue(c.transition.softness);
+	trSoftness_->setEnabled(Transitions::hasSoftEdge(c.transition.type));
+	syncingTr_ = was;
+}
+
 // Inverse Selection (Spotlight). Project-level rather than per-clip: it dims the
 // composited frame, so it applies to whatever is visible underneath it.
 // The selected effect clip: which effect, its parameters, its name, on/off and
@@ -3446,7 +3595,11 @@ void VideoEditorWindow::syncClipInspector()
 {
 	if (!clipBox_ || !timelineView_)
 		return;
-	const TlClip *c = fullEdit() ? timelineView_->selectedClipPtr() : nullptr;
+	syncTransitionInspector();
+	// A transition belongs to neither clip, so the clip panel steps aside while
+	// one is selected.
+	const bool onTransition = fullEdit() && timelineView_->transitionSelected();
+	const TlClip *c = (fullEdit() && !onTransition) ? timelineView_->selectedClipPtr() : nullptr;
 	clipBox_->setVisible(c != nullptr);
 	if (!c)
 		return;

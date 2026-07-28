@@ -63,6 +63,38 @@ std::vector<VoiceoverMixer::Take> TimelineAudio::buildTakes(const TimelineModel 
 			tk.fadeOutMs = std::clamp(c.fadeOutMs, 0, dur);
 			tk.fadeInCurve = c.fadeInCurve;
 			tk.fadeOutCurve = c.fadeOutCurve;
+
+			// An overlap on this track is a transition, and if both clips carry
+			// sound it crossfades too. Equal power by default, so the mix does
+			// not dip in the middle the way two linear fades would.
+			//
+			// The transition's fade REPLACES a shorter hand-set one over the
+			// same edge rather than adding to it: two fades on one edge would
+			// multiply and punch a hole in the middle of the transition.
+			const int ci = int(&c - t.clips.constData());
+			if (c.transition.enabled) {
+				const int inOverlap =
+					int(std::clamp<qint64>(t.overlapBefore(ci), 0, dur));
+				if (inOverlap > tk.fadeInMs) {
+					tk.fadeInMs = inOverlap;
+					tk.fadeInCurve = FadeCurve::EqualPower;
+				}
+			}
+			// The other side of the same overlap: whichever later clip starts
+			// inside this one takes it out.
+			for (int j = 0; j < t.clips.size(); ++j) {
+				if (j == ci || !t.clips[j].transition.enabled)
+					continue;
+				const TlClip &nx = t.clips[j];
+				if (nx.outStartMs <= c.outStartMs || nx.outStartMs >= c.outEndMs())
+					continue;
+				const int outOverlap = int(std::clamp<qint64>(
+					std::min(c.outEndMs(), nx.outEndMs()) - nx.outStartMs, 0, dur));
+				if (outOverlap > tk.fadeOutMs) {
+					tk.fadeOutMs = outOverlap;
+					tk.fadeOutCurve = FadeCurve::EqualPower;
+				}
+			}
 			takes.push_back(tk);
 		}
 	}

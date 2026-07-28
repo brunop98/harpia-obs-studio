@@ -183,6 +183,8 @@ target_sources(
     editor/timeline/TimelineView.cpp
     editor/timeline/TimelineView.hpp
     editor/timeline/Ease.hpp
+    editor/timeline/Transitions.cpp
+    editor/timeline/Transitions.hpp
     editor/timeline/EffectClip.cpp
     editor/timeline/EffectClip.hpp
     editor/timeline/Spotlight.cpp

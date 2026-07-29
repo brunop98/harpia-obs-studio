@@ -80,7 +80,9 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 # exporter share. Determinism here is what "preview equals export" means.
 g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$HERE/componentrender_test.cpp" \
-	"$H"/editor/component/*.cpp \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/component/ScriptComponent.cpp" \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \

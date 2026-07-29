@@ -1,6 +1,7 @@
 #include "VideoEditorWindow.hpp"
 
 #include "../ui/UiIcons.hpp"
+#include "component/ComponentPanel.hpp"
 #include "component/BuiltinComponents.hpp"
 #include "component/ComponentRegistry.hpp"
 #include "component/ScriptComponent.hpp"
@@ -919,6 +920,18 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	buildTransitionInspector(insLayout);
 	buildEffectInspector(insLayout);
 	buildSpotlightInspector(insLayout);
+
+	// The component list. It sits below the panels it is replacing rather than
+	// instead of them: the pose, the effects and the spotlight are still their
+	// own systems until each is ported to a component, and hiding a working
+	// control before its replacement exists would just remove a feature.
+	componentPanel_ = new ComponentPanel(ComponentRegistry::instance(), this);
+	componentPanel_->setVisible(false);
+	connect(componentPanel_, &ComponentPanel::componentsEdited, this,
+		[this](const QVector<ComponentInstance> &list) {
+			editSelectedClip([&list](TlClip &c) { c.components = list; });
+		});
+	insLayout->addWidget(componentPanel_);
 
 	insLayout->addStretch(1);
 
@@ -1947,13 +1960,10 @@ void VideoEditorWindow::reloadComponentsFromDisk()
 	componentCount_ = ScriptComponents::loadFolder(componentsDirPath(),
 						       ComponentRegistry::instance(),
 						       &componentErrors_);
-	// Kept for the panel rather than written to the log: someone whose component
-	// will not load needs to be told where they can see it, not left to discover
-	// that Error Logs exists.
-	if (componentsError_) {
-		componentsError_->setText(componentErrors_.join(QChar('\n')));
-		componentsError_->setVisible(!componentErrors_.isEmpty());
-	}
+	// Shown in the panel rather than written to the log: someone whose component
+	// will not load needs to be told where they can see why, not left to
+	// discover that Error Logs exists.
+	syncComponentPanel();
 	// A reloaded component may render differently, and the frame on screen was
 	// made with the old one.
 	if (fullEdit())
@@ -3532,6 +3542,21 @@ void VideoEditorWindow::onSpotlightPoseDragged(int index, const SpotPose &pose)
 		/*commit=*/false);
 }
 
+// The component list follows the selected clip. Values are resolved at the
+// clip's own time, so an animated property shows what is on screen rather than
+// its resting value -- the same rule the effect inspector follows.
+void VideoEditorWindow::syncComponentPanel()
+{
+	if (!componentPanel_ || !timelineView_)
+		return;
+	const TlClip *c = fullEdit() ? timelineView_->selectedClipPtr() : nullptr;
+	componentPanel_->setVisible(c != nullptr);
+	if (!c)
+		return;
+	componentPanel_->setLoadErrors(componentErrors_);
+	componentPanel_->setComponents(c->components, timelinePlayheadMs() - c->outStartMs);
+}
+
 void VideoEditorWindow::syncSpotlightInspector()
 {
 	if (!spotBox_ || !timelineView_)
@@ -4379,6 +4404,11 @@ void VideoEditorWindow::markScriptDrivenRows(const TlClip &c)
 
 void VideoEditorWindow::syncClipInspector()
 {
+	// The component list follows the clip like every other per-clip control, so
+	// it refreshes on the same call — after an edit AND after a selection
+	// change, which arrive through different paths.
+	syncComponentPanel();
+
 	if (!clipBox_ || !timelineView_)
 		return;
 	syncTransitionInspector();
@@ -5265,6 +5295,7 @@ void VideoEditorWindow::updateInspector()
 	// The Spotlight panel's subject depends on what is selected, so it has to
 	// re-point on every selection change, not only when it is itself edited.
 	syncSpotlightInspector();
+	syncComponentPanel();
 	if (!inspector_)
 		return;
 	auto setRange = [this](qint64 inMs, qint64 outMs, double sp, qint64 outLen) {

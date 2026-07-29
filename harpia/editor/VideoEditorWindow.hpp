@@ -100,6 +100,7 @@ class ShortcutPanel;
 class TransformEvaluator;
 class KeyList;
 class ParamSlider;
+class ComponentPanel;
 class AudioPreview;
 
 // One video the editor can cut from. The first source is the file the editor
@@ -543,7 +544,8 @@ private:
 	QFileSystemWatcher *componentWatch_ = nullptr;
 	QStringList componentErrors_; // why a user's component would not load
 	int componentCount_ = 0;
-	QLabel *componentsError_ = nullptr;
+	ComponentPanel *componentPanel_ = nullptr;
+	void syncComponentPanel();
 	QStringList availableScripts();
 	void refreshScriptList(); // selected clip's stack -> the list widget
 	bool ensureScriptCompiled(const QString &name, QString *err); // compile into scriptEval_

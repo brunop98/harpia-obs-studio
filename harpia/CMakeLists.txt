@@ -196,6 +196,8 @@ target_sources(
     editor/component/ComponentStack.cpp
     editor/component/ComponentStack.hpp
     editor/component/ComponentJson.hpp
+    editor/component/ComponentPanel.cpp
+    editor/component/ComponentPanel.hpp
     editor/component/ScriptComponent.cpp
     editor/component/ScriptComponent.hpp
     editor/component/BuiltinComponents.cpp

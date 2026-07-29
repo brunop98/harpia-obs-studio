@@ -535,7 +535,15 @@ private:
 	QHash<QString, QSlider *> scriptParamSliders_;
 	QHash<QString, QLabel *> scriptParamValues_;
 	QHash<QString, QCheckBox *> scriptParamChecks_;
-	QString scriptsDirPath();          // ensure + seed the folder
+	QString scriptsDirPath(); // ensure + seed the folder
+	// Custom components: the user's folder, and re-registering what is in it.
+	QString componentsDirPath(); // ensure + seed the folder
+	void reloadComponentsFromDisk();
+	QString componentsDir_;
+	QFileSystemWatcher *componentWatch_ = nullptr;
+	QStringList componentErrors_; // why a user's component would not load
+	int componentCount_ = 0;
+	QLabel *componentsError_ = nullptr;
 	QStringList availableScripts();
 	void refreshScriptList(); // selected clip's stack -> the list widget
 	bool ensureScriptCompiled(const QString &name, QString *err); // compile into scriptEval_

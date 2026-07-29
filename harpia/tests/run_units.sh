@@ -76,6 +76,16 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/ScriptComponent.cpp" \
 	-o "$WORK/scriptcomponent_test" "$QJSLIB/libqjs.a" $LF
 
+# Components through the REAL compositor -- the path the preview and the
+# exporter share. Determinism here is what "preview equals export" means.
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
+	"$HERE/componentrender_test.cpp" \
+	"$H"/editor/component/*.cpp \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
+	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
+	-o "$WORK/componentrender_test" "$QJSLIB/libqjs.a" $LF
+
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
@@ -84,4 +94,5 @@ QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionwatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/component_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/scriptcomponent_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/componentrender_test" || rc=1
 exit $rc

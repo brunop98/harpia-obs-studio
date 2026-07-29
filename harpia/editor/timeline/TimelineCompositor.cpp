@@ -2,6 +2,8 @@
 
 #include "EffectClip.hpp"
 #include "Transitions.hpp"
+#include "../component/ComponentRegistry.hpp"
+#include "../component/ComponentStack.hpp"
 #include "Spotlight.hpp"
 
 #include "../script/TransformScript.hpp"
@@ -309,16 +311,53 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 		auto renderClip = [&](QPainter &into, int ci) {
 			const TlClip &c = t.clips[ci];
 
+			// The clip's components, in resolved order. Built once per clip per
+			// frame; an empty list costs one branch, which is what almost every
+			// clip will be until the port finishes.
+			const bool hasComponents = !c.components.isEmpty();
+			std::unique_ptr<ComponentStack> stack;
+			EvalContext ectx;
+			if (hasComponents) {
+				stack.reset(new ComponentStack(c.components,
+							       ComponentRegistry::instance()));
+				ectx.tMs = outMs - c.outStartMs;
+				ectx.outMs = outMs;
+				ectx.durMs = std::max<qint64>(1, c.outDurationMs());
+				ectx.fps = fps;
+				// The project's size, not the render size: a half-resolution
+				// preview must not change what a component computes.
+				ectx.canvas = logicalCanvas;
+			}
+
+			// Time stage FIRST, because which source instant to decode is its
+			// answer to give. Everything after this point is working on the
+			// frame the Time components chose.
+			qint64 srcMs = c.srcAtOutput(outMs);
+			ClipState cstate;
+			if (hasComponents) {
+				cstate = stack->evaluatePose(ectx, c.transformAt(outMs));
+				if (std::abs(cstate.timeScale - 1.0) > 1e-9) {
+					const qint64 off = std::clamp<qint64>(
+						outMs - c.outStartMs, 0, c.outDurationMs());
+					srcMs = c.srcStartMs +
+						qint64(std::llround(double(off) *
+								    (c.speed > 0.01 ? c.speed : 1.0) *
+								    cstate.timeScale));
+				}
+			}
+
 			// Decode before scripting, not after: a script needs the clip's pixel
 			// size to work out where a point in the picture lands on the canvas,
 			// and that is only known once the frame (or the caption) exists.
 			QImage frame;
 			if (c.type == TlClip::Type::Video || c.type == TlClip::Type::Image)
-				frame = fp.frameFor(c.sourceId, c.srcAtOutput(outMs));
+				frame = fp.frameFor(c.sourceId, srcMs);
 
-			// Base pose / keyframes first, then the clip's script overrides
-			// whichever channels it defines.
-			TlTransform tf = c.transformAt(outMs);
+			// Base pose / keyframes, then the Transform components, then the
+			// clip's scripts on top of both. Scripts stay last of the three
+			// because that is where they already were, and moving them would
+			// change what existing projects render.
+			TlTransform tf = hasComponents ? cstate.xf : c.transformAt(outMs);
 			if (eval && !c.scripts.isEmpty()) {
 				ScriptContext sctx;
 				// The project's size, not the render size: a preview at half
@@ -348,6 +387,13 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 					tf = eval->apply(ClipScript{s.name, s.params}, tf, c, outMs, sctx);
 				}
 			}
+			// Pixel stage, on the clip's own frame before it is placed on the
+			// canvas — so a component blurs the clip, not everything under it.
+			// Text clips have no frame to hand over; they are drawn straight to
+			// the canvas, and are the next thing the Source stage will fix.
+			if (hasComponents && !frame.isNull())
+				stack->evaluatePixels(ectx, frame);
+
 			drawClip(into, c, tf, canvas, frame);
 		};
 

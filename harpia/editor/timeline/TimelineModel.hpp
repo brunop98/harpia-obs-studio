@@ -10,7 +10,9 @@
 // exporter can all share it.
 
 #include "../FadeCurve.hpp"
+#include "../component/Component.hpp"
 #include "Ease.hpp"
+#include "TlTransform.hpp"
 #include "EffectClip.hpp"
 #include "Transitions.hpp"
 #include "Spotlight.hpp"
@@ -27,16 +29,6 @@
 #include <limits>
 
 namespace harpia {
-
-// The animatable pose of a clip on the output canvas. Resolved per output frame
-// (from the clip's base pose, or interpolated between its keyframes).
-struct TlTransform {
-	double posX = 0.5;    // centre X (0..1 across the canvas)
-	double posY = 0.5;    // centre Y (0..1 down the canvas)
-	double scale = 1.0;   // 1 = fit the canvas; >1 zooms in; <1 = picture-in-picture
-	double rotation = 0.0; // degrees clockwise, about the clip's own centre
-	double opacity = 1.0;
-};
 
 // One animation keyframe: a pose pinned to a time inside the clip. `tMs` is an
 // offset from the clip's outStartMs, in OUTPUT time. `ease` shapes the curve
@@ -221,6 +213,13 @@ struct TlClip {
 
 	// Effect clips only: which effect, its parameters and its keyframes.
 	FxSpec fx;
+
+	// Components. The direction this editor is moving: every clip feature is a
+	// component in an ordered list, built-in or user-written alike. They run
+	// alongside the fields above for now — the pose, fx and scripts are being
+	// ported to components one at a time, and until that is finished both
+	// describe part of the clip.
+	QVector<ComponentInstance> components;
 
 	// How this clip ARRIVES when it overlaps the one before it on its track.
 	// The overlap itself is the transition's duration, so there is nothing here

@@ -1,6 +1,9 @@
 #include "VideoEditorWindow.hpp"
 
 #include "../ui/UiIcons.hpp"
+#include "component/BuiltinComponents.hpp"
+#include "component/ComponentRegistry.hpp"
+#include "component/ScriptComponent.hpp"
 #include "../ui/UiText.hpp"
 #include "KeyList.hpp"
 #include "ParamSlider.hpp"
@@ -838,6 +841,22 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	});
 	shadersDirPath(); // ensure the folder exists + presets are seeded
 	rebuildEffectsUI(); // show the empty-state hint
+
+	// Components. Built-ins first, then whatever the user has written — through
+	// the same registry, so a scripted component is not a second-class citizen.
+	// The folder is watched, so saving a file re-registers it and the next frame
+	// renders the new version.
+	registerBuiltinComponents(ComponentRegistry::instance());
+	reloadComponentsFromDisk();
+	componentWatch_ = new QFileSystemWatcher(this);
+	componentWatch_->addPath(componentsDirPath());
+	connect(componentWatch_, &QFileSystemWatcher::directoryChanged, this,
+		[this](const QString &) { reloadComponentsFromDisk(); });
+	connect(componentWatch_, &QFileSystemWatcher::fileChanged, this, [this](const QString &f) {
+		if (QFile::exists(f) && !componentWatch_->files().contains(f))
+			componentWatch_->addPath(f); // editors replace files on save
+		reloadComponentsFromDisk();
+	});
 
 	// Transform scripts: GUI-thread evaluator + live reload of the folder.
 	scriptEval_ = std::make_unique<TransformEvaluator>();
@@ -1896,6 +1915,50 @@ void VideoEditorWindow::onTimelineHoverScrub(qint64 outMs)
 }
 
 // ---- Per-clip transform scripting ----------------------------------------
+
+QString VideoEditorWindow::componentsDirPath()
+{
+	if (componentsDir_.isEmpty()) {
+		const QString base = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+		componentsDir_ = base + QStringLiteral("/harpia/components");
+	}
+	QDir().mkpath(componentsDir_);
+	// Seed the bundled example, but never overwrite: unlike the scripts folder
+	// this has one file and no history of shipped versions to reconcile, so the
+	// simple rule is the right one until there is a reason for the other.
+	const QString dst = componentsDir_ + QStringLiteral("/pulse.js");
+	if (!QFile::exists(dst)) {
+		QFile res(QStringLiteral(":/components/pulse.js"));
+		if (res.open(QIODevice::ReadOnly)) {
+			QFile out(dst);
+			if (out.open(QIODevice::WriteOnly))
+				out.write(res.readAll());
+		}
+	}
+	return componentsDir_;
+}
+
+// Re-scan the components folder. Registering a type replaces any earlier one
+// with the same id, so this is all hot reload needs; every render thread
+// recompiles the new source on its next frame.
+void VideoEditorWindow::reloadComponentsFromDisk()
+{
+	componentErrors_.clear();
+	componentCount_ = ScriptComponents::loadFolder(componentsDirPath(),
+						       ComponentRegistry::instance(),
+						       &componentErrors_);
+	// Kept for the panel rather than written to the log: someone whose component
+	// will not load needs to be told where they can see it, not left to discover
+	// that Error Logs exists.
+	if (componentsError_) {
+		componentsError_->setText(componentErrors_.join(QChar('\n')));
+		componentsError_->setVisible(!componentErrors_.isEmpty());
+	}
+	// A reloaded component may render differently, and the frame on screen was
+	// made with the old one.
+	if (fullEdit())
+		showTimelineFrame(timelinePlayheadMs());
+}
 
 QString VideoEditorWindow::scriptsDirPath()
 {

@@ -24,7 +24,7 @@
 // visible rather than paying silently everywhere.
 
 #include "../timeline/Ease.hpp"
-#include "../timeline/TimelineModel.hpp" // TlTransform
+#include "../timeline/TlTransform.hpp"
 
 #include <QJsonObject>
 #include <QMap>

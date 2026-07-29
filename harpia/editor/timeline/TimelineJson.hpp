@@ -11,6 +11,7 @@
 // project's `sources` array lines up with what is currently loaded.
 
 #include "TextStyleJson.hpp"
+#include "../component/ComponentJson.hpp"
 #include "TimelineModel.hpp"
 
 #include <QJsonArray>
@@ -219,6 +220,9 @@ inline QJsonObject clipToJson(const TlClip &c)
 			fo[QStringLiteral("spot")] = spotlightToJson(c.fx.spot);
 		co[QStringLiteral("fx")] = fo;
 	}
+	if (!c.components.isEmpty())
+		co[QStringLiteral("components")] =
+			componentsToJson(c.components, ComponentRegistry::instance());
 	if (!c.scripts.isEmpty()) {
 		QJsonArray scArr;
 		for (const TlScript &s : c.scripts) {
@@ -340,6 +344,8 @@ inline TlClip clipFromJson(const QJsonObject &co)
 		if (c.fx.type == FxType::InverseSelection)
 			c.fx.spot = spotlightFromJson(fo.value(QStringLiteral("spot")).toObject());
 	}
+	c.components = componentsFromJson(co.value(QStringLiteral("components")).toArray(),
+					  ComponentRegistry::instance());
 
 	// Scripts became a stack; projects written before that carry a single
 	// "script" object, which reads as a one-entry stack.

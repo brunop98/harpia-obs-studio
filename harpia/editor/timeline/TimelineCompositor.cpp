@@ -453,11 +453,10 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 	}
 	p.end();
 
-	// Inverse Selection last: it dims the COMPOSITED frame, so it covers every
-	// visible track at once rather than any one clip. Running it here — inside
-	// the shared compositor — is what makes the preview and the export identical
-	// without a second implementation.
-	Spotlight::apply(out, m.spotlight, outMs);
+	// An Inverse Selection is an effect clip, applied by the effect-track branch
+	// above at the point in the stack where its track sits -- so it dims exactly
+	// the tracks below it, and what is above stays clear. There is no
+	// project-wide pass here any more.
 	return out;
 }
 

@@ -610,9 +610,12 @@ struct TlTrack {
 // the display order (index 0 is the top lane) and, for video, the compositing
 // order: the HIGHER lane renders in FRONT, so index 0 is drawn last/on top.
 struct TimelineModel {
-	// Inverse Selection (Spotlight). Project-wide: it dims the COMPOSITED frame,
-	// so it covers every visible track at once.
-	SpotlightSpec spotlight;
+	// There is no project-level Inverse Selection here any more. A spotlight is
+	// a CLIP on an effect track, carrying its own areas -- so it has a start and
+	// an end you can see and drag, it dims only the tracks below it, and a
+	// project can hold several. The whole-project version was the one case where
+	// the clip spans the timeline, which the clip form covers by being dragged
+	// that wide.
 
 	// Points of interest on the output timeline, sorted, in ms. Purely for
 	// navigation — nothing about the render depends on them.
@@ -670,7 +673,7 @@ struct TimelineModel {
 
 	bool operator==(const TimelineModel &o) const
 	{
-		return tracks == o.tracks && markers == o.markers && spotlight == o.spotlight;
+		return tracks == o.tracks && markers == o.markers;
 	}
 	bool operator!=(const TimelineModel &o) const { return !(*this == o); }
 };

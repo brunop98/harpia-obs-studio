@@ -168,24 +168,24 @@ int main(int argc, char **argv)
 	add->click();
 	settle(700);
 
-	// The edit must have landed on the CLIP, not on the project-wide spec. These
-	// two are the assertions that actually separate "fixed" from "broken", so
-	// they run whatever happened to the selection — guarding them behind a
+	// The edit must have landed on the CLIP. There is no project-wide spec to
+	// land on any more -- that is the point of the change -- so what this now
+	// guards is that the panel still finds the selected clip at all rather than
+	// writing into the empty spec spotTarget() hands back when nothing is
+	// selected. It runs whatever happened to the selection: guarding it behind a
 	// non-null selection is how the first negative control came back green on
 	// everything that mattered.
 	const TlClip *sel = tv->selectedClipPtr();
 	const TlClip *fxClip = (!tv->model().tracks.isEmpty() && !tv->model().tracks[0].clips.isEmpty())
 				       ? &tv->model().tracks[0].clips[0]
 				       : nullptr;
-	std::printf("     clip spot: %s   project masks=%d\n",
+	std::printf("     clip spot: %s\n",
 		    fxClip ? qPrintable(QStringLiteral("enabled=%1 masks=%2")
 						.arg(int(fxClip->fx.spot.enabled))
 						.arg(fxClip->fx.spot.masks.size()))
-			   : "<gone>",
-		    int(tv->model().spotlight.masks.size()));
+			   : "<gone>");
 	ok(sel != nullptr, "the effect clip is still selected");
 	ok(fxClip && fxClip->fx.spot.active(), "the clip's own spotlight is now active");
-	ok(tv->model().spotlight.masks.isEmpty(), "and the project-wide one was left alone");
 
 	const Probe lit = probe(pc);
 	std::printf("     after:  centre %.1f  edge %.1f\n", lit.centre, lit.edge);

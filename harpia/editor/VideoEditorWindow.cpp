@@ -371,13 +371,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	bar->addWidget(sourcesBtn_);
 	bar->addSpacing(6);
 
-	// Effects toggle — opens the right panel (post-processing effects sit at its
-	// top). A dedicated button so the effect stack is easy to find.
+	// Effects toggle — opens the right panel, where a clip's components live.
 	effectsBtn_ = new QPushButton(QStringLiteral("Effects"), this);
 	effectsBtn_->setCheckable(true);
 	effectsBtn_->setChecked(false);
 	effectsBtn_->setToolTip(QStringLiteral(
-		"Show/hide post-processing effects (color grade, CRT, …) — applied to the preview and baked into export"));
+		"Show/hide the Inspector — select a clip and add a Shader, Script or Effect "
+		"component to it"));
 	connect(effectsBtn_, &QPushButton::toggled, this, [this](bool on) {
 		showInspector(on);
 		if (inspectorBtn_) {
@@ -765,90 +765,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 
 	// Project-level metadata + actions (collapsible, above the per-clip panels).
 	buildProjectInspector(insLayout);
-	// ---- Effect stack: user GLSL post-processing (preview + baked export) ----
-	// Placed first so it's the panel's headline feature (open via the Effects
-	// toolbar button). Effects stack top-to-bottom; each is a .frag in the user
-	// shaders folder with its own //@param controls.
-	{
-		auto *fxHdr = new QLabel(QStringLiteral("Shader effects"), this);
-		fxHdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
-		insLayout->addWidget(fxHdr);
-		// There are four things in this app called some kind of "effect", and
-		// nothing used to say which was which. Each section now states its
-		// scope in one line.
-		auto *fxWhat = new QLabel(
-			QStringLiteral("GLSL shaders over the FINISHED picture, after "
-				       "everything else. Whole output, whole timeline."),
-			this);
-		fxWhat->setWordWrap(true);
-		fxWhat->setStyleSheet(QStringLiteral("color:#7f858e;"));
-		insLayout->addWidget(fxWhat);
-
-		auto *fxBtns = new QHBoxLayout;
-		addEffectBtn_ = new QPushButton(QStringLiteral("Add shader"), this);
-		addEffectBtn_->setIcon(uiIcon(Glyph::ChevronDown, 11));
-		addEffectBtn_->setToolTip(QStringLiteral(
-			"Add a post-processing shader. Effects stack top-to-bottom and bake into export."));
-		auto *folderBtn = new QPushButton(QStringLiteral("Folder"), this);
-		folderBtn->setToolTip(QStringLiteral("Open the shaders folder — drop .frag files here"));
-		fxBtns->addWidget(addEffectBtn_, 1);
-		fxBtns->addWidget(folderBtn);
-		insLayout->addLayout(fxBtns);
-
-		shaderError_ = new QLabel(QString(), this);
-		shaderError_->setWordWrap(true);
-		shaderError_->setStyleSheet(
-			QStringLiteral("color:#e5484d; font-family:monospace; font-size:%1px;").arg(uiCaptionPx()));
-		shaderError_->setVisible(false);
-		insLayout->addWidget(shaderError_);
-
-		effectsBox_ = new QWidget(this);
-		auto *ebl = new QVBoxLayout(effectsBox_);
-		ebl->setContentsMargins(0, 2, 0, 2);
-		ebl->setSpacing(6);
-		insLayout->addWidget(effectsBox_);
-
-		connect(addEffectBtn_, &QPushButton::clicked, this, [this]() {
-			QMenu menu(this);
-			const QStringList names = availableShaders();
-			if (names.isEmpty())
-				menu.addAction(QStringLiteral("(no shaders in folder)"))->setEnabled(false);
-			for (const QString &n : names) {
-				QAction *a = menu.addAction(n);
-				connect(a, &QAction::triggered, this, [this, n]() { addEffect(n); });
-			}
-			menu.exec(addEffectBtn_->mapToGlobal(QPoint(0, addEffectBtn_->height())));
-		});
-		connect(folderBtn, &QPushButton::clicked, this,
-			[this]() { QDesktopServices::openUrl(QUrl::fromLocalFile(shadersDirPath())); });
-	}
-
-	shaderRenderer_ = std::make_unique<ShaderRenderer>();
-	shaderWatch_ = new QFileSystemWatcher(this);
-	connect(shaderWatch_, &QFileSystemWatcher::fileChanged, this, [this](const QString &path) {
-		// Editors often replace the file on save (breaking the watch); re-add it and
-		// recompile the whole chain from disk so live edits show immediately.
-		if (QFile::exists(path) && !shaderWatch_->files().contains(path))
-			shaderWatch_->addPath(path);
-		for (EditorEffect &e : effects_) {
-			EditorEffect fresh;
-			QString err;
-			if (loadShaderFile(e.name, &fresh, &err)) {
-				fresh.params = e.params; // keep current values
-				e.defs = fresh.defs;
-				e.wrapped = fresh.wrapped;
-			}
-		}
-		recompileChain();
-		rebuildEffectsUI();
-		// A shader is also a component type, so an edit on disk has to reach
-		// both -- otherwise the panel would show the new version and a clip
-		// carrying the same shader would keep rendering the old one.
-		reloadComponentsFromDisk();
-		refreshPreviewFrame();
-	});
-	shadersDirPath(); // ensure the folder exists + presets are seeded
-	rebuildEffectsUI(); // show the empty-state hint
+	// The project-level "Shader effects" panel used to live here. A shader is a
+	// component now ("Add Component -> Shader"), so it is added to a clip -- or to
+	// an effect clip spanning the timeline, which is what the old whole-output
+	// chain was -- and gets keyframes and multi-clip editing it never had.
 
 	// Components. Built-ins first, then whatever the user has written — through
 	// the same registry, so a scripted component is not a second-class citizen.
@@ -3280,7 +3200,7 @@ void VideoEditorWindow::buildSpotlightInspector(QVBoxLayout *into)
 	spotColor_ = new QPushButton(spotBox_);
 	gf->addRow(QStringLiteral("Colour"), spotColor_);
 	connect(spotColor_, &QPushButton::clicked, this, [this]() {
-		const QColor cur = timelineView_ ? timelineView_->model().spotlight.dimColor
+		const QColor cur = timelineView_ ? spotTarget().dimColor
 						 : QColor(Qt::black);
 		const QColor c = QColorDialog::getColor(cur, this, QStringLiteral("Dim colour"));
 		if (!c.isValid())
@@ -3479,11 +3399,13 @@ bool VideoEditorWindow::spotTargetIsClip() const
 	return c && c->type == TlClip::Type::Effect && c->fx.type == FxType::InverseSelection;
 }
 
+// Only ever a clip's own areas now. The empty spec is what the panel reads when
+// nothing suitable is selected -- it is hidden in that case, but a reference has
+// to point at something.
 const SpotlightSpec &VideoEditorWindow::spotTarget() const
 {
-	if (spotTargetIsClip())
-		return timelineView_->selectedClipPtr()->fx.spot;
-	return timelineView_->model().spotlight;
+	static const SpotlightSpec kNone;
+	return spotTargetIsClip() ? timelineView_->selectedClipPtr()->fx.spot : kNone;
 }
 
 int VideoEditorWindow::selectedMaskRow() const
@@ -3508,21 +3430,14 @@ void VideoEditorWindow::editSpotlight(const std::function<void(SpotlightSpec &)>
 {
 	if (!timelineView_)
 		return;
-	if (spotTargetIsClip()) {
-		// editSelectedClip already repaints and snapshots — and its snapshot is
-		// debounced, which is exactly what `commit` is asking for during a drag,
-		// so the flag has nothing left to decide on this branch.
-		editSelectedClip([&fn](TlClip &c) { fn(c.fx.spot); });
-		syncSpotlightInspector();
-		return;
-	}
-	TimelineModel m = timelineView_->model();
-	fn(m.spotlight);
-	timelineView_->setModel(m);
+	if (!spotTargetIsClip())
+		return; // nothing selected to edit; the panel is hidden anyway
+	// editSelectedClip already repaints and snapshots -- and its snapshot is
+	// debounced, which is exactly what `commit` is asking for during a drag, so
+	// the flag has nothing left to decide now that the clip is the only target.
+	Q_UNUSED(commit);
+	editSelectedClip([&fn](TlClip &c) { fn(c.fx.spot); });
 	syncSpotlightInspector();
-	showTimelineFrame(timelinePlayheadMs());
-	if (commit)
-		commitSnapshot();
 }
 
 // A mask dragged in the preview. Where the new pose goes depends on whether the
@@ -3789,10 +3704,13 @@ void VideoEditorWindow::syncSpotlightInspector()
 		return;
 	// Only meaningful in Full editing: the other modes have no composition to
 	// dim.
-	spotBox_->setVisible(fullEdit());
-	if (!fullEdit())
-		return;
+	// A spotlight is a clip, so this panel edits the selected one and shows
+	// nothing when there is no such clip -- rather than quietly falling back to a
+	// project-wide setting that no longer exists.
 	const bool onClip = spotTargetIsClip();
+	spotBox_->setVisible(fullEdit() && onClip);
+	if (!fullEdit() || !onClip)
+		return;
 	const SpotlightSpec &s = spotTarget();
 	const bool wasSyncing = syncingSpot_;
 	syncingSpot_ = true;
@@ -3801,18 +3719,14 @@ void VideoEditorWindow::syncSpotlightInspector()
 	// look identical in both cases and there is no way to tell whether you are
 	// about to dim the whole project or just one clip's stretch of it.
 	if (spotHdr_)
-		spotHdr_->setText(onClip ? QStringLiteral("Inverse Selection — this clip")
-					 : QStringLiteral("Inverse Selection — whole project"));
+		spotHdr_->setText(QStringLiteral("Inverse Selection — this clip"));
 	if (spotScopeHint_)
 		spotScopeHint_->setText(
-			onClip ? QStringLiteral("These areas belong to the selected effect clip: "
-						"they last as long as it does and dim only the "
-						"tracks below it. Keyframes are in clip time, so "
-						"moving the clip takes the animation with it.")
-			       : QStringLiteral("Dims the whole composition for the whole "
-						"project. For a highlight that comes and goes, "
-						"add an Inverse Selection effect clip instead and "
-						"select it — this panel will edit that clip."));
+			QStringLiteral("These areas belong to the selected effect clip: they "
+				       "last as long as it does and dim only the tracks below "
+				       "it. Keyframes are in clip time, so moving the clip "
+				       "takes the animation with it. To dim the whole video, "
+				       "drag the clip out to the full length."));
 
 	spotOn_->setChecked(s.enabled);
 	spotInvert_->setChecked(s.invert);
@@ -5874,28 +5788,12 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 				mk.append(double(m));
 			root[QStringLiteral("markers")] = mk;
 		}
-		// Inverse Selection is project-level, so it sits next to the tracks
-		// rather than on any one clip. Only written when it differs from the
-		// default, to keep an untouched project's file clean.
-		if (s.timeline.spotlight != SpotlightSpec())
-			root[QStringLiteral("spotlight")] = spotlightToJson(s.timeline.spotlight);
 		root[QStringLiteral("harpiaProject")] = 3; // timelines need a v3 reader
 	}
 
-	// Post-processing effect stack (names reference .frag files in the user folder).
-	if (!s.effects.isEmpty()) {
-		QJsonArray fxArr;
-		for (const ShaderState &st : s.effects) {
-			QJsonObject fo;
-			fo[QStringLiteral("name")] = st.name;
-			QJsonObject params;
-			for (auto it = st.params.constBegin(); it != st.params.constEnd(); ++it)
-				params[it.key()] = it.value();
-			fo[QStringLiteral("params")] = params;
-			fxArr.append(fo);
-		}
-		root[QStringLiteral("effects")] = fxArr;
-	}
+	// No project-level "effects" array any more: a shader is a component, so it
+	// is written with the clip that carries it. The reader still understands the
+	// old key and migrates it -- see applyProjectJson.
 
 	QFile f(path);
 	if (!f.open(QIODevice::WriteOnly))
@@ -6065,7 +5963,6 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 
 	// "Full editing" timeline (project v3). Absent in v1/v2 projects, which just
 	// restore an empty timeline.
-	s.timeline.spotlight = spotlightFromJson(root.value(QStringLiteral("spotlight")).toObject());
 	for (const QJsonValue &mv : root.value(QStringLiteral("markers")).toArray())
 		s.timeline.markers.append(qint64(mv.toDouble()));
 	std::sort(s.timeline.markers.begin(), s.timeline.markers.end());
@@ -6099,26 +5996,103 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 		s.timeline.tracks.append(t);
 	}
 
-	// Post-processing effect stack (restored by restoreSnapshot below). Back-compat:
-	// older projects stored a single "shader" object instead of an "effects" array.
-	auto readEffect = [](const QJsonObject &fo) {
-		ShaderState st;
-		st.name = fo.value(QStringLiteral("name")).toString();
-		const QJsonObject params = fo.value(QStringLiteral("params")).toObject();
-		for (auto it = params.constBegin(); it != params.constEnd(); ++it)
-			st.params[it.key()] = it.value().toDouble();
-		return st;
-	};
-	if (root.value(QStringLiteral("effects")).isArray()) {
-		for (const QJsonValue &jv : root.value(QStringLiteral("effects")).toArray()) {
-			const ShaderState st = readEffect(jv.toObject());
-			if (!st.name.isEmpty())
-				s.effects.push_back(st);
+	// Migration: Inverse Selection used to be one project-wide setting living
+	// next to the tracks. It is a CLIP now, so a project that carries the old
+	// field gets an effect track holding one spotlight clip spanning the whole
+	// timeline -- which is what "whole project" meant, said in the timeline's own
+	// vocabulary. From there it can be trimmed, moved, or joined by a second one,
+	// none of which the old field could express.
+	//
+	// The track goes on TOP so it dims everything, matching where the old pass
+	// ran (last, over the finished composite).
+	if (root.contains(QStringLiteral("spotlight"))) {
+		const SpotlightSpec spec =
+			spotlightFromJson(root.value(QStringLiteral("spotlight")).toObject());
+		if (spec != SpotlightSpec()) {
+			TlClip c;
+			c.type = TlClip::Type::Effect;
+			c.fx.type = FxType::InverseSelection;
+			c.fx.name = QStringLiteral("Inverse Selection");
+			c.fx.enabled = true;
+			c.fx.spot = spec;
+			c.outStartMs = 0;
+			// An effect clip's length is free, so the source range IS its
+			// duration. A timeline with nothing on it still gets a usable clip
+			// rather than a zero-width one that cannot be grabbed.
+			c.srcStartMs = 0;
+			c.srcEndMs = std::max<qint64>(1000, s.timeline.durationMs());
+
+			TlTrack t;
+			t.kind = TlTrack::Kind::Effect;
+			t.name = QStringLiteral("Inverse Selection");
+			t.clips.append(c);
+			s.timeline.tracks.prepend(t);
 		}
-	} else if (root.value(QStringLiteral("shader")).isObject()) {
-		const ShaderState st = readEffect(root.value(QStringLiteral("shader")).toObject());
-		if (!st.name.isEmpty())
-			s.effects.push_back(st);
+	}
+
+	// Migration: the post-processing chain used to be a project-level list of
+	// shaders applied to the finished picture. Each becomes a shader COMPONENT,
+	// in the same order, on one effect clip spanning the whole timeline -- which
+	// is exactly what "whole output, whole timeline" meant. From there it can be
+	// trimmed to a stretch, moved down the stack, or keyframed, none of which the
+	// project-level list could do.
+	//
+	// Older projects stored a single "shader" object instead of an "effects"
+	// array; both read the same way.
+	{
+		auto readEffect = [](const QJsonObject &fo) {
+			ShaderState st;
+			st.name = fo.value(QStringLiteral("name")).toString();
+			const QJsonObject params = fo.value(QStringLiteral("params")).toObject();
+			for (auto it = params.constBegin(); it != params.constEnd(); ++it)
+				st.params[it.key()] = it.value().toDouble();
+			return st;
+		};
+		QVector<ShaderState> old;
+		if (root.value(QStringLiteral("effects")).isArray()) {
+			for (const QJsonValue &jv : root.value(QStringLiteral("effects")).toArray()) {
+				const ShaderState st = readEffect(jv.toObject());
+				if (!st.name.isEmpty())
+					old.append(st);
+			}
+		} else if (root.value(QStringLiteral("shader")).isObject()) {
+			const ShaderState st =
+				readEffect(root.value(QStringLiteral("shader")).toObject());
+			if (!st.name.isEmpty())
+				old.append(st);
+		}
+		if (!old.isEmpty()) {
+			TlClip c;
+			c.type = TlClip::Type::Effect;
+			c.fx.type = FxType::Brightness; // a carrier; the components do the work
+			c.fx.enabled = false;
+			c.fx.name = QStringLiteral("Shaders");
+			c.outStartMs = 0;
+			c.srcStartMs = 0;
+			c.srcEndMs = std::max<qint64>(1000, s.timeline.durationMs());
+			int n = 0;
+			for (const ShaderState &st : old) {
+				ComponentInstance ci;
+				ci.typeId = shaderComponentId(st.name);
+				// A shader whose file is gone registers no type. Skipped rather
+				// than added as a component nothing can render; putting the
+				// .frag back and reopening restores it.
+				if (!ComponentRegistry::instance().find(ci.typeId))
+					continue;
+				ci.instanceId = QStringLiteral("shader%1").arg(n++);
+				for (auto it = st.params.cbegin(); it != st.params.cend(); ++it)
+					ci.props.insert(it.key(), it.value());
+				c.components.append(ci);
+			}
+			if (!c.components.isEmpty()) {
+				TlTrack t;
+				t.kind = TlTrack::Kind::Effect;
+				t.name = QStringLiteral("Shaders");
+				t.clips.append(c);
+				// On top, where the old chain ran: after everything else.
+				s.timeline.tracks.prepend(t);
+			}
+		}
 	}
 
 	// Show a source that the project actually uses, then apply the edits (which
@@ -6238,8 +6212,6 @@ EditorSnapshot VideoEditorWindow::snapshot() const
 	s.cropEnabled = canvas_->cropEnabled();
 	s.cropRect = canvas_->cropRectVideo();
 	s.voiceClips = voTrack_->clips();
-	for (const EditorEffect &e : effects_)
-		s.effects.push_back(ShaderState{e.name, e.params});
 	if (timelineView_)
 		s.timeline = timelineView_->model();
 	return s;
@@ -6303,20 +6275,6 @@ void VideoEditorWindow::restoreSnapshot(const EditorSnapshot &s)
 	canvas_->setCropRectVideo(s.cropRect);
 
 	voTrack_->setClips(s.voiceClips);
-
-	// Restore the effect stack: reload each named shader from disk and apply the
-	// saved parameter values on top of its defaults.
-	effects_.clear();
-	for (const ShaderState &st : s.effects) {
-		EditorEffect e;
-		e.params = st.params;
-		QString err;
-		if (loadShaderFile(st.name, &e, &err))
-			effects_.append(e);
-	}
-	recompileChain();
-	rebuildEffectsUI();
-	updateShaderWatch();
 
 	if (timelineView_) {
 		timelineView_->setModel(s.timeline);
@@ -6755,7 +6713,11 @@ void VideoEditorWindow::applySpeed(double value)
 	scheduleSnapshot();
 }
 
-// ---- Post-processing shader effect --------------------------------------
+// ---- The shaders folder --------------------------------------------------
+//
+// The chain that used to be applied here is gone; shaders are components, and
+// the component loader scans this folder. Creating and seeding it stays, so a
+// fresh install still has examples to add.
 
 QString VideoEditorWindow::shadersDirPath()
 {
@@ -6784,239 +6746,21 @@ QString VideoEditorWindow::shadersDirPath()
 	return shadersDir_;
 }
 
-QStringList VideoEditorWindow::availableShaders()
-{
-	QStringList names;
-	for (const QFileInfo &fi :
-	     QDir(shadersDirPath()).entryInfoList({QStringLiteral("*.frag")}, QDir::Files, QDir::Name))
-		names << fi.completeBaseName();
-	return names;
-}
-
-bool VideoEditorWindow::loadShaderFile(const QString &name, EditorEffect *out, QString *err)
-{
-	const QString path = shadersDirPath() + QLatin1Char('/') + name + QStringLiteral(".frag");
-	QFile f(path);
-	if (!f.open(QIODevice::ReadOnly)) {
-		if (err)
-			*err = QStringLiteral("Could not read %1.frag").arg(name);
-		return false;
-	}
-	const QString glsl = QString::fromUtf8(f.readAll());
-	f.close();
-	out->name = name;
-	out->defs = parseShaderParams(glsl);
-	out->wrapped = wrapShaderToy(glsl, out->defs);
-	for (const ShaderParam &p : out->defs) // default any unset params
-		if (!out->params.contains(p.uniform))
-			out->params[p.uniform] = p.def;
-	return true;
-}
-
-void VideoEditorWindow::addEffect(const QString &name)
-{
-	EditorEffect e;
-	QString err;
-	if (!loadShaderFile(name, &e, &err)) {
-		if (shaderError_) {
-			shaderError_->setText(err);
-			shaderError_->setVisible(true);
-		}
-		return;
-	}
-	effects_.append(e);
-	recompileChain();
-	rebuildEffectsUI();
-	updateShaderWatch();
-	refreshPreviewFrame();
-	scheduleSnapshot();
-}
-
-void VideoEditorWindow::removeEffect(int index)
-{
-	if (index < 0 || index >= effects_.size())
-		return;
-	effects_.remove(index);
-	recompileChain();
-	rebuildEffectsUI();
-	updateShaderWatch();
-	refreshPreviewFrame();
-	scheduleSnapshot();
-}
-
-void VideoEditorWindow::moveEffect(int index, int delta)
-{
-	const int to = index + delta;
-	if (index < 0 || index >= effects_.size() || to < 0 || to >= effects_.size())
-		return;
-	effects_.move(index, to);
-	recompileChain();
-	rebuildEffectsUI();
-	refreshPreviewFrame();
-	scheduleSnapshot();
-}
-
-void VideoEditorWindow::recompileChain()
-{
-	if (!shaderRenderer_)
-		return;
-	QVector<ShaderLayerSource> layers;
-	layers.reserve(effects_.size());
-	for (const EditorEffect &e : effects_)
-		layers.append({e.wrapped, e.defs});
-	QString err;
-	const bool ok = shaderRenderer_->setChain(layers, &err);
-	if (shaderError_) {
-		shaderError_->setText(ok ? QString() : err);
-		shaderError_->setVisible(!ok);
-	}
-}
-
-void VideoEditorWindow::updateShaderWatch()
-{
-	if (!shaderWatch_)
-		return;
-	if (!shaderWatch_->files().isEmpty())
-		shaderWatch_->removePaths(shaderWatch_->files());
-	for (const EditorEffect &e : effects_) {
-		const QString p = shadersDirPath() + QLatin1Char('/') + e.name + QStringLiteral(".frag");
-		if (QFile::exists(p))
-			shaderWatch_->addPath(p);
-	}
-}
-
-void VideoEditorWindow::rebuildEffectsUI()
-{
-	if (!effectsBox_)
-		return;
-	auto *box = qobject_cast<QVBoxLayout *>(effectsBox_->layout());
-	if (!box)
-		return;
-	// Clear existing children.
-	while (QLayoutItem *item = box->takeAt(0)) {
-		if (QWidget *w = item->widget())
-			w->deleteLater();
-		delete item;
-	}
-
-	if (effects_.isEmpty()) {
-		auto *empty = new QLabel(
-			QStringLiteral("No effects yet — click “Add effect” to grade or stylize the video."),
-			effectsBox_);
-		empty->setWordWrap(true);
-		empty->setStyleSheet(QStringLiteral("color:#7f858e;"));
-		box->addWidget(empty);
-		return;
-	}
-
-	for (int i = 0; i < effects_.size(); ++i) {
-		const EditorEffect &e = effects_[i];
-		auto *card = new QWidget(effectsBox_);
-		card->setObjectName(QStringLiteral("fxCard"));
-		card->setStyleSheet(QStringLiteral(
-			"QWidget#fxCard { background:#1c1e22; border:1px solid #2c2f36; border-radius:4px; }"));
-		auto *cv = new QVBoxLayout(card);
-		cv->setContentsMargins(8, 6, 8, 8);
-		cv->setSpacing(4);
-
-		auto *hdr = new QHBoxLayout;
-		auto *title = new QLabel(QStringLiteral("%1. %2").arg(i + 1).arg(e.name), card);
-		title->setStyleSheet(QStringLiteral("color:#e8eaed; font-weight:bold;"));
-		hdr->addWidget(title, 1);
-		auto *up = new QPushButton(card);
-		up->setIcon(uiIcon(Glyph::ArrowUp, 13));
-		auto *down = new QPushButton(card);
-		down->setIcon(uiIcon(Glyph::ArrowDown, 13));
-		auto *del = new QPushButton(card);
-		del->setIcon(uiIcon(Glyph::Cross, 13));
-		up->setFixedWidth(26);
-		down->setFixedWidth(26);
-		del->setFixedWidth(26);
-		up->setEnabled(i > 0);
-		down->setEnabled(i < effects_.size() - 1);
-		up->setToolTip(QStringLiteral("Move earlier in the chain"));
-		down->setToolTip(QStringLiteral("Move later in the chain"));
-		del->setToolTip(QStringLiteral("Remove this effect"));
-		hdr->addWidget(up);
-		hdr->addWidget(down);
-		hdr->addWidget(del);
-		cv->addLayout(hdr);
-		connect(up, &QPushButton::clicked, this, [this, i]() { moveEffect(i, -1); });
-		connect(down, &QPushButton::clicked, this, [this, i]() { moveEffect(i, +1); });
-		connect(del, &QPushButton::clicked, this, [this, i]() { removeEffect(i); });
-
-		auto *form = new QFormLayout;
-		form->setContentsMargins(0, 2, 0, 0);
-		form->setHorizontalSpacing(8);
-		form->setVerticalSpacing(3);
-		for (const ShaderParam &p : e.defs) {
-			const double val = e.params.value(p.uniform, p.def);
-			auto *key = new QLabel(p.label, card);
-			key->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
-			if (p.type == ShaderParam::Type::Bool) {
-				auto *cb = new QCheckBox(card);
-				cb->setChecked(val != 0.0);
-				connect(cb, &QCheckBox::toggled, this, [this, i, u = p.uniform](bool on) {
-					if (i < effects_.size())
-						effects_[i].params[u] = on ? 1.0 : 0.0;
-					refreshPreviewFrame();
-					scheduleSnapshot();
-				});
-				form->addRow(key, cb);
-			} else {
-				auto *roww = new QWidget(card);
-				auto *rl = new QHBoxLayout(roww);
-				rl->setContentsMargins(0, 0, 0, 0);
-				rl->setSpacing(6);
-				auto *sl = new QSlider(Qt::Horizontal, roww);
-				sl->setRange(0, 1000);
-				const double span = (p.max > p.min) ? (p.max - p.min) : 1.0;
-				sl->setValue(int(std::clamp((val - p.min) / span, 0.0, 1.0) * 1000.0));
-				auto *vlab = new QLabel(QString::number(val, 'g', 3), roww);
-				vlab->setMinimumWidth(40);
-				vlab->setStyleSheet(QStringLiteral("color:#c8ccd4; font-family:monospace;"));
-				rl->addWidget(sl, 1);
-				rl->addWidget(vlab);
-				connect(sl, &QSlider::valueChanged, this,
-					[this, i, u = p.uniform, mn = p.min, sp = span, vlab](int v) {
-						const double d = mn + (double(v) / 1000.0) * sp;
-						if (i < effects_.size())
-							effects_[i].params[u] = d;
-						vlab->setText(QString::number(d, 'g', 3));
-						refreshPreviewFrame();
-						scheduleSnapshot();
-					});
-				form->addRow(key, roww);
-			}
-		}
-		cv->addLayout(form);
-		box->addWidget(card);
-	}
-}
-
-QImage VideoEditorWindow::runShader(const QImage &img, qint64 ms)
-{
-	if (effects_.isEmpty() || !shaderRenderer_ || !shaderRenderer_->hasChain() || img.isNull())
-		return img;
-	QVector<QMap<QString, double>> perLayer;
-	perLayer.reserve(effects_.size());
-	for (const EditorEffect &e : effects_)
-		perLayer.append(e.params);
-	const float t = float(ms) / 1000.0f;
-	return shaderRenderer_->apply(img, t, int(ms / 33), perLayer);
-}
-
+// The preview shows the frame the compositor produced, with nothing applied
+// after it. A shader component runs INSIDE the compositor, which is what makes
+// the preview and the export identical -- the post-pass that used to sit here
+// existed only on the preview side and had to be reimplemented in the exporter.
 void VideoEditorWindow::setPreviewFrame(const QImage &img, qint64 ms)
 {
 	lastPreviewRaw_ = img;
 	lastPreviewMs_ = ms;
-	canvas_->setFrame(runShader(img, ms));
+	canvas_->setFrame(img);
 }
 
 void VideoEditorWindow::refreshPreviewFrame()
 {
 	if (canvas_ && !lastPreviewRaw_.isNull())
-		canvas_->setFrame(runShader(lastPreviewRaw_, lastPreviewMs_));
+		canvas_->setFrame(lastPreviewRaw_);
 }
 
 // Render whatever position is pending, right now.
@@ -7220,10 +6964,8 @@ void VideoEditorWindow::onSave()
 		o.duckOriginal = voDuck_->isChecked();
 	}
 
-	// Bake the post-processing effect stack into the output frames (ignored for
-	// GIF, which uses a separate palette-based encoder).
-	for (const EditorEffect &e : effects_)
-		o.effects.push_back({e.wrapped, e.defs, e.params});
+	// Nothing to bake here any more: a shader is a component, so it runs inside
+	// the compositor the exporter already shares with the preview.
 
 	exporter_ = new ClipExporter(this);
 	connect(exporter_, &ClipExporter::progress, this, &VideoEditorWindow::onExportProgress);

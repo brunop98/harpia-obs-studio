@@ -296,6 +296,16 @@ void TransformEvaluator::clearError()
 TlTransform TransformEvaluator::apply(const ClipScript &script, const TlTransform &base,
 				      const TlClip &clip, qint64 outMs, const ScriptContext &ctx)
 {
+	// The clip is only ever asked for these two numbers, and a script component
+	// already knows both -- so the work lives in the overload and this one is
+	// the convenience wrapper, rather than a component having to fabricate a
+	// TlClip to get at it.
+	return applyAt(script, base, outMs - clip.outStartMs, clip.outDurationMs(), ctx);
+}
+
+TlTransform TransformEvaluator::applyAt(const ClipScript &script, const TlTransform &base,
+					qint64 tMsIn, qint64 durMsIn, const ScriptContext &ctx)
+{
 	if (!script.active())
 		return base;
 	const auto it = d_->scripts.constFind(script.name);
@@ -310,8 +320,8 @@ TlTransform TransformEvaluator::apply(const ClipScript &script, const TlTransfor
 		JS_SetPropertyStr(jc, d_->global, p.key().toUtf8().constData(),
 				  JS_NewFloat64(jc, p.value()));
 
-	const double durMs = double(std::max<qint64>(1, clip.outDurationMs()));
-	const double tMs = double(std::clamp<qint64>(outMs - clip.outStartMs, 0, qint64(durMs)));
+	const double durMs = double(std::max<qint64>(1, durMsIn));
+	const double tMs = double(std::clamp<qint64>(tMsIn, 0, qint64(durMs)));
 	const double t = tMs / 1000.0;
 	const double dur = durMs / 1000.0;
 	const double u = std::clamp(tMs / durMs, 0.0, 1.0);

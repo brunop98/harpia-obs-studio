@@ -13,6 +13,7 @@
 #include "TextStyleJson.hpp"
 #include "../component/BuiltinComponents.hpp"
 #include "../component/ComponentJson.hpp"
+#include "../component/TransformScriptComponent.hpp"
 #include "TimelineModel.hpp"
 
 #include <QJsonArray>
@@ -399,6 +400,31 @@ inline TlClip clipFromJson(const QJsonObject &co)
 		const TlScript s = readScript(co.value(QStringLiteral("script")).toObject());
 		if (!s.name.isEmpty())
 			c.scripts.append(s);
+	}
+
+	// Migration: a transform script used to be an entry in the clip's own
+	// `scripts` list. Each becomes the component that replaced it, in the same
+	// order -- which is the order they ran in, and now the order they sit in the
+	// component list. Only when there are no components yet, for the same reason
+	// the fx migration above checks: a project already migrated still carries
+	// `scripts` for the older readers, and converting it twice would apply every
+	// script twice.
+	//
+	// A script whose file is gone registers no type, so it is skipped rather
+	// than added as a component nothing can render. The `scripts` list keeps it
+	// either way, so putting the file back and reopening restores it.
+	if (c.components.isEmpty() && !c.scripts.isEmpty()) {
+		int n = 0;
+		for (const TlScript &sc : c.scripts) {
+			ComponentInstance ci;
+			ci.typeId = transformScriptComponentId(sc.name);
+			if (!ComponentRegistry::instance().find(ci.typeId))
+				continue;
+			ci.instanceId = QStringLiteral("script%1").arg(n++);
+			for (auto it = sc.params.cbegin(); it != sc.params.cend(); ++it)
+				ci.props.insert(it.key(), it.value());
+			c.components.append(ci);
+		}
 	}
 	if (c.type == TlClip::Type::Text) {
 		const QJsonObject tx = co.value(QStringLiteral("textStyle")).toObject();

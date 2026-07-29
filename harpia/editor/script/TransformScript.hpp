@@ -105,6 +105,13 @@ public:
 	TlTransform apply(const ClipScript &script, const TlTransform &base, const TlClip &clip,
 			  qint64 outMs, const ScriptContext &ctx);
 
+	// The same thing, told the clip-relative time and the duration directly.
+	// A script component already knows both -- and the clip is all apply() ever
+	// asked them for -- so this is where the work lives and the overload above
+	// is the wrapper, rather than a component having to invent a TlClip.
+	TlTransform applyAt(const ClipScript &script, const TlTransform &base, qint64 tMs,
+			    qint64 durMs, const ScriptContext &ctx);
+
 	QString lastError() const;
 	void clearError();
 

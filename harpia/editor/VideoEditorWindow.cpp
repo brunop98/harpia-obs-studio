@@ -28,6 +28,8 @@
 #include "VoiceoverMixer.hpp"
 #include "VoiceoverTrack.hpp"
 #include "script/TransformScript.hpp"
+#include "component/ShaderComponent.hpp"
+#include "component/TransformScriptComponent.hpp"
 #include "shader/ShaderRenderer.hpp"
 #include "timeline/TimelineCompositor.hpp"
 #include "ShortcutPanel.hpp"
@@ -839,6 +841,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		}
 		recompileChain();
 		rebuildEffectsUI();
+		// A shader is also a component type, so an edit on disk has to reach
+		// both -- otherwise the panel would show the new version and a clip
+		// carrying the same shader would keep rendering the old one.
+		reloadComponentsFromDisk();
 		refreshPreviewFrame();
 	});
 	shadersDirPath(); // ensure the folder exists + presets are seeded
@@ -869,11 +875,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(scriptWatch_, &QFileSystemWatcher::directoryChanged, this, [this](const QString &) {
 		refreshScriptList();
 		reloadScriptsFromDisk();
+		reloadComponentsFromDisk(); // the same file is also a component type
 	});
 	connect(scriptWatch_, &QFileSystemWatcher::fileChanged, this, [this](const QString &p) {
 		if (QFile::exists(p) && !scriptWatch_->files().contains(p))
 			scriptWatch_->addPath(p); // editors replace files on save
 		reloadScriptsFromDisk();
+		reloadComponentsFromDisk();
 	});
 
 	// ---- Clip properties -------------------------------------------------
@@ -2139,9 +2147,15 @@ QString VideoEditorWindow::componentsDirPath()
 void VideoEditorWindow::reloadComponentsFromDisk()
 {
 	componentErrors_.clear();
-	componentCount_ = ScriptComponents::loadFolder(componentsDirPath(),
-						       ComponentRegistry::instance(),
-						       &componentErrors_);
+	ComponentRegistry &reg = ComponentRegistry::instance();
+	componentCount_ = ScriptComponents::loadFolder(componentsDirPath(), reg, &componentErrors_);
+	// The shaders and the transform scripts are components too -- one type per
+	// file, from the same folders they always lived in. Registering them here
+	// rather than at startup is what makes their folders hot-reload on the same
+	// terms as the components folder: save a .frag and the next frame has it.
+	componentCount_ += ShaderComponents::loadFolder(shadersDirPath(), reg, &componentErrors_);
+	componentCount_ +=
+		TransformScriptComponents::loadFolder(scriptsDirPath(), reg, &componentErrors_);
 	// Shown in the panel rather than written to the log: someone whose component
 	// will not load needs to be told where they can see why, not left to
 	// discover that Error Logs exists.
@@ -3975,130 +3989,10 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	keyInfo_->setStyleSheet(QStringLiteral("color:#7f858e;"));
 	v->addWidget(keyInfo_);
 
-	// ---- Transform script -------------------------------------------------
-	auto *scHdr = new QLabel(QStringLiteral("Script"), clipBox_);
-	scHdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed; margin-top:6px;"));
-	v->addWidget(scHdr);
-	auto *scHint = new QLabel(
-		QStringLiteral("Drives position/scale/rotation/opacity in code. Channels the script "
-			       "leaves out keep the values above."),
-		clipBox_);
-	scHint->setWordWrap(true);
-	scHint->setStyleSheet(QStringLiteral("color:#7f858e;"));
-	v->addWidget(scHint);
-
-	// Some Qt builds (the trimmed obs-deps Qt used for Windows releases) ship no
-	// Qml module, so there is no JS engine to run scripts with. Say so plainly
-	// rather than letting the picker look broken.
-	if (!TransformEvaluator::available()) {
-		auto *scOff = new QLabel(
-			QStringLiteral("Unavailable in this build — it was compiled against a Qt "
-				       "with no Qml module, so there is no scripting engine. "
-				       "Keyframes and the controls above still work."),
-			clipBox_);
-		scOff->setWordWrap(true);
-		scOff->setStyleSheet(QStringLiteral("color:#d5a642;"));
-		v->addWidget(scOff);
-	}
-
-	// The stack. Scripts run top-to-bottom, so the list order IS the evaluation
-	// order; InternalMove gives real drag-and-drop reordering for free, which is
-	// far steadier than hand-rolled card dragging.
-	scriptList_ = new QListWidget(clipBox_);
-	scriptList_->setEnabled(TransformEvaluator::available());
-	scriptList_->setDragDropMode(QAbstractItemView::InternalMove);
-	scriptList_->setDefaultDropAction(Qt::MoveAction);
-	scriptList_->setSelectionMode(QAbstractItemView::SingleSelection);
-	scriptList_->setUniformItemSizes(true);
-	scriptList_->setMaximumHeight(112);
-	scriptList_->setToolTip(QStringLiteral(
-		"Scripts run top to bottom — drag to reorder. Each starts from what the one above "
-		"produced, so scripts driving different channels combine, and on a shared channel "
-		"the lower one wins."));
-	v->addWidget(scriptList_);
-
-	connect(scriptList_, &QListWidget::currentRowChanged, this, [this](int row) {
-		if (syncingClip_)
-			return;
-		scriptSel_ = row;
-		rebuildScriptParams(); // show the newly selected entry's controls
-	});
-	// A drag finishing rewrites the clip's stack in the list's new order.
-	//
-	// Which signal that is depends on how Qt implements the move: QListWidget's
-	// InternalMove drop goes through dropMimeData and emits rowsInserted (plus a
-	// separate removal of the source row) rather than rowsMoved, so listening for
-	// rowsMoved alone silently never fired. Listen for every mutation and read
-	// the order back on the next event-loop turn, once the drop has settled —
-	// applyScriptOrderFromList ignores the half-finished states in between.
-	const auto onListMutated = [this]() {
-		if (syncingClip_ || scriptOrderSyncPending_)
-			return;
-		scriptOrderSyncPending_ = true;
-		QTimer::singleShot(0, this, [this]() {
-			scriptOrderSyncPending_ = false;
-			applyScriptOrderFromList();
-		});
-	};
-	connect(scriptList_->model(), &QAbstractItemModel::rowsMoved, this, onListMutated);
-	connect(scriptList_->model(), &QAbstractItemModel::rowsInserted, this, onListMutated);
-	connect(scriptList_->model(), &QAbstractItemModel::rowsRemoved, this, onListMutated);
-	connect(scriptList_->model(), &QAbstractItemModel::layoutChanged, this, onListMutated);
-	connect(scriptList_->model(), &QAbstractItemModel::modelReset, this, onListMutated);
-
-	auto *stkBtns = new QHBoxLayout;
-	addScriptBtn_ = new QPushButton(QStringLiteral("Add script"), clipBox_);
-	addScriptBtn_->setEnabled(TransformEvaluator::available());
-	addScriptBtn_->setToolTip(QStringLiteral("Stack another transform script on this clip"));
-	auto *scDel = new QPushButton(clipBox_);
-	scDel->setIcon(uiIcon(Glyph::Cross, 13));
-	scDel->setFixedWidth(28);
-	scDel->setToolTip(QStringLiteral("Remove the selected script"));
-	stkBtns->addWidget(addScriptBtn_, 1);
-	stkBtns->addWidget(scDel);
-	v->addLayout(stkBtns);
-
-	connect(addScriptBtn_, &QPushButton::clicked, this, [this]() {
-		QMenu menu(this);
-		const QStringList names = availableScripts();
-		if (names.isEmpty())
-			menu.addAction(QStringLiteral("(no scripts in folder)"))->setEnabled(false);
-		for (const QString &n : names) {
-			QAction *a = menu.addAction(n);
-			connect(a, &QAction::triggered, this, [this, n]() { addScriptToClip(n); });
-		}
-		menu.exec(addScriptBtn_->mapToGlobal(QPoint(0, addScriptBtn_->height())));
-	});
-	connect(scDel, &QPushButton::clicked, this, [this]() { removeScriptFromClip(scriptSel_); });
-
-	auto *scBtns = new QHBoxLayout;
-	auto *scReload = new QPushButton(QStringLiteral("Reload"), clipBox_);
-	scReload->setToolTip(QStringLiteral("Recompile the scripts after editing them on disk"));
-	auto *scFolder = new QPushButton(QStringLiteral("Folder"), clipBox_);
-	scFolder->setToolTip(QStringLiteral("Open the scripts folder — drop .js files here"));
-	scBtns->addWidget(scReload);
-	scBtns->addWidget(scFolder);
-	v->addLayout(scBtns);
-	connect(scReload, &QPushButton::clicked, this, [this]() {
-		refreshScriptList();
-		reloadScriptsFromDisk();
-	});
-	connect(scFolder, &QPushButton::clicked, this,
-		[this]() { QDesktopServices::openUrl(QUrl::fromLocalFile(scriptsDirPath())); });
-
-	scriptError_ = new QLabel(QString(), clipBox_);
-	scriptError_->setWordWrap(true);
-	scriptError_->setStyleSheet(
-		QStringLiteral("color:#e5484d; font-family:monospace; font-size:%1px;").arg(uiCaptionPx()));
-	scriptError_->setVisible(false);
-	v->addWidget(scriptError_);
-
-	scriptParamBox_ = new QWidget(clipBox_);
-	auto *spl = new QFormLayout(scriptParamBox_);
-	spl->setContentsMargins(0, 2, 0, 0);
-	spl->setHorizontalSpacing(8);
-	spl->setVerticalSpacing(4);
-	v->addWidget(scriptParamBox_);
+	// The transform-script panel used to live here. Scripts are components now
+	// ("Add Component -> Script"), so the stack, its drag-to-reorder and its
+	// parameter controls are the ones every component gets rather than a second
+	// set built only for scripts.
 
 	// ---- Text style (text clips only) ------------------------------------
 	textBox_ = new QWidget(clipBox_);

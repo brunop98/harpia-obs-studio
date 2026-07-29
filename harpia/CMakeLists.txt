@@ -199,6 +199,8 @@ target_sources(
     editor/component/ComponentPanel.cpp
     editor/component/ComponentPanel.hpp
     editor/component/ScriptComponent.cpp
+    editor/component/ShaderComponent.cpp
+    editor/component/TransformScriptComponent.cpp
     editor/component/ScriptComponent.hpp
     editor/component/BuiltinComponents.cpp
     editor/component/BuiltinComponents.hpp

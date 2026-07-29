@@ -137,6 +137,16 @@ public:
 
 	// Save to / open from an explicit path, with no dialog. The menu items wrap
 	// these; tests and the autosave timer use them directly.
+	// Reading a still, and what the dialog may offer. Both are pure functions of
+	// their input with no window state, and both are public because the failure
+	// path is the interesting one and a test has to be able to reach it.
+	//
+	// readStillImage tries Qt first and falls back to libav for the formats this
+	// Qt build has no plugin for (WebP, most often). Null on failure, with *why
+	// naming which stage failed and what this build can actually read.
+	static QImage readStillImage(const QString &path, QString *why);
+	static QString imageOpenFilter();
+
 	QString saveProjectTo(const QString &path, bool quiet);
 	bool openProjectAt(const QString &path);
 
@@ -282,6 +292,8 @@ private:
 	// Registered as sources with no decoder; the frame providers serve the cached
 	// QImage for every timestamp. -1 on failure.
 	int addImageSource(const QString &path);
+	// Built from what can actually be opened, so the dialog never offers a
+	// format the editor would then refuse.
 	QHash<int, QImage> stillImages_; // sourceId -> decoded still
 	void addImageClip();
 	// A video or image dropped from the desktop onto the timeline lanes.

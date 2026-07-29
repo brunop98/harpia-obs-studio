@@ -143,6 +143,17 @@ g++ -std=c++17 -O2 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/pixelbands_test" $LF
 
+# Masking a clip to a shape: the outside is CLEARED, not darkened, and the track
+# below shows through the hole.
+g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
+	"$HERE/mask_test.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
+	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	-o "$WORK/mask_test" "$QJSLIB/libqjs.a" $LF
+
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
@@ -157,4 +168,5 @@ QT_QPA_PLATFORM=offscreen "$WORK/assetcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectarea_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/gutterspill_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/pixelbands_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/mask_test" || rc=1
 exit $rc

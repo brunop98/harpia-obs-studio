@@ -288,7 +288,10 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 					});
 				control = check;
 			} else {
-				slider = new ParamSlider(d.min, d.max, 3, row->box);
+				// An Int is a count or a choice; three decimals on one reads
+				// as a broken float control.
+				slider = new ParamSlider(d.min, d.max,
+							 d.type == PropType::Int ? 0 : 3, row->box);
 				if (m.mixed)
 					slider->setMixed();
 				else

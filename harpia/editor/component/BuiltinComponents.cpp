@@ -5,6 +5,7 @@
 #include "ComponentRegistry.hpp"
 
 #include <QImage>
+#include <QPainter>
 
 #include <algorithm>
 #include <cmath>
@@ -61,6 +62,88 @@ public:
 					       std::min(io.frame->width(), io.frame->height())));
 		if (px > 0)
 			Spotlight::blurInPlace(*io.frame, px);
+	}
+};
+
+// ---- Mask ----------------------------------------------------------------
+// Cut the clip to a shape. Outside it becomes TRANSPARENT rather than dark, so
+// whatever is on the tracks below shows through -- which is what makes
+// picture-in-picture, shaped reveals and "show only this corner" work. The
+// dimming version of the same idea is Inverse Selection, which is a clip of its
+// own because it grades the whole composition rather than one layer.
+//
+// The shape is described in the CLIP's own space, not the canvas: a mask
+// belongs to the thing it is cutting, so moving or zooming the clip carries it
+// along instead of leaving the picture sliding around behind a fixed hole.
+//
+// The geometry comes from Spotlight::maskPath, so there is one description of
+// what a rounded rectangle is in this program rather than two that can drift.
+class MaskComponent : public IComponent {
+public:
+	void evaluate(const EvalContext &ctx, ClipState &io) const override
+	{
+		if (!io.frame || io.frame->isNull())
+			return;
+		QImage &frame = *io.frame;
+		if (frame.format() != QImage::Format_RGBA8888)
+			frame = frame.convertToFormat(QImage::Format_RGBA8888);
+
+		SpotMask m;
+		m.shape = spotShapeFromInt(int(std::lround(ctx.f("shape", 1.0))));
+		SpotPose pose;
+		pose.cx = ctx.f("centreX", 0.5);
+		pose.cy = ctx.f("centreY", 0.5);
+		pose.w = std::max(0.0, ctx.f("width", 0.5));
+		pose.h = std::max(0.0, ctx.f("height", 0.5));
+		pose.rotation = ctx.f("rotation", 0.0);
+		pose.radius = std::clamp(ctx.f("corner", 0.15), 0.0, 0.5);
+		const bool invert = ctx.b("invert", false);
+		const double feather = std::clamp(ctx.f("feather", 0.02), 0.0, 1.0);
+
+		// The coverage map: white where the clip survives, black where it does
+		// not, at the frame's own size so the edge lands on the same pixels the
+		// frame has.
+		//
+		// White-on-BLACK in a colour channel, not white-on-transparent in the
+		// alpha one, because blurInPlace does not touch alpha at all -- it says
+		// so itself, and feathering silently did nothing until that was read
+		// rather than assumed. RGBA8888 for the same kind of reason: the blur
+		// converts anything else to it, which would move the buffer out from
+		// under the read below.
+		QImage cover(frame.size(), QImage::Format_RGBA8888);
+		cover.fill(Qt::black);
+		{
+			QPainter p(&cover);
+			p.setRenderHint(QPainter::Antialiasing, true);
+			p.setPen(Qt::NoPen);
+			p.setBrush(Qt::white);
+			p.drawPath(Spotlight::maskPath(m, pose, frame.size()));
+		}
+		// Feather as a fraction of the shorter side, the same rule the effects
+		// use, so a mask looks the same at any render size -- including the
+		// reduced-resolution preview.
+		const int soft = int(std::lround(feather * 0.25 *
+						 std::min(frame.width(), frame.height())));
+		if (soft > 0)
+			Spotlight::blurInPlace(cover, soft);
+
+		// Multiply the frame's alpha by the coverage. Done by hand rather than
+		// through QPainter's DestinationIn so the frame stays RGBA8888
+		// throughout -- the composition modes want premultiplied ARGB, and
+		// converting there and back costs two full passes per frame.
+		const int w = frame.width(), h = frame.height();
+		for (int y = 0; y < h; ++y) {
+			uchar *row = frame.scanLine(y);
+			const uchar *cov = cover.constScanLine(y);
+			for (int x = 0; x < w; ++x) {
+				// Red carries the coverage; the three colour channels are
+				// identical here, since the map is only ever black or white.
+				const int c = cov[x * 4 + 0];
+				const int a = invert ? 255 - c : c;
+				uchar &alpha = row[x * 4 + 3];
+				alpha = uchar((int(alpha) * a + 127) / 255);
+			}
+		}
 	}
 };
 
@@ -267,6 +350,47 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 			    QStringLiteral("As a fraction of the frame's shorter side, so it "
 					   "looks the same at any render size.")}};
 		t.make = [] { return std::unique_ptr<IComponent>(new BlurComponent); };
+		reg.add(t);
+	}
+	{
+		ComponentType t;
+		t.id = QStringLiteral("harpia.mask");
+		t.displayName = QStringLiteral("Mask");
+		t.category = QStringLiteral("Pixel");
+		t.stage = Stage::Pixel;
+		t.help = QStringLiteral(
+			"Cut the clip to a shape. Everything outside becomes transparent, so the "
+			"tracks below show through. The shape is in the clip's own space, so it "
+			"moves and zooms with the clip.");
+		t.props = {
+			{QStringLiteral("shape"), QStringLiteral("Shape"), PropType::Int, 0.0, 3.0,
+			 1.0, false,
+			 QStringLiteral("0 rectangle, 1 rounded rectangle, 2 circle, 3 ellipse.")},
+			{QStringLiteral("centreX"), QStringLiteral("Centre X"), PropType::Float, -0.5,
+			 1.5, 0.5, true, QStringLiteral("0.5 is the middle of the clip.")},
+			{QStringLiteral("centreY"), QStringLiteral("Centre Y"), PropType::Float, -0.5,
+			 1.5, 0.5, true, QStringLiteral("0.5 is the middle of the clip.")},
+			{QStringLiteral("width"), QStringLiteral("Width"), PropType::Float, 0.0, 2.0,
+			 0.5, true, QStringLiteral("As a fraction of the clip's width. A circle "
+						   "takes its size from this alone.")},
+			{QStringLiteral("height"), QStringLiteral("Height"), PropType::Float, 0.0,
+			 2.0, 0.5, true, QStringLiteral("As a fraction of the clip's height.")},
+			{QStringLiteral("rotation"), QStringLiteral("Rotation"), PropType::Float,
+			 -180.0, 180.0, 0.0, true, QStringLiteral("Degrees clockwise, about the "
+								  "shape's own centre.")},
+			{QStringLiteral("corner"), QStringLiteral("Corner radius"), PropType::Float,
+			 0.0, 0.5, 0.15, true,
+			 QStringLiteral("Rounded rectangle only, as a fraction of the shorter side.")},
+			{QStringLiteral("feather"), QStringLiteral("Feather"), PropType::Float, 0.0,
+			 1.0, 0.02, true, QStringLiteral("Soften the edge. 0 is a hard cut.")},
+			{QStringLiteral("invert"), QStringLiteral("Invert"), PropType::Bool, 0.0, 1.0,
+			 0.0, false,
+			 QStringLiteral("Cut the shape OUT of the clip instead of keeping it.")},
+		};
+		// Not a point op: a feathered edge reads its neighbours through the blur,
+		// and the coverage map is built from the whole frame's geometry either
+		// way. Handing this a sub-rect would move the shape.
+		t.make = [] { return std::unique_ptr<IComponent>(new MaskComponent); };
 		reg.add(t);
 	}
 }

@@ -14,6 +14,7 @@
 
 #include <functional>
 
+class QMimeData;
 class QPainter;
 class QTimer;
 
@@ -54,6 +55,10 @@ public:
 	// Append a clip to a track (creating a default track of the right kind when
 	// the timeline is empty). Emits clipsChanged + selects it.
 	void addClip(TlTrack::Kind kind, const TlClip &clip);
+	// Put a clip on an existing lane, or on a new one inserted at `newTrackAt`.
+	// The drop handler needs this: addClip() appends to the LAST lane of a kind,
+	// which is not where the pointer was. Returns the track it landed on.
+	int addClipAt(TlTrack::Kind kind, const TlClip &clip, int track, int newTrackAt);
 	int trackCount() const { return model_.tracks.size(); }
 
 	void setPlayhead(qint64 outMs);
@@ -147,6 +152,13 @@ public:
 
 signals:
 	void clipsChanged();
+	// Media files dropped straight onto the lanes. The view knows WHERE they
+	// landed; it does not know how to read a PNG or an MP4, and the media pool
+	// they have to be registered in belongs to the window -- so it reports the
+	// drop and the window builds the clips. `newTrackAt >= 0` means the drop was
+	// between lanes (or past the last one) and asked for a track to be made
+	// there; otherwise `track` is the lane it landed on.
+	void filesDropped(const QStringList &paths, int track, int newTrackAt, qint64 outMs);
 	// A finished, discrete edit (drag released, split, delete, paste, track op).
 	// Always paired with clipsChanged; the window uses it to close an undo entry
 	// immediately instead of waiting out the coalescing timer.
@@ -263,6 +275,16 @@ private:
 	};
 	DropTarget dropTargetAt(int y, TlTrack::Kind kind) const;
 	int insertYFor(int newTrackAt) const; // y of the "new track here" indicator
+
+	// Dragging FILES in from outside. Reuses the same drop indicator as an
+	// internal clip move, so the two read identically -- the highlighted lane or
+	// the "new track here" line means the same thing whichever drag it is.
+	void dragEnterEvent(QDragEnterEvent *e) override;
+	void dragMoveEvent(QDragMoveEvent *e) override;
+	void dragLeaveEvent(QDragLeaveEvent *e) override;
+	void dropEvent(QDropEvent *e) override;
+	static QStringList droppableFiles(const QMimeData *mime);
+	bool fileDrag_ = false;
 
 	// Header widgets: the small lock / hide / mute toggles in the gutter.
 	enum class HeaderHit { None, Lock, Hide, Mute };

@@ -284,6 +284,9 @@ private:
 	int addImageSource(const QString &path);
 	QHash<int, QImage> stillImages_; // sourceId -> decoded still
 	void addImageClip();
+	// A video or image dropped from the desktop onto the timeline lanes.
+	void onFilesDroppedOnTimeline(const QStringList &paths, int track, int newTrackAt,
+				      qint64 outMs);
 	void addEffectClip(); // toolbar: drop an effect clip on an effect track
 
 	// The effect-clip Inspector used to be here: a type combo, a parameter form

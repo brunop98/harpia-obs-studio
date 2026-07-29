@@ -27,6 +27,7 @@
 #include "TrackEditor.hpp"
 #include "VoiceoverMixer.hpp"
 #include "VoiceoverTrack.hpp"
+#include "MediaFiles.hpp"
 #include "script/TransformScript.hpp"
 #include "component/ShaderComponent.hpp"
 #include "component/TransformScriptComponent.hpp"
@@ -107,17 +108,6 @@ namespace harpia {
 
 
 namespace {
-// Accepted source video extensions (drag-drop + Add video filter).
-bool isVideoFile(const QString &path)
-{
-	static const QStringList kExts = {QStringLiteral("mp4"), QStringLiteral("mov"),
-					  QStringLiteral("mkv"), QStringLiteral("webm"),
-					  QStringLiteral("avi"), QStringLiteral("m4v"),
-					  QStringLiteral("gif"), QStringLiteral("wmv"),
-					  QStringLiteral("flv"), QStringLiteral("ts")};
-	return kExts.contains(QFileInfo(path).suffix().toLower());
-}
-
 QString previewTimeText(qint64 ms)
 {
 	return timeTextMs(ms);
@@ -481,6 +471,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		refreshKeyframeEditor(); // it follows the selection
 	});
 	// "Show in inspector" from a clip's right-click menu (any mode).
+	connect(timelineView_, &TimelineView::filesDropped, this,
+		&VideoEditorWindow::onFilesDroppedOnTimeline);
 	connect(timelineView_, &TimelineView::inspectClipRequested, this,
 		&VideoEditorWindow::revealInspector);
 	connect(timelineView_, &TimelineView::keyframeEditorRequested, this,
@@ -1804,6 +1796,57 @@ void VideoEditorWindow::addImageClip()
 	c.srcEndMs = 5000; // freely stretchable, like a caption
 	c.outStartMs = timelinePlayheadMs();
 	timelineView_->addClip(TlTrack::Kind::Video, c);
+	updateInfoLabel();
+	showTimelineFrame(timelinePlayheadMs());
+}
+
+// Files dragged from the desktop straight onto the lanes. The view worked out
+// WHERE; this works out what, and puts them there.
+//
+// Several files dropped together are laid end to end from the drop point rather
+// than stacked on top of each other -- dropping a folder of stills should give a
+// sequence, not one clip with four hidden underneath it.
+void VideoEditorWindow::onFilesDroppedOnTimeline(const QStringList &paths, int track,
+						 int newTrackAt, qint64 outMs)
+{
+	if (!timelineView_ || paths.isEmpty())
+		return;
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+
+	qint64 at = std::max<qint64>(0, outMs);
+	int landed = -1;
+	for (const QString &f : paths) {
+		TlClip c;
+		// A GIF is both, and the video reader is what people mean by dropping
+		// one -- so the video test goes first, matching MediaFiles.hpp.
+		if (isVideoFile(f)) {
+			const int id = addSource(f);
+			if (id < 0)
+				continue; // addSource already said why
+			const EditorSource *src = sourceById(id);
+			c.type = TlClip::Type::Video;
+			c.sourceId = id;
+			c.srcStartMs = 0;
+			c.srcEndMs = src ? src->durationMs : 0;
+		} else {
+			const int id = addImageSource(f);
+			if (id < 0)
+				continue;
+			c.type = TlClip::Type::Image;
+			c.sourceId = id;
+			c.srcStartMs = 0;
+			c.srcEndMs = 5000; // a still has no length of its own
+		}
+		c.outStartMs = at;
+		at += std::max<qint64>(1, c.outDurationMs());
+		// Only the FIRST clip makes a track; the rest join it, or the drop of
+		// three files would leave three new lanes.
+		landed = timelineView_->addClipAt(TlTrack::Kind::Video, c, landed >= 0 ? landed : track,
+						  landed >= 0 ? -1 : newTrackAt);
+	}
+	if (landed < 0)
+		return;
 	updateInfoLabel();
 	showTimelineFrame(timelinePlayheadMs());
 }
@@ -4724,12 +4767,16 @@ void VideoEditorWindow::onPreviewTransformZoom(double factor, double cursorXNorm
 	applySelectedClipTransform(tf);
 }
 
+// Dropped anywhere in the window EXCEPT the lanes -- the timeline handles its
+// own drops, and gets them first because it is the widget under the pointer.
+// Here there is no lane to aim at, so a file joins the media pool and waits to
+// be used, which is what dropping on the background has always meant.
 void VideoEditorWindow::dragEnterEvent(QDragEnterEvent *e)
 {
 	if (!e->mimeData()->hasUrls())
 		return;
 	for (const QUrl &u : e->mimeData()->urls())
-		if (isVideoFile(u.toLocalFile())) {
+		if (isMediaFile(u.toLocalFile())) {
 			e->acceptProposedAction();
 			return;
 		}
@@ -4737,19 +4784,32 @@ void VideoEditorWindow::dragEnterEvent(QDragEnterEvent *e)
 
 void VideoEditorWindow::dropEvent(QDropEvent *e)
 {
-	int firstAdded = -1;
+	int firstVideo = -1;
+	bool addedAny = false;
 	for (const QUrl &u : e->mimeData()->urls()) {
 		const QString f = u.toLocalFile();
-		if (f.isEmpty() || !isVideoFile(f))
+		if (f.isEmpty())
 			continue;
-		const int id = addSource(f);
-		if (id >= 0 && firstAdded < 0)
-			firstAdded = id;
+		// Images used to be ignored here, so dropping a PNG on the editor did
+		// nothing at all and gave no reason why.
+		if (isVideoFile(f)) {
+			const int id = addSource(f);
+			if (id < 0)
+				continue;
+			addedAny = true;
+			if (firstVideo < 0)
+				firstVideo = id;
+		} else if (isImageFile(f)) {
+			addedAny |= addImageSource(f) >= 0;
+		}
 	}
-	if (firstAdded >= 0) {
-		setActiveSource(firstAdded);
-		e->acceptProposedAction();
-	}
+	if (!addedAny)
+		return;
+	// Only a video can be the ACTIVE source -- that is what the preview scrubs
+	// and what Trim and Multi-Cut cut from. A still has nothing to scrub.
+	if (firstVideo >= 0)
+		setActiveSource(firstVideo);
+	e->acceptProposedAction();
 }
 
 void VideoEditorWindow::showSourcesPanel()

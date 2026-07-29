@@ -1,5 +1,7 @@
 #include "TimelineView.hpp"
 
+#include "../MediaFiles.hpp"
+
 #include "../component/BuiltinComponents.hpp"
 #include "../component/ComponentRegistry.hpp"
 
@@ -12,6 +14,8 @@
 #include <QKeyEvent>
 #include <QHash>
 #include <QMenu>
+#include <QMimeData>
+#include <QDragEnterEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -50,6 +54,8 @@ TimelineView::TimelineView(QWidget *parent) : QWidget(parent)
 {
 	setFocusPolicy(Qt::ClickFocus);
 	setMouseTracking(true);
+	// Drop a video or an image straight onto the lanes.
+	setAcceptDrops(true);
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 	setToolTip(QStringLiteral("Drag clips to move · drag an edge to trim · right-click to split · "
 				  "scroll to zoom, Shift+scroll to pan"));
@@ -238,6 +244,96 @@ void TimelineView::addClip(TlTrack::Kind kind, const TlClip &clip)
 	update();
 	commitEdit();
 	emit selectionChanged(selTrack_, selClip_);
+}
+
+// addClip() appends to the LAST lane of a kind, which is fine for a menu action
+// but wrong for a drop: the pointer was over a particular lane, or between two
+// of them. This takes the answer dropTargetAt() already worked out.
+int TimelineView::addClipAt(TlTrack::Kind kind, const TlClip &clip, int track, int newTrackAt)
+{
+	int target = -1;
+	if (newTrackAt >= 0) {
+		TlTrack t;
+		t.kind = kind;
+		t.color = randomPastel();
+		target = std::clamp(newTrackAt, 0, int(model_.tracks.size()));
+		model_.tracks.insert(target, t);
+		renumberTracks();
+	} else if (track >= 0 && track < model_.tracks.size() &&
+		   model_.tracks[track].kind == kind && !model_.tracks[track].locked) {
+		target = track;
+	}
+	if (target < 0) {
+		// Nowhere sensible was named -- a locked lane, or one of the wrong kind.
+		// Falling back to addClip is better than dropping the file on the floor:
+		// something appears, and it appears somewhere the user can see and move.
+		addClip(kind, clip);
+		return selTrack_;
+	}
+	model_.tracks[target].clips.append(clip);
+	selTrack_ = target;
+	selClip_ = model_.tracks[target].clips.size() - 1;
+	clampView();
+	updateGeometry();
+	update();
+	commitEdit();
+	emit selectionChanged(selTrack_, selClip_);
+	return target;
+}
+
+QStringList TimelineView::droppableFiles(const QMimeData *mime)
+{
+	QStringList out;
+	if (!mime || !mime->hasUrls())
+		return out;
+	for (const QUrl &u : mime->urls()) {
+		const QString f = u.toLocalFile();
+		if (!f.isEmpty() && isMediaFile(f))
+			out << f;
+	}
+	return out;
+}
+
+void TimelineView::dragEnterEvent(QDragEnterEvent *e)
+{
+	if (droppableFiles(e->mimeData()).isEmpty())
+		return;
+	fileDrag_ = true;
+	e->acceptProposedAction();
+}
+
+void TimelineView::dragMoveEvent(QDragMoveEvent *e)
+{
+	if (!fileDrag_)
+		return;
+	// A dropped file is a picture clip, so it targets the picture group -- the
+	// same call an internal drag makes, so the indicator means the same thing.
+	drop_ = dropTargetAt(int(e->position().y()), TlTrack::Kind::Video);
+	update();
+	e->acceptProposedAction();
+}
+
+void TimelineView::dragLeaveEvent(QDragLeaveEvent *)
+{
+	fileDrag_ = false;
+	drop_ = DropTarget();
+	update();
+}
+
+void TimelineView::dropEvent(QDropEvent *e)
+{
+	const QStringList files = droppableFiles(e->mimeData());
+	fileDrag_ = false;
+	const DropTarget d = drop_;
+	drop_ = DropTarget();
+	update();
+	if (files.isEmpty())
+		return;
+	// Where along the timeline it was dropped, not the playhead: the pointer is
+	// the whole point of dropping onto the lanes rather than pressing Add.
+	const qint64 at = std::max<qint64>(0, xToMs(int(e->position().x())));
+	e->acceptProposedAction();
+	emit filesDropped(files, d.track, d.newTrackAt, at);
 }
 
 const TlClip *TimelineView::selectedClipPtr() const
@@ -862,7 +958,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	// no fades, too narrow for a label — is just a rounded rectangle, and zoomed
 	// out that is most of them. Painting it as one call instead of a fill path,
 	// a clip path and a border path is three rasterisations saved per clip.
-	const bool dragging = (mode_ == Mode::Move && dragMoved_);
+	const bool dragging = (mode_ == Mode::Move && dragMoved_) || fileDrag_;
 	const bool wantsInside =
 		isFx || (video && srcThumbs_.contains(c.sourceId)) || !c.peaks.isEmpty() ||
 		(!dragging && !c.keys.isEmpty()) || clipTakesFades(track, clip) ||
@@ -1134,7 +1230,7 @@ void TimelineView::paintEvent(QPaintEvent *)
 	viewTarget_ = viewStart_;
 	ensureFonts();
 
-	const bool dragging = (mode_ == Mode::Move && dragMoved_);
+	const bool dragging = (mode_ == Mode::Move && dragMoved_) || fileDrag_;
 
 	// Lanes + headers.
 	for (int i = 0; i < model_.tracks.size(); ++i) {

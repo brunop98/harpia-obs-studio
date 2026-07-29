@@ -12,6 +12,8 @@
 #include <QVector>
 #include <QWidget>
 
+#include <functional>
+
 class QPainter;
 class QTimer;
 
@@ -113,6 +115,12 @@ public:
 	int selectedClip() const { return selClip_; }
 	const TlClip *selectedClipPtr() const;
 	void updateSelectedClip(const TlClip &c); // Inspector edits push back here
+	// Every selected clip as (track, clip), primary first, in timeline order.
+	QVector<QPair<int, int>> selectedPairs() const;
+	// Edit EVERY selected clip in one go, emitting clipsChanged once at the end.
+	// One signal, so the window takes one undo snapshot however many clips the
+	// edit touched — which is what makes a multi-clip change one Ctrl-Z.
+	void applyToSelection(const std::function<void(TlClip &)> &fn);
 
 	// Magnet: snap clip edges to the playhead, 0 and other clips while dragging.
 	void setSnapEnabled(bool on);
@@ -262,9 +270,6 @@ private:
 	HeaderHit headerHitAt(int track, const QPoint &p) const;
 	// `atOutMs` is where the new-effect entries place their clip.
 	void showTrackMenu(int track, const QPoint &globalPos, qint64 atOutMs);
-	// Every selected clip as (track, clip), primary first, in timeline order.
-	QVector<QPair<int, int>> selectedPairs() const;
-
 	void renumberTracks(); // V1..Vn bottom-up, A1..An top-down
 	static QColor randomPastel();
 

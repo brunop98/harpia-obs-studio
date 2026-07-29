@@ -1,8 +1,8 @@
 #include "ComponentPanel.hpp"
 
-#include "../ParamSlider.hpp"
 #include "../../ui/UiIcons.hpp"
 #include "../../ui/UiText.hpp"
+#include "../ParamSlider.hpp"
 #include "ComponentRegistry.hpp"
 
 #include <QCheckBox>
@@ -12,7 +12,6 @@
 #include <QLabel>
 #include <QMenu>
 #include <QPushButton>
-#include <QUuid>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -24,7 +23,10 @@ namespace harpia {
 struct ComponentPanel::Row {
 	QFrame *box = nullptr;
 	QCheckBox *enabled = nullptr;
-	QVector<QString> keys;          // property key per control, parallel to the two below
+	QString typeId;
+	int ordinal = 0;
+	bool pinned = false;
+	QVector<QString> keys;
 	QVector<ParamSlider *> sliders; // null for a non-float property
 	QVector<QCheckBox *> checks;    // null for a non-bool property
 	QVector<QPushButton *> keyBtns;
@@ -55,15 +57,11 @@ QPushButton *iconButton(Glyph g, const QString &tip, QWidget *parent)
 	return b;
 }
 
-bool hasKeyAt(const ComponentInstance &c, const QString &key, qint64 tMs)
+Qt::CheckState stateOf(const ComponentPanel::Mixed &m)
 {
-	const auto it = c.keys.find(key);
-	if (it == c.keys.end())
-		return false;
-	for (const PropKey &k : *it)
-		if (std::abs(k.tMs - tMs) <= 1)
-			return true;
-	return false;
+	// Qt's third state exists for exactly this. Picking checked or unchecked
+	// would be reporting one clip's answer as everyone's.
+	return m.mixed ? Qt::PartiallyChecked : (m.value.toBool() ? Qt::Checked : Qt::Unchecked);
 }
 
 } // namespace
@@ -75,9 +73,9 @@ ComponentPanel::ComponentPanel(const ComponentRegistry &reg, QWidget *parent)
 	v->setContentsMargins(0, 6, 0, 0);
 	v->setSpacing(5);
 
-	auto *hdr = new QLabel(QStringLiteral("Components"), this);
-	hdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
-	v->addWidget(hdr);
+	header_ = new QLabel(QStringLiteral("Components"), this);
+	header_->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
+	v->addWidget(header_);
 
 	loadErrors_ = new QLabel(this);
 	loadErrors_->setWordWrap(true);
@@ -93,372 +91,285 @@ ComponentPanel::ComponentPanel(const ComponentRegistry &reg, QWidget *parent)
 	warnings_->setVisible(false);
 	v->addWidget(warnings_);
 
-	empty_ = new QLabel(QStringLiteral("No components. Add one to change how this clip "
-					   "plays, moves or looks."),
-			    this);
+	empty_ = new QLabel(this);
 	empty_->setWordWrap(true);
 	empty_->setStyleSheet(QStringLiteral("color:#7f858e;"));
 	v->addWidget(empty_);
-
-	pinnedLayout_ = new QVBoxLayout;
-	pinnedLayout_->setSpacing(6);
-	v->addLayout(pinnedLayout_);
 
 	listLayout_ = new QVBoxLayout;
 	listLayout_->setSpacing(6);
 	v->addLayout(listLayout_);
 
+	// Components on SOME of the selection. Named rather than drawn, because
+	// there is nothing coherent to edit — but omitting them silently would let
+	// the list read as the whole truth about the clips.
+	notShared_ = new QLabel(this);
+	notShared_->setWordWrap(true);
+	notShared_->setStyleSheet(
+		QStringLiteral("color:#7f858e; font-size:%1px;").arg(uiCaptionPx()));
+	notShared_->setVisible(false);
+	v->addWidget(notShared_);
+
 	auto *add = new QPushButton(QStringLiteral("Add Component"), this);
 	add->setToolTip(QStringLiteral("Everything a clip does is a component — built-in or one "
-				       "you wrote yourself."));
+				       "you wrote yourself. Goes on every selected clip."));
 	connect(add, &QPushButton::clicked, this, &ComponentPanel::addComponentMenu);
 	v->addWidget(add);
+
+	setView(View{});
 }
 
-void ComponentPanel::setPinned(const QVector<PinnedRow> &rows)
+bool ComponentPanel::shapeChanged(const View &next) const
 {
-	// Rebuild only when the SHAPE changes — which rows, and which of their
-	// properties a script has taken over. Otherwise push values, so a number
-	// being typed is not yanked out from under the cursor.
-	bool structural = rows.size() != pinned_.size();
-	for (int i = 0; !structural && i < rows.size(); ++i)
-		structural = rows[i].typeId != pinned_[i].typeId ||
-			     rows[i].driven != pinned_[i].driven;
-	pinned_ = rows;
-	if (structural)
-		buildPinnedRows();
-	else
-		pushPinnedValues();
-}
-
-void ComponentPanel::buildPinnedRows()
-{
-	for (Row *r : pinnedRows_) {
-		r->box->deleteLater();
-		delete r;
-	}
-	pinnedRows_.clear();
-
-	for (int n = 0; n < pinned_.size(); ++n) {
-		const PinnedRow &pin = pinned_[n];
-		const ComponentType *type = reg_.find(pin.typeId);
-		if (!type)
-			continue;
-
-		auto *row = new Row;
-		row->box = new QFrame(this);
-		row->box->setFrameShape(QFrame::StyledPanel);
-		row->box->setStyleSheet(
-			QStringLiteral("QFrame{border:1px solid #3a3f47; border-radius:4px;}"));
-		auto *bv = new QVBoxLayout(row->box);
-		bv->setContentsMargins(6, 4, 6, 6);
-		bv->setSpacing(4);
-
-		auto *head = new QHBoxLayout;
-		head->setSpacing(4);
-		auto *name = new QLabel(type->displayName, row->box);
-		name->setStyleSheet(QStringLiteral("border:none; font-weight:bold; color:#e8eaed;"));
-		name->setToolTip(type->help + QStringLiteral("\n\nEvery clip has one, so this row "
-							     "cannot be removed or reordered."));
-		head->addWidget(name, 1);
-		head->addWidget(stageBadge(type->stage, row->box));
-		bv->addLayout(head);
-
-		auto *form = new QFormLayout;
-		form->setHorizontalSpacing(8);
-		form->setVerticalSpacing(3);
-		for (const PropDef &d : type->props) {
-			row->keys.append(d.key);
-			auto *sl = new ParamSlider(d.min, d.max, 3, row->box);
-			sl->setValue(pin.values.value(d.key, d.def));
-			if (!d.help.isEmpty())
-				sl->setToolTip(d.help);
-			const QString tid = pin.typeId;
-			connect(sl, &ParamSlider::valueChanged, this,
-				[this, tid, key = d.key](double v) {
-					if (syncing_)
-						return;
-					emit pinnedEdited(tid, key, v);
-				});
-			row->sliders.append(sl);
-			row->checks.append(nullptr);
-			row->keyBtns.append(nullptr);
-
-			// A script that computes this channel makes the box a starting
-			// point (it reads it as ctx.base), not the framing on screen.
-			// Saying so on the row beats leaving the mismatch to be found.
-			const bool driven = pin.driven.contains(d.key);
-			auto *lbl = new QLabel(
-				driven ? d.label + QStringLiteral("  (script)") : d.label, row->box);
-			lbl->setStyleSheet(driven ? QStringLiteral("border:none; color:#ffd44f;")
-						  : QStringLiteral("border:none;"));
-			if (driven)
-				lbl->setToolTip(pin.drivenTip);
-			row->labels.append(lbl);
-			form->addRow(lbl, sl);
-		}
-		bv->addLayout(form);
-		pinnedLayout_->addWidget(row->box);
-		pinnedRows_.append(row);
-	}
-	pushPinnedValues();
-}
-
-void ComponentPanel::pushPinnedValues()
-{
-	syncing_ = true;
-	for (int n = 0; n < pinnedRows_.size() && n < pinned_.size(); ++n) {
-		Row *r = pinnedRows_[n];
-		for (int i = 0; i < r->keys.size(); ++i)
-			if (r->sliders[i])
-				r->sliders[i]->setValue(pinned_[n].values.value(r->keys[i], 0.0));
-	}
-	syncing_ = false;
-}
-
-void ComponentPanel::setLoadErrors(const QStringList &errors)
-{
-	loadErrors_->setText(errors.join(QChar('\n')));
-	loadErrors_->setVisible(!errors.isEmpty());
-}
-
-bool ComponentPanel::shapeChanged(const QVector<ComponentInstance> &next) const
-{
-	if (next.size() != list_.size())
+	if (next.clipCount != view_.clipCount || next.pinned.size() != view_.pinned.size() ||
+	    next.shared.size() != view_.shared.size() || next.notShared != view_.notShared)
 		return true;
-	for (int i = 0; i < next.size(); ++i)
-		if (next[i].typeId != list_[i].typeId || next[i].instanceId != list_[i].instanceId)
+	for (int i = 0; i < next.pinned.size(); ++i) {
+		if (next.pinned[i].typeId != view_.pinned[i].typeId ||
+		    next.pinned[i].driven != view_.pinned[i].driven)
 			return true;
+		// Whether a property is MIXED changes the control, not just its value:
+		// an em dash is a different thing on screen from a number, so the row
+		// has to be rebuilt rather than refreshed.
+		for (auto it = next.pinned[i].values.cbegin(); it != next.pinned[i].values.cend(); ++it)
+			if (it->mixed != view_.pinned[i].values.value(it.key()).mixed)
+				return true;
+	}
+	for (int i = 0; i < next.shared.size(); ++i) {
+		const SharedComponent &a = next.shared[i];
+		const SharedComponent &b = view_.shared[i];
+		if (a.typeId != b.typeId || a.ordinal != b.ordinal || a.keyedHere != b.keyedHere ||
+		    a.enabled.mixed != b.enabled.mixed)
+			return true;
+		for (auto it = a.values.cbegin(); it != a.values.cend(); ++it)
+			if (it->mixed != b.values.value(it.key()).mixed)
+				return true;
+	}
 	return false;
 }
 
-void ComponentPanel::setComponents(const QVector<ComponentInstance> &list, qint64 clipTimeMs)
+void ComponentPanel::setView(const View &v)
 {
-	const bool structural = shapeChanged(list);
-	list_ = list;
-	timeMs_ = clipTimeMs;
+	const bool structural = shapeChanged(v);
+	view_ = v;
 	if (structural)
 		rebuild();
 	else
 		pushValues();
 
-	QStringList w;
-	{
-		// Order and conflicts are recomputed here rather than cached, because the
-		// panel is the only place the user can be told about them.
-		QStringList orderWarnings;
-		resolveOrder(list_, reg_, &orderWarnings);
-		w = orderWarnings + findConflicts(list_, reg_);
+	header_->setText(v.clipCount > 1
+				 ? QStringLiteral("Components  ·  %1 clips selected").arg(v.clipCount)
+				 : QStringLiteral("Components"));
+	loadErrors_->setText(v.loadErrors.join(QChar('\n')));
+	loadErrors_->setVisible(!v.loadErrors.isEmpty());
+	warnings_->setText(v.warnings.join(QChar('\n')));
+	warnings_->setVisible(!v.warnings.isEmpty());
+	empty_->setText(v.clipCount > 1
+				? QStringLiteral("These clips have no components in common. Adding "
+						 "one puts it on all of them.")
+				: QStringLiteral("No components. Add one to change how this clip "
+						 "plays, moves or looks."));
+	empty_->setVisible(v.shared.isEmpty() && v.notShared.isEmpty() && v.clipCount > 0);
+	notShared_->setText(
+		v.notShared.isEmpty()
+			? QString()
+			: QStringLiteral("Not shared — on some of these clips but not all, so "
+					 "there is nothing coherent to edit here: %1")
+				  .arg(v.notShared.join(QStringLiteral(", "))));
+	notShared_->setVisible(!v.notShared.isEmpty());
+}
+
+ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
+					     const QMap<QString, Mixed> &values,
+					     const Mixed *enabled, const QStringList &driven,
+					     const QString &drivenTip, const QStringList &keyedHere,
+					     bool pinned, bool canUp, bool canDown)
+{
+	const ComponentType *type = reg_.find(typeId);
+
+	auto *row = new Row;
+	row->typeId = typeId;
+	row->ordinal = ordinal;
+	row->pinned = pinned;
+	row->box = new QFrame(this);
+	row->box->setFrameShape(QFrame::StyledPanel);
+	row->box->setStyleSheet(
+		QStringLiteral("QFrame{border:1px solid #3a3f47; border-radius:4px;}"));
+	auto *bv = new QVBoxLayout(row->box);
+	bv->setContentsMargins(6, 4, 6, 6);
+	bv->setSpacing(4);
+
+	auto *head = new QHBoxLayout;
+	head->setSpacing(4);
+
+	if (!pinned && enabled) {
+		row->enabled = new QCheckBox(row->box);
+		row->enabled->setTristate(enabled->mixed);
+		row->enabled->setCheckState(stateOf(*enabled));
+		row->enabled->setToolTip(
+			enabled->mixed
+				? QStringLiteral("Some of these clips have it on and some off. "
+						 "Clicking sets them all the same.")
+				: QStringLiteral("Turn this off without losing its settings."));
+		connect(row->enabled, &QCheckBox::clicked, this, [this, typeId, ordinal](bool on) {
+			if (syncing_)
+				return;
+			emit componentEnableChanged(typeId, ordinal, on);
+		});
+		head->addWidget(row->enabled);
 	}
-	warnings_->setText(w.join(QChar('\n')));
-	warnings_->setVisible(!w.isEmpty());
-	// The empty-state hint is about ADDABLE components; the pose row is always
-	// there and would make "no components" read as a lie.
-	empty_->setVisible(list_.isEmpty());
+
+	auto *name = new QLabel(type ? type->displayName : QStringLiteral("Missing: %1").arg(typeId),
+				row->box);
+	name->setStyleSheet(QStringLiteral("border:none; font-weight:bold; color:%1;")
+				    .arg(type ? QStringLiteral("#e8eaed") : QStringLiteral("#e2a03f")));
+	if (!type)
+		name->setToolTip(QStringLiteral(
+			"This project uses a component that is not installed here. Its settings "
+			"are kept and saved back unchanged, so nothing is lost — it just cannot "
+			"render on this machine."));
+	else if (pinned)
+		name->setToolTip(type->help + QStringLiteral("\n\nEvery clip has one, so this row "
+							     "cannot be removed or reordered."));
+	else if (!type->help.isEmpty())
+		name->setToolTip(type->help);
+	head->addWidget(name, 1);
+	if (type)
+		head->addWidget(stageBadge(type->stage, row->box));
+
+	if (!pinned) {
+		auto *up = iconButton(Glyph::ArrowUp, QStringLiteral("Move up"), row->box);
+		up->setEnabled(canUp);
+		connect(up, &QPushButton::clicked, this,
+			[this, typeId, ordinal] { emit componentMoved(typeId, ordinal, -1); });
+		auto *down = iconButton(Glyph::ArrowDown, QStringLiteral("Move down"), row->box);
+		down->setEnabled(canDown);
+		connect(down, &QPushButton::clicked, this,
+			[this, typeId, ordinal] { emit componentMoved(typeId, ordinal, 1); });
+		auto *more = iconButton(Glyph::ChevronDown,
+					QStringLiteral("Reset, copy, paste, duplicate…"), row->box);
+		connect(more, &QPushButton::clicked, this,
+			[this, typeId, ordinal] { componentMenu(typeId, ordinal); });
+		auto *del = iconButton(Glyph::Cross, QStringLiteral("Remove this component"), row->box);
+		connect(del, &QPushButton::clicked, this,
+			[this, typeId, ordinal] { emit componentRemoved(typeId, ordinal); });
+		head->addWidget(up);
+		head->addWidget(down);
+		head->addWidget(more);
+		head->addWidget(del);
+	}
+	bv->addLayout(head);
+
+	if (type && !type->props.isEmpty()) {
+		auto *form = new QFormLayout;
+		form->setHorizontalSpacing(8);
+		form->setVerticalSpacing(3);
+		for (const PropDef &d : type->props) {
+			row->keys.append(d.key);
+			const Mixed m = values.value(d.key);
+			QWidget *control = nullptr;
+			ParamSlider *slider = nullptr;
+			QCheckBox *check = nullptr;
+
+			if (d.type == PropType::Bool) {
+				check = new QCheckBox(row->box);
+				check->setTristate(m.mixed);
+				check->setCheckState(stateOf(m));
+				connect(check, &QCheckBox::clicked, this,
+					[this, typeId, ordinal, key = d.key](bool on) {
+						if (syncing_)
+							return;
+						emit propertyEdited(typeId, ordinal, key, on);
+					});
+				control = check;
+			} else {
+				slider = new ParamSlider(d.min, d.max, 3, row->box);
+				if (m.mixed)
+					slider->setMixed();
+				else
+					slider->setValue(m.value.toDouble());
+				const QString tid = typeId;
+				connect(slider, &ParamSlider::valueChanged, this,
+					[this, tid, ordinal, key = d.key, pinned](double v) {
+						if (syncing_)
+							return;
+						if (pinned)
+							emit pinnedEdited(tid, key, v);
+						else
+							emit propertyEdited(tid, ordinal, key, v);
+					});
+				control = slider;
+			}
+			row->sliders.append(slider);
+			row->checks.append(check);
+			if (!d.help.isEmpty())
+				control->setToolTip(d.help);
+
+			QPushButton *kb = nullptr;
+			if (!pinned && d.keyframeable && d.type != PropType::Bool) {
+				const bool here = keyedHere.contains(d.key);
+				kb = iconButton(Glyph::Diamond,
+						QStringLiteral("Key this value at the playhead "
+							       "(again to remove)"),
+						row->box);
+				kb->setIcon(uiIcon(Glyph::Diamond, 11,
+						   here ? QColor(0xe5, 0x48, 0x4d) : QColor()));
+				connect(kb, &QPushButton::clicked, this,
+					[this, typeId, ordinal, key = d.key] {
+						emit keyframeToggled(typeId, ordinal, key);
+					});
+			}
+			row->keyBtns.append(kb);
+
+			auto *cell = new QWidget(row->box);
+			auto *ch = new QHBoxLayout(cell);
+			ch->setContentsMargins(0, 0, 0, 0);
+			ch->setSpacing(3);
+			ch->addWidget(control, 1);
+			if (kb)
+				ch->addWidget(kb);
+
+			// A script that computes this channel makes the box a starting
+			// point (it reads it as ctx.base), not the framing on screen.
+			const bool isDriven = driven.contains(d.key);
+			auto *lbl = new QLabel(isDriven ? d.label + QStringLiteral("  (script)") : d.label,
+					       row->box);
+			lbl->setStyleSheet(isDriven ? QStringLiteral("border:none; color:#ffd44f;")
+						    : QStringLiteral("border:none;"));
+			if (isDriven)
+				lbl->setToolTip(drivenTip);
+			row->labels.append(lbl);
+			form->addRow(lbl, cell);
+		}
+		bv->addLayout(form);
+	}
+	listLayout_->addWidget(row->box);
+	return row;
 }
 
 void ComponentPanel::rebuild()
 {
 	for (Row *r : rows_) {
+		// Orphan it BEFORE queueing the delete. A rebuild is usually triggered
+		// from inside one of these widgets' own signals, so it cannot be
+		// deleted outright -- but a deleteLater'd widget stays a child until
+		// the event loop gets round to it, and until then it is still found by
+		// findChildren, still laid out, and still showing the value it had.
+		r->box->setParent(nullptr);
+		r->box->hide();
 		r->box->deleteLater();
 		delete r;
 	}
 	rows_.clear();
 
-	for (int i = 0; i < list_.size(); ++i) {
-		const ComponentInstance &c = list_[i];
-		const ComponentType *type = reg_.find(c.typeId);
-
-		auto *row = new Row;
-		row->box = new QFrame(this);
-		row->box->setFrameShape(QFrame::StyledPanel);
-		row->box->setStyleSheet(
-			QStringLiteral("QFrame{border:1px solid #3a3f47; border-radius:4px;}"));
-		auto *bv = new QVBoxLayout(row->box);
-		bv->setContentsMargins(6, 4, 6, 6);
-		bv->setSpacing(4);
-
-		auto *head = new QHBoxLayout;
-		head->setSpacing(4);
-		row->enabled = new QCheckBox(row->box);
-		row->enabled->setChecked(c.enabled);
-		row->enabled->setToolTip(QStringLiteral("Turn this component off without losing its "
-						       "settings."));
-		connect(row->enabled, &QCheckBox::toggled, this, [this, i](bool on) {
-			if (syncing_ || i >= list_.size())
-				return;
-			list_[i].enabled = on;
-			emitEdit();
-		});
-		head->addWidget(row->enabled);
-
-		// A component the project names but this build has no plugin for. Its
-		// settings are intact and will be written back out; saying so is the
-		// difference between "your work is safe" and "something vanished".
-		auto *name = new QLabel(type ? type->displayName
-					     : QStringLiteral("Missing: %1").arg(c.typeId),
-					row->box);
-		name->setStyleSheet(QStringLiteral("border:none; font-weight:bold; color:%1;")
-					    .arg(type ? QStringLiteral("#e8eaed")
-						      : QStringLiteral("#e2a03f")));
-		if (!type)
-			name->setToolTip(QStringLiteral(
-				"This project uses a component that is not installed here. Its "
-				"settings are kept and saved back unchanged, so nothing is lost "
-				"— it just cannot render on this machine."));
-		else if (!type->help.isEmpty())
-			name->setToolTip(type->help);
-		head->addWidget(name, 1);
-		if (type)
-			head->addWidget(stageBadge(type->stage, row->box));
-
-		auto *up = iconButton(Glyph::ArrowUp, QStringLiteral("Move up"), row->box);
-		up->setEnabled(i > 0);
-		connect(up, &QPushButton::clicked, this, [this, i] {
-			if (i <= 0 || i >= list_.size())
-				return;
-			list_.swapItemsAt(i, i - 1);
-			emitEdit();
-		});
-		auto *down = iconButton(Glyph::ArrowDown, QStringLiteral("Move down"), row->box);
-		down->setEnabled(i + 1 < list_.size());
-		connect(down, &QPushButton::clicked, this, [this, i] {
-			if (i < 0 || i + 1 >= list_.size())
-				return;
-			list_.swapItemsAt(i, i + 1);
-			emitEdit();
-		});
-		auto *del = iconButton(Glyph::Cross, QStringLiteral("Remove this component"),
-				       row->box);
-		connect(del, &QPushButton::clicked, this, [this, i] {
-			if (i < 0 || i >= list_.size())
-				return;
-			list_.remove(i);
-			emitEdit();
-		});
-		head->addWidget(up);
-		head->addWidget(down);
-		head->addWidget(del);
-		bv->addLayout(head);
-
-		if (type && !type->props.isEmpty()) {
-			auto *form = new QFormLayout;
-			form->setHorizontalSpacing(8);
-			form->setVerticalSpacing(3);
-			for (const PropDef &d : type->props) {
-				row->keys.append(d.key);
-				QWidget *control = nullptr;
-				ParamSlider *slider = nullptr;
-				QCheckBox *check = nullptr;
-
-				if (d.type == PropType::Bool) {
-					check = new QCheckBox(row->box);
-					check->setChecked(propAt(*type, c, d.key, timeMs_).toBool());
-					connect(check, &QCheckBox::toggled, this,
-						[this, i, key = d.key](bool on) {
-							if (syncing_ || i >= list_.size())
-								return;
-							list_[i].props.insert(key, on);
-							emitEdit();
-						});
-					control = check;
-				} else {
-					slider = new ParamSlider(d.min, d.max, 3, row->box);
-					slider->setValue(
-						propAt(*type, c, d.key, timeMs_).toDouble());
-					connect(slider, &ParamSlider::valueChanged, this,
-						[this, i, key = d.key](double v) {
-							if (syncing_ || i >= list_.size())
-								return;
-							// Editing an ANIMATED property writes to the
-							// key at the playhead, not to the static
-							// value -- which the keys would override on
-							// the next frame, leaving the control
-							// looking dead.
-							auto k = list_[i].keys.find(key);
-							if (k != list_[i].keys.end() && !k->isEmpty()) {
-								for (PropKey &pk : *k)
-									if (std::abs(pk.tMs - timeMs_) <= 1) {
-										pk.v = v;
-										emitEdit();
-										return;
-									}
-								PropKey pk;
-								pk.tMs = timeMs_;
-								pk.v = v;
-								k->append(pk);
-								std::sort(k->begin(), k->end(),
-									  [](const PropKey &a,
-									     const PropKey &b) {
-										  return a.tMs < b.tMs;
-									  });
-							} else {
-								list_[i].props.insert(key, v);
-							}
-							emitEdit();
-						});
-					control = slider;
-				}
-				row->sliders.append(slider);
-				row->checks.append(check);
-				if (!d.help.isEmpty())
-					control->setToolTip(d.help);
-
-				QPushButton *kb = nullptr;
-				if (d.keyframeable && d.type != PropType::Bool) {
-					kb = iconButton(Glyph::Diamond,
-							QStringLiteral("Key this value at the "
-								       "playhead (again to remove)"),
-							row->box);
-					connect(kb, &QPushButton::clicked, this,
-						[this, i, key = d.key] {
-							if (i < 0 || i >= list_.size())
-								return;
-							auto &keys = list_[i].keys[key];
-							for (int n = 0; n < keys.size(); ++n)
-								if (std::abs(keys[n].tMs - timeMs_) <= 1) {
-									keys.remove(n);
-									// A property with no keys left is
-									// not animated; leaving an empty
-									// list behind would keep the
-									// control reading as keyed.
-									if (keys.isEmpty())
-										list_[i].keys.remove(key);
-									emitEdit();
-									return;
-								}
-							PropKey pk;
-							pk.tMs = timeMs_;
-							const ComponentType *t =
-								reg_.find(list_[i].typeId);
-							pk.v = t ? propAt(*t, list_[i], key, timeMs_)
-									   .toDouble()
-								 : 0.0;
-							keys.append(pk);
-							std::sort(keys.begin(), keys.end(),
-								  [](const PropKey &a, const PropKey &b) {
-									  return a.tMs < b.tMs;
-								  });
-							emitEdit();
-						});
-				}
-				row->keyBtns.append(kb);
-
-				auto *cell = new QWidget(row->box);
-				auto *ch = new QHBoxLayout(cell);
-				ch->setContentsMargins(0, 0, 0, 0);
-				ch->setSpacing(3);
-				ch->addWidget(control, 1);
-				if (kb)
-					ch->addWidget(kb);
-				auto *lbl = new QLabel(d.label, row->box);
-				lbl->setStyleSheet(QStringLiteral("border:none;"));
-				form->addRow(lbl, cell);
-			}
-			bv->addLayout(form);
-		}
-		listLayout_->addWidget(row->box);
-		rows_.append(row);
+	for (const PinnedRow &p : view_.pinned)
+		rows_.append(makeRow(p.typeId, 0, p.values, nullptr, p.driven, p.drivenTip, {},
+				     /*pinned=*/true, false, false));
+	for (int i = 0; i < view_.shared.size(); ++i) {
+		const SharedComponent &c = view_.shared[i];
+		rows_.append(makeRow(c.typeId, c.ordinal, c.values, &c.enabled, {}, QString(),
+				     c.keyedHere, /*pinned=*/false, i > 0,
+				     i + 1 < view_.shared.size()));
 	}
 	pushValues();
 }
@@ -466,37 +377,58 @@ void ComponentPanel::rebuild()
 void ComponentPanel::pushValues()
 {
 	syncing_ = true;
-	for (int i = 0; i < rows_.size() && i < list_.size(); ++i) {
-		Row *r = rows_[i];
-		const ComponentInstance &c = list_[i];
-		const ComponentType *type = reg_.find(c.typeId);
-		r->enabled->setChecked(c.enabled);
-		if (!type)
-			continue;
-		for (int k = 0; k < r->keys.size(); ++k) {
-			const QVariant v = propAt(*type, c, r->keys[k], timeMs_);
-			if (r->sliders[k])
-				r->sliders[k]->setValue(v.toDouble());
-			if (r->checks[k])
-				r->checks[k]->setChecked(v.toBool());
-			if (r->keyBtns[k]) {
-				// Filled when there is a key exactly here, dim when the
-				// property is animated but this instant is between keys.
-				const bool here = hasKeyAt(c, r->keys[k], timeMs_);
-				const bool animated = c.keys.contains(r->keys[k]);
-				r->keyBtns[k]->setIcon(uiIcon(Glyph::Diamond, 11,
-							      here ? QColor(0xe5, 0x48, 0x4d)
-								   : animated ? QColor(0xc8, 0xa0, 0x60)
-									      : QColor()));
+	auto apply = [](Row *r, const QMap<QString, Mixed> &values, const Mixed *enabled) {
+		if (r->enabled && enabled) {
+			r->enabled->setTristate(enabled->mixed);
+			r->enabled->setCheckState(stateOf(*enabled));
+		}
+		for (int i = 0; i < r->keys.size(); ++i) {
+			const Mixed m = values.value(r->keys[i]);
+			if (r->sliders[i]) {
+				if (m.mixed)
+					r->sliders[i]->setMixed();
+				else
+					r->sliders[i]->setValue(m.value.toDouble());
+			}
+			if (r->checks[i]) {
+				r->checks[i]->setTristate(m.mixed);
+				r->checks[i]->setCheckState(stateOf(m));
 			}
 		}
-	}
+	};
+	int n = 0;
+	for (const PinnedRow &p : view_.pinned)
+		if (n < rows_.size())
+			apply(rows_[n++], p.values, nullptr);
+	for (const SharedComponent &c : view_.shared)
+		if (n < rows_.size())
+			apply(rows_[n++], c.values, &c.enabled);
 	syncing_ = false;
 }
 
-void ComponentPanel::emitEdit()
+void ComponentPanel::componentMenu(const QString &typeId, int ordinal)
 {
-	emit componentsEdited(list_);
+	QMenu menu(this);
+	// Spelling out "on all 5 clips" rather than leaving it implied: a batch
+	// operation that quietly touched more than you meant is not undoable in the
+	// user's head even when it is in the program's.
+	const QString all = view_.clipCount > 1
+				    ? QStringLiteral(" on all %1 clips").arg(view_.clipCount)
+				    : QString();
+	QAction *reset = menu.addAction(QStringLiteral("Reset to defaults") + all);
+	menu.addSeparator();
+	QAction *copy = menu.addAction(QStringLiteral("Copy values"));
+	QAction *paste = menu.addAction(QStringLiteral("Paste values") + all);
+	QAction *dup = menu.addAction(QStringLiteral("Duplicate") + all);
+	connect(reset, &QAction::triggered, this,
+		[this, typeId, ordinal] { emit componentReset(typeId, ordinal); });
+	connect(copy, &QAction::triggered, this,
+		[this, typeId, ordinal] { emit componentCopied(typeId, ordinal); });
+	connect(paste, &QAction::triggered, this,
+		[this, typeId, ordinal] { emit componentPasted(typeId, ordinal); });
+	connect(dup, &QAction::triggered, this,
+		[this, typeId, ordinal] { emit componentDuplicated(typeId, ordinal); });
+	menu.exec(QCursor::pos());
 }
 
 void ComponentPanel::addComponentMenu()
@@ -509,22 +441,12 @@ void ComponentPanel::addComponentMenu()
 			continue; // every clip already has one
 		if (t.category != lastCategory) {
 			lastCategory = t.category;
-			sub = menu.addMenu(t.category.isEmpty() ? QStringLiteral("Other")
-								: t.category);
+			sub = menu.addMenu(t.category.isEmpty() ? QStringLiteral("Other") : t.category);
 		}
 		QAction *a = (sub ? sub : &menu)->addAction(t.displayName);
 		a->setToolTip(t.help);
 		const QString id = t.id;
-		connect(a, &QAction::triggered, this, [this, id] {
-			ComponentInstance c;
-			c.typeId = id;
-			// A stable identity, so another component can refer to this one and
-			// so the panel can tell two of the same type apart.
-			c.instanceId =
-				QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
-			list_.append(c);
-			emitEdit();
-		});
+		connect(a, &QAction::triggered, this, [this, id] { emit componentAdded(id); });
 	}
 	if (menu.isEmpty())
 		menu.addAction(QStringLiteral("No components registered"))->setEnabled(false);

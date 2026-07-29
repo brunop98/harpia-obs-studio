@@ -30,6 +30,13 @@ public:
 	// Set without emitting — for pushing a model value into the control.
 	void setValue(double v);
 
+	// The selected clips disagree about this value. Unity's em dash: show that
+	// there IS no single value rather than picking one of them and quietly
+	// implying the others match. Cleared by setValue, and by the user typing —
+	// at which point the value they typed becomes everyone's.
+	void setMixed();
+	bool isMixed() const { return mixed_; }
+
 signals:
 	void valueChanged(double v);
 
@@ -41,6 +48,7 @@ private:
 	QDoubleSpinBox *spin_ = nullptr;
 	double lo_ = 0.0, hi_ = 1.0;
 	bool syncing_ = false;
+	bool mixed_ = false;
 };
 
 } // namespace harpia

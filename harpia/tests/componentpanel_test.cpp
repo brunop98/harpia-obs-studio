@@ -122,11 +122,10 @@ int main(int argc, char **argv)
 		// exec() blocks, so driving the menu itself would hang a headless run.
 		// Everything downstream of the signal -- the clip write, the repaint,
 		// the panel rebuild -- is the part that can be wrong, and it is all here.
-		ComponentInstance rot;
-		rot.typeId = QStringLiteral("harpia.alwaysRotate");
-		rot.instanceId = QStringLiteral("r1");
-		rot.props.insert(QStringLiteral("degreesPerSecond"), 90.0);
-		emit panel->componentsEdited({rot});
+		emit panel->componentAdded(QStringLiteral("harpia.alwaysRotate"));
+		settle(400);
+		emit panel->propertyEdited(QStringLiteral("harpia.alwaysRotate"), 0,
+					   QStringLiteral("degreesPerSecond"), 90.0);
 		settle(700);
 
 		const TlClip *c = tv->selectedClipPtr();
@@ -163,9 +162,7 @@ int main(int argc, char **argv)
 	std::printf("\n-- disabling a component from the panel stops it --\n");
 	{
 		const double on = meanLuma(pc->currentFrame());
-		QVector<ComponentInstance> list = tv->selectedClipPtr()->components;
-		list[0].enabled = false;
-		emit panel->componentsEdited(list);
+		emit panel->componentEnableChanged(QStringLiteral("harpia.alwaysRotate"), 0, false);
 		settle(700);
 		const double off = meanLuma(pc->currentFrame());
 		std::printf("     enabled %.1f  disabled %.1f  plain %.1f\n", on, off, plain);
@@ -176,17 +173,14 @@ int main(int argc, char **argv)
 
 	std::printf("\n-- removing it leaves the clip clean --\n");
 	{
-		emit panel->componentsEdited({});
+		emit panel->componentRemoved(QStringLiteral("harpia.alwaysRotate"), 0);
 		settle(500);
 		ok(tv->selectedClipPtr()->components.isEmpty(), "no components left");
 	}
 
 	std::printf("\n-- an unknown component is shown, not dropped --\n");
 	{
-		ComponentInstance missing;
-		missing.typeId = QStringLiteral("nobody.hasthis");
-		missing.instanceId = QStringLiteral("m1");
-		emit panel->componentsEdited({missing});
+		emit panel->componentAdded(QStringLiteral("nobody.hasthis"));
 		settle(500);
 		bool warned = false;
 		for (QLabel *l : panel->findChildren<QLabel *>())
@@ -204,10 +198,7 @@ int main(int argc, char **argv)
 		// that is no longer there.
 		tv->selectClip(0, 0);
 		settle(200);
-		ComponentInstance b;
-		b.typeId = QStringLiteral("harpia.blur");
-		b.instanceId = QStringLiteral("b1");
-		emit panel->componentsEdited({b});
+		emit panel->componentAdded(QStringLiteral("harpia.blur"));
 		settle(400);
 		ok(!panel->isHidden(), "the panel is up with a component on the clip");
 

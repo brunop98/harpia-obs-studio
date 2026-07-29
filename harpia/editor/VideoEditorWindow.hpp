@@ -5,6 +5,7 @@
 #include "shader/ShaderEffect.hpp"    // ShaderState / ShaderParam (post-processing)
 #include "timeline/TimelineModel.hpp" // TlClip / TlTransform (Full-editing timeline)
 #include "DevPanel.hpp"                 // EditorChromeParams / EditorInspectorParams
+#include "component/ComponentPanel.hpp"  // ComponentPanel::View (Inspector model)
 #include "timeline/TimelineView.hpp"    // ClipboardEntry (timeline copy/paste)
 
 #include <QDateTime>
@@ -100,7 +101,6 @@ class ShortcutPanel;
 class TransformEvaluator;
 class KeyList;
 class ParamSlider;
-class ComponentPanel;
 class AudioPreview;
 
 // One video the editor can cut from. The first source is the file the editor
@@ -534,6 +534,19 @@ private:
 	int componentCount_ = 0;
 	ComponentPanel *componentPanel_ = nullptr;
 	void syncComponentPanel();
+	// What the Inspector should show for the current selection: the components
+	// every selected clip has, and which of their values they disagree about.
+	ComponentPanel::View buildComponentView() const;
+	// Apply an edit to the matching component on EVERY selected clip, as one
+	// undo step.
+	void editSharedComponent(const QString &typeId, int ordinal,
+				 const std::function<void(ComponentInstance &)> &fn);
+	void afterComponentEdit();
+	// A component's own time for the clip it is on. Keys are clip-relative, and
+	// with several clips selected each has its own offset.
+	qint64 componentEditTimeFor(const ComponentInstance &ci) const;
+	ComponentInstance componentClipboard_;
+	bool componentClipboardValid_ = false;
 	QStringList availableScripts();
 	void refreshScriptList(); // selected clip's stack -> the list widget
 	bool ensureScriptCompiled(const QString &name, QString *err); // compile into scriptEval_

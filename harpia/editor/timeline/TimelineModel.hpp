@@ -465,7 +465,8 @@ struct TlClip {
 		       posX == o.posX && posY == o.posY && scale == o.scale &&
 		       rotation == o.rotation && opacity == o.opacity &&
 		       crop == o.crop && keys == o.keys && text == o.text &&
-		       scripts == o.scripts && fx == o.fx && transition == o.transition &&
+		       scripts == o.scripts && fx == o.fx && components == o.components &&
+		       transition == o.transition &&
 		       volume == o.volume && fadeInMs == o.fadeInMs &&
 		       fadeOutMs == o.fadeOutMs && fadeInCurve == o.fadeInCurve &&
 		       fadeOutCurve == o.fadeOutCurve;

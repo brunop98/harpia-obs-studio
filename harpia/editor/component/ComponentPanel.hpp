@@ -1,6 +1,6 @@
 #pragma once
 
-// The Inspector's component list — the Unity shape, for a clip.
+// The Inspector's component list — the Unity shape, for one clip or for many.
 //
 // One ordered list of components, each a header row (enable, name, stage, move,
 // remove) over its properties, and Add Component at the bottom. A property's
@@ -8,21 +8,35 @@
 // and gets a slider, a keyframe track and a serialised field without anyone
 // writing a third thing.
 //
-// It owns no clip. It is handed a list and a clip time, and reports edits back;
-// what the list belongs to and how the edit becomes an undo step is the
-// window's business. That keeps the panel testable without the editor, which
-// matters because everything else in this Inspector needs libobs to exist.
+// MULTI-SELECT IS NOT A SEPARATE MODE. With several clips selected the panel
+// shows the components they ALL have, and a property whose value differs
+// between them reads as an em dash rather than as one clip's number pretending
+// to speak for the rest. Editing it gives every selected clip that value.
+// Because one clip is simply the case where N is 1, there is no single-clip
+// path to keep in step with a multi-clip one — which is the bug that shape
+// invites.
+//
+// Edits leave here as OPERATIONS ("set this property", "remove this component")
+// rather than as a finished list, for the same reason: with five clips selected
+// there is no one list to hand back. The window applies each operation to every
+// selected clip, in a single undo step.
+//
+// It owns no clip. It is handed what to show and reports what was asked for;
+// which clips those are, and how an edit becomes an undo entry, is the window's
+// business. That keeps the panel testable without the editor, which matters
+// because everything else in this Inspector needs libobs to exist.
 //
 // Rebuild vs refresh is deliberate. Rebuilding the widgets on every keystroke
 // would take the focus out from under whoever is typing, so the panel only
-// rebuilds when the list's SHAPE changes (different components, or a different
-// order) and otherwise just pushes values into the controls that are already
-// there.
+// rebuilds when the SHAPE changes — which components are shared, which
+// properties are mixed — and otherwise pushes values into the controls that are
+// already there.
 
 #include "../timeline/TlTransform.hpp"
 #include "Component.hpp"
 
 #include <QMap>
+#include <QVariant>
 #include <QVector>
 #include <QWidget>
 
@@ -36,65 +50,87 @@ class ComponentRegistry;
 class ComponentPanel : public QWidget {
 	Q_OBJECT
 public:
-	// `reg` must outlive the panel.
 	explicit ComponentPanel(const ComponentRegistry &reg, QWidget *parent = nullptr);
 
-	// Show `list`, with property values resolved at `clipTimeMs` so an animated
-	// property reads honestly rather than showing its resting value.
-	void setComponents(const QVector<ComponentInstance> &list, qint64 clipTimeMs);
+	// One value across the whole selection: either everyone agrees, or they do
+	// not. Deliberately a QVariant rather than a double — every property type
+	// the system grows gets mixed-value handling out of this without another
+	// line of code, which is the only way "and any future type" can be true
+	// rather than aspirational.
+	struct Mixed {
+		QVariant value; // meaningless when `mixed`
+		bool mixed = false;
+	};
 
-	// Errors from loading the user's components folder, shown above the list.
-	void setLoadErrors(const QStringList &errors);
-
-	// A clip's ESSENTIAL properties: the ones it has by being a clip rather than
-	// by having something added to it. Its pose, and how fast it plays. They are
-	// shown as pinned rows above the list, with no enable box, no move arrows
-	// and no remove button — Unity's Transform, which works the same way and for
-	// the same reason. Offering to delete a clip's position would be offering
-	// nonsense.
-	//
-	// Their values live in the clip's own fields, not in a ComponentInstance.
-	// The rows are still rendered from the registered type's PropDefs, so one
-	// declaration of the labels and ranges serves the pinned rows and the
-	// ordinary ones alike.
+	// A property every clip has by BEING a clip: its pose, its rate. Pinned
+	// above the list, not removable — a clip without a position is not a thing.
 	struct PinnedRow {
-		QString typeId;               // the registered type whose props to show
-		QMap<QString, double> values; // by property key
-		QStringList driven;           // props a script is computing
+		QString typeId; // the registered type whose PropDefs to render from
+		QMap<QString, Mixed> values;
+		QStringList driven; // props a transform script is computing
 		QString drivenTip;
 	};
-	void setPinned(const QVector<PinnedRow> &rows);
+
+	// One component the whole selection shares. `ordinal` tells the second Blur
+	// from the first when a clip carries two.
+	struct SharedComponent {
+		QString typeId;
+		int ordinal = 0;
+		Mixed enabled; // mixed when some of them have it switched off
+		QMap<QString, Mixed> values;
+		QStringList keyedHere; // props with a key at the playhead on every clip
+	};
+
+	// Everything the panel draws, handed over whole so it can decide in one
+	// place whether the shape changed and a rebuild is needed.
+	struct View {
+		int clipCount = 0;
+		QVector<PinnedRow> pinned;
+		QVector<SharedComponent> shared;
+		QStringList notShared; // on some of the selection but not all
+		QStringList warnings;
+		QStringList loadErrors;
+	};
+	void setView(const View &v);
 
 signals:
-	// The list changed and should be written back to the clip.
-	void componentsEdited(const QVector<ComponentInstance> &list);
-	// A pinned property changed. Separate from componentsEdited because these do
-	// not live in the list; the window knows which clip field each one is.
+	// Every one of these means "do this to every selected clip".
+	void propertyEdited(const QString &typeId, int ordinal, const QString &key,
+			    const QVariant &value);
 	void pinnedEdited(const QString &typeId, const QString &key, double value);
+	void componentAdded(const QString &typeId);
+	void componentRemoved(const QString &typeId, int ordinal);
+	void componentEnableChanged(const QString &typeId, int ordinal, bool on);
+	void componentMoved(const QString &typeId, int ordinal, int delta);
+	void componentReset(const QString &typeId, int ordinal);
+	void componentDuplicated(const QString &typeId, int ordinal);
+	void componentCopied(const QString &typeId, int ordinal);
+	void componentPasted(const QString &typeId, int ordinal);
+	void keyframeToggled(const QString &typeId, int ordinal, const QString &key);
 
 private:
-	void rebuild();
-	void buildPinnedRows();
-	void pushPinnedValues();
-	void pushValues();
-	void emitEdit();
-	// True when the widgets on screen no longer match `list_`'s shape.
-	bool shapeChanged(const QVector<ComponentInstance> &next) const;
-	void addComponentMenu();
+	struct Row;
 
-	struct Row; // one component's widgets
+	void rebuild();
+	void pushValues();
+	bool shapeChanged(const View &next) const;
+	void addComponentMenu();
+	void componentMenu(const QString &typeId, int ordinal);
+	// `pinnedIndex >= 0` marks a pinned row: no enable box, no arrows, no
+	// remove, and no keyframe diamonds.
+	Row *makeRow(const QString &typeId, int ordinal, const QMap<QString, Mixed> &values,
+		     const Mixed *enabled, const QStringList &driven, const QString &drivenTip,
+		     const QStringList &keyedHere, bool pinned, bool canUp, bool canDown);
 
 	const ComponentRegistry &reg_;
-	QVector<ComponentInstance> list_;
-	qint64 timeMs_ = 0;
-	QVector<Row *> rows_;
-	QVector<Row *> pinnedRows_;
-	QVector<PinnedRow> pinned_;
-	QVBoxLayout *pinnedLayout_ = nullptr;
+	View view_;
+	QVector<Row *> rows_; // pinned first, then shared, in draw order
 	QVBoxLayout *listLayout_ = nullptr;
+	QLabel *header_ = nullptr;
 	QLabel *empty_ = nullptr;
 	QLabel *warnings_ = nullptr;
 	QLabel *loadErrors_ = nullptr;
+	QLabel *notShared_ = nullptr;
 	bool syncing_ = false;
 };
 

@@ -1,6 +1,7 @@
 #include "ParamSlider.hpp"
 
 #include <QDoubleSpinBox>
+#include <QLineEdit>
 #include <QHBoxLayout>
 #include <QMouseEvent>
 #include <QSlider>
@@ -80,6 +81,7 @@ ParamSlider::ParamSlider(double lo, double hi, int decimals, QWidget *parent)
 	connect(slider_, &QSlider::valueChanged, this, [this](int v) {
 		if (syncing_)
 			return;
+		mixed_ = false; // the user has just decided what it should be
 		syncing_ = true;
 		const double d = fromSlider(v);
 		spin_->setValue(d);
@@ -89,6 +91,7 @@ ParamSlider::ParamSlider(double lo, double hi, int decimals, QWidget *parent)
 	connect(spin_, &QDoubleSpinBox::valueChanged, this, [this](double d) {
 		if (syncing_)
 			return;
+		mixed_ = false;
 		syncing_ = true;
 		slider_->setValue(toSlider(d));
 		syncing_ = false;
@@ -118,8 +121,31 @@ void ParamSlider::setValue(double v)
 {
 	const bool was = syncing_;
 	syncing_ = true;
+	mixed_ = false;
 	spin_->setValue(std::clamp(v, lo_, hi_));
 	slider_->setValue(toSlider(v));
+	syncing_ = was;
+}
+
+void ParamSlider::setMixed()
+{
+	const bool was = syncing_;
+	syncing_ = true;
+	mixed_ = true;
+	// Straight into the line edit rather than through setValue: there is no
+	// number to show, and any number we picked would be a lie about the clips
+	// that hold a different one. The box still accepts typing, and what is typed
+	// becomes every selected clip's value.
+	// findChild, not lineEdit(): that accessor is protected on QAbstractSpinBox.
+	if (QLineEdit *le = spin_->findChild<QLineEdit *>()) {
+		le->setText(QStringLiteral("\u2014"));
+		le->selectAll(); // so the first keystroke replaces it rather than appending
+	}
+	spin_->setToolTip(QStringLiteral("The selected clips have different values here. "
+					 "Type one to give them all the same."));
+	// Park the handle at the low end; leaving it wherever the last clip put it
+	// would read as a value.
+	slider_->setValue(slider_->minimum());
 	syncing_ = was;
 }
 

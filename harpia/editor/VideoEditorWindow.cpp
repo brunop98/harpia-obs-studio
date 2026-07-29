@@ -1,7 +1,8 @@
 #include "VideoEditorWindow.hpp"
 
+#include <QUuid>
+
 #include "../ui/UiIcons.hpp"
-#include "component/ComponentPanel.hpp"
 #include "component/BuiltinComponents.hpp"
 #include "component/ComponentRegistry.hpp"
 #include "component/ScriptComponent.hpp"
@@ -926,36 +927,182 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// control before its replacement exists would just remove a feature.
 	componentPanel_ = new ComponentPanel(ComponentRegistry::instance(), this);
 	componentPanel_->setVisible(false);
-	connect(componentPanel_, &ComponentPanel::componentsEdited, this,
-		[this](const QVector<ComponentInstance> &list) {
-			editSelectedClip([&list](TlClip &c) { c.components = list; });
+	// Every operation is applied to EVERY selected clip, in one edit and so one
+	// undo step. There is no single-clip path: one clip is the case where the
+	// selection has one member, which is what stops the two drifting apart.
+	connect(componentPanel_, &ComponentPanel::propertyEdited, this,
+		[this](const QString &t, int o, const QString &key, const QVariant &v) {
+			editSharedComponent(t, o, [&](ComponentInstance &ci) {
+				// An ANIMATED property is driven by its keys, so writing the
+				// static value would be overwritten on the next frame and the
+				// control would look dead. Write the key at the playhead.
+				auto k = ci.keys.find(key);
+				if (k != ci.keys.end() && !k->isEmpty()) {
+					const qint64 t0 = componentEditTimeFor(ci);
+					for (PropKey &pk : *k)
+						if (std::abs(pk.tMs - t0) <= 1) {
+							pk.v = v.toDouble();
+							return;
+						}
+					PropKey pk;
+					pk.tMs = t0;
+					pk.v = v.toDouble();
+					k->append(pk);
+					std::sort(k->begin(), k->end(),
+						  [](const PropKey &a, const PropKey &b) {
+							  return a.tMs < b.tMs;
+						  });
+					return;
+				}
+				ci.props.insert(key, v);
+			});
 		});
-	// A pinned property maps back to the clip field it came from. The pose goes
-	// through applySelectedClipTransform, the same path the preview drag uses,
-	// which is what keeps auto-keyframe and the keyframe editor working exactly
-	// as they did when the old panel wrote here.
+	connect(componentPanel_, &ComponentPanel::componentEnableChanged, this,
+		[this](const QString &t, int o, bool on) {
+			editSharedComponent(t, o, [on](ComponentInstance &ci) { ci.enabled = on; });
+		});
+	connect(componentPanel_, &ComponentPanel::componentRemoved, this,
+		[this](const QString &t, int o) {
+			timelineView_->applyToSelection([&](TlClip &c) {
+				int seen = 0;
+				for (int i = 0; i < c.components.size(); ++i)
+					if (c.components[i].typeId == t && seen++ == o) {
+						c.components.remove(i);
+						return;
+					}
+			});
+			afterComponentEdit();
+		});
+	connect(componentPanel_, &ComponentPanel::componentMoved, this,
+		[this](const QString &t, int o, int delta) {
+			timelineView_->applyToSelection([&](TlClip &c) {
+				int seen = 0;
+				for (int i = 0; i < c.components.size(); ++i)
+					if (c.components[i].typeId == t && seen++ == o) {
+						const int j = i + delta;
+						if (j >= 0 && j < c.components.size())
+							c.components.swapItemsAt(i, j);
+						return;
+					}
+			});
+			afterComponentEdit();
+		});
+	connect(componentPanel_, &ComponentPanel::componentAdded, this, [this](const QString &t) {
+		const ComponentType *type = ComponentRegistry::instance().find(t);
+		timelineView_->applyToSelection([&](TlClip &c) {
+			ComponentInstance ci;
+			ci.typeId = t;
+			ci.instanceId = QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
+			if (type)
+				for (const PropDef &d : type->props)
+					ci.props.insert(d.key, d.def);
+			c.components.append(ci);
+		});
+		afterComponentEdit();
+	});
+	connect(componentPanel_, &ComponentPanel::componentReset, this,
+		[this](const QString &t, int o) {
+			const ComponentType *type = ComponentRegistry::instance().find(t);
+			if (!type)
+				return;
+			editSharedComponent(t, o, [type](ComponentInstance &ci) {
+				ci.props.clear();
+				ci.keys.clear(); // a reset that left the animation behind is not one
+				for (const PropDef &d : type->props)
+					ci.props.insert(d.key, d.def);
+			});
+		});
+	connect(componentPanel_, &ComponentPanel::componentCopied, this,
+		[this](const QString &t, int o) {
+			// From the PRIMARY clip: with several selected there is no one set
+			// of values to copy, and the primary is the one the user clicked.
+			const TlClip *c = timelineView_->selectedClipPtr();
+			if (!c)
+				return;
+			int seen = 0;
+			for (const ComponentInstance &ci : c->components)
+				if (ci.typeId == t && seen++ == o) {
+					componentClipboard_ = ci;
+					componentClipboardValid_ = true;
+					return;
+				}
+		});
+	connect(componentPanel_, &ComponentPanel::componentPasted, this,
+		[this](const QString &t, int o) {
+			if (!componentClipboardValid_ || componentClipboard_.typeId != t)
+				return; // pasting a Blur's values onto a Speed means nothing
+			editSharedComponent(t, o, [this](ComponentInstance &ci) {
+				ci.props = componentClipboard_.props;
+				ci.keys = componentClipboard_.keys;
+				ci.enabled = componentClipboard_.enabled;
+			});
+		});
+	connect(componentPanel_, &ComponentPanel::componentDuplicated, this,
+		[this](const QString &t, int o) {
+			timelineView_->applyToSelection([&](TlClip &c) {
+				int seen = 0;
+				for (int i = 0; i < c.components.size(); ++i)
+					if (c.components[i].typeId == t && seen++ == o) {
+						ComponentInstance copy = c.components[i];
+						copy.instanceId =
+							QUuid::createUuid()
+								.toString(QUuid::WithoutBraces)
+								.left(8);
+						c.components.insert(i + 1, copy);
+						return;
+					}
+			});
+			afterComponentEdit();
+		});
+	connect(componentPanel_, &ComponentPanel::keyframeToggled, this,
+		[this](const QString &t, int o, const QString &key) {
+			const ComponentType *type = ComponentRegistry::instance().find(t);
+			editSharedComponent(t, o, [&](ComponentInstance &ci) {
+				const qint64 t0 = componentEditTimeFor(ci);
+				auto &keys = ci.keys[key];
+				for (int i = 0; i < keys.size(); ++i)
+					if (std::abs(keys[i].tMs - t0) <= 1) {
+						keys.remove(i);
+						// No keys left is not animated; an empty list
+						// would keep the control reading as keyed.
+						if (keys.isEmpty())
+							ci.keys.remove(key);
+						return;
+					}
+				PropKey pk;
+				pk.tMs = t0;
+				pk.v = type ? propAt(*type, ci, key, t0).toDouble() : 0.0;
+				keys.append(pk);
+				std::sort(keys.begin(), keys.end(),
+					  [](const PropKey &a, const PropKey &b) { return a.tMs < b.tMs; });
+			});
+		});
+	// A pinned property maps back to the clip field it came from, on every
+	// selected clip. The pose goes through the same path the preview drag uses,
+	// which keeps auto-keyframe and the keyframe editor working as they did.
 	connect(componentPanel_, &ComponentPanel::pinnedEdited, this,
 		[this](const QString &typeId, const QString &key, double v) {
-			const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
-			if (!sel)
-				return;
 			if (typeId == QStringLiteral("harpia.speed")) {
-				editSelectedClip(
+				timelineView_->applyToSelection(
 					[v](TlClip &c) { c.speed = std::clamp(v, 0.1, 20.0); });
+				afterComponentEdit();
 				return;
 			}
-			TlTransform tf = sel->transformAt(timelinePlayheadMs());
-			if (key == QStringLiteral("posX"))
-				tf.posX = v;
-			else if (key == QStringLiteral("posY"))
-				tf.posY = v;
-			else if (key == QStringLiteral("scale"))
-				tf.scale = v;
-			else if (key == QStringLiteral("rotation"))
-				tf.rotation = v;
-			else if (key == QStringLiteral("opacity"))
-				tf.opacity = v;
-			applySelectedClipTransform(tf);
+			timelineView_->applyToSelection([&](TlClip &c) {
+				TlTransform tf = c.transformAt(timelinePlayheadMs());
+				if (key == QStringLiteral("posX"))
+					tf.posX = v;
+				else if (key == QStringLiteral("posY"))
+					tf.posY = v;
+				else if (key == QStringLiteral("scale"))
+					tf.scale = v;
+				else if (key == QStringLiteral("rotation"))
+					tf.rotation = v;
+				else if (key == QStringLiteral("opacity"))
+					tf.opacity = v;
+				c.setBaseTransform(tf);
+			});
+			afterComponentEdit();
 		});
 	insLayout->addWidget(componentPanel_);
 
@@ -3397,47 +3544,229 @@ void VideoEditorWindow::onSpotlightPoseDragged(int index, const SpotPose &pose)
 		/*commit=*/false);
 }
 
-// The component list follows the selected clip. Values are resolved at the
-// clip's own time, so an animated property shows what is on screen rather than
-// its resting value -- the same rule the effect inspector follows.
+// Gather one value across every selected clip: either they all agree, or they
+// do not and the Inspector shows an em dash. Templated on the getter so the
+// same three lines serve floats, bools and every property type added later —
+// which is what makes "any future type multi-edits for free" true rather than
+// a promise.
+template <typename F>
+static ComponentPanel::Mixed gather(int n, F get)
+{
+	ComponentPanel::Mixed m;
+	for (int i = 0; i < n; ++i) {
+		const QVariant v = get(i);
+		if (i == 0)
+			m.value = v;
+		else if (v != m.value) {
+			m.mixed = true;
+			return m;
+		}
+	}
+	return m;
+}
+
+// What the Inspector should show for the current selection.
+//
+// Shared means present on EVERY selected clip, matched by (type, ordinal) so
+// the second Blur on one clip lines up with the second Blur on another rather
+// than with its first. Anything on only some of them is named in the
+// not-shared line instead: there is no coherent value to edit, but leaving it
+// out silently would let the list read as the whole truth about the clips.
+ComponentPanel::View VideoEditorWindow::buildComponentView() const
+{
+	ComponentPanel::View v;
+	if (!timelineView_ || !fullEdit())
+		return v;
+	const TimelineModel &m = timelineView_->model();
+	QVector<const TlClip *> clips;
+	for (const auto &p : timelineView_->selectedPairs())
+		if (p.first >= 0 && p.first < m.tracks.size() && p.second >= 0 &&
+		    p.second < m.tracks[p.first].clips.size())
+			clips.append(&m.tracks[p.first].clips[p.second]);
+	v.clipCount = clips.size();
+	if (clips.isEmpty())
+		return v;
+
+	const qint64 ph = timelinePlayheadMs();
+	const int n = clips.size();
+	// Each clip's own time, not the raw playhead: two clips at different
+	// positions are at different points in their own animations.
+	auto clipTime = [&](int i) { return ph - clips[i]->outStartMs; };
+
+	v.loadErrors = componentErrors_;
+
+	// ---- the essentials every clip has ---------------------------------
+	{
+		ComponentPanel::PinnedRow pose;
+		pose.typeId = QStringLiteral("harpia.transform");
+		auto at = [&](int i) { return clips[i]->transformAt(ph); };
+		pose.values = {
+			{QStringLiteral("posX"), gather(n, [&](int i) { return at(i).posX; })},
+			{QStringLiteral("posY"), gather(n, [&](int i) { return at(i).posY; })},
+			{QStringLiteral("scale"), gather(n, [&](int i) { return at(i).scale; })},
+			{QStringLiteral("rotation"), gather(n, [&](int i) { return at(i).rotation; })},
+			{QStringLiteral("opacity"), gather(n, [&](int i) { return at(i).opacity; })}};
+		// Only meaningful for one clip: with several selected there is no single
+		// script stack to describe.
+		if (n == 1)
+			pose.driven = scriptDrivenPoseKeys(*clips[0], &pose.drivenTip);
+		v.pinned.append(pose);
+	}
+	{
+		bool anyClocked = false;
+		for (const TlClip *c : clips)
+			if (!c->freeDuration())
+				anyClocked = true;
+		if (anyClocked) {
+			ComponentPanel::PinnedRow sp;
+			sp.typeId = QStringLiteral("harpia.speed");
+			sp.values = {{QStringLiteral("factor"),
+				      gather(n, [&](int i) { return clips[i]->speed; })}};
+			v.pinned.append(sp);
+		}
+	}
+
+	// ---- the components they have in common -----------------------------
+	const ComponentRegistry &reg = ComponentRegistry::instance();
+	// Ordinal of each (typeId, k) on one clip, so the k-th Blur matches the
+	// k-th Blur elsewhere.
+	auto nth = [](const TlClip *c, const QString &id, int ordinal) -> const ComponentInstance * {
+		int seen = 0;
+		for (const ComponentInstance &ci : c->components)
+			if (ci.typeId == id && seen++ == ordinal)
+				return &ci;
+		return nullptr;
+	};
+
+	QSet<QString> sharedNames;
+	QMap<QString, int> countOnFirst;
+	for (const ComponentInstance &ci : clips[0]->components) {
+		const int ordinal = countOnFirst[ci.typeId]++;
+		bool everywhere = true;
+		for (int i = 1; i < n && everywhere; ++i)
+			everywhere = nth(clips[i], ci.typeId, ordinal) != nullptr;
+		if (!everywhere)
+			continue;
+
+		ComponentPanel::SharedComponent sc;
+		sc.typeId = ci.typeId;
+		sc.ordinal = ordinal;
+		sc.enabled = gather(n, [&](int i) {
+			const ComponentInstance *x = nth(clips[i], sc.typeId, sc.ordinal);
+			return x && x->enabled;
+		});
+		if (const ComponentType *t = reg.find(ci.typeId)) {
+			for (const PropDef &d : t->props)
+				sc.values.insert(d.key, gather(n, [&](int i) {
+							 const ComponentInstance *x =
+								 nth(clips[i], sc.typeId, sc.ordinal);
+							 return x ? propAt(*t, *x, d.key, clipTime(i))
+								  : QVariant();
+						 }));
+			// The diamond fills only when EVERY selected clip has a key here;
+			// a half-keyed selection is not keyed.
+			for (const PropDef &d : t->props) {
+				bool allKeyed = true;
+				for (int i = 0; i < n && allKeyed; ++i) {
+					const ComponentInstance *x = nth(clips[i], sc.typeId, sc.ordinal);
+					allKeyed = false;
+					if (x) {
+						const auto k = x->keys.find(d.key);
+						if (k != x->keys.end())
+							for (const PropKey &pk : *k)
+								if (std::abs(pk.tMs - clipTime(i)) <= 1)
+									allKeyed = true;
+					}
+				}
+				if (allKeyed)
+					sc.keyedHere.append(d.key);
+			}
+		}
+		v.shared.append(sc);
+		sharedNames.insert(ci.typeId + QChar('#') + QString::number(ordinal));
+	}
+
+	// Anything on some clips but not all.
+	if (n > 1) {
+		QSet<QString> partial;
+		for (const TlClip *c : clips) {
+			QMap<QString, int> seen;
+			for (const ComponentInstance &ci : c->components) {
+				const int ordinal = seen[ci.typeId]++;
+				const QString tag = ci.typeId + QChar('#') + QString::number(ordinal);
+				if (sharedNames.contains(tag))
+					continue;
+				const ComponentType *t = reg.find(ci.typeId);
+				partial.insert(t ? t->displayName : ci.typeId);
+			}
+		}
+		v.notShared = QStringList(partial.cbegin(), partial.cend());
+		v.notShared.sort();
+	}
+
+	// Ordering warnings come from the primary clip: with a mixed selection
+	// there is no one order to describe, and repeating five of them would be
+	// noise rather than help.
+	if (n == 1) {
+		QStringList w;
+		resolveOrder(clips[0]->components, reg, &w);
+		v.warnings = w + findConflicts(clips[0]->components, reg);
+	}
+	return v;
+}
+
 void VideoEditorWindow::syncComponentPanel()
 {
 	if (!componentPanel_ || !timelineView_)
 		return;
-	const TlClip *c = fullEdit() ? timelineView_->selectedClipPtr() : nullptr;
-	componentPanel_->setVisible(c != nullptr);
-	if (!c) {
-		componentPanel_->setPinned({});
-		return;
-	}
-	componentPanel_->setLoadErrors(componentErrors_);
+	const ComponentPanel::View v = buildComponentView();
+	componentPanel_->setVisible(v.clipCount > 0);
+	componentPanel_->setView(v);
+}
 
-	// The two things a clip HAS by being a clip: where it sits, and how fast it
-	// plays. Pinned above the list it can add to.
-	QVector<ComponentPanel::PinnedRow> pins;
-	{
-		// The pose, resolved at the playhead so an animated clip shows what is
-		// on screen rather than its resting framing.
-		const TlTransform tf = c->transformAt(timelinePlayheadMs());
-		ComponentPanel::PinnedRow pose;
-		pose.typeId = QStringLiteral("harpia.transform");
-		pose.values = {{QStringLiteral("posX"), tf.posX},
-			       {QStringLiteral("posY"), tf.posY},
-			       {QStringLiteral("scale"), tf.scale},
-			       {QStringLiteral("rotation"), tf.rotation},
-			       {QStringLiteral("opacity"), tf.opacity}};
-		pose.driven = scriptDrivenPoseKeys(*c, &pose.drivenTip);
-		pins.append(pose);
-	}
-	// Stills and captions have no source clock, so there is no rate to set.
-	if (!c->freeDuration()) {
-		ComponentPanel::PinnedRow sp;
-		sp.typeId = QStringLiteral("harpia.speed");
-		sp.values = {{QStringLiteral("factor"), c->speed}};
-		pins.append(sp);
-	}
-	componentPanel_->setPinned(pins);
-	componentPanel_->setComponents(c->components, timelinePlayheadMs() - c->outStartMs);
+// Every component operation lands here: find the matching component on EACH
+// selected clip and apply the change to all of them, in one edit and therefore
+// one undo step. `fn` may leave the instance untouched.
+void VideoEditorWindow::editSharedComponent(const QString &typeId, int ordinal,
+					    const std::function<void(ComponentInstance &)> &fn)
+{
+	if (!timelineView_)
+		return;
+	timelineView_->applyToSelection([&](TlClip &c) {
+		int seen = 0;
+		for (ComponentInstance &ci : c.components)
+			if (ci.typeId == typeId && seen++ == ordinal) {
+				fn(ci);
+				return;
+			}
+	});
+	afterComponentEdit();
+}
+
+// Shared tail for every component operation: repaint, refresh the panel, and
+// take ONE snapshot however many clips were touched.
+// Which instant a keyframe edit lands on. Keys are CLIP-relative, so with two
+// clips selected at different positions the same playhead is a different moment
+// in each — the offset has to come from the clip the instance is on.
+qint64 VideoEditorWindow::componentEditTimeFor(const ComponentInstance &ci) const
+{
+	if (!timelineView_)
+		return 0;
+	const TimelineModel &m = timelineView_->model();
+	for (const TlTrack &t : m.tracks)
+		for (const TlClip &c : t.clips)
+			for (const ComponentInstance &x : c.components)
+				if (&x == &ci)
+					return timelinePlayheadMs() - c.outStartMs;
+	return timelinePlayheadMs();
+}
+
+void VideoEditorWindow::afterComponentEdit()
+{
+	syncPreviewTransformTarget();
+	showTimelineFrame(timelinePlayheadMs());
+	syncComponentPanel();
+	scheduleSnapshot();
 }
 
 void VideoEditorWindow::syncSpotlightInspector()

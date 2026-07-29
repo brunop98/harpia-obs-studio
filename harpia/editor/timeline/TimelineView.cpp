@@ -97,6 +97,10 @@ void TimelineView::setModel(const TimelineModel &m)
 {
 	model_ = m;
 	selTrack_ = selClip_ = -1;
+	// The extras are indices into the OLD model; a new one makes them meaningless
+	// and possibly out of range. Clearing the primary without them was how undo
+	// came back holding a selection that pointed past the end of a track.
+	extraSel_.clear();
 	selTransition_ = false;
 	hoverTrTrack_ = hoverTrClip_ = -1;
 	clampView();
@@ -1850,13 +1854,38 @@ void TimelineView::leaveEvent(QEvent *)
 }
 
 // Every selected clip, primary included, as (track, clip).
+void TimelineView::applyToSelection(const std::function<void(TlClip &)> &fn)
+{
+	const QVector<QPair<int, int>> sel = selectedPairs();
+	if (sel.isEmpty())
+		return;
+	for (const auto &p : sel) {
+		if (p.first < 0 || p.first >= model_.tracks.size())
+			continue;
+		TlTrack &t = model_.tracks[p.first];
+		if (t.locked || p.second < 0 || p.second >= t.clips.size())
+			continue;
+		fn(t.clips[p.second]);
+	}
+	update();
+	emit clipsChanged();
+}
+
 QVector<QPair<int, int>> TimelineView::selectedPairs() const
 {
+	// A selection can outlive the clips it names -- undo swaps the whole model
+	// underneath it, and a shorter track leaves indices pointing past the end.
+	// Dropping those here rather than trusting them keeps every caller (and the
+	// comparator below, which dereferences them) safe.
+	const auto live = [this](const QPair<int, int> &p) {
+		return p.first >= 0 && p.first < model_.tracks.size() && p.second >= 0 &&
+		       p.second < model_.tracks[p.first].clips.size();
+	};
 	QVector<QPair<int, int>> out;
-	if (selTrack_ >= 0 && selClip_ >= 0)
+	if (selTrack_ >= 0 && selClip_ >= 0 && live({selTrack_, selClip_}))
 		out.append({selTrack_, selClip_});
 	for (const auto &p : extraSel_)
-		if (p != qMakePair(selTrack_, selClip_))
+		if (p != qMakePair(selTrack_, selClip_) && live(p))
 			out.append(p);
 	// Sorted by track then time so callers can rely on a stable order.
 	std::sort(out.begin(), out.end(), [this](const auto &a, const auto &b) {
@@ -1901,6 +1930,11 @@ void TimelineView::addToSelection(int track, int clip)
 		return;
 	extraSel_.insert({track, clip});
 	update();
+	// The primary is unchanged, so the arguments repeat -- but the SELECTION
+	// grew, and the Inspector shows what the whole selection has in common.
+	// Without this, Ctrl-clicking a second clip leaves the panel describing
+	// only the first.
+	emit selectionChanged(selTrack_, selClip_);
 }
 
 void TimelineView::selectAllClips()

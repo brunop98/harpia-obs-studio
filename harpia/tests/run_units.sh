@@ -46,10 +46,19 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/regionwatch_test.cpp" "$H/core/RegionWatch.cpp" -o "$WORK/regionwatch_test" $LF
 
+# The component runtime: purity, stage order, dependencies, serialisation.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/component_test.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	-o "$WORK/component_test" $LF
+
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/paramslider_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionwatch_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/component_test" || rc=1
 exit $rc

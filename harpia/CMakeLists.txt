@@ -188,6 +188,16 @@ target_sources(
     editor/ExportOptionsDialog.hpp
     editor/VideoEditorWindow.cpp
     editor/VideoEditorWindow.hpp
+    # Component runtime: every clip feature is a component, built-in or scripted.
+    editor/component/Component.cpp
+    editor/component/Component.hpp
+    editor/component/ComponentRegistry.cpp
+    editor/component/ComponentRegistry.hpp
+    editor/component/ComponentStack.cpp
+    editor/component/ComponentStack.hpp
+    editor/component/ComponentJson.hpp
+    editor/component/BuiltinComponents.cpp
+    editor/component/BuiltinComponents.hpp
     # User-authored GLSL post-processing shaders (preview + baked into export).
     editor/shader/ShaderEffect.hpp
     editor/shader/SpotlightGl.cpp

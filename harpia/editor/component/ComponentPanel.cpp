@@ -115,125 +115,104 @@ ComponentPanel::ComponentPanel(const ComponentRegistry &reg, QWidget *parent)
 	v->addWidget(add);
 }
 
-void ComponentPanel::setPinnedTransform(const TlTransform &xf, bool present,
-					const QStringList &drivenKeys, const QString &drivenTip)
+void ComponentPanel::setPinned(const QVector<PinnedRow> &rows)
 {
-	const bool structural = present != pinnedPresent_ || drivenKeys != drivenKeys_;
-	pinnedXf_ = xf;
-	pinnedPresent_ = present;
-	drivenKeys_ = drivenKeys;
-	drivenTip_ = drivenTip;
+	// Rebuild only when the SHAPE changes — which rows, and which of their
+	// properties a script has taken over. Otherwise push values, so a number
+	// being typed is not yanked out from under the cursor.
+	bool structural = rows.size() != pinned_.size();
+	for (int i = 0; !structural && i < rows.size(); ++i)
+		structural = rows[i].typeId != pinned_[i].typeId ||
+			     rows[i].driven != pinned_[i].driven;
+	pinned_ = rows;
 	if (structural)
-		buildPinnedRow();
+		buildPinnedRows();
 	else
 		pushPinnedValues();
 }
 
-// A value out of the pose row, by property key. One place, so the row's order
-// and the struct's fields cannot drift apart.
-static double poseGet(const TlTransform &t, const QString &key)
+void ComponentPanel::buildPinnedRows()
 {
-	if (key == QLatin1String("posX"))
-		return t.posX;
-	if (key == QLatin1String("posY"))
-		return t.posY;
-	if (key == QLatin1String("scale"))
-		return t.scale;
-	if (key == QLatin1String("rotation"))
-		return t.rotation;
-	return t.opacity;
-}
-static void poseSet(TlTransform &t, const QString &key, double v)
-{
-	if (key == QLatin1String("posX"))
-		t.posX = v;
-	else if (key == QLatin1String("posY"))
-		t.posY = v;
-	else if (key == QLatin1String("scale"))
-		t.scale = v;
-	else if (key == QLatin1String("rotation"))
-		t.rotation = v;
-	else
-		t.opacity = v;
-}
-
-void ComponentPanel::buildPinnedRow()
-{
-	if (pinned_) {
-		pinned_->box->deleteLater();
-		delete pinned_;
-		pinned_ = nullptr;
+	for (Row *r : pinnedRows_) {
+		r->box->deleteLater();
+		delete r;
 	}
-	const ComponentType *type = reg_.find(QStringLiteral("harpia.transform"));
-	if (!pinnedPresent_ || !type)
-		return;
+	pinnedRows_.clear();
 
-	auto *row = new Row;
-	row->box = new QFrame(this);
-	row->box->setFrameShape(QFrame::StyledPanel);
-	row->box->setStyleSheet(
-		QStringLiteral("QFrame{border:1px solid #3a3f47; border-radius:4px;}"));
-	auto *bv = new QVBoxLayout(row->box);
-	bv->setContentsMargins(6, 4, 6, 6);
-	bv->setSpacing(4);
+	for (int n = 0; n < pinned_.size(); ++n) {
+		const PinnedRow &pin = pinned_[n];
+		const ComponentType *type = reg_.find(pin.typeId);
+		if (!type)
+			continue;
 
-	auto *head = new QHBoxLayout;
-	head->setSpacing(4);
-	auto *name = new QLabel(type->displayName, row->box);
-	name->setStyleSheet(QStringLiteral("border:none; font-weight:bold; color:#e8eaed;"));
-	// No enable box, no move arrows, no remove: a clip without a pose is not a
-	// thing, so offering to take it away would be offering nonsense.
-	name->setToolTip(QStringLiteral("Where the clip sits on the canvas. Every clip has one, "
-					"so this row cannot be removed or reordered."));
-	head->addWidget(name, 1);
-	head->addWidget(stageBadge(type->stage, row->box));
-	bv->addLayout(head);
+		auto *row = new Row;
+		row->box = new QFrame(this);
+		row->box->setFrameShape(QFrame::StyledPanel);
+		row->box->setStyleSheet(
+			QStringLiteral("QFrame{border:1px solid #3a3f47; border-radius:4px;}"));
+		auto *bv = new QVBoxLayout(row->box);
+		bv->setContentsMargins(6, 4, 6, 6);
+		bv->setSpacing(4);
 
-	auto *form = new QFormLayout;
-	form->setHorizontalSpacing(8);
-	form->setVerticalSpacing(3);
-	for (const PropDef &d : type->props) {
-		row->keys.append(d.key);
-		auto *sl = new ParamSlider(d.min, d.max, 3, row->box);
-		sl->setValue(poseGet(pinnedXf_, d.key));
-		if (!d.help.isEmpty())
-			sl->setToolTip(d.help);
-		connect(sl, &ParamSlider::valueChanged, this, [this, key = d.key](double v) {
-			if (syncing_)
-				return;
-			poseSet(pinnedXf_, key, v);
-			emit transformEdited(pinnedXf_);
-		});
-		row->sliders.append(sl);
-		row->checks.append(nullptr);
-		row->keyBtns.append(nullptr);
+		auto *head = new QHBoxLayout;
+		head->setSpacing(4);
+		auto *name = new QLabel(type->displayName, row->box);
+		name->setStyleSheet(QStringLiteral("border:none; font-weight:bold; color:#e8eaed;"));
+		name->setToolTip(type->help + QStringLiteral("\n\nEvery clip has one, so this row "
+							     "cannot be removed or reordered."));
+		head->addWidget(name, 1);
+		head->addWidget(stageBadge(type->stage, row->box));
+		bv->addLayout(head);
 
-		// A script that computes this channel makes the box a starting point
-		// (it reads it as ctx.base), not the framing on screen. Saying so on the
-		// row beats leaving the mismatch to be discovered.
-		const bool driven = drivenKeys_.contains(d.key);
-		auto *lbl = new QLabel(driven ? d.label + QStringLiteral("  (script)") : d.label,
-				       row->box);
-		lbl->setStyleSheet(driven ? QStringLiteral("border:none; color:#ffd44f;")
-					  : QStringLiteral("border:none;"));
-		if (driven)
-			lbl->setToolTip(drivenTip_);
-		row->labels.append(lbl);
-		form->addRow(lbl, sl);
+		auto *form = new QFormLayout;
+		form->setHorizontalSpacing(8);
+		form->setVerticalSpacing(3);
+		for (const PropDef &d : type->props) {
+			row->keys.append(d.key);
+			auto *sl = new ParamSlider(d.min, d.max, 3, row->box);
+			sl->setValue(pin.values.value(d.key, d.def));
+			if (!d.help.isEmpty())
+				sl->setToolTip(d.help);
+			const QString tid = pin.typeId;
+			connect(sl, &ParamSlider::valueChanged, this,
+				[this, tid, key = d.key](double v) {
+					if (syncing_)
+						return;
+					emit pinnedEdited(tid, key, v);
+				});
+			row->sliders.append(sl);
+			row->checks.append(nullptr);
+			row->keyBtns.append(nullptr);
+
+			// A script that computes this channel makes the box a starting
+			// point (it reads it as ctx.base), not the framing on screen.
+			// Saying so on the row beats leaving the mismatch to be found.
+			const bool driven = pin.driven.contains(d.key);
+			auto *lbl = new QLabel(
+				driven ? d.label + QStringLiteral("  (script)") : d.label, row->box);
+			lbl->setStyleSheet(driven ? QStringLiteral("border:none; color:#ffd44f;")
+						  : QStringLiteral("border:none;"));
+			if (driven)
+				lbl->setToolTip(pin.drivenTip);
+			row->labels.append(lbl);
+			form->addRow(lbl, sl);
+		}
+		bv->addLayout(form);
+		pinnedLayout_->addWidget(row->box);
+		pinnedRows_.append(row);
 	}
-	bv->addLayout(form);
-	pinnedLayout_->addWidget(row->box);
-	pinned_ = row;
+	pushPinnedValues();
 }
 
 void ComponentPanel::pushPinnedValues()
 {
-	if (!pinned_)
-		return;
 	syncing_ = true;
-	for (int i = 0; i < pinned_->keys.size(); ++i)
-		if (pinned_->sliders[i])
-			pinned_->sliders[i]->setValue(poseGet(pinnedXf_, pinned_->keys[i]));
+	for (int n = 0; n < pinnedRows_.size() && n < pinned_.size(); ++n) {
+		Row *r = pinnedRows_[n];
+		for (int i = 0; i < r->keys.size(); ++i)
+			if (r->sliders[i])
+				r->sliders[i]->setValue(pinned_[n].values.value(r->keys[i], 0.0));
+	}
 	syncing_ = false;
 }
 

@@ -22,6 +22,7 @@
 #include "../timeline/TlTransform.hpp"
 #include "Component.hpp"
 
+#include <QMap>
 #include <QVector>
 #include <QWidget>
 
@@ -45,25 +46,35 @@ public:
 	// Errors from loading the user's components folder, shown above the list.
 	void setLoadErrors(const QStringList &errors);
 
-	// The clip's own pose, shown as a pinned first row that cannot be removed or
-	// reordered — Unity's Transform, which works the same way and for the same
-	// reason. Its values still live in the clip's fields rather than in a
-	// ComponentInstance; the row renders from the registered harpia.transform
-	// type's PropDefs so it is built by the same code as every other row.
-	// `drivenKeys` marks properties a transform script is computing, whose boxes
-	// are therefore a starting point rather than the framing on screen.
-	void setPinnedTransform(const TlTransform &xf, bool present, const QStringList &drivenKeys,
-				const QString &drivenTip);
+	// A clip's ESSENTIAL properties: the ones it has by being a clip rather than
+	// by having something added to it. Its pose, and how fast it plays. They are
+	// shown as pinned rows above the list, with no enable box, no move arrows
+	// and no remove button — Unity's Transform, which works the same way and for
+	// the same reason. Offering to delete a clip's position would be offering
+	// nonsense.
+	//
+	// Their values live in the clip's own fields, not in a ComponentInstance.
+	// The rows are still rendered from the registered type's PropDefs, so one
+	// declaration of the labels and ranges serves the pinned rows and the
+	// ordinary ones alike.
+	struct PinnedRow {
+		QString typeId;               // the registered type whose props to show
+		QMap<QString, double> values; // by property key
+		QStringList driven;           // props a script is computing
+		QString drivenTip;
+	};
+	void setPinned(const QVector<PinnedRow> &rows);
 
 signals:
 	// The list changed and should be written back to the clip.
 	void componentsEdited(const QVector<ComponentInstance> &list);
-	// The pinned pose changed. Separate because it does not live in the list.
-	void transformEdited(const TlTransform &xf);
+	// A pinned property changed. Separate from componentsEdited because these do
+	// not live in the list; the window knows which clip field each one is.
+	void pinnedEdited(const QString &typeId, const QString &key, double value);
 
 private:
 	void rebuild();
-	void buildPinnedRow();
+	void buildPinnedRows();
 	void pushPinnedValues();
 	void pushValues();
 	void emitEdit();
@@ -77,11 +88,8 @@ private:
 	QVector<ComponentInstance> list_;
 	qint64 timeMs_ = 0;
 	QVector<Row *> rows_;
-	Row *pinned_ = nullptr; // the clip's pose; null when nothing is selected
-	TlTransform pinnedXf_;
-	bool pinnedPresent_ = false;
-	QStringList drivenKeys_;
-	QString drivenTip_;
+	QVector<Row *> pinnedRows_;
+	QVector<PinnedRow> pinned_;
 	QVBoxLayout *pinnedLayout_ = nullptr;
 	QVBoxLayout *listLayout_ = nullptr;
 	QLabel *empty_ = nullptr;

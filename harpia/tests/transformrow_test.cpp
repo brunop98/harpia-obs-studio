@@ -141,10 +141,43 @@ int main(int argc, char **argv)
 		ok(outside == 0, "the old Transform section is gone");
 	}
 
-	std::printf("\n-- Speed stayed behind, on purpose --\n");
-	// It is the clip's playback rate, which changes its LENGTH on the timeline.
-	// Not a pose, and not the same thing as the Speed component.
-	ok(hasLabel(&w, QStringLiteral("Speed")), "the clip's Speed row is still in the Inspector");
+	std::printf("\n-- Speed is pinned beside it, not left behind --\n");
+	{
+		// Both essentials in one place. Speed is pinned rather than addable
+		// because every clip plays at some rate; a second addable Speed would
+		// be a different thing wearing the same name.
+		ok(hasLabel(panel, QStringLiteral("Speed")), "a Speed row is in the component list");
+		ok(hasLabel(panel, QStringLiteral("Factor")), "with its factor");
+		// Scoped to the CLIP inspector, found via its Reset button. Other
+		// "Speed" labels in the window are different features — the Trim /
+		// Multi-Cut range readout, and the transport control — and asserting
+		// against the whole window would be asserting against those.
+		QWidget *clipBox = nullptr;
+		if (QPushButton *reset = button(&w, QStringLiteral("Reset transform")))
+			clipBox = reset->parentWidget();
+		ok(clipBox != nullptr, "the clip inspector is findable");
+		int dupes = 0;
+		if (clipBox)
+			for (QLabel *l : clipBox->findChildren<QLabel *>())
+				if (l->text() == QStringLiteral("Speed"))
+					++dupes;
+		std::printf("     Speed rows left in the clip inspector: %d\n", dupes);
+		ok(dupes == 0, "and the clip inspector's own Speed row is gone");
+	}
+
+	std::printf("\n-- editing Speed changes the clip's rate and its length --\n");
+	{
+		const qint64 lenBefore = tv->selectedClipPtr()->outDurationMs();
+		emit panel->pinnedEdited(QStringLiteral("harpia.speed"), QStringLiteral("factor"), 2.0);
+		settle(500);
+		const TlClip *c = tv->selectedClipPtr();
+		std::printf("     speed %.2f, length %lld -> %lld ms\n", c->speed,
+			    (long long)lenBefore, (long long)c->outDurationMs());
+		eq(c->speed, 2.0, "the clip took the new rate", 1e-9);
+		ok(c->outDurationMs() < lenBefore, "and its strip got shorter, as it always did");
+		emit panel->pinnedEdited(QStringLiteral("harpia.speed"), QStringLiteral("factor"), 1.0);
+		settle(300);
+	}
 
 	std::printf("\n-- the row cannot be taken away --\n");
 	{
@@ -160,9 +193,8 @@ int main(int argc, char **argv)
 	std::printf("\n-- editing it moves the picture --\n");
 	{
 		const double before = meanLuma(pc->currentFrame());
-		TlTransform tf = tv->selectedClipPtr()->transformAt(500);
-		tf.scale = 2.5;
-		emit panel->transformEdited(tf);
+		emit panel->pinnedEdited(QStringLiteral("harpia.transform"),
+					 QStringLiteral("scale"), 2.5);
 		settle(700);
 		const double after = meanLuma(pc->currentFrame());
 		std::printf("     zoom 1.0 -> 2.5: mean luma %.1f -> %.1f\n", before, after);

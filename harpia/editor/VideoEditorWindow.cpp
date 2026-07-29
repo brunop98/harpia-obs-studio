@@ -930,11 +930,33 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		[this](const QVector<ComponentInstance> &list) {
 			editSelectedClip([&list](TlClip &c) { c.components = list; });
 		});
-	// The pinned pose goes through applySelectedClipTransform, the same path the
-	// preview drag uses — which is what keeps auto-keyframe and the keyframe
-	// editor working exactly as they did when the old panel wrote here.
-	connect(componentPanel_, &ComponentPanel::transformEdited, this,
-		[this](const TlTransform &tf) { applySelectedClipTransform(tf); });
+	// A pinned property maps back to the clip field it came from. The pose goes
+	// through applySelectedClipTransform, the same path the preview drag uses,
+	// which is what keeps auto-keyframe and the keyframe editor working exactly
+	// as they did when the old panel wrote here.
+	connect(componentPanel_, &ComponentPanel::pinnedEdited, this,
+		[this](const QString &typeId, const QString &key, double v) {
+			const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+			if (!sel)
+				return;
+			if (typeId == QStringLiteral("harpia.speed")) {
+				editSelectedClip(
+					[v](TlClip &c) { c.speed = std::clamp(v, 0.1, 20.0); });
+				return;
+			}
+			TlTransform tf = sel->transformAt(timelinePlayheadMs());
+			if (key == QStringLiteral("posX"))
+				tf.posX = v;
+			else if (key == QStringLiteral("posY"))
+				tf.posY = v;
+			else if (key == QStringLiteral("scale"))
+				tf.scale = v;
+			else if (key == QStringLiteral("rotation"))
+				tf.rotation = v;
+			else if (key == QStringLiteral("opacity"))
+				tf.opacity = v;
+			applySelectedClipTransform(tf);
+		});
 	insLayout->addWidget(componentPanel_);
 
 	insLayout->addStretch(1);
@@ -3385,15 +3407,36 @@ void VideoEditorWindow::syncComponentPanel()
 	const TlClip *c = fullEdit() ? timelineView_->selectedClipPtr() : nullptr;
 	componentPanel_->setVisible(c != nullptr);
 	if (!c) {
-		componentPanel_->setPinnedTransform(TlTransform{}, false, {}, QString());
+		componentPanel_->setPinned({});
 		return;
 	}
 	componentPanel_->setLoadErrors(componentErrors_);
-	// The pose, resolved at the playhead so an animated clip shows what is on
-	// screen rather than its resting framing.
-	QString tip;
-	const QStringList driven = scriptDrivenPoseKeys(*c, &tip);
-	componentPanel_->setPinnedTransform(c->transformAt(timelinePlayheadMs()), true, driven, tip);
+
+	// The two things a clip HAS by being a clip: where it sits, and how fast it
+	// plays. Pinned above the list it can add to.
+	QVector<ComponentPanel::PinnedRow> pins;
+	{
+		// The pose, resolved at the playhead so an animated clip shows what is
+		// on screen rather than its resting framing.
+		const TlTransform tf = c->transformAt(timelinePlayheadMs());
+		ComponentPanel::PinnedRow pose;
+		pose.typeId = QStringLiteral("harpia.transform");
+		pose.values = {{QStringLiteral("posX"), tf.posX},
+			       {QStringLiteral("posY"), tf.posY},
+			       {QStringLiteral("scale"), tf.scale},
+			       {QStringLiteral("rotation"), tf.rotation},
+			       {QStringLiteral("opacity"), tf.opacity}};
+		pose.driven = scriptDrivenPoseKeys(*c, &pose.drivenTip);
+		pins.append(pose);
+	}
+	// Stills and captions have no source clock, so there is no rate to set.
+	if (!c->freeDuration()) {
+		ComponentPanel::PinnedRow sp;
+		sp.typeId = QStringLiteral("harpia.speed");
+		sp.values = {{QStringLiteral("factor"), c->speed}};
+		pins.append(sp);
+	}
+	componentPanel_->setPinned(pins);
 	componentPanel_->setComponents(c->components, timelinePlayheadMs() - c->outStartMs);
 }
 
@@ -3547,34 +3590,10 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	hint->setStyleSheet(QStringLiteral("color:#7f858e;"));
 	v->addWidget(hint);
 
-	auto *form = new QFormLayout;
-	form->setContentsMargins(0, 2, 0, 0);
-	form->setHorizontalSpacing(8);
-	form->setVerticalSpacing(4);
-	auto mkSpin = [this](double lo, double hi, double step, int dec) {
-		auto *s = new QDoubleSpinBox(clipBox_);
-		s->setRange(lo, hi);
-		s->setSingleStep(step);
-		s->setDecimals(dec);
-		s->setKeyboardTracking(false);
-		return s;
-	};
-	// Zoom, Position, Rotation and Opacity used to live here. They are the
-	// Transform component now, pinned at the top of the component list — one
-	// place to look for what a clip does, rather than a pose panel here and
-	// everything else there. Speed stays: it is the clip's own playback rate,
-	// which changes its LENGTH on the timeline, not its pose.
-	clipSpeedSpin_ = mkSpin(0.1, 20.0, 0.1, 2);
-	clipSpeedSpin_->setToolTip(QStringLiteral(
-		"Playback speed for this clip. Its length on the timeline changes to match, and "
-		"its audio is time-stretched (pitch preserved) on export."));
-	form->addRow(QStringLiteral("Speed"), clipSpeedSpin_);
-	v->addLayout(form);
-	connect(clipSpeedSpin_, &QDoubleSpinBox::valueChanged, this, [this](double sp) {
-		if (syncingClip_)
-			return;
-		editSelectedClip([sp](TlClip &c) { c.speed = std::clamp(sp, 0.1, 20.0); });
-	});
+	// Zoom, Position, Rotation, Opacity and Speed all used to live here in a
+	// form of their own. They are the pinned Transform and Speed rows of the
+	// component list now — one place to look for everything a clip does, rather
+	// than some of it here and the rest there. Nothing is left of the form.
 
 	auto *resetBtn = new QPushButton(QStringLiteral("Reset transform"), clipBox_);
 	resetBtn->setToolTip(QStringLiteral("Put the clip back to the middle at its natural size, "
@@ -4240,8 +4259,6 @@ void VideoEditorWindow::syncClipInspector()
 	const bool wasSyncing = syncingClip_;
 	syncingClip_ = true;
 	const qint64 ph = timelinePlayheadMs();
-	clipSpeedSpin_->setValue(c->speed);
-	clipSpeedSpin_->setEnabled(!c->freeDuration()); // stills/captions have no source clock
 	autoKeyChk_->setChecked(autoKeyframe_);
 	const int here = c->keyframeIndexAt(ph);
 	keyInfo_->setText(c->keys.isEmpty()

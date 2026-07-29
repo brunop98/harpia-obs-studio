@@ -400,7 +400,6 @@ private:
 	// The pose spin boxes used to live here. They are the pinned Transform row
 	// in ComponentPanel now; the clip's fields are unchanged and still what the
 	// preview drag, the keyframe editor and the project format all write.
-	QDoubleSpinBox *clipSpeedSpin_ = nullptr; // per-clip playback speed
 	QCheckBox *autoKeyChk_ = nullptr;
 	QLabel *keyInfo_ = nullptr;
 	QWidget *textBox_ = nullptr; // text-clip style controls

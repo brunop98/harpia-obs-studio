@@ -201,7 +201,16 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 		t.displayName = QStringLiteral("Speed");
 		t.category = QStringLiteral("Time");
 		t.stage = Stage::Time;
-		t.help = QStringLiteral("Play the clip faster or slower. 2 is double speed.");
+		// Not addable, for the same reason Transform is not: every clip plays at
+		// some rate, so it is a thing a clip IS rather than one it HAS. It is
+		// pinned in the Inspector and backed by the clip's own speed field,
+		// which is what makes the strip resize when you speed a clip up. A
+		// second, addable Speed would be a different Speed — one that changes
+		// which frame is sampled without changing the length — and two controls
+		// with one name is worse than either.
+		t.addable = false;
+		t.help = QStringLiteral("How fast the clip plays. 2 is double speed, and its length "
+					"on the timeline halves to match.");
 		t.props = {{QStringLiteral("factor"), QStringLiteral("Factor"), PropType::Float, 0.1,
 			    10.0, 1.0, true,
 			    QStringLiteral("Above 1 is faster, below 1 is slower.")}};

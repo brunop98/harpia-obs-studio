@@ -393,9 +393,34 @@ void TimelineView::setLayoutParams(const TimelineViewParams &p)
 
 // ---- geometry ---------------------------------------------------------------
 
+// The gutter can never be narrower than what it has to hold.
+//
+// The header's toggles are laid out at fixed offsets from its left edge, so a
+// gutter set narrower than they need does not squeeze them -- it pushes the
+// rightmost one out into the content area, where the clips are painted
+// afterwards and cover it. The Mute toggle simply vanished under the first
+// clip, which is what "the thumbnail goes over the track controls" was.
+//
+// Derived from the same numbers headerToggleRect uses rather than written down
+// twice, so adding a fourth toggle widens the floor instead of reintroducing
+// this.
+int TimelineView::minGutterWidth()
+{
+	constexpr int kPad = 8;    // headerToggleRect's left inset
+	constexpr int kSize = 16;  // a toggle
+	constexpr int kGap = 4;    // between them
+	constexpr int kSlots = 3;  // lock, hide, mute -- the widest case (video)
+	return kPad + kSlots * (kSize + kGap) - kGap + kPad;
+}
+
+int TimelineView::gutterWidth() const
+{
+	return std::max(lp_.gutterW, minGutterWidth());
+}
+
 QRect TimelineView::contentRect() const
 {
-	const int x = lp_.margin + lp_.gutterW;
+	const int x = lp_.margin + gutterWidth();
 	const int y = lp_.margin + lp_.rulerH;
 	return QRect(x, y, std::max(1, width() - lp_.margin - x), std::max(1, height() - lp_.margin - y));
 }
@@ -424,7 +449,7 @@ QRect TimelineView::laneRect(int track) const
 QRect TimelineView::trackHeaderRect(int track) const
 {
 	const QRect l = laneRect(track);
-	return QRect(lp_.margin, l.y(), lp_.gutterW, l.height());
+	return QRect(lp_.margin, l.y(), gutterWidth(), l.height());
 }
 
 int TimelineView::laneAtY(int y) const
@@ -996,7 +1021,12 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	}
 
 	p.save();
-	p.setClipPath(path);
+	// IntersectClip, not the default ReplaceClip. The caller has already clipped
+	// the painter to the content area precisely so a clip starting left of the
+	// visible range cannot paint over the track headers -- and replacing the
+	// region here threw that away, which is how the filmstrip of a scrolled-off
+	// clip ended up drawn across the gutter's name and L/H/M toggles.
+	p.setClipPath(path, Qt::IntersectClip);
 	if (video) {
 		const auto it = srcThumbs_.constFind(c.sourceId);
 		const qint64 sdur = srcThumbDur_.value(c.sourceId, 0);
@@ -1469,7 +1499,8 @@ void TimelineView::paintEvent(QPaintEvent *)
 
 	// Left gutter separator.
 	p.setPen(cl_.border);
-	p.drawLine(lp_.margin + lp_.gutterW, lp_.margin, lp_.margin + lp_.gutterW, height() - lp_.margin);
+	p.drawLine(lp_.margin + gutterWidth(), lp_.margin, lp_.margin + gutterWidth(),
+		   height() - lp_.margin);
 }
 
 // ---- interaction ------------------------------------------------------------

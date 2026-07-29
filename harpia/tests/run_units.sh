@@ -124,6 +124,18 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/effectarea_test" "$QJSLIB/libqjs.a" $LF
 
+# A track's lock/hide/mute toggles stay inside the gutter at every width the Dev
+# panel can set, and nothing paints over them.
+"$MOC" -I"$H" "$H/editor/timeline/TimelineView.hpp" -o "$WORK/moc_TimelineView.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/gutterspill_test.cpp" "$H/editor/timeline/TimelineView.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
+	-o "$WORK/gutterspill_test" $LF
+
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
@@ -136,4 +148,5 @@ QT_QPA_PLATFORM=offscreen "$WORK/componentrender_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/assetcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectarea_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/gutterspill_test" || rc=1
 exit $rc

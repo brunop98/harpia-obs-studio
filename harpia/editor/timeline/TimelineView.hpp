@@ -140,6 +140,20 @@ public:
 	// Fit the whole timeline in the view (zoom out to 1:1 on the full span).
 	void zoomToFit();
 
+	// The content area, for tests: everything left of it is the track gutter,
+	// and a test that recomputed the margins itself would drift from the layout
+	// it is meant to be checking.
+	QRect contentRectForTest() const { return contentRect(); }
+	// Slot 0/1/2 = lock/hide/mute. For tests: the invariant being checked is
+	// "this rect is inside the gutter", and a test computing the rect itself
+	// would be checking its own arithmetic.
+	QRect headerToggleRectForTest(int track, int slot) const
+	{
+		const HeaderHit h = slot == 0 ? HeaderHit::Lock
+					      : (slot == 1 ? HeaderHit::Hide : HeaderHit::Mute);
+		return headerToggleRect(track, h);
+	}
+
 	const EditorColors &colors() const { return cl_; }
 	void setColors(const EditorColors &c)
 	{
@@ -183,7 +197,11 @@ protected:
 
 private:
 	// ---- geometry / axis ----
-	QRect contentRect() const;             // x past the gutter, y past the ruler
+	QRect contentRect() const;
+	// The gutter's width, never less than its contents need. See the .cpp: a
+	// gutter set too narrow used to push the Mute toggle under the first clip.
+	int gutterWidth() const;
+	static int minGutterWidth();             // x past the gutter, y past the ruler
 	int laneHeight(int track) const;
 	QRect laneRect(int track) const;       // full-width lane row (content x-range)
 	QRect trackHeaderRect(int track) const;

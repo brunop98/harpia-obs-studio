@@ -28,6 +28,7 @@
 #include "VoiceoverMixer.hpp"
 #include "VoiceoverTrack.hpp"
 #include "MediaFiles.hpp"
+#include "../ui/WheelGuard.hpp"
 #include "script/TransformScript.hpp"
 #include "component/ShaderComponent.hpp"
 #include "component/TransformScriptComponent.hpp"
@@ -785,6 +786,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	insScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 	insScroll->viewport()->setAutoFillBackground(false);
 	insScroll->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; }"));
+	// The wheel scrolls this panel; it never edits what happens to be under the
+	// pointer. See ui/WheelGuard.hpp -- a spin box quietly taking a scroll meant
+	// for the panel is a value changed without anyone deciding to change it.
+	new WheelGuard(insScroll, this);
 	insOuter->addWidget(insScroll, 1);
 
 	auto *insContent = new QWidget(insScroll);

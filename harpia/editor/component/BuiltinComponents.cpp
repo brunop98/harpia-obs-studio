@@ -169,6 +169,7 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 			p.def = d.def;
 			t.props.append(p);
 		}
+		t.help = QString::fromLatin1(fxHelp(ft));
 		t.pointOp = fxIsPointOp(ft);
 		t.make = [ft] { return std::unique_ptr<IComponent>(new FxComponent(ft)); };
 		reg.add(t);

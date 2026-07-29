@@ -35,6 +35,11 @@ struct ComponentPanel::Row {
 
 namespace {
 
+// How wide a property's name may get before it wraps. Narrow on purpose: the
+// controls are what the eye needs to land on, and a component's own //@param
+// text can be arbitrarily long.
+constexpr int kPropLabelW = 116;
+
 // A component's stage, shown small beside its name. Not decoration: the order
 // things run in is the question people ask first, and the answer is otherwise
 // invisible.
@@ -334,10 +339,26 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 			const bool isDriven = driven.contains(d.key);
 			auto *lbl = new QLabel(isDriven ? d.label + QStringLiteral("  (script)") : d.label,
 					       row->box);
-			lbl->setStyleSheet(isDriven ? QStringLiteral("border:none; color:#ffd44f;")
-						    : QStringLiteral("border:none;"));
+			// Small, and bounded. A script or shader writes its own //@param
+			// labels and they can be a sentence -- "Focus X (0 = left, 1 =
+			// right)" -- which at body size pushed the label column wider than
+			// the controls it names. Wrapped to a narrow column instead of
+			// elided, so nothing is hidden behind a tooltip nobody hovers.
+			lbl->setWordWrap(true);
+			lbl->setMaximumWidth(kPropLabelW);
+			lbl->setStyleSheet(
+				QStringLiteral("border:none; font-size:%1px; color:%2;")
+					.arg(uiCaptionPx())
+					.arg(isDriven ? QStringLiteral("#ffd44f")
+						      : QStringLiteral("#c8ccd4")));
+			// The tooltip carries the label AND its help, so a wrapped or
+			// abbreviated name is still readable in full somewhere.
+			QString tip = d.label;
+			if (!d.help.isEmpty())
+				tip += QStringLiteral("\n\n") + d.help;
 			if (isDriven)
-				lbl->setToolTip(drivenTip);
+				tip = drivenTip;
+			lbl->setToolTip(tip);
 			row->labels.append(lbl);
 			form->addRow(lbl, cell);
 		}

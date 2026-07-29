@@ -59,6 +59,37 @@ inline constexpr int kFxTypeCount = int(FxType::Count);
 // therefore defaults to "not a point op" by falling through, which is the safe
 // way round -- a wrong `true` here is a rendering bug, a wrong `false` is only
 // slower.
+// One line saying what an effect does, for the component's tooltip. Effects had
+// none: the Inspector showed a name and some sliders and left you to find out
+// what "Chromatic aberration" or "Exposure" meant by moving them.
+inline const char *fxHelp(FxType t)
+{
+	switch (t) {
+	case FxType::Brightness: return "Lift or lower every pixel evenly.";
+	case FxType::Contrast: return "Push light and dark apart, or pull them together.";
+	case FxType::Saturation: return "How strong the colours are. 0 is greyscale.";
+	case FxType::Exposure: return "Brightness in stops, the way a camera means it — "
+				      "gentler in the highlights than Brightness.";
+	case FxType::HueShift: return "Rotate every colour round the wheel.";
+	case FxType::ColorBalance: return "Warm or cool the picture by moving the "
+					  "red/green/blue mix.";
+	case FxType::Blur: return "Soften the picture. A fast box blur.";
+	case FxType::GaussianBlur: return "Soften the picture more smoothly than Blur, "
+					  "and more slowly.";
+	case FxType::Sharpen: return "Bring out edges. Too much looks crunchy.";
+	case FxType::Vignette: return "Darken towards the corners, to draw the eye "
+				      "to the middle.";
+	case FxType::Glow: return "Bloom the bright parts into what is next to them.";
+	case FxType::Pixelate: return "Drop the resolution into visible blocks.";
+	case FxType::Noise: return "Add film-like grain.";
+	case FxType::ChromaticAberration: return "Split the colour channels apart at the "
+						 "edges, like a cheap lens.";
+	case FxType::InverseSelection: return "Dim everything except the chosen areas.";
+	case FxType::Count: break;
+	}
+	return "";
+}
+
 inline bool fxIsPointOp(FxType t)
 {
 	switch (t) {

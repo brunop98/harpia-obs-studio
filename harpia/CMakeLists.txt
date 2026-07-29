@@ -200,6 +200,7 @@ target_sources(
     editor/component/ComponentPanel.hpp
     editor/component/ScriptComponent.cpp
     editor/component/ShaderComponent.cpp
+    ui/WheelGuard.cpp
     editor/component/TransformScriptComponent.cpp
     editor/component/ScriptComponent.hpp
     editor/component/BuiltinComponents.cpp

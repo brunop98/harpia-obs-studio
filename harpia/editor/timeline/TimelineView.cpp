@@ -915,6 +915,24 @@ void TimelineView::ensureFonts() const
 	clipFont_.setPixelSize(std::max(6, lp_.segFontPx));
 }
 
+namespace {
+// Antialiasing, on only where something curved is being drawn.
+//
+// A timeline is overwhelmingly axis-aligned rectangles and text, and
+// antialiasing costs a third of the whole paint whether or not there is a curve
+// in it -- measured at 1600x420: 5.3 ms against 3.0 for a small project, 10.5
+// against 6.9 for a dense one. That is paid on every mouse-move of every drag,
+// which is the most interaction-sensitive path in the editor.
+//
+// Text is unaffected: Qt antialiases glyphs under the separate
+// TextAntialiasing hint, which stays on.
+struct AaOn {
+	QPainter &p;
+	explicit AaOn(QPainter &pp) : p(pp) { p.setRenderHint(QPainter::Antialiasing, true); }
+	~AaOn() { p.setRenderHint(QPainter::Antialiasing, false); }
+};
+} // namespace
+
 void TimelineView::drawClip(QPainter &p, int track, int clip) const
 {
 	const TlTrack &t = model_.tracks[track];
@@ -965,11 +983,17 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 		(!dragging && r.width() >= 28);
 	if (!wantsInside) {
 		p.setPen(sel ? QPen(cl_.accent, 2) : QPen(cl_.border, 1));
-		p.drawRoundedRect(r, 4, 4);
+		{
+			AaOn aa(p);
+			p.drawRoundedRect(r, 4, 4);
+		}
 		return;
 	}
 
-	p.drawPath(path);
+	{
+		AaOn aa(p);
+		p.drawPath(path);
+	}
 
 	p.save();
 	p.setClipPath(path);
@@ -1027,6 +1051,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 			d.lineTo(kx, ky + 4);
 			d.lineTo(kx - 4, ky);
 			d.closeSubpath();
+			AaOn aa(p);
 			p.drawPath(d);
 		}
 	}
@@ -1085,6 +1110,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 
 	p.setPen(sel ? QPen(cl_.accent, 2) : QPen(cl_.border, 1));
 	p.setBrush(Qt::NoBrush);
+	AaOn aa(p);
 	p.drawRoundedRect(r, 4, 4);
 }
 
@@ -1196,6 +1222,7 @@ void TimelineView::drawFades(QPainter &p, int track, int clip) const
 		filled << QPointF(x0 + w, r.top()) << QPointF(x0, r.top());
 		p.setPen(Qt::NoPen);
 		p.setBrush(wash);
+		AaOn aa(p);
 		p.drawPolygon(filled);
 		p.setPen(QPen(line, 2));
 		p.setBrush(Qt::NoBrush);
@@ -1214,6 +1241,7 @@ void TimelineView::drawFades(QPainter &p, int track, int clip) const
 		const bool hot = (fadeDrag_ == me) || (fadeHover_ == me);
 		p.setPen(QPen(QColor(0x20, 0x20, 0x20), 1));
 		p.setBrush(hot ? QColor(0xff, 0xff, 0xff) : line);
+		AaOn aa(p);
 		p.drawEllipse(hot ? h.adjusted(-1, -1, 1, 1) : h);
 	}
 }
@@ -1223,7 +1251,8 @@ void TimelineView::paintEvent(QPaintEvent *)
 	// Measure the axis once for the whole paint instead of once per msToX call.
 	const SpanGuard span(this);
 	QPainter p(this);
-	p.setRenderHint(QPainter::Antialiasing);
+	// Off by default; AaOn turns it on around the curved drawing. See above.
+	p.setRenderHint(QPainter::Antialiasing, false);
 	p.fillRect(rect(), cl_.timelineBg);
 
 	clampView();
@@ -1276,7 +1305,10 @@ void TimelineView::paintEvent(QPaintEvent *)
 					return;
 				p.setPen(Qt::NoPen);
 				p.setBrush(on ? cl_.accent : QColor(0x2b, 0x2f, 0x36));
-				p.drawRoundedRect(r, 3, 3);
+				{
+					AaOn aa(p);
+					p.drawRoundedRect(r, 3, 3);
+				}
 				p.setPen(on ? QColor(0xff, 0xff, 0xff) : cl_.caption);
 				p.drawText(r, Qt::AlignCenter, glyph);
 			};
@@ -1335,7 +1367,10 @@ void TimelineView::paintEvent(QPaintEvent *)
 		p.setPen(Qt::NoPen);
 		p.setBrush(cl_.accent);
 		const QRect tag(c.x() + 6, y - 9, 104, 18);
-		p.drawRoundedRect(tag, 3, 3);
+		{
+			AaOn aa(p);
+			p.drawRoundedRect(tag, 3, 3);
+		}
 		QFont tf = p.font();
 		tf.setPixelSize(10);
 		tf.setBold(true);
@@ -1390,6 +1425,7 @@ void TimelineView::paintEvent(QPaintEvent *)
 		flag.lineTo(mx + 9, lp_.margin + 6);
 		flag.lineTo(mx, lp_.margin + 10);
 		flag.closeSubpath();
+		AaOn aa(p);
 		p.drawPath(flag);
 	}
 
@@ -1413,7 +1449,10 @@ void TimelineView::paintEvent(QPaintEvent *)
 			const QRect tag(flip ? hx - tw - 2 : hx + 2, lp_.margin + 1, tw, 14);
 			p.setPen(Qt::NoPen);
 			p.setBrush(cl_.hover);
-			p.drawRoundedRect(tag, 2, 2);
+			{
+				AaOn aa(p);
+				p.drawRoundedRect(tag, 2, 2);
+			}
 			p.setPen(QColor(0x15, 0x17, 0x1a));
 			p.drawText(tag, Qt::AlignCenter, lab);
 		}

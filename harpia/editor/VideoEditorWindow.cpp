@@ -482,6 +482,46 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		&VideoEditorWindow::onPreviewTransformDrag);
 	connect(canvas_, &PreviewCanvas::transformZoomed, this,
 		&VideoEditorWindow::onPreviewTransformZoom);
+	// The grips. Scaling is relative to the pose at the START of the gesture --
+	// the canvas reports how far the grip has been dragged from where it was
+	// pressed, not since the last mouse-move -- so the factor is applied to a
+	// remembered pose rather than compounding into a runaway.
+	connect(canvas_, &PreviewCanvas::transformScaled, this,
+		[this](double factor, double, double) {
+			const TlClip *sel =
+				timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+			if (!sel)
+				return;
+			if (playing_) // see onPreviewTransformDrag
+				stopPlayback();
+			if (!xfGestureActive_) {
+				xfGestureActive_ = true;
+				xfGestureBase_ = sel->transformAt(timelinePlayheadMs());
+			}
+			TlTransform tf = xfGestureBase_;
+			tf.scale = std::clamp(xfGestureBase_.scale * factor, 0.05, 20.0);
+			applySelectedClipTransform(tf);
+		});
+	connect(canvas_, &PreviewCanvas::transformRotated, this, [this](double deg) {
+		const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+		if (!sel)
+			return;
+		if (playing_)
+			stopPlayback();
+		if (!xfGestureActive_) {
+			xfGestureActive_ = true;
+			xfGestureBase_ = sel->transformAt(timelinePlayheadMs());
+		}
+		TlTransform tf = xfGestureBase_;
+		tf.rotation = deg;
+		applySelectedClipTransform(tf);
+	});
+	// One undo entry per gesture, like the spotlight masks: the drag itself only
+	// wrote the model.
+	connect(canvas_, &PreviewCanvas::transformEditFinished, this, [this]() {
+		xfGestureActive_ = false;
+		commitSnapshot();
+	});
 	// Spotlight masks, placed by looking at the picture rather than by typing
 	// four numbers into the panel.
 	connect(canvas_, &PreviewCanvas::spotlightPoseChanged, this,
@@ -4676,7 +4716,7 @@ void VideoEditorWindow::syncPreviewTransformTarget()
 	const TlClip *c = fullEdit() ? timelineView_->selectedClipPtr() : nullptr;
 	canvas_->setTransformMode(c != nullptr);
 	if (!c) {
-		canvas_->setTransformRect(QRectF());
+		canvas_->setTransformBox(QRectF(), 0.0);
 		return;
 	}
 	// Outline the clip where it currently sits on the canvas.
@@ -4693,9 +4733,13 @@ void VideoEditorWindow::syncPreviewTransformTarget()
 		natural = (!c->crop.isNull() && c->crop.width() > 1) ? c->crop.size()
 								    : QSize(s->width, s->height);
 	}
-	canvas_->setTransformRect(natural.isEmpty()
-					  ? QRectF()
-					  : TimelineCompositor::clipRectOnCanvas(tf, canvasSize, natural));
+	// The rotation goes across separately: clipRectOnCanvas returns the box
+	// BEFORE it is turned, and handing the canvas a bounding box instead would
+	// put the grips off the corners of anything tilted.
+	canvas_->setTransformBox(natural.isEmpty() ? QRectF()
+						   : TimelineCompositor::clipRectOnCanvas(
+							     tf, canvasSize, natural),
+				 tf.rotation);
 }
 
 void VideoEditorWindow::applySelectedClipTransform(const TlTransform &tf)

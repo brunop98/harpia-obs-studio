@@ -94,6 +94,14 @@ QRect PreviewCanvas::widgetCropRect() const
 	return videoToWidget(cropVideo_);
 }
 
+namespace {
+// Grab radius and rotate-knob arm for the clip's transform grips. Deliberately
+// the same numbers the spotlight masks use: two sets of handles in one widget
+// that grabbed at different distances would feel like two different tools.
+constexpr int kXfGrab = 9;
+constexpr int kXfRotateArm = 26;
+} // namespace
+
 void PreviewCanvas::paintEvent(QPaintEvent *)
 {
 	QPainter p(this);
@@ -105,14 +113,40 @@ void PreviewCanvas::paintEvent(QPaintEvent *)
 	// Full editing: dashed outline of the clip being manipulated (canvas px ->
 	// widget px), so it's obvious what scroll/drag will move.
 	if (transformMode_ && !transformRect_.isEmpty() && vw_ > 0 && vh_ > 0) {
-		const double sx = double(d.width()) / vw_;
-		const double sy = double(d.height()) / vh_;
-		const QRectF r(d.x() + transformRect_.x() * sx, d.y() + transformRect_.y() * sy,
-			       transformRect_.width() * sx, transformRect_.height() * sy);
-		QPen pen(QColor(0x00, 0xae, 0xef), 1.5, Qt::DashLine);
-		p.setPen(pen);
+		const QRectF r = transformWidgetRect();
+		const QColor accent(0x00, 0xae, 0xef);
+		p.save();
+		p.setRenderHint(QPainter::Antialiasing, true);
+		// Turn the painter rather than the rect: a rotated QRectF is still
+		// axis-aligned, so drawing it turned is the only way the outline sits on
+		// the clip instead of around it.
+		p.translate(r.center());
+		p.rotate(transformRotation_);
+		p.translate(-r.center());
+		p.setPen(QPen(accent, 1.5, Qt::DashLine));
 		p.setBrush(Qt::NoBrush);
 		p.drawRect(r);
+		// The stalk up to the rotate knob, drawn in the same turned frame so it
+		// stays perpendicular to the top edge.
+		p.setPen(QPen(accent, 1.2));
+		p.drawLine(QPointF(r.center().x(), r.top()),
+			   QPointF(r.center().x(), r.top() - kXfRotateArm));
+		p.restore();
+
+		// The grips themselves come back already turned, so they are drawn
+		// square-on -- a rotated square grip is just harder to hit.
+		p.setPen(QPen(accent, 1.2));
+		p.setBrush(QColor(0x10, 0x12, 0x14));
+		const QVector<QPointF> h = transformHandlePoints();
+		for (int k = 0; k < h.size(); ++k) {
+			if (k == h.size() - 1) { // the rotate knob is a circle, not a square
+				p.setBrush(accent);
+				p.drawEllipse(h[k], 5.0, 5.0);
+				p.setBrush(QColor(0x10, 0x12, 0x14));
+			} else {
+				p.drawRect(QRectF(h[k].x() - 3.5, h[k].y() - 3.5, 7, 7));
+			}
+		}
 	}
 
 	if (spotMode_)
@@ -187,12 +221,74 @@ void PreviewCanvas::setTransformMode(bool on)
 	update();
 }
 
-void PreviewCanvas::setTransformRect(const QRectF &canvasRect)
+void PreviewCanvas::setTransformBox(const QRectF &canvasRect, double rotationDeg)
 {
-	if (transformRect_ == canvasRect)
+	if (transformRect_ == canvasRect && qFuzzyCompare(transformRotation_ + 1.0, rotationDeg + 1.0))
 		return;
 	transformRect_ = canvasRect;
+	transformRotation_ = rotationDeg;
 	update();
+}
+
+// The clip's unrotated box in widget pixels. Rotation is applied on top of this
+// by whoever draws or hit-tests, never baked in -- the box is what the pose
+// says, and turning it is a separate fact.
+QRectF PreviewCanvas::transformWidgetRect() const
+{
+	if (transformRect_.isEmpty() || vw_ <= 0 || vh_ <= 0)
+		return QRectF();
+	const QRect d = displayRect();
+	const double sx = double(d.width()) / vw_;
+	const double sy = double(d.height()) / vh_;
+	return QRectF(d.x() + transformRect_.x() * sx, d.y() + transformRect_.y() * sy,
+		      transformRect_.width() * sx, transformRect_.height() * sy);
+}
+
+// Eight grips plus the rotation knob, in widget coordinates, already turned by
+// the clip's rotation. Order matches XfZone below: TL, T, TR, L, R, BL, B, BR,
+// Rotate.
+QVector<QPointF> PreviewCanvas::transformHandlePoints() const
+{
+	QVector<QPointF> out;
+	const QRectF r = transformWidgetRect();
+	if (r.isEmpty())
+		return out;
+	const double hw = r.width() / 2.0, hh = r.height() / 2.0;
+	const QPointF local[9] = {{-hw, -hh}, {0, -hh}, {hw, -hh},
+				  {-hw, 0},   {hw, 0},  {-hw, hh},
+				  {0, hh},    {hw, hh}, {0, -hh - kXfRotateArm}};
+	const QPointF c = r.center();
+	const double a = transformRotation_ * M_PI / 180.0;
+	for (const QPointF &l : local)
+		out.append(c + QPointF(l.x() * std::cos(a) - l.y() * std::sin(a),
+				       l.x() * std::sin(a) + l.y() * std::cos(a)));
+	return out;
+}
+
+PreviewCanvas::XfZone PreviewCanvas::transformZoneAt(const QPoint &pos) const
+{
+	const QRectF r = transformWidgetRect();
+	if (r.isEmpty())
+		return XfZone::None;
+	static const XfZone zones[9] = {XfZone::TL, XfZone::T,  XfZone::TR,
+					XfZone::L,  XfZone::R,  XfZone::BL,
+					XfZone::B,  XfZone::BR, XfZone::Rotate};
+	const QVector<QPointF> h = transformHandlePoints();
+	for (int k = 0; k < h.size(); ++k) {
+		const QPointF v = h[k] - QPointF(pos);
+		if (std::abs(v.x()) <= kXfGrab && std::abs(v.y()) <= kXfGrab)
+			return zones[k];
+	}
+	// Inside the box (in ITS axes, so a tilted clip is grabbed where it looks
+	// like it is) moves the clip -- which is what the whole canvas used to do.
+	const QPointF c = r.center();
+	const QPointF v = QPointF(pos) - c;
+	const double a = -transformRotation_ * M_PI / 180.0;
+	const QPointF local(v.x() * std::cos(a) - v.y() * std::sin(a),
+			    v.x() * std::sin(a) + v.y() * std::cos(a));
+	if (std::abs(local.x()) <= r.width() / 2.0 && std::abs(local.y()) <= r.height() / 2.0)
+		return XfZone::Move;
+	return XfZone::None;
 }
 
 // ---- Spotlight handles ------------------------------------------------------
@@ -458,9 +554,25 @@ void PreviewCanvas::mousePressEvent(QMouseEvent *e)
 		return;
 	}
 	if (transformMode_ && !cropEnabled_ && e->button() == Qt::LeftButton) {
-		transformDragging_ = true;
+		const XfZone z = transformZoneAt(e->pos());
+		// Outside the clip entirely: let the press fall through rather than
+		// starting a drag the user cannot see the effect of. Dragging empty
+		// canvas used to move the selected clip from anywhere, which made it
+		// very easy to nudge something you were not looking at.
+		if (z == XfZone::None)
+			return;
+		xfDrag_ = z;
 		transformLast_ = e->pos();
-		setCursor(Qt::ClosedHandCursor);
+		const QRectF r = transformWidgetRect();
+		xfPressRect_ = r;
+		xfPressRotation_ = transformRotation_;
+		const QPointF v = QPointF(e->pos()) - r.center();
+		xfPressAngle_ = std::atan2(v.y(), v.x()) * 180.0 / M_PI;
+		const double a = -transformRotation_ * M_PI / 180.0;
+		xfPressLocal_ = QPointF(v.x() * std::cos(a) - v.y() * std::sin(a),
+					v.x() * std::sin(a) + v.y() * std::cos(a));
+		transformDragging_ = z == XfZone::Move;
+		setCursor(z == XfZone::Move ? Qt::ClosedHandCursor : Qt::CrossCursor);
 		return;
 	}
 	if (!cropEnabled_ || e->button() != Qt::LeftButton)
@@ -610,14 +722,64 @@ void PreviewCanvas::mouseMoveEvent(QMouseEvent *e)
 		update();
 		return;
 	}
-	if (transformDragging_ && (e->buttons() & Qt::LeftButton)) {
+	if (xfDrag_ != XfZone::None && (e->buttons() & Qt::LeftButton)) {
 		const QRect d = displayRect();
-		if (d.width() > 0 && d.height() > 0) {
+		if (d.width() <= 0 || d.height() <= 0)
+			return;
+		if (xfDrag_ == XfZone::Move) {
 			const QPoint delta = e->pos() - transformLast_;
 			transformLast_ = e->pos();
 			emit transformDragged(double(delta.x()) / d.width(),
 					      double(delta.y()) / d.height());
+			return;
 		}
+		if (xfDrag_ == XfZone::Rotate) {
+			const QPointF v = QPointF(e->pos()) - xfPressRect_.center();
+			double deg = xfPressRotation_ +
+				     (std::atan2(v.y(), v.x()) * 180.0 / M_PI - xfPressAngle_);
+			// Shift snaps to 15 degrees. Free rotation is the default because
+			// the snap is the special case people ask for, not the other way
+			// round -- and it matches the masks, which snap on Shift too.
+			if (e->modifiers() & Qt::ShiftModifier)
+				deg = std::round(deg / 15.0) * 15.0;
+			while (deg > 180.0)
+				deg -= 360.0;
+			while (deg < -180.0)
+				deg += 360.0;
+			emit transformRotated(deg);
+			return;
+		}
+
+		// A resize grip. Only uniform scale exists in a clip's pose, so the
+		// factor is how much further from the centre the pointer is along the
+		// axis this grip owns -- which makes a side grip do something honest
+		// instead of nothing.
+		const QPointF v = QPointF(e->pos()) - xfPressRect_.center();
+		const double a = -xfPressRotation_ * M_PI / 180.0;
+		const QPointF local(v.x() * std::cos(a) - v.y() * std::sin(a),
+				    v.x() * std::sin(a) + v.y() * std::cos(a));
+		double f = 1.0;
+		const bool useX = xfDrag_ == XfZone::L || xfDrag_ == XfZone::R;
+		const bool useY = xfDrag_ == XfZone::T || xfDrag_ == XfZone::B;
+		if (useX) {
+			if (std::abs(xfPressLocal_.x()) > 1.0)
+				f = local.x() / xfPressLocal_.x();
+		} else if (useY) {
+			if (std::abs(xfPressLocal_.y()) > 1.0)
+				f = local.y() / xfPressLocal_.y();
+		} else {
+			// A corner: the ratio of the distances from the centre, so the
+			// grip tracks the pointer diagonally.
+			const double d0 = std::hypot(xfPressLocal_.x(), xfPressLocal_.y());
+			const double d1 = std::hypot(local.x(), local.y());
+			if (d0 > 1.0)
+				f = d1 / d0;
+		}
+		// Dragging a grip PAST the centre would flip the factor negative and
+		// turn the clip inside out; a clip has no negative scale, so the drag
+		// stops at very small instead.
+		f = std::clamp(f, 0.02, 50.0);
+		emit transformScaled(f, 0.0, 0.0);
 		return;
 	}
 	if (drag_ == Zone::None || !(e->buttons() & Qt::LeftButton))
@@ -669,9 +831,11 @@ void PreviewCanvas::mouseReleaseEvent(QMouseEvent *)
 		return;
 	}
 	drag_ = Zone::None;
-	if (transformDragging_) {
+	if (xfDrag_ != XfZone::None) {
+		xfDrag_ = XfZone::None;
 		transformDragging_ = false;
 		setCursor(transformMode_ ? Qt::OpenHandCursor : Qt::ArrowCursor);
+		emit transformEditFinished();
 	}
 }
 

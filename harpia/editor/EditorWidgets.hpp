@@ -44,8 +44,11 @@ public:
 	void setTransformMode(bool on);
 	bool transformMode() const { return transformMode_; }
 	// Outline of the clip being manipulated, in output-canvas pixels (empty
-	// hides it). Drawn as a dashed selection box for feedback.
-	void setTransformRect(const QRectF &canvasRect);
+	// hides it), plus how far it is turned. The rect is the UNROTATED box and
+	// the angle is applied about its centre -- the same decomposition the
+	// compositor uses -- so the grips sit on the corners of the shape as drawn
+	// rather than on a bounding box that is wrong the moment anything is turned.
+	void setTransformBox(const QRectF &canvasRect, double rotationDeg);
 
 	// Developer Panel: tweak the preview's minimum size live.
 	const PreviewLayoutParams &layoutParams() const { return lp_; }
@@ -64,6 +67,11 @@ public:
 	bool spotlightMode() const { return spotMode_; }
 	void setSpotlightMasks(const QVector<SpotDraw> &masks, int selected);
 
+	// The transform grips in widget coordinates, for tests: pressing exactly on
+	// one is the whole point, and a test that computed the geometry itself would
+	// be checking its own arithmetic rather than the widget's.
+	QVector<QPointF> handlePointsForTest() const { return transformHandlePoints(); }
+
 signals:
 	void cropChanged(const QRect &videoRect);
 	// Incremental move, as a fraction of the canvas (add to posX/posY).
@@ -71,6 +79,15 @@ signals:
 	// Zoom by `factor` while holding the point under the cursor fixed; the
 	// cursor is given in normalised canvas coordinates.
 	void transformZoomed(double factor, double cursorXNorm, double cursorYNorm);
+	// A grip was dragged. Absolute rather than incremental: a resize moves the
+	// centre as well as the size, and sending those as two deltas invites them
+	// to be applied against different poses. `scaleFactor` multiplies whatever
+	// the clip's scale is; `rotationDeg` replaces its rotation.
+	void transformScaled(double scaleFactor, double posXNorm, double posYNorm);
+	void transformRotated(double rotationDeg);
+	// The gesture ended -- one undo step per drag, not one per pixel. Matches
+	// what spotlightEditFinished does for masks.
+	void transformEditFinished();
 	// A mask was clicked (-1 = the click missed every mask).
 	void spotlightSelected(int index);
 	// Live, once per mouse-move: the mask's new pose in normalised canvas terms.
@@ -104,10 +121,31 @@ private:
 	QRect dragStartCrop_; // widget px at press
 
 	// Full-editing clip manipulation.
+	//
+	// The grips are the same eight-plus-rotate arrangement the spotlight masks
+	// use, and for the same reason: everything is computed in the clip's OWN
+	// unrotated space and then turned, so dragging a corner of a tilted clip
+	// resizes along its axes rather than the screen's.
+	//
+	// Only uniform scale, because that is all a clip's pose has. Every grip
+	// therefore does the same kind of thing -- an edge grip scales by how far it
+	// is dragged along its own axis -- rather than four of them silently doing
+	// nothing.
+	enum class XfZone { None, Move, TL, T, TR, L, R, BL, B, BR, Rotate };
+	QVector<QPointF> transformHandlePoints() const; // widget px, already turned
+	XfZone transformZoneAt(const QPoint &p) const;
+	QRectF transformWidgetRect() const; // the unrotated box, in widget px
+
 	bool transformMode_ = false;
 	bool transformDragging_ = false;
 	QPoint transformLast_;
-	QRectF transformRect_; // canvas px; empty = no outline
+	QRectF transformRect_;        // canvas px, UNROTATED; empty = no outline
+	double transformRotation_ = 0.0;
+	XfZone xfDrag_ = XfZone::None;
+	QPointF xfPressLocal_;    // press point in the clip's own axes
+	QRectF xfPressRect_;      // the widget-space box when the drag started
+	double xfPressRotation_ = 0.0;
+	double xfPressAngle_ = 0.0; // pointer angle at press, for the rotate grip
 
 	// ---- Spotlight editing ----------------------------------------------
 	// A mask's own frame: everything is computed in UNROTATED mask space and

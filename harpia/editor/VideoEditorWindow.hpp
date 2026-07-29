@@ -306,6 +306,11 @@ private:
 	// keyframed (or auto-key is on) the edit lands on a keyframe at the
 	// playhead; otherwise it updates the clip's static pose.
 	void onPreviewTransformDrag(double dxNorm, double dyNorm);
+	// The pose a grip drag started from. A resize reports how far the grip has
+	// moved SINCE THE PRESS, so applying it to the live pose every mouse-move
+	// would compound and the clip would fly away.
+	TlTransform xfGestureBase_;
+	bool xfGestureActive_ = false;
 	void onPreviewTransformZoom(double factor, double cursorXNorm, double cursorYNorm);
 	void applySelectedClipTransform(const TlTransform &tf);
 	void syncPreviewTransformTarget(); // arm/disarm + refresh the outline

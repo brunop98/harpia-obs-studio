@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.28...3.30)
 
 # Multimedia provides the editor's voiceover microphone capture (QAudioSource).
 # OpenGL provides the offscreen GPU shader pipeline (post-processing effects);
-find_package(Qt6 REQUIRED Widgets Gui Multimedia OpenGL)
+find_package(Qt6 REQUIRED Widgets Gui Multimedia OpenGL Concurrent)
 
 # FFmpeg (bundled with OBS deps) is used to extract clip thumbnails.
 find_package(FFmpeg REQUIRED COMPONENTS avcodec avformat avutil swscale swresample avfilter)
@@ -31,6 +31,7 @@ target_link_libraries(
     Qt::Gui
     Qt::Multimedia
     Qt::OpenGL
+    Qt::Concurrent
     FFmpeg::avcodec
     FFmpeg::avformat
     FFmpeg::avutil

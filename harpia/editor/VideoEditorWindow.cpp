@@ -80,6 +80,7 @@
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QtConcurrent>
 #include <QCryptographicHash>
 #include <QSet>
 #include <QSettings>
@@ -6024,6 +6025,41 @@ bool VideoEditorWindow::openProjectAt(const QString &path)
 }
 
 // Rebuild the whole editor from a parsed project document.
+// Decode the waveform peaks for a set of files at once, on every core.
+//
+// Opening a project used to do this one file at a time on the GUI thread, so a
+// project with eight audio sources paid eight full decodes back to back before
+// the window would even paint. loadPeaks is a pure function of the path -- it
+// opens its own file, holds no static state and touches nothing shared -- which
+// makes this the safest kind of parallelism there is: N independent calls whose
+// results are collected afterwards.
+//
+// blockingMapped, not a detached pool: the caller needs the answers before it
+// can build the model, and running them concurrently while still waiting for
+// all of them keeps the sequencing exactly as it was. The GUI thread is one of
+// the workers, so no core sits idle waiting for the others.
+QHash<QString, QVector<float>> VideoEditorWindow::decodePeaks(const QStringList &paths)
+{
+	QHash<QString, QVector<float>> out;
+	// Distinct paths only. The same file on two tracks used to be decoded twice
+	// because the cache was per track rather than per project.
+	QStringList todo;
+	for (const QString &p : paths)
+		if (!p.isEmpty() && !todo.contains(p))
+			todo << p;
+	if (todo.isEmpty())
+		return out;
+	if (todo.size() == 1) { // not worth a pool for one file
+		out.insert(todo.first(), VoiceoverTrack::loadPeaks(todo.first(), 600));
+		return out;
+	}
+	const QVector<QVector<float>> got = QtConcurrent::blockingMapped(
+		todo, [](const QString &p) { return VoiceoverTrack::loadPeaks(p, 600); });
+	for (int i = 0; i < todo.size() && i < got.size(); ++i)
+		out.insert(todo[i], got[i]);
+	return out;
+}
+
 void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString &path, bool quiet)
 {
 	const int ver = root.value(QStringLiteral("harpiaProject")).toInt(1);
@@ -6119,8 +6155,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 		v.volume = o.value(QStringLiteral("volume")).toDouble(1.0);
 		v.fadeInMs = o.value(QStringLiteral("fadeIn")).toInt(15);
 		v.fadeOutMs = o.value(QStringLiteral("fadeOut")).toInt(15);
-		v.peaks = VoiceoverTrack::loadPeaks(v.path, 600); // for the waveform
-		s.voiceClips.push_back(v);
+		s.voiceClips.push_back(v); // peaks filled in below, all files at once
 	}
 
 	// "Full editing" timeline (project v3). Absent in v1/v2 projects, which just
@@ -6136,26 +6171,42 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 			c.sourceId = srcMap.isEmpty() ? defaultSrcId
 						      : srcMap.value(c.sourceId, defaultSrcId);
 
-		// Waveforms are a derived cache, so they are not stored in the project —
-		// but they DO have to be rebuilt, or an audio clip reopens as a blank bar.
-		// One decode per source, not per clip.
-		if (t.kind == TlTrack::Kind::Audio) {
-			QHash<int, QVector<float>> peaksBySource;
+		s.timeline.tracks.append(t);
+	}
+
+	// Waveforms are a derived cache, so they are not stored in the project — but
+	// they DO have to be rebuilt, or an audio clip reopens as a blank bar. Every
+	// file the project needs is decoded in ONE parallel pass here, rather than
+	// one at a time as each track is read: the decodes are independent, and
+	// serialising them was most of the time it took to open a project with
+	// several audio sources.
+	{
+		QStringList want;
+		for (const VoiceoverClip &v : s.voiceClips)
+			want << v.path;
+		for (const TlTrack &t : s.timeline.tracks) {
+			if (t.kind != TlTrack::Kind::Audio)
+				continue;
+			for (const TlClip &c : t.clips) {
+				if (c.type == TlClip::Type::Text || c.type == TlClip::Type::Image)
+					continue;
+				if (const EditorSource *es = sourceById(c.sourceId))
+					want << es->path;
+			}
+		}
+		const QHash<QString, QVector<float>> peaks = decodePeaks(want);
+		for (VoiceoverClip &v : s.voiceClips)
+			v.peaks = peaks.value(v.path);
+		for (TlTrack &t : s.timeline.tracks) {
+			if (t.kind != TlTrack::Kind::Audio)
+				continue;
 			for (TlClip &c : t.clips) {
 				if (c.type == TlClip::Type::Text || c.type == TlClip::Type::Image)
 					continue;
-				auto it = peaksBySource.constFind(c.sourceId);
-				if (it == peaksBySource.constEnd()) {
-					const EditorSource *es = sourceById(c.sourceId);
-					it = peaksBySource.insert(
-						c.sourceId,
-						es ? VoiceoverTrack::loadPeaks(es->path, 600)
-						   : QVector<float>());
-				}
-				c.peaks = it.value();
+				if (const EditorSource *es = sourceById(c.sourceId))
+					c.peaks = peaks.value(es->path);
 			}
 		}
-		s.timeline.tracks.append(t);
 	}
 
 	// Migration: Inverse Selection used to be one project-wide setting living

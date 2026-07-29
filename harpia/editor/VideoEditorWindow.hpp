@@ -469,6 +469,9 @@ private:
 	// `quiet` suppresses every dialog: the relink picker, the wrong-source
 	// question and the "Project loaded" confirmation. openProjectAt() is quiet.
 	void applyProjectJson(const QJsonObject &root, const QString &path, bool quiet);
+	// Waveform peaks for many files at once, on every core. See the .cpp:
+	// loadPeaks is a pure function of its path, so the calls are independent.
+	static QHash<QString, QVector<float>> decodePeaks(const QStringList &paths);
 	void doAutosave();
 	void revealProjectFolder();
 	// A collapsible "▾ Title" section; returns the body to fill in.

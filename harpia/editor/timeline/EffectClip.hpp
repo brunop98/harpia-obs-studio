@@ -178,6 +178,16 @@ struct FxSpec {
 
 class Effects {
 public:
+	// Force the number of row bands the pixel passes use, for tests. 0 restores
+	// the default (one per core, and serial below a size threshold).
+	//
+	// This exists because the threshold makes threading UNTESTABLE by accident:
+	// the pixel-equality test runs at 160x120, which is far below it, so it
+	// exercised only the serial path and would have passed however wrong the
+	// banded one was. With this a test can render the same frame at 1 band and
+	// at N and demand they match exactly.
+	static void setPixelBandsForTest(int bands);
+
 	// Grade `img` in place. `tMs` is the position INSIDE the effect clip, so a
 	// keyframe at 0 is the clip's start — everything time-varying here, the
 	// parameters and the Spotlight's masks alike, is keyed against it, and so

@@ -196,6 +196,8 @@ target_sources(
     editor/component/ComponentStack.cpp
     editor/component/ComponentStack.hpp
     editor/component/ComponentJson.hpp
+    editor/component/ScriptComponent.cpp
+    editor/component/ScriptComponent.hpp
     editor/component/BuiltinComponents.cpp
     editor/component/BuiltinComponents.hpp
     # User-authored GLSL post-processing shaders (preview + baked into export).

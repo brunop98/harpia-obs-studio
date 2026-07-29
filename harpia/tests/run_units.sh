@@ -54,6 +54,28 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/component_test" $LF
 
+# Custom components, in JavaScript. Needs QuickJS, which takes ~11s to compile
+# and would otherwise be paid on every run of what is meant to be the fast
+# suite -- so the archive is cached outside $WORK and rebuilt only when the
+# vendored sources actually change.
+QJS="$H/third_party/quickjs"
+QJSLIB="${TMPDIR:-/tmp}/harpia-qjs-units"
+mkdir -p "$QJSLIB"
+newest_src="$(ls -t "$QJS"/*.c "$QJS"/*.h 2>/dev/null | head -1)"
+if [ ! -f "$QJSLIB/libqjs.a" ] || [ "$newest_src" -nt "$QJSLIB/libqjs.a" ]; then
+	echo "  (building QuickJS for the component script test, one time)"
+	for f in dtoa libregexp libunicode quickjs; do
+		gcc -std=c11 -O1 -fPIC -D_GNU_SOURCE -I"$QJS" -c "$QJS/$f.c" -o "$QJSLIB/$f.o" &
+	done
+	wait
+	ar rcs "$QJSLIB/libqjs.a" "$QJSLIB"/*.o
+fi
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
+	"$HERE/scriptcomponent_test.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/ScriptComponent.cpp" \
+	-o "$WORK/scriptcomponent_test" "$QJSLIB/libqjs.a" $LF
+
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
@@ -61,4 +83,5 @@ QT_QPA_PLATFORM=offscreen "$WORK/paramslider_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionwatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/component_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/scriptcomponent_test" || rc=1
 exit $rc

@@ -14,5 +14,7 @@
     <file alias="scripts/zoom-in.js">../editor/script/presets/zoom-in.js</file>
     <file alias="scripts/fade-in-out.js">../editor/script/presets/fade-in-out.js</file>
     <file alias="scripts/shake.js">../editor/script/presets/shake.js</file>
+    <!-- Bundled example component, seeded into the user components folder. -->
+    <file alias="components/pulse.js">../editor/component/presets/pulse.js</file>
   </qresource>
 </RCC>

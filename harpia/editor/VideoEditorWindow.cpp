@@ -4486,11 +4486,14 @@ void VideoEditorWindow::syncClipInspector()
 		}
 	}
 
-	// An effect clip has no picture of its own, so the transform half is a lie
-	// for it; its own panel takes over.
+	// An effect clip's transform used to be hidden, on the grounds that a clip
+	// with no picture of its own cannot be posed. It can: the pose is the AREA
+	// the grade lands in, so position, zoom and rotation decide which part of the
+	// composite gets the effect, and hiding them left the whole feature
+	// unreachable.
 	const bool isFx = c->type == TlClip::Type::Effect;
 	if (videoClipBox_)
-		videoClipBox_->setVisible(!onAudioTrack && !isFx);
+		videoClipBox_->setVisible(!onAudioTrack);
 
 	const bool isText = !onAudioTrack && !isFx && c->type == TlClip::Type::Text;
 	textBox_->setVisible(isText);

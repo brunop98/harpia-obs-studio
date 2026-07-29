@@ -113,6 +113,17 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/assetcomponent_test" "$QJSLIB/libqjs.a" $LF
 
+# An effect clip grades only inside its own transform area -- and a clip nobody
+# moved still covers the whole canvas, which every existing project relies on.
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
+	"$HERE/effectarea_test.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
+	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	-o "$WORK/effectarea_test" "$QJSLIB/libqjs.a" $LF
+
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
@@ -124,4 +135,5 @@ QT_QPA_PLATFORM=offscreen "$WORK/scriptcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/componentrender_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/assetcomponent_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/effectarea_test" || rc=1
 exit $rc

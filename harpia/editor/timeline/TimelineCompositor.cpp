@@ -11,6 +11,7 @@
 #include <QFont>
 #include <QFontMetricsF>
 #include <QPainter>
+#include <QTransform>
 #include <QPainterPath>
 #include <QPainterPathStroker>
 #include <QHash>
@@ -167,6 +168,36 @@ QRectF TimelineCompositor::clipRectOnCanvas(const TlTransform &tf, QSize canvas,
 	return QRectF(cx - w / 2.0, cy - h / 2.0, w, h);
 }
 
+bool TimelineCompositor::isWholeCanvas(const TlTransform &tf)
+{
+	// Deliberately exact-ish rather than "close enough": at scale 1.001 the area
+	// really is slightly larger than the canvas and clipping to it is a no-op, so
+	// treating it as whole costs nothing -- but a clip at 0.999 is being
+	// deliberately inset, and rounding that up to "everything" would silently
+	// ignore what the user did.
+	return tf.scale >= 1.0 && std::abs(tf.posX - 0.5) < 1e-9 && std::abs(tf.posY - 0.5) < 1e-9 &&
+	       std::abs(tf.rotation) < 1e-9 && tf.opacity >= 1.0;
+}
+
+QPainterPath TimelineCompositor::effectAreaPath(const TlTransform &tf, QSize canvas)
+{
+	QPainterPath path;
+	if (canvas.width() <= 0 || canvas.height() <= 0)
+		return path;
+	const double s = std::max(0.001, tf.scale);
+	const double w = canvas.width() * s;
+	const double h = canvas.height() * s;
+	const double cx = tf.posX * canvas.width();
+	const double cy = tf.posY * canvas.height();
+
+	QTransform t;
+	t.translate(cx, cy);
+	if (std::abs(tf.rotation) > 0.001)
+		t.rotate(tf.rotation);
+	path.addRect(QRectF(-w / 2.0, -h / 2.0, w, h));
+	return t.map(path);
+}
+
 void TimelineCompositor::drawTextClip(QPainter &p, const TlClip &c, const TlTransform &tf, QSize canvas)
 {
 	const TlText &t = c.text;
@@ -295,9 +326,27 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 			const bool hasComponents = !ec.components.isEmpty();
 			if (!hasComponents && !ec.fx.enabled)
 				continue;
+			// An effect clip has a transform like any other clip, and it
+			// bounds WHERE the grade lands: move it, shrink it, spin it, and
+			// only that part of the picture is affected. At the default pose
+			// (centred, scale 1, no rotation) the area is the whole canvas, so
+			// an effect clip nobody has moved behaves exactly as it did.
+			const TlTransform exf = ec.transformAt(outMs);
+			const QPainterPath area = effectAreaPath(exf, out.size());
+			const bool whole = isWholeCanvas(exf);
+
 			// The painter has to be closed before the pixels are touched
 			// directly, and reopened for whatever is drawn on top.
 			p.end();
+
+			// Grade the WHOLE frame and paint back only the area, rather than
+			// grading a cut-out. A blur inside the area then samples the pixels
+			// just outside it, the way it would if the area were not there --
+			// cutting first would darken the boundary with the transparency it
+			// blurred into. The copy is skipped when the area is everything,
+			// which is the common case.
+			QImage graded = whole ? QImage() : out.copy();
+			QImage &target = whole ? out : graded;
 			if (hasComponents) {
 				// An effect clip's Pixel components run over the composite so
 				// far, which IS everything below this track — the same reach
@@ -311,13 +360,23 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 				ectx.durMs = std::max<qint64>(1, ec.outDurationMs());
 				ectx.fps = fps;
 				ectx.canvas = logicalCanvas;
-				stack.evaluatePixels(ectx, out);
+				stack.evaluatePixels(ectx, target);
 			} else {
 				// Not yet migrated: a project still carrying the old fx field.
-				Effects::apply(out, ec.fx, outMs - ec.outStartMs);
+				Effects::apply(target, ec.fx, outMs - ec.outStartMs);
 			}
 			p.begin(&out);
 			p.setRenderHint(QPainter::Antialiasing, true);
+			if (!whole) {
+				p.save();
+				p.setClipPath(area);
+				// Opacity fades the grade in and out without touching what is
+				// under it -- the natural reading of an effect clip's own
+				// opacity, and keyframeable like every other pose channel.
+				p.setOpacity(std::clamp(exf.opacity, 0.0, 1.0));
+				p.drawImage(0, 0, graded);
+				p.restore();
+			}
 			continue;
 		}
 

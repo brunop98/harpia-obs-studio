@@ -11,6 +11,7 @@
 #include "TimelineModel.hpp"
 
 #include <QImage>
+#include <QPainterPath>
 #include <QRectF>
 #include <QSize>
 
@@ -45,6 +46,15 @@ public:
 	// the preview to hit-test and drag the selected clip. `srcSize` is the clip's
 	// natural pixel size (its cropped source size, or the measured text size).
 	static QRectF clipRectOnCanvas(const TlTransform &tf, QSize canvas, QSize srcSize);
+
+	// The region of the canvas an effect clip grades, from its pose. An effect
+	// has no source to fit, so its natural size IS the canvas: scale 1 centred
+	// covers everything, which is what an effect clip nobody has moved should
+	// still do. Rotation makes it a path rather than a rect.
+	static QPainterPath effectAreaPath(const TlTransform &tf, QSize canvas);
+	// True when that path is the whole canvas, so the caller can take the cheap
+	// route and grade in place instead of copying the frame.
+	static bool isWholeCanvas(const TlTransform &tf);
 
 	// Natural (unscaled) size a text clip occupies on a given canvas.
 	static QSize textNaturalSize(const TlText &t, QSize canvas);

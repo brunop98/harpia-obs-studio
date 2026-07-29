@@ -1,9 +1,10 @@
 #include "EffectClip.hpp"
 
+#include "editor/Parallel.hpp"
+
 #include <QImage>
 #include <QPainter>
 #include <QThread>
-#include <QtConcurrent>
 
 #include <atomic>
 #include <algorithm>
@@ -131,12 +132,7 @@ template <typename RowFn> void parallelRows(QImage &img, RowFn rowFn)
 		rowFn(base, bpl, 0, h);
 		return;
 	}
-	QVector<int> idx(bands);
-	for (int i = 0; i < bands; ++i)
-		idx[i] = i;
-	QtConcurrent::blockingMap(idx, [&](int b) {
-		rowFn(base, bpl, h * b / bands, h * (b + 1) / bands);
-	});
+	blockingFor(bands, [&](int b) { rowFn(base, bpl, h * b / bands, h * (b + 1) / bands); });
 }
 
 // `fn(channel, value)` is called 768 times, whatever the frame size.

@@ -67,6 +67,30 @@ public:
 	bool spotlightMode() const { return spotMode_; }
 	void setSpotlightMasks(const QVector<SpotDraw> &masks, int selected);
 
+	// ---- Mask component handles -----------------------------------------
+	// The shape a Mask component is cutting, so it can be dragged on the picture
+	// instead of typed into eight spin boxes.
+	//
+	// The pose is in the CLIP's own normalised space, which is where the
+	// component stores it -- so the canvas has to place it through the clip's
+	// own rect and rotation (the ones setTransformBox already gave it) rather
+	// than treat it as canvas coordinates. Composing those two transforms here
+	// is what keeps the grips on the shape when the clip is moved, zoomed or
+	// turned.
+	struct MaskEdit {
+		bool on = false;
+		SpotShape shape = SpotShape::RoundRect;
+		double cx = 0.5, cy = 0.5; // centre, as a fraction of the clip
+		double w = 0.5, h = 0.5;   // size, as a fraction of the clip
+		double rotation = 0.0;     // degrees, about the shape's own centre
+		double corner = 0.15;
+	};
+	void setMaskEdit(const MaskEdit &m);
+	const MaskEdit &maskEdit() const { return mask_; }
+	// The grips in widget coordinates, for tests: TL, T, TR, L, R, BL, B, BR,
+	// Rotate. A test that recomputed this would be checking its own arithmetic.
+	QVector<QPointF> maskHandlePointsForTest() const { return maskHandlePoints(); }
+
 	// The transform grips in widget coordinates, for tests: pressing exactly on
 	// one is the whole point, and a test that computed the geometry itself would
 	// be checking its own arithmetic rather than the widget's.
@@ -88,6 +112,10 @@ signals:
 	// The gesture ended -- one undo step per drag, not one per pixel. Matches
 	// what spotlightEditFinished does for masks.
 	void transformEditFinished();
+	// A Mask component's shape was dragged. Absolute, and reported live; the
+	// window writes it to the component's properties.
+	void maskPoseChanged(double cx, double cy, double w, double h, double rotation);
+	void maskEditFinished(); // one undo step per gesture
 	// A mask was clicked (-1 = the click missed every mask).
 	void spotlightSelected(int index);
 	// Live, once per mouse-move: the mask's new pose in normalised canvas terms.
@@ -135,6 +163,23 @@ private:
 	QVector<QPointF> transformHandlePoints() const; // widget px, already turned
 	XfZone transformZoneAt(const QPoint &p) const;
 	QRectF transformWidgetRect() const; // the unrotated box, in widget px
+
+	// ---- Mask component editing ----
+	// Deliberately the same nine-grip arrangement and grab radius as the clip
+	// transform and the spotlight masks: three sets of handles in one widget
+	// that behaved differently would read as three different tools.
+	enum class MaskZone { None, Move, TL, T, TR, L, R, BL, B, BR, Rotate };
+	QVector<QPointF> maskHandlePoints() const;   // widget px, fully placed
+	MaskZone maskZoneAt(const QPoint &p) const;
+	// Widget point -> the clip's normalised space, undoing the clip's placement
+	// and rotation. The inverse of what maskHandlePoints does.
+	QPointF widgetToClipNorm(const QPointF &p) const;
+
+	MaskEdit mask_;
+	MaskZone maskDrag_ = MaskZone::None;
+	MaskEdit maskStart_;        // the pose at mouse-down, so a drag is absolute
+	QPointF maskStartNorm_;     // press point, in the clip's normalised space
+	double maskStartAngle_ = 0; // pointer angle at press, for the rotate grip
 
 	bool transformMode_ = false;
 	bool transformDragging_ = false;

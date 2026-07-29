@@ -8,6 +8,7 @@
 #include "component/ScriptComponent.hpp"
 #include "../ui/UiText.hpp"
 #include "KeyList.hpp"
+#include "Parallel.hpp"
 #include "ParamSlider.hpp"
 #include "TimeText.hpp"
 
@@ -81,7 +82,6 @@
 #include <QPushButton>
 #include <QImageReader>
 #include <QScrollArea>
-#include <QtConcurrent>
 #include <QCryptographicHash>
 #include <QSet>
 #include <QSettings>
@@ -521,6 +521,27 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	});
 	// One undo entry per gesture, like the spotlight masks: the drag itself only
 	// wrote the model.
+	// Dragging a mask's grips writes the component's own properties, through the
+	// same path the Inspector's sliders use -- so it keyframes, multi-clip edits
+	// and undoes identically, and the panel follows the drag live.
+	connect(canvas_, &PreviewCanvas::maskPoseChanged, this,
+		[this](double cx, double cy, double w, double h, double rot) {
+			if (!timelineView_ || !timelineView_->selectedClipPtr())
+				return;
+			if (playing_) // see onPreviewTransformDrag: reframe against a still playhead
+				stopPlayback();
+			editSharedComponent(QStringLiteral("harpia.mask"), 0,
+					    [&](ComponentInstance &ci) {
+						    ci.props[QStringLiteral("centreX")] = cx;
+						    ci.props[QStringLiteral("centreY")] = cy;
+						    ci.props[QStringLiteral("width")] = w;
+						    ci.props[QStringLiteral("height")] = h;
+						    ci.props[QStringLiteral("rotation")] = rot;
+					    });
+			afterComponentEdit();
+		});
+	// One undo entry per gesture, like the clip grips and the spotlight masks.
+	connect(canvas_, &PreviewCanvas::maskEditFinished, this, [this]() { commitSnapshot(); });
 	connect(canvas_, &PreviewCanvas::transformEditFinished, this, [this]() {
 		xfGestureActive_ = false;
 		commitSnapshot();
@@ -4806,6 +4827,7 @@ void VideoEditorWindow::syncPreviewTransformTarget()
 	canvas_->setTransformMode(c != nullptr);
 	if (!c) {
 		canvas_->setTransformBox(QRectF(), 0.0);
+		canvas_->setMaskEdit(PreviewCanvas::MaskEdit{});
 		return;
 	}
 	// Outline the clip where it currently sits on the canvas.
@@ -4829,6 +4851,37 @@ void VideoEditorWindow::syncPreviewTransformTarget()
 						   : TimelineCompositor::clipRectOnCanvas(
 							     tf, canvasSize, natural),
 				 tf.rotation);
+
+	// A Mask component on this clip becomes draggable on the picture. The FIRST
+	// enabled one: with two masks there is no single shape to put grips on, and
+	// silently editing one of them would be worse than editing the obvious one.
+	PreviewCanvas::MaskEdit me;
+	const ComponentType *maskType =
+		ComponentRegistry::instance().find(QStringLiteral("harpia.mask"));
+	if (maskType && !natural.isEmpty()) {
+		for (const ComponentInstance &ci : c->components) {
+			if (ci.typeId != QStringLiteral("harpia.mask") || !ci.enabled)
+				continue;
+			// Through propAt, so a keyframed mask puts its grips where the
+			// shape actually IS at the playhead rather than at its resting
+			// pose -- the same trap the spotlight masks already avoid.
+			const qint64 tMs = ph - c->outStartMs;
+			const auto f = [&](const char *k, double d) {
+				const QVariant v = propAt(*maskType, ci, QString::fromLatin1(k), tMs);
+				return v.isValid() ? v.toDouble() : d;
+			};
+			me.on = true;
+			me.shape = spotShapeFromInt(int(std::lround(f("shape", 1.0))));
+			me.cx = f("centreX", 0.5);
+			me.cy = f("centreY", 0.5);
+			me.w = f("width", 0.5);
+			me.h = f("height", 0.5);
+			me.rotation = f("rotation", 0.0);
+			me.corner = f("corner", 0.15);
+			break;
+		}
+	}
+	canvas_->setMaskEdit(me);
 }
 
 void VideoEditorWindow::applySelectedClipTransform(const TlTransform &tf)
@@ -6136,8 +6189,9 @@ QHash<QString, QVector<float>> VideoEditorWindow::decodePeaks(const QStringList 
 		out.insert(todo.first(), VoiceoverTrack::loadPeaks(todo.first(), 600));
 		return out;
 	}
-	const QVector<QVector<float>> got = QtConcurrent::blockingMapped(
-		todo, [](const QString &p) { return VoiceoverTrack::loadPeaks(p, 600); });
+	const QVector<QVector<float>> got = blockingMapped(
+		QVector<QString>(todo.cbegin(), todo.cend()),
+		[](const QString &p) { return VoiceoverTrack::loadPeaks(p, 600); });
 	for (int i = 0; i < todo.size() && i < got.size(); ++i)
 		out.insert(todo[i], got[i]);
 	return out;

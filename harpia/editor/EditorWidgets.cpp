@@ -149,6 +149,33 @@ void PreviewCanvas::paintEvent(QPaintEvent *)
 		}
 	}
 
+	// The Mask component's shape, with the same grips as everything else here.
+	if (mask_.on) {
+		const QVector<QPointF> h = maskHandlePoints();
+		if (h.size() == 9) {
+			const QColor accent(0xff, 0xc0, 0x40); // amber: not the clip's blue
+			p.save();
+			p.setRenderHint(QPainter::Antialiasing, true);
+			// The outline is drawn as a polygon through the corner grips
+			// rather than a rotated rect, because it has already been through
+			// both rotations and there is no single angle left to give a
+			// painter. TL, TR, BR, BL -- the four corners of that list.
+			QPolygonF outline;
+			outline << h[0] << h[2] << h[7] << h[5];
+			p.setPen(QPen(accent, 1.5, Qt::DashLine));
+			p.setBrush(Qt::NoBrush);
+			p.drawPolygon(outline);
+			p.setPen(QPen(accent, 1.2));
+			p.drawLine(h[1], h[8]); // the stalk to the rotate knob
+			p.setBrush(QColor(0x10, 0x12, 0x14));
+			for (int k = 0; k < 8; ++k)
+				p.drawRect(QRectF(h[k].x() - 3.5, h[k].y() - 3.5, 7, 7));
+			p.setBrush(accent);
+			p.drawEllipse(h[8], 5.0, 5.0);
+			p.restore();
+		}
+	}
+
 	if (spotMode_)
 		drawSpotlight(p);
 
@@ -263,6 +290,99 @@ QVector<QPointF> PreviewCanvas::transformHandlePoints() const
 		out.append(c + QPointF(l.x() * std::cos(a) - l.y() * std::sin(a),
 				       l.x() * std::sin(a) + l.y() * std::cos(a)));
 	return out;
+}
+
+void PreviewCanvas::setMaskEdit(const MaskEdit &m)
+{
+	mask_ = m;
+	if (!m.on)
+		maskDrag_ = MaskZone::None;
+	update();
+}
+
+// Where the mask's grips land on screen.
+//
+// Two transforms, in this order: the shape sits in the CLIP's normalised space
+// and is turned by its own rotation there; the clip is then placed on the
+// canvas and turned by the CLIP's rotation. Applying them the other way round
+// puts the grips somewhere plausible-looking and wrong the moment either angle
+// is non-zero.
+QVector<QPointF> PreviewCanvas::maskHandlePoints() const
+{
+	QVector<QPointF> out;
+	const QRectF clip = transformWidgetRect();
+	if (!mask_.on || clip.isEmpty())
+		return out;
+
+	// Half-extents in widget pixels. A Circle takes its height from its width,
+	// exactly as maskPath does, or the grips would sit off the shape.
+	const double hw = mask_.w * clip.width() / 2.0;
+	const double hh = (mask_.shape == SpotShape::Circle) ? hw : mask_.h * clip.height() / 2.0;
+	const QPointF local[9] = {{-hw, -hh}, {0, -hh}, {hw, -hh},
+				  {-hw, 0},   {hw, 0},  {-hw, hh},
+				  {0, hh},    {hw, hh}, {0, -hh - kXfRotateArm}};
+
+	// The shape's centre, inside the clip's rect, before the clip is turned.
+	const QPointF centreInClip(clip.x() + mask_.cx * clip.width(),
+				   clip.y() + mask_.cy * clip.height());
+	const double ma = mask_.rotation * M_PI / 180.0;
+	const double ca = transformRotation_ * M_PI / 180.0;
+	const QPointF clipCentre = clip.center();
+	for (const QPointF &l : local) {
+		// The shape's own rotation, about the shape's centre.
+		const QPointF turned(l.x() * std::cos(ma) - l.y() * std::sin(ma),
+				     l.x() * std::sin(ma) + l.y() * std::cos(ma));
+		const QPointF inClip = centreInClip + turned;
+		// Then the clip's rotation, about the clip's centre.
+		const QPointF v = inClip - clipCentre;
+		out.append(clipCentre + QPointF(v.x() * std::cos(ca) - v.y() * std::sin(ca),
+						v.x() * std::sin(ca) + v.y() * std::cos(ca)));
+	}
+	return out;
+}
+
+QPointF PreviewCanvas::widgetToClipNorm(const QPointF &p) const
+{
+	const QRectF clip = transformWidgetRect();
+	if (clip.isEmpty())
+		return {};
+	// Undo the clip's rotation first, then express the result as a fraction of
+	// the clip's own rect -- the inverse of maskHandlePoints' second step.
+	const QPointF centre = clip.center();
+	const QPointF v = p - centre;
+	const double a = -transformRotation_ * M_PI / 180.0;
+	const QPointF un(v.x() * std::cos(a) - v.y() * std::sin(a),
+			 v.x() * std::sin(a) + v.y() * std::cos(a));
+	const QPointF inClip = centre + un;
+	return QPointF((inClip.x() - clip.x()) / clip.width(),
+		       (inClip.y() - clip.y()) / clip.height());
+}
+
+PreviewCanvas::MaskZone PreviewCanvas::maskZoneAt(const QPoint &pos) const
+{
+	if (!mask_.on)
+		return MaskZone::None;
+	const QVector<QPointF> h = maskHandlePoints();
+	if (h.size() != 9)
+		return MaskZone::None;
+	static const MaskZone zones[9] = {MaskZone::TL, MaskZone::T,  MaskZone::TR,
+					  MaskZone::L,  MaskZone::R,  MaskZone::BL,
+					  MaskZone::B,  MaskZone::BR, MaskZone::Rotate};
+	for (int k = 0; k < h.size(); ++k) {
+		const QPointF v = h[k] - QPointF(pos);
+		if (std::abs(v.x()) <= kXfGrab && std::abs(v.y()) <= kXfGrab)
+			return zones[k];
+	}
+	// Inside the shape moves it. Tested in the shape's own axes so a turned
+	// mask is grabbed where it looks like it is.
+	const QPointF n = widgetToClipNorm(QPointF(pos));
+	const double dx = n.x() - mask_.cx, dy = n.y() - mask_.cy;
+	const double a = -mask_.rotation * M_PI / 180.0;
+	const double lx = dx * std::cos(a) - dy * std::sin(a);
+	const double ly = dx * std::sin(a) + dy * std::cos(a);
+	if (std::abs(lx) <= mask_.w / 2.0 && std::abs(ly) <= mask_.h / 2.0)
+		return MaskZone::Move;
+	return MaskZone::None;
 }
 
 PreviewCanvas::XfZone PreviewCanvas::transformZoneAt(const QPoint &pos) const
@@ -553,6 +673,25 @@ void PreviewCanvas::mousePressEvent(QMouseEvent *e)
 		update();
 		return;
 	}
+	// The mask is tested BEFORE the clip's own transform: when a mask is being
+	// edited its grips sit on top of the clip's, and the one under the pointer
+	// has to be the one the user can see.
+	if (mask_.on && !cropEnabled_ && e->button() == Qt::LeftButton) {
+		const MaskZone z = maskZoneAt(e->pos());
+		if (z != MaskZone::None) {
+			maskDrag_ = z;
+			maskStart_ = mask_;
+			maskStartNorm_ = widgetToClipNorm(QPointF(e->pos()));
+			const QVector<QPointF> h = maskHandlePoints();
+			if (h.size() == 9) {
+				const QPointF c = (h[0] + h[7]) / 2.0;
+				const QPointF v = QPointF(e->pos()) - c;
+				maskStartAngle_ = std::atan2(v.y(), v.x()) * 180.0 / M_PI;
+			}
+			setCursor(z == MaskZone::Move ? Qt::ClosedHandCursor : Qt::CrossCursor);
+			return;
+		}
+	}
 	if (transformMode_ && !cropEnabled_ && e->button() == Qt::LeftButton) {
 		const XfZone z = transformZoneAt(e->pos());
 		// Outside the clip entirely: let the press fall through rather than
@@ -722,6 +861,74 @@ void PreviewCanvas::mouseMoveEvent(QMouseEvent *e)
 		update();
 		return;
 	}
+	if (maskDrag_ != MaskZone::None && (e->buttons() & Qt::LeftButton)) {
+		MaskEdit m = maskStart_;
+		const QPointF now = widgetToClipNorm(QPointF(e->pos()));
+		if (maskDrag_ == MaskZone::Move) {
+			m.cx = maskStart_.cx + (now.x() - maskStartNorm_.x());
+			m.cy = maskStart_.cy + (now.y() - maskStartNorm_.y());
+		} else if (maskDrag_ == MaskZone::Rotate) {
+			const QVector<QPointF> h = maskHandlePoints();
+			if (h.size() == 9) {
+				const QPointF c = (h[0] + h[7]) / 2.0;
+				const QPointF v = QPointF(e->pos()) - c;
+				double deg = maskStart_.rotation +
+					     (std::atan2(v.y(), v.x()) * 180.0 / M_PI - maskStartAngle_);
+				if (e->modifiers() & Qt::ShiftModifier)
+					deg = std::round(deg / 15.0) * 15.0;
+				while (deg > 180.0)
+					deg -= 360.0;
+				while (deg < -180.0)
+					deg += 360.0;
+				m.rotation = deg;
+			}
+		} else {
+			// A size grip. Measured in the SHAPE's own axes, so dragging the
+			// right edge of a turned mask widens it along its own width rather
+			// than along the screen's.
+			const double a = -maskStart_.rotation * M_PI / 180.0;
+			const auto toLocal = [&](const QPointF &n) {
+				const double dx = n.x() - maskStart_.cx, dy = n.y() - maskStart_.cy;
+				return QPointF(dx * std::cos(a) - dy * std::sin(a),
+					       dx * std::sin(a) + dy * std::cos(a));
+			};
+			const QPointF l0 = toLocal(maskStartNorm_), l1 = toLocal(now);
+			const bool right = maskDrag_ == MaskZone::R || maskDrag_ == MaskZone::TR ||
+					   maskDrag_ == MaskZone::BR;
+			const bool left = maskDrag_ == MaskZone::L || maskDrag_ == MaskZone::TL ||
+					  maskDrag_ == MaskZone::BL;
+			const bool bottom = maskDrag_ == MaskZone::B || maskDrag_ == MaskZone::BL ||
+					    maskDrag_ == MaskZone::BR;
+			const bool top = maskDrag_ == MaskZone::T || maskDrag_ == MaskZone::TL ||
+					 maskDrag_ == MaskZone::TR;
+			const double dx = l1.x() - l0.x(), dy = l1.y() - l0.y();
+			// The opposite edge stays put: the size changes by the drag and the
+			// centre by half of it, which is what "drag this edge" means.
+			if (right) {
+				m.w = std::max(0.01, maskStart_.w + dx);
+			} else if (left) {
+				m.w = std::max(0.01, maskStart_.w - dx);
+			}
+			if (bottom) {
+				m.h = std::max(0.01, maskStart_.h + dy);
+			} else if (top) {
+				m.h = std::max(0.01, maskStart_.h - dy);
+			}
+			// Move the centre by half the size change, along the shape's axes,
+			// so the grip follows the pointer and the far side does not walk.
+			const double sw = (right ? (m.w - maskStart_.w) : 0) -
+					  (left ? (m.w - maskStart_.w) : 0);
+			const double sh = (bottom ? (m.h - maskStart_.h) : 0) -
+					  (top ? (m.h - maskStart_.h) : 0);
+			const double fa = maskStart_.rotation * M_PI / 180.0;
+			m.cx = maskStart_.cx + (sw / 2.0) * std::cos(fa) - (sh / 2.0) * std::sin(fa);
+			m.cy = maskStart_.cy + (sw / 2.0) * std::sin(fa) + (sh / 2.0) * std::cos(fa);
+		}
+		mask_ = m;
+		update();
+		emit maskPoseChanged(m.cx, m.cy, m.w, m.h, m.rotation);
+		return;
+	}
 	if (xfDrag_ != XfZone::None && (e->buttons() & Qt::LeftButton)) {
 		const QRect d = displayRect();
 		if (d.width() <= 0 || d.height() <= 0)
@@ -831,6 +1038,12 @@ void PreviewCanvas::mouseReleaseEvent(QMouseEvent *)
 		return;
 	}
 	drag_ = Zone::None;
+	if (maskDrag_ != MaskZone::None) {
+		maskDrag_ = MaskZone::None;
+		setCursor(transformMode_ ? Qt::OpenHandCursor : Qt::ArrowCursor);
+		emit maskEditFinished();
+		return;
+	}
 	if (xfDrag_ != XfZone::None) {
 		xfDrag_ = XfZone::None;
 		transformDragging_ = false;

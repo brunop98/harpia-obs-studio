@@ -11,6 +11,8 @@
 
 #include "../FadeCurve.hpp"
 #include "../component/Component.hpp"
+
+#include <functional>
 #include "Ease.hpp"
 #include "TlTransform.hpp"
 #include "EffectClip.hpp"
@@ -220,6 +222,35 @@ struct TlClip {
 	// ported to components one at a time, and until that is finished both
 	// describe part of the clip.
 	QVector<ComponentInstance> components;
+
+	// What to call an effect clip on the timeline. Its components decide, when
+	// it has any: swapping Brightness for Blur must not leave the strip still
+	// saying "Brightness". Falls back to the fx field for a project that has not
+	// been migrated yet.
+	QString effectLabel(const std::function<QString(const QString &)> &nameOf) const
+	{
+		if (!fx.name.isEmpty())
+			return fx.name; // a name the user typed always wins
+		if (components.isEmpty())
+			return QString::fromLatin1(fxTypeName(fx.type));
+		QStringList parts;
+		for (const ComponentInstance &ci : components)
+			parts << nameOf(ci.typeId);
+		return parts.join(QStringLiteral(" + "));
+	}
+
+	// A fresh effect clip, as a component. Both places that make one call this,
+	// so "what a new Brightness looks like" is written once.
+	static ComponentInstance newEffectComponent(const QString &typeId,
+						    const QMap<QString, double> &defaults)
+	{
+		ComponentInstance ci;
+		ci.typeId = typeId;
+		ci.instanceId = QStringLiteral("fx");
+		for (auto it = defaults.cbegin(); it != defaults.cend(); ++it)
+			ci.props.insert(it.key(), it.value());
+		return ci;
+	}
 
 	// How this clip ARRIVES when it overlaps the one before it on its track.
 	// The overlap itself is the transition's duration, so there is nothing here

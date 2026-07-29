@@ -197,6 +197,31 @@ int main(int argc, char **argv)
 		   "and it stays on the clip, so saving cannot destroy it");
 	}
 
+	std::printf("\n-- deleting the clip takes the panel and the components with it --\n");
+	{
+		// Components live inside TlClip, so removing the clip removes them; the
+		// thing that could go wrong is the panel staying up and editing a clip
+		// that is no longer there.
+		tv->selectClip(0, 0);
+		settle(200);
+		ComponentInstance b;
+		b.typeId = QStringLiteral("harpia.blur");
+		b.instanceId = QStringLiteral("b1");
+		emit panel->componentsEdited({b});
+		settle(400);
+		ok(!panel->isHidden(), "the panel is up with a component on the clip");
+
+		tv->deleteSelected();
+		settle(500);
+		ok(panel->isHidden(), "deleting the clip hides the panel");
+		ok(tv->selectedClipPtr() == nullptr, "and nothing is selected");
+		int left = 0;
+		for (const TlTrack &t : tv->model().tracks)
+			for (const TlClip &c : t.clips)
+				left += c.components.size();
+		ok(left == 0, "no components survive the clip they were on");
+	}
+
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
 }

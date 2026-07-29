@@ -1,5 +1,8 @@
 #include "TimelineView.hpp"
 
+#include "../component/BuiltinComponents.hpp"
+#include "../component/ComponentRegistry.hpp"
+
 #include "../../ui/UiIcons.hpp"
 #include "../TimeText.hpp"
 
@@ -21,6 +24,19 @@
 #include <limits>
 
 namespace harpia {
+
+namespace {
+// An effect clip's strip label, asking the registry for each component's
+// display name. Here rather than in the model so TimelineModel keeps knowing
+// nothing about the registry.
+QString effectClipLabel(const TlClip &c)
+{
+	return c.effectLabel([](const QString &id) {
+		const ComponentType *t = ComponentRegistry::instance().find(id);
+		return t ? t->displayName : id;
+	});
+}
+} // namespace
 
 namespace {
 constexpr qint64 kMinClipMs = 100;
@@ -928,7 +944,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 				   QRectF(r.x() + 5, r.center().y() - bs / 2.0, bs, bs),
 				   c.fx.enabled ? QColor(0xf2, 0xf4, 0xf7) : cl_.caption);
 		const int textX = (bs > 4 ? bs + 4 : 0);
-		const QString label = QStringLiteral("%1%2").arg(c.fx.label()).arg(
+		const QString label = QStringLiteral("%1%2").arg(effectClipLabel(c)).arg(
 			c.fx.enabled ? QString() : QStringLiteral("  (off)"));
 		p.setPen(c.fx.enabled ? QColor(0xf2, 0xf4, 0xf7) : cl_.caption);
 		p.drawText(r.adjusted(5 + textX, 0, -4, 0), Qt::AlignVCenter | Qt::AlignLeft,
@@ -2135,8 +2151,12 @@ void TimelineView::addEffectClipAt(int track, qint64 atOutMs, FxType type)
 	c.srcStartMs = 0;
 	c.srcEndMs = 3000; // freely stretchable, like a caption
 	c.outStartMs = std::max<qint64>(0, atOutMs);
+	// The fx field is still filled in so the clip's LABEL and the older
+	// readers keep working; what actually renders is the component.
 	c.fx.type = type;
 	c.fx.params = fxDefaults(type);
+	c.components.append(
+		TlClip::newEffectComponent(effectComponentId(type), fxDefaults(type)));
 	t.clips.append(c);
 	selTrack_ = track;
 	selClip_ = t.clips.size() - 1;
@@ -2295,7 +2315,7 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		bool ok = false;
 		const QString n = QInputDialog::getText(this, QStringLiteral("Rename effect"),
 							QStringLiteral("Effect name:"),
-							QLineEdit::Normal, fc.fx.label(), &ok)
+							QLineEdit::Normal, effectClipLabel(fc), &ok)
 					  .trimmed();
 		if (!ok)
 			return;

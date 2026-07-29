@@ -297,21 +297,10 @@ private:
 	void addImageClip();
 	void addEffectClip(); // toolbar: drop an effect clip on an effect track
 
-	// Effect-clip Inspector (the selected effect's type, parameters, name).
-	void buildEffectInspector(QVBoxLayout *into);
-	void syncEffectInspector();
-	void rebuildEffectParams();
-	QWidget *fxBox_ = nullptr;
-	QComboBox *fxType_ = nullptr;
-	QLineEdit *fxName_ = nullptr;
-	QCheckBox *fxEnabled_ = nullptr;
-	QWidget *fxParamBox_ = nullptr;
-	QFormLayout *fxParamForm_ = nullptr;
-	QVector<ParamSlider *> fxParamSpins_; // slider + spin box per parameter
-	QStringList fxParamKeys_;
-	int fxParamsForType_ = -1;
-	KeyList *fxKeys_ = nullptr;    // the selected effect clip's parameter keys
-	bool syncingFx_ = false;             // "Add image…" -> pick a file + drop a clip
+	// The effect-clip Inspector used to be here: a type combo, a parameter form
+	// and a keyframe list. Every effect is a component now, so an effect clip is
+	// edited in the component list like anything else — and can hold several at
+	// once, which the single-type panel could not express.
 
 	void addAudioClipFromSource(int sourceId); // put a source's audio on an audio lane
 	void onAddAudioClicked();                  // "Add audio ▾" menu

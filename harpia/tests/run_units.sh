@@ -52,6 +52,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
 	-o "$WORK/component_test" $LF
 
 # Custom components, in JavaScript. Needs QuickJS, which takes ~11s to compile
@@ -88,6 +89,16 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/componentrender_test" "$QJSLIB/libqjs.a" $LF
 
+# Effects as components: every FxType registered, rendering pixel-for-pixel
+# what the old path did, and an unmigrated project opening with its grade.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/effectcomponent_test.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	-o "$WORK/effectcomponent_test" $LF
+
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
@@ -97,4 +108,5 @@ QT_QPA_PLATFORM=offscreen "$WORK/regionwatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/component_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/scriptcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/componentrender_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/effectcomponent_test" || rc=1
 exit $rc

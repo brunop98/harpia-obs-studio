@@ -11,6 +11,7 @@
 // project's `sources` array lines up with what is currently loaded.
 
 #include "TextStyleJson.hpp"
+#include "../component/BuiltinComponents.hpp"
 #include "../component/ComponentJson.hpp"
 #include "TimelineModel.hpp"
 
@@ -346,6 +347,37 @@ inline TlClip clipFromJson(const QJsonObject &co)
 	}
 	c.components = componentsFromJson(co.value(QStringLiteral("components")).toArray(),
 					  ComponentRegistry::instance());
+
+	// Migration: effects used to be a single `fx` object on the clip. Turn one
+	// into the component that replaced it, keyframes and all, so a project made
+	// before the port opens with its grade intact and saves back in the new
+	// shape. Only when there are no components yet — a project already migrated
+	// still carries `fx` for the older readers, and converting it twice would
+	// double the effect.
+	// Effect clips only. Guarding on co.contains("fx") alone was wrong: the fx
+	// block is not even PARSED for other clip types, so a stray key on a video
+	// clip would have produced a spurious Brightness out of default values.
+	if (c.type == TlClip::Type::Effect && c.components.isEmpty() &&
+	    c.fx.type != FxType::InverseSelection && co.contains(QStringLiteral("fx"))) {
+		ComponentInstance ci;
+		ci.typeId = effectComponentId(c.fx.type);
+		ci.instanceId = QStringLiteral("fx");
+		ci.enabled = c.fx.enabled;
+		for (auto it = c.fx.params.cbegin(); it != c.fx.params.cend(); ++it)
+			ci.props.insert(it.key(), it.value());
+		for (const FxKey &k : c.fx.keys)
+			for (auto it = k.params.cbegin(); it != k.params.cend(); ++it) {
+				PropKey pk;
+				pk.tMs = k.tMs;
+				pk.v = it.value();
+				ci.keys[it.key()].append(pk);
+			}
+		for (auto it = ci.keys.begin(); it != ci.keys.end(); ++it)
+			std::sort(it->begin(), it->end(),
+				  [](const PropKey &a, const PropKey &b) { return a.tMs < b.tMs; });
+		if (ComponentRegistry::instance().find(ci.typeId))
+			c.components.append(ci);
+	}
 
 	// Scripts became a stack; projects written before that carry a single
 	// "script" object, which reads as a one-entry stack.

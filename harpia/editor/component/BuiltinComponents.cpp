@@ -1,5 +1,6 @@
 #include "BuiltinComponents.hpp"
 
+#include "../timeline/EffectClip.hpp" // the effect table, and Effects::apply
 #include "../timeline/Spotlight.hpp" // blurInPlace -- one blur in the program, not two
 #include "ComponentRegistry.hpp"
 
@@ -86,10 +87,91 @@ public:
 	}
 };
 
+// ---- The effect family ---------------------------------------------------
+// One component per FxType, GENERATED from the table Effects already keeps
+// rather than fifteen hand-written registrations. The names, ranges and
+// defaults therefore cannot drift from the renderer's, and a new effect becomes
+// a component by existing.
+//
+// Each one builds a one-off FxSpec and hands it to Effects::apply, so there is
+// still exactly one implementation of Brightness in the program. This is a port
+// of where an effect is CONFIGURED, not a reimplementation of what it does.
+class FxComponent : public IComponent {
+public:
+	explicit FxComponent(FxType t) : type_(t) {}
+
+	void evaluate(const EvalContext &ctx, ClipState &io) const override
+	{
+		if (!io.frame || io.frame->isNull())
+			return;
+		FxSpec spec;
+		spec.type = type_;
+		spec.enabled = true;
+		for (const FxParamDef &d : fxParams(type_))
+			spec.params.insert(QString::fromLatin1(d.key),
+					   ctx.f(d.key, d.def));
+		// tMs 0, not ctx.tMs: the component's own keyframes have already been
+		// resolved into ctx.p, so letting FxSpec interpolate again would be a
+		// second animation system fighting the first.
+		Effects::apply(*io.frame, spec, 0);
+	}
+
+private:
+	FxType type_;
+};
+
+// "Hue shift" -> "harpia.fx.hueShift". Derived rather than listed so a new
+// effect cannot be given an id in one place and forgotten in another.
+QString fxComponentId(FxType t)
+{
+	const QString name = QString::fromLatin1(fxTypeName(t));
+	QString camel;
+	bool up = false;
+	for (const QChar ch : name) {
+		if (ch == QChar(' ')) {
+			up = true;
+			continue;
+		}
+		camel += up ? ch.toUpper() : (camel.isEmpty() ? ch.toLower() : ch);
+		up = false;
+	}
+	return QStringLiteral("harpia.fx.") + camel;
+}
+
 } // namespace
+
+QString effectComponentId(FxType t)
+{
+	return fxComponentId(t);
+}
 
 void registerBuiltinComponents(ComponentRegistry &reg)
 {
+	// Every effect, as a component. Inverse Selection is skipped: its settings
+	// are a list of shapes rather than a handful of numbers, so it needs an
+	// editor of its own and is ported separately.
+	for (int i = 0; i < kFxTypeCount; ++i) {
+		const FxType ft = FxType(i);
+		if (ft == FxType::InverseSelection)
+			continue;
+		ComponentType t;
+		t.id = fxComponentId(ft);
+		t.displayName = QString::fromLatin1(fxTypeName(ft));
+		t.category = QStringLiteral("Effect");
+		t.stage = Stage::Pixel;
+		for (const FxParamDef &d : fxParams(ft)) {
+			PropDef p;
+			p.key = QString::fromLatin1(d.key);
+			p.label = QString::fromLatin1(d.label);
+			p.type = PropType::Float;
+			p.min = d.lo;
+			p.max = d.hi;
+			p.def = d.def;
+			t.props.append(p);
+		}
+		t.make = [ft] { return std::unique_ptr<IComponent>(new FxComponent(ft)); };
+		reg.add(t);
+	}
 	{
 		ComponentType t;
 		t.id = QStringLiteral("harpia.transform");

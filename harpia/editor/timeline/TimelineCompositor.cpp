@@ -290,12 +290,32 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 			if (ei < 0)
 				continue;
 			const TlClip &ec = t.clips[ei];
-			if (ec.type != TlClip::Type::Effect || !ec.fx.enabled)
+			if (ec.type != TlClip::Type::Effect)
+				continue;
+			const bool hasComponents = !ec.components.isEmpty();
+			if (!hasComponents && !ec.fx.enabled)
 				continue;
 			// The painter has to be closed before the pixels are touched
 			// directly, and reopened for whatever is drawn on top.
 			p.end();
-			Effects::apply(out, ec.fx, outMs - ec.outStartMs);
+			if (hasComponents) {
+				// An effect clip's Pixel components run over the composite so
+				// far, which IS everything below this track — the same reach
+				// Effects::apply had. On an ordinary clip the identical
+				// components see only that clip's own frame; what they grade is
+				// decided by where the clip sits, not by the component.
+				ComponentStack stack(ec.components, ComponentRegistry::instance());
+				EvalContext ectx;
+				ectx.tMs = outMs - ec.outStartMs;
+				ectx.outMs = outMs;
+				ectx.durMs = std::max<qint64>(1, ec.outDurationMs());
+				ectx.fps = fps;
+				ectx.canvas = logicalCanvas;
+				stack.evaluatePixels(ectx, out);
+			} else {
+				// Not yet migrated: a project still carrying the old fx field.
+				Effects::apply(out, ec.fx, outMs - ec.outStartMs);
+			}
 			p.begin(&out);
 			p.setRenderHint(QPainter::Antialiasing, true);
 			continue;

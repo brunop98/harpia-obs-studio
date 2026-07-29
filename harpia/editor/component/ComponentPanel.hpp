@@ -107,6 +107,10 @@ signals:
 	void componentCopied(const QString &typeId, int ordinal);
 	void componentPasted(const QString &typeId, int ordinal);
 	void keyframeToggled(const QString &typeId, int ordinal, const QString &key);
+	// One of the component's own buttons. The panel does not know what it does;
+	// the window looks the action up on the type and runs it on every selected
+	// clip, as one undo step, like any other edit from here.
+	void actionInvoked(const QString &typeId, int ordinal, const QString &actionId);
 
 private:
 	struct Row;

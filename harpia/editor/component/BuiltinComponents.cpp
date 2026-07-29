@@ -192,6 +192,28 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 			{QStringLiteral("opacity"), QStringLiteral("Opacity"), PropType::Float, 0.0,
 			 1.0, 1.0, true, QString()},
 		};
+		// Reset used to be a button in the Inspector, sitting next to the
+		// Transform section but owned by the window. It belongs to the
+		// component: it knows what its own defaults are, and putting it here is
+		// what proves an action can come from a component rather than from a
+		// hand-placed widget.
+		//
+		// Writing every property explicitly rather than clearing the bag: an
+		// empty bag means "no value set", which resolves to the same numbers
+		// today but stops doing so the moment a property gains a keyframe.
+		ComponentAction reset;
+		reset.id = QStringLiteral("reset");
+		reset.label = QStringLiteral("Reset transform");
+		reset.help = QStringLiteral("Put the clip back to the middle at its natural size, "
+					    "and clear its pose animation.");
+		reset.run = [](PropBag &p) {
+			p[QStringLiteral("scale")] = 1.0;
+			p[QStringLiteral("posX")] = 0.5;
+			p[QStringLiteral("posY")] = 0.5;
+			p[QStringLiteral("rotation")] = 0.0;
+			p[QStringLiteral("opacity")] = 1.0;
+		};
+		t.actions.append(reset);
 		t.make = [] { return std::unique_ptr<IComponent>(new TransformComponent); };
 		reg.add(t);
 	}

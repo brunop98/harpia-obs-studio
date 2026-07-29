@@ -168,6 +168,30 @@ public:
 	virtual void evaluate(const EvalContext &ctx, ClipState &io) const = 0;
 };
 
+// A button a component puts in its own box in the Inspector.
+//
+// Sliders cover "what is this value"; some things are a verb instead -- reset
+// this, fit to the frame, bake the animation down. Those were previously
+// buttons hand-placed in the Inspector next to whatever they acted on, which
+// meant a new one was a change to the window rather than to the component that
+// owns it, and a user-written component could not have one at all.
+//
+// `run` is the whole implementation, and it sees only the component's own
+// properties. That is deliberate: an action that can reach the clip, the
+// timeline or the window is an action whose effect depends on where it is
+// invoked from, and it would be applied N times over a multi-clip selection
+// with N different answers. Restricted to the property bag, "press it with five
+// clips selected" has exactly one meaning -- do it to each of them -- which is
+// how every other edit in this panel already behaves.
+struct ComponentAction {
+	QString id;    // stable; what the panel sends back
+	QString label; // the button's text
+	QString help;  // tooltip
+	// Mutate the properties. Anything not written is left as it is, so an
+	// action that resets one channel does not silently reset the others.
+	std::function<void(PropBag &)> run;
+};
+
 // The registration record: everything the editor knows about a kind of
 // component without having one.
 struct ComponentType {
@@ -177,6 +201,9 @@ struct ComponentType {
 	int version = 1;  // bumped when props change shape; drives migrate()
 	Stage stage = Stage::Pixel;
 	QVector<PropDef> props;
+
+	// Buttons this component shows under its properties. Empty for most.
+	QVector<ComponentAction> actions;
 
 	// Ordering within a stage. Not called `requires` — that is a keyword from
 	// C++20 on, and this project will not want to rename a public field the day

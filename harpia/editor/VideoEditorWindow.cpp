@@ -1032,6 +1032,63 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			});
 			afterComponentEdit();
 		});
+	// A component's own button. The window does not know what any of them mean:
+	// it looks the action up on the type, runs it over a copy of that
+	// component's properties, and writes the result back -- so a built-in and a
+	// user-written component reach this by exactly the same route, and a new
+	// action costs nothing here.
+	connect(componentPanel_, &ComponentPanel::actionInvoked, this,
+		[this](const QString &typeId, int ordinal, const QString &actionId) {
+			const ComponentType *type = ComponentRegistry::instance().find(typeId);
+			if (!type)
+				return;
+			const ComponentAction *act = nullptr;
+			for (const ComponentAction &a : type->actions)
+				if (a.id == actionId)
+					act = &a;
+			if (!act || !act->run)
+				return;
+
+			if (type->addable) {
+				editSharedComponent(typeId, ordinal, [act](ComponentInstance &ci) {
+					act->run(ci.props);
+					// A keyed property would immediately overwrite whatever
+					// the action just wrote, leaving a button that visibly
+					// does nothing. Only the keys it actually touched go.
+					for (auto it = ci.props.cbegin(); it != ci.props.cend(); ++it)
+						ci.keys.remove(it.key());
+				});
+				afterComponentEdit();
+				return;
+			}
+
+			// A pinned component is backed by the clip's own fields rather than
+			// by a ComponentInstance, so the action runs against a bag built
+			// from those fields and the result is written back into them.
+			timelineView_->applyToSelection([act](TlClip &c) {
+				const TlTransform base = c.baseTransform();
+				PropBag p;
+				p[QStringLiteral("scale")] = base.scale;
+				p[QStringLiteral("posX")] = base.posX;
+				p[QStringLiteral("posY")] = base.posY;
+				p[QStringLiteral("rotation")] = base.rotation;
+				p[QStringLiteral("opacity")] = base.opacity;
+				act->run(p);
+				TlTransform tf;
+				tf.scale = p.value(QStringLiteral("scale"), base.scale).toDouble();
+				tf.posX = p.value(QStringLiteral("posX"), base.posX).toDouble();
+				tf.posY = p.value(QStringLiteral("posY"), base.posY).toDouble();
+				tf.rotation =
+					p.value(QStringLiteral("rotation"), base.rotation).toDouble();
+				tf.opacity = p.value(QStringLiteral("opacity"), base.opacity).toDouble();
+				c.setBaseTransform(tf);
+				// Same reasoning as above: keyframes would win over the pose
+				// the action just set, so Reset has to clear them to mean
+				// anything on an animated clip.
+				c.keys.clear();
+			});
+			afterComponentEdit();
+		});
 	insLayout->addWidget(componentPanel_);
 
 	insLayout->addStretch(1);
@@ -3852,16 +3909,9 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	// component list now — one place to look for everything a clip does, rather
 	// than some of it here and the rest there. Nothing is left of the form.
 
-	auto *resetBtn = new QPushButton(QStringLiteral("Reset transform"), clipBox_);
-	resetBtn->setToolTip(QStringLiteral("Put the clip back to the middle at its natural size, "
-					    "and clear its pose animation."));
-	connect(resetBtn, &QPushButton::clicked, this, [this]() {
-		editSelectedClip([](TlClip &c) {
-			c.setBaseTransform(TlTransform{});
-			c.keys.clear();
-		});
-	});
-	v->addWidget(resetBtn);
+	// Reset transform used to be a button here. It is the Transform component's
+	// own action now, so it sits inside that component's box with the values it
+	// resets rather than floating above them.
 
 	// ---- Keyframes -------------------------------------------------------
 	auto *kfHdr = new QLabel(QStringLiteral("Animation"), clipBox_);

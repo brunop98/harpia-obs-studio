@@ -343,6 +343,29 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 		}
 		bv->addLayout(form);
 	}
+
+	// The component's own buttons, under its properties. A component declares
+	// these; the panel does not know what any of them mean, which is what lets a
+	// user-written one have them too.
+	if (type && !type->actions.isEmpty()) {
+		auto *ah = new QHBoxLayout;
+		ah->setContentsMargins(0, 2, 0, 0);
+		ah->setSpacing(4);
+		for (const ComponentAction &a : type->actions) {
+			auto *b = new QPushButton(a.label, row->box);
+			b->setStyleSheet(QStringLiteral("padding:3px 8px;"));
+			if (!a.help.isEmpty())
+				b->setToolTip(a.help);
+			connect(b, &QPushButton::clicked, this,
+				[this, typeId, ordinal, id = a.id] {
+					emit actionInvoked(typeId, ordinal, id);
+				});
+			ah->addWidget(b);
+		}
+		ah->addStretch(1);
+		bv->addLayout(ah);
+	}
+
 	listLayout_->addWidget(row->box);
 	return row;
 }

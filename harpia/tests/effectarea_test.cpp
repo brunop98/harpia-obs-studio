@@ -17,6 +17,7 @@
 //     change every project that already has one.
 #include "editor/component/BuiltinComponents.hpp"
 #include "editor/component/ComponentRegistry.hpp"
+#include "editor/component/ComponentStack.hpp"
 #include "editor/timeline/TimelineCompositor.hpp"
 #include "editor/timeline/TimelineModel.hpp"
 
@@ -167,6 +168,63 @@ int main(int argc, char **argv)
 		const int outside = lum(out, 0.85, 0.85);
 		std::printf("     in the box %d  the rest %d\n", inBox, outside);
 		ok(inBox > outside + 30, "the box is the bright part, not the hole in it");
+	}
+
+	std::printf("\n-- the point-op fast path grades identically --\n");
+	{
+		// A point-op stack grades only the area's bounding box instead of the
+		// whole frame. That is only sound if the answer is the same, so: the
+		// value just INSIDE the border must equal the value at the centre. A
+		// sub-rect handed to something that reads its neighbours would differ
+		// exactly there, which is the seam this guards against.
+		TlTransform tf;
+		tf.scale = 0.5;
+		const QImage out =
+			TimelineCompositor::compose(build(tf), 500, canvas, provider, nullptr, 30.0);
+		const int mid = lum(out, 0.5, 0.5);
+		const int nearEdge = lum(out, 0.27, 0.5); // just inside the left border
+		const int justOut = lum(out, 0.23, 0.5);  // just outside it
+		std::printf("     centre %d  just inside %d  just outside %d\n", mid, nearEdge,
+			    justOut);
+		ok(std::abs(mid - nearEdge) <= 1, "the border is graded the same as the middle");
+		ok(justOut < mid - 30, "and the grade stops at the border");
+	}
+
+	std::printf("\n-- a neighbour-reading effect does NOT take that path --\n");
+	{
+		// Blur samples around each pixel, so a cut-out would make it read the
+		// edge of the patch. The stack has to say so, or the fast path would be
+		// taken and the area would get a seam nobody asked for.
+		QVector<ComponentInstance> comps;
+		ComponentInstance blur;
+		blur.typeId = effectComponentId(FxType::Blur);
+		blur.instanceId = QStringLiteral("bl");
+		comps.append(blur);
+		ComponentStack s1(comps, ComponentRegistry::instance());
+		ok(!s1.pixelStageIsPointOp(), "Blur is not a point op");
+
+		QVector<ComponentInstance> both = comps;
+		ComponentInstance br;
+		br.typeId = effectComponentId(FxType::Brightness);
+		br.instanceId = QStringLiteral("br");
+		both.append(br);
+		ComponentStack s2(both, ComponentRegistry::instance());
+		// One neighbour-reader is enough to disqualify the whole stack: the
+		// brightness runs over what the blur produced.
+		ok(!s2.pixelStageIsPointOp(), "and neither is a stack containing one");
+
+		QVector<ComponentInstance> justBright;
+		justBright.append(br);
+		ComponentStack s3(justBright, ComponentRegistry::instance());
+		ok(s3.pixelStageIsPointOp(), "Brightness on its own is");
+
+		// A disabled blur cannot affect the pixels, so it must not veto either.
+		QVector<ComponentInstance> disabledBlur = justBright;
+		ComponentInstance off = blur;
+		off.enabled = false;
+		disabledBlur.append(off);
+		ComponentStack s4(disabledBlur, ComponentRegistry::instance());
+		ok(s4.pixelStageIsPointOp(), "a switched-off blur does not veto it");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

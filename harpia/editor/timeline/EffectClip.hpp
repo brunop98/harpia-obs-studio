@@ -48,6 +48,42 @@ enum class FxType {
 
 inline constexpr int kFxTypeCount = int(FxType::Count);
 
+// True when an effect's output pixel depends only on the input pixel at the
+// SAME position -- a curve, a matrix, a hue rotation. Those give the same
+// answer on a sub-rect as on the whole frame, which is what lets an
+// area-bounded effect clip grade only the region it covers.
+//
+// Listed by what is NOT one, because that is the shorter and the more dangerous
+// list: anything reading its neighbours would sample the cut edge instead of
+// the pixels really there and leave a seam at the area's border. A new FxType
+// therefore defaults to "not a point op" by falling through, which is the safe
+// way round -- a wrong `true` here is a rendering bug, a wrong `false` is only
+// slower.
+inline bool fxIsPointOp(FxType t)
+{
+	switch (t) {
+	case FxType::Blur:
+	case FxType::GaussianBlur:
+	case FxType::Sharpen:
+	case FxType::Glow:
+	case FxType::Pixelate:
+	case FxType::ChromaticAberration:
+	case FxType::Vignette:          // depends on the pixel's POSITION in the frame
+	case FxType::Noise:             // ditto: the pattern is placed by coordinate
+	case FxType::InverseSelection:  // a mask over the whole composition
+	case FxType::Count:
+		return false;
+	case FxType::Brightness:
+	case FxType::Contrast:
+	case FxType::Saturation:
+	case FxType::Exposure:
+	case FxType::HueShift:
+	case FxType::ColorBalance:
+		return true;
+	}
+	return false;
+}
+
 // One tunable on an effect. `lo`/`hi` bound it, `def` is where it starts (and
 // what "Reset" returns to).
 struct FxParamDef {

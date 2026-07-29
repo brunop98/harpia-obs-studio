@@ -28,6 +28,17 @@ ComponentStack::ComponentStack(const QVector<ComponentInstance> &list, const Com
 	}
 }
 
+bool ComponentStack::pixelStageIsPointOp() const
+{
+	for (const Entry &e : entries_) {
+		if (e.stage != Stage::Pixel || !e.inst->enabled)
+			continue;
+		if (!e.type->pointOp)
+			return false;
+	}
+	return true;
+}
+
 void ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io) const
 {
 	for (const Entry &e : entries_) {

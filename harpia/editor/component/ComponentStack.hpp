@@ -45,6 +45,12 @@ public:
 	// True when every enabled component is pure, so this clip's frames may be
 	// rendered in any order and cached.
 	bool pure() const { return pure_; }
+
+	// True when every ENABLED Pixel component only ever reads the pixel it is
+	// writing. Such a stack gives the same answer on a sub-rect as on the whole
+	// frame, which is what lets an area-bounded effect grade just its region.
+	// An empty Pixel stage answers true: there is nothing that could disagree.
+	bool pixelStageIsPointOp() const;
 	bool isEmpty() const { return entries_.isEmpty(); }
 
 private:

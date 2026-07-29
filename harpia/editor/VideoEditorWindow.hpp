@@ -218,8 +218,10 @@ private:
 
 	// Transform rows (Zoom / Pos X / Pos Y / Rotation / Opacity) in order, so a
 	// script running on the clip can mark the ones it drives.
-	QVector<QLabel *> poseLabels_;
-	void markScriptDrivenRows(const TlClip &c);
+	// Which pose properties a transform script is computing, for the Transform
+	// row to mark. Reports rather than restyles: the rows are in the component
+	// panel now.
+	QStringList scriptDrivenPoseKeys(const TlClip &c, QString *tip) const;
 
 	// Preview request pacing (see requestPreview in the .cpp): render the first
 	// request at once, then at most one per timer interval, always the newest.
@@ -406,11 +408,9 @@ private:
 	// Built once and kept in sync with the selected clip (shown only in Full
 	// editing when a clip is selected), so dragging a slider never rebuilds it.
 	QWidget *clipBox_ = nullptr;
-	QDoubleSpinBox *posXSpin_ = nullptr;
-	QDoubleSpinBox *posYSpin_ = nullptr;
-	QDoubleSpinBox *zoomSpin_ = nullptr;
-	QDoubleSpinBox *rotationSpin_ = nullptr;  // degrees about the clip's centre
-	QDoubleSpinBox *opacitySpin_ = nullptr;
+	// The pose spin boxes used to live here. They are the pinned Transform row
+	// in ComponentPanel now; the clip's fields are unchanged and still what the
+	// preview drag, the keyframe editor and the project format all write.
 	QDoubleSpinBox *clipSpeedSpin_ = nullptr; // per-clip playback speed
 	QCheckBox *autoKeyChk_ = nullptr;
 	QLabel *keyInfo_ = nullptr;

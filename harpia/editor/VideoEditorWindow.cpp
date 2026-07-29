@@ -931,6 +931,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		[this](const QVector<ComponentInstance> &list) {
 			editSelectedClip([&list](TlClip &c) { c.components = list; });
 		});
+	// The pinned pose goes through applySelectedClipTransform, the same path the
+	// preview drag uses — which is what keeps auto-keyframe and the keyframe
+	// editor working exactly as they did when the old panel wrote here.
+	connect(componentPanel_, &ComponentPanel::transformEdited, this,
+		[this](const TlTransform &tf) { applySelectedClipTransform(tf); });
 	insLayout->addWidget(componentPanel_);
 
 	insLayout->addStretch(1);
@@ -1917,6 +1922,13 @@ void VideoEditorWindow::onTimelineScrub(qint64 outMs)
 		stopPlayback();
 	timelineView_->setPlayhead(outMs);
 	cursorTimeLabel_->setText(previewTimeText(outMs));
+	// The component list shows values AT THE PLAYHEAD, so moving the playhead
+	// has to move them — otherwise an animated clip's numbers disagree with the
+	// picture beside them, which is the fault the Spotlight fields had. Only the
+	// component panel, not the whole clip inspector: this runs on every mouse
+	// move of a scrub, and the panel's refresh is a handful of setValue calls
+	// where a full sync rebuilds the effect controls.
+	syncComponentPanel();
 	requestPreview(-1, outMs); // -1 = "composite the timeline"
 }
 
@@ -3551,9 +3563,16 @@ void VideoEditorWindow::syncComponentPanel()
 		return;
 	const TlClip *c = fullEdit() ? timelineView_->selectedClipPtr() : nullptr;
 	componentPanel_->setVisible(c != nullptr);
-	if (!c)
+	if (!c) {
+		componentPanel_->setPinnedTransform(TlTransform{}, false, {}, QString());
 		return;
+	}
 	componentPanel_->setLoadErrors(componentErrors_);
+	// The pose, resolved at the playhead so an animated clip shows what is on
+	// screen rather than its resting framing.
+	QString tip;
+	const QStringList driven = scriptDrivenPoseKeys(*c, &tip);
+	componentPanel_->setPinnedTransform(c->transformAt(timelinePlayheadMs()), true, driven, tip);
 	componentPanel_->setComponents(c->components, timelinePlayheadMs() - c->outStartMs);
 }
 
@@ -3719,30 +3738,16 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		s->setKeyboardTracking(false);
 		return s;
 	};
-	zoomSpin_ = mkSpin(0.05, 20.0, 0.05, 2);
-	posXSpin_ = mkSpin(-2.0, 3.0, 0.01, 3);
-	posYSpin_ = mkSpin(-2.0, 3.0, 0.01, 3);
-	opacitySpin_ = mkSpin(0.0, 1.0, 0.05, 2);
-	rotationSpin_ = mkSpin(-3600.0, 3600.0, 1.0, 1);
-	rotationSpin_->setSuffix(QStringLiteral("°"));
+	// Zoom, Position, Rotation and Opacity used to live here. They are the
+	// Transform component now, pinned at the top of the component list — one
+	// place to look for what a clip does, rather than a pose panel here and
+	// everything else there. Speed stays: it is the clip's own playback rate,
+	// which changes its LENGTH on the timeline, not its pose.
 	clipSpeedSpin_ = mkSpin(0.1, 20.0, 0.1, 2);
 	clipSpeedSpin_->setToolTip(QStringLiteral(
 		"Playback speed for this clip. Its length on the timeline changes to match, and "
 		"its audio is time-stretched (pitch preserved) on export."));
-	form->addRow(QStringLiteral("Zoom"), zoomSpin_);
-	form->addRow(QStringLiteral("Position X"), posXSpin_);
-	form->addRow(QStringLiteral("Position Y"), posYSpin_);
-	form->addRow(QStringLiteral("Rotation"), rotationSpin_);
-	form->addRow(QStringLiteral("Opacity"), opacitySpin_);
 	form->addRow(QStringLiteral("Speed"), clipSpeedSpin_);
-	// Kept so syncClipInspector can mark the rows a script is driving. Without
-	// this the value in the box and the framing on screen disagree with no
-	// explanation anywhere.
-	poseLabels_ = {qobject_cast<QLabel *>(form->labelForField(zoomSpin_)),
-		       qobject_cast<QLabel *>(form->labelForField(posXSpin_)),
-		       qobject_cast<QLabel *>(form->labelForField(posYSpin_)),
-		       qobject_cast<QLabel *>(form->labelForField(rotationSpin_)),
-		       qobject_cast<QLabel *>(form->labelForField(opacitySpin_))};
 	v->addLayout(form);
 	connect(clipSpeedSpin_, &QDoubleSpinBox::valueChanged, this, [this](double sp) {
 		if (syncingClip_)
@@ -3750,21 +3755,9 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		editSelectedClip([sp](TlClip &c) { c.speed = std::clamp(sp, 0.1, 20.0); });
 	});
 
-	auto applyPose = [this]() {
-		if (syncingClip_)
-			return;
-		TlTransform tf;
-		tf.posX = posXSpin_->value();
-		tf.posY = posYSpin_->value();
-		tf.scale = zoomSpin_->value();
-		tf.rotation = rotationSpin_->value();
-		tf.opacity = opacitySpin_->value();
-		applySelectedClipTransform(tf);
-	};
-	for (QDoubleSpinBox *s : {zoomSpin_, posXSpin_, posYSpin_, rotationSpin_, opacitySpin_})
-		connect(s, &QDoubleSpinBox::valueChanged, this, [applyPose](double) { applyPose(); });
-
 	auto *resetBtn = new QPushButton(QStringLiteral("Reset transform"), clipBox_);
+	resetBtn->setToolTip(QStringLiteral("Put the clip back to the middle at its natural size, "
+					    "and clear its pose animation."));
 	connect(resetBtn, &QPushButton::clicked, this, [this]() {
 		editSelectedClip([](TlClip &c) {
 			c.setBaseTransform(TlTransform{});
@@ -4358,13 +4351,15 @@ void VideoEditorWindow::refreshKeyframeEditor()
 }
 
 // A script that defines a channel computes that channel's final value, so the
-// number in the Inspector box is no longer what you see on screen — it becomes
-// the script's STARTING point (the script reads it as ctx.base). Say so on the
-// row instead of leaving the mismatch to be discovered.
-void VideoEditorWindow::markScriptDrivenRows(const TlClip &c)
+// number in the Transform row is no longer what you see on screen — it becomes
+// the script's STARTING point (the script reads it as ctx.base). The row says
+// so rather than leaving the mismatch to be discovered.
+//
+// Returns the property keys a script is driving, and fills *tip with which
+// scripts they are. The pose rows live in the component panel now, so this
+// reports rather than restyles.
+QStringList VideoEditorWindow::scriptDrivenPoseKeys(const TlClip &c, QString *tip) const
 {
-	if (poseLabels_.isEmpty())
-		return;
 	int mask = 0;
 	QStringList driving;
 	if (scriptEval_) {
@@ -4379,27 +4374,25 @@ void VideoEditorWindow::markScriptDrivenRows(const TlClip &c)
 		}
 	}
 	driving.removeDuplicates();
-	// Same order the rows were added in.
-	const int chan[5] = {TransformEvaluator::ChanScale,    TransformEvaluator::ChanPosition,
-			     TransformEvaluator::ChanPosition, TransformEvaluator::ChanRotation,
-			     TransformEvaluator::ChanOpacity};
-	static const char *names[5] = {"Zoom", "Position X", "Position Y", "Rotation", "Opacity"};
-	for (int i = 0; i < poseLabels_.size() && i < 5; ++i) {
-		QLabel *lb = poseLabels_[i];
-		if (!lb)
-			continue;
-		const bool driven = (mask & chan[i]) != 0;
-		lb->setText(driven ? QStringLiteral("%1  ⟡").arg(QLatin1String(names[i]))
-				   : QLatin1String(names[i]));
-		lb->setStyleSheet(driven ? QStringLiteral("color:#ffd44f;") : QString());
-		lb->setToolTip(driven ? QStringLiteral(
-					       "Driven by %1. This value is where the script "
-					       "starts from (it reads it as ctx.base), not the "
-					       "framing you see — change it and the whole move "
-					       "shifts with it.")
-					       .arg(driving.join(QStringLiteral(", ")))
-				      : QString());
-	}
+
+	QStringList keys;
+	if (mask & TransformEvaluator::ChanScale)
+		keys << QStringLiteral("scale");
+	if (mask & TransformEvaluator::ChanPosition)
+		keys << QStringLiteral("posX") << QStringLiteral("posY");
+	if (mask & TransformEvaluator::ChanRotation)
+		keys << QStringLiteral("rotation");
+	if (mask & TransformEvaluator::ChanOpacity)
+		keys << QStringLiteral("opacity");
+	if (tip)
+		*tip = keys.isEmpty()
+			       ? QString()
+			       : QStringLiteral("Driven by %1. This value is where the script "
+						"starts from (it reads it as ctx.base), not the "
+						"framing you see — change it and the whole move "
+						"shifts with it.")
+					 .arg(driving.join(QStringLiteral(", ")));
+	return keys;
 }
 
 void VideoEditorWindow::syncClipInspector()
@@ -4426,12 +4419,6 @@ void VideoEditorWindow::syncClipInspector()
 	const bool wasSyncing = syncingClip_;
 	syncingClip_ = true;
 	const qint64 ph = timelinePlayheadMs();
-	const TlTransform tf = c->transformAt(ph);
-	posXSpin_->setValue(tf.posX);
-	posYSpin_->setValue(tf.posY);
-	zoomSpin_->setValue(tf.scale);
-	rotationSpin_->setValue(tf.rotation);
-	opacitySpin_->setValue(tf.opacity);
 	clipSpeedSpin_->setValue(c->speed);
 	clipSpeedSpin_->setEnabled(!c->freeDuration()); // stills/captions have no source clock
 	autoKeyChk_->setChecked(autoKeyframe_);
@@ -4446,7 +4433,7 @@ void VideoEditorWindow::syncClipInspector()
 	// Transform script stack + the selected entry's parameter controls.
 	refreshScriptList();
 	rebuildScriptParams();
-	markScriptDrivenRows(*c);
+
 
 	// Which half of the panel applies. A clip on an audio track has no picture,
 	// so showing it zoom/rotation controls that do nothing would be a lie.

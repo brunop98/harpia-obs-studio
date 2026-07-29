@@ -28,6 +28,7 @@ struct ComponentPanel::Row {
 	QVector<ParamSlider *> sliders; // null for a non-float property
 	QVector<QCheckBox *> checks;    // null for a non-bool property
 	QVector<QPushButton *> keyBtns;
+	QVector<QLabel *> labels;
 };
 
 namespace {
@@ -99,6 +100,10 @@ ComponentPanel::ComponentPanel(const ComponentRegistry &reg, QWidget *parent)
 	empty_->setStyleSheet(QStringLiteral("color:#7f858e;"));
 	v->addWidget(empty_);
 
+	pinnedLayout_ = new QVBoxLayout;
+	pinnedLayout_->setSpacing(6);
+	v->addLayout(pinnedLayout_);
+
 	listLayout_ = new QVBoxLayout;
 	listLayout_->setSpacing(6);
 	v->addLayout(listLayout_);
@@ -108,6 +113,128 @@ ComponentPanel::ComponentPanel(const ComponentRegistry &reg, QWidget *parent)
 				       "you wrote yourself."));
 	connect(add, &QPushButton::clicked, this, &ComponentPanel::addComponentMenu);
 	v->addWidget(add);
+}
+
+void ComponentPanel::setPinnedTransform(const TlTransform &xf, bool present,
+					const QStringList &drivenKeys, const QString &drivenTip)
+{
+	const bool structural = present != pinnedPresent_ || drivenKeys != drivenKeys_;
+	pinnedXf_ = xf;
+	pinnedPresent_ = present;
+	drivenKeys_ = drivenKeys;
+	drivenTip_ = drivenTip;
+	if (structural)
+		buildPinnedRow();
+	else
+		pushPinnedValues();
+}
+
+// A value out of the pose row, by property key. One place, so the row's order
+// and the struct's fields cannot drift apart.
+static double poseGet(const TlTransform &t, const QString &key)
+{
+	if (key == QLatin1String("posX"))
+		return t.posX;
+	if (key == QLatin1String("posY"))
+		return t.posY;
+	if (key == QLatin1String("scale"))
+		return t.scale;
+	if (key == QLatin1String("rotation"))
+		return t.rotation;
+	return t.opacity;
+}
+static void poseSet(TlTransform &t, const QString &key, double v)
+{
+	if (key == QLatin1String("posX"))
+		t.posX = v;
+	else if (key == QLatin1String("posY"))
+		t.posY = v;
+	else if (key == QLatin1String("scale"))
+		t.scale = v;
+	else if (key == QLatin1String("rotation"))
+		t.rotation = v;
+	else
+		t.opacity = v;
+}
+
+void ComponentPanel::buildPinnedRow()
+{
+	if (pinned_) {
+		pinned_->box->deleteLater();
+		delete pinned_;
+		pinned_ = nullptr;
+	}
+	const ComponentType *type = reg_.find(QStringLiteral("harpia.transform"));
+	if (!pinnedPresent_ || !type)
+		return;
+
+	auto *row = new Row;
+	row->box = new QFrame(this);
+	row->box->setFrameShape(QFrame::StyledPanel);
+	row->box->setStyleSheet(
+		QStringLiteral("QFrame{border:1px solid #3a3f47; border-radius:4px;}"));
+	auto *bv = new QVBoxLayout(row->box);
+	bv->setContentsMargins(6, 4, 6, 6);
+	bv->setSpacing(4);
+
+	auto *head = new QHBoxLayout;
+	head->setSpacing(4);
+	auto *name = new QLabel(type->displayName, row->box);
+	name->setStyleSheet(QStringLiteral("border:none; font-weight:bold; color:#e8eaed;"));
+	// No enable box, no move arrows, no remove: a clip without a pose is not a
+	// thing, so offering to take it away would be offering nonsense.
+	name->setToolTip(QStringLiteral("Where the clip sits on the canvas. Every clip has one, "
+					"so this row cannot be removed or reordered."));
+	head->addWidget(name, 1);
+	head->addWidget(stageBadge(type->stage, row->box));
+	bv->addLayout(head);
+
+	auto *form = new QFormLayout;
+	form->setHorizontalSpacing(8);
+	form->setVerticalSpacing(3);
+	for (const PropDef &d : type->props) {
+		row->keys.append(d.key);
+		auto *sl = new ParamSlider(d.min, d.max, 3, row->box);
+		sl->setValue(poseGet(pinnedXf_, d.key));
+		if (!d.help.isEmpty())
+			sl->setToolTip(d.help);
+		connect(sl, &ParamSlider::valueChanged, this, [this, key = d.key](double v) {
+			if (syncing_)
+				return;
+			poseSet(pinnedXf_, key, v);
+			emit transformEdited(pinnedXf_);
+		});
+		row->sliders.append(sl);
+		row->checks.append(nullptr);
+		row->keyBtns.append(nullptr);
+
+		// A script that computes this channel makes the box a starting point
+		// (it reads it as ctx.base), not the framing on screen. Saying so on the
+		// row beats leaving the mismatch to be discovered.
+		const bool driven = drivenKeys_.contains(d.key);
+		auto *lbl = new QLabel(driven ? d.label + QStringLiteral("  (script)") : d.label,
+				       row->box);
+		lbl->setStyleSheet(driven ? QStringLiteral("border:none; color:#ffd44f;")
+					  : QStringLiteral("border:none;"));
+		if (driven)
+			lbl->setToolTip(drivenTip_);
+		row->labels.append(lbl);
+		form->addRow(lbl, sl);
+	}
+	bv->addLayout(form);
+	pinnedLayout_->addWidget(row->box);
+	pinned_ = row;
+}
+
+void ComponentPanel::pushPinnedValues()
+{
+	if (!pinned_)
+		return;
+	syncing_ = true;
+	for (int i = 0; i < pinned_->keys.size(); ++i)
+		if (pinned_->sliders[i])
+			pinned_->sliders[i]->setValue(poseGet(pinnedXf_, pinned_->keys[i]));
+	syncing_ = false;
 }
 
 void ComponentPanel::setLoadErrors(const QStringList &errors)
@@ -146,6 +273,8 @@ void ComponentPanel::setComponents(const QVector<ComponentInstance> &list, qint6
 	}
 	warnings_->setText(w.join(QChar('\n')));
 	warnings_->setVisible(!w.isEmpty());
+	// The empty-state hint is about ADDABLE components; the pose row is always
+	// there and would make "no components" read as a lie.
 	empty_->setVisible(list_.isEmpty());
 }
 
@@ -397,6 +526,8 @@ void ComponentPanel::addComponentMenu()
 	QString lastCategory;
 	QMenu *sub = nullptr;
 	for (const ComponentType &t : reg_.all()) {
+		if (!t.addable)
+			continue; // every clip already has one
 		if (t.category != lastCategory) {
 			lastCategory = t.category;
 			sub = menu.addMenu(t.category.isEmpty() ? QStringLiteral("Other")

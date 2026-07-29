@@ -184,6 +184,11 @@ struct ComponentType {
 	QStringList requiresIds;
 	QStringList conflictsIds;
 
+	// False for a component every clip implicitly has, so it does not appear in
+	// the Add Component menu. Unity's own Transform works this way: you cannot
+	// add a second one and you cannot remove the one you have.
+	bool addable = true;
+
 	// False only for components that genuinely need history. See the header
 	// comment: an impure component costs its clip frame-parallel export and
 	// correct scrubbing, so this is deliberately awkward to reach for.

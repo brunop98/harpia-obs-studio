@@ -24,6 +24,7 @@
 #include <QPainter>
 
 #include <cstdio>
+#include <random>
 
 using namespace harpia;
 static int failures = 0;
@@ -234,6 +235,95 @@ int main(int argc, char **argv)
 			    shot2.pixelColor(seamX, y).red(), shot2.pixelColor(seamX, y).green(),
 			    shot2.pixelColor(seamX, y).blue());
 		ok(lit == 0, "and no seam is painted where two unrelated clips merely touch");
+	}
+
+	std::printf("\n-- several clips ending at the same instant --\n");
+	{
+		// The bug this section exists for. splitSeams() indexes clips by their
+		// END time to avoid an O(n^2) scan, and it used a plain QHash --
+		// whose insert() REPLACES on a duplicate key. Two clips ending at the
+		// same instant therefore left only the last of them in the index, and
+		// when the one it kept was not the split's other half, the seam simply
+		// was not drawn: a real split with no valley on it.
+		//
+		// Not a contrived arrangement. Clips overlap by design wherever there
+		// is a transition, so coinciding end times are routine.
+		TlTrack t;
+		TlClip a; // the split's LEFT half: src 0..100
+		a.type = TlClip::Type::Video;
+		a.sourceId = 2;
+		a.srcStartMs = 0;
+		a.srcEndMs = 100;
+		a.outStartMs = 400;
+		TlClip decoy = a; // ends at the same instant, different source time
+		decoy.srcStartMs = 100;
+		decoy.srcEndMs = 200;
+		TlClip b; // the RIGHT half: source runs straight on from `a`
+		b.type = TlClip::Type::Video;
+		b.sourceId = 2;
+		b.srcStartMs = 100;
+		b.srcEndMs = 500;
+		b.outStartMs = 500;
+		// `decoy` stored last, so a replacing hash keeps IT and misses the pair.
+		t.clips = {a, decoy, b};
+		const QVector<qint64> seams = t.splitSeams();
+		std::printf("     seams: [");
+		for (qint64 s : seams)
+			std::printf(" %lld", (long long)s);
+		std::printf(" ]\n");
+		ok(seams.size() == 1 && seams[0] == 500,
+		   "the seam is found even though another clip ends at the same time");
+
+		// And it is reported once, not once per clip ending there.
+		TlTrack t2;
+		t2.clips = {a, decoy, b, b};
+		std::printf("     with the right half duplicated: %d seam(s)\n",
+			    int(t2.splitSeams().size()));
+		ok(t2.splitSeams().size() == 1, "and reported once, however many clips coincide");
+	}
+
+	std::printf("\n-- the fast sweep agrees with the obvious slow version --\n");
+	{
+		// splitSeams() and overlapsBefore() are both one-pass rewrites of an
+		// O(n^2) question, done because they run on every repaint and every
+		// mouse-move. A rewrite like that is exactly where a silent behaviour
+		// change hides -- the one above went unnoticed until this comparison
+		// existed -- so both are checked against the obvious version they
+		// replaced, over random tracks rather than hand-picked ones.
+		std::mt19937 rng(12345);
+		int seamBad = 0, overlapBad = 0;
+		for (int iter = 0; iter < 4000; ++iter) {
+			TlTrack t;
+			const int n = 1 + int(rng() % 6);
+			for (int i = 0; i < n; ++i) {
+				TlClip c;
+				c.type = TlClip::Type::Video;
+				c.sourceId = 1 + int(rng() % 2);
+				c.srcStartMs = qint64(rng() % 5) * 100;
+				c.srcEndMs = c.srcStartMs + 100 + qint64(rng() % 5) * 100;
+				c.outStartMs = qint64(rng() % 8) * 100;
+				c.speed = (rng() % 4 == 0) ? 2.0 : 1.0;
+				t.clips.append(c);
+			}
+			const QVector<qint64> fastOv = t.overlapsBefore();
+			for (int i = 0; i < t.clips.size(); ++i)
+				if (fastOv[i] != t.overlapBefore(i))
+					++overlapBad;
+
+			QVector<qint64> brute;
+			for (int x = 0; x < t.clips.size(); ++x)
+				for (int y = 0; y < t.clips.size(); ++y)
+					if (x != y && TlTrack::isSplitPair(t.clips[x], t.clips[y]))
+						brute.append(t.clips[y].outStartMs);
+			std::sort(brute.begin(), brute.end());
+			brute.erase(std::unique(brute.begin(), brute.end()), brute.end());
+			if (brute != t.splitSeams())
+				++seamBad;
+		}
+		std::printf("     4000 random tracks: %d seam, %d overlap disagreement(s)\n", seamBad,
+			    overlapBad);
+		ok(seamBad == 0, "splitSeams() matches a pairwise scan on every one");
+		ok(overlapBad == 0, "and overlapsBefore() matches overlapBefore()");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

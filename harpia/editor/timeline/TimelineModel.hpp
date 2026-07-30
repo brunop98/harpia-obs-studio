@@ -634,19 +634,31 @@ struct TlTrack {
 	// by end time also gets the answer right when clips are not in start order
 	// and when a third clip starts at the same instant, which a
 	// compare-with-your-neighbour sweep would miss.
+	//
+	// A MULTI-hash, and that is the whole subtlety. Several clips can end at the
+	// same instant -- routine on a track carrying transitions, where clips
+	// overlap by design -- and QHash::insert REPLACES on a duplicate key, so a
+	// plain QHash remembered only the last of them. When the one it kept was not
+	// the split's other half, the seam was simply not drawn: a real split with
+	// no valley on it, which is the one thing this is for.
 	QVector<qint64> splitSeams() const
 	{
-		QHash<qint64, int> endsAt; // output ms -> the clip that ends there
+		QMultiHash<qint64, int> endsAt; // output ms -> every clip ending there
 		endsAt.reserve(clips.size());
 		for (int i = 0; i < clips.size(); ++i)
 			endsAt.insert(clips[i].outEndMs(), i);
 		QVector<qint64> out;
 		for (const TlClip &c : clips) {
-			const auto it = endsAt.constFind(c.outStartMs);
-			if (it != endsAt.constEnd() && isSplitPair(clips[it.value()], c))
-				out.append(c.outStartMs);
+			for (auto it = endsAt.constFind(c.outStartMs);
+			     it != endsAt.constEnd() && it.key() == c.outStartMs; ++it) {
+				if (isSplitPair(clips[it.value()], c)) {
+					out.append(c.outStartMs);
+					break; // one seam per join, however many clips end here
+				}
+			}
 		}
 		std::sort(out.begin(), out.end());
+		out.erase(std::unique(out.begin(), out.end()), out.end());
 		return out;
 	}
 

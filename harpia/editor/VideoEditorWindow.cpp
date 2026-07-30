@@ -1396,7 +1396,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 				    QStringLiteral("View"), QStringLiteral("Ctrl + Mouse wheel"));
 	shortcuts_->addMouseGesture(QStringLiteral("timeline.pan"), QStringLiteral("Pan timeline"),
 				    QStringLiteral("View"),
-				    QStringLiteral("Shift + Mouse wheel / Middle-drag"));
+				    QStringLiteral("Shift + Mouse wheel / Middle-drag / Alt + drag"));
 	shortcuts_->addMouseGesture(QStringLiteral("preview.zoomClip"),
 				    QStringLiteral("Zoom the selected clip"),
 				    QStringLiteral("Video"),

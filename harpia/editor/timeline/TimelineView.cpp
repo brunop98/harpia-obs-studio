@@ -294,6 +294,15 @@ bool TimelineView::allAudio(const QStringList &files)
 	return true;
 }
 
+// Is this press a grab-to-pan? Middle button anywhere, or Alt+left for the
+// mice and trackpads that have no middle button.
+bool TimelineView::canPanFrom(const QMouseEvent *e)
+{
+	if (e->button() == Qt::MiddleButton)
+		return true;
+	return e->button() == Qt::LeftButton && (e->modifiers() & Qt::AltModifier);
+}
+
 QStringList TimelineView::droppableFiles(const QMimeData *mime)
 {
 	QStringList out;
@@ -1614,6 +1623,22 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	// moment a drag starts — leaving it drawn would point at nothing.
 	hoverMs_ = -1;
 
+	// Grab the timeline and slide it. Tested first, before the ruler and before
+	// anything under the pointer, because it has to work from anywhere: a pan
+	// that stops working over a clip is a pan you cannot trust.
+	//
+	// The middle button, because left is already spoken for twice over (empty
+	// space scrubs, a clip moves) and taking either would trade one navigation
+	// gesture for another. Alt+left does the same thing for mice and trackpads
+	// with no middle button.
+	if (canPanFrom(e) && pos.x() >= contentRect().x()) {
+		mode_ = Mode::Pan;
+		panStartX_ = pos.x();
+		panStartView_ = viewStart_;
+		setCursor(Qt::ClosedHandCursor);
+		return;
+	}
+
 	// Ruler or gutter → scrub / nothing.
 	if (pos.y() < lp_.margin + lp_.rulerH && pos.x() >= contentRect().x()) {
 		mode_ = Mode::Scrub;
@@ -1793,6 +1818,20 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 {
 	const QPoint pos = e->pos();
 
+	if (mode_ == Mode::Pan) {
+		// Against the pose at the press, so the grabbed instant stays under the
+		// pointer for the whole gesture however far it travels. Note the sign:
+		// dragging RIGHT shows earlier material, the way a hand on a map does.
+		const QRect c = contentRect();
+		if (c.width() > 0) {
+			const double msPerPx = double(visibleMs()) / double(c.width());
+			viewStart_ = panStartView_ -
+				     qint64(std::llround((pos.x() - panStartX_) * msPerPx));
+			clampView();
+			update();
+		}
+		return;
+	}
 	if (mode_ == Mode::Scrub) {
 		playheadMs_ = xToMs(pos.x());
 		emitScrubAt(playheadMs_);
@@ -1995,6 +2034,14 @@ void TimelineView::mouseDoubleClickEvent(QMouseEvent *e)
 
 void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 {
+	// Before the left-button gate below: a pan is usually a MIDDLE-button drag,
+	// and that gate would leave mode_ stuck at Pan forever -- after which every
+	// mouse-move slides the view whether a button is down or not.
+	if (mode_ == Mode::Pan) {
+		mode_ = Mode::None;
+		unsetCursor();
+		return;
+	}
 	if (e->button() != Qt::LeftButton)
 		return;
 	if (mode_ == Mode::Scrub) {

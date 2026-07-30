@@ -15,6 +15,7 @@
 #include <functional>
 
 class QMimeData;
+class QMouseEvent;
 class QPainter;
 class QTimer;
 
@@ -74,6 +75,23 @@ public:
 	qint64 playhead() const { return playheadMs_; }
 	qint64 durationMs() const { return model_.durationMs(); }
 	qint64 viewStartMs() const { return viewStart_; } // leftmost visible time
+	// Placing the view directly, and reading the time at a pixel. Both are for
+	// tests: a pan is only correct if the moment you grabbed is still under the
+	// pointer afterwards, and that is a question about pixels, not about state.
+	void setViewStartForTest(qint64 ms)
+	{
+		viewStart_ = ms;
+		clampView();
+		update();
+	}
+	void setZoomForTest(double z)
+	{
+		zoom_ = z;
+		clampView();
+		update();
+	}
+	qint64 timeAtXForTest(int x) const { return xToMs(x); }
+	qint64 visibleMsForTest() const { return visibleMs(); }
 	// The time<->pixel mapping, so callers (and tests) can aim at a time on the
 	// widget instead of re-deriving the axis from the layout params.
 	int xForMs(qint64 ms) const { return msToX(ms); }
@@ -177,6 +195,9 @@ public:
 	// copied in the file manager arrives as a URL list, not as a picture.
 	static QStringList droppableFiles(const QMimeData *mime);
 	static bool allAudio(const QStringList &files);
+	// Middle-drag, or Alt+left-drag, slides the view. Public so a test can ask
+	// the same question the press handler does.
+	static bool canPanFrom(const QMouseEvent *e);
 	// Which lane the drag in progress is aimed at (-1 = none, or a new one).
 	// For tests: the indicator has to promise where the drop will really land,
 	// and that promise is only checkable mid-drag.
@@ -374,6 +395,11 @@ private:
 	// ---- smooth zoom/pan over output-time ----
 	double zoom_ = 1.0;
 	qint64 viewStart_ = 0;
+	// Grab-to-pan state. The view is moved from the pose at the PRESS, not
+	// nudged per mouse-move: accumulating deltas drifts, and the promise of a
+	// grab is that the instant you grabbed stays under the pointer.
+	int panStartX_ = 0;
+	qint64 panStartView_ = 0;
 	double zoomTarget_ = 1.0;
 	qint64 viewTarget_ = 0;
 	qint64 zoomAnchorMs_ = 0;
@@ -382,7 +408,10 @@ private:
 	void animateStep();
 
 	// ---- interaction ----
-	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade };
+	// Pan drags the VIEW under a still timeline, the opposite of Scrub, which
+	// drags the playhead across a still view. Both are "navigating", and mixing
+	// them up is why it needs its own mode rather than a flag on Scrub.
+	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan };
 	Mode mode_ = Mode::None;
 	QPoint pressPos_;
 	bool dragMoved_ = false;

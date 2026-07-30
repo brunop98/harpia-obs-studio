@@ -498,6 +498,19 @@ QRect TimelineView::clipRect(int track, int clip) const
 	return QRect(x1, l.y() + 2, std::max(lp_.minClipW, x2 - x1), l.height() - 4);
 }
 
+// The drawn shape: the time span, pulled in by clipGap on each side so that two
+// clips which touch show a sliver of lane between them. Never below minClipW --
+// on a clip already at the floor there is nothing to give away, and a boundary
+// you cannot see is still better than a clip you cannot see.
+QRect TimelineView::clipPaintRect(int track, int clip) const
+{
+	const QRect r = clipRect(track, clip);
+	const int g = std::max(0, lp_.clipGap);
+	if (r.width() <= lp_.minClipW + 2 * g)
+		return r;
+	return r.adjusted(g, 0, -g, 0);
+}
+
 void TimelineView::clampView()
 {
 	viewStart_ = std::clamp<qint64>(viewStart_, 0, std::max<qint64>(0, spanMs() - visibleMs()));
@@ -807,6 +820,76 @@ void TimelineView::drawTransition(QPainter &p, int track, int incoming, qint64 s
 	p.restore();
 }
 
+// Which split seam the pointer is over, if any. Repaints only on a change: this
+// runs on every mouse-move across the whole widget.
+void TimelineView::updateHoverSeam(const QPoint &pos)
+{
+	int track = laneAtY(pos.y());
+	qint64 best = -1;
+	if (track >= 0 && track < model_.tracks.size() && !model_.tracks[track].hidden) {
+		// A few pixels either side, not an exact hit: a 1px line is not
+		// something anyone can put a cursor on, and the point is to confirm what
+		// you are near rather than to select it.
+		constexpr int kSeamHoverPx = 4;
+		int bestDx = kSeamHoverPx + 1;
+		for (const qint64 ms : model_.tracks[track].splitSeams()) {
+			const int dx = std::abs(msToX(ms) - pos.x());
+			if (dx <= kSeamHoverPx && dx < bestDx) {
+				bestDx = dx;
+				best = ms;
+			}
+		}
+	}
+	if (best < 0)
+		track = -1;
+	if (track == hoverSeamTrack_ && best == hoverSeamMs_)
+		return;
+	hoverSeamTrack_ = track;
+	hoverSeamMs_ = best;
+	update();
+}
+
+// The mark left where a clip was cut in two.
+//
+// Every clip boundary already shows a valley -- two rounded corners facing each
+// other across the gap clipPaintRect leaves. That says "something ends here".
+// This says something narrower and more useful: these two were ONE clip, and
+// the cut is yours. Two unrelated pieces of footage that happen to abut get the
+// valley and nothing else, so the two cases stop looking identical.
+//
+// Drawn after the clips and inside the same content clip, because it belongs to
+// neither half -- the same reasoning as the transition band above it.
+void TimelineView::drawSplitSeams(QPainter &p, int track) const
+{
+	const TlTrack &t = model_.tracks[track];
+	if (t.hidden)
+		return;
+	const QVector<qint64> seams = t.splitSeams();
+	if (seams.isEmpty())
+		return;
+	const QRect lane = laneRect(track);
+	const QRect content = contentRect();
+	const int y0 = lane.y() + 3, y1 = lane.bottom() - 3;
+
+	for (const qint64 ms : seams) {
+		const int x = msToX(ms);
+		if (x < content.x() - 2 || x > content.right() + 2)
+			continue;
+		// Brighter while the pointer is near it, so hovering a seam confirms
+		// which one you are about to trim rather than leaving you counting
+		// pixels between two clips of the same colour.
+		const bool near = hoverSeamTrack_ == track && hoverSeamMs_ == ms;
+		QColor c = cl_.splitSeam;
+		c.setAlpha(near ? 255 : 170);
+		p.setPen(QPen(c, std::max(1, lp_.splitSeamW)));
+		p.drawLine(x, y0, x, y1);
+		// Caps: two short ticks that close the valley top and bottom, so the
+		// seam reads as one mark rather than as a gap that happens to be lit.
+		p.drawLine(x - 2, y0, x + 2, y0);
+		p.drawLine(x - 2, y1, x + 2, y1);
+	}
+}
+
 void TimelineView::removeSelectedTransition()
 {
 	if (!selTransition_ || selTrack_ < 0 || selTrack_ >= model_.tracks.size())
@@ -967,7 +1050,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	const bool isFx = c.type == TlClip::Type::Effect;
 	const bool video = t.kind == TlTrack::Kind::Video && !isText && !isImage && !isFx;
 	const bool sel = isSelected(track, clip);
-	const QRect r = clipRect(track, clip);
+	const QRect r = clipPaintRect(track, clip);
 	// Scrolled-away clips cost the same as visible ones otherwise: the painter
 	// clips the output, but the filmstrip tiling and the per-pixel waveform loop
 	// below still run in full. On a long timeline that is most of the paint.
@@ -975,7 +1058,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	if (r.right() < content.x() || r.x() > content.right())
 		return;
 	QPainterPath path;
-	path.addRoundedRect(r, 4, 4);
+	path.addRoundedRect(r, lp_.clipRadius, lp_.clipRadius);
 	p.setPen(Qt::NoPen);
 	// Clips take their track's colour (selection brightens it); text clips get a
 	// slight violet lean so they still read as captions.
@@ -1010,7 +1093,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 		p.setPen(sel ? QPen(cl_.accent, 2) : QPen(cl_.border, 1));
 		{
 			AaOn aa(p);
-			p.drawRoundedRect(r, 4, 4);
+			p.drawRoundedRect(r, lp_.clipRadius, lp_.clipRadius);
 		}
 		return;
 	}
@@ -1141,7 +1224,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	p.setPen(sel ? QPen(cl_.accent, 2) : QPen(cl_.border, 1));
 	p.setBrush(Qt::NoBrush);
 	AaOn aa(p);
-	p.drawRoundedRect(r, 4, 4);
+	p.drawRoundedRect(r, lp_.clipRadius, lp_.clipRadius);
 }
 
 // ---- fade handles -----------------------------------------------------------
@@ -1355,6 +1438,7 @@ void TimelineView::paintEvent(QPaintEvent *)
 		p.setClipRect(contentRect());
 		for (int ci = 0; ci < t.clips.size(); ++ci)
 			drawClip(p, i, ci);
+		drawSplitSeams(p, i);
 		p.restore();
 
 		// Overlaps last, over both clips: the band has to read as belonging to
@@ -1835,6 +1919,7 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 		hoverTrClip_ = hoverInc;
 		update();
 	}
+	updateHoverSeam(pos);
 
 	int track = -1;
 	const int clip = clipAtPoint(pos, &track);
@@ -2016,7 +2101,9 @@ void TimelineView::changeEvent(QEvent *e)
 void TimelineView::leaveEvent(QEvent *)
 {
 	hoverMs_ = -1;
-	update(); // drop the hover marker
+	hoverSeamTrack_ = -1;
+	hoverSeamMs_ = -1;
+	update(); // drop the hover marker and any lit seam
 }
 
 // Every selected clip, primary included, as (track, clip).

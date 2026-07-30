@@ -46,6 +46,11 @@ struct EditorColors {
 	QColor marker{0x5c, 0xd6, 0x8a};     // a noted place, not a time now
 	QColor snapGuide{0xff, 0xff, 0xff};  // the magnet, while a drag is held on it
 	QColor fade{0xff, 0xd9, 0x6b};       // audio fade envelope + its grips
+	// The seam between the two halves of a split. Deliberately NOT the accent
+	// (that means selection) and not the playhead red (that means "an edit lands
+	// here"): a seam is a fact about the edit already made. Cool grey-blue, so a
+	// timeline with forty splits reads as structure rather than as forty alerts.
+	QColor splitSeam{0x8f, 0xa8, 0xc4};
 
 	bool operator==(const EditorColors &o) const
 	{
@@ -57,7 +62,7 @@ struct EditorColors {
 		       textClipSel == o.textClipSel && waveform == o.waveform &&
 		       effectClip == o.effectClip &&
 		       playhead == o.playhead && hover == o.hover && marker == o.marker &&
-		       snapGuide == o.snapGuide && fade == o.fade;
+		       snapGuide == o.snapGuide && fade == o.fade && splitSeam == o.splitSeam;
 	}
 };
 

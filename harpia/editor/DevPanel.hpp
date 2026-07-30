@@ -176,6 +176,9 @@ private:
 	QSpinBox *ftLaneGap_ = nullptr;
 	QSpinBox *ftMargin_ = nullptr;
 	QSpinBox *ftMinClipW_ = nullptr;
+	QSpinBox *ftClipGap_ = nullptr;
+	QSpinBox *ftClipRadius_ = nullptr;
+	QSpinBox *ftSplitSeamW_ = nullptr;
 	QSpinBox *ftSnapPx_ = nullptr;
 	QSpinBox *ftDropBandPx_ = nullptr;
 	QSpinBox *ftSegFontPx_ = nullptr;

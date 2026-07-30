@@ -20,6 +20,7 @@
 #include "Spotlight.hpp"
 
 #include <QColor>
+#include <QHash>
 #include <QMap>
 #include <QRect>
 #include <QString>
@@ -596,6 +597,56 @@ struct TlTrack {
 				reach = std::max(reach, clips[order[k]].outEndMs());
 			i = j;
 		}
+		return out;
+	}
+
+	// Are these two clips, in this order, the two halves of one split?
+	//
+	// Not merely "they touch". A split leaves the source time running straight
+	// through the join, so deleting the seam would put the original clip back --
+	// which is the thing worth telling apart on screen. Two unrelated pieces of
+	// footage that happen to abut are a different edit and read differently.
+	//
+	// Stills, captions and effects have no source clock (splitAtPlayhead
+	// rewrites their src range outright), so for those the test is same source
+	// and, for a caption, the same text: continuity has to be shown some other
+	// way or not claimed at all.
+	static bool isSplitPair(const TlClip &a, const TlClip &b)
+	{
+		if (a.type != b.type || a.outEndMs() != b.outStartMs)
+			return false;
+		if (a.type == TlClip::Type::Text)
+			return a.text == b.text;
+		if (a.type == TlClip::Type::Effect)
+			return false; // an effect has neither a source nor a source time
+		if (a.sourceId != b.sourceId || a.sourceId == 0)
+			return false;
+		if (a.freeDuration()) // a still: one file, no clock to be continuous in
+			return true;
+		return !(qAbs(a.speed - b.speed) > 1e-9) && a.srcEndMs == b.srcStartMs;
+	}
+
+	// Where on the output timeline this track's splits are, in ms.
+	//
+	// Two passes over the clips rather than a pair of nested loops, for the same
+	// reason overlapsBefore() has one sweep: this is wanted on every repaint and
+	// every mouse-move, and O(clips^2) there is felt on a busy track. Indexing
+	// by end time also gets the answer right when clips are not in start order
+	// and when a third clip starts at the same instant, which a
+	// compare-with-your-neighbour sweep would miss.
+	QVector<qint64> splitSeams() const
+	{
+		QHash<qint64, int> endsAt; // output ms -> the clip that ends there
+		endsAt.reserve(clips.size());
+		for (int i = 0; i < clips.size(); ++i)
+			endsAt.insert(clips[i].outEndMs(), i);
+		QVector<qint64> out;
+		for (const TlClip &c : clips) {
+			const auto it = endsAt.constFind(c.outStartMs);
+			if (it != endsAt.constEnd() && isSplitPair(clips[it.value()], c))
+				out.append(c.outStartMs);
+		}
+		std::sort(out.begin(), out.end());
 		return out;
 	}
 

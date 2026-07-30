@@ -136,6 +136,18 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
 	-o "$WORK/gutterspill_test" $LF
 
+# Where a clip was split: the drawn shapes leave a gap the eye can see, the hit
+# rects still tile so the gap is not a dead strip, and only a REAL split -- one
+# whose halves would rejoin seamlessly -- gets the seam mark.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/splitseam_test.cpp" "$H/editor/timeline/TimelineView.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
+	-o "$WORK/splitseam_test" $LF
+
 # Splitting a pixel pass across cores must not change a pixel: identical output
 # at 1..8 row bands, including counts that divide the height unevenly.
 g++ -std=c++17 -O2 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -167,6 +179,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/effectcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/assetcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectarea_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/gutterspill_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/splitseam_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/pixelbands_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/mask_test" || rc=1
 exit $rc

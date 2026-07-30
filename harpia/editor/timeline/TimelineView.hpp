@@ -30,6 +30,14 @@ struct TimelineViewParams {
 	int laneGap = 3;
 	int margin = 6;
 	int minClipW = 6;     // don't let a clip shrink below this on screen
+	// Breathing room drawn INSIDE each clip's time span, per side. Two clips
+	// that touch therefore show 2*clipGap of lane between them, and their
+	// rounded corners face each other across it -- the "valley" that makes a
+	// boundary visible at all. Purely cosmetic: hit testing uses the full span,
+	// so the gap is not a dead strip you can click into.
+	int clipGap = 1;
+	int clipRadius = 5;   // corner radius; the valley is only as deep as this
+	int splitSeamW = 1;   // the line drawn in the gap where a clip was split
 	int snapPx = 8;       // snap threshold in pixels
 	int segFontPx = 10;
 	int dropBandPx = 7;   // edge band that means "make a new track here"
@@ -169,6 +177,15 @@ public:
 	// copied in the file manager arrives as a URL list, not as a picture.
 	static QStringList droppableFiles(const QMimeData *mime);
 
+	// The two rects a clip has, for tests: the one you can click and the one
+	// that gets drawn. That they are DIFFERENT is the point of the gap, and
+	// that the first still tiles the lane is what keeps the gap clickable.
+	QRect clipRectForTest(int track, int clip) const { return clipRect(track, clip); }
+	QRect clipPaintRectForTest(int track, int clip) const
+	{
+		return clipPaintRect(track, clip);
+	}
+
 signals:
 	void clipsChanged();
 	// Media files dropped straight onto the lanes. The view knows WHERE they
@@ -236,7 +253,12 @@ private:
 	mutable qint64 spanCache_ = -1;
 	int msToX(qint64 ms) const;
 	qint64 xToMs(int x) const;
+	// clipRect is the clip's TIME span, and is what hit testing, dragging and
+	// the trim/fade grips all use. clipPaintRect is that inset by clipGap per
+	// side -- the shape actually drawn. Keeping them apart is the whole reason
+	// the gap can exist without turning into a strip that swallows clicks.
 	QRect clipRect(int track, int clip) const;
+	QRect clipPaintRect(int track, int clip) const;
 	void clampView();
 	// Fonts used by the paint path, built once instead of per track and per clip
 	// (constructing a QFont and calling setFont re-resolves it every time).
@@ -284,6 +306,13 @@ private:
 	// (TlTrack::overlapsBefore) — asking per clip is O(clips²) across a track.
 	QRect transitionRect(int track, int incoming, qint64 span) const;
 	void drawTransition(QPainter &p, int track, int incoming, qint64 span) const;
+	// The mark where a clip was split in two, drawn in the gap between the
+	// halves. See the definition for why a split is worth telling apart from
+	// two unrelated clips that merely touch.
+	void drawSplitSeams(QPainter &p, int track) const;
+	void updateHoverSeam(const QPoint &pos);
+	int hoverSeamTrack_ = -1;   // -1 = the pointer is not near a seam
+	qint64 hoverSeamMs_ = -1;
 	// Nearest snap candidate to `ms`, or `ms` itself when nothing is in range.
 	// `hit` (optional) reports whether a candidate was actually taken — the
 	// caller uses it to light up the guide line.

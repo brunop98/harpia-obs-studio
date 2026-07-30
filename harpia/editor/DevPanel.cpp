@@ -230,6 +230,9 @@ TimelineViewParams DevPanel::loadFullTimeline()
 	p.laneGap = s.value(QStringLiteral("ft/laneGap"), d.laneGap).toInt();
 	p.margin = s.value(QStringLiteral("ft/margin"), d.margin).toInt();
 	p.minClipW = s.value(QStringLiteral("ft/minClipW"), d.minClipW).toInt();
+	p.clipGap = s.value(QStringLiteral("ft/clipGap"), d.clipGap).toInt();
+	p.clipRadius = s.value(QStringLiteral("ft/clipRadius"), d.clipRadius).toInt();
+	p.splitSeamW = s.value(QStringLiteral("ft/splitSeamW"), d.splitSeamW).toInt();
 	p.snapPx = s.value(QStringLiteral("ft/snapPx"), d.snapPx).toInt();
 	p.dropBandPx = s.value(QStringLiteral("ft/dropBandPx"), d.dropBandPx).toInt();
 	p.segFontPx = s.value(QStringLiteral("ft/segFontPx"), d.segFontPx).toInt();
@@ -249,6 +252,9 @@ void DevPanel::saveFullTimeline(const TimelineViewParams &p)
 	s.setValue(QStringLiteral("ft/laneGap"), p.laneGap);
 	s.setValue(QStringLiteral("ft/margin"), p.margin);
 	s.setValue(QStringLiteral("ft/minClipW"), p.minClipW);
+	s.setValue(QStringLiteral("ft/clipGap"), p.clipGap);
+	s.setValue(QStringLiteral("ft/clipRadius"), p.clipRadius);
+	s.setValue(QStringLiteral("ft/splitSeamW"), p.splitSeamW);
 	s.setValue(QStringLiteral("ft/snapPx"), p.snapPx);
 	s.setValue(QStringLiteral("ft/dropBandPx"), p.dropBandPx);
 	s.setValue(QStringLiteral("ft/segFontPx"), p.segFontPx);
@@ -518,6 +524,14 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 			       ftMargin_ = spin(0, 40, ft.margin, &DevPanel::applyFullTimeline));
 		ftForm->addRow(QStringLiteral("Min clip width"),
 			       ftMinClipW_ = spin(2, 80, ft.minClipW, &DevPanel::applyFullTimeline));
+		// The three that decide how visible a cut is. Live, because "obvious
+		// enough" is a judgement that has to be made against real footage.
+		ftForm->addRow(QStringLiteral("Clip gap (px per side)"),
+			       ftClipGap_ = spin(0, 6, ft.clipGap, &DevPanel::applyFullTimeline));
+		ftForm->addRow(QStringLiteral("Clip corner radius"),
+			       ftClipRadius_ = spin(0, 14, ft.clipRadius, &DevPanel::applyFullTimeline));
+		ftForm->addRow(QStringLiteral("Split seam width"),
+			       ftSplitSeamW_ = spin(1, 5, ft.splitSeamW, &DevPanel::applyFullTimeline));
 		ftForm->addRow(QStringLiteral("Snap distance (px)"),
 			       ftSnapPx_ = spin(0, 40, ft.snapPx, &DevPanel::applyFullTimeline));
 		ftForm->addRow(QStringLiteral("New-track drop band (px)"),
@@ -664,6 +678,9 @@ void DevPanel::applyFullTimeline()
 	p.laneGap = ftLaneGap_->value();
 	p.margin = ftMargin_->value();
 	p.minClipW = ftMinClipW_->value();
+	p.clipGap = ftClipGap_->value();
+	p.clipRadius = ftClipRadius_->value();
+	p.splitSeamW = ftSplitSeamW_->value();
 	p.snapPx = ftSnapPx_->value();
 	p.dropBandPx = ftDropBandPx_->value();
 	p.segFontPx = ftSegFontPx_->value();

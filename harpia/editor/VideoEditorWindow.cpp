@@ -39,6 +39,7 @@
 #include "ShortcutPanel.hpp"
 #include "ShortcutRegistry.hpp"
 #include "timeline/KeyframeEditor.hpp"
+#include "timeline/TimelineSlice.hpp"
 #include "timeline/TimelineView.hpp"
 #include "timeline/Transitions.hpp"
 
@@ -482,6 +483,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		&VideoEditorWindow::revealInspector);
 	connect(timelineView_, &TimelineView::keyframeEditorRequested, this,
 		&VideoEditorWindow::openKeyframeEditor);
+	// "Export this clip…" — the ordinary Export window, aimed at one stretch.
+	connect(timelineView_, &TimelineView::exportRangeRequested, this,
+		&VideoEditorWindow::onExportRangeRequested);
 	// Direct manipulation of the selected clip straight in the preview.
 	connect(canvas_, &PreviewCanvas::transformDragged, this,
 		&VideoEditorWindow::onPreviewTransformDrag);
@@ -7344,11 +7348,29 @@ void VideoEditorWindow::onCropToggled(bool on)
 	canvas_->setCropEnabled(on);
 }
 
+void VideoEditorWindow::onExportRangeRequested(qint64 fromMs, qint64 toMs)
+{
+	// Deliberately the same door as the Export button: one dialog, one set of
+	// settings, one code path that builds the Options. The only difference is
+	// that this one arrives with the range already chosen.
+	pendingExportSpan_ = TlSpan{fromMs, toMs};
+	onSave();
+}
+
 void VideoEditorWindow::onSave()
 {
 	if (!valid_ || exporter_) // ignore while an export is already running
 		return;
 	stopPlayback();
+
+	// What the dialog may offer as an alternative to the whole timeline. Taken
+	// from the clip menu when it came from there, otherwise from whatever is
+	// selected — pressing Export offers the selection, it does not assume it.
+	const bool spanFromMenu = pendingExportSpan_.isValid();
+	TlSpan span = pendingExportSpan_;
+	pendingExportSpan_ = TlSpan(); // consumed, whichever way this call ends
+	if (fullEdit() && !span.isValid())
+		span = timelineView_->selectionSpan();
 
 	if (fullEdit() && timelineView_->model().isEmpty()) {
 		QMessageBox::information(
@@ -7379,6 +7401,23 @@ void VideoEditorWindow::onSave()
 		ec.fps = timelineFps();
 		ec.seconds = timelineView_->durationMs() / 1000.0;
 		ec.previewFrame = canvas_->currentFrame();
+		// Offer the range only when it is actually a smaller thing than the
+		// project. A "Selection" entry that covers everything is a choice with
+		// one outcome, which is worse than no choice at all.
+		span.fromMs = std::max<qint64>(0, span.fromMs);
+		span.toMs = std::min(span.toMs, timelineView_->durationMs());
+		if (span.isValid() && span.durationMs() < timelineView_->durationMs()) {
+			ec.rangeSeconds = span.durationMs() / 1000.0;
+			ec.rangeLabel = QStringLiteral("Selection  (%1 – %2)")
+						.arg(timeTextCentis(span.fromMs),
+						     timeTextCentis(span.toMs));
+			ec.rangeDefault = spanFromMenu;
+			// A distinct name, so an excerpt cannot quietly overwrite the
+			// full export sitting in the same folder.
+			ec.rangeName = base + QStringLiteral("_part");
+		} else {
+			span = TlSpan();
+		}
 	} else if (cuts) {
 		const EditorSource *s0 = sourceById(sources_.front().id);
 		ec.sourceSize = s0 ? QSize(s0->width, s0->height) : QSize();
@@ -7465,7 +7504,13 @@ void VideoEditorWindow::onSave()
 	// Full editing: hand over the whole timeline. It replaces the trim range and
 	// the cut list — the exporter composites every visible track per frame.
 	if (fullEdit()) {
-		o.timeline = timelineView_->model();
+		// A range export is the SAME render through the same code, handed a
+		// timeline that has been cut down to the chosen window and rebased to
+		// zero. Nothing downstream — the compositor, the audio mix, the
+		// progress arithmetic — has to know a range was involved.
+		o.timeline = (dlg.exportRange() && span.isValid())
+				     ? sliceTimeline(timelineView_->model(), span.fromMs, span.toMs)
+				     : timelineView_->model();
 		for (const EditorSource &es : sources_)
 			o.timelineSources[es.id] = es.path.toStdString();
 		// Ship each referenced script's SOURCE so the worker compiles its own

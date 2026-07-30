@@ -117,7 +117,29 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	form->setLabelAlignment(Qt::AlignLeft);
 	left->addLayout(form);
 
-	nameEdit_ = new QLineEdit(ctx_.defaultName, this);
+	// ---- What to export ---------------------------------------------------
+	// First, because it changes what every row below is describing. Only shown
+	// when the caller actually has a range on offer.
+	if (ctx_.rangeSeconds > 0.0) {
+		scopeCombo_ = new QComboBox(this);
+		scopeCombo_->addItem(QStringLiteral("Whole timeline  (%1 s)")
+					     .arg(ctx_.seconds, 0, 'f', 1),
+				     0);
+		scopeCombo_->addItem(ctx_.rangeLabel.isEmpty()
+					     ? QStringLiteral("Selection  (%1 s)")
+							.arg(ctx_.rangeSeconds, 0, 'f', 1)
+					     : ctx_.rangeLabel,
+				     1);
+		scopeCombo_->setCurrentIndex(ctx_.rangeDefault ? 1 : 0);
+		scopeCombo_->setToolTip(QStringLiteral(
+			"Export only part of the timeline. Everything on every track inside that "
+			"stretch comes along — it is the same render, just a shorter window of it."));
+		form->addRow(QStringLiteral("Export"), scopeCombo_);
+	}
+
+	nameEdit_ = new QLineEdit(this);
+	nameEdit_->setText(exportRange() && !ctx_.rangeName.isEmpty() ? ctx_.rangeName
+								     : ctx_.defaultName);
 	nameEdit_->setPlaceholderText(QStringLiteral("Output file name"));
 	form->addRow(QStringLiteral("File name"), nameEdit_);
 
@@ -321,6 +343,9 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 
 	connect(formatCombo_, &QComboBox::currentIndexChanged, this,
 		&ExportOptionsDialog::onFormatChanged);
+	if (scopeCombo_)
+		connect(scopeCombo_, &QComboBox::currentIndexChanged, this,
+			&ExportOptionsDialog::onScopeChanged);
 	connect(resCombo_, &QComboBox::currentIndexChanged, this, &ExportOptionsDialog::refresh);
 	connect(customW_, &QSpinBox::valueChanged, this, &ExportOptionsDialog::refresh);
 	connect(customH_, &QSpinBox::valueChanged, this, &ExportOptionsDialog::refresh);
@@ -352,6 +377,28 @@ void ExportOptionsDialog::onFormatChanged()
 	gifRow_->setVisible(gif);
 	videoRow_->setVisible(!gif);
 	exportBtn_->setText(QStringLiteral("Export %1").arg(formatName(format())));
+	refresh();
+}
+
+bool ExportOptionsDialog::exportRange() const
+{
+	return scopeCombo_ && scopeCombo_->currentData().toInt() == 1;
+}
+
+double ExportOptionsDialog::exportSeconds() const
+{
+	return exportRange() ? ctx_.rangeSeconds : ctx_.seconds;
+}
+
+void ExportOptionsDialog::onScopeChanged()
+{
+	// Follow the name along with the scope, but only while it is still one of
+	// the two suggestions: the moment someone types their own, it is theirs.
+	if (nameEdit_ && !ctx_.rangeName.isEmpty()) {
+		const QString cur = nameEdit_->text().trimmed();
+		if (cur == ctx_.defaultName || cur == ctx_.rangeName || cur.isEmpty())
+			nameEdit_->setText(exportRange() ? ctx_.rangeName : ctx_.defaultName);
+	}
 	refresh();
 }
 
@@ -392,15 +439,20 @@ void ExportOptionsDialog::refresh()
 	const bool gif = format() == ClipExporter::Format::Gif;
 	const bool audio = !gif && keepAudio() && ctx_.canKeepAudio &&
 			   format() != ClipExporter::Format::WebM;
-	summary_->setText(
+	QString text =
 		QStringLiteral("Format:      %1\nResolution:  %2\nFrame rate:  %3 fps\n"
 			       "Duration:    %4 s\nAudio:       %5")
 			.arg(formatName(format()))
 			.arg(out.isValid() ? QStringLiteral("%1×%2").arg(out.width()).arg(out.height())
 					   : QStringLiteral("—"))
 			.arg(effectiveFps(), 0, 'g', 4)
-			.arg(ctx_.seconds, 0, 'f', 1)
-			.arg(audio ? QStringLiteral("Yes") : QStringLiteral("No")));
+			.arg(exportSeconds(), 0, 'f', 1)
+			.arg(audio ? QStringLiteral("Yes") : QStringLiteral("No"));
+	// Spelled out when it is NOT the whole project, so a short duration reads as
+	// a deliberate excerpt rather than as something having gone wrong.
+	if (exportRange())
+		text += QStringLiteral("\nScope:       Selection only");
+	summary_->setText(text);
 
 	sizeValue_->setText(QStringLiteral("≈ %1").arg(humanFileSize(estimatedBytes())));
 }
@@ -413,7 +465,7 @@ qint64 ExportOptionsDialog::estimatedBytes() const
 	in.width = out.width();
 	in.height = out.height();
 	in.fps = effectiveFps();
-	in.seconds = ctx_.seconds;
+	in.seconds = exportSeconds();
 	in.videoCrf = videoCrf();
 	in.chroma444 = chroma444();
 	in.keepAudio = keepAudio() && ctx_.canKeepAudio;

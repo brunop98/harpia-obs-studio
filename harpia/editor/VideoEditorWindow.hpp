@@ -186,6 +186,9 @@ private slots:
 	void onPreviewTick();
 	void onCropToggled(bool on);
 	void onSave();
+	// "Export this clip…" from the timeline's right-click menu: the same Export
+	// window, opened with the sub-range pre-selected.
+	void onExportRangeRequested(qint64 fromMs, qint64 toMs);
 	void onExportProgress(int pct, qint64 etaMs, qint64 bytes);
 	void onExportFinished(bool ok, bool canceled, const QString &err);
 	void onPlayPause();
@@ -751,6 +754,11 @@ private:
 	std::thread exportThread_;
 	QProgressDialog *progress_ = nullptr;
 	QString outPath_;
+	// Set by "Export this clip…" and consumed by the next onSave(), which is
+	// what makes that menu item open the ORDINARY export window rather than a
+	// second one that would have to be kept in step with it. Invalid = the
+	// Export button, which offers the selection but does not assume it.
+	TlSpan pendingExportSpan_;
 
 	// Auto-cut (scene detection) runs on a worker thread.
 	std::thread sceneThread_;

@@ -44,6 +44,24 @@ public:
 		bool canKeepAudio = true;
 		bool allowGif = true;  // multi-cut exports are video-only
 		QImage previewFrame;   // first frame, for the summary panel
+
+		// An optional sub-range the caller can write INSTEAD of the whole
+		// thing -- the selected clip, or the span the selection covers. The
+		// scope row only appears when there is one, so a Trim or Multi-Cut
+		// export looks exactly as it did.
+		//
+		// The caller stays in charge of what the range means; the dialog only
+		// reports which of the two was chosen, and sizes/summarises whichever
+		// it is.
+		double rangeSeconds = 0.0; // 0 = no range on offer
+		QString rangeLabel;        // e.g. "Selected clip  (0:04 – 0:11)"
+		// Whether to START on the range. Right-clicking a clip and choosing
+		// Export means that clip; pressing the Export button means the project,
+		// even when something happens to be selected.
+		bool rangeDefault = false;
+		// What to call the file when the range is chosen, so an excerpt does
+		// not silently overwrite the full export sitting next to it.
+		QString rangeName;
 	};
 
 	explicit ExportOptionsDialog(const Context &ctx, QWidget *parent = nullptr);
@@ -64,12 +82,19 @@ public:
 	bool chroma444() const;
 	// 0x0 = keep the source/canvas size. Always even; see encodeSize().
 	QSize outputSize() const;
+	// True when the user chose the sub-range rather than the whole thing.
+	// Always false when the Context offered no range.
+	bool exportRange() const;
+	// The duration the summary and the estimate are actually describing --
+	// ctx_.seconds or ctx_.rangeSeconds, depending on the scope.
+	double exportSeconds() const;
 	// The estimate currently on screen, so a test can check the label rather
 	// than re-deriving it.
 	qint64 estimatedBytes() const;
 
 private slots:
 	void onFormatChanged();
+	void onScopeChanged();
 	void refresh(); // summary + estimate, after any change
 
 private:
@@ -80,6 +105,7 @@ private:
 
 	Context ctx_;
 
+	QComboBox *scopeCombo_ = nullptr; // null when no range was offered
 	QLineEdit *nameEdit_ = nullptr;
 	QLineEdit *folderEdit_ = nullptr;
 	QComboBox *formatCombo_ = nullptr;

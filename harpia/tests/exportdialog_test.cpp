@@ -415,6 +415,78 @@ int main(int argc, char **argv)
 	}
 
 	QSettings().clear();
+
+	std::printf("\n-- exporting only part of the timeline --\n");
+	{
+		// The scope row only exists when the caller has a range to offer, so a
+		// Trim or Multi-Cut export looks exactly as it always did.
+		ExportOptionsDialog plain(ctx1080());
+		plain.show();
+		QApplication::processEvents();
+		ok(!plain.exportRange(), "no range offered, nothing to choose");
+		ok(std::fabs(plain.exportSeconds() - 10.0) < 1e-9,
+		   "and the whole thing is what gets sized");
+
+		ExportOptionsDialog::Context c = ctx1080();
+		c.rangeSeconds = 2.5;
+		c.rangeLabel = QStringLiteral("Selection  (0:04.00 – 0:06.50)");
+		c.rangeName = QStringLiteral("myclip_part");
+
+		// Pressing Export offers the selection but does not assume it: the
+		// project is still what you asked for.
+		ExportOptionsDialog viaButton(c);
+		viaButton.show();
+		QApplication::processEvents();
+		ok(!viaButton.exportRange(), "the Export button starts on the whole timeline");
+
+		// Right-clicking a clip and choosing Export means THAT clip.
+		c.rangeDefault = true;
+		ExportOptionsDialog viaMenu(c);
+		viaMenu.show();
+		QApplication::processEvents();
+		ok(viaMenu.exportRange(), "\"Export this clip\" starts on the selection");
+		ok(std::fabs(viaMenu.exportSeconds() - 2.5) < 1e-9, "and reports the range's length");
+		std::printf("     name %s\n", qPrintable(viaMenu.fileName()));
+		ok(viaMenu.fileName() == QStringLiteral("myclip_part"),
+		   "under its own name, so it cannot overwrite the full export");
+
+		// The estimate has to follow the scope. An excerpt a quarter as long
+		// that still reads as the full size is exactly the misinformation the
+		// estimate exists to avoid.
+		const qint64 whole = viaButton.estimatedBytes();
+		const qint64 part = viaMenu.estimatedBytes();
+		std::printf("     whole %s vs range %s\n", qPrintable(humanFileSize(whole)),
+			    qPrintable(humanFileSize(part)));
+		ok(part < whole / 2, "the estimate shrinks with the shorter range");
+
+		// Flipping the scope back has to take the name and the numbers with it.
+		QComboBox *scope = nullptr;
+		for (QComboBox *cb : viaMenu.findChildren<QComboBox *>())
+			if (cb->count() == 2 &&
+			    cb->itemText(0).startsWith(QStringLiteral("Whole timeline")))
+				scope = cb;
+		ok(scope != nullptr, "the scope chooser is on screen");
+		if (scope) {
+			scope->setCurrentIndex(0);
+			QApplication::processEvents();
+			ok(!viaMenu.exportRange(), "switching back selects the whole timeline");
+			ok(std::fabs(viaMenu.exportSeconds() - 10.0) < 1e-9,
+			   "and the duration follows it");
+			ok(viaMenu.fileName() == QStringLiteral("myclip"),
+			   "as does the suggested name");
+
+			// ...but a name the user typed is theirs, whatever the scope does.
+			for (QLineEdit *le : viaMenu.findChildren<QLineEdit *>())
+				if (le->text() == QStringLiteral("myclip"))
+					le->setText(QStringLiteral("for-dave"));
+			scope->setCurrentIndex(1);
+			QApplication::processEvents();
+			ok(viaMenu.fileName() == QStringLiteral("for-dave"),
+			   "a name you typed yourself is not overwritten");
+		}
+	}
+
+	QSettings().clear();
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
 }

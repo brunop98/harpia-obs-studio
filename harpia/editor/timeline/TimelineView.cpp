@@ -2240,6 +2240,17 @@ QVector<QPair<int, int>> TimelineView::selectedPairs() const
 	return out;
 }
 
+TlSpan TimelineView::selectionSpan() const
+{
+	TlSpan span;
+	for (const auto &p : selectedPairs()) {
+		const TlClip &c = model_.tracks[p.first].clips[p.second];
+		span.fromMs = span.fromMs < 0 ? c.outStartMs : std::min(span.fromMs, c.outStartMs);
+		span.toMs = std::max(span.toMs, c.outEndMs());
+	}
+	return span;
+}
+
 bool TimelineView::isSelected(int track, int clip) const
 {
 	return (track == selTrack_ && clip == selClip_) || extraSel_.contains({track, clip});
@@ -2623,6 +2634,27 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 
 	QAction *inspect = menu.addAction(QStringLiteral("Show in inspector"));
 	QAction *keys = menu.addAction(QStringLiteral("Keyframes…"));
+
+	// Export just this stretch. Right-clicking a clip that is not part of the
+	// current selection means THAT clip -- picking it up as a selection first
+	// would be a click nobody asked for -- so the span is worked out here
+	// rather than read off selectionSpan().
+	const bool inSel = isSelected(track, clip);
+	const auto sel = selectedPairs();
+	TlSpan exportSpan;
+	if (inSel && sel.size() > 1) {
+		exportSpan = selectionSpan();
+	} else {
+		exportSpan.fromMs = menuClip.outStartMs;
+		exportSpan.toMs = menuClip.outEndMs();
+	}
+	QAction *exportSel = menu.addAction(
+		(inSel && sel.size() > 1)
+			? QStringLiteral("Export selection…  (%1 clips)").arg(sel.size())
+			: QStringLiteral("Export this clip…"));
+	exportSel->setToolTip(QStringLiteral(
+		"Opens the usual Export window for just this stretch of the timeline — every "
+		"track inside it, so the excerpt looks like what you were watching."));
 	// An effect clip animates its own parameters, not a transform, so the
 	// transform keyframe editor would be empty and misleading.
 	keys->setEnabled(!locked && !isFx);
@@ -2666,6 +2698,10 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	QAction *chosen = menu.exec(globalPos);
 	if (chosen == inspect) {
 		emit inspectClipRequested();
+		return;
+	}
+	if (chosen == exportSel) {
+		emit exportRangeRequested(exportSpan.fromMs, exportSpan.toMs);
 		return;
 	}
 	if (chosen == keys) {

@@ -49,8 +49,13 @@ build() { # source-file output-name
 		"$H/editor/ClipExporter.cpp" "$H/editor/TimelineAudio.cpp" \
 		"$H/editor/VoiceoverMixer.cpp" "$H/editor/AudioRetimer.cpp" \
 		"$H/editor/GifEncoder.cpp" "$H/editor/FrameSeeker.cpp" \
+		"$H/editor/StillImage.cpp" \
+		"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+		"$H/editor/component/ComponentStack.cpp" \
+		"$H/editor/component/BuiltinComponents.cpp" \
 		"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Spotlight.cpp" \
 		"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
+		"$H/editor/shader/SpotlightGl.cpp" \
 		"$H/editor/script/TransformScript.cpp" "$H/editor/shader/ShaderRenderer.cpp" \
 		"$WORK/moc_ClipExporter.cpp" \
 		-o "$WORK/$2" $LF

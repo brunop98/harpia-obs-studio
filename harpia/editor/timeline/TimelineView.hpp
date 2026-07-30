@@ -1,6 +1,7 @@
 #pragma once
 
 #include "TimelineModel.hpp"
+#include "TimelineSlice.hpp" // TlSpan (what "the selected portion" is)
 #include "../EditorColors.hpp"
 
 #include <QFont>
@@ -135,6 +136,12 @@ public:
 	// Nearest marker before/after `fromMs`, or -1 when there is none that way.
 	qint64 markerNear(qint64 fromMs, bool forward) const;
 	bool isSelected(int track, int clip) const;
+	// The output-time span the selection covers, earliest start to latest end.
+	// Invalid when nothing is selected. This is what "export the selected
+	// portion" means: not the clips themselves, but the window of time they
+	// occupy — everything on every track inside it comes along, which is the
+	// only reading under which the excerpt looks like what you were watching.
+	TlSpan selectionSpan() const;
 
 	// A transition is selected instead of a clip when the click lands in an
 	// overlap. It is identified by the INCOMING clip, which is where its
@@ -235,6 +242,10 @@ signals:
 	void hoverScrub(qint64 outMs); // preview while hovering (no click)
 	void inspectClipRequested();   // "Show in inspector" from a clip's menu
 	void keyframeEditorRequested();// "Keyframes…" from a clip's menu
+	// "Export this clip…" / "Export selection…". The window owns the export
+	// dialog and the media pool, so the view only says which slice of output
+	// time was asked for.
+	void exportRangeRequested(qint64 fromMs, qint64 toMs);
 
 protected:
 	void paintEvent(QPaintEvent *) override;

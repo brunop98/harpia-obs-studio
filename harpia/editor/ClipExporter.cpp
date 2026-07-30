@@ -2,6 +2,7 @@
 
 #include "AudioRetimer.hpp"
 #include "FrameSeeker.hpp"
+#include "StillImage.hpp"
 #include "GifEncoder.hpp"
 #include "TimelineAudio.hpp"
 #include "VoiceoverMixer.hpp"
@@ -1376,7 +1377,10 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 			if (c.type == TlClip::Type::Image) {
 				if (provider.stills.count(c.sourceId))
 					continue;
-				QImage img(path);
+				// readStillImage, not QImage(path): a WebP added through
+				// the libav fallback previews fine and would otherwise
+				// encode as an empty frame, which nothing reports.
+				QImage img = readStillImage(path);
 				if (!img.isNull())
 					provider.stills[c.sourceId] =
 						img.convertToFormat(QImage::Format_RGBA8888);

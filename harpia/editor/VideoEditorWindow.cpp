@@ -10,6 +10,7 @@
 #include "KeyList.hpp"
 #include "Parallel.hpp"
 #include "ParamSlider.hpp"
+#include "StillImage.hpp"
 #include "TimeText.hpp"
 
 #include "AudioRecorder.hpp"
@@ -54,6 +55,7 @@
 #include <cmath>
 #include <numeric>
 #include <QApplication>
+#include <QDateTime>
 #include <QClipboard>
 #include <QDir>
 #include <QDirIterator>
@@ -702,6 +704,22 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	addImageBtn_->setVisible(false); // Full editing only
 	connect(addImageBtn_, &QPushButton::clicked, this, &VideoEditorWindow::addImageClip);
 	controls->addWidget(addImageBtn_);
+	// Ctrl+V does this too, but a screenshot pasted straight onto the timeline is
+	// not something anyone tries unprompted -- so it gets a button, greyed out
+	// when there is nothing on the clipboard to place.
+	pasteImageBtn_ = new QPushButton(QStringLiteral("Paste image"), this);
+	pasteImageBtn_->setToolTip(QStringLiteral(
+		"Place the image on the clipboard \u2014 a screenshot, or a picture copied "
+		"from a browser \u2014 on the timeline (Ctrl+V)"));
+	pasteImageBtn_->setVisible(false); // Full editing only
+	connect(pasteImageBtn_, &QPushButton::clicked, this,
+		[this]() { pasteImageFromClipboard(timelinePlayheadMs()); });
+	connect(QApplication::clipboard(), &QClipboard::dataChanged, this, [this]() {
+		if (pasteImageBtn_)
+			pasteImageBtn_->setEnabled(systemClipboardHasMedia());
+	});
+	pasteImageBtn_->setEnabled(systemClipboardHasMedia());
+	controls->addWidget(pasteImageBtn_);
 	addFxClipBtn_ = new QPushButton(QStringLiteral("Add effect clip"), this);
 	addFxClipBtn_->setToolTip(
 		QStringLiteral("Drop an effect clip on its own track. It grades every track "
@@ -1258,6 +1276,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// so a nudge always lands on a frame boundary rather than a round number
 	// of ms.
 	shortcuts_ = new ShortcutRegistry(this, this);
+	// Which of the two clipboards is the fresher one. Watched rather than polled
+	// on Ctrl+V, because "did this change since I copied clips?" is an ordering
+	// question and only the signal knows the order.
+	connect(QApplication::clipboard(), &QClipboard::dataChanged, this,
+		[this]() { systemCopySeq_ = ++seqCounter_; });
 	auto onTimeline = [this]() { return fullEdit() && timelineView_; };
 	auto frameMs = [this]() {
 		const double fps = timelineFps();
@@ -1309,8 +1332,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	      [this]() { copySelectedClips(false); });
 	tlCmd("edit.cut", "Cut clips", "Editing", {QKeySequence::Cut},
 	      [this]() { copySelectedClips(true); });
-	tlCmd("edit.paste", "Paste clips", "Editing", {QKeySequence::Paste},
-	      [this]() { pasteClips(); });
+	// Not tlCmd: pasting a picture is meaningful from any mode (it switches to
+	// Full editing to place it), so this one must not no-op outside the timeline.
+	cmd("edit.paste", "Paste clips or image", "Editing", {QKeySequence::Paste},
+	    [this]() { pasteFromClipboard(); });
 	tlCmd("edit.delete", "Delete selection", "Editing",
 	      {QKeySequence(Qt::Key_Delete), QKeySequence(Qt::Key_Backspace)},
 	      [this]() { timelineView_->deleteSelected(); });
@@ -1822,83 +1847,16 @@ void VideoEditorWindow::onSourceDoubleClicked(QListWidgetItem *item)
 
 // ---- Still images ---------------------------------------------------------
 
-// The file-dialog filter, built from what can ACTUALLY be opened rather than
-// written out by hand. The hand-written one listed *.webp on every build, so on
-// a Qt without the WebP plugin the dialog invited a file the editor then
-// refused -- and offering something you cannot accept is worse than not
-// offering it.
+// The reader itself moved to StillImage.cpp, so the export worker can use the
+// same one; these stay as the window's published entry points.
 QString VideoEditorWindow::imageOpenFilter()
 {
-	QStringList globs;
-	for (const QByteArray &f : QImageReader::supportedImageFormats())
-		globs << QStringLiteral("*.") + QString::fromLatin1(f);
-	// libav reads these whatever Qt's plugins do, via readStillImage's fallback.
-	for (const QString &extra : {QStringLiteral("*.webp"), QStringLiteral("*.tif"),
-				     QStringLiteral("*.tiff")})
-		if (!globs.contains(extra))
-			globs << extra;
-	globs.sort();
-	return QStringLiteral("Images (%1);;All files (*)").arg(globs.join(QChar(' ')));
+	return harpia::imageOpenFilter();
 }
 
-// Read a still, by whichever decoder can. Returns a null image and fills *why
-// with a reason a person can act on.
-//
-// Two decoders, because neither alone covers what the dialog offers. Qt handles
-// PNG, JPEG, BMP and GIF natively and quickly. WebP needs Qt's qtimageformats
-// plugin, which is NOT in every build -- it is absent from the trimmed obs-deps
-// Qt used for releases -- and the dialog offered *.webp regardless, so picking
-// one produced "Could not read that image." with no clue why. libav is already
-// linked for the video path and decodes WebP, so it is the fallback for
-// anything Qt declines.
 QImage VideoEditorWindow::readStillImage(const QString &path, QString *why)
 {
-	const QFileInfo fi(path);
-	if (!fi.exists()) {
-		if (why)
-			*why = QStringLiteral("There is no file at %1.").arg(QDir::toNativeSeparators(path));
-		return {};
-	}
-	if (!fi.isReadable()) {
-		if (why)
-			*why = QStringLiteral("%1 cannot be read — check the file's permissions.")
-				       .arg(fi.fileName());
-		return {};
-	}
-
-	// A still used as a clip is legitimately large; Qt's 128 MB default refuses
-	// a 6000x6000 photo outright. Raised rather than removed -- an unbounded
-	// limit is how a malformed header turns into an out-of-memory kill.
-	if (QImageReader::allocationLimit() < 512)
-		QImageReader::setAllocationLimit(512);
-
-	QImageReader reader(path);
-	reader.setAutoTransform(true); // honour the EXIF orientation of a phone photo
-	QImage img = reader.read();
-	if (!img.isNull())
-		return img;
-	const QString qtErr = reader.errorString();
-
-	// Fall back to libav, which reads formats this Qt build has no plugin for.
-	FrameSeeker fs;
-	if (fs.open(path)) {
-		// A generous bound rather than the preview's: this is the source, and
-		// downscaling it here would throw away detail the canvas may want.
-		const QImage frame = fs.frameAt(0, 16384, 16384);
-		if (!frame.isNull())
-			return frame;
-	}
-
-	if (why) {
-		QStringList qtFormats;
-		for (const QByteArray &f : QImageReader::supportedImageFormats())
-			qtFormats << QString::fromLatin1(f);
-		*why = QStringLiteral("%1 could not be decoded.\n\nQt said: %2\nThe video decoder "
-				      "could not read it either.\n\nThis build reads: %3 (plus "
-				      "anything the video decoder handles).")
-			       .arg(fi.fileName(), qtErr, qtFormats.join(QStringLiteral(", ")));
-	}
-	return {};
+	return harpia::readStillImage(path, why);
 }
 
 int VideoEditorWindow::addImageSource(const QString &path)
@@ -5346,6 +5304,7 @@ void VideoEditorWindow::copySelectedClips(bool cut)
 	if (sel.isEmpty())
 		return;
 	clipboard_ = sel;
+	copySeq_ = ++seqCounter_; // for Ctrl+V's newest-wins rule
 	if (cut)
 		timelineView_->deleteSelected();
 }
@@ -5356,6 +5315,154 @@ void VideoEditorWindow::pasteClips()
 		return;
 	// Land at the playhead, the one place the user is definitely looking.
 	timelineView_->pasteAt(clipboard_, timelinePlayheadMs());
+}
+
+// Somewhere to put a picture that arrived without a file behind it.
+//
+// This is not an implementation detail that could have gone either way. A
+// source is identified by its PATH: the project writes sources[].path and
+// relinks by it on open, and the exporter re-reads that path on a worker thread
+// rather than touching the editor's in-memory cache. An image held only in RAM
+// would therefore preview perfectly, save a project that reopens broken, and
+// export as an empty frame -- three symptoms, one cause, none of them visible
+// until after the paste looked like it worked.
+//
+// The app's own config folder rather than a temp dir, because "still there
+// tomorrow" is the whole requirement.
+QString VideoEditorWindow::writePastedImage(const QImage &img, QString *why)
+{
+	const auto fail = [why](const QString &msg) {
+		if (why)
+			*why = msg;
+		return QString();
+	};
+	if (img.isNull())
+		return fail(QStringLiteral("The clipboard image was empty."));
+
+	const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) +
+			    QStringLiteral("/pasted");
+	if (!QDir().mkpath(dir))
+		return fail(QStringLiteral("Could not create the folder for pasted images:\n%1")
+				    .arg(QDir::toNativeSeparators(dir)));
+
+	// Timestamped so the folder stays browsable, plus a counter because two
+	// pastes inside one second is normal and losing the first would be silent.
+	const QString stamp =
+		QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss"));
+	QString path;
+	for (int n = 0; n < 10000; ++n) {
+		path = n == 0 ? QStringLiteral("%1/pasted-%2.png").arg(dir, stamp)
+			      : QStringLiteral("%1/pasted-%2-%3.png").arg(dir, stamp).arg(n);
+		if (!QFileInfo::exists(path))
+			break;
+	}
+	// PNG, not the clipboard's original format: lossless, alpha-preserving, and
+	// readable by the plain QImage(path) the export worker uses.
+	if (!img.save(path, "PNG"))
+		return fail(QStringLiteral("Could not write the pasted image to:\n%1")
+				    .arg(QDir::toNativeSeparators(path)));
+	return path;
+}
+
+QString VideoEditorWindow::sourcePathForTest(int sourceId) const
+{
+	for (const EditorSource &s : sources_)
+		if (s.id == sourceId)
+			return s.path;
+	return {};
+}
+
+QString VideoEditorWindow::infoTextForTest() const
+{
+	return infoLabel_ ? infoLabel_->text() : QString();
+}
+
+bool VideoEditorWindow::systemClipboardHasMedia() const
+{
+	const QMimeData *mime = QApplication::clipboard()->mimeData();
+	if (!mime)
+		return false;
+	if (mime->hasImage() && !qvariant_cast<QImage>(mime->imageData()).isNull())
+		return true;
+	// A file copied in Explorer or Finder arrives as a URL list, not a picture.
+	// The timeline already knows which of those it can take.
+	return !TimelineView::droppableFiles(mime).isEmpty();
+}
+
+bool VideoEditorWindow::pasteImageFromClipboard(qint64 atMs)
+{
+	const QMimeData *mime = QApplication::clipboard()->mimeData();
+	if (!mime) {
+		if (infoLabel_)
+			infoLabel_->setText(QStringLiteral("There is nothing on the clipboard."));
+		return false;
+	}
+
+	// Files first: copying a file in the file manager also puts a thumbnail on
+	// some clipboards, and the file is unambiguously what was meant.
+	const QStringList files = TimelineView::droppableFiles(mime);
+	if (!files.isEmpty()) {
+		onFilesDroppedOnTimeline(files, -1, -1, atMs);
+		return true;
+	}
+
+	const QImage img = qvariant_cast<QImage>(mime->imageData());
+	if (img.isNull()) {
+		// Say which of the two ways it can be unusable it was: an empty
+		// clipboard and a clipboard full of text are different mistakes.
+		if (infoLabel_)
+			infoLabel_->setText(
+				mime->hasText()
+					? QStringLiteral("The clipboard holds text, not an image.")
+					: QStringLiteral("The clipboard holds no image."));
+		return false;
+	}
+
+	QString why;
+	const QString path = writePastedImage(img, &why);
+	if (path.isEmpty()) {
+		QMessageBox::warning(this, QStringLiteral("Paste image"), why);
+		return false;
+	}
+	const int id = addImageSource(path);
+	if (id < 0)
+		return false; // addImageSource already said why
+
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	TlClip c;
+	c.type = TlClip::Type::Image;
+	c.sourceId = id;
+	c.srcStartMs = 0;
+	c.srcEndMs = 5000; // a still has no length of its own, like Add image
+	c.outStartMs = std::max<qint64>(0, atMs);
+	timelineView_->addClip(TlTrack::Kind::Video, c);
+	updateInfoLabel();
+	showTimelineFrame(timelinePlayheadMs());
+	return true;
+}
+
+// One key, two plausible meanings, newest wins.
+//
+// Ctrl+V has meant "paste the clips I copied inside Harpia" since the timeline
+// existed, and it now also has to mean "paste the screenshot I just took". A
+// mode switch or a second shortcut would be honest but nobody would find it, so
+// the dispatch follows what was copied last -- which is what the hand already
+// expects from every other editor.
+void VideoEditorWindow::pasteFromClipboard()
+{
+	const bool haveClips = timelineView_ && fullEdit() && !clipboard_.isEmpty();
+	const bool haveMedia = systemClipboardHasMedia();
+	if (!haveClips && !haveMedia) {
+		// Not silence: Ctrl+V doing nothing at all reads as a broken shortcut.
+		pasteImageFromClipboard(timelinePlayheadMs()); // says which kind of nothing
+		return;
+	}
+	if (haveMedia && (!haveClips || systemCopySeq_ > copySeq_)) {
+		pasteImageFromClipboard(timelinePlayheadMs());
+		return;
+	}
+	pasteClips();
 }
 
 void VideoEditorWindow::applyModeSplit()
@@ -5492,6 +5599,8 @@ void VideoEditorWindow::setEditMode(EditMode m)
 		addAudioBtn_->setVisible(full);
 	if (addImageBtn_)
 		addImageBtn_->setVisible(full);
+	if (pasteImageBtn_)
+		pasteImageBtn_->setVisible(full);
 	if (addFxClipBtn_)
 		addFxClipBtn_->setVisible(full);
 	if (snapBtn_)
@@ -6230,8 +6339,16 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 							.arg(sname.isEmpty() ? QFileInfo(spath).fileName()
 									     : sname),
 						QFileInfo(path).absolutePath(),
-						QStringLiteral("Video files (*.mp4 *.mov *.mkv *.webm *.avi "
-							       "*.m4v *.gif *.wmv *.flv *.ts);;All files (*)"));
+						// The filter follows what went missing. A video
+						// filter on an image source made the file you
+						// needed unselectable, which reads as the
+						// relink being broken.
+						isImageFile(spath)
+							? imageOpenFilter()
+							: QStringLiteral(
+								  "Video files (*.mp4 *.mov *.mkv *.webm "
+								  "*.avi *.m4v *.gif *.wmv *.flv "
+								  "*.ts);;All files (*)"));
 					if (!picked.isEmpty())
 						spath = picked;
 				}

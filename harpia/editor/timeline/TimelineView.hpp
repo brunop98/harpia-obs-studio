@@ -164,6 +164,11 @@ public:
 	const TimelineViewParams &layoutParams() const { return lp_; }
 	void setLayoutParams(const TimelineViewParams &p);
 
+	// Which of a drag's (or a clipboard's) files this widget would actually
+	// take. Public because pasting has exactly the same question to ask: a file
+	// copied in the file manager arrives as a URL list, not as a picture.
+	static QStringList droppableFiles(const QMimeData *mime);
+
 signals:
 	void clipsChanged();
 	// Media files dropped straight onto the lanes. The view knows WHERE they
@@ -301,7 +306,6 @@ private:
 	void dragMoveEvent(QDragMoveEvent *e) override;
 	void dragLeaveEvent(QDragLeaveEvent *e) override;
 	void dropEvent(QDropEvent *e) override;
-	static QStringList droppableFiles(const QMimeData *mime);
 	bool fileDrag_ = false;
 
 	// Header widgets: the small lock / hide / mute toggles in the gutter.

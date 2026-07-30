@@ -147,6 +147,13 @@ public:
 	static QImage readStillImage(const QString &path, QString *why);
 	static QString imageOpenFilter();
 
+	// Where a source's media actually lives, and whatever the info line last
+	// said. Both are here for tests: a paste is only correct if it left a FILE
+	// behind, and the "nothing usable on the clipboard" message is a feature
+	// rather than a log line, so both have to be observable.
+	QString sourcePathForTest(int sourceId) const;
+	QString infoTextForTest() const;
+
 	QString saveProjectTo(const QString &path, bool quiet);
 	bool openProjectAt(const QString &path);
 
@@ -165,6 +172,15 @@ signals:
 	void exported(const QString &path);
 
 private slots:
+	// The Ctrl+V dispatcher. Ctrl+V has two plausible meanings -- the clips you
+	// copied inside Harpia, and the picture you copied outside it -- and one key
+	// has to pick; whichever was copied LAST wins. A counter rather than a
+	// timestamp, because two copies inside one millisecond are not hypothetical.
+	//
+	// A slot so a test can reach it the way the shortcut does, rather than
+	// through a second code path that might not match.
+	void pasteFromClipboard();
+	void copySelectedClipsForTest() { copySelectedClips(false); }
 	void onScrub(qint64 ms);
 	void onHoverScrub(qint64 ms); // hover preview — never interrupts playback
 	void onPreviewTick();
@@ -259,6 +275,19 @@ private:
 	void copySelectedClips(bool cut);
 	void pasteClips();
 	QVector<TimelineView::ClipboardEntry> clipboard_;
+	// True if the system clipboard holds something this editor could place.
+	bool systemClipboardHasMedia() const;
+	// Put whatever picture (or file list) the system clipboard holds on the
+	// timeline. Returns false, having said why, if it holds nothing usable.
+	bool pasteImageFromClipboard(qint64 atMs);
+	// An image that arrived without a file behind it has to be given one: the
+	// project stores sources by PATH, and the exporter re-reads that path on a
+	// worker thread. Written to the app's own folder rather than a temp dir, so
+	// a project saved today still opens tomorrow. Empty on failure, with *why.
+	static QString writePastedImage(const QImage &img, QString *why);
+	quint64 copySeq_ = 0;       // bumped when clips are copied inside Harpia
+	quint64 systemCopySeq_ = 0; // bumped when the system clipboard changes
+	quint64 seqCounter_ = 0;    // the tick both of the above are stamped from
 	QSplitter *hsplit_ = nullptr;   // preview+editing | inspector
 	QSplitter *vsplit_ = nullptr;   // preview / editing area
 	QWidget *bottomPane_ = nullptr; // mode bar + mode stack + audio + buttons
@@ -310,6 +339,7 @@ private:
 	void onAddAudioClicked();                  // "Add audio ▾" menu
 	QPushButton *addAudioBtn_ = nullptr;
 	QPushButton *addImageBtn_ = nullptr;
+	QPushButton *pasteImageBtn_ = nullptr;
 	QPushButton *addFxClipBtn_ = nullptr; // "Add effect" -> an effect CLIP
 	QString sessionAudioDir(); // per-session temp dir for decoded proxies
 

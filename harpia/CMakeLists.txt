@@ -149,6 +149,8 @@ target_sources(
     editor/ParamSlider.cpp
     editor/ParamSlider.hpp
     editor/FrameSeeker.cpp
+    editor/StillImage.cpp
+    editor/StillImage.hpp
     editor/FrameSeeker.hpp
     editor/ClipExporter.cpp
     editor/ClipExporter.hpp

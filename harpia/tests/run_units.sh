@@ -177,6 +177,16 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/singleinstance_test.cpp" "$H/ui/SingleInstance.cpp" \
 	"$WORK/moc_SingleInstance.cpp" -o "$WORK/singleinstance_test" $LF
 
+# Every component property can be keyed -- including the ones that are not
+# numbers you can slide between (a Bool holds; a Colour moves channel by channel).
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/propkeys_test.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
+	-o "$WORK/propkeys_test" $LF
+
 # Splitting a pixel pass across cores must not change a pixel: identical output
 # at 1..8 row bands, including counts that divide the height unevenly.
 g++ -std=c++17 -O2 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -212,6 +222,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/splitseam_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinepan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineperf_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/singleinstance_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/propkeys_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/pixelbands_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/mask_test" || rc=1
 exit $rc

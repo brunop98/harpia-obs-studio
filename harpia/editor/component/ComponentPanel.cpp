@@ -314,7 +314,15 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 				control->setToolTip(d.help);
 
 			QPushButton *kb = nullptr;
-			if (!pinned && d.keyframeable && d.type != PropType::Bool) {
+			// Bools included. A switch that turns on partway through a clip is a
+		// normal thing to want -- an invert that kicks in, a mask that stops
+		// cutting -- and it holds between keys rather than interpolating, so
+		// there is nothing ambiguous about keying one.
+		//
+		// Pinned rows are still excluded, but not because they cannot animate:
+		// they are the clip's OWN pose and speed, which have their own keyframe
+		// editor. Two ways to key the same channel would be two sets of keys.
+		if (!pinned && d.keyframeable) {
 				const bool here = keyedHere.contains(d.key);
 				kb = iconButton(Glyph::Diamond,
 						QStringLiteral("Key this value at the playhead "

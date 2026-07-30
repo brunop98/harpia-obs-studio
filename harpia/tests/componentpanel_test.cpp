@@ -159,6 +159,57 @@ int main(int argc, char **argv)
 		ok(staged, "and which stage it runs in, since that is the first thing anyone asks");
 	}
 
+	std::printf("\n-- a Bool property can be keyed, and holds between keys --\n");
+	{
+		// The Inspector used to offer the diamond only on numeric rows, so a
+		// switch could not be animated at all. Driven end to end here: through
+		// the panel's own signal, into the clip, and back out of the resolver.
+		emit panel->componentAdded(QStringLiteral("harpia.mask"));
+		settle(500);
+		const TlClip *c = tv->selectedClipPtr();
+		int maskAt = -1;
+		for (int i = 0; c && i < c->components.size(); ++i)
+			if (c->components[i].typeId == QStringLiteral("harpia.mask"))
+				maskAt = i;
+		ok(maskAt >= 0, "a Mask was added");
+
+		// The panel has to OFFER it. A key button per keyable property, and the
+		// Mask has nine of them now that its switch and its shape count.
+		int diamonds = 0;
+		for (QPushButton *b : panel->findChildren<QPushButton *>())
+			if (b->toolTip().startsWith(QStringLiteral("Key this value")))
+				++diamonds;
+		std::printf("     key buttons on screen: %d\n", diamonds);
+		// Five pose channels are pinned rows and have their own editor, so the
+		// count here is the components' own properties.
+		ok(diamonds >= 9, "every one of the Mask's properties offers a key button");
+
+		emit panel->keyframeToggled(QStringLiteral("harpia.mask"), 0,
+					    QStringLiteral("invert"));
+		settle(400);
+		c = tv->selectedClipPtr();
+		const ComponentInstance *mi = (c && maskAt >= 0 && maskAt < c->components.size())
+						      ? &c->components[maskAt]
+						      : nullptr;
+		ok(mi && mi->keys.contains(QStringLiteral("invert")),
+		   "keying the Bool wrote a key onto the clip");
+		if (mi && mi->keys.contains(QStringLiteral("invert"))) {
+			std::printf("     invert now has %d key(s)\n",
+				    int(mi->keys[QStringLiteral("invert")].size()));
+			ok(mi->keys[QStringLiteral("invert")].size() == 1, "exactly one");
+		}
+
+		// Off again immediately. Every section below is written about the
+		// Always Rotate on its own, and a Mask left in place changes both the
+		// component count and the picture they measure.
+		// Ordinal, not the index in the vector: it means the k-th Mask on the
+		// clip, and there is only one.
+		emit panel->componentRemoved(QStringLiteral("harpia.mask"), 0);
+		settle(400);
+		c = tv->selectedClipPtr();
+		ok(c && c->components.size() == 1, "and the Mask came back off cleanly");
+	}
+
 	std::printf("\n-- disabling a component from the panel stops it --\n");
 	{
 		const double on = meanLuma(pc->currentFrame());

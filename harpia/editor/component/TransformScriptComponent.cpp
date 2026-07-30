@@ -149,7 +149,10 @@ int TransformScriptComponents::loadFolder(const QString &folder, ComponentRegist
 			d.min = p.min;
 			d.max = p.max;
 			d.def = p.def;
-			d.keyframeable = d.type == PropType::Float;
+			// Every type, not just Float. A script or shader parameter is no
+			// less animatable for being an integer or a switch -- the value
+			// resolver handles the kind, and a bool holds between keys.
+			d.keyframeable = true;
 			t.props.append(d);
 		}
 		t.make = [id] {

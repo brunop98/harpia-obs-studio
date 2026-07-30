@@ -945,14 +945,17 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 				auto k = ci.keys.find(key);
 				if (k != ci.keys.end() && !k->isEmpty()) {
 					const qint64 t0 = componentEditTimeFor(ci);
+					const ComponentType *ty = ComponentRegistry::instance().find(t);
+					const PropDef *pd = ty ? defFor(*ty, key) : nullptr;
+					const double kv = pd ? propKeyValue(*pd, v) : v.toDouble();
 					for (PropKey &pk : *k)
 						if (std::abs(pk.tMs - t0) <= 1) {
-							pk.v = v.toDouble();
+							pk.v = kv;
 							return;
 						}
 					PropKey pk;
 					pk.tMs = t0;
-					pk.v = v.toDouble();
+					pk.v = kv;
 					k->append(pk);
 					std::sort(k->begin(), k->end(),
 						  [](const PropKey &a, const PropKey &b) {
@@ -1077,7 +1080,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 					}
 				PropKey pk;
 				pk.tMs = t0;
-				pk.v = type ? propAt(*type, ci, key, t0).toDouble() : 0.0;
+				const PropDef *pd = type ? defFor(*type, key) : nullptr;
+				pk.v = pd ? propKeyValue(*pd, propAt(*type, ci, key, t0)) : 0.0;
 				keys.append(pk);
 				std::sort(keys.begin(), keys.end(),
 					  [](const PropKey &a, const PropKey &b) { return a.tMs < b.tMs; });

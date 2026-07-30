@@ -246,6 +246,17 @@ struct ComponentType {
 // its static value, otherwise the type's default. Exposed because the Inspector
 // needs the same answer the renderer gets, and computing it twice differently
 // is how a panel comes to disagree with the picture.
+// The declaration of one property by key, or null. Public because callers that
+// key a value need its TYPE to know how to store it.
+const PropDef *defFor(const ComponentType &type, const QString &key);
+
+// A property value as a PropKey would store it.
+//
+// The inverse of what propAt does on the way out, and it exists because
+// QVariant(QColor).toDouble() is silently 0 -- keying a colour by calling
+// toDouble() on it would write black and look like the key did not take.
+double propKeyValue(const PropDef &def, const QVariant &v);
+
 QVariant propAt(const ComponentType &type, const ComponentInstance &inst, const QString &key,
 		qint64 tMs);
 

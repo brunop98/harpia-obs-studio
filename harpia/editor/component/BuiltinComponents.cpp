@@ -363,8 +363,11 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 			"tracks below show through. The shape is in the clip's own space, so it "
 			"moves and zooms with the clip.");
 		t.props = {
+			// Keyframeable, like everything else. An Int lands on whole
+			// numbers between keys, so animating this steps cleanly from one
+			// shape to the next rather than resolving to half a shape.
 			{QStringLiteral("shape"), QStringLiteral("Shape"), PropType::Int, 0.0, 3.0,
-			 1.0, false,
+			 1.0, true,
 			 QStringLiteral("0 rectangle, 1 rounded rectangle, 2 circle, 3 ellipse.")},
 			{QStringLiteral("centreX"), QStringLiteral("Centre X"), PropType::Float, -0.5,
 			 1.5, 0.5, true, QStringLiteral("0.5 is the middle of the clip.")},
@@ -383,8 +386,10 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 			 QStringLiteral("Rounded rectangle only, as a fraction of the shorter side.")},
 			{QStringLiteral("feather"), QStringLiteral("Feather"), PropType::Float, 0.0,
 			 1.0, 0.02, true, QStringLiteral("Soften the edge. 0 is a hard cut.")},
+			// A Bool holds between its keys rather than interpolating, so
+			// keying this switches the cut at the key and not halfway to it.
 			{QStringLiteral("invert"), QStringLiteral("Invert"), PropType::Bool, 0.0, 1.0,
-			 0.0, false,
+			 0.0, true,
 			 QStringLiteral("Cut the shape OUT of the clip instead of keeping it.")},
 		};
 		// Not a point op: a feathered edge reads its neighbours through the blur,

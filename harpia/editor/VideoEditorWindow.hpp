@@ -370,6 +370,9 @@ private:
 	// How a "Zoom here" is shaped. One set for the window, so repeated zooms
 	// in a project match each other rather than each having its own timing.
 	ZoomSettings zoomSettings_;
+	// Keyframe-lane geometry from the Dev panel, kept here because the editor
+	// it applies to is a dialog that only exists while it is open.
+	KeyframeLayoutParams keyframeLayout_ = DevPanel::loadKeyframe();
 	// applyModeSplit() has run against the window's real (maximised) size.
 	bool modeSplitSized_ = false;
 	// "Zoom here" from the preview's right-click menu: write a push-in to the
@@ -459,6 +462,7 @@ private:
 	// in ComponentPanel now; the clip's fields are unchanged and still what the
 	// preview drag, the keyframe editor and the project format all write.
 	QCheckBox *autoKeyChk_ = nullptr;
+	QListWidget *keyList_ = nullptr; // every keyframe on the selected clip
 	QLabel *keyInfo_ = nullptr;
 	QWidget *textBox_ = nullptr; // text-clip style controls
 	QPlainTextEdit *textEdit_ = nullptr;

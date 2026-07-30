@@ -339,6 +339,75 @@ int main(int argc, char **argv)
 		   "a click on the letterbox bar clamps into the picture");
 	}
 
+	std::printf("\n-- Snap pulls a drag onto the centre --\n");
+	{
+		// Dragging to EXACTLY centred by hand is a game of one-pixel
+		// corrections you lose: 0.4997 reads as centred and is not.
+		bool sx = false, sy = false;
+		TlTransform near_;
+		near_.posX = 0.4970;
+		near_.posY = 0.5040;
+		const TlTransform snapped = snapPoseToCentre(near_, 0.01, &sx, &sy);
+		ok(snapped.posX == 0.5 && snapped.posY == 0.5, "a near-centre pose lands on centre");
+		ok(sx && sy, "and reports both axes, so the guides can be shown");
+
+		// Per axis: sliding down the middle keeps its horizontal centring
+		// instead of needing both held at once.
+		TlTransform oneAxis;
+		oneAxis.posX = 0.5002;
+		oneAxis.posY = 0.2000;
+		const TlTransform half = snapPoseToCentre(oneAxis, 0.01, &sx, &sy);
+		std::printf("     (0.5002, 0.2000) -> (%.4f, %.4f)  snapX=%d snapY=%d\n", half.posX,
+			    half.posY, int(sx), int(sy));
+		ok(half.posX == 0.5, "the axis that is near centre snaps");
+		ok(half.posY == 0.2, "the one that is not is left exactly alone");
+		ok(sx && !sy, "and only the snapped axis reports");
+
+		// Far away, nothing happens -- a snap that reaches too far is a drag
+		// you cannot place.
+		TlTransform far_;
+		far_.posX = 0.44;
+		far_.posY = 0.62;
+		const TlTransform untouched = snapPoseToCentre(far_, 0.01, &sx, &sy);
+		ok(untouched.posX == 0.44 && untouched.posY == 0.62, "a pose well off centre is not moved");
+		ok(!sx && !sy, "and reports no snap");
+
+		// Threshold 0 is how "Snap off" is expressed.
+		bool zx = true, zy = true;
+		const TlTransform off = snapPoseToCentre(near_, 0.0, &zx, &zy);
+		ok(off.posX == near_.posX && off.posY == near_.posY, "a zero threshold snaps nothing");
+		ok(!zx && !zy, "and says so");
+	}
+
+	std::printf("\n-- Prev/Next keyframe wraps around --\n");
+	{
+		// With three keys, pressing Next on the third used to do nothing, which
+		// reads as a broken button rather than as the end of the list.
+		QVector<TlKeyframe> keys;
+		for (qint64 t : {0LL, 1000LL, 2000LL}) {
+			TlKeyframe k;
+			k.tMs = t;
+			keys.append(k);
+		}
+		ok(stepKeyIndex(keys, 0, +1) == 1, "Next from the first goes to the second");
+		ok(stepKeyIndex(keys, 1000, +1) == 2, "and on to the third");
+		std::printf("     Next from the last -> index %d\n", stepKeyIndex(keys, 2000, +1));
+		ok(stepKeyIndex(keys, 2000, +1) == 0, "Next from the LAST wraps to the first");
+		ok(stepKeyIndex(keys, 2000, -1) == 1, "Prev walks back");
+		std::printf("     Prev from the first -> index %d\n", stepKeyIndex(keys, 0, -1));
+		ok(stepKeyIndex(keys, 0, -1) == 2, "and Prev from the first wraps to the last");
+
+		// Between keys, it goes to the neighbour rather than wrapping.
+		ok(stepKeyIndex(keys, 1500, +1) == 2, "from between two keys, Next takes the later");
+		ok(stepKeyIndex(keys, 1500, -1) == 1, "and Prev the earlier");
+
+		// A single key has nowhere to go: wrapping onto itself would look like
+		// the button doing nothing, which is what this is fixing.
+		QVector<TlKeyframe> one{keys[0]};
+		ok(stepKeyIndex(one, 0, +1) == -1, "a lone key has nowhere to step");
+		ok(stepKeyIndex({}, 0, +1) == -1, "and neither does an empty track");
+	}
+
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
 }

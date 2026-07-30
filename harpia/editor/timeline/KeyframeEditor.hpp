@@ -29,6 +29,20 @@ namespace harpia {
 // One channel's keyframe strip: a ruler, the clip's span, and a diamond per key
 // that pins this channel. Drag a diamond sideways to retime it, click to select,
 // wheel to zoom, middle-drag (or shift-wheel) to pan.
+// Runtime-tweakable geometry for the keyframe lanes (Dev-panel tunable, like
+// TimelineViewParams next door). These were four constants in the .cpp, which
+// meant the one part of the editor whose spacing is hardest to judge from a
+// screenshot -- how big a diamond has to be before you can reliably grab it --
+// could only be tuned by rebuilding.
+struct KeyframeLayoutParams {
+	int margin = 8;      // breathing room inside a lane
+	int rulerH = 16;     // the per-lane time ruler
+	int grab = 7;        // half-width of a key's clickable area
+	int diamond = 5;     // half-width of the key marker as drawn
+	int laneMinH = 120;  // a lane's minimum height
+	double maxZoom = 64.0;
+};
+
 class KeyframeLane : public QWidget {
 	Q_OBJECT
 public:
@@ -42,6 +56,9 @@ public:
 	int selectedKey() const { return sel_; }   // index into clip().keys, or -1
 	void selectKey(int keyIndex);
 	void zoomToFit();
+
+	const KeyframeLayoutParams &layoutParams() const { return lp_; }
+	void setLayoutParams(const KeyframeLayoutParams &p);
 
 signals:
 	void clipEdited();                  // a key moved/added/removed here
@@ -66,6 +83,7 @@ private:
 
 	int lane_ = 0;
 	TlClip clip_;
+	KeyframeLayoutParams lp_;
 	qint64 playheadMs_ = 0;
 	int sel_ = -1;
 
@@ -93,6 +111,11 @@ public:
 	// Follow the main timeline's playhead (given as an output-time position).
 	void setPlayheadOut(qint64 outMs);
 
+	// Dev-panel geometry, pushed down to every lane. One set for the dialog:
+	// four lanes that measured their diamonds differently would be a bug, not
+	// a feature.
+	void setLayoutParams(const KeyframeLayoutParams &p);
+
 signals:
 	// The clip was edited here: the window should push it back onto the
 	// timeline, refresh the preview and record one undo step.
@@ -101,6 +124,7 @@ signals:
 	void scrubRequested(qint64 outMs);
 
 private:
+	KeyframeLayoutParams lp_;
 	void rebuildLanes();
 	void syncKeyPanel();       // fill the property panel from the selection
 	void pushEdit();           // emit clipChanged + refresh the lanes

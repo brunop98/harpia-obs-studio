@@ -7,6 +7,7 @@
 #include <QString>
 #include <QVector>
 
+#include "timeline/KeyframeEditor.hpp" // KeyframeLayoutParams
 #include "../ui/UiText.hpp"
 
 #include <functional>
@@ -89,6 +90,13 @@ public:
 	static TimelineViewParams loadFullTimeline();
 	static void saveFullTimeline(const TimelineViewParams &p);
 
+	// Keyframe-lane geometry. Signal-based rather than widget-based like the
+	// group above, because the keyframe editor is a dialog that only exists
+	// while it is open -- the window keeps the values and applies them to the
+	// editor whenever it is opened.
+	static KeyframeLayoutParams loadKeyframe();
+	static void saveKeyframe(const KeyframeLayoutParams &p);
+
 	// The editor palette, shared by all three track widgets. Same deal: the
 	// editor loads it at startup and follows colorsChanged() live.
 	static EditorColors loadColors();
@@ -97,6 +105,7 @@ public:
 signals:
 	void chromeChanged(const EditorChromeParams &p);
 	void inspectorChanged(const EditorInspectorParams &p);
+	void keyframeChanged(const KeyframeLayoutParams &p);
 
 private:
 	void applyTimeline();
@@ -105,6 +114,7 @@ private:
 	void applyPreview();
 	void applyChrome();
 	void applyFullTimeline();
+	void applyKeyframe();
 	void applyColors();
 	void resetDefaults();
 
@@ -183,6 +193,14 @@ private:
 	QSpinBox *ftDropBandPx_ = nullptr;
 	QSpinBox *ftSegFontPx_ = nullptr;
 	QDoubleSpinBox *ftMaxZoom_ = nullptr;
+
+	// Keyframe lanes.
+	QSpinBox *kfMargin_ = nullptr;
+	QSpinBox *kfRulerH_ = nullptr;
+	QSpinBox *kfGrab_ = nullptr;
+	QSpinBox *kfDiamond_ = nullptr;
+	QSpinBox *kfLaneMinH_ = nullptr;
+	QDoubleSpinBox *kfMaxZoom_ = nullptr;
 
 	// Voiceover track.
 	QSpinBox *voMargin_ = nullptr;

@@ -241,6 +241,35 @@ TimelineViewParams DevPanel::loadFullTimeline()
 	return p;
 }
 
+KeyframeLayoutParams DevPanel::loadKeyframe()
+{
+	KeyframeLayoutParams p;
+	const KeyframeLayoutParams d; // struct defaults ARE the shipped values
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout"));
+	p.margin = s.value(QStringLiteral("kf/margin"), d.margin).toInt();
+	p.rulerH = s.value(QStringLiteral("kf/rulerH"), d.rulerH).toInt();
+	p.grab = s.value(QStringLiteral("kf/grab"), d.grab).toInt();
+	p.diamond = s.value(QStringLiteral("kf/diamond"), d.diamond).toInt();
+	p.laneMinH = s.value(QStringLiteral("kf/laneMinH"), d.laneMinH).toInt();
+	p.maxZoom = s.value(QStringLiteral("kf/maxZoom"), d.maxZoom).toDouble();
+	s.endGroup();
+	return p;
+}
+
+void DevPanel::saveKeyframe(const KeyframeLayoutParams &p)
+{
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout"));
+	s.setValue(QStringLiteral("kf/margin"), p.margin);
+	s.setValue(QStringLiteral("kf/rulerH"), p.rulerH);
+	s.setValue(QStringLiteral("kf/grab"), p.grab);
+	s.setValue(QStringLiteral("kf/diamond"), p.diamond);
+	s.setValue(QStringLiteral("kf/laneMinH"), p.laneMinH);
+	s.setValue(QStringLiteral("kf/maxZoom"), p.maxZoom);
+	s.endGroup();
+}
+
 void DevPanel::saveFullTimeline(const TimelineViewParams &p)
 {
 	QSettings s = devSettings();
@@ -503,6 +532,39 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 
 	const VoiceoverLayoutParams vo = voice_->layoutParams();
 	// Full-editing multi-track timeline (only when that widget exists).
+	{
+		// Keyframe lanes. Signal-based: the keyframe editor is a dialog that
+		// only exists while open, so the values are saved and broadcast and the
+		// window applies them whenever it builds one.
+		const KeyframeLayoutParams kf = loadKeyframe();
+		QFormLayout *kfForm = addPage(
+			QStringLiteral("Keyframes"),
+			QStringLiteral("The per-channel keyframe lanes (Keyframes… on a clip)."));
+		kfForm->addRow(QStringLiteral("Lane margin"),
+			       kfMargin_ = spin(0, 40, kf.margin, &DevPanel::applyKeyframe));
+		kfForm->addRow(QStringLiteral("Ruler height"),
+			       kfRulerH_ = spin(8, 48, kf.rulerH, &DevPanel::applyKeyframe));
+		kfForm->addRow(QStringLiteral("Key grab radius"),
+			       kfGrab_ = spin(3, 24, kf.grab, &DevPanel::applyKeyframe));
+		kfGrab_->setToolTip(QStringLiteral(
+			"How close the pointer has to be to catch a key. Bigger than the diamond "
+			"on purpose -- a marker you can see but not reliably grab is the usual "
+			"complaint about keyframe editors."));
+		kfForm->addRow(QStringLiteral("Key marker size"),
+			       kfDiamond_ = spin(2, 20, kf.diamond, &DevPanel::applyKeyframe));
+		kfForm->addRow(QStringLiteral("Lane minimum height"),
+			       kfLaneMinH_ = spin(60, 400, kf.laneMinH, &DevPanel::applyKeyframe));
+		kfMaxZoom_ = new QDoubleSpinBox(this);
+		kfMaxZoom_->setRange(1.0, 512.0);
+		kfMaxZoom_->setDecimals(1);
+		kfMaxZoom_->setValue(kf.maxZoom);
+		connect(kfMaxZoom_, &QDoubleSpinBox::valueChanged, this, [this]() {
+			if (!loading_)
+				applyKeyframe();
+		});
+		kfForm->addRow(QStringLiteral("Max zoom"), kfMaxZoom_);
+	}
+
 	if (fullTimeline_) {
 		// The widget was already given the saved values at startup, so reading
 		// them back keeps the boxes in step with what's on screen.
@@ -708,6 +770,19 @@ void DevPanel::applyVoice()
 	p.edgeZone = voEdgeZone_->value();
 	voice_->setLayoutParams(p);
 	saveFrom(timeline_->layoutParams(), tracks_->layoutParams(), p, preview_->layoutParams());
+}
+
+void DevPanel::applyKeyframe()
+{
+	KeyframeLayoutParams p;
+	p.margin = kfMargin_->value();
+	p.rulerH = kfRulerH_->value();
+	p.grab = kfGrab_->value();
+	p.diamond = kfDiamond_->value();
+	p.laneMinH = kfLaneMinH_->value();
+	p.maxZoom = kfMaxZoom_->value();
+	saveKeyframe(p);
+	emit keyframeChanged(p);
 }
 
 void DevPanel::applyChrome()

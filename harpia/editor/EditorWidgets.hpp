@@ -49,6 +49,9 @@ public:
 	// compositor uses -- so the grips sit on the corners of the shape as drawn
 	// rather than on a bounding box that is wrong the moment anything is turned.
 	void setTransformBox(const QRectF &canvasRect, double rotationDeg);
+	// Centre guides, drawn while a drag is snapped to the middle of the canvas.
+	// A snap you cannot see is indistinguishable from the drag having stuck.
+	void setCentreGuides(bool showX, bool showY);
 
 	// Developer Panel: tweak the preview's minimum size live.
 	const PreviewLayoutParams &layoutParams() const { return lp_; }
@@ -186,6 +189,9 @@ private:
 	double maskStartAngle_ = 0; // pointer angle at press, for the rotate grip
 
 	bool transformMode_ = false;
+	// Centre guides, on only while a drag is actually snapped.
+	bool guideX_ = false;
+	bool guideY_ = false;
 	bool transformDragging_ = false;
 	QPoint transformLast_;
 	QRectF transformRect_;        // canvas px, UNROTATED; empty = no outline

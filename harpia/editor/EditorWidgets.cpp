@@ -149,6 +149,23 @@ void PreviewCanvas::paintEvent(QPaintEvent *)
 		}
 	}
 
+	// Centre guides. Only while a drag is actually snapped, so the line means
+	// "this is on the centre now" rather than being permanent furniture.
+	if ((guideX_ || guideY_) && !d.isEmpty()) {
+		p.save();
+		p.setRenderHint(QPainter::Antialiasing, false);
+		p.setPen(QPen(QColor(0xff, 0xc0, 0x40, 200), 1, Qt::DashLine));
+		if (guideX_) {
+			const int cx = d.center().x();
+			p.drawLine(cx, d.top(), cx, d.bottom());
+		}
+		if (guideY_) {
+			const int cy = d.center().y();
+			p.drawLine(d.left(), cy, d.right(), cy);
+		}
+		p.restore();
+	}
+
 	// The Mask component's shape, with the same grips as everything else here.
 	if (mask_.on) {
 		const QVector<QPointF> h = maskHandlePoints();
@@ -245,6 +262,15 @@ void PreviewCanvas::setTransformMode(bool on)
 	if (!on)
 		transformRect_ = QRectF();
 	setCursor(on ? Qt::OpenHandCursor : Qt::ArrowCursor);
+	update();
+}
+
+void PreviewCanvas::setCentreGuides(bool showX, bool showY)
+{
+	if (guideX_ == showX && guideY_ == showY)
+		return;
+	guideX_ = showX;
+	guideY_ = showY;
 	update();
 }
 

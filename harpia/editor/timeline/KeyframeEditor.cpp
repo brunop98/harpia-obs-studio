@@ -31,11 +31,6 @@ const QColor kKeySel(0xff, 0xff, 0xff);
 const QColor kCurve(0x00, 0xae, 0xef);
 const QColor kPlayhead(0xe5, 0x48, 0x4d);
 
-constexpr int kMargin = 8;
-constexpr int kRulerH = 16;
-constexpr int kGrab = 7;   // half-width of a key's clickable area
-constexpr int kDiamond = 5;
-constexpr double kMaxZoom = 64.0;
 } // namespace
 
 // ---- KeyframeLane -----------------------------------------------------------
@@ -44,7 +39,15 @@ KeyframeLane::KeyframeLane(int lane, QWidget *parent) : QWidget(parent), lane_(l
 {
 	setMouseTracking(true);
 	setFocusPolicy(Qt::StrongFocus);
-	setMinimumHeight(120);
+	setMinimumHeight(lp_.laneMinH);
+}
+
+void KeyframeLane::setLayoutParams(const KeyframeLayoutParams &p)
+{
+	lp_ = p;
+	setMinimumHeight(lp_.laneMinH);
+	clampView(); // maxZoom may have moved under the current zoom
+	update();
 }
 
 void KeyframeLane::setClip(const TlClip &c)
@@ -88,13 +91,13 @@ QSize KeyframeLane::minimumSizeHint() const
 
 QRect KeyframeLane::contentRect() const
 {
-	return QRect(kMargin, kMargin + kRulerH, std::max(1, width() - 2 * kMargin),
-		     std::max(1, height() - 2 * kMargin - kRulerH));
+	return QRect(lp_.margin, lp_.margin + lp_.rulerH, std::max(1, width() - 2 * lp_.margin),
+		     std::max(1, height() - 2 * lp_.margin - lp_.rulerH));
 }
 
 void KeyframeLane::clampView()
 {
-	zoom_ = std::clamp(zoom_, 1.0, kMaxZoom);
+	zoom_ = std::clamp(zoom_, 1.0, lp_.maxZoom);
 	const qint64 dur = std::max<qint64>(1, clip_.outDurationMs());
 	const qint64 visible = qint64(double(dur) / zoom_);
 	viewStart_ = std::clamp<qint64>(viewStart_, 0, std::max<qint64>(0, dur - visible));
@@ -119,7 +122,7 @@ qint64 KeyframeLane::xToMs(int x) const
 
 int KeyframeLane::keyAtX(int x) const
 {
-	int best = -1, bestD = kGrab + 1;
+	int best = -1, bestD = lp_.grab + 1;
 	for (int i : clip_.keysOnLane(lane_)) {
 		const int d = std::abs(msToX(clip_.keys[i].tMs) - x);
 		if (d < bestD) {
@@ -161,8 +164,8 @@ void KeyframeLane::paintEvent(QPaintEvent *)
 		const int x = msToX(t);
 		if (x < r.x() - 1 || x > r.right() + 1)
 			continue;
-		p.drawLine(x, kMargin + kRulerH - 4, x, kMargin + kRulerH - 1);
-		p.drawText(QRect(x - 28, kMargin - 1, 56, kRulerH - 4), Qt::AlignHCenter | Qt::AlignTop,
+		p.drawLine(x, lp_.margin + lp_.rulerH - 4, x, lp_.margin + lp_.rulerH - 1);
+		p.drawText(QRect(x - 28, lp_.margin - 1, 56, lp_.rulerH - 4), Qt::AlignHCenter | Qt::AlignTop,
 			   QStringLiteral("%1s").arg(t / 1000.0, 0, 'f', stepMs < 1000 ? 1 : 0));
 	}
 
@@ -207,7 +210,7 @@ void KeyframeLane::paintEvent(QPaintEvent *)
 		if (x < r.x() - 8 || x > r.right() + 8)
 			continue;
 		const int y = r.bottom() - 10;
-		const int s = (i == sel_) ? kDiamond + 2 : kDiamond;
+		const int s = (i == sel_) ? lp_.diamond + 2 : lp_.diamond;
 		QPainterPath d;
 		d.moveTo(x, y - s);
 		d.lineTo(x + s, y);
@@ -230,7 +233,7 @@ void KeyframeLane::paintEvent(QPaintEvent *)
 	const int px = msToX(playheadMs_);
 	if (px >= r.x() - 1 && px <= r.right() + 1) {
 		p.setPen(QPen(kPlayhead, 1));
-		p.drawLine(px, kMargin, px, r.bottom());
+		p.drawLine(px, lp_.margin, px, r.bottom());
 	}
 
 	p.setPen(QPen(kBorder, 1));
@@ -359,7 +362,7 @@ void KeyframeLane::wheelEvent(QWheelEvent *e)
 	// Zoom about the cursor, so the frame under it stays put.
 	const qint64 anchor = xToMs(int(e->position().x()));
 	const double before = zoom_;
-	zoom_ = std::clamp(zoom_ * std::pow(1.2, dy / 120.0), 1.0, kMaxZoom);
+	zoom_ = std::clamp(zoom_ * std::pow(1.2, dy / 120.0), 1.0, lp_.maxZoom);
 	if (std::abs(zoom_ - before) > 1e-9) {
 		const QRect r = contentRect();
 		const qint64 dur = std::max<qint64>(1, clip_.outDurationMs());
@@ -401,6 +404,7 @@ KeyframeEditor::KeyframeEditor(QWidget *parent) : QDialog(parent)
 	tabs_->setDocumentMode(true);
 	for (int l = 0; l < kTlLaneCount; ++l) {
 		auto *lane = new KeyframeLane(l, this);
+		lane->setLayoutParams(lp_); // whatever the Dev panel last set
 		lanes_.append(lane);
 		tabs_->addTab(lane, QString::fromLatin1(tlLaneName(l)));
 		connect(lane, &KeyframeLane::clipEdited, this, [this, lane]() {
@@ -607,6 +611,17 @@ void KeyframeEditor::setClip(const TlClip &c, const QString &label)
 				       : QStringLiteral("Keyframes — %1").arg(label));
 	rebuildLanes();
 	syncKeyPanel();
+}
+
+void KeyframeEditor::setLayoutParams(const KeyframeLayoutParams &p)
+{
+	lp_ = p;
+	// Also remembered here, so lanes rebuilt later (rebuildLanes runs whenever
+	// the clip changes) come up with the current geometry rather than the
+	// struct defaults.
+	for (KeyframeLane *l : lanes_)
+		if (l)
+			l->setLayoutParams(lp_);
 }
 
 void KeyframeEditor::setPlayheadOut(qint64 outMs)

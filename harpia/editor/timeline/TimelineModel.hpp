@@ -474,6 +474,31 @@ struct TlClip {
 	}
 };
 
+// The keyframe the Prev/Next buttons should jump to from `relMs` (a clip-time
+// position), or -1 when there is nowhere to go.
+//
+// Wraps: past the last key, Next returns the first. Without that, pressing Next
+// on the final key of three does nothing at all, which reads as a broken button
+// rather than as having reached the end.
+//
+// The +/-1 ms deadband stops "next" from re-selecting the key you are already
+// sitting on, which is why this is not just a lower_bound.
+inline int stepKeyIndex(const QVector<TlKeyframe> &keys, qint64 relMs, int dir)
+{
+	if (keys.isEmpty())
+		return -1;
+	if (dir > 0) {
+		for (int i = 0; i < keys.size(); ++i)
+			if (keys[i].tMs > relMs + 1)
+				return i;
+		return keys.size() > 1 ? 0 : -1; // wrap; a lone key has nowhere to go
+	}
+	for (int i = keys.size() - 1; i >= 0; --i)
+		if (keys[i].tMs < relMs - 1)
+			return i;
+	return keys.size() > 1 ? keys.size() - 1 : -1;
+}
+
 // Hand a split clip's fades to the two halves it became: the head keeps the
 // fade-in, the tail keeps the fade-out, neither inherits the other's, and both
 // are pulled in to fit. Shared by the two split paths so a context-menu split

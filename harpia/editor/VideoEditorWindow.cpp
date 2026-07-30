@@ -421,6 +421,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 				&VideoEditorWindow::applyInspectorParams);
 			connect(devPanel_, &DevPanel::chromeChanged, this,
 				&VideoEditorWindow::applyChrome);
+			connect(devPanel_, &DevPanel::keyframeChanged, this,
+				[this](const KeyframeLayoutParams &p) {
+					keyframeLayout_ = p;
+					if (keyEditor_)
+						keyEditor_->setLayoutParams(p);
+				});
 		}
 		devPanel_->show();
 		devPanel_->raise();
@@ -577,6 +583,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(canvas_, &PreviewCanvas::maskEditFinished, this, [this]() { commitSnapshot(); });
 	connect(canvas_, &PreviewCanvas::transformEditFinished, this, [this]() {
 		xfGestureActive_ = false;
+		// The guides say "the drag you are doing is snapped"; with the drag over
+		// they would just be lines nobody asked for.
+		canvas_->setCentreGuides(false, false);
 		commitSnapshot();
 	});
 	// Spotlight masks, placed by looking at the picture rather than by typing
@@ -4163,6 +4172,32 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(kfDel, &QPushButton::clicked, this, &VideoEditorWindow::removeKeyframeAtPlayhead);
 	connect(kfPrev, &QPushButton::clicked, this, [this]() { stepKeyframe(-1); });
 	connect(kfNext, &QPushButton::clicked, this, [this]() { stepKeyframe(1); });
+	// Every keyframe, listed. "3 keyframes" tells you how many there are and
+	// nothing about WHERE they are, so finding the one you want meant stepping
+	// through them with the arrows and watching the preview. Each row is its
+	// time and the channels it pins; clicking one jumps the playhead to it.
+	keyList_ = new QListWidget(clipBox_);
+	keyList_->setToolTip(QStringLiteral(
+		"Every keyframe on this clip. Click one to jump to it; the ✦ marks show which "
+		"channels that key pins."));
+	keyList_->setAlternatingRowColors(true);
+	keyList_->setUniformItemSizes(true);
+	keyList_->setMaximumHeight(120);
+	connect(keyList_, &QListWidget::itemClicked, this, [this](QListWidgetItem *it) {
+		if (syncingClip_ || !it)
+			return;
+		const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+		if (!sel)
+			return;
+		bool ok = false;
+		const qint64 rel = it->data(Qt::UserRole).toLongLong(&ok);
+		if (!ok)
+			return;
+		onTimelineScrub(sel->outStartMs + rel);
+		syncClipInspector();
+	});
+	v->addWidget(keyList_);
+
 	keyInfo_ = new QLabel(QString(), clipBox_);
 	keyInfo_->setStyleSheet(QStringLiteral("color:#7f858e;"));
 	v->addWidget(keyInfo_);
@@ -4543,6 +4578,7 @@ void VideoEditorWindow::openKeyframeEditor()
 		return;
 	if (!keyEditor_) {
 		keyEditor_ = new KeyframeEditor(this);
+		keyEditor_->setLayoutParams(keyframeLayout_);
 		connect(keyEditor_, &KeyframeEditor::clipChanged, this, [this](const TlClip &c) {
 			if (!timelineView_ || !timelineView_->selectedClipPtr())
 				return;
@@ -4669,6 +4705,36 @@ void VideoEditorWindow::syncClipInspector()
 					    .arg(c->keys.size() == 1 ? QString() : QStringLiteral("s"))
 					    .arg(here >= 0 ? QStringLiteral(" · on one now") : QString()));
 
+	// The list itself: one row per key, in time order, with the channels it
+	// pins. Rebuilt rather than patched -- a few keys is a few rows, and a
+	// partial update is where a stale entry would come from.
+	if (keyList_) {
+		keyList_->clear();
+		for (int i = 0; i < c->keys.size(); ++i) {
+			const TlKeyframe &k = c->keys[i];
+			QStringList lanes;
+			for (int l = 0; l < kTlLaneCount; ++l)
+				if (k.channel(l).on)
+					lanes << QString::fromLatin1(tlLaneName(l));
+			// A key that pins everything says so once instead of listing four.
+			const QString what = lanes.size() == kTlLaneCount
+						     ? QStringLiteral("all")
+						     : (lanes.isEmpty() ? QStringLiteral("—")
+									: lanes.join(QStringLiteral(", ")));
+			auto *item = new QListWidgetItem(
+				QStringLiteral("%1   %2   %3")
+					.arg(i + 1, 2)
+					.arg(timeTextCentis(k.tMs), -8)
+					.arg(what));
+			item->setData(Qt::UserRole, qlonglong(k.tMs));
+			keyList_->addItem(item);
+		}
+		// Highlight the one the playhead is on, so the list and the preview
+		// agree about where you are.
+		keyList_->setCurrentRow(here);
+		keyList_->setVisible(!c->keys.isEmpty());
+	}
+
 	// Transform script stack + the selected entry's parameter controls.
 	refreshScriptList();
 	rebuildScriptParams();
@@ -4779,23 +4845,12 @@ void VideoEditorWindow::stepKeyframe(int dir)
 	if (!sel || sel->keys.isEmpty())
 		return;
 	const qint64 rel = timelinePlayheadMs() - sel->outStartMs;
-	qint64 target = -1;
-	if (dir > 0) {
-		for (const TlKeyframe &k : sel->keys)
-			if (k.tMs > rel + 1) {
-				target = k.tMs;
-				break;
-			}
-	} else {
-		for (int i = sel->keys.size() - 1; i >= 0; --i)
-			if (sel->keys[i].tMs < rel - 1) {
-				target = sel->keys[i].tMs;
-				break;
-			}
-	}
-	if (target < 0)
+	// Wrapping and the deadband both live in stepKeyIndex, where they can be
+	// checked without a window.
+	const int i = stepKeyIndex(sel->keys, rel, dir);
+	if (i < 0)
 		return;
-	onTimelineScrub(sel->outStartMs + target);
+	onTimelineScrub(sel->outStartMs + sel->keys[i].tMs);
 	syncClipInspector();
 }
 
@@ -4987,6 +5042,14 @@ void VideoEditorWindow::applySelectedClipTransform(const TlTransform &tf)
 	scheduleSnapshot();
 }
 
+namespace {
+// How close to the middle a drag has to get before it is pulled onto it, as a
+// fraction of the canvas. About 1% -- roughly 19 canvas px at 1080p, and a
+// handful of screen pixels at any preview size, which is close enough to be
+// deliberate and far enough to be reachable.
+constexpr double kCentreSnapNorm = 0.01;
+} // namespace
+
 void VideoEditorWindow::onPreviewTransformDrag(double dxNorm, double dyNorm)
 {
 	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
@@ -5000,6 +5063,16 @@ void VideoEditorWindow::onPreviewTransformDrag(double dxNorm, double dyNorm)
 	TlTransform tf = sel->transformAt(timelinePlayheadMs());
 	tf.posX += dxNorm;
 	tf.posY += dyNorm;
+	// Snap does for the picture what it already does for clip edges on the
+	// timeline: dragging something to EXACTLY centred by hand is a game of
+	// one-pixel corrections you lose, and 0.4997 reads as centred while not
+	// being it. Per axis, so sliding down the middle keeps its horizontal
+	// centring instead of needing both held at once.
+	bool snappedX = false, snappedY = false;
+	if (timelineView_ && timelineView_->snapEnabled())
+		tf = snapPoseToCentre(tf, kCentreSnapNorm, &snappedX, &snappedY);
+	if (canvas_)
+		canvas_->setCentreGuides(snappedX, snappedY);
 	applySelectedClipTransform(tf);
 }
 

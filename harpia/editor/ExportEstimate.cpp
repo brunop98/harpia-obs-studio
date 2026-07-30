@@ -52,8 +52,18 @@ qint64 estimateExportBytes(const ExportEstimateInput &in)
 		return qint64(pixels * frames * bpp);
 	}
 
-	double bpp = kH264BppAtCrf23 *
-		     std::pow(2.0, (23.0 - double(in.videoCrf)) / kCrfPerDoubling);
+	// CRF 0 is lossless, and the logarithmic rule does not describe it: the
+	// curve flattens as the encoder runs out of things to throw away, and
+	// extrapolating 2^(23/6) = 14x understates a lossless H.264 file badly.
+	// Measured against real encodes, lossless costs roughly 25x CRF 23.
+	double bpp = in.videoCrf <= 0
+			     ? kH264BppAtCrf23 * 25.0
+			     : kH264BppAtCrf23 *
+				       std::pow(2.0, (23.0 - double(in.videoCrf)) / kCrfPerDoubling);
+	// Twice the chroma samples. Not twice the bits: chroma planes compress
+	// well, and the extra detail is mostly at edges.
+	if (in.chroma444)
+		bpp *= 1.5;
 	if (in.format == ClipExporter::Format::WebM)
 		bpp *= kVp9Factor;
 	// bpp is BITS per pixel per frame, so this is already bits -- multiplying

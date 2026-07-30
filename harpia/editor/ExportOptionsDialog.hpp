@@ -60,6 +60,8 @@ public:
 	bool gifLoop() const;
 	int videoCrf() const;
 	bool keepAudio() const;
+	ClipExporter::Options::Effort effort() const;
+	bool chroma444() const;
 	// 0x0 = keep the source/canvas size. Always even; see encodeSize().
 	QSize outputSize() const;
 	// The estimate currently on screen, so a test can check the label rather
@@ -88,6 +90,8 @@ private:
 
 	QSlider *qualitySlider_ = nullptr;
 	QLabel *qualityLabel_ = nullptr;
+	QComboBox *effortCombo_ = nullptr;
+	QCheckBox *chroma444Check_ = nullptr;
 	QCheckBox *audioCheck_ = nullptr;
 	QWidget *videoRow_ = nullptr;
 

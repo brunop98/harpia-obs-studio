@@ -79,6 +79,24 @@ int main(int argc, char **argv)
 	QCoreApplication::setApplicationName(QStringLiteral("exportdialog_test"));
 	QSettings().clear();
 
+	std::printf("\n-- a fresh install exports at high quality --\n");
+	{
+		// The default used to be the middle of the slider on a live-capture
+		// preset, which is a fine recording setting and a poor export one.
+		ExportOptionsDialog dlg(ctx1080());
+		dlg.show();
+		QApplication::processEvents();
+		std::printf("     CRF %d, effort %d, 4:4:4 %s\n", dlg.videoCrf(), int(dlg.effort()),
+			    dlg.chroma444() ? "on" : "off");
+		ok(dlg.videoCrf() <= 14, "the quality slider starts near the top of its range");
+		ok(dlg.effort() == ClipExporter::Options::Effort::Best,
+		   "and the encoder is allowed to take its time");
+		// Not 4:4:4 by default, and that is deliberate: it is H.264 High 4:4:4
+		// Predictive, which browsers and phones refuse to play. The best-looking
+		// file nobody can open is not the best default.
+		ok(!dlg.chroma444(), "but not 4:4:4, which many players cannot open");
+	}
+
 	std::printf("\n-- the estimate moves the way the settings do --\n");
 	{
 		ExportEstimateInput base;
@@ -376,7 +394,7 @@ int main(int argc, char **argv)
 		std::printf("     reopened at %dx%d, CRF %d\n", again.outputSize().width(),
 			    again.outputSize().height(), again.videoCrf());
 		ok(again.outputSize() == QSize(1280, 720), "it reopened at the resolution last used");
-		ok(again.videoCrf() == 16, "and at the quality last used");
+		ok(again.videoCrf() == 0, "and at the quality last used (the slider's top is lossless)");
 
 		// Remembered as a HEIGHT, not an index: the preset list depends on the
 		// source, so an index means a different row for the next clip.

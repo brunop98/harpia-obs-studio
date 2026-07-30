@@ -62,7 +62,27 @@ public:
 		bool gifLoop = true;   // loop forever, vs play once
 
 		// Video-only
-		int videoCrf = 20;    // x264/vp9 constant quality (lower = better)
+		//
+		// How hard the encoder is allowed to work. This is NOT the same knob as
+		// videoCrf: CRF asks for a quality, effort decides how many tools the
+		// encoder may use to reach it. The exporter used to be pinned at
+		// x264 "veryfast", which is a recording preset -- fine when frames are
+		// arriving in real time, needlessly lossy for a render that can take as
+		// long as it likes.
+		enum class Effort { Fast, Balanced, Best };
+		Effort effort = Effort::Best;
+
+		// 4:4:4 chroma instead of 4:2:0. 4:2:0 stores one colour sample per 2x2
+		// block, which is invisible on camera footage and very visible on
+		// coloured text, thin UI lines and hard graphic edges -- exactly what a
+		// screen recorder produces. Costs roughly half again in size and is not
+		// playable everywhere (H.264 High 4:4:4 Predictive), so it is a choice
+		// rather than the default.
+		bool chroma444 = false;
+
+		// Matches the dialog's default. A caller that sets nothing should get a
+		// good-looking file, not a mediocre one it never chose.
+		int videoCrf = 12;    // x264/vp9 constant quality (lower = better; 0 = lossless)
 		bool keepAudio = true; // MP4/MKV/MOV keep the (trimmed) audio; GIF/WebM silent
 		// Output size, in pixels. 0 = whatever the path would produce anyway (the
 		// source, the cropped area, or the timeline canvas). Set BOTH or neither:

@@ -33,12 +33,31 @@ namespace {
 // tedium the old dialog had.
 constexpr char kGroup[] = "export/";
 
-// The quality slider runs 0..100 left-to-right (smaller file -> better
-// quality) and maps onto CRF backwards, because CRF counts the other way.
-// The useful range for x264 is about 30 down to 16; outside it you are either
-// looking at mush or paying for bits nobody can see.
+// The quality slider runs 0..100 left-to-right (smaller file -> better quality)
+// and maps onto CRF backwards, because CRF counts the other way.
+//
+// The top of the range is CRF 0, which for x264 is mathematically lossless --
+// the decoded output is bit-identical to what went in. It used to stop at 16,
+// which is excellent and still not what someone asking for "maximum" means.
+// 16 now sits around 88 on the slider, so the everyday range is unchanged and
+// the last stretch is the expensive part.
 constexpr int kCrfWorst = 30;
-constexpr int kCrfBest = 16;
+constexpr int kCrfBest = 0;
+
+// What a fresh install exports at. Deliberately near the top of the range:
+// people notice a soft export immediately and a large file only later, and the
+// slider is right there for anyone who wants the other trade.
+//
+// CRF 12 rather than 0: 0 is mathematically lossless and runs to hundreds of
+// megabytes a minute, which is a surprise, not a default. 12 is visually
+// indistinguishable from the source on everything short of a frame-by-frame
+// comparison.
+constexpr int kDefaultCrf = 12;
+constexpr auto kDefaultEffort = ClipExporter::Options::Effort::Best;
+// 4:4:4 is NOT defaulted on, and that is not timidity. It is H.264 High 4:4:4
+// Predictive: browsers, phones and QuickTime will not play it. A default that
+// produces the best-looking file nobody can open is not the best default.
+constexpr bool kDefaultChroma444 = false;
 int crfForSlider(int v)
 {
 	const double t = std::clamp(v, 0, 100) / 100.0;
@@ -48,6 +67,24 @@ int sliderForCrf(int crf)
 {
 	const double t = double(kCrfWorst - crf) / double(kCrfWorst - kCrfBest);
 	return int(std::lround(std::clamp(t, 0.0, 1.0) * 100.0));
+}
+
+// What a CRF actually means, in the words people use for it. A bare number is
+// meaningless to anyone who has not encoded video before, and the two ends in
+// particular need saying: 0 is lossless and enormous, 30 is visibly rough.
+QString qualityWord(int crf)
+{
+	if (crf <= 0)
+		return QStringLiteral("Lossless");
+	if (crf <= 12)
+		return QStringLiteral("Maximum");
+	if (crf <= 17)
+		return QStringLiteral("Very high");
+	if (crf <= 21)
+		return QStringLiteral("High");
+	if (crf <= 25)
+		return QStringLiteral("Good");
+	return QStringLiteral("Draft");
 }
 
 QString formatName(ClipExporter::Format f)
@@ -153,7 +190,7 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	ql->setContentsMargins(0, 0, 0, 0);
 	qualitySlider_ = new QSlider(Qt::Horizontal, qrow);
 	qualitySlider_->setRange(0, 100);
-	qualitySlider_->setValue(sliderForCrf(23));
+	qualitySlider_->setValue(sliderForCrf(kDefaultCrf));
 	ql->addWidget(qualitySlider_, 1);
 	qualityLabel_ = new QLabel(qrow);
 	qualityLabel_->setMinimumWidth(70);
@@ -162,6 +199,33 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	auto *hint = new QLabel(QStringLiteral("Smaller file  ←→  Better quality"), videoRow_);
 	hint->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 	vform->addRow(QString(), hint);
+
+	// The other half of "quality", and the one that was hard-coded. CRF asks
+	// for a quality; this decides how hard the encoder may work to reach it.
+	effortCombo_ = new QComboBox(videoRow_);
+	effortCombo_->addItem(QStringLiteral("Faster encode"),
+			      int(ClipExporter::Options::Effort::Fast));
+	effortCombo_->addItem(QStringLiteral("Balanced"),
+			      int(ClipExporter::Options::Effort::Balanced));
+	effortCombo_->addItem(QStringLiteral("Best quality (slowest)"),
+			      int(ClipExporter::Options::Effort::Best));
+	// Best, not Balanced. An export is not a live capture: there is no deadline
+	// to miss, and the slower preset is free detail.
+	effortCombo_->setCurrentIndex(effortCombo_->findData(int(kDefaultEffort)));
+	effortCombo_->setToolTip(QStringLiteral(
+		"How long the encoder may spend. Exports used to be pinned to a LIVE preset, "
+		"which exists so an encoder can keep up with a real-time capture — an export "
+		"has no such deadline, and a slower preset finds more detail at the same "
+		"quality setting."));
+	vform->addRow(QStringLiteral("Encoder effort"), effortCombo_);
+
+	chroma444Check_ = new QCheckBox(QStringLiteral("Full colour detail (4:4:4)"), videoRow_);
+	chroma444Check_->setToolTip(QStringLiteral(
+		"Normal video stores one colour sample per 2×2 block of pixels. That is "
+		"invisible on camera footage and very visible on coloured text, thin lines "
+		"and hard graphic edges — which is most of a screen recording.\n\n"
+		"Bigger files, and not every player or website accepts it."));
+	vform->addRow(QString(), chroma444Check_);
 	audioCheck_ = new QCheckBox(QStringLiteral("Keep audio"), videoRow_);
 	audioCheck_->setChecked(true);
 	audioCheck_->setEnabled(ctx_.canKeepAudio);
@@ -261,6 +325,8 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	connect(customW_, &QSpinBox::valueChanged, this, &ExportOptionsDialog::refresh);
 	connect(customH_, &QSpinBox::valueChanged, this, &ExportOptionsDialog::refresh);
 	connect(qualitySlider_, &QSlider::valueChanged, this, &ExportOptionsDialog::refresh);
+	connect(effortCombo_, &QComboBox::currentIndexChanged, this, &ExportOptionsDialog::refresh);
+	connect(chroma444Check_, &QCheckBox::toggled, this, &ExportOptionsDialog::refresh);
 	connect(audioCheck_, &QCheckBox::toggled, this, &ExportOptionsDialog::refresh);
 	connect(gifFpsSpin_, &QSpinBox::valueChanged, this, &ExportOptionsDialog::refresh);
 	connect(gifColorsCombo_, &QComboBox::currentIndexChanged, this,
@@ -316,7 +382,12 @@ void ExportOptionsDialog::refresh()
 
 	const QSize out = outputSize().isValid() ? outputSize() : ctx_.sourceSize;
 	if (qualityLabel_)
-		qualityLabel_->setText(QStringLiteral("CRF %1").arg(videoCrf()));
+		qualityLabel_->setText(
+			QStringLiteral("%1 · CRF %2").arg(qualityWord(videoCrf())).arg(videoCrf()));
+	// 4:4:4 is an H.264 thing here; VP9 in this build is 4:2:0 only, so the box
+	// is disabled rather than silently ignored.
+	if (chroma444Check_)
+		chroma444Check_->setEnabled(format() != ClipExporter::Format::WebM);
 
 	const bool gif = format() == ClipExporter::Format::Gif;
 	const bool audio = !gif && keepAudio() && ctx_.canKeepAudio &&
@@ -344,6 +415,7 @@ qint64 ExportOptionsDialog::estimatedBytes() const
 	in.fps = effectiveFps();
 	in.seconds = ctx_.seconds;
 	in.videoCrf = videoCrf();
+	in.chroma444 = chroma444();
 	in.keepAudio = keepAudio() && ctx_.canKeepAudio;
 	in.gifColors = gifColors();
 	in.gifDither = gifDither();
@@ -370,8 +442,8 @@ void ExportOptionsDialog::loadRemembered()
 	if (ri >= 0)
 		resCombo_->setCurrentIndex(ri);
 
-	qualitySlider_->setValue(
-		sliderForCrf(s.value(QLatin1String(kGroup) + QStringLiteral("crf"), 23).toInt()));
+	qualitySlider_->setValue(sliderForCrf(
+		s.value(QLatin1String(kGroup) + QStringLiteral("crf"), kDefaultCrf).toInt()));
 	gifFpsSpin_->setValue(
 		s.value(QLatin1String(kGroup) + QStringLiteral("gifFps"), 15).toInt());
 	const int gc = gifColorsCombo_->findData(
@@ -382,6 +454,14 @@ void ExportOptionsDialog::loadRemembered()
 		s.value(QLatin1String(kGroup) + QStringLiteral("gifDither"), true).toBool());
 	gifLoopCheck_->setChecked(
 		s.value(QLatin1String(kGroup) + QStringLiteral("gifLoop"), true).toBool());
+	const int ei = effortCombo_->findData(
+		s.value(QLatin1String(kGroup) + QStringLiteral("effort"), int(kDefaultEffort))
+			.toInt());
+	if (ei >= 0)
+		effortCombo_->setCurrentIndex(ei);
+	chroma444Check_->setChecked(
+		s.value(QLatin1String(kGroup) + QStringLiteral("chroma444"), kDefaultChroma444)
+			.toBool());
 	if (ctx_.canKeepAudio)
 		audioCheck_->setChecked(
 			s.value(QLatin1String(kGroup) + QStringLiteral("keepAudio"), true).toBool());
@@ -400,6 +480,8 @@ void ExportOptionsDialog::saveRemembered() const
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("gifDither"), gifDither());
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("gifLoop"), gifLoop());
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("keepAudio"), keepAudio());
+	s.setValue(QLatin1String(kGroup) + QStringLiteral("effort"), int(effort()));
+	s.setValue(QLatin1String(kGroup) + QStringLiteral("chroma444"), chroma444());
 }
 
 QString ExportOptionsDialog::fileName() const
@@ -445,6 +527,16 @@ bool ExportOptionsDialog::gifDither() const
 bool ExportOptionsDialog::gifLoop() const
 {
 	return gifLoopCheck_->isChecked();
+}
+
+ClipExporter::Options::Effort ExportOptionsDialog::effort() const
+{
+	return ClipExporter::Options::Effort(effortCombo_->currentData().toInt());
+}
+
+bool ExportOptionsDialog::chroma444() const
+{
+	return chroma444Check_->isChecked() && format() != ClipExporter::Format::WebM;
 }
 
 int ExportOptionsDialog::videoCrf() const

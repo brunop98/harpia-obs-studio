@@ -7436,6 +7436,8 @@ void VideoEditorWindow::onSave()
 	o.outHeight = outSize.height();
 	o.speed = speed_;   // from the editor's speed slider
 	o.videoCrf = dlg.videoCrf();
+	o.effort = dlg.effort();
+	o.chroma444 = dlg.chroma444();
 	o.keepAudio = dlg.keepAudio();
 	if (cuts) {
 		// Multi-cut assembly: the cut list replaces trim range + global speed.

@@ -30,6 +30,7 @@ struct ExportEstimateInput {
 	double fps = 30.0;
 	double seconds = 0.0;
 	int videoCrf = 23;   // video formats
+	bool chroma444 = false;
 	bool keepAudio = true;
 	int gifColors = 256; // GIF
 	bool gifDither = true;

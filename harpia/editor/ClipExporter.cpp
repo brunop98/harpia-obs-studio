@@ -92,16 +92,21 @@ struct VideoState {
 	// where a silent null would look like a truncated export.
 	AVFrame *scaleForEncode(AVFrame *in)
 	{
-		if (!in || !venc || (in->width == venc->width && in->height == venc->height))
+		if (!in || !venc)
+			return in;
+		// Format as well as size: with 4:4:4 chosen, a path that still produces
+		// 4:2:0 has to be converted here or the encoder rejects the frame.
+		if (in->width == venc->width && in->height == venc->height &&
+		    AVPixelFormat(in->format) == venc->pix_fmt)
 			return in;
 		if (!toOut) {
 			toOut = sws_getContext(in->width, in->height, AVPixelFormat(in->format),
-					       venc->width, venc->height, AV_PIX_FMT_YUV420P,
+					       venc->width, venc->height, venc->pix_fmt,
 					       SWS_BICUBIC, nullptr, nullptr, nullptr);
 			outScaled = av_frame_alloc();
 			if (!toOut || !outScaled)
 				return in;
-			outScaled->format = AV_PIX_FMT_YUV420P;
+			outScaled->format = venc->pix_fmt;
 			outScaled->width = venc->width;
 			outScaled->height = venc->height;
 			if (av_frame_get_buffer(outScaled, 32) < 0)
@@ -153,6 +158,19 @@ struct VideoState {
 // the GOP length, so those are arguments; everything else is the same by
 // definition and now only exists once.
 
+// The pixel format the encoder runs in, and therefore the format every path has
+// to hand it. One function so the encoder, the rescaler and the compositor's
+// RGBA conversion cannot disagree -- a mismatch there is not a quality problem, it
+// is a refused frame.
+AVPixelFormat encodePixFmt(const ClipExporter::Options &opts)
+{
+	// VP9 in this build is 4:2:0 only; asking for 444 there would fail to open
+	// rather than look better.
+	if (opts.chroma444 && opts.format != ClipExporter::Format::WebM)
+		return AV_PIX_FMT_YUV444P;
+	return AV_PIX_FMT_YUV420P;
+}
+
 // The size the encoder should be opened at, given what the path would otherwise
 // have produced. Even numbers, because yuv420p subsamples by two and an odd
 // dimension is rejected outright by both encoders.
@@ -181,10 +199,18 @@ QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const
 	const QSize enc = encodeSize(opts, w, h);
 	s.venc->width = enc.width();
 	s.venc->height = enc.height();
-	s.venc->pix_fmt = AV_PIX_FMT_YUV420P;
+	s.venc->pix_fmt = encodePixFmt(opts);
 	s.venc->time_base = timeBase;
 	s.venc->framerate = frameRate;
 	s.venc->gop_size = gopSize;
+	// Say what the colours MEAN. Left unset, a player has to guess the matrix
+	// and primaries, and the usual guess for anything over SD is what we write
+	// anyway -- but the guess for small frames is BT.601, which shifts every
+	// colour in a downscaled export. Cheap to state, and then nobody guesses.
+	s.venc->colorspace = AVCOL_SPC_BT709;
+	s.venc->color_primaries = AVCOL_PRI_BT709;
+	s.venc->color_trc = AVCOL_TRC_BT709;
+	s.venc->color_range = AVCOL_RANGE_MPEG;
 
 	// The container has to exist before the encoder opens: whether it wants a
 	// global header changes a flag on the encoder.
@@ -194,15 +220,31 @@ QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const
 	if (s.ofmt->oformat->flags & AVFMT_GLOBALHEADER)
 		s.venc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
+	using Effort = ClipExporter::Options::Effort;
 	if (webm) {
 		s.venc->bit_rate = 0; // constant-quality VP9
 		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
-		av_opt_set(s.venc->priv_data, "deadline", "good", 0);
-		av_opt_set_int(s.venc->priv_data, "cpu-used", 5, 0);
+		// cpu-used counts the other way from x264's preset: higher is faster
+		// and worse. 5 is a streaming setting and was hard-coded here.
+		const int cpuUsed = opts.effort == Effort::Best      ? 1
+				    : opts.effort == Effort::Fast    ? 5
+								     : 2;
+		av_opt_set(s.venc->priv_data, "deadline",
+			   opts.effort == Effort::Fast ? "realtime" : "good", 0);
+		av_opt_set_int(s.venc->priv_data, "cpu-used", cpuUsed, 0);
 		av_opt_set(s.venc->priv_data, "row-mt", "1", 0);
 	} else {
-		av_opt_set(s.venc->priv_data, "preset", "veryfast", 0);
-		av_opt_set(s.venc->priv_data, "profile", "high", 0);
+		// "veryfast" is a LIVE preset: it exists so an encoder can keep up with
+		// frames arriving in real time. An export is not real time, and paying
+		// a slower preset buys real detail at the same CRF.
+		const char *preset = opts.effort == Effort::Best     ? "slow"
+				     : opts.effort == Effort::Fast   ? "veryfast"
+								     : "medium";
+		av_opt_set(s.venc->priv_data, "preset", preset, 0);
+		// 4:4:4 needs its own profile; asking for "high" with a 444 pixel
+		// format is a refusal, not a downgrade.
+		av_opt_set(s.venc->priv_data, "profile",
+			   s.venc->pix_fmt == AV_PIX_FMT_YUV444P ? "high444" : "high", 0);
 		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
 	}
 	if (avcodec_open2(s.venc, vc, nullptr) < 0)
@@ -238,8 +280,8 @@ QString openOutputFile(VideoState &s, const ClipExporter::Options &opts, const Q
 }
 
 // Applies a compiled post-processing shader to output frames on the export
-// worker thread. YUV420P -> RGBA -> shader -> YUV420P, in place on the frame
-// about to be encoded, so the baked file matches the editor's live preview.
+// worker thread. YUV -> RGBA -> shader -> the frame's own YUV format, in place
+// on the frame about to be encoded, so the baked file matches the preview.
 struct ShaderPass {
 	ShaderRenderer renderer;
 	SwsContext *toRgba = nullptr;
@@ -279,8 +321,8 @@ struct ShaderPass {
 		return QString();
 	}
 
-	// Filter one writable YUV420P frame in place. Returns false only on an
-	// unexpected sws failure.
+	// Filter one writable YUV frame in place, whatever its chroma layout.
+	// Returns false only on an unexpected sws failure.
 	bool process(AVFrame *f, float tSec, int frame)
 	{
 		if (!active || !f)
@@ -293,8 +335,11 @@ struct ShaderPass {
 				sws_freeContext(toYuv);
 			toRgba = sws_getContext(W, H, (AVPixelFormat)f->format, W, H, AV_PIX_FMT_RGBA,
 						SWS_BILINEAR, nullptr, nullptr, nullptr);
-			toYuv = sws_getContext(W, H, AV_PIX_FMT_RGBA, W, H, AV_PIX_FMT_YUV420P, SWS_BILINEAR,
-					       nullptr, nullptr, nullptr);
+			// Back into the frame's OWN format, not a hard-coded 4:2:0: this
+			// writes over the frame in place, and with 4:4:4 chosen a 4:2:0
+			// write would scribble past the U/V planes.
+			toYuv = sws_getContext(W, H, AV_PIX_FMT_RGBA, W, H, (AVPixelFormat)f->format,
+					       SWS_BILINEAR, nullptr, nullptr, nullptr);
 			w = W;
 			h = H;
 		}
@@ -507,7 +552,12 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 
 	// ---- Scratch frames ----
 	s.cropFrame = av_frame_alloc();
-	s.cropFrame->format = AV_PIX_FMT_YUV420P;
+	// The encoder's format, not a hard-coded 4:2:0. Every intermediate frame in
+	// this path has to follow it: converting the decoded picture down to 4:2:0
+	// here and letting scaleForEncode widen it back to 4:4:4 later would throw
+	// the chroma away first and then pretend to keep it -- which is exactly what
+	// happened, and made a CRF-0 "lossless" export not lossless at all.
+	s.cropFrame->format = encodePixFmt(opts);
 	s.cropFrame->width = cw;
 	s.cropFrame->height = ch;
 	if (av_frame_get_buffer(s.cropFrame, 0) < 0)
@@ -554,18 +604,18 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 	};
 
 	auto ensureYuvFull = [&](AVFrame *f) -> AVFrame * {
-		if ((AVPixelFormat)f->format == AV_PIX_FMT_YUV420P)
+		if ((AVPixelFormat)f->format == encodePixFmt(opts))
 			return f;
 		if (!s.fullYuv) {
 			s.fullYuv = av_frame_alloc();
-			s.fullYuv->format = AV_PIX_FMT_YUV420P;
+			s.fullYuv->format = encodePixFmt(opts);
 			s.fullYuv->width = s.vdec->width;
 			s.fullYuv->height = s.vdec->height;
 			av_frame_get_buffer(s.fullYuv, 0);
 		}
 		if (!s.toYuv)
 			s.toYuv = sws_getContext(s.vdec->width, s.vdec->height, (AVPixelFormat)f->format,
-						 s.vdec->width, s.vdec->height, AV_PIX_FMT_YUV420P, SWS_BILINEAR,
+						 s.vdec->width, s.vdec->height, encodePixFmt(opts), SWS_BILINEAR,
 						 nullptr, nullptr, nullptr);
 		av_frame_make_writable(s.fullYuv); // encoder may still hold a ref
 		sws_scale(s.toYuv, f->data, f->linesize, 0, s.vdec->height, s.fullYuv->data, s.fullYuv->linesize);
@@ -636,7 +686,7 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 							yf->data[2] + (cy / 2) * yf->linesize[2] + (cx / 2),
 							nullptr};
 						av_image_copy(s.cropFrame->data, s.cropFrame->linesize, src,
-							      yf->linesize, AV_PIX_FMT_YUV420P, cw, ch);
+							      yf->linesize, encodePixFmt(opts), cw, ch);
 						toEnc = s.cropFrame;
 					}
 					toEnc->pts = scaledPts(pts);
@@ -699,7 +749,7 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 							yf->data[2] + (cy / 2) * yf->linesize[2] + (cx / 2),
 							nullptr};
 						av_image_copy(s.cropFrame->data, s.cropFrame->linesize, src,
-							      yf->linesize, AV_PIX_FMT_YUV420P, cw, ch);
+							      yf->linesize, encodePixFmt(opts), cw, ch);
 						toEnc = s.cropFrame;
 					} else {
 						ok = false;
@@ -819,7 +869,7 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 
 	// ---- Scratch frames ----
 	s.cropFrame = av_frame_alloc();
-	s.cropFrame->format = AV_PIX_FMT_YUV420P;
+	s.cropFrame->format = encodePixFmt(opts);
 	s.cropFrame->width = cw;
 	s.cropFrame->height = ch;
 	if (av_frame_get_buffer(s.cropFrame, 0) < 0)
@@ -837,18 +887,18 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 	QString audioErr;
 
 	auto ensureYuvFull = [&](AVFrame *f) -> AVFrame * {
-		if ((AVPixelFormat)f->format == AV_PIX_FMT_YUV420P)
+		if ((AVPixelFormat)f->format == encodePixFmt(opts))
 			return f;
 		if (!s.fullYuv) {
 			s.fullYuv = av_frame_alloc();
-			s.fullYuv->format = AV_PIX_FMT_YUV420P;
+			s.fullYuv->format = encodePixFmt(opts);
 			s.fullYuv->width = s.vdec->width;
 			s.fullYuv->height = s.vdec->height;
 			av_frame_get_buffer(s.fullYuv, 0);
 		}
 		if (!s.toYuv)
 			s.toYuv = sws_getContext(s.vdec->width, s.vdec->height, (AVPixelFormat)f->format,
-						 s.vdec->width, s.vdec->height, AV_PIX_FMT_YUV420P,
+						 s.vdec->width, s.vdec->height, encodePixFmt(opts),
 						 SWS_BILINEAR, nullptr, nullptr, nullptr);
 		av_frame_make_writable(s.fullYuv); // encoder may still hold a ref
 		sws_scale(s.toYuv, f->data, f->linesize, 0, s.vdec->height, s.fullYuv->data,
@@ -941,7 +991,7 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 							 yf->data[2] + (cy / 2) * yf->linesize[2] + (cx / 2),
 							 nullptr};
 				av_image_copy(s.cropFrame->data, s.cropFrame->linesize, src, yf->linesize,
-					      AV_PIX_FMT_YUV420P, cw, ch);
+					      encodePixFmt(opts), cw, ch);
 				toEnc = s.cropFrame;
 			}
 			int64_t v = (int64_t)llround(outBaseTicks + double(pts - startV) / cut.speed);
@@ -1120,7 +1170,7 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 		m.padX = evenDown((cw - m.fitW) / 2);
 		m.padY = evenDown((ch - m.fitH) / 2);
 		m.sws = sws_getContext(m.vdec->width, m.vdec->height, m.vdec->pix_fmt, m.fitW, m.fitH,
-				       AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr, nullptr);
+				       encodePixFmt(opts), SWS_BILINEAR, nullptr, nullptr, nullptr);
 		if (!m.sws)
 			return QStringLiteral("Could not create a video scaler.");
 	}
@@ -1184,7 +1234,7 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 
 	// Canvas frame (reuse cropFrame as the letterboxed output frame).
 	s.cropFrame = av_frame_alloc();
-	s.cropFrame->format = AV_PIX_FMT_YUV420P;
+	s.cropFrame->format = encodePixFmt(opts);
 	s.cropFrame->width = cw;
 	s.cropFrame->height = ch;
 	if (av_frame_get_buffer(s.cropFrame, 0) < 0)
@@ -1501,7 +1551,11 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 		return e;
 
 	// RGBA (composited) -> YUV420P (encoder).
-	SwsContext *toYuv = sws_getContext(cw, ch, AV_PIX_FMT_RGBA, cw, ch, AV_PIX_FMT_YUV420P,
+	// Straight to the encoder's format. Going via 4:2:0 first and letting
+	// scaleForEncode widen it back to 4:4:4 would be lossless-looking and
+	// pointless: the chroma is thrown away in the first conversion, and this is
+	// the path where composited text and graphics live.
+	SwsContext *toYuv = sws_getContext(cw, ch, AV_PIX_FMT_RGBA, cw, ch, encodePixFmt(opts),
 					   SWS_BILINEAR, nullptr, nullptr, nullptr);
 	AVFrame *yuv = av_frame_alloc();
 	AVPacket *pkt = av_packet_alloc();
@@ -1514,7 +1568,7 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 			av_packet_free(&pkt);
 		return QStringLiteral("Could not allocate the render buffers.");
 	}
-	yuv->format = AV_PIX_FMT_YUV420P;
+	yuv->format = encodePixFmt(opts);
 	yuv->width = cw;
 	yuv->height = ch;
 	av_frame_get_buffer(yuv, 0);

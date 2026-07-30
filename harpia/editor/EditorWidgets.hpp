@@ -112,6 +112,10 @@ signals:
 	// The gesture ended -- one undo step per drag, not one per pixel. Matches
 	// what spotlightEditFinished does for masks.
 	void transformEditFinished();
+	// Right-click on the picture, in normalised canvas coordinates. The canvas
+	// knows where it drew the frame; what a right-click MEANS is the window's
+	// business, so it only reports the point.
+	void contextRequested(double xNorm, double yNorm, const QPoint &globalPos);
 	// A Mask component's shape was dragged. Absolute, and reported live; the
 	// window writes it to the component's properties.
 	void maskPoseChanged(double cx, double cy, double w, double h, double rotation);

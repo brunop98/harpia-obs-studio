@@ -650,6 +650,19 @@ void PreviewCanvas::wheelEvent(QWheelEvent *e)
 
 void PreviewCanvas::mousePressEvent(QMouseEvent *e)
 {
+	// Right-click anywhere on the drawn picture. Reported before anything else
+	// looks at the event: none of the drag modes below use the right button, and
+	// a menu that only appears when no tool happens to be armed is a menu people
+	// conclude does not exist.
+	if (e->button() == Qt::RightButton) {
+		const QRect d = displayRect();
+		if (d.width() > 0 && d.height() > 0 && d.contains(e->pos())) {
+			emit contextRequested(double(e->pos().x() - d.x()) / d.width(),
+					      double(e->pos().y() - d.y()) / d.height(),
+					      e->globalPosition().toPoint());
+			return;
+		}
+	}
 	// Spotlight editing takes precedence over clip transform: both drag with the
 	// left button, and while the Spotlight panel is open the masks are what you
 	// mean to move.

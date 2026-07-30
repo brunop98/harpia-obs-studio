@@ -486,6 +486,25 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// "Export this clip…" — the ordinary Export window, aimed at one stretch.
 	connect(timelineView_, &TimelineView::exportRangeRequested, this,
 		&VideoEditorWindow::onExportRangeRequested);
+	// Right-click the picture: "Zoom here". Full-editing only, since it writes
+	// keyframes onto a timeline clip and the other two modes have none.
+	connect(canvas_, &PreviewCanvas::contextRequested, this,
+		[this](double xn, double yn, const QPoint &globalPos) {
+			if (!fullEdit())
+				return;
+			QMenu menu(this);
+			QAction *zoom = menu.addAction(QStringLiteral("Zoom here"));
+			const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+			zoom->setEnabled(sel != nullptr);
+			zoom->setToolTip(QStringLiteral(
+				"Push in to this point at the playhead and back out again. It is written "
+				"as ordinary keyframes, so you can drag, retime or delete it afterwards."));
+			if (!sel)
+				zoom->setText(QStringLiteral("Zoom here  (select a clip first)"));
+			if (menu.exec(globalPos) == zoom && sel)
+				addZoomAtPreviewPoint(xn, yn);
+		});
+
 	// Direct manipulation of the selected clip straight in the preview.
 	connect(canvas_, &PreviewCanvas::transformDragged, this,
 		&VideoEditorWindow::onPreviewTransformDrag);
@@ -4813,6 +4832,61 @@ qint64 VideoEditorWindow::timelineEditMs() const
 	return std::clamp<qint64>(ph, sel->outStartMs, std::max(sel->outStartMs, sel->outEndMs() - 1));
 }
 
+void VideoEditorWindow::addZoomAtPreviewPoint(double canvasXNorm, double canvasYNorm)
+{
+	if (!fullEdit() || !timelineView_)
+		return;
+	const TlClip *sel = timelineView_->selectedClipPtr();
+	if (!sel)
+		return;
+	const QSize natural = clipNaturalSize(*sel);
+	if (natural.isEmpty())
+		return;
+	if (playing_)
+		stopPlayback(); // the zoom is anchored to a still playhead, as the drags are
+
+	const qint64 at = timelineEditMs();
+	const QSize canvasSize = timelineCanvasSize();
+	// The click is a point on the CANVAS; the generator wants one in the clip.
+	// They differ the moment the clip is already zoomed, which is exactly when
+	// someone reaches for this a second time.
+	const QPointF inClip = clipPointFromCanvas(sel->transformAt(at), canvasSize, natural,
+						   QPointF(canvasXNorm, canvasYNorm));
+
+	TlClip c = *sel;
+	if (!addZoomAt(c, at, inClip, canvasSize, natural, zoomSettings_)) {
+		infoLabel_->setText(
+			QStringLiteral("This clip is too short for a zoom that can arrive and leave."));
+		return;
+	}
+	// One call: updateSelectedClip emits clipsChanged, which re-renders the
+	// preview, re-reads the Inspector, and schedules the undo snapshot. Doing
+	// any of that again here would just be a second, later copy of it.
+	timelineView_->updateSelectedClip(c);
+	refreshKeyframeEditor(); // the keys are new; the editor lists them
+	// After the update, because the clipsChanged handler rewrites this label.
+	infoLabel_->setText(
+		QStringLiteral("Zoom added at %1 — four keyframes, so you can drag or delete it.")
+			.arg(timeTextCentis(at)));
+}
+
+QSize VideoEditorWindow::clipNaturalSize(const TlClip &c)
+{
+	// The clip's own pixel size, which is what every canvas-geometry question
+	// is measured against. Shared rather than re-derived: the transform grips
+	// and "Zoom here" have to agree about where the picture is, and two copies
+	// of this would eventually not.
+	const QSize canvasSize = timelineCanvasSize();
+	if (c.type == TlClip::Type::Text)
+		return TimelineCompositor::textNaturalSize(c.text, canvasSize);
+	if (const auto it = stillImages_.constFind(c.sourceId); it != stillImages_.constEnd())
+		return it.value().size();
+	if (EditorSource *s = sourceById(c.sourceId))
+		return (!c.crop.isNull() && c.crop.width() > 1) ? c.crop.size()
+							       : QSize(s->width, s->height);
+	return QSize();
+}
+
 void VideoEditorWindow::syncPreviewTransformTarget()
 {
 	if (!canvas_ || !timelineView_)
@@ -4828,16 +4902,7 @@ void VideoEditorWindow::syncPreviewTransformTarget()
 	const QSize canvasSize = timelineCanvasSize();
 	const qint64 ph = timelinePlayheadMs();
 	const TlTransform tf = c->transformAt(ph);
-	QSize natural;
-	if (c->type == TlClip::Type::Text) {
-		natural = TimelineCompositor::textNaturalSize(c->text, canvasSize);
-	} else if (const auto it = stillImages_.constFind(c->sourceId);
-		   it != stillImages_.constEnd()) {
-		natural = it.value().size();
-	} else if (EditorSource *s = sourceById(c->sourceId)) {
-		natural = (!c->crop.isNull() && c->crop.width() > 1) ? c->crop.size()
-								    : QSize(s->width, s->height);
-	}
+	const QSize natural = clipNaturalSize(*c);
 	// The rotation goes across separately: clipRectOnCanvas returns the box
 	// BEFORE it is turned, and handing the canvas a bounding box instead would
 	// put the grips off the corners of anything tilted.

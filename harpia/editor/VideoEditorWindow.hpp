@@ -3,7 +3,8 @@
 #include "TrackEditor.hpp"        // CutSegment (stored in EditorSnapshot)
 #include "VoiceoverTrack.hpp"     // VoiceoverClip (stored in EditorSnapshot)
 #include "shader/ShaderEffect.hpp"    // ShaderState / ShaderParam (post-processing)
-#include "timeline/TimelineModel.hpp" // TlClip / TlTransform (Full-editing timeline)
+#include "timeline/TimelineModel.hpp"  // TlClip / TlTransform (Full-editing timeline)
+#include "timeline/ZoomKeyframes.hpp"  // ZoomSettings (the "Zoom here" shape)
 #include "DevPanel.hpp"                 // EditorChromeParams / EditorInspectorParams
 #include "component/ComponentPanel.hpp"  // ComponentPanel::View (Inspector model)
 #include "timeline/TimelineView.hpp"    // ClipboardEntry (timeline copy/paste)
@@ -359,6 +360,17 @@ private:
 	void onPreviewTransformZoom(double factor, double cursorXNorm, double cursorYNorm);
 	void applySelectedClipTransform(const TlTransform &tf);
 	void syncPreviewTransformTarget(); // arm/disarm + refresh the outline
+	// A clip's own pixel size (text measured, image, or the cropped source).
+	// Every canvas-geometry question goes through this one answer.
+	// Not const: sourceById() is not, and adding a const overload of the media
+	// pool purely to satisfy this would be the tail wagging the dog.
+	QSize clipNaturalSize(const TlClip &c);
+	// How a "Zoom here" is shaped. One set for the window, so repeated zooms
+	// in a project match each other rather than each having its own timing.
+	ZoomSettings zoomSettings_;
+	// "Zoom here" from the preview's right-click menu: write a push-in to the
+	// clicked point onto the selected clip, as ordinary Transform keyframes.
+	void addZoomAtPreviewPoint(double canvasXNorm, double canvasYNorm);
 	qint64 timelinePlayheadMs() const;
 	// Playhead clamped inside the selected clip: where an edit applies AND is
 	// previewed, so the two can never disagree.

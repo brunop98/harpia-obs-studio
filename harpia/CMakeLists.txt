@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.28...3.30)
 
 # Multimedia provides the editor's voiceover microphone capture (QAudioSource).
 # OpenGL provides the offscreen GPU shader pipeline (post-processing effects);
-find_package(Qt6 REQUIRED Widgets Gui Multimedia OpenGL)
+find_package(Qt6 REQUIRED Widgets Gui Multimedia OpenGL Network)
 
 # FFmpeg (bundled with OBS deps) is used to extract clip thumbnails.
 find_package(FFmpeg REQUIRED COMPONENTS avcodec avformat avutil swscale swresample avfilter)
@@ -28,6 +28,12 @@ target_link_libraries(
   PRIVATE
     OBS::libobs
     Qt::Widgets
+    # QLocalServer/QLocalSocket, for the single-instance lock. This adds no new
+    # file to the Windows package: Qt6Multimedia already links Qt6Network, so
+    # the DLL is deployed either way. Worth checking rather than assuming -- a
+    # release once shipped a Qt6Concurrent.dll that would not load, and the app
+    # did not start at all.
+    Qt::Network
     Qt::Gui
     Qt::Multimedia
     Qt::OpenGL
@@ -204,6 +210,8 @@ target_sources(
     editor/component/ComponentPanel.hpp
     editor/component/ScriptComponent.cpp
     editor/component/ShaderComponent.cpp
+    ui/SingleInstance.cpp
+    ui/SingleInstance.hpp
     ui/WheelGuard.cpp
     editor/component/TransformScriptComponent.cpp
     editor/component/ScriptComponent.hpp

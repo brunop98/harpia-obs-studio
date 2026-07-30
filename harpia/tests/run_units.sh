@@ -13,8 +13,8 @@ WORK="${1:-$(mktemp -d)}"
 mkdir -p "$WORK"
 MOC="$(command -v moc || ls /usr/lib/qt6/libexec/moc /usr/lib/x86_64-linux-gnu/qt6/libexec/moc 2>/dev/null | head -1)"
 # Qt6OpenGL is here for SpotlightGl, which Spotlight.cpp dispatches to.
-CF="$(pkg-config --cflags Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL)"
-LF="$(pkg-config --libs Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL)"
+CF="$(pkg-config --cflags Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
+LF="$(pkg-config --libs Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
 
 # Two commands must never end up sharing a key: Qt fires neither.
 "$MOC" -I"$H" "$H/editor/ShortcutRegistry.hpp" -o "$WORK/moc_ShortcutRegistry.cpp"
@@ -170,6 +170,13 @@ g++ -std=c++17 -O2 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
 	-o "$WORK/timelineperf_test" $LF
 
+# One app at a time. Re-launches ITSELF, because two objects in one process is
+# not the situation that actually happens.
+"$MOC" -I"$H" "$H/ui/SingleInstance.hpp" -o "$WORK/moc_SingleInstance.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/singleinstance_test.cpp" "$H/ui/SingleInstance.cpp" \
+	"$WORK/moc_SingleInstance.cpp" -o "$WORK/singleinstance_test" $LF
+
 # Splitting a pixel pass across cores must not change a pixel: identical output
 # at 1..8 row bands, including counts that divide the height unevenly.
 g++ -std=c++17 -O2 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -204,6 +211,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/gutterspill_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/splitseam_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinepan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineperf_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/singleinstance_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/pixelbands_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/mask_test" || rc=1
 exit $rc

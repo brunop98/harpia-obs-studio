@@ -3,6 +3,7 @@
 #include "core/ObsContext.hpp"
 #include "model/PresetStore.hpp"
 #include "ui/MainWindow.hpp"
+#include "ui/SingleInstance.hpp"
 #include "ui/UiText.hpp"
 
 #include <util/bmem.h>
@@ -96,6 +97,18 @@ int main(int argc, char *argv[])
 	// font, so a widget built first would keep the platform default.
 	harpia::applyTextScale(app);
 
+	// One instance, and before ANY of the backend exists.
+	//
+	// Two Harpias cannot coexist: they would fight over the capture devices,
+	// the audio graph, the output folder and the preset file, and the second
+	// obs_startup() fails in a way nobody can read. This has to come before the
+	// logger too -- a second process opening the session log is itself a way to
+	// corrupt the first one's.
+	harpia::SingleInstance instance(
+		harpia::SingleInstance::userScopedKey(QStringLiteral("harpia-recorder")));
+	if (!instance.acquire())
+		return 0; // the running copy has been asked to come forward
+
 	// Start logging before anything else so startup and any early crash are
 	// captured to disk (flushed per line).
 	harpia::Logger::instance().init(resolveLogDir());
@@ -157,6 +170,11 @@ int main(int argc, char *argv[])
 	{
 		harpia::MainWindow win(obs, presets, outputFolder);
 		win.show();
+		// Launching a second copy shows this one rather than doing nothing:
+		// double-clicking the icon when the app is already open should get you
+		// the app, which is the whole point of refusing the second instance.
+		QObject::connect(&instance, &harpia::SingleInstance::anotherInstanceStarted, &win,
+				 [&win]() { harpia::raiseWindowToFront(&win); });
 		rc = app.exec();
 	}
 

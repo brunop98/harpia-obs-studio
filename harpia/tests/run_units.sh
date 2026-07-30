@@ -159,6 +159,17 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
 	-o "$WORK/timelinepan_test" $LF
 
+# Hit-testing must not go quadratic again: every "where is this on screen"
+# question used to re-measure the project's whole duration.
+g++ -std=c++17 -O2 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/timelineperf_test.cpp" "$H/editor/timeline/TimelineView.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
+	-o "$WORK/timelineperf_test" $LF
+
 # Splitting a pixel pass across cores must not change a pixel: identical output
 # at 1..8 row bands, including counts that divide the height unevenly.
 g++ -std=c++17 -O2 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -192,6 +203,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/effectarea_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/gutterspill_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/splitseam_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinepan_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/timelineperf_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/pixelbands_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/mask_test" || rc=1
 exit $rc

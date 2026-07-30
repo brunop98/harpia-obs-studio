@@ -1111,9 +1111,17 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	// out that is most of them. Painting it as one call instead of a fill path,
 	// a clip path and a border path is three rasterisations saved per clip.
 	const bool dragging = (mode_ == Mode::Move && dragMoved_) || fileDrag_;
+	// Below this a clip has no room for anything INSIDE it: a waveform, a
+	// filmstrip tile or a keyframe pip drawn across a handful of pixels is
+	// noise, and drawing it costs a QPainterPath, a clip-path change and a
+	// save/restore per clip -- by far the most expensive thing in the paint.
+	// A dense timeline is mostly clips this narrow.
+	constexpr int kMinWidthForContents = 10;
+	const bool roomInside = r.width() >= kMinWidthForContents;
 	const bool wantsInside =
-		isFx || (video && srcThumbs_.contains(c.sourceId)) || !c.peaks.isEmpty() ||
-		(!dragging && !c.keys.isEmpty()) || clipTakesFades(track, clip) ||
+		isFx ||
+		(roomInside && ((video && srcThumbs_.contains(c.sourceId)) || !c.peaks.isEmpty() ||
+				(!dragging && !c.keys.isEmpty()) || clipTakesFades(track, clip))) ||
 		(!dragging && r.width() >= 28);
 	if (!wantsInside) {
 		p.setPen(sel ? QPen(cl_.accent, 2) : QPen(cl_.border, 1));
@@ -1292,7 +1300,15 @@ QRect TimelineView::fadeHandleRect(int track, int clip, FadeSide side) const
 
 TimelineView::FadeHit TimelineView::fadeHandleAt(const QPoint &pt) const
 {
-	for (int ti = 0; ti < model_.tracks.size(); ++ti) {
+	// One lane can hold the hit, so find it before walking any clips. Without
+	// this the search is every clip in the project on every mouse-move, and
+	// each clipRect() underneath used to cost an O(clips) span scan of its own
+	// -- 1200 clips meant well over a million operations per pointer motion.
+	const SpanGuard span(this);
+	const int hitLane = laneAtY(pt.y());
+	if (hitLane < 0)
+		return {};
+	for (int ti = hitLane; ti <= hitLane; ++ti) {
 		if (model_.tracks[ti].locked)
 			continue;
 		for (int ci = 0; ci < model_.tracks[ti].clips.size(); ++ci) {
@@ -1617,6 +1633,9 @@ void TimelineView::paintEvent(QPaintEvent *)
 
 void TimelineView::mousePressEvent(QMouseEvent *e)
 {
+	// Same reason as the hover pass: a press hit-tests several times over, and
+	// all of it happens before anything in the model moves.
+	const SpanGuard span(this);
 	const QPoint pos = e->pos();
 	setFocus();
 	// The hover marker tracks the preview, which stops following the pointer the
@@ -1961,6 +1980,13 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 	}
 
 	// Idle: cursor hint + hover preview.
+	//
+	// Everything below asks where things are on screen, and every one of those
+	// questions used to recompute the timeline's total span by walking every
+	// clip on every track. Held once here, the whole hover pass shares one
+	// answer. Deliberately NOT held over the drag branches above: those change
+	// the model as they go, and the span has to follow them.
+	const SpanGuard hoverSpan(this);
 	// A fade grip lights up under the cursor, and claims the cursor shape from
 	// the trim handle it overlaps.
 	const FadeHit fh = fadeHandleAt(pos);

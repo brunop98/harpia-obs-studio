@@ -92,6 +92,11 @@ public:
 	}
 	qint64 timeAtXForTest(int x) const { return xToMs(x); }
 	qint64 visibleMsForTest() const { return visibleMs(); }
+	// The span cache and its guard, for the perf regression test. The guard's
+	// re-entrancy has no visible effect -- the numbers stay right either way --
+	// so the only way to pin it is to look at the cache directly.
+	qint64 spanMsForTest() const { return spanMs(); }
+	qint64 spanCacheForTest() const { return spanCache_; }
 	// The time<->pixel mapping, so callers (and tests) can aim at a time on the
 	// widget instead of re-deriving the axis from the layout params.
 	int xForMs(qint64 ms) const { return msToX(ms); }
@@ -266,17 +271,31 @@ private:
 	// span once and answers from that. The guard is RAII so an early return
 	// cannot leave a stale value behind; outside its lifetime spanMs() goes
 	// back to measuring, which keeps every editing path exact.
+	// Re-entrant: it restores whatever it found rather than clearing outright.
+	// A guard held by a caller and another taken by a helper it calls is the
+	// normal case -- and an inner guard that reset the cache to "measure again"
+	// on the way out would silently switch the OUTER one off for the rest of
+	// its scope, which is a slowdown with no symptom.
 	class SpanGuard {
 	public:
-		explicit SpanGuard(const TimelineView *v) : v_(v) { v_->spanCache_ = v_->spanMs(); }
-		~SpanGuard() { v_->spanCache_ = -1; }
+		explicit SpanGuard(const TimelineView *v) : v_(v), prev_(v->spanCache_)
+		{
+			v_->spanCache_ = v_->spanMs();
+		}
+		~SpanGuard() { v_->spanCache_ = prev_; }
 		SpanGuard(const SpanGuard &) = delete;
 		SpanGuard &operator=(const SpanGuard &) = delete;
 
 	private:
 		const TimelineView *v_;
+		qint64 prev_;
 	};
 	mutable qint64 spanCache_ = -1;
+
+public:
+	using SpanGuardForTest = SpanGuard;
+
+private:
 	int msToX(qint64 ms) const;
 	qint64 xToMs(int x) const;
 	// clipRect is the clip's TIME span, and is what hit testing, dragging and

@@ -164,7 +164,15 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	setWindowFlags(Qt::Window | Qt::WindowTitleHint | Qt::WindowSystemMenuHint |
 		       Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint);
 	setSizeGripEnabled(true);
+	// The size it RESTORES to when un-maximised; the editor itself opens
+	// maximised (below), because every part of it wants the room -- the preview,
+	// the track stack and the Inspector are all things you immediately drag
+	// bigger otherwise.
 	resize(1040, 680);
+	// Maximised rather than true full-screen: full-screen takes the title bar
+	// with it, and this is a window you close, move to another monitor, and put
+	// beside the thing you are recording.
+	setWindowState(windowState() | Qt::WindowMaximized);
 	setAcceptDrops(true); // drop video files to add them as sources
 
 	auto *root = new QVBoxLayout(this);
@@ -5086,6 +5094,24 @@ void VideoEditorWindow::showEvent(QShowEvent *e)
 
 	// First real geometry: now the split can be sized to the starting mode.
 	QTimer::singleShot(0, this, [this]() { applyModeSplit(); });
+}
+
+void VideoEditorWindow::resizeEvent(QResizeEvent *e)
+{
+	QDialog::resizeEvent(e);
+	// Opening maximised means the real height can arrive AFTER showEvent, and
+	// applyModeSplit() divides whatever height it happens to find -- sized
+	// against the restore-down 680 it leaves the preview short on a 1440p
+	// screen. Run it once more on the first resize, when the window is the size
+	// it is actually going to be.
+	//
+	// Once. After that the split belongs to the user, and applyModeSplit only
+	// ever takes room away from the bottom pane -- so re-running it on every
+	// resize would quietly undo a splitter they had dragged the other way.
+	if (!modeSplitSized_ && isVisible()) {
+		modeSplitSized_ = true;
+		applyModeSplit();
+	}
 }
 
 bool VideoEditorWindow::eventFilter(QObject *watched, QEvent *e)

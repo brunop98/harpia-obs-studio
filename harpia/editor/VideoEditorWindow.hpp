@@ -48,6 +48,7 @@ class QDragEnterEvent;
 class QDropEvent;
 class QEvent;
 class QShowEvent;
+class QResizeEvent;
 class QJsonObject;
 
 namespace harpia {
@@ -167,6 +168,7 @@ protected:
 	void dragEnterEvent(QDragEnterEvent *e) override;
 	void dropEvent(QDropEvent *e) override;
 	void showEvent(QShowEvent *e) override;              // first-show: place Sources panel
+	void resizeEvent(QResizeEvent *e) override;          // first real size: fix the split
 	bool eventFilter(QObject *watched, QEvent *e) override; // sync toggle when panel closed
 
 signals:
@@ -368,6 +370,8 @@ private:
 	// How a "Zoom here" is shaped. One set for the window, so repeated zooms
 	// in a project match each other rather than each having its own timing.
 	ZoomSettings zoomSettings_;
+	// applyModeSplit() has run against the window's real (maximised) size.
+	bool modeSplitSized_ = false;
 	// "Zoom here" from the preview's right-click menu: write a push-in to the
 	// clicked point onto the selected clip, as ordinary Transform keyframes.
 	void addZoomAtPreviewPoint(double canvasXNorm, double canvasYNorm);

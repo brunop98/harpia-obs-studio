@@ -39,8 +39,7 @@ struct ExportEstimateInput {
 // Bytes. 0 when the input cannot produce a file (no duration, no pixels).
 qint64 estimateExportBytes(const ExportEstimateInput &in);
 
-// "24.8 MB" / "812 KB". Deliberately decimal MB, matching what file managers
-// and upload limits mean by the word.
-QString humanFileSize(qint64 bytes);
+// humanFileSize() lives in ui/UiText.hpp -- callers of this header almost
+// always want it, and there is exactly one of it now.
 
 } // namespace harpia

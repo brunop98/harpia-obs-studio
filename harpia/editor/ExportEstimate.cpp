@@ -1,5 +1,7 @@
 #include "ExportEstimate.hpp"
 
+#include "../ui/UiText.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -82,19 +84,5 @@ qint64 estimateExportBytes(const ExportEstimateInput &in)
 	return qint64((videoBits + audioBits) / 8.0 + overheadBytes);
 }
 
-QString humanFileSize(qint64 bytes)
-{
-	if (bytes <= 0)
-		return QStringLiteral("—");
-	const double kb = double(bytes) / 1000.0;
-	if (kb < 1.0)
-		return QStringLiteral("%1 B").arg(bytes);
-	if (kb < 1000.0)
-		return QStringLiteral("%1 KB").arg(kb, 0, 'f', 0);
-	const double mb = kb / 1000.0;
-	if (mb < 1000.0)
-		return QStringLiteral("%1 MB").arg(mb, 0, 'f', mb < 10.0 ? 2 : 1);
-	return QStringLiteral("%1 GB").arg(mb / 1000.0, 0, 'f', 2);
-}
 
 } // namespace harpia

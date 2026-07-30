@@ -2673,19 +2673,6 @@ QWidget *VideoEditorWindow::addSection(QVBoxLayout *into, const QString &title, 
 }
 
 namespace {
-QString humanBytes(qint64 b)
-{
-	if (b <= 0)
-		return QStringLiteral("—");
-	const double kb = b / 1024.0;
-	if (kb < 1024.0)
-		return QStringLiteral("%1 KB").arg(kb, 0, 'f', 0);
-	const double mb = kb / 1024.0;
-	if (mb < 1024.0)
-		return QStringLiteral("%1 MB").arg(mb, 0, 'f', 1);
-	return QStringLiteral("%1 GB").arg(mb / 1024.0, 0, 'f', 2);
-}
-
 // Recursive size of a folder (used for the project's assets).
 qint64 dirSize(const QString &path)
 {
@@ -3193,8 +3180,8 @@ void VideoEditorWindow::refreshProjectInspector()
 	for (const EditorSource &s : sources_)
 		media += QFileInfo(s.path).size();
 	pjSize_->setText(saved ? QStringLiteral("%1  (media %2)")
-					 .arg(humanBytes(bytes), humanBytes(media))
-			       : QStringLiteral("—  (media %1)").arg(humanBytes(media)));
+					 .arg(humanFileSize(bytes), humanFileSize(media))
+			       : QStringLiteral("—  (media %1)").arg(humanFileSize(media)));
 
 	// The Auto values and the letterbox warning both read the first source, so
 	// they are recomputed whenever anything about the project is refreshed.

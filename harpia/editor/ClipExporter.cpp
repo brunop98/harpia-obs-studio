@@ -85,6 +85,32 @@ struct VideoState {
 	AVStream *aOut = nullptr; // audio stream-copy (optional)
 	bool headerWritten = false;
 
+	// The decoded frame in the encoder's pixel format, converting once and
+	// reusing the buffer. Two export paths spelled this out identically (modulo
+	// where the lines happened to wrap); it belongs here because fullYuv and
+	// toYuv are this struct's own members and nobody outside should be reaching
+	// for them.
+	AVFrame *ensureEncodeFormat(AVFrame *f, AVPixelFormat want)
+	{
+		if (!f || AVPixelFormat(f->format) == want)
+			return f;
+		if (!fullYuv) {
+			fullYuv = av_frame_alloc();
+			fullYuv->format = want;
+			fullYuv->width = vdec->width;
+			fullYuv->height = vdec->height;
+			av_frame_get_buffer(fullYuv, 0);
+		}
+		if (!toYuv)
+			toYuv = sws_getContext(vdec->width, vdec->height, AVPixelFormat(f->format),
+					       vdec->width, vdec->height, want, SWS_BILINEAR, nullptr,
+					       nullptr, nullptr);
+		av_frame_make_writable(fullYuv); // the encoder may still hold a ref
+		sws_scale(toYuv, f->data, f->linesize, 0, vdec->height, fullYuv->data,
+			  fullYuv->linesize);
+		return fullYuv;
+	}
+
 	// The frame the encoder should actually receive. Identity unless the output
 	// size differs from the frame's, in which case a yuv->yuv rescale runs into
 	// a reused frame. Returns `in` unchanged on any allocation failure: a
@@ -366,6 +392,55 @@ struct ShaderPass {
 	}
 };
 
+// The tail every export path shares.
+//
+// Bake the effect chain, rescale to the encoder's size and format, send, drain,
+// write. This was spelled out four times -- three of them byte for byte
+// identical, the fourth differing only in the name of its packet -- which is
+// how the file came to have four encoder setups before openVideoEncoder pulled
+// those together. Adding the output rescale meant four edits; the next thing
+// will mean one.
+//
+// An object rather than a function so the shader and its frame counter, which
+// have to live as long as the encode does, come along with it instead of being
+// three more locals every caller has to remember to declare.
+struct VideoSink {
+	VideoSink(VideoState &st, AVPacket *p) : s(st), pkt(p) {}
+
+	VideoState &s;
+	AVPacket *pkt; // scratch for the drained packets; owned by the caller
+	ShaderPass shader;
+	int shaderFrame = 0;
+
+	// Compile the effect chain, if there is one. Callers that bake no shaders
+	// (the timeline composites them as components) simply do not call this, and
+	// the pass stays inactive.
+	QString initShader(const ClipExporter::Options &opts) { return shader.init(opts); }
+
+	bool operator()(AVFrame *f)
+	{
+		if (f && shader.active)
+			shader.process(f, float(f->pts * av_q2d(s.venc->time_base)), shaderFrame++);
+		f = s.scaleForEncode(f); // no-op unless an output size was chosen
+		if (avcodec_send_frame(s.venc, f) < 0)
+			return false;
+		while (true) {
+			const int r = avcodec_receive_packet(s.venc, pkt);
+			if (r == AVERROR(EAGAIN) || r == AVERROR_EOF)
+				break;
+			if (r < 0)
+				return false;
+			av_packet_rescale_ts(pkt, s.venc->time_base, s.vOut->time_base);
+			pkt->stream_index = s.vOut->index;
+			if (av_interleaved_write_frame(s.ofmt, pkt) < 0)
+				return false;
+			av_packet_unref(pkt);
+		}
+		return true;
+	}
+};
+
+
 } // namespace
 
 void ClipExporter::run(const QString &inPath, const QString &outPath, const Options &opts)
@@ -603,50 +678,11 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 		return v;
 	};
 
-	auto ensureYuvFull = [&](AVFrame *f) -> AVFrame * {
-		if ((AVPixelFormat)f->format == encodePixFmt(opts))
-			return f;
-		if (!s.fullYuv) {
-			s.fullYuv = av_frame_alloc();
-			s.fullYuv->format = encodePixFmt(opts);
-			s.fullYuv->width = s.vdec->width;
-			s.fullYuv->height = s.vdec->height;
-			av_frame_get_buffer(s.fullYuv, 0);
-		}
-		if (!s.toYuv)
-			s.toYuv = sws_getContext(s.vdec->width, s.vdec->height, (AVPixelFormat)f->format,
-						 s.vdec->width, s.vdec->height, encodePixFmt(opts), SWS_BILINEAR,
-						 nullptr, nullptr, nullptr);
-		av_frame_make_writable(s.fullYuv); // encoder may still hold a ref
-		sws_scale(s.toYuv, f->data, f->linesize, 0, s.vdec->height, s.fullYuv->data, s.fullYuv->linesize);
-		return s.fullYuv;
-	};
+	auto ensureYuvFull = [&](AVFrame *f) { return s.ensureEncodeFormat(f, encodePixFmt(opts)); };
 
-	ShaderPass shaderPass;
-	if (QString e = shaderPass.init(opts); !e.isEmpty())
+	VideoSink encodeVideo(s, outPkt);
+	if (QString e = encodeVideo.initShader(opts); !e.isEmpty())
 		return e;
-	int shaderFrame = 0;
-
-	auto encodeVideo = [&](AVFrame *f) -> bool {
-		if (f && shaderPass.active)
-			shaderPass.process(f, float(f->pts * av_q2d(s.venc->time_base)), shaderFrame++);
-		f = s.scaleForEncode(f); // no-op unless an output size was chosen
-		if (avcodec_send_frame(s.venc, f) < 0)
-			return false;
-		while (true) {
-			int r = avcodec_receive_packet(s.venc, outPkt);
-			if (r == AVERROR(EAGAIN) || r == AVERROR_EOF)
-				break;
-			if (r < 0)
-				return false;
-			av_packet_rescale_ts(outPkt, s.venc->time_base, s.vOut->time_base);
-			outPkt->stream_index = s.vOut->index;
-			if (av_interleaved_write_frame(s.ofmt, outPkt) < 0)
-				return false;
-			av_packet_unref(outPkt);
-		}
-		return true;
-	};
 
 	while (!errored && !videoDone) {
 		if (cancel_.load())
@@ -886,51 +922,11 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 	bool errored = false;
 	QString audioErr;
 
-	auto ensureYuvFull = [&](AVFrame *f) -> AVFrame * {
-		if ((AVPixelFormat)f->format == encodePixFmt(opts))
-			return f;
-		if (!s.fullYuv) {
-			s.fullYuv = av_frame_alloc();
-			s.fullYuv->format = encodePixFmt(opts);
-			s.fullYuv->width = s.vdec->width;
-			s.fullYuv->height = s.vdec->height;
-			av_frame_get_buffer(s.fullYuv, 0);
-		}
-		if (!s.toYuv)
-			s.toYuv = sws_getContext(s.vdec->width, s.vdec->height, (AVPixelFormat)f->format,
-						 s.vdec->width, s.vdec->height, encodePixFmt(opts),
-						 SWS_BILINEAR, nullptr, nullptr, nullptr);
-		av_frame_make_writable(s.fullYuv); // encoder may still hold a ref
-		sws_scale(s.toYuv, f->data, f->linesize, 0, s.vdec->height, s.fullYuv->data,
-			  s.fullYuv->linesize);
-		return s.fullYuv;
-	};
+	auto ensureYuvFull = [&](AVFrame *f) { return s.ensureEncodeFormat(f, encodePixFmt(opts)); };
 
-	ShaderPass shaderPass;
-	if (QString e = shaderPass.init(opts); !e.isEmpty())
+	VideoSink encodeVideo(s, outPkt);
+	if (QString e = encodeVideo.initShader(opts); !e.isEmpty())
 		return e;
-	int shaderFrame = 0;
-
-	auto encodeVideo = [&](AVFrame *f) -> bool {
-		if (f && shaderPass.active)
-			shaderPass.process(f, float(f->pts * av_q2d(s.venc->time_base)), shaderFrame++);
-		f = s.scaleForEncode(f); // no-op unless an output size was chosen
-		if (avcodec_send_frame(s.venc, f) < 0)
-			return false;
-		while (true) {
-			int r = avcodec_receive_packet(s.venc, outPkt);
-			if (r == AVERROR(EAGAIN) || r == AVERROR_EOF)
-				break;
-			if (r < 0)
-				return false;
-			av_packet_rescale_ts(outPkt, s.venc->time_base, s.vOut->time_base);
-			outPkt->stream_index = s.vOut->index;
-			if (av_interleaved_write_frame(s.ofmt, outPkt) < 0)
-				return false;
-			av_packet_unref(outPkt);
-		}
-		return true;
-	};
 
 	auto writeAudio = [&](AVPacket *p) -> bool {
 		av_packet_rescale_ts(p, AVRational{1, retimer.sampleRate()}, s.aOut->time_base);
@@ -1254,31 +1250,9 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 		std::memset(f->data[1], 128, size_t(f->linesize[1]) * (f->height / 2));
 		std::memset(f->data[2], 128, size_t(f->linesize[2]) * (f->height / 2));
 	};
-	ShaderPass shaderPass;
-	if (QString e = shaderPass.init(opts); !e.isEmpty())
+	VideoSink encodeVideo(s, outPkt);
+	if (QString e = encodeVideo.initShader(opts); !e.isEmpty())
 		return e;
-	int shaderFrame = 0;
-
-	auto encodeVideo = [&](AVFrame *f) -> bool {
-		if (f && shaderPass.active)
-			shaderPass.process(f, float(f->pts * av_q2d(s.venc->time_base)), shaderFrame++);
-		f = s.scaleForEncode(f); // no-op unless an output size was chosen
-		if (avcodec_send_frame(s.venc, f) < 0)
-			return false;
-		while (true) {
-			int r = avcodec_receive_packet(s.venc, outPkt);
-			if (r == AVERROR(EAGAIN) || r == AVERROR_EOF)
-				break;
-			if (r < 0)
-				return false;
-			av_packet_rescale_ts(outPkt, s.venc->time_base, s.vOut->time_base);
-			outPkt->stream_index = s.vOut->index;
-			if (av_interleaved_write_frame(s.ofmt, outPkt) < 0)
-				return false;
-			av_packet_unref(outPkt);
-		}
-		return true;
-	};
 	auto writeAudio = [&](AVPacket *p) -> bool {
 		av_packet_rescale_ts(p, AVRational{1, retimer.sampleRate()}, s.aOut->time_base);
 		p->stream_index = s.aOut->index;
@@ -1578,24 +1552,9 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 		av_frame_free(&yuv);
 		av_packet_free(&pkt);
 	};
-	auto encode = [&](AVFrame *f) -> bool {
-		f = s.scaleForEncode(f); // no-op unless an output size was chosen
-		if (avcodec_send_frame(s.venc, f) < 0)
-			return false;
-		while (true) {
-			const int r = avcodec_receive_packet(s.venc, pkt);
-			if (r == AVERROR(EAGAIN) || r == AVERROR_EOF)
-				break;
-			if (r < 0)
-				return false;
-			av_packet_rescale_ts(pkt, s.venc->time_base, s.vOut->time_base);
-			pkt->stream_index = s.vOut->index;
-			if (av_interleaved_write_frame(s.ofmt, pkt) < 0)
-				return false;
-			av_packet_unref(pkt);
-		}
-		return true;
-	};
+	// No initShader(): the timeline composites effects as components, so there
+	// is nothing to bake here and the pass stays inactive.
+	VideoSink encode(s, pkt);
 
 	// ---- Render every frame -----------------------------------------------
 	const auto t0 = std::chrono::steady_clock::now();

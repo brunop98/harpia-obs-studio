@@ -1,5 +1,7 @@
 #include "ShareExportDialog.hpp"
 
+#include "UiText.hpp"
+
 #include <QApplication>
 #include <QClipboard>
 #include <QCloseEvent>
@@ -20,17 +22,6 @@
 namespace harpia {
 
 namespace {
-
-QString humanSize(qint64 bytes)
-{
-	const double kb = bytes / 1024.0;
-	if (kb < 1024.0)
-		return QStringLiteral("%1 KB").arg(kb, 0, 'f', 0);
-	const double mb = kb / 1024.0;
-	if (mb < 1024.0)
-		return QStringLiteral("%1 MB").arg(mb, 0, 'f', 1);
-	return QStringLiteral("%1 GB").arg(mb / 1024.0, 0, 'f', 2);
-}
 
 QString humanEta(qint64 ms)
 {
@@ -171,7 +162,7 @@ void ShareExportDialog::onProgress(int percent, double speed, qint64 etaMs, qint
 	pctLabel_->setText(QStringLiteral("%1%").arg(percent));
 	speedLabel_->setText(QStringLiteral("Speed: %1x").arg(speed, 0, 'f', 1));
 	etaLabel_->setText(QStringLiteral("ETA: %1").arg(humanEta(etaMs)));
-	sizeLabel_->setText(QStringLiteral("Output so far: %1").arg(humanSize(outBytes)));
+	sizeLabel_->setText(QStringLiteral("Output so far: %1").arg(humanFileSize(outBytes)));
 }
 
 void ShareExportDialog::onFinished(bool ok, bool canceled, const QString &error)
@@ -219,7 +210,7 @@ void ShareExportDialog::buildSummary()
 	summaryLabel_->setTextFormat(Qt::RichText);
 	summaryLabel_->setText(
 		QStringLiteral("Original: <b>%1</b><br>Optimized: <b>%2</b><br>Space saved: <b>%3%</b>")
-			.arg(humanSize(originalBytes_), humanSize(finalBytes_))
+			.arg(humanFileSize(originalBytes_), humanFileSize(finalBytes_))
 			.arg(savedPct, 0, 'f', 0));
 	v->addWidget(summaryLabel_);
 

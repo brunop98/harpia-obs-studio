@@ -19,6 +19,7 @@
 // Built like exportsize_test (needs libav): ClipExporter + GifEncoder + the
 // compositor, plus Qt Widgets for the dialog itself.
 #include "editor/ExportEstimate.hpp"
+#include "ui/UiText.hpp"
 #include "editor/ExportOptionsDialog.hpp"
 
 #include <QApplication>

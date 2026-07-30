@@ -16,6 +16,8 @@
 
 class QApplication;
 
+#include <QString>
+
 namespace harpia {
 
 // Set the app-wide base font and the tooltip font. Call once, before any
@@ -32,5 +34,17 @@ inline int uiCaptionPx()  { return uiTextPx(0.92); } // errors, hints, status
 inline int uiHeadingPx()  { return uiTextPx(1.18); } // dialog headline
 inline int uiTimecodePx() { return uiTextPx(1.45); } // the editor's big clock
 inline int uiReadoutPx()  { return uiTextPx(1.05); } // inspector value fields
+
+// A byte count as a person reads it: "812 KB", "24.8 MB".
+//
+// One of these, because there were three, and they did not agree. Two used
+// 1024 and one used 1000, so the export dialog's estimate and the size the
+// finished file reported afterwards were in different units under the same
+// word -- a 5% discrepancy that reads as the estimate being wrong.
+//
+// 1024, because this is a Windows-first app and Explorer's "MB" is 1024-based.
+// Matching the file manager the user is about to check the file in matters more
+// than matching the SI committee.
+QString humanFileSize(qint64 bytes);
 
 } // namespace harpia

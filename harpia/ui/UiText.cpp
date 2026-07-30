@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QFont>
 #include <QFontInfo>
+#include <QLocale>
 #include <QToolTip>
 
 #include <algorithm>
@@ -54,6 +55,21 @@ int uiTextPx(double scale)
 	// stylesheet needs the pixel size the platform actually resolved it to.
 	const int base = QFontInfo(QApplication::font()).pixelSize();
 	return std::max(kMinPx, int(std::lround(base * scale)));
+}
+
+QString humanFileSize(qint64 bytes)
+{
+	if (bytes <= 0)
+		return QStringLiteral("\u2014");
+	// QLocale rather than hand-rolled arithmetic: it uses the reader's decimal
+	// separator, and TraditionalFormat is the 1024-based "KB/MB/GB" Windows
+	// Explorer shows. The three hand-rolled copies this replaces all wrote a
+	// full stop regardless of locale, and one of them counted in 1000s.
+	//
+	// Two decimals below 10 MB: at one, "1.2 MB" hides the difference between a
+	// 1.20 and a 1.29 estimate, which is exactly the range people compare.
+	const int precision = bytes < 10LL * 1024 * 1024 ? 2 : 1;
+	return QLocale().formattedDataSize(bytes, precision, QLocale::DataSizeTraditionalFormat);
 }
 
 } // namespace harpia

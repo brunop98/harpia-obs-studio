@@ -67,6 +67,52 @@ function Assert-Cmake {
     }
 }
 
+# Is there a Visual Studio C++ toolset for CMake to generate for?
+#
+# Without one, CMake picks "Visual Studio 17 2022" as its default generator and
+# fails with "could not find any instance of Visual Studio" -- a message that
+# names a product the user never asked for and does not say what to do about
+# it, or that building is not required in the first place.
+function Assert-VisualStudio {
+    # vswhere ships with every VS installer at this fixed path. Guard the env
+    # var: Join-Path on a null root throws, and ErrorActionPreference is Stop,
+    # so a missing variable would abort with a worse message than the one this
+    # function exists to replace.
+    $pf86 = ${env:ProgramFiles(x86)}
+    $vswhere = if ($pf86) {
+        Join-Path $pf86 'Microsoft Visual Studio/Installer/vswhere.exe'
+    } else { $null }
+    $found = $false
+    if ($vswhere -and (Test-Path $vswhere)) {
+        # -products * so the standalone Build Tools count, not just the IDE.
+        $installs = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath 2>$null
+        $found = [bool]$installs
+    }
+    if ($found) { return }
+
+    Write-Host ''
+    Write-Host 'ERROR: no Visual Studio C++ toolset was found on this machine.' -ForegroundColor Red
+    Write-Host ''
+    Write-Host 'CMake needs one to generate a build. Without it you get its own'
+    Write-Host 'message instead, which is where "Visual Studio 17 2022" comes from:'
+    Write-Host '    Generator ... could not find any instance of Visual Studio.' -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host 'If you only want to RUN Harpia on this PC, you do not need any of' -ForegroundColor Yellow
+    Write-Host 'this -- do not build here. On a PC that can build, run:' -ForegroundColor Yellow
+    Write-Host '    .\harpia\scripts\Build-Harpia.ps1 -Package'
+    Write-Host 'then copy the whole build_x64\dist\Harpia folder across and run'
+    Write-Host 'bin\64bit\harpia.exe from it. That folder is self-contained.'
+    Write-Host ''
+    Write-Host 'If you DO want to build here, install one of these (either works):'
+    Write-Host '    winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"'
+    Write-Host '    winget install Microsoft.VisualStudio.2022.Community  (tick "Desktop development with C++")'
+    Write-Host 'Then open a NEW terminal and run this script again.'
+    Write-Host ''
+    exit 1
+}
+
 Assert-Cmake
 
 Push-Location $RepoRoot
@@ -86,6 +132,14 @@ try {
         if (-not $cacheExists) {
             # Fresh tree: target x64 and let CMake auto-detect the installed Visual
             # Studio (override with -Generator "Visual Studio 17 2022" if needed).
+            #
+            # Checked here rather than at the top of the script: a -Reconfigure of
+            # an existing cache reuses its generator, and an explicitly requested
+            # non-VS generator (Ninja) does not need the IDE's toolset located
+            # this way. Only a fresh VS-generator configure does.
+            if (-not $Generator -or $Generator -like 'Visual Studio*') {
+                Assert-VisualStudio
+            }
             $cfgArgs += @('-A', 'x64')
             if ($Generator) { $cfgArgs += @('-G', $Generator) }
         }

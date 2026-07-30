@@ -36,6 +36,15 @@ downloads the prebuilt dependencies from `buildspec.json` automatically.
 > **stock `obs-studio` no longer builds from this tree** — recover it from git
 > history if ever needed.
 
+> **Only want to RUN Harpia on another PC?** Don't build there — that second
+> machine needs no toolchain at all. Build once on a machine that has Visual
+> Studio, with `-Package` (see *Making a distributable* below), and copy the
+> `build_x64\dist\Harpia` folder across. Running `Build-Harpia.ps1` on a PC
+> without the C++ toolset is what produces CMake's confusing
+> *"Visual Studio 17 2022 … could not find any instance of Visual Studio"* —
+> the script now says so up front rather than letting that be the first thing
+> you see.
+
 ### Quick build (recommended)
 
 ```powershell

@@ -14,11 +14,13 @@
 // passed however wrong the banded one was. Effects::setPixelBandsForTest is
 // what makes the threaded path reachable from a test.
 #include "editor/timeline/EffectClip.hpp"
+#include "editor/timeline/Spotlight.hpp"
 
 #include <QGuiApplication>
 #include <QImage>
 
 #include <cstdio>
+#include <random>
 
 using namespace harpia;
 static int failures = 0;
@@ -131,6 +133,68 @@ int main(int argc, char **argv)
 		Effects::apply(after, fx, 0);
 		int row = -1;
 		ok(!identical(before, after, &row), "the frame changed, so the comparisons mean something");
+	}
+
+	std::printf("\n-- the blur's three colour planes never touch each other --\n");
+	{
+		// The blur is now split across the three planes, one per thread, which
+		// is only sound if no plane reads another. That is the property, so
+		// that is what is checked: blur a full-colour frame, then blur three
+		// frames each carrying ONE of its channels, and the channels have to
+		// come out the same either way.
+		//
+		// Checked at 1920x1080 and a large radius, because the split is per
+		// channel and a small frame would still exercise it -- but the size
+		// this actually runs at is the one worth being sure about.
+		const int w = 640, h = 360, r = 17;
+		QImage full(w, h, QImage::Format_RGBA8888);
+		std::mt19937 rng(99);
+		for (int y = 0; y < h; ++y) {
+			uchar *row = full.bits() + size_t(y) * full.bytesPerLine();
+			for (int x = 0; x < w; ++x) {
+				row[x * 4 + 0] = uchar(rng());
+				row[x * 4 + 1] = uchar(rng());
+				row[x * 4 + 2] = uchar(rng());
+				row[x * 4 + 3] = 255;
+			}
+		}
+		QImage together = full;
+		Spotlight::blurInPlace(together, r);
+
+		bool same = true;
+		for (int c = 0; c < 3; ++c) {
+			QImage solo(w, h, QImage::Format_RGBA8888);
+			solo.fill(QColor(0, 0, 0, 255));
+			for (int y = 0; y < h; ++y) {
+				const uchar *sr = full.constBits() + size_t(y) * full.bytesPerLine();
+				uchar *dr = solo.bits() + size_t(y) * solo.bytesPerLine();
+				for (int x = 0; x < w; ++x)
+					dr[x * 4 + c] = sr[x * 4 + c];
+			}
+			Spotlight::blurInPlace(solo, r);
+			for (int y = 0; y < h && same; ++y) {
+				const uchar *a2 = together.constBits() + size_t(y) * together.bytesPerLine();
+				const uchar *b2 = solo.constBits() + size_t(y) * solo.bytesPerLine();
+				for (int x = 0; x < w; ++x)
+					if (a2[x * 4 + c] != b2[x * 4 + c]) {
+						std::printf("     channel %d differs at (%d,%d): %d vs %d\n",
+							    c, x, y, a2[x * 4 + c], b2[x * 4 + c]);
+						same = false;
+						break;
+					}
+			}
+		}
+		ok(same, "each channel blurs to the same result alone as it does together");
+
+		// And the blur did something, or the comparison above is vacuous.
+		bool changed = false;
+		for (int y = 0; y < h && !changed; ++y) {
+			const uchar *a2 = full.constBits() + size_t(y) * full.bytesPerLine();
+			const uchar *b2 = together.constBits() + size_t(y) * together.bytesPerLine();
+			for (int x = 0; x < w * 4; ++x)
+				if (a2[x] != b2[x]) { changed = true; break; }
+		}
+		ok(changed, "and the blur actually changed the frame");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

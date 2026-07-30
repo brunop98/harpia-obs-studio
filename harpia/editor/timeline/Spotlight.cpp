@@ -1,5 +1,7 @@
 #include "Spotlight.hpp"
 
+#include "../Parallel.hpp"
+
 #include "../shader/SpotlightGl.hpp"
 
 #include <QPainter>
@@ -74,12 +76,14 @@ void Spotlight::blurInPlace(QImage &img, int radius)
 	static thread_local std::vector<int> accBuf;
 	if (scratch.size() < plane * 6)
 		scratch.resize(plane * 6);
-	if (accBuf.size() < size_t(w))
-		accBuf.resize(size_t(w));
+	// One accumulator row PER CHANNEL: the three planes are blurred on
+	// different threads below, and boxV walks its own acc across the frame.
+	if (accBuf.size() < size_t(w) * 3)
+		accBuf.resize(size_t(w) * 3);
 	unsigned char *src[3] = {scratch.data(), scratch.data() + plane, scratch.data() + plane * 2};
 	unsigned char *dst[3] = {scratch.data() + plane * 3, scratch.data() + plane * 4,
 				 scratch.data() + plane * 5};
-	int *acc = accBuf.data();
+	int *accAll = accBuf.data();
 
 	unsigned char *bits = img.bits();
 	for (int y = 0; y < h; ++y) {
@@ -127,7 +131,7 @@ void Spotlight::blurInPlace(QImage &img, int radius)
 	// sequential, and the inner loop carries no dependency across x, so it
 	// vectorises. Walking actual columns (the obvious way to write this) reads
 	// one cache line per pixel and was most of the old cost.
-	auto boxV = [&](const unsigned char *s, unsigned char *d) {
+	auto boxV = [&](const unsigned char *s, unsigned char *d, int *acc) {
 		for (int x = 0; x < w; ++x)
 			acc[x] = s[x] * (radius + 1);
 		for (int y = 1; y <= radius; ++y) {
@@ -146,12 +150,21 @@ void Spotlight::blurInPlace(QImage &img, int radius)
 		}
 	};
 
-	for (int c = 0; c < 3; ++c) {
+	// The three colour planes never read each other, so this is the one split
+	// in the whole routine that needs no reasoning about overlap -- and it is
+	// the part worth splitting: eighteen full-frame passes live in here, against
+	// two for the de/re-interleave around it. Each channel gets its own
+	// accumulator row so boxV's running sums stay private.
+	//
+	// blockingFor runs job 0 on the calling thread, so a single-core machine
+	// does exactly what it did before, in the same order.
+	blockingFor(3, [&](int c) {
+		int *acc = accAll + size_t(c) * size_t(w);
 		for (int pass = 0; pass < 3; ++pass) {
 			boxH(src[c], dst[c]);
-			boxV(dst[c], src[c]);
+			boxV(dst[c], src[c], acc);
 		}
-	}
+	});
 
 	for (int y = 0; y < h; ++y) {
 		unsigned char *row = bits + size_t(y) * stride;

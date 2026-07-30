@@ -176,6 +176,11 @@ public:
 	// take. Public because pasting has exactly the same question to ask: a file
 	// copied in the file manager arrives as a URL list, not as a picture.
 	static QStringList droppableFiles(const QMimeData *mime);
+	static bool allAudio(const QStringList &files);
+	// Which lane the drag in progress is aimed at (-1 = none, or a new one).
+	// For tests: the indicator has to promise where the drop will really land,
+	// and that promise is only checkable mid-drag.
+	int dropTargetTrackForTest() const { return drop_.track; }
 
 	// The two rects a clip has, for tests: the one you can click and the one
 	// that gets drawn. That they are DIFFERENT is the point of the gap, and

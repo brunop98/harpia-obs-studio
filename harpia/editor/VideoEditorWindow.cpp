@@ -1922,12 +1922,53 @@ void VideoEditorWindow::onFilesDroppedOnTimeline(const QStringList &paths, int t
 	if (!fullEdit())
 		setEditMode(EditMode::Full);
 
-	qint64 at = std::max<qint64>(0, outMs);
-	int landed = -1;
+	// Picture and sound get their OWN running positions, both starting at the
+	// drop point. Dropping a video and its music track together then puts the
+	// music UNDER the video, which is what that gesture means -- a single
+	// running position would have queued the music after the picture ended.
+	// A drag of nothing but audio was aimed at the audio lanes by the view, so
+	// its track/newTrackAt can be taken at face value. See the audio branch.
+	const bool audioDrag = TimelineView::allAudio(paths);
+	qint64 atPic = std::max<qint64>(0, outMs);
+	qint64 atAud = atPic;
+	int landed = -1;    // the picture lane the first clip made or joined
+	int audLanded = -1; // ...and the audio one
+	bool any = false;
 	for (const QString &f : paths) {
 		TlClip c;
 		// A GIF is both, and the video reader is what people mean by dropping
 		// one -- so the video test goes first, matching MediaFiles.hpp.
+		if (isAudioFile(f)) {
+			// An audio-only file has no video stream for FrameSeeker to open,
+			// so this decodes it to a session WAV and registers THAT. Before
+			// this it fell through to the image branch and produced "could not
+			// be decoded", which was true of the still reader and useless.
+			const int id = addAudioSource(f);
+			if (id < 0)
+				continue; // addAudioSource already said why
+			const EditorSource *src = sourceById(id);
+			const QString wav = audioProxyFor(id);
+			c.type = TlClip::Type::Video; // "media clip"; the LANE makes it audio
+			c.sourceId = id;
+			c.srcStartMs = 0;
+			c.srcEndMs = src ? src->durationMs : 0;
+			c.peaks = VoiceoverTrack::loadPeaks(wav, 600); // so it draws a waveform
+			c.outStartMs = atAud;
+			atAud += std::max<qint64>(1, c.outDurationMs());
+			// The drop's target lane is only usable when the WHOLE drag was
+			// audio: that is the case the view computed against the audio
+			// group. In a mixed drag it named a picture lane, and inserting an
+			// audio track at a picture position would break the
+			// video-then-audio ordering the compositor relies on -- so those
+			// fall back to addClipAt's own "last audio lane, or make one".
+			const bool aimed = audioDrag && audLanded < 0;
+			audLanded = timelineView_->addClipAt(TlTrack::Kind::Audio, c,
+							     audLanded >= 0 ? audLanded
+									    : (aimed ? track : -1),
+							     aimed ? newTrackAt : -1);
+			any = true;
+			continue;
+		}
 		if (isVideoFile(f)) {
 			const int id = addSource(f);
 			if (id < 0)
@@ -1946,14 +1987,15 @@ void VideoEditorWindow::onFilesDroppedOnTimeline(const QStringList &paths, int t
 			c.srcStartMs = 0;
 			c.srcEndMs = 5000; // a still has no length of its own
 		}
-		c.outStartMs = at;
-		at += std::max<qint64>(1, c.outDurationMs());
+		c.outStartMs = atPic;
+		atPic += std::max<qint64>(1, c.outDurationMs());
 		// Only the FIRST clip makes a track; the rest join it, or the drop of
 		// three files would leave three new lanes.
 		landed = timelineView_->addClipAt(TlTrack::Kind::Video, c, landed >= 0 ? landed : track,
 						  landed >= 0 ? -1 : newTrackAt);
+		any = true;
 	}
-	if (landed < 0)
+	if (!any)
 		return;
 	updateInfoLabel();
 	showTimelineFrame(timelinePlayheadMs());
@@ -2092,8 +2134,7 @@ void VideoEditorWindow::onAddAudioClicked()
 	if (chosen == imp) {
 		const QString f = QFileDialog::getOpenFileName(
 			this, QStringLiteral("Import audio"), QFileInfo(inPath_).absolutePath(),
-			QStringLiteral("Audio files (*.wav *.mp3 *.m4a *.aac *.flac *.ogg *.opus);;"
-				       "All files (*)"));
+			audioOpenFilter());
 		if (f.isEmpty())
 			return;
 		const int id = addAudioSource(f);
@@ -4945,6 +4986,10 @@ void VideoEditorWindow::dropEvent(QDropEvent *e)
 				firstVideo = id;
 		} else if (isImageFile(f)) {
 			addedAny |= addImageSource(f) >= 0;
+		} else if (isAudioFile(f)) {
+			// A music file dropped on the editor rather than on a lane: added
+			// to the pool, ready for "Add audio", instead of ignored.
+			addedAny |= addAudioSource(f) >= 0;
 		}
 	}
 	if (!addedAny)
@@ -5915,7 +5960,7 @@ void VideoEditorWindow::onImportAudioClicked()
 		return;
 	const QString in = QFileDialog::getOpenFileName(
 		this, QStringLiteral("Import audio"), QString(),
-		QStringLiteral("Audio (*.mp3 *.wav *.m4a *.aac *.ogg *.flac *.opus *.wma);;All files (*)"));
+		audioOpenFilter());
 	if (in.isEmpty())
 		return;
 	// Decode to our uniform PCM WAV so waveform/trim/mix all work the same way.

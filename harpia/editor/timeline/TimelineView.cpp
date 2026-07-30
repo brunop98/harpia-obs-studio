@@ -281,6 +281,19 @@ int TimelineView::addClipAt(TlTrack::Kind kind, const TlClip &clip, int track, i
 	return target;
 }
 
+// True when every file in the drag is audio-only, so the whole drag belongs on
+// an audio lane. A mixed drag (a video and its music) is a picture drag: the
+// audio in it finds its own lane once the window unpacks it.
+bool TimelineView::allAudio(const QStringList &files)
+{
+	if (files.isEmpty())
+		return false;
+	for (const QString &f : files)
+		if (!isAudioFile(f))
+			return false;
+	return true;
+}
+
 QStringList TimelineView::droppableFiles(const QMimeData *mime)
 {
 	QStringList out;
@@ -306,9 +319,13 @@ void TimelineView::dragMoveEvent(QDragMoveEvent *e)
 {
 	if (!fileDrag_)
 		return;
-	// A dropped file is a picture clip, so it targets the picture group -- the
-	// same call an internal drag makes, so the indicator means the same thing.
-	drop_ = dropTargetAt(int(e->position().y()), TlTrack::Kind::Video);
+	// An all-audio drag targets the AUDIO group, everything else the picture
+	// group -- the same call an internal drag makes, so the indicator means the
+	// same thing. Pointing a music file at a video lane and highlighting it
+	// would have promised a landing place the drop cannot honour.
+	drop_ = dropTargetAt(int(e->position().y()),
+			     allAudio(droppableFiles(e->mimeData())) ? TlTrack::Kind::Audio
+								     : TlTrack::Kind::Video);
 	update();
 	e->acceptProposedAction();
 }

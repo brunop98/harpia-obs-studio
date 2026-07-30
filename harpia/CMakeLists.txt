@@ -157,6 +157,7 @@ target_sources(
     editor/FrameSeeker.cpp
     editor/StillImage.cpp
     editor/StillImage.hpp
+    editor/CanvasFit.hpp
     editor/ExportEstimate.cpp
     editor/ExportEstimate.hpp
     editor/FrameSeeker.hpp

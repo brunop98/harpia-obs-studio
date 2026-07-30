@@ -141,6 +141,10 @@ public:
 	// source. Everything that renders or encodes goes through these two, so the
 	// preview and the export can never disagree about the canvas or the rate.
 	QSize timelineCanvasSize() const;
+	// Multi-Cut's output resolution: the primary source, which is what the
+	// multi-source export encodes to. Public for the same reason as above --
+	// the preview and the export have to agree, so it is one answer.
+	QSize multiCutCanvasSize() const;
 	double timelineFps() const;
 
 	// Save to / open from an explicit path, with no dialog. The menu items wrap

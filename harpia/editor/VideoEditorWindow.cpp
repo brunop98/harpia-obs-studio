@@ -39,6 +39,7 @@
 #include "ShortcutPanel.hpp"
 #include "ShortcutRegistry.hpp"
 #include "timeline/KeyframeEditor.hpp"
+#include "CanvasFit.hpp"
 #include "timeline/TimelineSlice.hpp"
 #include "timeline/TimelineView.hpp"
 #include "timeline/Transitions.hpp"
@@ -1706,7 +1707,13 @@ void VideoEditorWindow::setActiveSource(int id)
 	activeSourceId_ = id;
 	seeker_ = s->seeker.get();
 	tracks_->setActiveSource(id);
-	canvas_->setVideoSize(s->width, s->height);
+	// Simple Trim exports the active source at its own resolution, so the
+	// preview is that source. Multi-Cut assembles everything into ONE output
+	// sized from the primary, and re-shaping the canvas to whichever source was
+	// last selected made the other clips draw stretched into it -- the preview
+	// stopped describing the file that would come out.
+	const QSize pv = multiCut() ? multiCutCanvasSize() : QSize(s->width, s->height);
+	canvas_->setVideoSize(pv.width(), pv.height());
 	timeline_->setDuration(s->durationMs);
 	tracks_->setDuration(s->durationMs);
 	timeline_->setThumbs(s->thumbCache);
@@ -2250,6 +2257,17 @@ QSize VideoEditorWindow::previewRenderSize(QSize canvas) const
 	const double k = std::max(0.2, double(wantW) / canvas.width());
 	return QSize(std::max(160, int(std::lround(canvas.width() * k))),
 		     std::max(90, int(std::lround(canvas.height() * k))));
+}
+
+QSize VideoEditorWindow::multiCutCanvasSize() const
+{
+	// The PRIMARY source, because that is literally what the export encodes to:
+	// runVideoCutsMulti() takes its canvas from inputs[0], and inputs[0] is
+	// sources_.front(). Anything else here and the preview would be describing
+	// a file nobody is going to get.
+	if (!sources_.empty() && sources_.front().width > 0 && sources_.front().height > 0)
+		return QSize(sources_.front().width, sources_.front().height);
+	return QSize(1920, 1080);
 }
 
 QSize VideoEditorWindow::timelineCanvasSize() const
@@ -7507,7 +7525,12 @@ void VideoEditorWindow::showFrame(int sourceId, qint64 ms)
 	// Trim / Multi-Cut show one source frame; the same quality setting applies,
 	// against the 720p these modes have always previewed at.
 	const QSize dec = previewRenderSize(QSize(1280, 720));
-	const QImage img = fs->frameAt(ms, dec.width(), dec.height());
+	QImage img = fs->frameAt(ms, dec.width(), dec.height());
+	// Multi-Cut: a cut from a differently-shaped file goes into the output
+	// letterboxed, so it has to preview that way too. A no-op when every source
+	// is the same shape, which is nearly every project.
+	if (!img.isNull() && multiCut())
+		img = fitIntoCanvas(img, multiCutCanvasSize());
 	if (!img.isNull())
 		setPreviewFrame(img, ms);
 }
@@ -7588,8 +7611,9 @@ void VideoEditorWindow::onSave()
 			span = TlSpan();
 		}
 	} else if (cuts) {
-		const EditorSource *s0 = sourceById(sources_.front().id);
-		ec.sourceSize = s0 ? QSize(s0->width, s0->height) : QSize();
+		// Through the same answer the preview uses, so the dialog cannot quote
+		// one resolution while the picture shows another.
+		ec.sourceSize = multiCutCanvasSize();
 		ec.fps = seeker_ ? seeker_->fps() : 30.0;
 		ec.seconds = tracks_->totalOutputMs() / 1000.0;
 		ec.previewFrame = canvas_->currentFrame();

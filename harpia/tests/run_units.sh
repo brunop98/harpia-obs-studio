@@ -205,12 +205,20 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/mask_test" "$QJSLIB/libqjs.a" $LF
 
+# Custom Region keeps its frame on screen even when Harpia is not in front --
+# lining the region up against another app is the whole point of it.
+"$MOC" -I"$H" "$H/ui/RegionTool.hpp" -o "$WORK/moc_RegionTool.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" -I"$ROOT/libobs" $CF \
+	"$HERE/regionoverlay_test.cpp" "$H/ui/RegionTool.cpp" \
+	"$WORK/moc_RegionTool.cpp" -o "$WORK/regionoverlay_test" $LF
+
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/paramslider_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionwatch_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/regionoverlay_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/component_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/scriptcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/componentrender_test" || rc=1

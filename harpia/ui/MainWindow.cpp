@@ -604,6 +604,10 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		// Esc: revert to full-monitor capture.
 		captureModeCombo_->setCurrentIndex(int(CaptureMode::Monitor));
 	});
+	// Re-evaluate once a drag ends: mode changes are deferred while one is in
+	// flight, and grabbing the overlay changes which window is active.
+	connect(regionTool_.get(), &RegionTool::interactionFinished, this,
+		&MainWindow::updateRegionToolVisibility);
 	connect(regionTool_.get(), &RegionTool::saveRegionRequested, this, &MainWindow::onSaveRegionRequested);
 	connect(regionTool_.get(), &RegionTool::manageRegionsRequested, this,
 		&MainWindow::openSavedRegionsManager);
@@ -2115,30 +2119,27 @@ void MainWindow::updateRegionToolVisibility()
 {
 	if (!regionTool_)
 		return;
-	// The overlay belongs to Custom Region capture — with or without
-	// single-application capture (the region can crop the selected window too).
-	if (captureMode_ != CaptureMode::Region) {
-		regionTool_->hide();
+	// Mid-drag the overlay owns the interaction: re-masking under a move that
+	// started in the interior would drop it halfway. Activation changes fire
+	// exactly then -- clicking the overlay deactivates the main window -- so
+	// this is checked before anything is decided.
+	if (regionTool_->isInteracting())
 		return;
-	}
-	const bool recording = recorder_.isRecording();
-	regionTool_->setRecordingMode(recording);
-	if (recording) {
-		// While recording the overlay is always shown (dimmed by setRecordingMode)
-		// as a passive boundary indicator.
-		regionTool_->show();
-		return;
-	}
-	// Not recording: only show while the recorder — or the overlay itself, which
-	// the user may be dragging/resizing — has focus. When focus moves to another
-	// app, hide the overlay completely so it never floats over other windows.
+
+	// The policy itself lives in regionOverlayState(), so it can be stated once
+	// and tested without a window: whether the overlay is on screen at all, and
+	// whether it takes the mouse. It used to disappear the moment focus left
+	// Harpia, which made the one job it exists for -- lining the frame up
+	// against the app you are about to record -- impossible.
 	const bool focused = isActiveWindow() || regionTool_->isActiveWindow();
-	if (focused) {
-		regionTool_->setWindowOpacity(1.0);
-		regionTool_->show();
-	} else {
-		regionTool_->hide();
-	}
+	const RegionOverlayState st = regionOverlayState(captureMode_ == CaptureMode::Region,
+							 recorder_.isRecording(), focused);
+	regionTool_->setMode(st.mode);
+	// Never steals the foreground: showing an always-on-top window normally
+	// activates it, which would yank focus off whatever the user just clicked
+	// -- and then bounce it straight back here on the next activation change.
+	regionTool_->setAttribute(Qt::WA_ShowWithoutActivating, !focused);
+	regionTool_->setVisible(st.visible);
 }
 
 void MainWindow::changeEvent(QEvent *event)

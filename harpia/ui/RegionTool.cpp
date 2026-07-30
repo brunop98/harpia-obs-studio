@@ -78,12 +78,14 @@ void RegionTool::emitRegion()
 
 void RegionTool::rebuildMask()
 {
-	if (!recording_) {
+	if (mode_ == Mode::Editing) {
 		clearMask(); // whole widget grabs input (drag interior to move)
 		return;
 	}
-	// Recording: only the border frame + handles are interactive; the interior
-	// is click-through so the app being recorded stays usable.
+	// Anything else: only the border frame + handles are interactive, and the
+	// interior is click-through so the app underneath stays usable. That is not
+	// only a recording concern -- an overlay left up over another window with a
+	// solid input area would make that window unclickable.
 	QRegion mask(rect());
 	mask -= QRegion(innerRectLocal().adjusted(2, 2, -2, -2));
 	// Re-add handle squares (they sit on the border, already included, but keep
@@ -235,9 +237,12 @@ void RegionTool::mouseMoveEvent(QMouseEvent *e)
 
 void RegionTool::mouseReleaseEvent(QMouseEvent *)
 {
+	const bool wasDragging = dragZone_ != Zone::None;
 	dragZone_ = Zone::None;
 	showDims_ = false;
 	update();
+	if (wasDragging)
+		emit interactionFinished();
 }
 
 void RegionTool::mouseDoubleClickEvent(QMouseEvent *)
@@ -266,18 +271,22 @@ void RegionTool::contextMenuEvent(QContextMenuEvent *e)
 
 void RegionTool::keyPressEvent(QKeyEvent *e)
 {
-	if (e->key() == Qt::Key_Escape && !recording_)
+	if (e->key() == Qt::Key_Escape && mode_ != Mode::Recording)
 		emit cancelled();
 	else
 		QWidget::keyPressEvent(e);
 }
 
-void RegionTool::setRecordingMode(bool recording)
+void RegionTool::setMode(Mode m)
 {
-	recording_ = recording;
-	if (!recording)
+	mode_ = m;
+	if (m != Mode::Recording)
 		paused_ = false;
-	setWindowOpacity(recording ? 0.28 : 1.0);
+	// Editing is the only state you are looking AT the overlay in; the other
+	// two sit over somebody else's window, so they step back. Watching stays
+	// well clear of the recording dim -- it has to be readable enough to line
+	// up against the app underneath, which is the entire point of it.
+	setWindowOpacity(m == Mode::Recording ? 0.28 : m == Mode::Watching ? 0.75 : 1.0);
 	rebuildMask();
 	update();
 }
@@ -300,7 +309,7 @@ void RegionTool::paintEvent(QPaintEvent *)
 	// Border color reflects the recording state at a glance:
 	//   green = ready (not recording), red = recording, yellow = paused.
 	QColor border;
-	if (!recording_)
+	if (mode_ != Mode::Recording)
 		border = QColor(0x3f, 0xb9, 0x50); // green — ready
 	else if (paused_)
 		border = QColor(0xd2, 0x99, 0x22); // yellow — paused
@@ -334,6 +343,27 @@ void RegionTool::paintEvent(QPaintEvent *)
 		p.setPen(Qt::white);
 		p.drawText(inner.adjusted(6, 6, -6, -6), Qt::AlignTop | Qt::AlignLeft, label);
 	}
+}
+
+RegionOverlayState regionOverlayState(bool regionCaptureMode, bool recording, bool harpiaFocused)
+{
+	RegionOverlayState st;
+	// Only Custom Region has a region to show. Entire Monitor has nothing to
+	// frame, and leaving a rectangle floating over the desktop there would be
+	// noise with no meaning.
+	if (!regionCaptureMode)
+		return st; // hidden
+
+	st.visible = true;
+	if (recording) {
+		st.mode = RegionTool::Mode::Recording;
+		return st;
+	}
+	// The change that matters: NOT hidden when Harpia is in the background.
+	// Lining the frame up against the app being recorded means clicking that
+	// app, and the overlay used to leave with the focus.
+	st.mode = harpiaFocused ? RegionTool::Mode::Editing : RegionTool::Mode::Watching;
+	return st;
 }
 
 } // namespace harpia

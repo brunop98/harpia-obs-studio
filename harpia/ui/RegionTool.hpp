@@ -36,10 +36,34 @@ public:
 	// Current region as a CaptureRegion (device px rel. to screen).
 	CaptureRegion region() const;
 
-	// Recording mode: dim + interior click-through, still resizable.
-	void setRecordingMode(bool recording);
+	// How the overlay behaves right now. Three states, not two, because
+	// "visible" and "grabs the mouse" are different questions and conflating
+	// them is why the overlay used to vanish the moment you clicked the app you
+	// were trying to frame.
+	// Which part of the frame a press landed on. Public only because
+	// isInteracting() above is inline and needs the type.
+	enum class Zone { None, Move, Left, Right, Top, Bottom, TopLeft, TopRight, BottomLeft, BottomRight };
 
-	// Paused state — only meaningful while recording; drives the border color
+	enum class Mode {
+		// Harpia is in front. The whole rectangle takes the mouse, so dragging
+		// the interior moves the region -- the only state where that works.
+		Editing,
+		// Region capture is chosen but another app is in front. Still on
+		// screen, so the frame can be seen and adjusted against the thing being
+		// recorded; interior click-through, so that app stays usable.
+		Watching,
+		// Recording. Same input rules as Watching, dimmed further, and the
+		// border turns red (or yellow when paused).
+		Recording,
+	};
+	void setMode(Mode m);
+	Mode mode() const { return mode_; }
+	// True while a move or resize is under way. Callers must not change the
+	// mode during one: switching to Watching re-masks the widget, and pulling
+	// the interior out from under a drag that started there drops it halfway.
+	bool isInteracting() const { return dragZone_ != Zone::None; }
+
+	// Paused state — only meaningful in Recording mode; drives the border color
 	// (yellow when paused, red while actively recording).
 	void setPaused(bool paused);
 
@@ -48,6 +72,11 @@ signals:
 	void cancelled();            // Esc pressed while not recording
 	void saveRegionRequested();  // "Save Region…" chosen from the right-click menu
 	void manageRegionsRequested(); // "Manage saved regions…" chosen
+	// A move or resize finished. The owner defers mode changes while a drag is
+	// in flight (see isInteracting), so it needs telling when to look again --
+	// grabbing the overlay makes IT the active window, which usually means the
+	// mode that was right before the drag is not the right one after it.
+	void interactionFinished();
 
 protected:
 	void paintEvent(QPaintEvent *) override;
@@ -59,9 +88,6 @@ protected:
 	void keyPressEvent(QKeyEvent *) override;
 
 private:
-	// Which part of the frame a press landed on.
-	enum class Zone { None, Move, Left, Right, Top, Bottom, TopLeft, TopRight, BottomLeft, BottomRight };
-
 	Zone zoneAt(const QPoint &localPos) const;
 	void applyGeometry(const QRect &globalRect); // clamp to screen, set geometry, emit
 	void rebuildMask();
@@ -71,7 +97,7 @@ private:
 
 	QScreen *screen_ = nullptr;
 	qreal dpr_ = 1.0;
-	bool recording_ = false;
+	Mode mode_ = Mode::Editing;
 	bool paused_ = false;
 
 	Zone dragZone_ = Zone::None;
@@ -79,5 +105,23 @@ private:
 	QRect dragStartGeom_;
 	bool showDims_ = false;
 };
+
+// What the overlay should be doing, given the three facts that decide it.
+//
+// A free function, and not a private branch inside MainWindow, because this is
+// the whole policy: whether the region is on screen at all, and whether it
+// takes the mouse. It got that wrong for a long time in a way no test could
+// reach -- the overlay disappeared whenever focus left Harpia, so the region
+// could only ever be adjusted against an empty desktop.
+struct RegionOverlayState {
+	bool visible = false;
+	RegionTool::Mode mode = RegionTool::Mode::Editing;
+
+	bool operator==(const RegionOverlayState &o) const
+	{
+		return visible == o.visible && mode == o.mode;
+	}
+};
+RegionOverlayState regionOverlayState(bool regionCaptureMode, bool recording, bool harpiaFocused);
 
 } // namespace harpia

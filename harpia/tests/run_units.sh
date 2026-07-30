@@ -218,6 +218,12 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/timelineslice_test" "$QJSLIB/libqjs.a" $LF
 
+# Does the Display dropdown point at the monitor the recording area lives on?
+# Two independent lists (OBS's and Qt's) name the same displays.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/monitormatch_test.cpp" "$H/ui/MonitorMatch.cpp" \
+	-o "$WORK/monitormatch_test" $LF
+
 # The startup progress bar: weighted by the last run's real timings, and never
 # claiming to be finished while it is not.
 "$MOC" -I"$H" "$H/ui/StartupSplash.hpp" -o "$WORK/moc_StartupSplash.cpp"
@@ -240,6 +246,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionwatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionoverlay_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/startupsplash_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/monitormatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/component_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/scriptcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/componentrender_test" || rc=1

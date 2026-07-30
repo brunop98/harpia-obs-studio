@@ -210,6 +210,8 @@ target_sources(
     editor/component/ComponentPanel.hpp
     editor/component/ScriptComponent.cpp
     editor/component/ShaderComponent.cpp
+    ui/MonitorMatch.cpp
+    ui/MonitorMatch.hpp
     ui/SingleInstance.cpp
     ui/SingleInstance.hpp
     ui/StartupSplash.cpp

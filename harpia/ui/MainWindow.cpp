@@ -16,6 +16,7 @@
 #include "RecorderControlsOverlay.hpp"
 #include "CountdownOverlay.hpp"
 #include "RegionDialogs.hpp"
+#include "MonitorMatch.hpp"
 #include "RegionTool.hpp"
 #include "ScreenBorderOverlay.hpp"
 #include "ShareExportDialog.hpp"
@@ -961,85 +962,56 @@ QScreen *MainWindow::screenForActivePreset() const
 	const QList<QScreen *> screens = QGuiApplication::screens();
 	if (screens.isEmpty())
 		return nullptr;
-	int idx = activePreset().monitorIndex;
-	if (idx < 0 || idx >= screens.size())
-		idx = 0;
 
 #if defined(_WIN32)
 	// The overlay/crop origin must sit on the SAME physical monitor OBS captures.
 	// Qt's screen order and OBS's monitor list order are independent on Windows,
-	// so map by device identity (OBS monitor_id → GDI name → QScreen::name())
-	// rather than trusting the bare index. Falls back to the index if unresolved.
+	// so map by device identity (OBS monitor_id → GDI name → QScreen) rather
+	// than trusting the bare index. The choosing is in MonitorMatch, where it
+	// can be tested; this end only gathers the facts Win32 has to answer for.
 	const std::vector<MonitorOption> mons = CaptureManager::enumerateMonitors();
+	// Against the OBS count, because the index IS an OBS index. Checking it
+	// against Qt's count used to send a perfectly valid choice to 0 whenever
+	// OBS saw more displays than Qt did -- and only for the overlay, since the
+	// recording indexes the OBS list directly. That is the two disagreeing.
+	const int idx = clampMonitorIndex(activePreset().monitorIndex, int(mons.size()));
 	if (idx < (int)mons.size() && mons[idx].isString) {
 		const QString gdi = gdiNameForMonitorId(mons[idx].strValue);
 		if (!gdi.isEmpty()) {
-			auto pick = [&](QScreen *s, const char *how) {
-				blog(LOG_INFO, "[harpia] monitor map: OBS #%d (%s) -> Qt screen '%s' via %s",
-				     idx, gdi.toUtf8().constData(), s->name().toUtf8().constData(), how);
-				return s;
-			};
+			QVector<QtScreenDesc> qtScreens;
+			qtScreens.reserve(screens.size());
+			for (QScreen *s : screens)
+				qtScreens.append({s->name(), s->geometry().topLeft()});
 
-			// 1) Qt 5-style: QScreen::name() IS the GDI name ("\\.\DISPLAY2"),
-			//    with or without the "\\.\" prefix.
-			for (QScreen *s : screens) {
-				const QString qn = s->name();
-				if (qn.compare(gdi, Qt::CaseInsensitive) == 0 ||
-				    gdi.endsWith(qn, Qt::CaseInsensitive) ||
-				    qn.endsWith(gdi, Qt::CaseInsensitive))
-					return pick(s, "GDI name");
+			QVector<GdiDisplayDesc> all;
+			for (const auto &d : activeGdiDisplays())
+				all.append({d.first, friendlyNameForGdi(d.first), d.second.topLeft()});
+
+			// Take the target's own descriptor out of the list rather
+			// than rebuilding a half-filled one: the arrangement step
+			// ranks it against its neighbours, so it has to be the same
+			// record they are.
+			GdiDisplayDesc target{gdi, friendlyNameForGdi(gdi), QPoint()};
+			for (const GdiDisplayDesc &d : all)
+				if (d.gdiName.compare(gdi, Qt::CaseInsensitive) == 0)
+					target = d;
+			const int hit = matchQtScreen(qtScreens, target, all);
+			if (hit >= 0 && hit < screens.size()) {
+				blog(LOG_INFO,
+				     "[harpia] monitor map: OBS #%d (%s) -> Qt screen '%s' via %s",
+				     idx, gdi.toUtf8().constData(),
+				     screens.at(hit)->name().toUtf8().constData(), lastMatchMethod());
+				return screens.at(hit);
 			}
-
-			// 2) Qt 6-style: QScreen::name() is the monitor's friendly name
-			//    ("SMT22A550"). Only trust it when unique — twin monitors share it.
-			const QString friendly = friendlyNameForGdi(gdi);
-			if (!friendly.isEmpty()) {
-				QScreen *match = nullptr;
-				int matches = 0;
-				for (QScreen *s : screens)
-					if (s->name().compare(friendly, Qt::CaseInsensitive) == 0) {
-						match = s;
-						++matches;
-					}
-				if (matches == 1)
-					return pick(match, "friendly name");
-			}
-
-			// 3) Arrangement rank: Qt preserves the physical left-to-right /
-			//    top-to-bottom layout, so the Nth display by native position is
-			//    the Nth QScreen by logical position (DPI-scaling safe).
-			QRect nat;
-			if (nativeRectForGdi(gdi, &nat)) {
-				auto gdiList = activeGdiDisplays();
-				std::sort(gdiList.begin(), gdiList.end(),
-					  [](const auto &a, const auto &b) {
-						  return a.second.x() != b.second.x()
-								 ? a.second.x() < b.second.x()
-								 : a.second.y() < b.second.y();
-					  });
-				int rank = -1;
-				for (size_t i = 0; i < gdiList.size(); ++i)
-					if (gdiList[i].first.compare(gdi, Qt::CaseInsensitive) == 0)
-						rank = int(i);
-				if (rank >= 0 && (int)gdiList.size() == screens.size()) {
-					QList<QScreen *> byPos = screens;
-					std::sort(byPos.begin(), byPos.end(), [](QScreen *a, QScreen *b) {
-						const QPoint pa = a->geometry().topLeft();
-						const QPoint pb = b->geometry().topLeft();
-						return pa.x() != pb.x() ? pa.x() < pb.x()
-									: pa.y() < pb.y();
-					});
-					return pick(byPos.at(rank), "arrangement rank");
-				}
-			}
-
 			blog(LOG_WARNING,
-			     "[harpia] monitor map: no Qt screen matches OBS #%d (%s) — using Qt index %d",
-			     idx, gdi.toUtf8().constData(), idx);
+			     "[harpia] monitor map: no Qt screen matches OBS #%d (%s) — falling back to index",
+			     idx, gdi.toUtf8().constData());
 		}
 	}
 #endif
-	return screens.at(idx);
+	// No identity to go on: the bare index against Qt's list, which is a guess,
+	// so it is range-checked against the list it is actually indexing.
+	return screens.at(clampMonitorIndex(activePreset().monitorIndex, screens.size()));
 }
 
 QSize MainWindow::canvasForActivePreset() const

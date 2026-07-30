@@ -7375,16 +7375,46 @@ void VideoEditorWindow::onSave()
 	}
 
 	const QString base = QFileInfo(inPath_).completeBaseName() + QStringLiteral("_clip");
-	ExportOptionsDialog dlg(base, /*allowGif=*/!cuts, this);
+
+	// Everything the dialog needs to describe what is about to be written. It
+	// used to be told only a default name, which is why it could not show a
+	// duration, a resolution or a size.
+	ExportOptionsDialog::Context ec;
+	ec.defaultName = base;
+	ec.defaultFolder = QFileInfo(inPath_).absolutePath();
+	ec.allowGif = !cuts;
+	if (fullEdit()) {
+		ec.sourceSize = timelineCanvasSize();
+		ec.fps = timelineFps();
+		ec.seconds = timelineView_->durationMs() / 1000.0;
+		ec.previewFrame = canvas_->currentFrame();
+	} else if (cuts) {
+		const EditorSource *s0 = sourceById(sources_.front().id);
+		ec.sourceSize = s0 ? QSize(s0->width, s0->height) : QSize();
+		ec.fps = seeker_ ? seeker_->fps() : 30.0;
+		ec.seconds = tracks_->totalOutputMs() / 1000.0;
+		ec.previewFrame = canvas_->currentFrame();
+	} else {
+		const EditorSource *s0 = activeSource();
+		// The cropped area IS the output for a trim export, so the summary has
+		// to show that rather than the source's full size.
+		const QRect cr = canvas_->cropRectVideo();
+		ec.sourceSize = (cropToggle_->isChecked() && cr.width() > 1)
+					? cr.size()
+					: (s0 ? QSize(s0->width, s0->height) : QSize());
+		ec.fps = seeker_ ? seeker_->fps() : 30.0;
+		ec.seconds = std::max<qint64>(0, timeline_->end() - timeline_->start()) /
+			     1000.0 / std::max(0.01, speed_);
+		ec.previewFrame = canvas_->currentFrame();
+	}
+
+
+	ExportOptionsDialog dlg(ec, this);
 	if (dlg.exec() != QDialog::Accepted)
 		return;
 
-	QString name = dlg.fileName();
-	if (name.isEmpty())
-		name = base;
 	const ClipExporter::Format fmt = dlg.format();
-	const QString ext = ClipExporter::extensionFor(fmt);
-	outPath_ = QFileInfo(inPath_).absolutePath() + QLatin1Char('/') + name + QLatin1Char('.') + ext;
+	outPath_ = dlg.outputPath();
 
 	ClipExporter::Options o;
 	o.format = fmt;
@@ -7397,7 +7427,13 @@ void VideoEditorWindow::onSave()
 	o.cropW = c.width();
 	o.cropH = c.height();
 	o.gifFps = dlg.gifFps();
-	o.gifWidth = 0;     // output = cropped area / full video size (no downscale)
+	o.gifWidth = 0; // the chosen size drives it, via Options::outWidth
+	o.gifColors = dlg.gifColors();
+	o.gifDither = dlg.gifDither();
+	o.gifLoop = dlg.gifLoop();
+	const QSize outSize = dlg.outputSize();
+	o.outWidth = outSize.width();
+	o.outHeight = outSize.height();
 	o.speed = speed_;   // from the editor's speed slider
 	o.videoCrf = dlg.videoCrf();
 	o.keepAudio = dlg.keepAudio();
@@ -7483,7 +7519,7 @@ void VideoEditorWindow::onSave()
 	connect(exporter_, &ClipExporter::progress, this, &VideoEditorWindow::onExportProgress);
 	connect(exporter_, &ClipExporter::finished, this, &VideoEditorWindow::onExportFinished);
 
-	progress_ = new QProgressDialog(QStringLiteral("Exporting %1…").arg(ext.toUpper()),
+	progress_ = new QProgressDialog(QStringLiteral("Exporting %1…").arg(ClipExporter::extensionFor(fmt).toUpper()),
 					QStringLiteral("Cancel"), 0, 100, this);
 	progress_->setWindowModality(Qt::WindowModal);
 	progress_->setAutoClose(false);

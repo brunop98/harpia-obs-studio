@@ -151,6 +151,8 @@ target_sources(
     editor/FrameSeeker.cpp
     editor/StillImage.cpp
     editor/StillImage.hpp
+    editor/ExportEstimate.cpp
+    editor/ExportEstimate.hpp
     editor/FrameSeeker.hpp
     editor/ClipExporter.cpp
     editor/ClipExporter.hpp

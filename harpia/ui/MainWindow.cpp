@@ -275,6 +275,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		"Record this camera to its own file alongside the screen recording. "
 		"First entry disables the webcam."));
 	webcamCombo_->addItem(QStringLiteral("No webcam"), QString());
+	// The camera list is filled just before the popup opens; see eventFilter.
+	webcamCombo_->installEventFilter(this);
 
 	idleCombo_ = new QComboBox(central);
 	idleCombo_->addItem(QStringLiteral("Off"), 0);
@@ -618,10 +620,6 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	applyDarkTheme();
 
-	// Bring up the capture source now so the first record is instant.
-	obs_.resetVideo(canvasSize_.width(), canvasSize_.height(), activePreset().fps);
-	capture_.startCapture(activePreset().monitorIndex, activePreset().showMouseCursor);
-
 	stateTimer_ = new QTimer(this);
 	stateTimer_->setInterval(250);
 	connect(stateTimer_, &QTimer::timeout, this, &MainWindow::tickState);
@@ -664,12 +662,42 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	syncIdleControls();
 	audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds,
 			  activePreset().desktopVolume, activePreset().micVolumes);
-	refreshRecentList();
-	refreshReadiness();
-	refreshWebcamRow();
 	refreshDriveLink();
 	updateButtons();
 	applyResponsiveLayout(width()); // set initial section visibility
+
+	// Restore any layout metrics saved from a previous Developer Panel session
+	// and apply them over the freshly built (default-sized) layout.
+	MainDevPanel::loadInto(layout_);
+	setLayoutParams(layout_);
+
+	// Start keyboard focus on the primary action instead of a random combo.
+	primaryButton_->setFocus();
+
+	// Everything expensive is in finishStartup(), which main() calls once this
+	// window has actually been painted.
+}
+
+void MainWindow::finishStartup()
+{
+	// The slow half of coming up, deliberately after the window is on screen.
+	//
+	// None of this is needed to DRAW the window, and all of it talks to
+	// hardware or the filesystem: probing cameras, listing recordings, sizing
+	// the output drive, creating the capture source. Doing it in the
+	// constructor meant the app was an empty taskbar entry for the whole of it.
+	// Doing it here costs the same milliseconds but spends them with something
+	// on screen, which is most of what "faster" means to whoever is waiting.
+
+	// Bring the capture source up now so the first record is instant. This is
+	// the biggest single item here and the reason the window comes first.
+	obs_.resetVideo(canvasSize_.width(), canvasSize_.height(), activePreset().fps);
+	capture_.startCapture(activePreset().monitorIndex, activePreset().showMouseCursor);
+
+	refreshRecentList();
+	refreshReadiness();
+	refreshWebcamRow();
+	updateButtons(); // readiness may have changed what is allowed
 
 	// Surface (but never list) recordings orphaned by a crash/kill — they stay
 	// in each output folder's hidden .harpia_tmp for manual salvage instead of
@@ -681,14 +709,6 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 			blog(LOG_WARNING, "[harpia] orphaned partial recording (crash/kill?): %s",
 			     tmpDir.filePath(f).toUtf8().constData());
 	}
-
-	// Restore any layout metrics saved from a previous Developer Panel session
-	// and apply them over the freshly built (default-sized) layout.
-	MainDevPanel::loadInto(layout_);
-	setLayoutParams(layout_);
-
-	// Start keyboard focus on the primary action instead of a random combo.
-	primaryButton_->setFocus();
 }
 
 MainWindow::~MainWindow()
@@ -1607,9 +1627,52 @@ void MainWindow::editActivePreset(const QString &initialPage)
 	}
 }
 
+void MainWindow::reloadWebcamCombo()
+{
+	// Fill the camera list, keeping whatever is currently chosen selected. Only
+	// called when someone is actually looking at the list, because this is the
+	// call that probes DirectShow.
+	const QString had = webcamCombo_->currentData().toString();
+	const std::vector<AudioDevice> cams = WebcamRecorder::cameras();
+	QSignalBlocker block(webcamCombo_);
+	webcamCombo_->clear();
+	webcamCombo_->addItem(QStringLiteral("No webcam"), QString());
+	for (const AudioDevice &c : cams)
+		webcamCombo_->addItem(QString::fromStdString(c.name), QString::fromStdString(c.id));
+	const int idx = had.isEmpty() ? 0 : webcamCombo_->findData(had);
+	webcamCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
+}
+
 void MainWindow::refreshWebcamRow()
 {
 	const Preset &p = activePreset();
+
+	webcamCombo_->setEnabled(!recorder_.isRecording());
+
+	if (!p.webcamEnabled) {
+		// Off: the combo rests on its first item; no preview, no warning row.
+		//
+		// And NO camera enumeration. WebcamRecorder::cameras() creates a
+		// private DirectShow source and builds its properties, which walks
+		// every capture filter registered on the machine -- including the
+		// virtual cameras that OBS, Teams and Zoom leave installed, some of
+		// which are slow to answer. This used to run on every startup whether
+		// or not the webcam was switched on, which is the one unconditional
+		// hardware probe here that nothing caches. The list is filled in when
+		// the dropdown is opened (see eventFilter) or when the webcam is
+		// turned on, both of which are moments the user is already waiting on
+		// a camera.
+		{
+			QSignalBlocker block(webcamCombo_);
+			webcamCombo_->clear();
+			webcamCombo_->addItem(QStringLiteral("No webcam"), QString());
+			webcamCombo_->setCurrentIndex(0);
+		}
+		webcamBox_->setVisible(false);
+		if (webcamPreview_)
+			webcamPreview_->clearDevice();
+		return;
+	}
 
 	// Populate the device list: first item = "No webcam" (off), then cameras.
 	const std::vector<AudioDevice> cams = WebcamRecorder::cameras();
@@ -1619,19 +1682,6 @@ void MainWindow::refreshWebcamRow()
 		webcamCombo_->addItem(QStringLiteral("No webcam"), QString());
 		for (const AudioDevice &c : cams)
 			webcamCombo_->addItem(QString::fromStdString(c.name), QString::fromStdString(c.id));
-	}
-	webcamCombo_->setEnabled(!recorder_.isRecording());
-
-	if (!p.webcamEnabled) {
-		// Off: the combo rests on its first item; no preview, no warning row.
-		{
-			QSignalBlocker block(webcamCombo_);
-			webcamCombo_->setCurrentIndex(0);
-		}
-		webcamBox_->setVisible(false);
-		if (webcamPreview_)
-			webcamPreview_->clearDevice();
-		return;
 	}
 
 	const QString wantId = QString::fromStdString(p.webcamDeviceId);
@@ -2090,6 +2140,12 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 		reloadAppCombo(); // refresh the list right before the popup opens
 	if (obj == monitorCombo_ && event->type() == QEvent::MouseButtonPress)
 		reloadMonitorCombo(); // catch displays plugged/unplugged since launch
+	// With the webcam off the camera list is left empty at startup (the probe is
+	// slow and nothing was waiting on it), so it has to be filled the moment
+	// someone goes looking for a camera -- otherwise there would be no way to
+	// turn one on.
+	if (obj == webcamCombo_ && event->type() == QEvent::MouseButtonPress)
+		reloadWebcamCombo();
 	return QMainWindow::eventFilter(obj, event);
 }
 

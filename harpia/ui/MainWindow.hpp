@@ -98,6 +98,12 @@ public:
 	MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFolder, QWidget *parent = nullptr);
 	~MainWindow() override;
 
+	// The slow half of starting up: the capture source, the hardware probes,
+	// the recent-clips scan. Call it AFTER show(), with the window painted --
+	// none of it is needed to draw the window, and all of it used to happen
+	// while the screen was still empty.
+	void finishStartup();
+
 	// The Developer Panel drives the live layout metrics (layoutParams/
 	// setLayoutParams live in the private section below).
 	friend class MainDevPanel;
@@ -116,6 +122,10 @@ private slots:
 	void onAppWindowChanged();  // app dropdown; first item = no auto-pause
 	void onWebcamDeviceChanged(); // webcam dropdown; first item = no webcam
 	void refreshWebcamRow(); // populate/reflect the webcam device combo
+	// Fill the camera list. Separate from refreshWebcamRow() because this is
+	// the part that probes DirectShow, and it only runs when someone opens the
+	// dropdown or actually turns the webcam on.
+	void reloadWebcamCombo();
 	void onRegionChanged(const CaptureRegion &region);
 	void onIdleSettingChanged();
 	void onRegionLeaveSettingChanged();

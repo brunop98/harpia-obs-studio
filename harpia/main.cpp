@@ -4,16 +4,19 @@
 #include "model/PresetStore.hpp"
 #include "ui/MainWindow.hpp"
 #include "ui/SingleInstance.hpp"
+#include "ui/StartupSplash.hpp"
 #include "ui/UiText.hpp"
 
 #include <util/bmem.h>
 #include <util/platform.h>
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QIcon>
 #include <QDir>
 #include <QMessageBox>
 #include <QPalette>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QStyleFactory>
 #include <string>
@@ -79,6 +82,31 @@ void qtMessageToLogger(QtMsgType type, const QMessageLogContext &, const QString
 	harpia::Logger::instance().log(level, ("Qt: " + msg).toStdString());
 }
 
+// Last run's phase durations, which weight this run's progress bar. Stored
+// under the app's own QSettings so a fresh install simply falls back to the
+// built-in shape.
+constexpr char kTimingGroup[] = "startup/phase/";
+
+QMap<QString, int> loadStartupTimings()
+{
+	QSettings s;
+	QMap<QString, int> out;
+	for (int i = 0; i < harpia::startupPhaseCount(); ++i) {
+		const QString key = QString::fromLatin1(harpia::startupPhaseKey(harpia::startupPhaseAt(i)));
+		const QVariant v = s.value(QLatin1String(kTimingGroup) + key);
+		if (v.isValid())
+			out.insert(key, v.toInt());
+	}
+	return out;
+}
+
+void saveStartupTimings(const QMap<QString, int> &measured)
+{
+	QSettings s;
+	for (auto it = measured.cbegin(); it != measured.cend(); ++it)
+		s.setValue(QLatin1String(kTimingGroup) + it.key(), it.value());
+}
+
 } // namespace
 
 // Entry point for the Harpia recorder. Brings up the libobs backend in the
@@ -116,23 +144,52 @@ int main(int argc, char *argv[])
 	harpia::Logger::instance().log(harpia::LogLevel::Info,
 				       std::string("Harpia Recorder v") + HARPIA_VERSION_STRING + " starting");
 
+	// Something on screen for the rest of this. Startup is dominated by libobs
+	// work that has to finish before the window can exist -- the graphics device
+	// and every capture/encoder plugin -- so the app used to be an empty taskbar
+	// entry for the whole of it. The bar is weighted by the last run's real
+	// timings; see StartupSplash.hpp.
+	harpia::StartupTimeline timeline(loadStartupTimings());
+	QElapsedTimer clock;
+	clock.start();
+	harpia::StartupSplash splash(
+		QStringLiteral("v%1").arg(QString::fromUtf8(HARPIA_VERSION_STRING)));
+	splash.show();
+	const auto step = [&](harpia::StartupPhase p) {
+		timeline.begin(p, clock.elapsed());
+		splash.showPhase(timeline.label(), timeline.percent());
+	};
+	step(harpia::StartupPhase::Backend);
+
 	harpia::ObsContext obs;
 	if (!obs.startup()) {
+		splash.hide();
 		QMessageBox::critical(nullptr, QStringLiteral("Harpia Recorder"),
 				      QStringLiteral("Failed to initialize the OBS backend (obs_startup)."));
 		return 1;
 	}
 
 	// Audio and an initial video graph, then load all capture/encoder/output
-	// plugins. MainWindow re-configures video per the active preset.
+	// plugins. MainWindow re-configures video per the active preset -- and that
+	// second reset is now free when the preset happens to want this same shape,
+	// because ObsContext skips an identical one.
+	//
+	// The placeholder size cannot be avoided by asking the preset first: on
+	// Windows the preset's canvas comes from screenForActivePreset(), which
+	// needs monitor_capture's properties, which needs the modules that have not
+	// been loaded yet.
+	step(harpia::StartupPhase::Audio);
 	obs.resetAudio();
+	step(harpia::StartupPhase::Video);
 	obs.resetVideo(1920, 1080, 30);
+	step(harpia::StartupPhase::Plugins);
 	obs.loadModules();
 
 	// Dependency self-check: if required backend plugins didn't load (missing or
 	// blocked libraries), report it clearly and log it, rather than failing with a
 	// cryptic error only at record time. Non-fatal so the user can still open the
 	// Error Logs to see details.
+	step(harpia::StartupPhase::Components);
 	{
 		const std::vector<std::string> missing = obs.missingDependencies();
 		if (!missing.empty()) {
@@ -143,6 +200,9 @@ int main(int argc, char *argv[])
 				logLine += " " + m + ";";
 			}
 			harpia::Logger::instance().log(harpia::LogLevel::Error, logLine);
+			// Out of the way first: a modal dialog behind a frameless
+			// always-on-top splash is a hang as far as anyone can tell.
+			splash.hide();
 			QMessageBox::warning(
 				nullptr, QStringLiteral("Harpia Recorder — missing components"),
 				QStringLiteral(
@@ -150,10 +210,13 @@ int main(int argc, char *argv[])
 					"This usually means plugin libraries are missing from the install, or "
 					"were blocked by antivirus/security software. See Error Logs for details.")
 					.arg(list));
+			splash.show();
+			splash.showPhase(timeline.label(), timeline.percent());
 		}
 	}
 
 	// Default recordings folder: <Movies>/Harpia (falls back to home).
+	step(harpia::StartupPhase::Presets);
 	QString base = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
 	if (base.isEmpty())
 		base = QDir::homePath();
@@ -168,8 +231,28 @@ int main(int argc, char *argv[])
 	// would crash.
 	int rc;
 	{
+		step(harpia::StartupPhase::Window);
 		harpia::MainWindow win(obs, presets, outputFolder);
 		win.show();
+		splash.hide();
+		// Painted before the slow half runs. This is the part that changes what
+		// startup FEELS like: finishStartup() probes cameras, lists recordings
+		// and creates the capture source, none of which the window needs in
+		// order to be on screen and usable.
+		QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+		step(harpia::StartupPhase::Finishing);
+		win.finishStartup();
+		timeline.finish(clock.elapsed());
+
+		// The measurement this whole thing doubles as: what each phase really
+		// cost, on this machine, in the session log -- and back into QSettings
+		// so the next run's bar is weighted by it.
+		harpia::Logger::instance().log(
+			harpia::LogLevel::Info,
+			"startup " + std::to_string(timeline.totalMs()) + "ms (" +
+				timeline.summary().toStdString() + ")");
+		saveStartupTimings(timeline.measured());
+
 		// Launching a second copy shows this one rather than doing nothing:
 		// double-clicking the icon when the app is already open should get you
 		// the app, which is the whole point of refusing the second instance.

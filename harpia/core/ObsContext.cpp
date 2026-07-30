@@ -145,6 +145,12 @@ int ObsContext::resetVideo(uint32_t baseWidth, uint32_t baseHeight, int fpsNum, 
 	if (outHeight < 32)
 		outHeight = baseHeight;
 
+	// Already running exactly like this? Then there is nothing to reset. Every
+	// other field below is a constant, so these five are the whole request.
+	if (videoReady_ && baseWidth == lastBaseW_ && baseHeight == lastBaseH_ &&
+	    outWidth == lastOutW_ && outHeight == lastOutH_ && fpsNum == lastFps_)
+		return OBS_VIDEO_SUCCESS;
+
 	struct obs_video_info ovi = {};
 	ovi.graphics_module = renderModule();
 	ovi.fps_num = fpsNum > 0 ? (uint32_t)fpsNum : 30;
@@ -161,8 +167,16 @@ int ObsContext::resetVideo(uint32_t baseWidth, uint32_t baseHeight, int fpsNum, 
 	ovi.scale_type = OBS_SCALE_BICUBIC;
 
 	int ret = obs_reset_video(&ovi);
-	if (ret != OBS_VIDEO_SUCCESS)
+	if (ret != OBS_VIDEO_SUCCESS) {
 		blog(LOG_ERROR, "[harpia] obs_reset_video failed: %d", ret);
+		return ret;
+	}
+	videoReady_ = true;
+	lastBaseW_ = baseWidth;
+	lastBaseH_ = baseHeight;
+	lastOutW_ = outWidth;
+	lastOutH_ = outHeight;
+	lastFps_ = fpsNum;
 	return ret;
 }
 
@@ -231,6 +245,10 @@ void ObsContext::shutdown()
 	obs_shutdown();
 	initialized_ = false;
 	modulesLoaded_ = false;
+	// obs_shutdown() takes the video pipeline with it, so the cached "already
+	// running like this" must not survive into a restart -- it would skip the
+	// one reset that genuinely has to happen.
+	videoReady_ = false;
 }
 
 } // namespace harpia

@@ -66,6 +66,15 @@ private:
 
 	bool initialized_ = false;
 	bool modulesLoaded_ = false;
+
+	// The last obs_reset_video() that succeeded. Asking for the same thing
+	// again is a no-op worth skipping: obs_reset_video stops the video thread,
+	// rebuilds the format-conversion textures and starts it again, and startup
+	// used to do exactly that twice -- once here with a placeholder size before
+	// modules can load, then again with the preset's real canvas.
+	bool videoReady_ = false;
+	uint32_t lastBaseW_ = 0, lastBaseH_ = 0, lastOutW_ = 0, lastOutH_ = 0;
+	int lastFps_ = 0;
 };
 
 } // namespace harpia

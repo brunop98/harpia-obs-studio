@@ -212,6 +212,8 @@ target_sources(
     editor/component/ShaderComponent.cpp
     ui/SingleInstance.cpp
     ui/SingleInstance.hpp
+    ui/StartupSplash.cpp
+    ui/StartupSplash.hpp
     ui/WheelGuard.cpp
     editor/component/TransformScriptComponent.cpp
     editor/component/ScriptComponent.hpp

@@ -72,7 +72,10 @@ inline QJsonObject spotlightToJson(const SpotlightSpec &s)
 				ko[QStringLiteral("t")] = double(k.tMs);
 				ko[QStringLiteral("pose")] = spotPoseToJson(k.pose);
 				ko[QStringLiteral("ease")] = int(k.ease);
-				if (k.ease == TlEase::Bezier) {
+				// See the transform keys above: not gated on the ease,
+				// or a tuned Bezier is lost the moment you switch away
+				// from it to compare.
+				if (k.bez1 != 0.42 || k.bez2 != 0.58) {
 					ko[QStringLiteral("b1")] = k.bez1;
 					ko[QStringLiteral("b2")] = k.bez2;
 				}
@@ -168,7 +171,14 @@ inline QJsonObject clipToJson(const TlClip &c)
 				QJsonObject cho;
 				cho[QStringLiteral("on")] = ch.on;
 				cho[QStringLiteral("ease")] = int(ch.ease);
-				if (ch.ease == TlEase::Bezier) {
+				// Written whenever they are not the defaults, NOT only
+				// while the ease is Bezier. Tuning a Bezier and then
+				// flipping the ease to something else to compare is an
+				// ordinary thing to do, and gating on the current ease
+				// threw the handles away on save -- they came back as
+				// 0.42/0.58 and the tuning was gone. Same rule the
+				// component keys already use.
+				if (ch.bez1 != 0.42 || ch.bez2 != 0.58) {
 					cho[QStringLiteral("b1")] = ch.bez1;
 					cho[QStringLiteral("b2")] = ch.bez2;
 				}
@@ -210,7 +220,9 @@ inline QJsonObject clipToJson(const TlClip &c)
 					kp[it.key()] = it.value();
 				ko[QStringLiteral("params")] = kp;
 				ko[QStringLiteral("ease")] = int(k.ease);
-				if (k.ease == TlEase::Bezier) {
+				// Third instance of the same rule -- see the transform
+				// channels and the spotlight keys above.
+				if (k.bez1 != 0.42 || k.bez2 != 0.58) {
 					ko[QStringLiteral("b1")] = k.bez1;
 					ko[QStringLiteral("b2")] = k.bez2;
 				}

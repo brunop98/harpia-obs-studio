@@ -73,16 +73,56 @@ struct VideoState {
 	AVCodecContext *vdec = nullptr;
 	AVCodecContext *venc = nullptr;
 	SwsContext *toYuv = nullptr; // only if the source isn't yuv420p already
+	// Output scaling, when the chosen size is not the size the path produces.
+	// Applied at the ONE point every path shares -- just before the encoder --
+	// rather than in each path's own decode/crop/composite arithmetic, which is
+	// four places to get the aspect wrong instead of one.
+	SwsContext *toOut = nullptr;
+	AVFrame *outScaled = nullptr;
 	AVFrame *fullYuv = nullptr;  // full-frame yuv420p scratch (for non-yuv sources)
 	AVFrame *cropFrame = nullptr; // cropped yuv420p frame fed to the encoder
 	AVStream *vOut = nullptr;
 	AVStream *aOut = nullptr; // audio stream-copy (optional)
 	bool headerWritten = false;
 
+	// The frame the encoder should actually receive. Identity unless the output
+	// size differs from the frame's, in which case a yuv->yuv rescale runs into
+	// a reused frame. Returns `in` unchanged on any allocation failure: a
+	// wrongly sized frame is refused by the encoder, which is a clear error,
+	// where a silent null would look like a truncated export.
+	AVFrame *scaleForEncode(AVFrame *in)
+	{
+		if (!in || !venc || (in->width == venc->width && in->height == venc->height))
+			return in;
+		if (!toOut) {
+			toOut = sws_getContext(in->width, in->height, AVPixelFormat(in->format),
+					       venc->width, venc->height, AV_PIX_FMT_YUV420P,
+					       SWS_BICUBIC, nullptr, nullptr, nullptr);
+			outScaled = av_frame_alloc();
+			if (!toOut || !outScaled)
+				return in;
+			outScaled->format = AV_PIX_FMT_YUV420P;
+			outScaled->width = venc->width;
+			outScaled->height = venc->height;
+			if (av_frame_get_buffer(outScaled, 32) < 0)
+				return in;
+		}
+		if (!outScaled)
+			return in;
+		sws_scale(toOut, in->data, in->linesize, 0, in->height, outScaled->data,
+			  outScaled->linesize);
+		outScaled->pts = in->pts;
+		return outScaled;
+	}
+
 	~VideoState()
 	{
 		if (toYuv)
 			sws_freeContext(toYuv);
+		if (toOut)
+			sws_freeContext(toOut);
+		if (outScaled)
+			av_frame_free(&outScaled);
 		if (fullYuv)
 			av_frame_free(&fullYuv);
 		if (cropFrame)
@@ -113,6 +153,16 @@ struct VideoState {
 // the GOP length, so those are arguments; everything else is the same by
 // definition and now only exists once.
 
+// The size the encoder should be opened at, given what the path would otherwise
+// have produced. Even numbers, because yuv420p subsamples by two and an odd
+// dimension is rejected outright by both encoders.
+QSize encodeSize(const ClipExporter::Options &opts, int w, int h)
+{
+	if (opts.outWidth <= 0 || opts.outHeight <= 0 || w <= 0 || h <= 0)
+		return QSize(w, h);
+	return QSize(std::max(2, opts.outWidth & ~1), std::max(2, opts.outHeight & ~1));
+}
+
 // Create the encoder, the output container and the video stream. On success
 // `s.venc`, `s.ofmt` and `s.vOut` are live. Returns "" or an error to show.
 QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const QByteArray &outPath,
@@ -125,8 +175,12 @@ QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const
 	s.venc = avcodec_alloc_context3(vc);
 	if (!s.venc)
 		return QStringLiteral("Could not allocate the video encoder.");
-	s.venc->width = w;
-	s.venc->height = h;
+	// Here rather than at the four call sites: every path passes the size it
+	// would naturally produce, and the chosen output size overrides it in one
+	// place. scaleForEncode then rescales whatever arrives to match.
+	const QSize enc = encodeSize(opts, w, h);
+	s.venc->width = enc.width();
+	s.venc->height = enc.height();
 	s.venc->pix_fmt = AV_PIX_FMT_YUV420P;
 	s.venc->time_base = timeBase;
 	s.venc->framerate = frameRate;
@@ -321,7 +375,12 @@ void ClipExporter::run(const QString &inPath, const QString &outPath, const Opti
 		gp.cropW = gifOpts.cropW;
 		gp.cropH = gifOpts.cropH;
 		gp.fps = gifOpts.gifFps;
-		gp.width = gifOpts.gifWidth;
+		// A chosen output size applies to GIF too; gifWidth stays as the
+		// explicit override so nothing that already set it changes behaviour.
+		gp.width = gifOpts.gifWidth > 0 ? gifOpts.gifWidth : gifOpts.outWidth;
+		gp.colors = gifOpts.gifColors;
+		gp.dither = gifOpts.gifDither;
+		gp.loop = gifOpts.gifLoop;
 		gp.speed = gifOpts.speed;
 		QString err;
 		const bool ok = GifEncoder::encode(
@@ -521,6 +580,7 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 	auto encodeVideo = [&](AVFrame *f) -> bool {
 		if (f && shaderPass.active)
 			shaderPass.process(f, float(f->pts * av_q2d(s.venc->time_base)), shaderFrame++);
+		f = s.scaleForEncode(f); // no-op unless an output size was chosen
 		if (avcodec_send_frame(s.venc, f) < 0)
 			return false;
 		while (true) {
@@ -804,6 +864,7 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 	auto encodeVideo = [&](AVFrame *f) -> bool {
 		if (f && shaderPass.active)
 			shaderPass.process(f, float(f->pts * av_q2d(s.venc->time_base)), shaderFrame++);
+		f = s.scaleForEncode(f); // no-op unless an output size was chosen
 		if (avcodec_send_frame(s.venc, f) < 0)
 			return false;
 		while (true) {
@@ -1151,6 +1212,7 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 	auto encodeVideo = [&](AVFrame *f) -> bool {
 		if (f && shaderPass.active)
 			shaderPass.process(f, float(f->pts * av_q2d(s.venc->time_base)), shaderFrame++);
+		f = s.scaleForEncode(f); // no-op unless an output size was chosen
 		if (avcodec_send_frame(s.venc, f) < 0)
 			return false;
 		while (true) {
@@ -1463,6 +1525,7 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 		av_packet_free(&pkt);
 	};
 	auto encode = [&](AVFrame *f) -> bool {
+		f = s.scaleForEncode(f); // no-op unless an output size was chosen
 		if (avcodec_send_frame(s.venc, f) < 0)
 			return false;
 		while (true) {

@@ -21,6 +21,13 @@ public:
 		int fps = 15;
 		int width = 0;      // output width (0 == crop/source width — no downscale); height auto
 		double speed = 1.0; // playback speed multiplier (2.0 = twice as fast)
+		// Palette size. Fewer colours is a markedly smaller file and visible
+		// banding on gradients; 256 is the format's maximum and the default.
+		int colors = 256;
+		// Dithered palette mapping. Off is smaller and flatter -- good for
+		// screen recordings of flat UI, bad for anything with a gradient.
+		bool dither = true;
+		bool loop = true; // loop forever, vs play through once
 	};
 
 	// Returns true on success. `canceled()` is polled to abort; `progress()`

@@ -155,8 +155,16 @@ bool GifEncoder::encode(const QString &inPath, const QString &outPath, const Par
 	inputs->filter_ctx = s.sinkCtx;
 	inputs->pad_idx = 0;
 	inputs->next = nullptr;
-	const char *graphDesc =
-		"split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle";
+	// Palette size and dithering are the two knobs that actually move a GIF's
+	// size, and they used to be hard-coded. Clamped to what the format allows:
+	// palettegen refuses anything outside 2..256, and a refusal here reads to
+	// the user as "the export broke".
+	const int colors = std::clamp(p.colors, 2, 256);
+	char graphDesc[320];
+	snprintf(graphDesc, sizeof(graphDesc),
+		 "split[a][b];[a]palettegen=stats_mode=diff:max_colors=%d[p];"
+		 "[b][p]paletteuse=dither=%s:diff_mode=rectangle",
+		 colors, p.dither ? "bayer:bayer_scale=5" : "none");
 	int gp = avfilter_graph_parse_ptr(s.graph, graphDesc, &inputs, &outputs, nullptr);
 	avfilter_inout_free(&inputs);
 	avfilter_inout_free(&outputs);
@@ -186,7 +194,15 @@ bool GifEncoder::encode(const QString &inPath, const QString &outPath, const Par
 		if (avio_open(&s.ofmt->pb, out.constData(), AVIO_FLAG_WRITE) < 0)
 			return fail("Could not open the GIF file for writing.");
 	}
-	if (avformat_write_header(s.ofmt, nullptr) < 0)
+	// loop=0 means forever, -1 means play once. The muxer's own default is
+	// forever, so this only ever needs saying for the play-once case -- but it
+	// is said either way, because a default that changes under us is how a
+	// setting silently stops working.
+	AVDictionary *mux = nullptr;
+	av_dict_set_int(&mux, "loop", p.loop ? 0 : -1, 0);
+	const int hdr = avformat_write_header(s.ofmt, &mux);
+	av_dict_free(&mux);
+	if (hdr < 0)
 		return fail("Could not start writing the GIF.");
 	s.headerWritten = true;
 

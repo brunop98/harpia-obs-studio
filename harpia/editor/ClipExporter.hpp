@@ -57,10 +57,19 @@ public:
 		// GIF-only
 		int gifFps = 15;
 		int gifWidth = 0; // output width (0 == crop/source width — no downscale); height auto
+		int gifColors = 256;   // palette size, 2..256. Fewer = smaller file, banding
+		bool gifDither = true; // dithered palette mapping; off is smaller and blockier
+		bool gifLoop = true;   // loop forever, vs play once
 
 		// Video-only
 		int videoCrf = 20;    // x264/vp9 constant quality (lower = better)
 		bool keepAudio = true; // MP4/MKV/MOV keep the (trimmed) audio; GIF/WebM silent
+		// Output size, in pixels. 0 = whatever the path would produce anyway (the
+		// source, the cropped area, or the timeline canvas). Set BOTH or neither:
+		// the dialog derives the pair so the aspect is decided in one place
+		// rather than half here and half in four encode paths.
+		int outWidth = 0;
+		int outHeight = 0;
 
 		// Multi-cut assembly: when non-empty, the output is these source ranges
 		// played back-to-back, each at its own speed, and startMs/endMs/speed

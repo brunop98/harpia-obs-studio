@@ -131,6 +131,12 @@ public:
 
 	bool isValid() const { return valid_; }
 
+	// Is any editor window open right now? A counter rather than a flag on the
+	// owner: the editor is opened from two places (the recent strip and the
+	// Clip Library), and the recorder window needs the answer without either of
+	// them having to tell it.
+	static bool anyOpen() { return openCount_ > 0; }
+
 	// The project's output format, after resolving "Auto" against the first
 	// source. Everything that renders or encodes goes through these two, so the
 	// preview and the export can never disagree about the canvas or the rate.
@@ -369,6 +375,7 @@ private:
 	QSize clipNaturalSize(const TlClip &c);
 	// How a "Zoom here" is shaped. One set for the window, so repeated zooms
 	// in a project match each other rather than each having its own timing.
+	static int openCount_;
 	ZoomSettings zoomSettings_;
 	// Keyframe-lane geometry from the Dev panel, kept here because the editor
 	// it applies to is a dialog that only exists while it is open.

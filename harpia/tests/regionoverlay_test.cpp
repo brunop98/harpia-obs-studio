@@ -71,8 +71,8 @@ int main(int argc, char **argv)
 	{
 		// The fix itself, stated where it can be checked without a window.
 		using M = RegionTool::Mode;
-		const auto st = [](bool region, bool rec, bool focus) {
-			return regionOverlayState(region, rec, focus);
+		const auto st = [](bool region, bool rec, bool focus, bool editor = false) {
+			return regionOverlayState(region, rec, focus, editor);
 		};
 
 		// Entire Monitor: nothing to frame, so nothing on screen.
@@ -93,6 +93,17 @@ int main(int argc, char **argv)
 		// Recording wins over focus either way.
 		ok(st(true, true, true).mode == M::Recording, "recording shows the recording state");
 		ok(st(true, true, false).mode == M::Recording, "focused or not");
+
+		// The editor is a window you work INSIDE, usually maximised. A frame
+		// floating over it marks out a piece of desktop that has nothing to do
+		// with what is being edited, and it covers the thing you are looking at.
+		ok(!st(true, false, true, /*editor=*/true).visible,
+		   "no overlay while the editor is open");
+		ok(!st(true, false, false, true).visible, "whether or not Harpia is in front");
+		// ...but not at the cost of hiding a recording in progress: there the
+		// frame is saying "this is what is going into the file".
+		ok(st(true, true, true, true).visible, "unless a recording is running");
+		ok(st(true, true, true, true).mode == M::Recording, "still in the recording state");
 	}
 
 	std::printf("\n-- Editing: the whole rectangle is grabbable --\n");

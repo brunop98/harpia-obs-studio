@@ -279,6 +279,11 @@ void RegionTool::keyPressEvent(QKeyEvent *e)
 
 void RegionTool::setMode(Mode m)
 {
+	// Idempotent: this is called from the state tick now, and rebuilding the
+	// mask four times a second to arrive at the mask it already had is work
+	// nobody asked for.
+	if (mode_ == m)
+		return;
 	mode_ = m;
 	if (m != Mode::Recording)
 		paused_ = false;
@@ -345,7 +350,8 @@ void RegionTool::paintEvent(QPaintEvent *)
 	}
 }
 
-RegionOverlayState regionOverlayState(bool regionCaptureMode, bool recording, bool harpiaFocused)
+RegionOverlayState regionOverlayState(bool regionCaptureMode, bool recording, bool harpiaFocused,
+				      bool editorOpen)
 {
 	RegionOverlayState st;
 	// Only Custom Region has a region to show. Entire Monitor has nothing to
@@ -353,6 +359,17 @@ RegionOverlayState regionOverlayState(bool regionCaptureMode, bool recording, bo
 	// noise with no meaning.
 	if (!regionCaptureMode)
 		return st; // hidden
+
+	// The editor is a window you work INSIDE, usually maximised. A frame
+	// floating on top of it marks out a piece of the desktop that has nothing
+	// to do with what is being edited, and it sits over the thing you are
+	// trying to look at.
+	//
+	// Unless a recording is running: then the frame is saying "this is what is
+	// going into the file", which is worth more than the nuisance -- and
+	// hiding it would be hiding a recording in progress.
+	if (editorOpen && !recording)
+		return st;
 
 	st.visible = true;
 	if (recording) {

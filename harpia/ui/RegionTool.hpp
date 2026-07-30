@@ -122,6 +122,7 @@ struct RegionOverlayState {
 		return visible == o.visible && mode == o.mode;
 	}
 };
-RegionOverlayState regionOverlayState(bool regionCaptureMode, bool recording, bool harpiaFocused);
+RegionOverlayState regionOverlayState(bool regionCaptureMode, bool recording, bool harpiaFocused,
+				      bool editorOpen);
 
 } // namespace harpia

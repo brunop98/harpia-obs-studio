@@ -341,7 +341,11 @@ private:
 	qint64 pausedAccumMs_ = 0;
 	qint64 pauseStartMs_ = 0;
 	bool wasPaused_ = false;
-	bool autoPaused_ = false;  // paused by the idle monitor (vs. manually)
+	bool autoPaused_ = false;
+	// The off-region pause paused it, so the off-region rule may resume it.
+	// Separate from autoPaused_ so the idle and region state machines cannot
+	// resume each other's pauses.
+	bool regionAutoPaused_ = false;
 	bool focusPaused_ = false; // paused because the target app lost focus
 
 	// Transitional UI states while the async output starts/finalizes, so the

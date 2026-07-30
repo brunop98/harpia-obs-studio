@@ -288,18 +288,19 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		"Auto-pause the recording after this many seconds without mouse/keyboard "
 		"input, and resume on input. Off records regardless of activity."));
 
-	// Region recording only: stop once the pointer has been outside the region
-	// long enough. "Off" is -1 rather than 0 because 0 is a real choice here
-	// meaning "the moment it leaves".
+	// Region recording only: pause once the pointer has been outside the region
+	// long enough, and resume when it returns. "Off" is -1 rather than 0 because
+	// 0 is a real choice here meaning "the moment it leaves".
 	regionLeaveCombo_ = new QComboBox(central);
 	regionLeaveCombo_->addItem(QStringLiteral("Off"), kRegionWatchOff);
 	for (int s : kRegionWatchSeconds)
 		regionLeaveCombo_->addItem(QStringLiteral("%1 s").arg(s), s);
 	regionLeaveCombo_->setFixedWidth(kBehaviorComboW);
 	regionLeaveCombo_->setToolTip(QStringLiteral(
-		"Stop the recording once the mouse pointer has been outside the "
-		"recording region for this long. 0 s stops as soon as it leaves. "
-		"Only applies to Custom Region capture."));
+		"Pause the recording once the mouse pointer has been outside the "
+		"recording region for this long, and resume it when the pointer comes "
+		"back. 0 s pauses as soon as it leaves. Only applies to Custom Region "
+		"capture."));
 
 	auto behaviorRow = [&](const QString &text, QWidget *control) -> QWidget * {
 		auto *roww = new QWidget(central);
@@ -322,7 +323,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	behaviorRow(QStringLiteral("Focus app"), appCombo_);
 	behaviorRow(QStringLiteral("Webcam"), webcamCombo_);
 	idleGroup_ = behaviorRow(QStringLiteral("Pause when idle"), idleCombo_);
-	regionLeaveGroup_ = behaviorRow(QStringLiteral("Stop off-region"), regionLeaveCombo_);
+	regionLeaveGroup_ = behaviorRow(QStringLiteral("Pause off-region"), regionLeaveCombo_);
 	behaviorCol->addStretch(1);
 	middle->addLayout(behaviorCol);
 
@@ -1202,6 +1203,7 @@ void MainWindow::startRecording()
 	pauseStartMs_ = 0;
 	wasPaused_ = false;
 	autoPaused_ = false;
+	regionAutoPaused_ = false;
 	updateButtons();
 	updateRegionToolVisibility(); // dim the region tool into recording mode
 
@@ -1481,6 +1483,7 @@ void MainWindow::onPauseButton()
 	webcam_.pause(recorder_.isPaused()); // keep the companion file in sync
 	notePauseTransition(recorder_.isPaused());
 	autoPaused_ = false;  // manual action overrides the idle state machine
+	regionAutoPaused_ = false; // ...and the off-region one
 	focusPaused_ = false; // and the focus state machine
 	updateButtons();
 }
@@ -2161,7 +2164,8 @@ void MainWindow::updateRegionToolVisibility()
 	// against the app you are about to record -- impossible.
 	const bool focused = isActiveWindow() || regionTool_->isActiveWindow();
 	const RegionOverlayState st = regionOverlayState(captureMode_ == CaptureMode::Region,
-							 recorder_.isRecording(), focused);
+							 recorder_.isRecording(), focused,
+							 VideoEditorWindow::anyOpen());
 	regionTool_->setMode(st.mode);
 	// Never steals the foreground: showing an always-on-top window normally
 	// activates it, which would yank focus off whatever the user just clicked
@@ -2239,18 +2243,21 @@ void MainWindow::onIdleSettingChanged()
 // mattering — it is one cursor-position query.
 void MainWindow::tickRegionWatch()
 {
-	regionWatch_.setTimeoutSeconds(activePreset().regionLeaveStopSeconds);
+	regionWatch_.setTimeoutSeconds(activePreset().regionLeavePauseSeconds);
 
-	// Armed only while a region recording is actually running. Not while
-	// starting or stopping (the region and the recorder are mid-change), and
-	// not while paused — a paused recording is one the user has deliberately
-	// suspended, and ending it because they also walked away would be a
-	// surprise they cannot undo.
-	const bool armed = captureMode_ == CaptureMode::Region && currentRegion_.enabled &&
-			   recorder_.isRecording() && !recorder_.isPaused() && !starting_ && !stopping_;
+	// A region recording that is actually under way. Not while starting or
+	// stopping, when the region and the recorder are mid-change.
+	//
+	// Deliberately still true while PAUSED, unlike when this used to stop the
+	// recording: the pointer coming back is what resumes, so its position has to
+	// keep being checked. What does not run while paused is the countdown —
+	// hence the separate `armed` below.
+	const bool regionRec = captureMode_ == CaptureMode::Region && currentRegion_.enabled &&
+			       recorder_.isRecording() && !starting_ && !stopping_;
+	const bool armed = regionRec && !recorder_.isPaused();
 
 	bool inside = true;
-	if (armed) {
+	if (regionRec) {
 		// Resolve the screen once per recording, not four times a second: on
 		// Windows screenForActivePreset() enumerates monitors and does GDI
 		// lookups to match OBS's display order to Qt's, which is far too much
@@ -2271,11 +2278,27 @@ void MainWindow::tickRegionWatch()
 	}
 
 	if (regionWatch_.tick(armed, inside, QDateTime::currentMSecsSinceEpoch())) {
+		if (recorder_.pause(true)) {
+			webcam_.pause(true); // the companion file pauses in lockstep
+			notePauseTransition(true);
+			regionAutoPaused_ = true;
+			updateButtons();
+			Logger::instance().log(
+				LogLevel::Info,
+				"Auto-pause: pointer left the recording region for " +
+					std::to_string(regionWatch_.timeoutSeconds()) + "s");
+		}
+	} else if (regionRec && recorder_.isPaused() && regionAutoPaused_ && inside) {
+		// Back inside: pick up where it left off. Only when WE paused it --
+		// a recording the user paused by hand stays paused, however much the
+		// pointer wanders, which is the same rule the idle pause follows.
+		recorder_.pause(false);
+		webcam_.pause(false);
+		notePauseTransition(false);
+		regionAutoPaused_ = false;
+		updateButtons();
 		Logger::instance().log(LogLevel::Info,
-				       "Auto-stop: pointer left the recording region for " +
-					       std::to_string(regionWatch_.timeoutSeconds()) +
-					       "s — stopping");
-		beginStop();
+				       "Auto-pause: pointer is back in the region — resuming");
 	}
 }
 
@@ -2285,8 +2308,8 @@ void MainWindow::onRegionLeaveSettingChanged()
 	if (!cur)
 		return;
 	Preset updated = *cur;
-	updated.regionLeaveStopSeconds = regionLeaveCombo_->currentData().toInt();
-	if (updated.regionLeaveStopSeconds != cur->regionLeaveStopSeconds)
+	updated.regionLeavePauseSeconds = regionLeaveCombo_->currentData().toInt();
+	if (updated.regionLeavePauseSeconds != cur->regionLeavePauseSeconds)
 		presets_.upsert(updated);
 }
 
@@ -2371,7 +2394,7 @@ void MainWindow::syncIdleControls()
 	idleCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
 
 	QSignalBlocker b2(regionLeaveCombo_);
-	const int ri = regionLeaveCombo_->findData(p.regionLeaveStopSeconds);
+	const int ri = regionLeaveCombo_->findData(p.regionLeavePauseSeconds);
 	regionLeaveCombo_->setCurrentIndex(ri >= 0 ? ri : 0); // unknown value reads as Off
 	updateRegionLeaveVisibility();
 
@@ -2810,6 +2833,13 @@ void MainWindow::updateStatusChip()
 void MainWindow::tickState()
 {
 	++spinPhase_; // drive the Starting…/Stopping… spinner
+
+	// The editor opens with exec(), which spins its own event loop -- this timer
+	// keeps running inside it, and nothing else here does. So the overlay's
+	// "hide while the editor is up" rule is re-checked from the tick rather than
+	// from either of the two places an editor can be opened. setMode() and
+	// setVisible() are both no-ops when nothing has changed.
+	updateRegionToolVisibility();
 
 	// Stop watchdog: obs_output_stop is async and a stuck muxer/encoder can
 	// hang it indefinitely (previously: kill via Task Manager). After 10s,

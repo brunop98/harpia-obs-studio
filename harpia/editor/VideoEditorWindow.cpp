@@ -153,10 +153,14 @@ void revealInFolder(const QString &path)
 }
 } // namespace
 
+
+int VideoEditorWindow::openCount_ = 0;
+
 VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &libraryFolders,
 				     QWidget *parent)
 	: QDialog(parent), inPath_(inPath), libraryFolders_(libraryFolders)
 {
+	++openCount_; // the recorder hides its region overlay while one is up
 	setWindowTitle(QStringLiteral("Edit — %1").arg(QFileInfo(inPath).fileName()));
 	// A real window with minimize/maximize (QDialog hides them by default), so
 	// the editor can use the full screen — the preview canvas takes the extra
@@ -5960,6 +5964,7 @@ void VideoEditorWindow::onSegmentSelected(int index)
 
 VideoEditorWindow::~VideoEditorWindow()
 {
+	--openCount_;
 	stopPlayback();
 	if (voRecorder_ && voRecorder_->isRecording())
 		voRecorder_->stop();

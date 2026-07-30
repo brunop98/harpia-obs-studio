@@ -106,11 +106,11 @@ struct Preset {
 	// 0 disables the idle auto-pause behavior for this preset.
 	int idleTimeoutSeconds = 0;
 
-	// Region recording only: auto-STOP once the pointer has been outside the
-	// recording region this many seconds. -1 is off; 0 means the moment it
-	// leaves, so unlike idleTimeoutSeconds above, 0 cannot double as the
-	// disabled value.
-	int regionLeaveStopSeconds = -1;
+	// Region recording only: auto-PAUSE once the pointer has been outside the
+	// recording region this many seconds, resuming when it comes back. -1 is
+	// off; 0 means the moment it leaves, so unlike idleTimeoutSeconds above, 0
+	// cannot double as the disabled value.
+	int regionLeavePauseSeconds = -1;
 
 	// Auto-pause recording whenever the target application (the app that was in
 	// the foreground when recording started) loses focus, and resume when it

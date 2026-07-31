@@ -19,6 +19,7 @@
 #include "EditorWidgets.hpp"
 #include "ExportOptionsDialog.hpp"
 #include "FrameSeeker.hpp"
+#include "PreviewDecoder.hpp"
 #include "LevelMeter.hpp"
 #include "SceneDetector.hpp"
 #include "AudioPreview.hpp"
@@ -1311,6 +1312,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	previewTimer_->setInterval(20);
 	connect(previewTimer_, &QTimer::timeout, this, &VideoEditorWindow::onPreviewTick);
 
+	// Preview frames are decoded on a worker thread; the GUI thread never waits
+	// on a seek. See PreviewDecoder.hpp for why -- a 4K scrub is 300-400 ms of
+	// decode, and it used to happen right here on the GUI thread.
+	previewDecoder_ = std::make_unique<PreviewDecoder>();
+	connect(previewDecoder_.get(), &PreviewDecoder::frameReady, this,
+		&VideoEditorWindow::onPreviewFrameReady);
+
 	// Undo/redo history: coalesce a burst of edits (a drag, slider sweep) into
 	// one snapshot taken shortly after they settle.
 	histTimer_ = new QTimer(this);
@@ -1662,6 +1670,8 @@ int VideoEditorWindow::addSource(const QString &path)
 	src.height = seeker->height();
 	src.seeker = std::move(seeker);
 	const int id = src.id;
+	if (previewDecoder_)
+		previewDecoder_->setSource(id, path);
 	auto *thumbs = new TimelineThumbs(this);
 	src.thumbs = thumbs;
 	sources_.push_back(std::move(src));
@@ -1805,6 +1815,8 @@ void VideoEditorWindow::onRemoveSource()
 		if (it->id == id) {
 			if (it->thumbs)
 				it->thumbs->deleteLater();
+			if (previewDecoder_)
+				previewDecoder_->removeSource(id);
 			sources_.erase(it);
 			break;
 		}
@@ -2295,10 +2307,19 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 			if (const auto it = w->stillImages_.constFind(sourceId);
 			    it != w->stillImages_.constEnd())
 				return it.value();
-			FrameSeeker *fs = w->seekerFor(sourceId);
+			if (!w->previewDecoder_)
+				return QImage();
 			// Decoding straight to the size actually being composited saves both
-			// the scale and the memory traffic behind it.
-			return fs ? fs->frameAt(srcMs, decodeW, decodeH) : QImage();
+			// the scale and the memory traffic behind it. Whatever the decoder
+			// already has comes back now; anything it has to decode arrives via
+			// frameReady and this composite is redone. One slow clip therefore
+			// no longer holds up the whole frame.
+			bool exact = false;
+			const QImage img =
+				w->previewDecoder_->frame(sourceId, srcMs, decodeW, decodeH, &exact);
+			if (!exact)
+				w->shownExact_ = false;
+			return img;
 		}
 	} fp;
 
@@ -2324,6 +2345,11 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 	fp.w = this;
 	fp.decodeW = renderSize.width();
 	fp.decodeH = renderSize.height();
+	// Cleared by the provider if any clip's frame was not ready; -1 is the
+	// "composite the timeline" source id requestPreview already uses.
+	shownSource_ = -1;
+	shownMs_ = outMs;
+	shownExact_ = true;
 	const QImage composed = TimelineCompositor::compose(timelineView_->model(), outMs, renderSize,
 							    fp, scriptEval_.get(), fps, canvasSize);
 	setPreviewFrame(composed, outMs);
@@ -7517,22 +7543,41 @@ void VideoEditorWindow::showFrame(int sourceId, qint64 ms)
 {
 	if (!valid_)
 		return;
-	FrameSeeker *fs = seekerFor(sourceId);
-	if (!fs)
-		fs = seeker_; // fall back to the active source
-	if (!fs)
-		return;
+	if (!sourceById(sourceId))
+		sourceId = activeSourceId_; // fall back to the active source
 	// Trim / Multi-Cut show one source frame; the same quality setting applies,
 	// against the 720p these modes have always previewed at.
 	const QSize dec = previewRenderSize(QSize(1280, 720));
-	QImage img = fs->frameAt(ms, dec.width(), dec.height());
+	shownSource_ = sourceId;
+	shownMs_ = ms;
+
+	bool exact = false;
+	QImage img;
+	if (previewDecoder_)
+		img = previewDecoder_->frame(sourceId, ms, dec.width(), dec.height(), &exact);
+	shownExact_ = exact;
+	if (img.isNull())
+		return; // nothing decoded for this source yet -- keep the last picture
+			// on screen rather than flashing black while the worker catches up
 	// Multi-Cut: a cut from a differently-shaped file goes into the output
 	// letterboxed, so it has to preview that way too. A no-op when every source
 	// is the same shape, which is nearly every project.
-	if (!img.isNull() && multiCut())
+	if (multiCut())
 		img = fitIntoCanvas(img, multiCutCanvasSize());
-	if (!img.isNull())
-		setPreviewFrame(img, ms);
+	setPreviewFrame(img, ms);
+}
+
+// A frame the decode thread was asked for has arrived. Re-render the position
+// the preview is trying to show; now that the real frame is in the cache, the
+// stale one on screen is replaced. Converges: once everything the render needs
+// is exact, no new decode is scheduled and no further frames arrive.
+void VideoEditorWindow::onPreviewFrameReady(int sourceId, qint64 ms)
+{
+	Q_UNUSED(sourceId);
+	Q_UNUSED(ms);
+	if (!valid_ || playing_ || shownExact_ || shownMs_ < 0)
+		return;
+	requestPreview(shownSource_, shownMs_);
 }
 
 void VideoEditorWindow::onCropToggled(bool on)

@@ -1,5 +1,6 @@
 #!/bin/bash
-# Build and run the export checks: A/V sync, and all four export paths.
+# Build and run the checks that need real media: A/V sync, all four export
+# paths, and the preview decoder.
 #
 #   harpia/tests/run_avsync.sh [workdir]
 #
@@ -63,7 +64,17 @@ build() { # source-file output-name
 build "$HERE/avsync_test.cpp" avsync_test
 build "$HERE/exportpaths_test.cpp" exportpaths_test
 
+# The preview decoder. Separate build: it needs its own moc and none of the
+# exporter, and its media is a long-GOP 1080p file it generates for itself --
+# the short clips above would decode too fast to measure anything.
+"$MOC" -I"$H" "$H/editor/PreviewDecoder.hpp" -o "$WORK/moc_PreviewDecoder.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/previewdecoder_test.cpp" "$H/editor/PreviewDecoder.cpp" \
+	"$H/editor/FrameSeeker.cpp" "$WORK/moc_PreviewDecoder.cpp" \
+	-o "$WORK/previewdecoder_test" $LF
+
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/avsync_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportpaths_test" "$WORK" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/previewdecoder_test" "$WORK" || rc=1
 exit $rc

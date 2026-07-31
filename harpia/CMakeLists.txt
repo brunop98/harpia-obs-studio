@@ -155,6 +155,8 @@ target_sources(
     editor/ParamSlider.cpp
     editor/ParamSlider.hpp
     editor/FrameSeeker.cpp
+    editor/PreviewDecoder.cpp
+    editor/PreviewDecoder.hpp
     editor/StillImage.cpp
     editor/StillImage.hpp
     editor/CanvasFit.hpp

@@ -53,6 +53,8 @@ class QJsonObject;
 
 namespace harpia {
 
+class PreviewDecoder;
+
 // A full snapshot of the editor's undoable state. Undo/redo restores one of
 // these; snapshot-based history is simple and robust for this size of state.
 struct EditorSnapshot {
@@ -258,6 +260,8 @@ private:
 	// request at once, then at most one per timer interval, always the newest.
 	void requestPreview(int sourceId, qint64 ms);
 	void renderPendingPreview();
+	// A frame the decode thread was asked for has arrived.
+	void onPreviewFrameReady(int sourceId, qint64 ms);
 
 	// The Unsaved Changes prompt. Returns true when the caller may close.
 	bool confirmDiscardOnClose();
@@ -738,6 +742,14 @@ private:
 	QTimer *previewTimer_ = nullptr;
 	qint64 pendingMs_ = -1;
 	int pendingSource_ = -1; // source for the pending preview frame
+	// The position the preview is currently trying to show. Kept because a
+	// frame arriving from the decode thread has to re-render THAT position,
+	// which by then is no longer "pending" -- it was consumed when the
+	// stale-but-immediate version of it went up.
+	qint64 shownMs_ = -1;
+	int shownSource_ = -1;
+	bool shownExact_ = true; // false while waiting on the real frame
+	std::unique_ptr<PreviewDecoder> previewDecoder_;
 
 	// Looping playback. Simple Trim: the trimmed region at the global speed
 	// (playAnchorMs_ = source ms at clock zero). Multi-Cut: the assembled output

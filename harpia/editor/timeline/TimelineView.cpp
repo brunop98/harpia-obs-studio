@@ -95,8 +95,17 @@ void TimelineView::animateStep()
 		moving = true;
 	}
 	update();
-	if (!moving)
+	if (moving)
+		notifyView(); // a zoom or scroll in progress IS the interaction
+	else
 		anim_->stop();
+}
+
+// One place that knows what "where I am" means here, so every caller is a
+// single line and none of them can disagree about it.
+void TimelineView::notifyView()
+{
+	emit viewChanged(spanMs(), viewStart_, visibleMs(), playheadMs_);
 }
 
 void TimelineView::setModel(const TimelineModel &m)
@@ -983,6 +992,9 @@ qint64 TimelineView::snap(qint64 ms, int ignoreTrack, int ignoreClip, bool *hit)
 void TimelineView::emitScrubAt(qint64 outMs)
 {
 	emit scrub(outMs);
+	// Moving the playhead by hand is navigating too, and it is the moment you
+	// most want to know which part of the project you are looking at.
+	notifyView();
 }
 
 // ---- painting ---------------------------------------------------------------
@@ -1848,6 +1860,7 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 				     qint64(std::llround((pos.x() - panStartX_) * msPerPx));
 			clampView();
 			update();
+			notifyView();
 		}
 		return;
 	}

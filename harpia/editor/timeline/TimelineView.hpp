@@ -246,6 +246,10 @@ signals:
 	// dialog and the media pool, so the view only says which slice of output
 	// time was asked for.
 	void exportRangeRequested(qint64 fromMs, qint64 toMs);
+	// The window being LOOKED AT moved -- a zoom, a scroll, a pan, a scrub.
+	// Drives the floating overview that says where you are in a long project.
+	// Deliberately not emitted by playback: the overview is for navigating.
+	void viewChanged(qint64 totalMs, qint64 startMs, qint64 visibleMs, qint64 playheadMs);
 
 protected:
 	void paintEvent(QPaintEvent *) override;
@@ -436,6 +440,7 @@ private:
 	double zoomAnchorFrac_ = 0.0;
 	QTimer *anim_ = nullptr;
 	void animateStep();
+	void notifyView(); // emit viewChanged with the current numbers
 
 	// ---- interaction ----
 	// Pan drags the VIEW under a still timeline, the opposite of Scrub, which

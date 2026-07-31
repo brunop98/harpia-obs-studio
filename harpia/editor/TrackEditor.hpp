@@ -123,6 +123,11 @@ public:
 	void setLayoutParams(const TrackLayoutParams &p);
 
 signals:
+	// The window being LOOKED AT moved on one of the two lanes -- a zoom, a
+	// scroll, a hover. Carries that lane's own numbers, because the Source and
+	// Output tracks zoom independently and the overview shows whichever one you
+	// last touched.
+	void viewChanged(qint64 totalMs, qint64 startMs, qint64 visibleMs, qint64 playheadMs);
 	void segmentsChanged();          // added / removed / reordered
 	void selectionChanged(int index); // -1 = nothing selected
 	void scrubSource(qint64 ms);      // preview the source frame while interacting
@@ -150,6 +155,8 @@ private:
 	void clampView();
 	// Output track has its own zoom/pan over OUTPUT-time (0..totalOutputMs).
 	qint64 outVisibleMs() const;
+	// emit viewChanged for one lane: true = the Output track, false = Source.
+	void notifyView(bool outputLane);
 	int outMsToX(qint64 ms) const;
 	qint64 outXToMs(int x) const;
 	void clampOutView();

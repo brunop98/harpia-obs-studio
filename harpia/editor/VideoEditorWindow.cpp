@@ -25,6 +25,7 @@
 #include "SceneDetector.hpp"
 #include "AudioPreview.hpp"
 #include "TimelineAudio.hpp"
+#include "TimelineOverview.hpp"
 #include "TimelineThumbs.hpp"
 #include "timeline/TextStyleJson.hpp"
 #include "timeline/TimelineJson.hpp"
@@ -195,6 +196,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	auto *topLayout = new QVBoxLayout(topPane);
 	topLayout->setContentsMargins(0, 0, 0, 0);
 	canvas_ = new PreviewCanvas(this);
+	// A child of the preview, so it floats over the picture and is clipped to
+	// it. It takes no mouse events (see TimelineOverview), so nothing under it
+	// loses a click, and it occupies no layout space -- it is positioned by hand
+	// in layOutOverview() whenever the preview resizes.
+	overview_ = new TimelineOverview(canvas_);
+	canvas_->installEventFilter(this);
 	topLayout->addWidget(canvas_, 1);
 
 	// One unified toolbar under the preview, left → right:
@@ -456,6 +463,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	stack_->addWidget(timeline_);      // index 0 = Simple Trim
 	stack_->addWidget(tracks_);        // index 1 = Multi-Cut
 	stack_->addWidget(timelineView_);  // index 2 = Full Editing
+
+	// Long projects: zooming in is the only way to work precisely and also how
+	// you lose track of where you are. Both of these report their own view, and
+	// the strip over the preview shows it until you stop moving.
+	connect(timelineView_, &TimelineView::viewChanged, this,
+		&VideoEditorWindow::onTimelineViewChanged);
+	connect(tracks_, &TrackEditor::viewChanged, this, &VideoEditorWindow::onTimelineViewChanged);
 	bottomLayout->addWidget(stack_);
 
 	connect(timelineView_, &TimelineView::scrub, this, &VideoEditorWindow::onTimelineScrub);
@@ -5306,8 +5320,32 @@ void VideoEditorWindow::resizeEvent(QResizeEvent *e)
 	}
 }
 
+// The overview sits across the top of the preview, inset a little so it reads
+// as floating ON the picture rather than being part of its frame.
+void VideoEditorWindow::layOutOverview()
+{
+	if (!overview_ || !canvas_)
+		return;
+	const int m = 12;
+	const int w = std::max(120, canvas_->width() - 2 * m);
+	overview_->setGeometry(m, m, w, TimelineOverview::kHeight);
+}
+
+// Show the overview for a view that just moved. Only in the modes that have
+// something to get lost in: Simple Trim is one clip with two handles.
+void VideoEditorWindow::onTimelineViewChanged(qint64 totalMs, qint64 startMs, qint64 visibleMs,
+					      qint64 playheadMs)
+{
+	if (!overview_ || mode() == EditMode::Trim)
+		return;
+	layOutOverview();
+	overview_->showFor(totalMs, startMs, visibleMs, playheadMs);
+}
+
 bool VideoEditorWindow::eventFilter(QObject *watched, QEvent *e)
 {
+	if (watched == canvas_ && e->type() == QEvent::Resize)
+		layOutOverview();
 	// Closing the floating panel via its title-bar X mirrors the toolbar toggle.
 	if (watched == sourcesPanel_ && e->type() == QEvent::Close) {
 		if (sourcesBtn_ && sourcesBtn_->isChecked()) {
@@ -5844,6 +5882,9 @@ void VideoEditorWindow::showInspector(bool on)
 void VideoEditorWindow::setEditMode(EditMode m)
 {
 	stopPlayback();
+	// The strip describes the timeline you were on; leaving it makes it a lie.
+	if (overview_)
+		overview_->hideNow();
 	const bool wasFull = fullEdit();
 	trimModeBtn_->setChecked(m == EditMode::Trim);
 	cutModeBtn_->setChecked(m == EditMode::MultiCut);

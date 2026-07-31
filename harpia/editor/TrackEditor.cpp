@@ -57,6 +57,10 @@ void TrackEditor::animateScrollStep()
 	};
 
 	bool moving = false;
+	// Which lane the overview should describe. When both glide at once the
+	// Output track wins: it is the assembled result, and the one you are
+	// navigating when you are lost.
+	bool movedOutput = false;
 
 	// Source: zoom (anchor held under the cursor) takes priority over scroll.
 	if (easeZoom(zoom_, zoomTarget_)) {
@@ -73,14 +77,25 @@ void TrackEditor::animateScrollStep()
 		outViewStart_ = outZoomAnchorMs_ - qint64(outZoomAnchorFrac_ * outVisibleMs());
 		clampOutView();
 		outViewTarget_ = outViewStart_;
-		moving = true;
+		moving = movedOutput = true;
 	} else if (easeI(outViewStart_, outViewTarget_)) {
-		moving = true;
+		moving = movedOutput = true;
 	}
 
 	update();
-	if (!moving)
+	if (moving)
+		notifyView(movedOutput); // whichever lane is actually gliding
+	else
 		scrollAnim_->stop();
+}
+
+// One place that knows what "where I am" means for each lane.
+void TrackEditor::notifyView(bool outputLane)
+{
+	if (outputLane)
+		emit viewChanged(totalOutputMs(), outViewStart_, outVisibleMs(), playheadOutMs_);
+	else
+		emit viewChanged(duration_, viewStart_, visibleMs(), -1);
 }
 
 QSize TrackEditor::sizeHint() const
@@ -339,6 +354,7 @@ void TrackEditor::wheelEvent(QWheelEvent *e)
 				hoverOutSeg_ = seg;
 				hoverOutX_ = x;
 				emitHover(srcMs, segs_[seg].sourceId);
+				notifyView(true);
 			}
 		}
 	}

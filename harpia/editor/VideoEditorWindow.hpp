@@ -56,6 +56,7 @@ class QJsonObject;
 namespace harpia {
 
 class PreviewDecoder;
+class TimelineOverview;
 class ProxyBuilder;
 
 // A full snapshot of the editor's undoable state. Undo/redo restores one of
@@ -270,6 +271,9 @@ private:
 	void onProxyReady(int sourceId, const QString &proxyPath);
 	void onProxyProgress(int sourceId, int percent);
 	void updateProxyStatus();
+	// The floating "where am I in the project" strip over the preview.
+	void layOutOverview();
+	void onTimelineViewChanged(qint64 totalMs, qint64 startMs, qint64 visibleMs, qint64 playheadMs);
 	// Point a source's playback seeker at its proxy (deferred while playing).
 	void applyProxyToPlayback(int sourceId, const QString &proxyPath);
 	void flushPendingPlaybackProxies();
@@ -752,6 +756,7 @@ private:
 	QPushButton *resetCropBtn_ = nullptr; // hides with the Crop toggle
 	double speed_ = 1.0;
 
+	TimelineOverview *overview_ = nullptr;
 	QTimer *previewTimer_ = nullptr;
 	qint64 pendingMs_ = -1;
 	int pendingSource_ = -1; // source for the pending preview frame

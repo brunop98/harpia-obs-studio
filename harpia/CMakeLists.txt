@@ -195,6 +195,8 @@ target_sources(
     editor/AudioPreview.hpp
     editor/TimelineAudio.cpp
     editor/TimelineAudio.hpp
+    editor/TimelineOverview.cpp
+    editor/TimelineOverview.hpp
     editor/TimelineThumbs.cpp
     editor/TimelineThumbs.hpp
     editor/AudioRetimer.cpp

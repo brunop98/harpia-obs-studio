@@ -21,16 +21,10 @@ function(set_target_properties_obs target)
   get_target_property(target_type ${target} TYPE)
 
   if(target_type STREQUAL EXECUTABLE)
+    # inject-helper and get-graphics-offsets used to be special-cased here; they
+    # went with game capture, and with them the whole 32-bit install path.
     if(target STREQUAL obs-browser-helper)
       set(OBS_EXECUTABLE_DESTINATION "${OBS_PLUGIN_DESTINATION}")
-    elseif(target STREQUAL inject-helper OR target STREQUAL get-graphics-offsets)
-      set(OBS_EXECUTABLE_DESTINATION "${OBS_DATA_DESTINATION}/obs-plugins/win-capture")
-
-      _target_install_obs(${target} DESTINATION ${OBS_EXECUTABLE_DESTINATION} x86)
-
-      if(CMAKE_VS_PLATFORM_NAME STREQUAL ARM64)
-        _target_install_obs(${target} DESTINATION ${OBS_EXECUTABLE_DESTINATION} x64)
-      endif()
     endif()
 
     _target_install_obs(${target} DESTINATION ${OBS_EXECUTABLE_DESTINATION})
@@ -65,24 +59,10 @@ function(set_target_properties_obs target)
       set(target_destination "${OBS_EXECUTABLE_DESTINATION}")
     elseif(target STREQUAL "obspython" OR target STREQUAL "obslua")
       set(target_destination "${OBS_SCRIPT_PLUGIN_DESTINATION}")
-    elseif(target STREQUAL graphics-hook)
-      set(target_destination "${OBS_DATA_DESTINATION}/obs-plugins/win-capture")
-      target_add_resource(graphics-hook "${CMAKE_CURRENT_SOURCE_DIR}/obs-vulkan64.json" "${target_destination}")
-      target_add_resource(graphics-hook "${CMAKE_CURRENT_SOURCE_DIR}/obs-vulkan32.json" "${target_destination}")
-
-      _target_install_obs(${target} DESTINATION ${target_destination} x86)
-
-      if(CMAKE_VS_PLATFORM_NAME STREQUAL ARM64)
-        _target_install_obs(${target} DESTINATION ${target_destination} x64)
-      endif()
-    elseif(target STREQUAL obs-virtualcam-module)
-      set(target_destination "${OBS_DATA_DESTINATION}/obs-plugins/win-dshow")
-
-      _target_install_obs(${target} DESTINATION ${target_destination} x86)
-
-      if(CMAKE_VS_PLATFORM_NAME STREQUAL ARM64)
-        _target_install_obs(${target} DESTINATION ${target_destination} x64)
-      endif()
+    # graphics-hook and obs-virtualcam-module had their own destinations here.
+    # Neither target exists any more -- game capture is gone and the virtual
+    # camera was never added to this build -- so these were branches on names
+    # nothing could ever be called.
     else()
       set(target_destination "${OBS_PLUGIN_DESTINATION}")
     endif()

@@ -8190,10 +8190,13 @@ void VideoEditorWindow::onExportFinished(bool ok, bool canceled, const QString &
 			thumb = canvas_->currentFrame(); // a GIF, or anything that would not reopen
 	}
 
+	// The editor STAYS OPEN. It used to close itself the moment this dialog was
+	// dismissed, which undid the point of the dialog: you would finish handling
+	// the file and find the project gone, with nothing to go back to for a
+	// second export or one more tweak. Nothing downstream needs the close --
+	// exported() has already fired, and both listeners only refresh a list.
 	ExportDoneDialog dlg(outPath_, thumb, this);
 	dlg.exec();
-
-	accept(); // close the editor
 }
 
 } // namespace harpia

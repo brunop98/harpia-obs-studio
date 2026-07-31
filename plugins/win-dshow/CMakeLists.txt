@@ -44,14 +44,10 @@ target_link_libraries(
     winmm
 )
 
-# Harpia uses win-dshow for webcam CAPTURE only; the virtual-camera output module
-# is intentionally not built (reduces build surface, no virtual camera needed).
-if(TARGET OBS::virtualcam AND TARGET OBS::virtualcam-guid)
-  target_sources(win-dshow PRIVATE virtualcam.c)
-  target_link_libraries(win-dshow PRIVATE OBS::virtualcam-guid)
-  target_compile_definitions(win-dshow PRIVATE VIRTUALCAM_AVAILABLE)
-
-  add_dependencies(win-dshow obs-virtualcam-module)
-endif()
+# Harpia uses win-dshow for webcam CAPTURE only. The virtual-camera output and
+# its module are gone: nothing added the virtualcam-module directory, so the
+# targets this used to test for could never exist and the whole block was
+# unreachable -- a guard around code that had already been removed from the
+# build in every way except the file still being there.
 
 set_target_properties_obs(win-dshow PROPERTIES FOLDER plugins/win-dshow PREFIX "")

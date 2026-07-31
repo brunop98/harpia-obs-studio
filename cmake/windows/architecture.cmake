@@ -13,36 +13,21 @@ if(NOT DEFINED OBS_PARENT_ARCHITECTURE)
 endif()
 
 if(OBS_PARENT_ARCHITECTURE STREQUAL CMAKE_VS_PLATFORM_NAME)
-  if(OBS_PARENT_ARCHITECTURE STREQUAL ARM64)
-    execute_process(
-      COMMAND
-        "${CMAKE_COMMAND}" -S ${CMAKE_CURRENT_SOURCE_DIR} -B ${CMAKE_SOURCE_DIR}/build_x64 -A
-        "x64,version=${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}" -G "${CMAKE_GENERATOR}"
-        -DCMAKE_SYSTEM_VERSION:STRING='${CMAKE_SYSTEM_VERSION}' -DVIRTUALCAM_GUID:STRING=${VIRTUALCAM_GUID}
-        -DCMAKE_MESSAGE_LOG_LEVEL:STRING=${CMAKE_MESSAGE_LOG_LEVEL} -DOBS_PARENT_ARCHITECTURE:STRING=ARM64
-      RESULT_VARIABLE _process_result
-      COMMAND_ERROR_IS_FATAL ANY
-    )
-    execute_process(
-      COMMAND
-        "${CMAKE_COMMAND}" -S ${CMAKE_CURRENT_SOURCE_DIR} -B ${CMAKE_SOURCE_DIR}/build_x86 -A
-        "Win32,version=${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}" -G "${CMAKE_GENERATOR}"
-        -DCMAKE_SYSTEM_VERSION:STRING='${CMAKE_SYSTEM_VERSION}' -DVIRTUALCAM_GUID:STRING=${VIRTUALCAM_GUID}
-        -DCMAKE_MESSAGE_LOG_LEVEL:STRING=${CMAKE_MESSAGE_LOG_LEVEL} -DOBS_PARENT_ARCHITECTURE:STRING=ARM64
-      RESULT_VARIABLE _process_result
-      COMMAND_ERROR_IS_FATAL ANY
-    )
-  elseif(OBS_PARENT_ARCHITECTURE STREQUAL x64)
-    execute_process(
-      COMMAND
-        "${CMAKE_COMMAND}" -S ${CMAKE_CURRENT_SOURCE_DIR} -B ${CMAKE_SOURCE_DIR}/build_x86 -A
-        "Win32,version=${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}" -G "${CMAKE_GENERATOR}"
-        -DCMAKE_SYSTEM_VERSION:STRING='${CMAKE_SYSTEM_VERSION}' -DVIRTUALCAM_GUID:STRING=${VIRTUALCAM_GUID}
-        -DCMAKE_MESSAGE_LOG_LEVEL:STRING=${CMAKE_MESSAGE_LOG_LEVEL} -DOBS_PARENT_ARCHITECTURE:STRING=x64
-      RESULT_VARIABLE _process_result
-      COMMAND_ERROR_IS_FATAL ANY
-    )
-  endif()
+  # Upstream configures and builds this entire tree a SECOND time here, for the
+  # other bitness, purely so the game-capture helpers (graphics-hook,
+  # get-graphics-offsets, inject-helper) exist in both: they are injected into
+  # the captured process, so they have to match its architecture.
+  #
+  # Harpia does not do game capture -- CaptureManager asks for monitor_capture
+  # and window_capture -- and those three are gone, so nothing is left that
+  # needs a second architecture. The only other user of the mechanism,
+  # win-dshow's obs-virtualcam-module, is not part of this build at all (nothing
+  # adds its directory). Spawning the child configure would build libobs again
+  # into a directory no target then reads.
+  #
+  # The branch below still exists for a child build, and the guards in the root
+  # CMakeLists and libobs still honour OBS_PARENT_ARCHITECTURE, so reinstating
+  # one is a matter of putting the execute_process calls back.
 else()
   # target_disable_feature: Stub macro for child architecture builds
   macro(target_disable_feature)
@@ -102,10 +87,9 @@ else()
 
   include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/windows/buildspec.cmake")
 
+  # Only what a second-architecture build has to produce. The three
+  # game-capture helpers that used to be listed here no longer exist.
   add_subdirectory(libobs)
-  add_subdirectory(plugins/win-capture/get-graphics-offsets)
-  add_subdirectory(plugins/win-capture/graphics-hook)
-  add_subdirectory(plugins/win-capture/inject-helper)
 
   return()
 endif()

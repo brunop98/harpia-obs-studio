@@ -84,3 +84,26 @@ set_target_properties_obs(win-capture PROPERTIES FOLDER plugins/win-capture PREF
 add_subdirectory(graphics-hook)
 add_subdirectory(get-graphics-offsets)
 add_subdirectory(inject-helper)
+
+# Each of those three ends in a POST_BUILD step that drives a NESTED MSBuild of
+# the same 32-bit tree ("cmake --build ${CMAKE_SOURCE_DIR}/build_x86 -t <it>"),
+# because the game-capture helpers ship in both bitnesses. Nothing ordered the
+# three against each other, so a parallel build (msbuild /m) started them at the
+# same time and up to three nested MSBuild processes ran against one build_x86
+# directory at once. They collide on that tree's shared ZERO_CHECK bookkeeping:
+#
+#   error MSB3061: Unable to delete file
+#   "Win32\<config>\ZERO_CHECK\ZERO_CHECK.tlog\unsuccessfulbuild".
+#   Access to the path ... is denied. [build_x86\ZERO_CHECK.vcxproj]
+#
+# and the parent target then fails with MSB3073 on the custom command. It is a
+# race, so it comes and goes with machine speed and core count.
+#
+# Chaining the three makes the nested builds strictly sequential. They are small
+# and were never the long pole, so the wall clock is unchanged; only the overlap
+# is gone. Only the parent architecture attaches those POST_BUILD steps, so the
+# ordering is only needed there.
+if(OBS_PARENT_ARCHITECTURE STREQUAL CMAKE_VS_PLATFORM_NAME AND CMAKE_VS_PLATFORM_NAME MATCHES "(ARM64|x64)")
+  add_dependencies(get-graphics-offsets graphics-hook)
+  add_dependencies(inject-helper get-graphics-offsets)
+endif()

@@ -139,7 +139,11 @@ protected:
 
 private:
 	enum class Zone { None, Move, L, R, T, B, TL, TR, BL, BR };
-	QRect displayRect() const;                  // where the frame is painted
+	QRect displayRect() const;
+	// Where the frame is painted inside displayRect(): the same thing whenever
+	// the frame has the canvas's shape, and a letterbox rather than a stretch
+	// when it does not.
+	QRect frameRect() const;                  // where the frame is painted
 	QRect videoToWidget(const QRect &r) const;  // source px -> widget px
 	QRect widgetCropRect() const;               // crop in widget px
 	Zone zoneAt(const QPoint &p) const;

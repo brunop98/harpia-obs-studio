@@ -145,6 +145,7 @@ public:
 	// The project's output format, after resolving "Auto" against the first
 	// source. Everything that renders or encodes goes through these two, so the
 	// preview and the export can never disagree about the canvas or the rate.
+	QSize previewCanvasSize();
 	QSize timelineCanvasSize() const;
 	// Multi-Cut's output resolution: the primary source, which is what the
 	// multi-source export encodes to. Public for the same reason as above --

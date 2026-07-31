@@ -244,6 +244,17 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/canvasfit_test.cpp" -o "$WORK/canvasfit_test" $LF
 
+# Changing the project resolution must not stretch the picture. Renders the real
+# PreviewCanvas, so it links the widget and what it draws with.
+"$MOC" -I"$H" "$H/editor/EditorWidgets.hpp" -o "$WORK/moc_EditorWidgets.cpp"
+"$MOC" -I"$H" "$H/editor/ParamSlider.hpp" -o "$WORK/moc_ParamSlider2.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/previewaspect_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/ParamSlider.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
+	"$WORK/moc_EditorWidgets.cpp" "$WORK/moc_ParamSlider2.cpp" \
+	-o "$WORK/previewaspect_test" $LF
+
 # Does the Display dropdown point at the monitor the recording area lives on?
 # Two independent lists (OBS's and Qt's) name the same displays.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -274,6 +285,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/regionoverlay_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/startupsplash_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/monitormatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/canvasfit_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/previewaspect_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/projectroundtrip_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/zoomkeyframes_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/component_test" || rc=1

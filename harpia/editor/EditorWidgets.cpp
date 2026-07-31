@@ -1,4 +1,6 @@
 #include "EditorWidgets.hpp"
+
+#include "CanvasFit.hpp"
 #include "TimeText.hpp"
 
 #include <QMouseEvent>
@@ -78,6 +80,24 @@ QRect PreviewCanvas::displayRect() const
 	return QRect((width() - dw) / 2, (height() - dh) / 2, dw, dh);
 }
 
+// Where the frame is actually painted. Normally identical to displayRect(): the
+// frame is rendered at the canvas shape, so fitting it into a rect of that shape
+// changes nothing.
+//
+// It differs only when the two disagree -- a frame left over from before a
+// resolution change, say -- and then this letterboxes rather than distorts.
+// Stretching a picture to fit a box it does not belong in is never the right
+// answer, and it is the one thing a preview must not do: it is the reference
+// for every framing decision made against it.
+QRect PreviewCanvas::frameRect() const
+{
+	const QRect d = displayRect();
+	if (frame_.isNull() || d.isEmpty())
+		return d;
+	const QRect r = fitRectInCanvas(frame_.size(), d.size());
+	return r.isEmpty() ? d : r.translated(d.topLeft());
+}
+
 QRect PreviewCanvas::videoToWidget(const QRect &r) const
 {
 	const QRect d = displayRect();
@@ -108,7 +128,7 @@ void PreviewCanvas::paintEvent(QPaintEvent *)
 	p.fillRect(rect(), QColor(0x0d, 0x0e, 0x11));
 	const QRect d = displayRect();
 	if (!frame_.isNull())
-		p.drawImage(d, frame_);
+		p.drawImage(frameRect(), frame_);
 
 	// Full editing: dashed outline of the clip being manipulated (canvas px ->
 	// widget px), so it's obvious what scroll/drag will move.

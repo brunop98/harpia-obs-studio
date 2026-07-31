@@ -1751,7 +1751,7 @@ void VideoEditorWindow::setActiveSource(int id)
 	// sized from the primary, and re-shaping the canvas to whichever source was
 	// last selected made the other clips draw stretched into it -- the preview
 	// stopped describing the file that would come out.
-	const QSize pv = multiCut() ? multiCutCanvasSize() : QSize(s->width, s->height);
+	const QSize pv = previewCanvasSize();
 	canvas_->setVideoSize(pv.width(), pv.height());
 	timeline_->setDuration(s->durationMs);
 	tracks_->setDuration(s->durationMs);
@@ -2294,12 +2294,10 @@ QSize VideoEditorWindow::previewRenderSize(QSize canvas) const
 		return canvas;
 	const double dpr = canvas_->devicePixelRatioF() > 0.0 ? canvas_->devicePixelRatioF() : 1.0;
 	const int wantW = int(std::lround(canvas_->width() * dpr));
-	if (wantW >= canvas.width())
-		return canvas; // the area is bigger than the project: nothing to save
-	// Keep the aspect exactly, and never go below a size that is still legible.
-	const double k = std::max(0.2, double(wantW) / canvas.width());
-	return QSize(std::max(160, int(std::lround(canvas.width() * k))),
-		     std::max(90, int(std::lround(canvas.height() * k))));
+	// Keeps the aspect exactly, and never goes below a size that is still
+	// legible. Shared with the tests, because clamping the two sides separately
+	// is precisely how a tall project came out stretched.
+	return reducedRenderSize(canvas, wantW);
 }
 
 QSize VideoEditorWindow::multiCutCanvasSize() const
@@ -2310,6 +2308,25 @@ QSize VideoEditorWindow::multiCutCanvasSize() const
 	// a file nobody is going to get.
 	if (!sources_.empty() && sources_.front().width > 0 && sources_.front().height > 0)
 		return QSize(sources_.front().width, sources_.front().height);
+	return QSize(1920, 1080);
+}
+
+// The shape the PREVIEW should have, which is the shape the current mode's
+// output will have -- and those are three different things:
+//   Full editing : the project canvas (that is what the project resolution is);
+//   Multi-Cut    : the primary clip, which is the canvas the exporter builds;
+//   Simple Trim  : the active source, written at its own size.
+// Getting this wrong does not merely mislead, it distorts: the preview widget
+// letterboxes the composited frame into this shape.
+QSize VideoEditorWindow::previewCanvasSize()
+{
+	if (fullEdit())
+		return timelineCanvasSize();
+	if (multiCut())
+		return multiCutCanvasSize();
+	const EditorSource *s = sourceById(activeSourceId_);
+	if (s && s->width > 0 && s->height > 0)
+		return QSize(s->width, s->height);
 	return QSize(1920, 1080);
 }
 
@@ -3258,7 +3275,15 @@ void VideoEditorWindow::applyProjectFormat()
 	//
 	// The canvas is told its new size first: it letterboxes to that aspect, and
 	// the crop rectangle and the preview-drag maths are expressed against it.
-	const QSize c = timelineCanvasSize();
+	//
+	// previewCanvasSize(), not timelineCanvasSize(): the project resolution is
+	// the FULL EDITING output. Simple Trim writes the active source at its own
+	// size and Multi-Cut takes its shape from the primary clip, so handing
+	// either of them the project's shape made the preview claim a frame the
+	// export would never produce -- and the picture was then drawn stretched
+	// into it. Setting a 9:16 project while trimming a 16:9 clip is exactly
+	// that case.
+	const QSize c = previewCanvasSize();
 	if (canvas_)
 		canvas_->setVideoSize(c.width(), c.height());
 	if (fullEdit())

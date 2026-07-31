@@ -22,6 +22,7 @@
 #include <QSize>
 
 #include <algorithm>
+#include <cmath>
 
 namespace harpia {
 
@@ -74,6 +75,32 @@ inline QImage fitIntoCanvas(const QImage &src, QSize canvas)
 	p.setRenderHint(QPainter::SmoothPixmapTransform, true);
 	p.drawImage(fitRectInCanvas(src.size(), canvas), src);
 	return out;
+}
+
+// A reduced version of `canvas` for rendering into, no wider than `wantW`, with
+// the SHAPE kept exactly.
+//
+// The preview renders at the size the widget can actually show rather than the
+// project size, which on a 4K project saves most of the pixels for no visible
+// difference. The subtlety is the floor: clamping width and height against
+// separate minimums silently changes the aspect, and a 720x1280 project
+// squeezed into a narrow panel came out 160x256 -- 0.625 where the project is
+// 0.5625, i.e. the picture stretched. So the floor is applied to the SCALE,
+// once, and both sides follow it.
+inline QSize reducedRenderSize(QSize canvas, int wantW, QSize minSize = QSize(160, 90))
+{
+	if (canvas.width() <= 0 || canvas.height() <= 0)
+		return canvas;
+	if (wantW <= 0 || wantW >= canvas.width())
+		return canvas; // never enlarge: there is nothing to gain
+	double k = double(wantW) / canvas.width();
+	// The smallest scale at which BOTH sides still clear the minimum. Capped at
+	// 1 so a canvas already below the minimum is left alone rather than blown up.
+	const double kMin = std::min(1.0, std::max(double(minSize.width()) / canvas.width(),
+						   double(minSize.height()) / canvas.height()));
+	k = std::max(k, kMin);
+	return QSize(std::max(2, int(std::lround(canvas.width() * k))),
+		     std::max(2, int(std::lround(canvas.height() * k))));
 }
 
 } // namespace harpia

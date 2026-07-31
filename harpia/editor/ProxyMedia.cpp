@@ -171,13 +171,17 @@ private:
 
 		ShareExporter ex;
 		exporter_.store(&ex);
-		// Context-free connections: the lambdas run in this thread, where the
-		// signals are emitted, which is what lets the results below be captured
-		// by reference.
-		QObject::connect(&ex, &ShareExporter::progress,
-				 [this, id = job.sourceId](int pct, double, qint64, qint64) {
-					 emit owner_->progress(id, pct);
-				 });
+		// Both connections name a context object AND force a direct call. The
+		// context is required -- the three-argument context-free connect is gone
+		// in Qt 6.10 -- and the direct call is what makes the lambdas run in
+		// THIS thread, where the signals are emitted, which is in turn what lets
+		// the results below be captured by reference.
+		QObject::connect(
+			&ex, &ShareExporter::progress, owner_,
+			[this, id = job.sourceId](int pct, double, qint64, qint64) {
+				emit owner_->progress(id, pct);
+			},
+			Qt::DirectConnection);
 
 		ShareExporter::Options opts{};
 		opts.maxHeight = kProxyHeight;
@@ -190,11 +194,14 @@ private:
 		bool ok = false;
 		bool canceled = false;
 		QString err;
-		QObject::connect(&ex, &ShareExporter::finished, [&](bool o, bool c, const QString &e) {
-			ok = o;
-			canceled = c;
-			err = e;
-		});
+		QObject::connect(
+			&ex, &ShareExporter::finished, owner_,
+			[&](bool o, bool c, const QString &e) {
+				ok = o;
+				canceled = c;
+				err = e;
+			},
+			Qt::DirectConnection);
 		ex.run(job.path, tmp, opts);
 		exporter_.store(nullptr);
 

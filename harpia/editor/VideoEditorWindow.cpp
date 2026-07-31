@@ -7458,6 +7458,21 @@ void VideoEditorWindow::onPlayTick()
 			playSeg_ = seg;
 			playSourceId_ = segs[seg].sourceId;
 		}
+		// nextFrameAt cannot hold position: it always advances at least one
+		// frame. So when the clock has not yet moved past the frame already on
+		// screen, asking again runs the PICTURE ahead of the TIMELINE -- and
+		// since it is the picture that decides what you see, it sails straight
+		// past the cut's end handle and keeps playing the rest of the source.
+		// It bites whenever a frame lasts longer than a tick: a 15 fps source
+		// against the 30 fps preview timer advanced twice as fast as the output
+		// clock and overran a one-second cut by a full second, as did any cut
+		// slowed below 1x. Hold the frame instead; the clock catches up.
+		if (segSeeker->positionMs() >= 0 && segSeeker->positionMs() >= srcTarget) {
+			tracks_->setPlayhead(outPos);
+			voTrack_->setPlayhead(outPos);
+			cursorTimeLabel_->setText(previewTimeText(srcTarget));
+			return;
+		}
 		// Decode forward to the target source time; only the shown frame is
 		// converted (skipped catch-up frames stay in YUV — see nextFrameAt).
 		const QImage img = segSeeker->nextFrameAt(srcTarget, nullptr, 1280, 720, 240);
@@ -7487,6 +7502,13 @@ void VideoEditorWindow::onPlayTick()
 		target = start;
 	}
 
+	// The same rule as Multi-Cut above: do not ask for a frame the clock has
+	// not reached, or the picture outruns the trimmed region and plays past the
+	// end handle. Most visible at speeds below 1x and on low-frame-rate sources.
+	if (seeker_->positionMs() >= 0 && seeker_->positionMs() >= target) {
+		timeline_->setPlayhead(seeker_->positionMs());
+		return;
+	}
 	// Decode forward to the target time; only the shown frame is converted
 	// (skipped catch-up frames stay in YUV — see nextFrameAt).
 	qint64 ts = -1;

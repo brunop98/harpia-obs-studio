@@ -308,6 +308,12 @@ QImage FrameSeeker::nextFrame(qint64 *outMs, int maxW, int maxH)
 	return img;
 }
 
+// NOTE FOR CALLERS: this always advances by at least one frame. It cannot show
+// you the frame you are already on. A caller stepping a wall clock must check
+// positionMs() first and simply not call when the clock has not yet moved past
+// the current frame -- otherwise the picture outruns the clock, which is how
+// Multi-Cut playback used to sail past a cut's end handle on any source whose
+// frame interval is longer than the tick.
 QImage FrameSeeker::nextFrameAt(qint64 targetMs, qint64 *outMs, int maxW, int maxH, int maxFrames)
 {
 	if (!fmt_ || !dec_ || vIdx_ < 0)

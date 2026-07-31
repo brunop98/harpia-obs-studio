@@ -40,6 +40,11 @@ public:
 	// libav's short name for the video codec ("h264", "vp9", ...). Empty if
 	// unknown. Used to decide whether the file is worth proxying for preview.
 	QString codecName() const { return codecName_; }
+	// The source timestamp of the last frame decoded, or -1 right after a seek.
+	// Sequential playback needs this: nextFrameAt cannot hold position -- it
+	// always advances at least one frame -- so a caller pacing itself against a
+	// clock has to know when NOT to ask. See nextFrameAt.
+	qint64 positionMs() const { return posMs_; }
 
 	// Decode the frame nearest to `ms` and return it as an ARGB32 image scaled to
 	// fit within maxW x maxH (aspect preserved). Empty QImage on failure.

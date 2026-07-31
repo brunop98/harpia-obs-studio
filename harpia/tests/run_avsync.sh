@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build and run the checks that need real media: A/V sync, all four export
-# paths, the preview decoder and the editing proxies.
+# paths, the preview decoder, the editing proxies and Multi-Cut playback.
 #
 #   harpia/tests/run_avsync.sh [workdir]
 #
@@ -83,9 +83,18 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$WORK/moc_ProxyMedia.cpp" "$WORK/moc_ShareExporter.cpp" "$WORK/moc_PreviewDecoder.cpp" \
 	-o "$WORK/proxymedia_test" $LF
 
+# Multi-Cut output playback: a cut must stop at its end handle. Links the real
+# TrackEditor (its segment/output mapping) and a real decoder.
+"$MOC" -I"$H" "$H/editor/TrackEditor.hpp" -o "$WORK/moc_TrackEditor.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/multicutplay_test.cpp" "$H/editor/TrackEditor.cpp" "$H/editor/FrameSeeker.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TrackEditor.cpp" \
+	-o "$WORK/multicutplay_test" $LF
+
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/avsync_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportpaths_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewdecoder_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/proxymedia_test" "$WORK" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/multicutplay_test" "$WORK" || rc=1
 exit $rc

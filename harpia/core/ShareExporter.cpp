@@ -133,7 +133,7 @@ void ShareExporter::run(const QString &inPath, const QString &outPath, Options o
 	t.vInIdx = av_find_best_stream(t.ifmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
 	if (t.vInIdx < 0)
 		return fail(QStringLiteral("The file has no video track to optimize."));
-	t.aInIdx = av_find_best_stream(t.ifmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+	t.aInIdx = opts.dropAudio ? -1 : av_find_best_stream(t.ifmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
 
 	AVStream *vin = t.ifmt->streams[t.vInIdx];
 
@@ -173,7 +173,9 @@ void ShareExporter::run(const QString &inPath, const QString &outPath, Options o
 	t.venc->pix_fmt = AV_PIX_FMT_YUV420P;
 	t.venc->time_base = vin->time_base; // frame pts pass through in this base
 	t.venc->framerate = fr;
-	t.venc->gop_size = (fr.num > 0 && fr.den > 0) ? std::max(1, int(av_q2d(fr) * 2.0)) : 60;
+	t.venc->gop_size = opts.gopFrames > 0
+				   ? opts.gopFrames
+				   : ((fr.num > 0 && fr.den > 0) ? std::max(1, int(av_q2d(fr) * 2.0)) : 60);
 	t.venc->sample_aspect_ratio = t.vdec->sample_aspect_ratio;
 	// x264 knobs: quality-based encode, tuned preset, broadly-compatible profile.
 	av_opt_set(t.venc->priv_data, "preset", opts.preset, 0);

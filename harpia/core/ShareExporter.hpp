@@ -26,6 +26,13 @@ public:
 		int crf;            // x264 constant-quality factor (lower = better/bigger)
 		const char *preset; // x264 speed preset ("veryfast", "medium"…)
 		int audioKbps;      // AAC bitrate when the audio must be re-encoded
+		// Keyframe spacing, in frames. 0 = the sharing default of two seconds.
+		// Editing proxies set this small: the whole point of a proxy is that a
+		// seek never has to decode far, and that is decided here.
+		int gopFrames = 0;
+		// Skip the audio track entirely. For a proxy, which is only ever asked
+		// for pictures -- the real file still supplies the sound.
+		bool dropAudio = false;
 	};
 
 	static Options optionsFor(Level level);

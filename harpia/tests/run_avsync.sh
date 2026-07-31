@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build and run the checks that need real media: A/V sync, all four export
-# paths, and the preview decoder.
+# paths, the preview decoder and the editing proxies.
 #
 #   harpia/tests/run_avsync.sh [workdir]
 #
@@ -73,8 +73,19 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/editor/FrameSeeker.cpp" "$WORK/moc_PreviewDecoder.cpp" \
 	-o "$WORK/previewdecoder_test" $LF
 
+# Editing proxies. Links ShareExporter (the transcode a proxy build is) and the
+# preview decoder it hands the result to.
+"$MOC" -I"$H" "$H/editor/ProxyMedia.hpp" -o "$WORK/moc_ProxyMedia.cpp"
+"$MOC" -I"$H" "$H/core/ShareExporter.hpp" -o "$WORK/moc_ShareExporter.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/proxymedia_test.cpp" "$H/editor/ProxyMedia.cpp" "$H/editor/PreviewDecoder.cpp" \
+	"$H/editor/FrameSeeker.cpp" "$H/core/ShareExporter.cpp" \
+	"$WORK/moc_ProxyMedia.cpp" "$WORK/moc_ShareExporter.cpp" "$WORK/moc_PreviewDecoder.cpp" \
+	-o "$WORK/proxymedia_test" $LF
+
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/avsync_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportpaths_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewdecoder_test" "$WORK" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/proxymedia_test" "$WORK" || rc=1
 exit $rc

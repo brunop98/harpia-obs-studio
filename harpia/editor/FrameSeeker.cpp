@@ -97,6 +97,7 @@ bool FrameSeeker::open(const QString &path, bool fastThumbnails)
 
 	width_ = dec_->width;
 	height_ = dec_->height;
+	codecName_ = QString::fromLatin1(codec->name ? codec->name : "");
 	const AVRational fr = av_guess_frame_rate(fmt_, st, nullptr);
 	fps_ = (fr.num > 0 && fr.den > 0) ? av_q2d(fr) : 30.0;
 	if (fmt_->duration > 0)

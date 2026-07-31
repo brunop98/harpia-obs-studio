@@ -35,7 +35,7 @@ protected:
 				// Latest-wins: whatever the newest request for this source
 				// is at the moment it comes off the queue is the one decoded.
 				req = d_->pending_.take(sourceId);
-				path = d_->paths_.value(sourceId);
+				path = d_->decodePathLocked(sourceId);
 			}
 			if (req.ms < 0 || path.isEmpty())
 				continue;
@@ -115,10 +115,41 @@ void PreviewDecoder::setSource(int sourceId, const QString &path)
 	frameMs_.remove(sourceId);
 }
 
+void PreviewDecoder::setProxy(int sourceId, const QString &proxyPath)
+{
+	QMutexLocker lock(&mutex_);
+	if (proxies_.value(sourceId) == proxyPath)
+		return;
+	if (proxyPath.isEmpty())
+		proxies_.remove(sourceId);
+	else
+		proxies_[sourceId] = proxyPath;
+	cache_.remove(sourceId);
+	frameMs_.remove(sourceId);
+	// Anything queued was for the old file; it would decode the right time from
+	// the wrong place. The next render asks again.
+	pending_.remove(sourceId);
+	queue_.removeAll(sourceId);
+}
+
+// Caller holds the lock.
+QString PreviewDecoder::decodePathLocked(int sourceId) const
+{
+	const QString p = proxies_.value(sourceId);
+	return p.isEmpty() ? paths_.value(sourceId) : p;
+}
+
+QString PreviewDecoder::decodePathFor(int sourceId) const
+{
+	QMutexLocker lock(&mutex_);
+	return decodePathLocked(sourceId);
+}
+
 void PreviewDecoder::removeSource(int sourceId)
 {
 	QMutexLocker lock(&mutex_);
 	paths_.remove(sourceId);
+	proxies_.remove(sourceId);
 	cache_.remove(sourceId);
 	frameMs_.remove(sourceId);
 	pending_.remove(sourceId);
@@ -129,6 +160,7 @@ void PreviewDecoder::clear()
 {
 	QMutexLocker lock(&mutex_);
 	paths_.clear();
+	proxies_.clear();
 	cache_.clear();
 	frameMs_.clear();
 	pending_.clear();

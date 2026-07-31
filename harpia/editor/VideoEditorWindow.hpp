@@ -21,6 +21,8 @@
 
 #include <atomic>
 #include <functional>
+#include <QSet>
+
 #include <memory>
 #include <thread>
 #include <vector>
@@ -54,6 +56,7 @@ class QJsonObject;
 namespace harpia {
 
 class PreviewDecoder;
+class ProxyBuilder;
 
 // A full snapshot of the editor's undoable state. Undo/redo restores one of
 // these; snapshot-based history is simple and robust for this size of state.
@@ -262,6 +265,10 @@ private:
 	void renderPendingPreview();
 	// A frame the decode thread was asked for has arrived.
 	void onPreviewFrameReady(int sourceId, qint64 ms);
+	// Proxy build results, and the one-line status they put in the info label.
+	void onProxyReady(int sourceId, const QString &proxyPath);
+	void onProxyProgress(int sourceId, int percent);
+	void updateProxyStatus();
 
 	// The Unsaved Changes prompt. Returns true when the caller may close.
 	bool confirmDiscardOnClose();
@@ -750,6 +757,12 @@ private:
 	int shownSource_ = -1;
 	bool shownExact_ = true; // false while waiting on the real frame
 	std::unique_ptr<PreviewDecoder> previewDecoder_;
+	// Editing proxies: small, short-GOP stand-ins the PREVIEW decodes from when
+	// a source is too heavy to scrub. Export always uses the original.
+	std::unique_ptr<ProxyBuilder> proxyBuilder_;
+	QHash<int, int> proxyProgress_; // sourceId -> percent, while building
+	QSet<int> proxied_;             // sources now previewing from a proxy
+	bool proxyStatusShown_ = false; // whether the info label is ours to clear
 
 	// Looping playback. Simple Trim: the trimmed region at the global speed
 	// (playAnchorMs_ = source ms at clock zero). Multi-Cut: the assembled output

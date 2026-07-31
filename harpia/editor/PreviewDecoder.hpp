@@ -39,6 +39,15 @@ public:
 	// Register the file behind a source id. Re-registering the same id with a
 	// different path reopens it; the same path is a no-op.
 	void setSource(int sourceId, const QString &path);
+	// Decode this source from `proxyPath` instead of its original file. The
+	// proxy has the same timestamps and duration, so nothing above here changes;
+	// it is just a file that seeks quickly. Empty path = back to the original.
+	// Cached frames from the previous file are dropped: they came out of a
+	// different decode and the two do not have to agree pixel for pixel.
+	void setProxy(int sourceId, const QString &proxyPath);
+	// What the decoder is actually reading for this source -- the proxy if one
+	// is set, otherwise the original.
+	QString decodePathFor(int sourceId) const;
 	void removeSource(int sourceId);
 	void clear();
 
@@ -89,12 +98,14 @@ private:
 	bool sameFrame(int sourceId, qint64 a, qint64 b) const;
 
 	QImage lookupLocked(int sourceId, qint64 ms, int w, int h, bool *exact) const;
+	QString decodePathLocked(int sourceId) const;
 	// Worker side; caller holds the lock.
 	void store(int sourceId, const Request &req, const QImage &img);
 
 	mutable QMutex mutex_;
 	QWaitCondition wake_;
 	QHash<int, QString> paths_;
+	QHash<int, QString> proxies_; // sourceId -> proxy file, when one exists
 	QHash<int, Request> pending_; // latest request per source
 	QVector<int> queue_;          // source ids with work, in arrival order
 	QHash<int, QVector<Cached>> cache_;

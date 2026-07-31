@@ -20,6 +20,7 @@
 #include "ExportOptionsDialog.hpp"
 #include "FrameSeeker.hpp"
 #include "PreviewDecoder.hpp"
+#include "ProxyMedia.hpp"
 #include "LevelMeter.hpp"
 #include "SceneDetector.hpp"
 #include "AudioPreview.hpp"
@@ -1319,6 +1320,24 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(previewDecoder_.get(), &PreviewDecoder::frameReady, this,
 		&VideoEditorWindow::onPreviewFrameReady);
 
+	// Threading alone does not make a 4K seek fast, it only stops it blocking.
+	// For files that are genuinely the wrong shape for scrubbing, a small
+	// short-GOP proxy is built in the background and the preview switches to it
+	// when it is ready. Export never sees it.
+	proxyBuilder_ = std::make_unique<ProxyBuilder>();
+	connect(proxyBuilder_.get(), &ProxyBuilder::ready, this, &VideoEditorWindow::onProxyReady);
+	connect(proxyBuilder_.get(), &ProxyBuilder::progress, this,
+		&VideoEditorWindow::onProxyProgress);
+	connect(proxyBuilder_.get(), &ProxyBuilder::failed, this, [this](int id, const QString &why) {
+		// Not worth a dialog: the editor carries on with the original file,
+		// exactly as it did before proxies existed. The message goes to the log
+		// (main() forwards Qt messages into it) so it is still discoverable.
+		qWarning("harpia: preview proxy failed for source %d: %s", id,
+			 qUtf8Printable(why));
+		proxyProgress_.remove(id);
+		updateProxyStatus();
+	});
+
 	// Undo/redo history: coalesce a burst of edits (a drag, slider sweep) into
 	// one snapshot taken shortly after they settle.
 	histTimer_ = new QTimer(this);
@@ -1668,10 +1687,20 @@ int VideoEditorWindow::addSource(const QString &path)
 	src.durationMs = seeker->durationMs();
 	src.width = seeker->width();
 	src.height = seeker->height();
+	const QString codecName = seeker->codecName();
 	src.seeker = std::move(seeker);
 	const int id = src.id;
-	if (previewDecoder_)
+	if (previewDecoder_) {
 		previewDecoder_->setSource(id, path);
+		// Only files that actually scrub badly: above 1080p, or one of the
+		// slow-to-seek codecs. An ordinary recording is left alone, because a
+		// proxy for it would be a transcode that buys nothing.
+		if (proxyBuilder_ && wantsProxy(src.width, src.height, codecName)) {
+			proxyProgress_[id] = 0;
+			proxyBuilder_->request(id, path);
+			updateProxyStatus();
+		}
+	}
 	auto *thumbs = new TimelineThumbs(this);
 	src.thumbs = thumbs;
 	sources_.push_back(std::move(src));
@@ -1817,6 +1846,8 @@ void VideoEditorWindow::onRemoveSource()
 				it->thumbs->deleteLater();
 			if (previewDecoder_)
 				previewDecoder_->removeSource(id);
+			proxyProgress_.remove(id);
+			proxied_.remove(id);
 			sources_.erase(it);
 			break;
 		}
@@ -7565,6 +7596,64 @@ void VideoEditorWindow::showFrame(int sourceId, qint64 ms)
 	if (multiCut())
 		img = fitIntoCanvas(img, multiCutCanvasSize());
 	setPreviewFrame(img, ms);
+}
+
+// The proxy for a source is on disk: point the preview decoder at it and redraw.
+// Nothing else changes -- the timeline, the model and the exporter all still
+// refer to the original file, which is the only one that will be encoded.
+void VideoEditorWindow::onProxyReady(int sourceId, const QString &proxyPath)
+{
+	if (!previewDecoder_)
+		return;
+	previewDecoder_->setProxy(sourceId, proxyPath);
+	proxyProgress_.remove(sourceId);
+	proxied_.insert(sourceId);
+	if (EditorSource *s = sourceById(sourceId))
+		qInfo("harpia: preview proxy ready for %s", qUtf8Printable(s->name));
+	updateProxyStatus();
+	// The frame on screen came out of the original file; ask for it again so
+	// what is shown is what the preview will keep serving from now on.
+	shownExact_ = false;
+	refreshPreviewAtPlayhead();
+}
+
+void VideoEditorWindow::onProxyProgress(int sourceId, int percent)
+{
+	if (!proxyProgress_.contains(sourceId))
+		return; // finished or removed while this was in flight
+	proxyProgress_[sourceId] = percent;
+	updateProxyStatus();
+}
+
+// One line, in the label the editor already uses for status. Deliberately not a
+// modal or a progress dialog: the proxy is an optimisation running behind you,
+// and the editor is fully usable against the original while it builds.
+void VideoEditorWindow::updateProxyStatus()
+{
+	if (!infoLabel_)
+		return;
+	if (proxyProgress_.isEmpty()) {
+		if (!proxyStatusShown_)
+			return; // never wrote here; leave whatever else did
+		proxyStatusShown_ = false;
+		infoLabel_->clear();
+		return;
+	}
+	int pct = 100;
+	QString name;
+	for (auto it = proxyProgress_.constBegin(); it != proxyProgress_.constEnd(); ++it) {
+		if (it.value() <= pct) {
+			pct = it.value();
+			EditorSource *s = sourceById(it.key());
+			name = s ? s->name : QString();
+		}
+	}
+	const QString what = proxyProgress_.size() > 1
+				     ? QStringLiteral("%1 videos").arg(proxyProgress_.size())
+				     : name;
+	proxyStatusShown_ = true;
+	infoLabel_->setText(
+		QStringLiteral("Preparing %1 for smooth scrubbing… %2%").arg(what).arg(pct));
 }
 
 // A frame the decode thread was asked for has arrived. Re-render the position

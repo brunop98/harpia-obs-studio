@@ -157,6 +157,8 @@ target_sources(
     editor/FrameSeeker.cpp
     editor/PreviewDecoder.cpp
     editor/PreviewDecoder.hpp
+    editor/ProxyMedia.cpp
+    editor/ProxyMedia.hpp
     editor/StillImage.cpp
     editor/StillImage.hpp
     editor/CanvasFit.hpp

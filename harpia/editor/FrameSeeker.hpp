@@ -37,6 +37,9 @@ public:
 	int width() const { return width_; }
 	int height() const { return height_; }
 	double fps() const { return fps_; }
+	// libav's short name for the video codec ("h264", "vp9", ...). Empty if
+	// unknown. Used to decide whether the file is worth proxying for preview.
+	QString codecName() const { return codecName_; }
 
 	// Decode the frame nearest to `ms` and return it as an ARGB32 image scaled to
 	// fit within maxW x maxH (aspect preserved). Empty QImage on failure.
@@ -91,6 +94,7 @@ private:
 	int width_ = 0;
 	int height_ = 0;
 	double fps_ = 0.0;
+	QString codecName_;
 };
 
 } // namespace harpia

@@ -271,6 +271,13 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/deleterouting_test.cpp" -o "$WORK/deleterouting_test" $LF
 
+# The export-finished window: what its thumbnail hands over when dragged, what
+# each Copy button puts on the clipboard, and that no action dismisses it.
+"$MOC" -I"$H" "$H/ui/ExportDoneDialog.hpp" -o "$WORK/moc_ExportDoneDialog.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/exportdone_test.cpp" "$H/ui/ExportDoneDialog.cpp" \
+	"$WORK/moc_ExportDoneDialog.cpp" -o "$WORK/exportdone_test" $LF
+
 # Does the Display dropdown point at the monitor the recording area lives on?
 # Two independent lists (OBS's and Qt's) name the same displays.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -305,6 +312,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/previewaspect_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineoverview_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/filmstrip_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/deleterouting_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/exportdone_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/projectroundtrip_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/zoomkeyframes_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/component_test" || rc=1

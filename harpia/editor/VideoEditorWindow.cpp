@@ -2,6 +2,7 @@
 
 #include <QUuid>
 
+#include "../ui/ExportDoneDialog.hpp"
 #include "../ui/UiIcons.hpp"
 #include "component/BuiltinComponents.hpp"
 #include "component/ComponentRegistry.hpp"
@@ -8174,18 +8175,23 @@ void VideoEditorWindow::onExportFinished(bool ok, bool canceled, const QString &
 
 	emit exported(outPath_);
 
-	QMessageBox box(this);
-	box.setWindowTitle(QStringLiteral("Clip exported"));
-	box.setIcon(QMessageBox::Information);
-	box.setText(QStringLiteral("Saved %1").arg(QDir::toNativeSeparators(outPath_)));
-	QPushButton *openFileBtn = box.addButton(QStringLiteral("Open File"), QMessageBox::ActionRole);
-	QPushButton *openFolderBtn = box.addButton(QStringLiteral("Open Folder"), QMessageBox::ActionRole);
-	box.addButton(QStringLiteral("Done"), QMessageBox::AcceptRole);
-	box.exec();
-	if (box.clickedButton() == openFileBtn)
-		QDesktopServices::openUrl(QUrl::fromLocalFile(outPath_));
-	else if (box.clickedButton() == openFolderBtn)
-		revealInFolder(outPath_);
+	// The thumbnail comes from the FILE THAT WAS JUST WRITTEN, not from the
+	// preview: it is the one picture that proves the export is what you meant,
+	// and it is also what gets dragged out. A little way in rather than at zero,
+	// because the first frame of a cut is often a fade or a black frame.
+	QImage thumb;
+	{
+		FrameSeeker fs;
+		if (fs.open(outPath_)) {
+			const qint64 at = fs.durationMs() > 0 ? fs.durationMs() / 10 : 0;
+			thumb = fs.frameAt(at, 480, 270);
+		}
+		if (thumb.isNull() && canvas_)
+			thumb = canvas_->currentFrame(); // a GIF, or anything that would not reopen
+	}
+
+	ExportDoneDialog dlg(outPath_, thumb, this);
+	dlg.exec();
 
 	accept(); // close the editor
 }

@@ -137,6 +137,8 @@ target_sources(
     ui/MouseFxOverlay.hpp
     ui/ClipLibraryWindow.cpp
     ui/ClipLibraryWindow.hpp
+    ui/ExportDoneDialog.cpp
+    ui/ExportDoneDialog.hpp
     ui/ErrorLogsPanel.cpp
     ui/ErrorLogsPanel.hpp
     ui/MainDevPanel.cpp

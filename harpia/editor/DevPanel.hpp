@@ -16,6 +16,7 @@ class QCheckBox;
 class QDoubleSpinBox;
 class QPushButton;
 class QSpinBox;
+class QTabWidget;
 
 namespace harpia {
 
@@ -116,7 +117,21 @@ private:
 	void applyFullTimeline();
 	void applyKeyframe();
 	void applyColors();
+	// "Reset to defaults" used to mean ALL of them, from any tab -- so touching
+	// one number on the Colors page and wanting it back cost you every other
+	// tweak in the panel. Each section resets on its own now; resetDefaults()
+	// is what the explicit "all tabs" button calls.
 	void resetDefaults();
+	void resetCurrentTab();
+	void resetWindowTab();
+	void resetTrimTab();
+	void resetPreviewTab();
+	void resetInspectorTab();
+	void resetMultiCutTab();
+	void resetKeyframeTab();
+	void resetFullEditTab();
+	void resetVoiceoverTab();
+	void resetColorsTab();
 
 	// One swatch button per palette entry, keyed by the same name used in
 	// QSettings, so adding a colour means touching one table and nothing else.
@@ -209,7 +224,13 @@ private:
 	QSpinBox *voMinClipW_ = nullptr;
 	QSpinBox *voEdgeZone_ = nullptr;
 
-	bool loading_ = false; // guard: setting spin values must not re-apply
+	bool loading_ = false;
+	// The tab bar, and one id per tab in tab order. Ids rather than indices:
+	// two of the pages are only added when their widget exists, so the index of
+	// "Colors" is not a constant.
+	QTabWidget *tabs_ = nullptr;
+	QVector<QString> tabIds_;
+	QPushButton *resetTabBtn_ = nullptr; // guard: setting spin values must not re-apply
 };
 
 } // namespace harpia

@@ -397,11 +397,14 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 	// reaching the Multi-Cut or Voiceover numbers meant scrolling past all the
 	// others; each section is now a page of its own.
 	auto *tabs = new QTabWidget(this);
+	tabs_ = tabs;
 	tabs->setDocumentMode(true);
 
 	// Each page scrolls independently, so a long section stays usable in a short
 	// window and the tab bar never moves.
-	auto addPage = [&](const QString &title, const QString &blurb) {
+	// `id` is what Reset uses to find the section again. Not the index: two of
+	// the pages only exist when their widget does, so no index is a constant.
+	auto addPage = [&](const QString &id, const QString &title, const QString &blurb) {
 		auto *page = new QWidget;
 		auto *pv = new QVBoxLayout(page);
 		pv->setContentsMargins(12, 10, 12, 10);
@@ -424,13 +427,14 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		sc->setWidgetResizable(true);
 		sc->setFrameShape(QFrame::NoFrame);
 		tabs->addTab(sc, title);
+		tabIds_.append(id);
 		return form;
 	};
 
 	// Window-level toolbar tweaks (not part of any timeline layout struct).
 	const EditorChromeParams ch = loadChrome();
 	QFormLayout *winForm = addPage(
-		QStringLiteral("Window"),
+		QStringLiteral("window"), QStringLiteral("Window"),
 		QStringLiteral("Toolbar and panel sizing for the editor window itself."));
 	winForm->addRow(QStringLiteral("Button height"),
 			winBtnH_ = spin(16, 64, ch.buttonH, &DevPanel::applyChrome));
@@ -456,7 +460,7 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 	winForm->addRow(QString(), winPowerSave_);
 
 	const TimelineLayoutParams tl = timeline_->layoutParams();
-	QFormLayout *tlForm = addPage(QStringLiteral("Trim"),
+	QFormLayout *tlForm = addPage(QStringLiteral("trim"), QStringLiteral("Trim"),
 				      QStringLiteral("The single-range timeline in Simple Trim mode."));
 	tlForm->addRow(QStringLiteral("Side padding"),
 		       tlPad_ = spin(0, 64, tl.pad, &DevPanel::applyTimeline));
@@ -474,7 +478,7 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		       tlMaxZoom_ = dspin(1.0, 256.0, tl.maxZoom, &DevPanel::applyTimeline));
 
 	const PreviewLayoutParams pv = preview_->layoutParams();
-	QFormLayout *pvForm = addPage(QStringLiteral("Preview"),
+	QFormLayout *pvForm = addPage(QStringLiteral("preview"), QStringLiteral("Preview"),
 				      QStringLiteral("The video preview, shared by every mode."));
 	pvForm->addRow(QStringLiteral("Preview min width"),
 		       pvW_ = spin(160, 1920, pv.minW, &DevPanel::applyPreview));
@@ -484,7 +488,7 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 	const TrackLayoutParams tr = tracks_->layoutParams();
 	const EditorInspectorParams ip = loadInspector();
 	QFormLayout *insForm = addPage(
-		QStringLiteral("Inspector"),
+		QStringLiteral("inspector"), QStringLiteral("Inspector"),
 		QStringLiteral("The properties panel on the right. Open width is what it "
 			       "gets the first time you show it; drag the splitter to override."));
 	insForm->addRow(QStringLiteral("Minimum width"),
@@ -503,7 +507,7 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 			insScriptH_ = spin(48, 400, ip.scriptListH, &DevPanel::applyInspector));
 
 	QFormLayout *trForm = addPage(
-		QStringLiteral("Multi-Cut"),
+		QStringLiteral("multicut"), QStringLiteral("Multi-Cut"),
 		QStringLiteral("The source and output tracks in Multi-Cut mode."));
 	trForm->addRow(QStringLiteral("Margin"),
 		       trMargin_ = spin(0, 64, tr.margin, &DevPanel::applyTracks));
@@ -538,7 +542,7 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		// window applies them whenever it builds one.
 		const KeyframeLayoutParams kf = loadKeyframe();
 		QFormLayout *kfForm = addPage(
-			QStringLiteral("Keyframes"),
+			QStringLiteral("keyframes"), QStringLiteral("Keyframes"),
 			QStringLiteral("The per-channel keyframe lanes (Keyframes… on a clip)."));
 		kfForm->addRow(QStringLiteral("Lane margin"),
 			       kfMargin_ = spin(0, 40, kf.margin, &DevPanel::applyKeyframe));
@@ -570,7 +574,7 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		// them back keeps the boxes in step with what's on screen.
 		const TimelineViewParams ft = fullTimeline_->layoutParams();
 		QFormLayout *ftForm =
-			addPage(QStringLiteral("Full editing"),
+			addPage(QStringLiteral("fulledit"), QStringLiteral("Full editing"),
 				QStringLiteral("The multi-track timeline in Full editing mode."));
 		ftForm->addRow(QStringLiteral("Track header width"),
 			       ftGutterW_ = spin(60, 320, ft.gutterW, &DevPanel::applyFullTimeline));
@@ -604,7 +608,7 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 			       ftMaxZoom_ = dspin(1.0, 512.0, ft.maxZoom, &DevPanel::applyFullTimeline));
 	}
 
-	QFormLayout *voForm = addPage(QStringLiteral("Voiceover"),
+	QFormLayout *voForm = addPage(QStringLiteral("voiceover"), QStringLiteral("Voiceover"),
 				      QStringLiteral("The narration track under the editing area."));
 	voForm->addRow(QStringLiteral("Margin"),
 		       voMargin_ = spin(0, 48, vo.margin, &DevPanel::applyVoice));
@@ -622,7 +626,7 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 	// as a palette rather than as a list of hex strings.
 	colors_ = loadColors();
 	QFormLayout *colForm = addPage(
-		QStringLiteral("Colors"),
+		QStringLiteral("colors"), QStringLiteral("Colors"),
 		QStringLiteral("The editor palette, shared by all three track widgets. Click a "
 			       "swatch to pick a new colour — it applies to the timeline "
 			       "immediately."));
@@ -660,11 +664,22 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		if (want >= 0 && want < tabs->count())
 			tabs->setCurrentIndex(want);
 	}
-	connect(tabs, &QTabWidget::currentChanged, this, [](int i) {
+	auto syncResetLabel = [this]() {
+		if (!resetTabBtn_ || !tabs_)
+			return;
+		const QString name = tabs_->tabText(tabs_->currentIndex());
+		resetTabBtn_->setText(QStringLiteral("Reset “%1”").arg(name));
+		resetTabBtn_->setToolTip(
+			QStringLiteral("Restore the shipped values for the %1 page only. "
+				       "Every other page keeps its settings.")
+				.arg(name));
+	};
+	connect(tabs, &QTabWidget::currentChanged, this, [this, syncResetLabel](int i) {
 		QSettings st = devSettings();
 		st.beginGroup(QStringLiteral("devLayout"));
 		st.setValue(QStringLiteral("tab"), i);
 		st.endGroup();
+		syncResetLabel();
 	});
 
 	auto *outer = new QVBoxLayout(this);
@@ -681,18 +696,28 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 
 	auto *btnRow = new QHBoxLayout;
 	btnRow->setContentsMargins(10, 6, 10, 8);
-	auto *resetBtn = new QPushButton(QStringLiteral("Reset to defaults"), this);
-	connect(resetBtn, &QPushButton::clicked, this, &DevPanel::resetDefaults);
-	btnRow->addWidget(resetBtn);
+	// Named after the tab it will act on, because a button labelled "Reset to
+	// defaults" sitting under nine tabs does not say which of them it means --
+	// and it used to mean all nine, which is how one unwanted colour cost you
+	// every other tweak in the panel.
+	resetTabBtn_ = new QPushButton(this);
+	connect(resetTabBtn_, &QPushButton::clicked, this, &DevPanel::resetCurrentTab);
+	btnRow->addWidget(resetTabBtn_);
+	auto *resetAllBtn = new QPushButton(QStringLiteral("Reset all tabs"), this);
+	resetAllBtn->setToolTip(QStringLiteral("Restore the shipped values on every page."));
+	connect(resetAllBtn, &QPushButton::clicked, this, &DevPanel::resetDefaults);
+	btnRow->addWidget(resetAllBtn);
 	btnRow->addStretch(1);
 	auto *closeBtn = new QPushButton(QStringLiteral("Close"), this);
 	connect(closeBtn, &QPushButton::clicked, this, &QDialog::close);
 	btnRow->addWidget(closeBtn);
 	outer->addLayout(btnRow);
 
+	syncResetLabel(); // the panel opens on a remembered tab, so name it now
+
 	// Wide enough for all eight tab labels; below this the tab bar turns into a
 	// pair of scroll arrows and half the sections stop being discoverable.
-	resize(660, 680);
+	resize(700, 680);
 }
 
 void DevPanel::applyTimeline()
@@ -798,86 +823,188 @@ void DevPanel::applyChrome()
 	emit chromeChanged(p);
 }
 
-void DevPanel::resetDefaults()
+// Each section restores its own struct defaults and then goes through the SAME
+// apply function the spin boxes use. That is what keeps a reset and a hand edit
+// from drifting apart: there is one path from widget values to the app, and
+// reset walks it rather than duplicating the save-and-broadcast half.
+//
+// loading_ is held across the setValue calls so the apply fires once at the end
+// instead of once per box.
+
+void DevPanel::resetWindowTab()
+{
+	const EditorChromeParams d;
+	loading_ = true;
+	winBtnH_->setValue(d.buttonH);
+	winTcFont_->setValue(d.timecodeFontPx);
+	winInsFont_->setValue(d.inspectorFontPx);
+	winSpeedW_->setValue(d.speedSliderMinW);
+	winSpinW_->setValue(d.speedSpinW);
+	winPowerSave_->setChecked(d.powerSaveOnBlur);
+	loading_ = false;
+	applyChrome();
+}
+
+void DevPanel::resetTrimTab()
+{
+	const TimelineLayoutParams d;
+	loading_ = true;
+	tlPad_->setValue(d.pad);
+	tlBarTop_->setValue(d.barTop);
+	tlBarH_->setValue(d.barH);
+	tlHandleW_->setValue(d.handleW);
+	tlTileGap_->setValue(d.tileGap);
+	tlFontPx_->setValue(d.fontPx);
+	tlMaxZoom_->setValue(d.maxZoom);
+	loading_ = false;
+	applyTimeline();
+}
+
+void DevPanel::resetPreviewTab()
+{
+	const PreviewLayoutParams d;
+	loading_ = true;
+	pvW_->setValue(d.minW);
+	pvH_->setValue(d.minH);
+	loading_ = false;
+	applyPreview();
+}
+
+void DevPanel::resetInspectorTab()
+{
+	const EditorInspectorParams d;
+	loading_ = true;
+	insMinW_->setValue(d.minWidth);
+	insOpenW_->setValue(d.openWidth);
+	insMargin_->setValue(d.margin);
+	insSpacing_->setValue(d.spacing);
+	insLabelSp_->setValue(d.labelSpacing);
+	insRowSp_->setValue(d.rowSpacing);
+	insScriptH_->setValue(d.scriptListH);
+	loading_ = false;
+	applyInspector();
+}
+
+void DevPanel::resetMultiCutTab()
+{
+	const TrackLayoutParams d;
+	loading_ = true;
+	trMargin_->setValue(d.margin);
+	trCaptionH_->setValue(d.captionH);
+	trSrcH_->setValue(d.srcH);
+	trTrackGap_->setValue(d.trackGap);
+	trOutH_->setValue(d.outH);
+	trSegGap_->setValue(d.segGap);
+	trMinSegW_->setValue(d.minSegW);
+	trHardMinSegW_->setValue(d.hardMinSegW);
+	trTileGap_->setValue(d.tileGap);
+	trCaptionFontPx_->setValue(d.captionFontPx);
+	trSegFontPx_->setValue(d.segFontPx);
+	trMaxZoom_->setValue(d.maxZoom);
+	loading_ = false;
+	applyTracks();
+}
+
+void DevPanel::resetKeyframeTab()
+{
+	if (!kfMargin_)
+		return; // the page only exists when the editor offers keyframes
+	const KeyframeLayoutParams d;
+	loading_ = true;
+	kfMargin_->setValue(d.margin);
+	kfRulerH_->setValue(d.rulerH);
+	kfGrab_->setValue(d.grab);
+	kfDiamond_->setValue(d.diamond);
+	kfLaneMinH_->setValue(d.laneMinH);
+	kfMaxZoom_->setValue(d.maxZoom);
+	loading_ = false;
+	applyKeyframe();
+}
+
+void DevPanel::resetFullEditTab()
+{
+	if (!ftGutterW_)
+		return; // no Full-editing timeline in this window
+	const TimelineViewParams d;
+	loading_ = true;
+	ftGutterW_->setValue(d.gutterW);
+	ftRulerH_->setValue(d.rulerH);
+	ftVideoLaneH_->setValue(d.videoLaneH);
+	ftAudioLaneH_->setValue(d.audioLaneH);
+	ftLaneGap_->setValue(d.laneGap);
+	ftMargin_->setValue(d.margin);
+	ftMinClipW_->setValue(d.minClipW);
+	ftSnapPx_->setValue(d.snapPx);
+	ftDropBandPx_->setValue(d.dropBandPx);
+	ftSegFontPx_->setValue(d.segFontPx);
+	ftMaxZoom_->setValue(d.maxZoom);
+	loading_ = false;
+	applyFullTimeline();
+}
+
+void DevPanel::resetVoiceoverTab()
+{
+	const VoiceoverLayoutParams d;
+	loading_ = true;
+	voMargin_->setValue(d.margin);
+	voCaptionH_->setValue(d.captionH);
+	voTrackH_->setValue(d.trackH);
+	voMinClipW_->setValue(d.minClipW);
+	voEdgeZone_->setValue(d.edgeZone);
+	loading_ = false;
+	applyVoice();
+}
+
+void DevPanel::resetColorsTab()
 {
 	colors_ = EditorColors(); // the struct's defaults are the shipped palette
 	for (const ColorRow &r : colorRows_)
 		paintSwatch(r);
 	applyColors();
+}
 
-	const TimelineLayoutParams tl; // struct defaults ARE the app defaults
-	const TrackLayoutParams tr;
-	const VoiceoverLayoutParams vo;
-	const PreviewLayoutParams pv;
-	loading_ = true;
-	tlPad_->setValue(tl.pad);
-	tlBarTop_->setValue(tl.barTop);
-	tlBarH_->setValue(tl.barH);
-	tlHandleW_->setValue(tl.handleW);
-	tlTileGap_->setValue(tl.tileGap);
-	tlFontPx_->setValue(tl.fontPx);
-	tlMaxZoom_->setValue(tl.maxZoom);
-	pvW_->setValue(pv.minW);
-	pvH_->setValue(pv.minH);
-	trMargin_->setValue(tr.margin);
-	trCaptionH_->setValue(tr.captionH);
-	trSrcH_->setValue(tr.srcH);
-	trTrackGap_->setValue(tr.trackGap);
-	trOutH_->setValue(tr.outH);
-	trSegGap_->setValue(tr.segGap);
-	trMinSegW_->setValue(tr.minSegW);
-	trHardMinSegW_->setValue(tr.hardMinSegW);
-	trTileGap_->setValue(tr.tileGap);
-	trCaptionFontPx_->setValue(tr.captionFontPx);
-	trSegFontPx_->setValue(tr.segFontPx);
-	trMaxZoom_->setValue(tr.maxZoom);
-	voMargin_->setValue(vo.margin);
-	voCaptionH_->setValue(vo.captionH);
-	voTrackH_->setValue(vo.trackH);
-	voMinClipW_->setValue(vo.minClipW);
-	voEdgeZone_->setValue(vo.edgeZone);
-	const EditorChromeParams ch; // struct defaults ARE the shipped defaults
-	winBtnH_->setValue(ch.buttonH);
-	winTcFont_->setValue(ch.timecodeFontPx);
-	winInsFont_->setValue(ch.inspectorFontPx);
-	winSpeedW_->setValue(ch.speedSliderMinW);
-	winSpinW_->setValue(ch.speedSpinW);
-	winPowerSave_->setChecked(ch.powerSaveOnBlur);
-	const EditorInspectorParams ipd;
-	insMinW_->setValue(ipd.minWidth);
-	insOpenW_->setValue(ipd.openWidth);
-	insMargin_->setValue(ipd.margin);
-	insSpacing_->setValue(ipd.spacing);
-	insLabelSp_->setValue(ipd.labelSpacing);
-	insRowSp_->setValue(ipd.rowSpacing);
-	insScriptH_->setValue(ipd.scriptListH);
-	const TimelineViewParams ft; // Full-editing timeline defaults
-	if (ftGutterW_) {
-		ftGutterW_->setValue(ft.gutterW);
-		ftRulerH_->setValue(ft.rulerH);
-		ftVideoLaneH_->setValue(ft.videoLaneH);
-		ftAudioLaneH_->setValue(ft.audioLaneH);
-		ftLaneGap_->setValue(ft.laneGap);
-		ftMargin_->setValue(ft.margin);
-		ftMinClipW_->setValue(ft.minClipW);
-		ftSnapPx_->setValue(ft.snapPx);
-		ftDropBandPx_->setValue(ft.dropBandPx);
-		ftSegFontPx_->setValue(ft.segFontPx);
-		ftMaxZoom_->setValue(ft.maxZoom);
-	}
-	loading_ = false;
-	timeline_->setLayoutParams(tl);
-	tracks_->setLayoutParams(tr);
-	voice_->setLayoutParams(vo);
-	preview_->setLayoutParams(pv);
-	if (fullTimeline_)
-		fullTimeline_->setLayoutParams(ft);
-	saveFrom(tl, tr, vo, pv);
-	saveChrome(ch);
-	saveInspector(ipd);
-	saveFullTimeline(ft);
-	emit chromeChanged(ch);
-	emit inspectorChanged(ipd);
+// The page in front of you, and nothing else.
+void DevPanel::resetCurrentTab()
+{
+	if (!tabs_)
+		return;
+	const int i = tabs_->currentIndex();
+	if (i < 0 || i >= tabIds_.size())
+		return;
+	const QString id = tabIds_.at(i);
+	if (id == QLatin1String("window"))
+		resetWindowTab();
+	else if (id == QLatin1String("trim"))
+		resetTrimTab();
+	else if (id == QLatin1String("preview"))
+		resetPreviewTab();
+	else if (id == QLatin1String("inspector"))
+		resetInspectorTab();
+	else if (id == QLatin1String("multicut"))
+		resetMultiCutTab();
+	else if (id == QLatin1String("keyframes"))
+		resetKeyframeTab();
+	else if (id == QLatin1String("fulledit"))
+		resetFullEditTab();
+	else if (id == QLatin1String("voiceover"))
+		resetVoiceoverTab();
+	else if (id == QLatin1String("colors"))
+		resetColorsTab();
+}
+
+// Every page, for when that is genuinely what you want. Expressed as the sum of
+// the parts so the two can never disagree about what a default is.
+void DevPanel::resetDefaults()
+{
+	resetWindowTab();
+	resetTrimTab();
+	resetPreviewTab();
+	resetInspectorTab();
+	resetMultiCutTab();
+	resetKeyframeTab();
+	resetFullEditTab();
+	resetVoiceoverTab();
+	resetColorsTab();
 }
 
 } // namespace harpia

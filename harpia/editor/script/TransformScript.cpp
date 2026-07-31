@@ -431,6 +431,15 @@ TlTransform TransformEvaluator::apply(const ClipScript &, const TlTransform &bas
 	return base; // scripts are inert; hand-set transforms and keyframes still work
 }
 
+// The header declares both, and TransformScriptComponent calls THIS one -- so
+// leaving it out of the stub made a no-QuickJS build fail to link, which is
+// exactly what the note at the top of this file promises will not happen.
+TlTransform TransformEvaluator::applyAt(const ClipScript &, const TlTransform &base, qint64, qint64,
+					const ScriptContext &)
+{
+	return base;
+}
+
 #endif
 
 } // namespace harpia

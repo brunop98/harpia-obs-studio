@@ -283,6 +283,29 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/diskspace_test.cpp" -o "$WORK/diskspace_test" $LF
 
+# Dev panel: "Reset to defaults" must mean the tab you are on. Links the real
+# panel and the four track widgets it edits, because the property under test is
+# that the OTHER pages are left alone -- which only the real thing can show.
+# StillImage/FrameSeeker come along with the panel's widgets, hence libav.
+AVCF="$(pkg-config --cflags libavformat libavcodec libavutil libswscale)"
+AVLF="$(pkg-config --libs libavformat libavcodec libavutil libswscale)"
+for h in editor/DevPanel editor/EditorWidgets editor/TrackEditor editor/VoiceoverTrack \
+	 editor/timeline/TimelineView editor/timeline/KeyframeEditor editor/ParamSlider \
+	 editor/component/ComponentPanel; do
+	"$MOC" -I"$H" "$H/$h.hpp" -o "$WORK/moc_dp_$(basename "$h").cpp"
+done
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF $AVCF \
+	"$HERE/devpanelreset_test.cpp" \
+	"$H/editor/DevPanel.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/TrackEditor.cpp" \
+	"$H/editor/VoiceoverTrack.cpp" "$H/editor/timeline/TimelineView.cpp" \
+	"$H/editor/timeline/KeyframeEditor.cpp" "$H/editor/ParamSlider.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/shader/ShaderRenderer.cpp" "$H/editor/script/TransformScript.cpp" \
+	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
+	"$H"/editor/component/*.cpp "$H/editor/StillImage.cpp" "$H/editor/FrameSeeker.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK"/moc_dp_*.cpp \
+	-o "$WORK/devpanelreset_test" $LF $AVLF
+
 # Does the Display dropdown point at the monitor the recording area lives on?
 # Two independent lists (OBS's and Qt's) name the same displays.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -319,6 +342,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/filmstrip_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/deleterouting_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportdone_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/diskspace_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/devpanelreset_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/projectroundtrip_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/zoomkeyframes_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/component_test" || rc=1

@@ -5320,15 +5320,23 @@ void VideoEditorWindow::resizeEvent(QResizeEvent *e)
 	}
 }
 
-// The overview sits across the top of the preview, inset a little so it reads
-// as floating ON the picture rather than being part of its frame.
+// Across the BOTTOM of the preview, inset a little so it reads as floating on
+// the picture rather than being part of its frame.
+//
+// It began at the top and that was the wrong end: what it describes is the
+// timeline, and putting it at the bottom edge puts it directly above the
+// timeline, so the red box and the lanes it stands for are next to each other
+// and the eye travels a few pixels instead of the height of the preview. It
+// stays a child of the preview -- floating, taking no layout space -- because
+// it is only meant to be there while you are moving.
 void VideoEditorWindow::layOutOverview()
 {
 	if (!overview_ || !canvas_)
 		return;
 	const int m = 12;
 	const int w = std::max(120, canvas_->width() - 2 * m);
-	overview_->setGeometry(m, m, w, TimelineOverview::kHeight);
+	const int y = std::max(m, canvas_->height() - TimelineOverview::kHeight - m);
+	overview_->setGeometry(m, y, w, TimelineOverview::kHeight);
 }
 
 // Show the overview for a view that just moved. Only in the modes that have

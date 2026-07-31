@@ -205,6 +205,8 @@ private slots:
 	void onHoverScrub(qint64 ms); // hover preview — never interrupts playback
 	void onPreviewTick();
 	void onCropToggled(bool on);
+	// Delete/Backspace: remove whatever is selected, in whatever mode.
+	void deleteSelection();
 	void onSave();
 	// "Export this clip…" from the timeline's right-click menu: the same Export
 	// window, opened with the sub-range pre-selected.

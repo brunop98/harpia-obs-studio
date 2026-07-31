@@ -43,6 +43,7 @@
 #include "ShortcutRegistry.hpp"
 #include "timeline/KeyframeEditor.hpp"
 #include "CanvasFit.hpp"
+#include "DeleteRouting.hpp"
 #include "timeline/TimelineSlice.hpp"
 #include "timeline/TimelineView.hpp"
 #include "timeline/Transitions.hpp"
@@ -50,6 +51,7 @@
 #include "../Version.hpp"
 
 #include <QCheckBox>
+#include <QAbstractSpinBox>
 #include <QComboBox>
 #include <QDesktopServices>
 #include <QDoubleSpinBox>
@@ -83,6 +85,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QTextEdit>
 #include <QProcess>
 #include <QSpinBox>
 #include <QProgressDialog>
@@ -1441,9 +1444,15 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// Full editing to place it), so this one must not no-op outside the timeline.
 	cmd("edit.paste", "Paste clips or image", "Editing", {QKeySequence::Paste},
 	    [this]() { pasteFromClipboard(); });
-	tlCmd("edit.delete", "Delete selection", "Editing",
-	      {QKeySequence(Qt::Key_Delete), QKeySequence(Qt::Key_Backspace)},
-	      [this]() { timelineView_->deleteSelected(); });
+	// NOT tlCmd: Delete has to work on whatever is selected in whatever mode you
+	// are in. It was bound to the Full-editing timeline alone, and because a
+	// window-level QShortcut is consulted BEFORE the focused widget's
+	// keyPressEvent, the binding swallowed the key everywhere else and then did
+	// nothing -- so Multi-Cut's cuts and the voiceover takes had working Delete
+	// handlers that could never be reached.
+	cmd("edit.delete", "Delete selection", "Editing",
+	    {QKeySequence(Qt::Key_Delete), QKeySequence(Qt::Key_Backspace)},
+	    [this]() { deleteSelection(); });
 	tlCmd("marker.toggle", "Add / remove marker", "Markers", {QKeySequence(Qt::Key_M)},
 	      [this]() { timelineView_->toggleMarkerAtPlayhead(); });
 	// N, not S — S already splits. (Resolve uses N for the magnet too.)
@@ -7855,6 +7864,47 @@ void VideoEditorWindow::onPreviewFrameReady(int sourceId, qint64 ms)
 	if (!valid_ || playing_ || shownExact_ || shownMs_ < 0)
 		return;
 	requestPreview(shownSource_, shownMs_);
+}
+
+// Delete, from the one shortcut that owns the key. A window-level QShortcut
+// beats the focused widget to it, so the routing that focus would have done has
+// to happen here instead. The rule itself lives in DeleteRouting.hpp, where it
+// can be read and tested in one piece.
+void VideoEditorWindow::deleteSelection()
+{
+	if (!valid_)
+		return;
+	const QWidget *f = QApplication::focusWidget();
+	DeleteContext ctx;
+	// Qt normally lets an editable widget veto a shortcut via ShortcutOverride,
+	// so this should be belt and braces -- but the cost of being wrong is a clip
+	// silently deleted while renaming one, and that is not a bet worth taking on
+	// every custom widget in the window behaving.
+	ctx.editingText = qobject_cast<const QLineEdit *>(f) ||
+			  qobject_cast<const QAbstractSpinBox *>(f) ||
+			  qobject_cast<const QPlainTextEdit *>(f) ||
+			  qobject_cast<const QTextEdit *>(f) || qobject_cast<const QComboBox *>(f);
+	ctx.voiceoverFocused = voTrack_ && f == voTrack_;
+	ctx.voiceoverHasSel = voTrack_ && voTrack_->selectedIndex() >= 0;
+	ctx.fullEdit = fullEdit();
+	ctx.timelineHasSel = timelineView_ && timelineView_->hasSelection();
+	ctx.multiCut = multiCut();
+	ctx.multiCutHasSel = tracks_ && tracks_->selectedIndex() >= 0;
+
+	switch (deleteTargetFor(ctx)) {
+	case DeleteTarget::VoiceoverTake:
+		voTrack_->removeSelected();
+		break;
+	case DeleteTarget::TimelineClips:
+		timelineView_->deleteSelected();
+		break;
+	case DeleteTarget::MultiCutSegment:
+		tracks_->removeSelected();
+		break;
+	case DeleteTarget::TextCursor:
+	case DeleteTarget::Nothing:
+		break;
+	}
 }
 
 void VideoEditorWindow::onCropToggled(bool on)

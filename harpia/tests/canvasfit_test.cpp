@@ -128,6 +128,46 @@ int main(int argc, char **argv)
 		   "a reduced-size decode of the right shape is left alone");
 	}
 
+	std::printf("\n-- letterboxing at preview scale frames it identically --\n");
+	{
+		// Multi-Cut used to fit the decoded frame into multiCutCanvasSize(), the
+		// primary source's REAL size -- 3840x2160 on a 4K project. That built a
+		// 33 MB image with a smooth rescale for every scrubbed frame, to be drawn
+		// into a widget a fraction of the size: 24.4 ms a frame measured against
+		// 1.1 ms at preview scale.
+		//
+		// Doing it small is only legitimate if it FRAMES the picture the same
+		// way, so that is what is checked -- the bars in the same proportions,
+		// not merely a smaller image.
+		const QSize full(3840, 2160);
+		const QSize small(1280, 720); // the same shape, preview-sized
+		bool sameFraming = true;
+		for (QSize src : {QSize(960, 720), QSize(720, 1280), QSize(640, 480), QSize(1000, 700)}) {
+			const QRect a = fitRectInCanvas(src, full);
+			const QRect b = fitRectInCanvas(src, small);
+			// Compare as fractions of the canvas, which is what "the same
+			// framing" means when the two canvases differ in size.
+			const double ax = double(a.x()) / full.width(), aw = double(a.width()) / full.width();
+			const double bx = double(b.x()) / small.width(), bw = double(b.width()) / small.width();
+			const double ay = double(a.y()) / full.height(), ah = double(a.height()) / full.height();
+			const double by = double(b.y()) / small.height(), bh = double(b.height()) / small.height();
+			if (std::abs(ax - bx) > 0.004 || std::abs(aw - bw) > 0.004 ||
+			    std::abs(ay - by) > 0.004 || std::abs(ah - bh) > 0.004) {
+				sameFraming = false;
+				std::printf("     MISMATCH %dx%d: full x=%.4f w=%.4f  small x=%.4f w=%.4f\n",
+					    src.width(), src.height(), ax, aw, bx, bw);
+			}
+		}
+		ok(sameFraming, "the bars land in the same proportions at either canvas size");
+
+		// And the result really is the small one -- the point of the change.
+		QImage src(960, 720, QImage::Format_RGBA8888);
+		src.fill(QColor(200, 60, 60));
+		ok(fitIntoCanvas(src, small).size() == small, "and the image produced is preview-sized");
+		ok(fitIntoCanvas(src, full).size() == full,
+		   "CONTROL: fitting into the full canvas really does produce a full-size image");
+	}
+
 	std::printf("\n-- degenerate inputs --\n");
 	{
 		ok(fitRectInCanvas(QSize(0, 0), canvas).isEmpty(), "a source with no area has no rect");

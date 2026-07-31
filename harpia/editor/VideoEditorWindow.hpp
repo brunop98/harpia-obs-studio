@@ -273,6 +273,8 @@ private:
 	// Point a source's playback seeker at its proxy (deferred while playing).
 	void applyProxyToPlayback(int sourceId, const QString &proxyPath);
 	void flushPendingPlaybackProxies();
+	// Start a source's filmstrip, reading frames from `fromPath`.
+	void startFilmstrip(int sourceId, const QString &fromPath);
 
 	// The Unsaved Changes prompt. Returns true when the caller may close.
 	bool confirmDiscardOnClose();
@@ -766,6 +768,7 @@ private:
 	std::unique_ptr<ProxyBuilder> proxyBuilder_;
 	QHash<int, int> proxyProgress_; // sourceId -> percent, while building
 	QSet<int> proxied_;             // sources now previewing from a proxy
+	QSet<int> proxyPending_;        // proxy requested, filmstrip waiting on it
 	QHash<int, QString> pendingPlaybackProxy_; // arrived while playing; applied on stop
 	bool proxyStatusShown_ = false; // whether the info label is ours to clear
 

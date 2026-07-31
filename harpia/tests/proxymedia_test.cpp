@@ -263,6 +263,30 @@ int main(int argc, char **argv)
 		ok(proxMs * 2 < origMs, "the proxy seeks at least twice as fast");
 	}
 
+	std::printf("\n-- and the filmstrip can be built from it --\n");
+	{
+		// The filmstrip is sixty evenly-spaced thumbnails, and building it from
+		// the original is sixty full-size seeks on a background thread while you
+		// are trying to work. Building it from the proxy is only correct if the
+		// thumbnails show the same frames -- a filmstrip that disagrees with the
+		// video is worse than a slow one.
+		FrameSeeker fo, fp;
+		fo.open(src, true); // the fast mode TimelineThumbs uses
+		fp.open(gotPath, true);
+		int agree = 0;
+		const int N = 30;
+		for (int i = 0; i < N; ++i) {
+			const qint64 ms = qint64((i + 0.5) * double(fo.durationMs()) / N);
+			if (channelOf(fo.frameAt(ms, 128, 72)) == channelOf(fp.frameAt(ms, 128, 72)))
+				++agree;
+		}
+		std::printf("     %d of %d thumbnails match the original\n", agree, N);
+		// Not all N: the fast mode can land a frame or two off, and two of these
+		// sit right on a colour change. The claim is that the strip describes the
+		// video, not that it is frame-exact -- which the fast mode never was.
+		ok(agree >= N - 2, "the strip from the proxy shows what the original shows");
+	}
+
 	std::printf("\n-- and the preview decoder switches to it --\n");
 	{
 		PreviewDecoder dec;

@@ -1335,6 +1335,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		qWarning("harpia: preview proxy failed for source %d: %s", id,
 			 qUtf8Printable(why));
 		proxyProgress_.remove(id);
+		proxyPending_.remove(id);
+		// The filmstrip was waiting on a proxy that will not arrive, so build it
+		// from the original after all -- slow is better than never.
+		if (const EditorSource *s = sourceById(id))
+			startFilmstrip(id, s->path);
 		updateProxyStatus();
 	});
 
@@ -1697,6 +1702,7 @@ int VideoEditorWindow::addSource(const QString &path)
 		// proxy for it would be a transcode that buys nothing.
 		if (proxyBuilder_ && wantsProxy(src.width, src.height, codecName)) {
 			proxyProgress_[id] = 0;
+			proxyPending_.insert(id);
 			proxyBuilder_->request(id, path);
 			updateProxyStatus();
 		}
@@ -1732,7 +1738,15 @@ int VideoEditorWindow::addSource(const QString &path)
 			tracks_->setThumbs(s->thumbCache);
 		}
 	});
-	thumbs->start(path, 60, 128, 72);
+	// The filmstrip is sixty evenly-spaced frames, and on a heavy source that is
+	// sixty full-size seeks on a background thread while you are trying to work:
+	// 1182 ms for an eight-second 4K VP9 clip against 70 ms from its proxy, and
+	// the gap widens with length -- past a two-second spacing every thumbnail
+	// stops being able to roll forward and becomes a whole-GOP seek of its own.
+	// So when a proxy is coming, wait for it. Nothing is lost but the few
+	// seconds before the strip appears, and the status line says why.
+	if (!proxyPending_.contains(id))
+		thumbs->start(path, 60, 128, 72);
 	refreshSourceList();
 	return id;
 }
@@ -1847,6 +1861,7 @@ void VideoEditorWindow::onRemoveSource()
 			if (previewDecoder_)
 				previewDecoder_->removeSource(id);
 			proxyProgress_.remove(id);
+			proxyPending_.remove(id);
 			proxied_.remove(id);
 			sources_.erase(it);
 			break;
@@ -7605,7 +7620,15 @@ void VideoEditorWindow::showFrame(int sourceId, qint64 ms)
 		sourceId = activeSourceId_; // fall back to the active source
 	// Trim / Multi-Cut show one source frame; the same quality setting applies,
 	// against the 720p these modes have always previewed at.
-	const QSize dec = previewRenderSize(QSize(1280, 720));
+	//
+	// Multi-Cut decodes into its own canvas SHAPE, reduced to preview size. It
+	// used to decode into a 1280x720 box and then letterbox into
+	// multiCutCanvasSize(), which is the primary source's REAL size -- 3840x2160
+	// for a 4K project. That built a 33 MB image with a smooth rescale on every
+	// scrubbed frame, to be drawn into a widget a fraction of the size:
+	// 24.4 ms a frame measured, against 1.1 ms at preview scale.
+	const QSize mcCanvas = multiCut() ? previewRenderSize(multiCutCanvasSize()) : QSize();
+	const QSize dec = multiCut() ? mcCanvas : previewRenderSize(QSize(1280, 720));
 	shownSource_ = sourceId;
 	shownMs_ = ms;
 
@@ -7619,9 +7642,11 @@ void VideoEditorWindow::showFrame(int sourceId, qint64 ms)
 			// on screen rather than flashing black while the worker catches up
 	// Multi-Cut: a cut from a differently-shaped file goes into the output
 	// letterboxed, so it has to preview that way too. A no-op when every source
-	// is the same shape, which is nearly every project.
-	if (multiCut())
-		img = fitIntoCanvas(img, multiCutCanvasSize());
+	// is the same shape, which is nearly every project. The bars land in the
+	// same proportions whatever size the canvas is, so doing it at preview scale
+	// shows the same framing for a twentieth of the work.
+	if (multiCut() && mcCanvas.isValid())
+		img = fitIntoCanvas(img, mcCanvas);
 	setPreviewFrame(img, ms);
 }
 
@@ -7639,6 +7664,8 @@ void VideoEditorWindow::onProxyReady(int sourceId, const QString &proxyPath)
 	// has to be pointed at the proxy too or pressing Play on a 4K clip still
 	// stutters -- scrubbing was only half of it.
 	applyProxyToPlayback(sourceId, proxyPath);
+	proxyPending_.remove(sourceId);
+	startFilmstrip(sourceId, proxyPath);
 	if (EditorSource *s = sourceById(sourceId))
 		qInfo("harpia: preview proxy ready for %s", qUtf8Printable(s->name));
 	updateProxyStatus();
@@ -7675,6 +7702,16 @@ void VideoEditorWindow::applyProxyToPlayback(int sourceId, const QString &proxyP
 	}
 	if (activeSourceId_ == sourceId)
 		seeker_ = s->seeker.get(); // same object, but be explicit about it
+}
+
+// Kick off the filmstrip for a source, reading from `fromPath`. TimelineThumbs
+// ignores a second start, so calling this after the source already has a strip
+// is harmless.
+void VideoEditorWindow::startFilmstrip(int sourceId, const QString &fromPath)
+{
+	EditorSource *s = sourceById(sourceId);
+	if (s && s->thumbs && !fromPath.isEmpty())
+		s->thumbs->start(fromPath, 60, 128, 72);
 }
 
 void VideoEditorWindow::flushPendingPlaybackProxies()

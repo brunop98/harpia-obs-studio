@@ -1,5 +1,7 @@
 #include "TimelineView.hpp"
 
+#include "editor/Filmstrip.hpp"
+
 #include "../MediaFiles.hpp"
 
 #include "../component/BuiltinComponents.hpp"
@@ -1179,18 +1181,16 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 			// Start at the first tile at or before the visible edge (tiles must stay
 			// on their original grid, or they'd shift as the view scrolls).
 			const int x0 = r.x() + 1;
-			const int step = tileW + 1;
-			const int firstVis = x0 + std::max(0, (content.x() - x0) / step) * step;
-			const int lastVis = std::min(r.right() - 1, content.right() + step);
-			for (int x = firstVis; x < lastVis; x += step) {
-				const double f =
-					std::clamp(double(x + tileW / 2 - r.x()) / std::max(1, r.width()),
-						   0.0, 1.0);
-				const qint64 ms = c.srcStartMs + qint64(f * double(c.srcLenMs()));
-				const int ti = std::clamp(int(double(ms) / sdur * strip.size()), 0,
-							  int(strip.size()) - 1);
-				if (!strip[ti].isNull())
-					p.drawImage(QRect(x, r.y() + 1, tileW, th), strip[ti]);
+			const int lastVis = std::min(r.right() - 1, content.right() + tileW + 1);
+			// One tile per DISTINCT frame. Stepping by tile width repeated the
+			// same thumbnail once a clip was zoomed past the strip's resolution;
+			// this spaces them out instead, each at the moment it came from
+			// (see Filmstrip.hpp).
+			for (const StripTile &t :
+			     filmstripTiles(int(strip.size()), sdur, c.srcStartMs, c.srcLenMs(), x0,
+					    std::max(1, r.width()), tileW, 1, content.x(), lastVis)) {
+				if (!strip[t.index].isNull())
+					p.drawImage(QRect(t.x, r.y() + 1, tileW, th), strip[t.index]);
 			}
 		}
 	} else if (!c.peaks.isEmpty() && c.srcEndMs > 0) {

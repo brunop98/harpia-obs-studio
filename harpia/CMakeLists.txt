@@ -154,6 +154,7 @@ target_sources(
     editor/KeyList.hpp
     editor/ParamSlider.cpp
     editor/ParamSlider.hpp
+    editor/Filmstrip.hpp
     editor/FrameSeeker.cpp
     editor/PreviewDecoder.cpp
     editor/PreviewDecoder.hpp

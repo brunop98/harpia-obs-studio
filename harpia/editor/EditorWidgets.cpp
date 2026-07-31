@@ -1,6 +1,7 @@
 #include "EditorWidgets.hpp"
 
 #include "CanvasFit.hpp"
+#include "Filmstrip.hpp"
 #include "TimeText.hpp"
 
 #include <QMouseEvent>
@@ -1206,12 +1207,16 @@ void Timeline::ensureStripCache(const QRect &bar)
 		const int tileH = local.height();
 		const int tileW = std::max(8, int(tileH * aspect));
 		const int tileGap = std::max(0, lp_.tileGap);
-		const double sliceMs = double(duration_) / n;
-		for (int x = 0; x < local.width(); x += tileW + tileGap) {
-			const qint64 ms = xToMs(bar.x() + x + tileW / 2);
-			const int i = std::clamp(int(ms / sliceMs), 0, n - 1);
-			if (!thumbs_[i].isNull())
-				cp.drawImage(QRect(x, 0, tileW, tileH), thumbs_[i]);
+		// The bar shows [viewStart, viewStart+visible] of the source across its
+		// whole width. filmstripTiles turns that into one tile per DISTINCT
+		// frame, so zooming in spaces the thumbnails out instead of repeating
+		// them (see Filmstrip.hpp).
+		const qint64 fromMs = xToMs(bar.x());
+		const qint64 spanMs = std::max<qint64>(1, xToMs(bar.x() + local.width()) - fromMs);
+		for (const StripTile &t : filmstripTiles(n, duration_, fromMs, spanMs, 0, local.width(),
+							 tileW, tileGap, 0, local.width())) {
+			if (!thumbs_[t.index].isNull())
+				cp.drawImage(QRect(t.x, 0, tileW, tileH), thumbs_[t.index]);
 		}
 	}
 }

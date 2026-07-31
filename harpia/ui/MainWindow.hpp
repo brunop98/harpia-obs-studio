@@ -198,6 +198,11 @@ protected:
 	void changeEvent(QEvent *event) override; // track window activation
 	// Refreshes the app list right before the app dropdown's popup opens.
 	bool eventFilter(QObject *obj, QEvent *event) override;
+	// Free space + destination folder, shown on the recording screen, and the
+	// question asked before starting when there is little room left.
+	void updateDiskLabel();
+	bool confirmDiskSpace();
+	void openOutputFolder();
 	// Guard against silently losing a recording: closing mid-recording asks for
 	// confirmation, stops cleanly, and only closes once the file is finalized.
 	void closeEvent(QCloseEvent *event) override;
@@ -268,6 +273,7 @@ private:
 	WebcamPreview *webcamPreview_ = nullptr;
 
 	// Recording readiness
+	QLabel *diskLabel_ = nullptr; // "12.4 GB free  ·  D:\\Recordings"
 	QWidget *warningsBox_ = nullptr;
 	QVBoxLayout *warningsLayout_ = nullptr;
 	StatusBadge *statusBadge_ = nullptr; // passive Ready/Recording/Paused/Error dot

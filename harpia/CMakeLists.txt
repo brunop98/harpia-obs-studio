@@ -88,6 +88,7 @@ target_sources(
     core/CaptureManager.cpp
     core/CaptureManager.hpp
     core/EncoderFactory.cpp
+    core/DiskSpace.hpp
     core/EncoderFactory.hpp
     core/RecordingController.cpp
     core/RecordingController.hpp

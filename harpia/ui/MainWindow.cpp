@@ -82,6 +82,8 @@
 #include <QStatusBar>
 #include <QToolButton>
 #include <QStorageInfo>
+
+#include "core/DiskSpace.hpp"
 #include <QStyle>
 #include <QThreadPool>
 #include <QTime>
@@ -227,6 +229,20 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	// The behavior dropdowns (Focus app / Webcam / Pause when idle) live in the
 	// middle section's LEFT column — created there, below.
+
+	// ---- Where it goes, and whether it will fit --------------------------
+	// Both halves of "the recording was lost" are silent otherwise: running out
+	// of disk, and writing to a folder you did not mean. Stating them costs one
+	// line and removes the need to go and check.
+	diskLabel_ = new QLabel(central);
+	diskLabel_->setObjectName(QStringLiteral("diskLabel"));
+	diskLabel_->setAlignment(Qt::AlignHCenter);
+	diskLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+	diskLabel_->setCursor(Qt::PointingHandCursor);
+	diskLabel_->setToolTip(QStringLiteral("Free space on the output drive, and where recordings "
+					      "are saved. Click to open the folder."));
+	diskLabel_->installEventFilter(this);
+	root->addWidget(diskLabel_);
 
 	// ---- Recording readiness --------------------------------------------
 	warningsBox_ = new QWidget(central);
@@ -1250,6 +1266,8 @@ void MainWindow::beginRecordFlow()
 	refreshReadiness();
 	if (recordingBlocked_)
 		return;
+	if (!confirmDiskSpace())
+		return;
 
 	const int cd = activePreset().countdownSeconds;
 	if (cd > 0 && countdownOverlay_) {
@@ -1260,6 +1278,59 @@ void MainWindow::beginRecordFlow()
 		return;
 	}
 	beginStart();
+}
+
+// Ask before recording onto a nearly-full drive. Not a block: it is the user's
+// disk and they may know something we do not -- a short take, a drive about to
+// be cleared. But it must be a decision rather than a discovery, because the
+// discovery happens after the thing being recorded has already gone.
+bool MainWindow::confirmDiskSpace()
+{
+	const QString folder = QString::fromStdString(activePreset().outputFolder);
+	const DiskStatus st = diskStatusFor(folder);
+	const QString prompt = lowDiskPrompt(st);
+	if (prompt.isEmpty())
+		return true; // plenty of room, or a drive that will not say
+	QMessageBox box(this);
+	box.setWindowTitle(QStringLiteral("Low disk space"));
+	box.setIcon(st.level == DiskLevel::Critical ? QMessageBox::Warning : QMessageBox::Information);
+	box.setText(prompt);
+	box.setInformativeText(QDir::toNativeSeparators(folder));
+	QPushButton *go = box.addButton(QStringLiteral("Record anyway"), QMessageBox::AcceptRole);
+	QPushButton *openBtn = box.addButton(QStringLiteral("Open folder"), QMessageBox::ActionRole);
+	box.addButton(QStringLiteral("Cancel"), QMessageBox::RejectRole);
+	box.setDefaultButton(go);
+	box.exec();
+	if (box.clickedButton() == openBtn) {
+		// Not a decision: let them go and clear some space, then press Record
+		// again. Silently starting after "Open folder" would be a trap.
+		openOutputFolder();
+		return false;
+	}
+	return box.clickedButton() == go;
+}
+
+void MainWindow::openOutputFolder()
+{
+	const QString folder = QString::fromStdString(activePreset().outputFolder);
+	if (!folder.isEmpty())
+		QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+}
+
+// Refreshed on the readiness tick, which already runs at a sensible rate and
+// already re-stats the folder. Free space moves while you record -- watching it
+// fall is the point.
+void MainWindow::updateDiskLabel()
+{
+	if (!diskLabel_)
+		return;
+	const QString folder = QString::fromStdString(activePreset().outputFolder);
+	const DiskStatus st = diskStatusFor(folder);
+	diskLabel_->setText(diskLine(folder, st));
+	const char *colour = st.level == DiskLevel::Critical ? "#e5484d"
+			     : st.level == DiskLevel::Low   ? "#f5a524"
+							    : "#7d838f";
+	diskLabel_->setStyleSheet(QStringLiteral("color:%1;").arg(QLatin1String(colour)));
 }
 
 void MainWindow::beginStart()
@@ -1755,15 +1826,19 @@ void MainWindow::refreshReadiness()
 			} else if (dir.exists() && !QFileInfo(folder).isWritable()) {
 				hwFolderIssue_ = 2;
 			} else {
-				const QStorageInfo storage(folder);
-				if (storage.isValid() && storage.bytesAvailable() > 0 &&
-				    storage.bytesAvailable() < 500LL * 1024 * 1024)
+				// The same threshold the Record button asks about, from the
+				// same place: a caution that disagreed with the prompt would
+				// be worse than either alone.
+				const DiskStatus st = diskStatusFor(folder);
+				if (st.level == DiskLevel::Low || st.level == DiskLevel::Critical)
 					hwFolderIssue_ = 3;
 			}
 		}
 		hwEncoderOk_ = p.format == RecordingFormat::GIF ||
 			       !EncoderFactory::videoEncoderId(p).empty();
 	}
+
+	updateDiskLabel();
 
 	// --- Output folder --- (state cached above)
 	const QString folder = QString::fromStdString(p.outputFolder);
@@ -1777,8 +1852,11 @@ void MainWindow::refreshReadiness()
 		warnings.push_back({QStringLiteral("Output folder is not writable."),
 				    [this]() { editActivePreset(); }, QStringLiteral("Fix folder")});
 	} else if (hwFolderIssue_ == 3) {
-		warnings.push_back({QStringLiteral("Low disk space (< 500 MB) on the output drive."), nullptr,
-				    QString(), /*blocking=*/false});
+		const DiskStatus st = diskStatusFor(folder);
+		warnings.push_back({QStringLiteral("Low disk space: only %1 free on the output drive.")
+					    .arg(formatBytes(st.freeBytes)),
+				    [this]() { openOutputFolder(); }, QStringLiteral("Open folder"),
+				    /*blocking=*/false});
 	}
 
 	// --- Display / region ---
@@ -2121,6 +2199,12 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 	// turn one on.
 	if (obj == webcamCombo_ && event->type() == QEvent::MouseButtonPress)
 		reloadWebcamCombo();
+	// The disk line names the destination, so clicking it should take you there
+	// -- that is what anyone reading a path on screen wants to do next.
+	if (obj == diskLabel_ && event->type() == QEvent::MouseButtonRelease) {
+		openOutputFolder();
+		return true;
+	}
 	return QMainWindow::eventFilter(obj, event);
 }
 

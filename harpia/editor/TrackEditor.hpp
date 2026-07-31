@@ -102,6 +102,10 @@ public:
 	void removeSelected();
 
 	qint64 totalOutputMs() const;
+	// Move the visible window of the lane the overview is currently showing.
+	// Which lane that is IS the last one that reported, by construction: the
+	// strip only ever displays one of them, and it displays the last to move.
+	void setViewStart(qint64 startMs);
 	qint64 outputStartOf(int index) const; // output-time where segment #index begins
 	// Map an output-time position to (segment index, source ms). Returns -1 when
 	// there are no segments; outMs past the end clamps into the last segment.
@@ -203,6 +207,9 @@ private:
 	int selected_ = -1;      // primary selection (drives resize + the slider value)
 	QSet<int> multiSel_;     // full selection; selected_ is a member when >= 0
 	qint64 playheadOutMs_ = -1;
+	// The lane the last notifyView() described, so a drag on the overview moves
+	// the same one the user is looking at.
+	bool lastViewLaneOutput_ = false;
 
 	// Revision counter bumped on every change to segs_ (add/remove/reorder/trim/
 	// speed). Drives the totalOutputMs and segmentRects memo caches below.

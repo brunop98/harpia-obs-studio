@@ -103,6 +103,18 @@ void TimelineView::animateStep()
 
 // One place that knows what "where I am" means here, so every caller is a
 // single line and none of them can disagree about it.
+void TimelineView::setViewStart(qint64 startMs)
+{
+	viewStart_ = startMs;
+	clampView();
+	// The ease targets have to follow, or the next animation frame would drag
+	// the view back to wherever the last wheel gesture was heading.
+	viewTarget_ = viewStart_;
+	zoomTarget_ = zoom_;
+	update();
+	notifyView();
+}
+
 void TimelineView::notifyView()
 {
 	emit viewChanged(spanMs(), viewStart_, visibleMs(), playheadMs_);

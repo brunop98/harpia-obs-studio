@@ -92,10 +92,28 @@ void TrackEditor::animateScrollStep()
 // One place that knows what "where I am" means for each lane.
 void TrackEditor::notifyView(bool outputLane)
 {
+	lastViewLaneOutput_ = outputLane;
 	if (outputLane)
 		emit viewChanged(totalOutputMs(), outViewStart_, outVisibleMs(), playheadOutMs_);
 	else
 		emit viewChanged(duration_, viewStart_, visibleMs(), -1);
+}
+
+void TrackEditor::setViewStart(qint64 startMs)
+{
+	if (lastViewLaneOutput_) {
+		outViewStart_ = startMs;
+		clampOutView();
+		outViewTarget_ = outViewStart_;
+		outZoomTarget_ = outZoom_;
+	} else {
+		viewStart_ = startMs;
+		clampView();
+		viewTarget_ = viewStart_;
+		zoomTarget_ = zoom_;
+	}
+	update();
+	notifyView(lastViewLaneOutput_);
 }
 
 QSize TrackEditor::sizeHint() const

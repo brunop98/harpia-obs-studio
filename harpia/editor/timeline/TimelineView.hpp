@@ -93,6 +93,10 @@ public:
 	}
 	qint64 timeAtXForTest(int x) const { return xToMs(x); }
 	qint64 visibleMsForTest() const { return visibleMs(); }
+	// Move the visible window so it starts here (the overview dragging it).
+	// Snaps rather than glides: a drag has to track the hand, and easing toward
+	// a target that moves every mouse-move reads as lag.
+	void setViewStart(qint64 startMs);
 	// The span cache and its guard, for the perf regression test. The guard's
 	// re-entrancy has no visible effect -- the numbers stay right either way --
 	// so the only way to pin it is to look at the cache directly.

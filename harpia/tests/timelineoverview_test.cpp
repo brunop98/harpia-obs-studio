@@ -20,6 +20,8 @@
 
 #include <QApplication>
 #include <QImage>
+#include <QMouseEvent>
+#include <QSignalSpy>
 
 #include <cstdio>
 
@@ -134,6 +136,87 @@ int main(int argc, char **argv)
 		ov.showFor(0, 0, 0, -1);
 		ov.finishFadeForTest();
 		ok(!ov.isVisible(), "an empty project never shows the strip");
+	}
+
+	std::printf("\n-- dragging the box moves the view --\n");
+	{
+		// The arithmetic first. A grab keeps its GRIP: picking the box up near
+		// its right edge and moving must slide it, not snap its centre to the
+		// pointer, or every drag would jump before it moved.
+		const qint64 vis = hour / 4;
+		// Grabbed dead centre, pointer at the middle of the bar -> the view is
+		// centred on the middle of the project.
+		const qint64 mid = TimelineOverview::startForDrag(hour, vis, 0.5, bar.center().x(), bar);
+		std::printf("     centre grab at the middle -> start %lld ms (want %lld)\n",
+			    (long long)mid, (long long)(hour / 2 - vis / 2));
+		ok(std::llabs(mid - (hour / 2 - vis / 2)) < 60000, "a centred grab centres the view");
+
+		// Same pointer, grabbed at the box's LEFT edge: the view now starts at
+		// the pointer instead of straddling it.
+		const qint64 fromLeft = TimelineOverview::startForDrag(hour, vis, 0.0, bar.center().x(), bar);
+		ok(std::llabs(fromLeft - hour / 2) < 60000, "grabbing the left edge puts that edge under the pointer");
+		ok(fromLeft > mid, "so the two grabs are genuinely different, not the same answer twice");
+
+		// Dragging past either end is clamped, not scrolled into nothing.
+		ok(TimelineOverview::startForDrag(hour, vis, 0.5, bar.x() - 500, bar) == 0,
+		   "dragging off the left end stops at the beginning");
+		ok(TimelineOverview::startForDrag(hour, vis, 0.5, bar.right() + 500, bar) == hour - vis,
+		   "and off the right end stops at the last full view");
+
+		// Moving the pointer right always moves the view later. This is the
+		// property that makes a drag feel attached to the hand.
+		bool tracks = true;
+		qint64 prev = -1;
+		for (int x = bar.x(); x <= bar.right(); x += 10) {
+			const qint64 st = TimelineOverview::startForDrag(hour, vis, 0.5, x, bar);
+			if (st < prev)
+				tracks = false;
+			prev = st;
+		}
+		ok(tracks, "the view only moves later as the pointer moves right");
+	}
+
+	std::printf("\n-- and the real widget reports it --\n");
+	{
+		TimelineOverview ov;
+		ov.resize(420, TimelineOverview::kHeight);
+		ov.showFor(hour, 0, hour / 4, -1); // looking at the first quarter
+		ov.finishFadeForTest();
+
+		QSignalSpy spy(&ov, &TimelineOverview::viewStartRequested);
+		const QRect bar2 = ov.barRect();
+		const int y = bar2.center().y();
+
+		// Click far to the right of the box: a jump, centred there.
+		const QPointF at(bar2.x() + bar2.width() * 0.8, y);
+		QMouseEvent press(QEvent::MouseButtonPress, at, at, Qt::LeftButton, Qt::LeftButton,
+				  Qt::NoModifier);
+		QApplication::sendEvent(&ov, &press);
+		ok(spy.count() == 1, "a click in the bar asks for a new view start");
+		ok(ov.draggingForTest(), "and begins a drag, so the mouse can carry on");
+		const qint64 jumped = spy.count() ? spy.at(0).at(0).toLongLong() : -1;
+		std::printf("     clicked at 80%% of an hour -> start %lld ms\n", (long long)jumped);
+		ok(jumped > hour / 2, "the view jumped towards the end, where the click was");
+
+		// Drag left; the requested start must come back down.
+		const QPointF to(bar2.x() + bar2.width() * 0.3, y);
+		QMouseEvent move(QEvent::MouseMove, to, to, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+		QApplication::sendEvent(&ov, &move);
+		ok(spy.count() == 2, "moving while held asks again");
+		ok(spy.at(1).at(0).toLongLong() < jumped, "and dragging left moves the view earlier");
+
+		QMouseEvent rel(QEvent::MouseButtonRelease, to, to, Qt::LeftButton, Qt::NoButton,
+				Qt::NoModifier);
+		QApplication::sendEvent(&ov, &rel);
+		ok(!ov.draggingForTest(), "releasing ends the drag");
+
+		// CONTROL: with no button held, a bare move must NOT move the view --
+		// otherwise merely crossing the strip would throw the timeline about.
+		const QPointF elsewhere(bar2.x() + 5.0, y);
+		QMouseEvent hover(QEvent::MouseMove, elsewhere, elsewhere, Qt::NoButton, Qt::NoButton,
+				  Qt::NoModifier);
+		QApplication::sendEvent(&ov, &hover);
+		ok(spy.count() == 2, "CONTROL: hovering across it changes nothing");
 	}
 
 	std::printf("\n-- and the box is painted where it was computed --\n");

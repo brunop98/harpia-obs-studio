@@ -197,9 +197,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	topLayout->setContentsMargins(0, 0, 0, 0);
 	canvas_ = new PreviewCanvas(this);
 	// A child of the preview, so it floats over the picture and is clipped to
-	// it. It takes no mouse events (see TimelineOverview), so nothing under it
-	// loses a click, and it occupies no layout space -- it is positioned by hand
-	// in layOutOverview() whenever the preview resizes.
+	// it, and it occupies no layout space -- layOutOverview() places it by hand
+	// whenever the preview resizes. It does take the mouse, but only while it is
+	// on screen: hidden widgets get no mouse events, so the preview keeps every
+	// click except during the couple of seconds this is up.
 	overview_ = new TimelineOverview(canvas_);
 	canvas_->installEventFilter(this);
 	topLayout->addWidget(canvas_, 1);
@@ -470,6 +471,15 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(timelineView_, &TimelineView::viewChanged, this,
 		&VideoEditorWindow::onTimelineViewChanged);
 	connect(tracks_, &TrackEditor::viewChanged, this, &VideoEditorWindow::onTimelineViewChanged);
+	// Dragging the red box moves the timeline it stands for. The overview does
+	// not know which widget that is, and does not need to: it reports a new
+	// start and the window routes it to whatever is on screen.
+	connect(overview_, &TimelineOverview::viewStartRequested, this, [this](qint64 startMs) {
+		if (fullEdit())
+			timelineView_->setViewStart(startMs);
+		else if (multiCut())
+			tracks_->setViewStart(startMs);
+	});
 	bottomLayout->addWidget(stack_);
 
 	connect(timelineView_, &TimelineView::scrub, this, &VideoEditorWindow::onTimelineScrub);

@@ -1,5 +1,7 @@
 #include "editor/TimelineOverview.hpp"
 
+#include <QEnterEvent>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QTimer>
@@ -18,10 +20,11 @@ constexpr int kRadius = 5;
 
 TimelineOverview::TimelineOverview(QWidget *parent) : QWidget(parent)
 {
-	// Read-only by construction. Anything under it -- the preview, its transform
-	// grips -- keeps every click, so this can float wherever it reads best
-	// without becoming something to work around.
-	setAttribute(Qt::WA_TransparentForMouseEvents, true);
+	// It takes the mouse, because dragging the red box is how you move the view.
+	// That only costs the preview a click while the strip is actually on screen:
+	// hidden widgets receive no mouse events, and it is hidden most of the time.
+	setCursor(Qt::OpenHandCursor);
+	setMouseTracking(true);
 	setFixedHeight(kHeight);
 	setVisible(false);
 
@@ -86,6 +89,29 @@ QRect TimelineOverview::viewportRect(qint64 totalMs, qint64 startMs, qint64 visi
 	return QRect(x, bar.y(), w, bar.height());
 }
 
+qint64 TimelineOverview::msForX(qint64 totalMs, int x, const QRect &bar)
+{
+	if (totalMs <= 0 || bar.width() <= 0)
+		return 0;
+	const double f = std::clamp(double(x - bar.x()) / double(bar.width()), 0.0, 1.0);
+	return qint64(std::llround(f * double(totalMs)));
+}
+
+qint64 TimelineOverview::startForDrag(qint64 totalMs, qint64 visibleMs, double grabFrac, int x,
+				      const QRect &bar)
+{
+	if (totalMs <= 0 || visibleMs <= 0)
+		return 0;
+	// The moment under the pointer, minus however far into the box the pointer
+	// sits. Grabbing the box near its right edge and moving right must slide the
+	// box, not teleport its centre to the cursor.
+	const qint64 under = msForX(totalMs, x, bar);
+	const qint64 want = under - qint64(std::llround(std::clamp(grabFrac, 0.0, 1.0) *
+						       double(visibleMs)));
+	const qint64 maxStart = std::max<qint64>(0, totalMs - visibleMs);
+	return std::clamp<qint64>(want, 0, maxStart);
+}
+
 void TimelineOverview::showFor(qint64 totalMs, qint64 startMs, qint64 visibleMs, qint64 playheadMs)
 {
 	totalMs_ = totalMs;
@@ -135,6 +161,73 @@ void TimelineOverview::finishFadeForTest()
 	if (opacity_ <= 0.001)
 		setVisible(false);
 	update();
+}
+
+void TimelineOverview::mousePressEvent(QMouseEvent *e)
+{
+	if (e->button() != Qt::LeftButton || totalMs_ <= 0) {
+		e->ignore();
+		return;
+	}
+	const QRect bar = barRect();
+	const QRect box = viewportRect(totalMs_, startMs_, visibleMs_, bar);
+	const int x = int(e->position().x());
+	// Inside the box: pick it up where it was grabbed. Outside: treat it as
+	// "put the middle of the view here", which is what clicking a spot on an
+	// overview means everywhere else.
+	grabFrac_ = (!box.isEmpty() && x >= box.x() && x <= box.right() && box.width() > 0)
+			    ? double(x - box.x()) / double(box.width())
+			    : 0.5;
+	dragging_ = true;
+	setCursor(Qt::ClosedHandCursor);
+	idle_->stop(); // never fade out from under a drag
+	startFade(1.0);
+	emit viewStartRequested(startForDrag(totalMs_, visibleMs_, grabFrac_, x, bar));
+	e->accept();
+}
+
+void TimelineOverview::mouseMoveEvent(QMouseEvent *e)
+{
+	if (!dragging_) {
+		e->ignore();
+		return;
+	}
+	emit viewStartRequested(
+		startForDrag(totalMs_, visibleMs_, grabFrac_, int(e->position().x()), barRect()));
+	e->accept();
+}
+
+void TimelineOverview::mouseReleaseEvent(QMouseEvent *e)
+{
+	if (!dragging_) {
+		e->ignore();
+		return;
+	}
+	dragging_ = false;
+	setCursor(Qt::OpenHandCursor);
+	// Under the pointer it stays up; the countdown restarts when the pointer
+	// leaves, which is handled in leaveEvent.
+	if (!underMouse())
+		idle_->start();
+	e->accept();
+}
+
+// Reaching for the strip must not make it disappear. While the pointer is on
+// it, it stays; the countdown restarts the moment the pointer leaves.
+void TimelineOverview::enterEvent(QEnterEvent *e)
+{
+	if (isVisible()) {
+		idle_->stop();
+		startFade(1.0);
+	}
+	QWidget::enterEvent(e);
+}
+
+void TimelineOverview::leaveEvent(QEvent *e)
+{
+	if (isVisible() && !dragging_)
+		idle_->start();
+	QWidget::leaveEvent(e);
 }
 
 void TimelineOverview::paintEvent(QPaintEvent *)

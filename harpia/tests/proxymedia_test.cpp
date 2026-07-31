@@ -196,6 +196,49 @@ int main(int argc, char **argv)
 		ok(aligned, "every sampled timestamp shows the same content in both");
 	}
 
+	std::printf("\n-- and it is safe for PLAYBACK to read, not just scrubbing --\n");
+	{
+		// Playback pulls frames sequentially from the source's own FrameSeeker
+		// and paces itself by its rate, so pointing that at the proxy only works
+		// if the rate matches and the frames come out in the same order at the
+		// same times. A proxy at a different frame rate would play at the wrong
+		// speed while looking perfectly fine frame by frame.
+		FrameSeeker so, sp;
+		so.open(src);
+		sp.open(gotPath);
+		std::printf("     fps original %.3f, proxy %.3f\n", so.fps(), sp.fps());
+		ok(std::abs(so.fps() - sp.fps()) < 0.01, "the frame rates agree");
+
+		// Walk the proxy sequentially from the green section into the blue one
+		// and check the timestamps advance and the colour changes where it
+		// should -- that is the whole of what playback needs from it.
+		ok(sp.seekTo(2500), "the proxy seeks for sequential play");
+		qint64 ts = -1;
+		int frames = 0;
+		char atGreen = '?', atBlue = '?';
+		qint64 lastTs = -1;
+		bool monotonic = true;
+		while (frames < 90) {
+			const QImage f = sp.nextFrame(&ts, 480, 270);
+			if (f.isNull())
+				break;
+			if (lastTs >= 0 && ts < lastTs)
+				monotonic = false;
+			lastTs = ts;
+			if (atGreen == '?' && ts >= 2500)
+				atGreen = channelOf(f);
+			if (ts >= 4500) {
+				atBlue = channelOf(f);
+				break;
+			}
+			++frames;
+		}
+		std::printf("     played %d frames to %lld ms: %c then %c\n", frames, (long long)ts,
+			    atGreen, atBlue);
+		ok(monotonic, "timestamps only move forward");
+		ok(atGreen == 'G' && atBlue == 'B', "and the colours change where the original does");
+	}
+
 	std::printf("\n-- and it is the point: seeking is cheaper --\n");
 	{
 		// Backwards through the clip, which is the worst case: every step

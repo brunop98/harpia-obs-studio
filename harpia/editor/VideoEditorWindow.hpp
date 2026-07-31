@@ -270,6 +270,9 @@ private:
 	void onProxyReady(int sourceId, const QString &proxyPath);
 	void onProxyProgress(int sourceId, int percent);
 	void updateProxyStatus();
+	// Point a source's playback seeker at its proxy (deferred while playing).
+	void applyProxyToPlayback(int sourceId, const QString &proxyPath);
+	void flushPendingPlaybackProxies();
 
 	// The Unsaved Changes prompt. Returns true when the caller may close.
 	bool confirmDiscardOnClose();
@@ -763,6 +766,7 @@ private:
 	std::unique_ptr<ProxyBuilder> proxyBuilder_;
 	QHash<int, int> proxyProgress_; // sourceId -> percent, while building
 	QSet<int> proxied_;             // sources now previewing from a proxy
+	QHash<int, QString> pendingPlaybackProxy_; // arrived while playing; applied on stop
 	bool proxyStatusShown_ = false; // whether the info label is ours to clear
 
 	// Looping playback. Simple Trim: the trimmed region at the global speed

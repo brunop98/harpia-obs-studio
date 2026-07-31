@@ -7315,6 +7315,8 @@ void VideoEditorWindow::stopPlayback()
 		audioPreview_->stop();
 	if (voTrack_ && !voRecording_)
 		voTrack_->clearPlayhead();
+	// A proxy that landed mid-playback is safe to install now.
+	flushPendingPlaybackProxies();
 }
 
 void VideoEditorWindow::onPlayTick()
@@ -7633,6 +7635,10 @@ void VideoEditorWindow::onProxyReady(int sourceId, const QString &proxyPath)
 	previewDecoder_->setProxy(sourceId, proxyPath);
 	proxyProgress_.remove(sourceId);
 	proxied_.insert(sourceId);
+	// Playback reads the source directly rather than through the decoder, so it
+	// has to be pointed at the proxy too or pressing Play on a 4K clip still
+	// stutters -- scrubbing was only half of it.
+	applyProxyToPlayback(sourceId, proxyPath);
 	if (EditorSource *s = sourceById(sourceId))
 		qInfo("harpia: preview proxy ready for %s", qUtf8Printable(s->name));
 	updateProxyStatus();
@@ -7640,6 +7646,45 @@ void VideoEditorWindow::onProxyReady(int sourceId, const QString &proxyPath)
 	// what is shown is what the preview will keep serving from now on.
 	shownExact_ = false;
 	refreshPreviewAtPlayhead();
+}
+
+// Point a source's own FrameSeeker -- the one playback pulls frames from -- at
+// the proxy. Everything that describes the source (its size, its duration, its
+// rate, its path) still comes from the original: the proxy is the same video at
+// the same times, and only the pixels being decoded change. Export never looks
+// here at all; it opens the paths in sources_.
+//
+// Never while playing. A reopen puts the decoder back at the start, and
+// onPlayTick pulls frames in sequence, so swapping underneath it would jump the
+// picture. It waits for the next stop instead, which costs nothing: the proxy
+// only ever arrives once.
+void VideoEditorWindow::applyProxyToPlayback(int sourceId, const QString &proxyPath)
+{
+	if (playing_) {
+		pendingPlaybackProxy_[sourceId] = proxyPath;
+		return;
+	}
+	EditorSource *s = sourceById(sourceId);
+	if (!s || !s->seeker)
+		return;
+	if (!s->seeker->open(proxyPath)) {
+		// Fall back to the original rather than leaving a closed seeker behind,
+		// which would make playback of this source show nothing at all.
+		s->seeker->open(s->path);
+		return;
+	}
+	if (activeSourceId_ == sourceId)
+		seeker_ = s->seeker.get(); // same object, but be explicit about it
+}
+
+void VideoEditorWindow::flushPendingPlaybackProxies()
+{
+	if (pendingPlaybackProxy_.isEmpty())
+		return;
+	const QHash<int, QString> pend = pendingPlaybackProxy_;
+	pendingPlaybackProxy_.clear();
+	for (auto it = pend.constBegin(); it != pend.constEnd(); ++it)
+		applyProxyToPlayback(it.key(), it.value());
 }
 
 void VideoEditorWindow::onProxyProgress(int sourceId, int percent)

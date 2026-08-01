@@ -10,6 +10,19 @@
 
 #include <algorithm>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#ifndef WDA_EXCLUDEFROMCAPTURE
+#define WDA_EXCLUDEFROMCAPTURE 0x00000011 // Windows 10 2004+
+#endif
+#endif
+
 namespace harpia {
 
 namespace {
@@ -40,6 +53,33 @@ RegionTool::RegionTool(QWidget *parent) : QWidget(parent)
 	setAttribute(Qt::WA_TranslucentBackground);
 	setMouseTracking(true);
 	setFocusPolicy(Qt::StrongFocus);
+}
+
+void RegionTool::excludeFromCapture()
+{
+#if defined(_WIN32)
+	// The frame marks out what is being recorded; it must not BE recorded. It
+	// sits exactly on the boundary of the captured rectangle, so its 2 px border
+	// and its handles land in the file as a coloured outline around every frame
+	// -- baked in, with no way to remove them afterwards.
+	//
+	// Same fix the floating controls and the screen border already use: still
+	// drawn on the monitor, omitted from anything that captures the screen.
+	// Needs Windows 10 2004 or newer; older builds simply keep the old
+	// behaviour rather than failing.
+	//
+	// Requires a real window handle, so this cannot run from the constructor --
+	// winId() before the window exists creates one too early and the affinity is
+	// lost when it is recreated. showEvent is the first point it is reliable,
+	// and re-applying there is cheap and covers a hide/show cycle.
+	SetWindowDisplayAffinity((HWND)winId(), WDA_EXCLUDEFROMCAPTURE);
+#endif
+}
+
+void RegionTool::showEvent(QShowEvent *e)
+{
+	QWidget::showEvent(e);
+	excludeFromCapture();
 }
 
 void RegionTool::setScreen(QScreen *screen)
@@ -223,6 +263,24 @@ RegionTool::Zone RegionTool::zoneAt(const QPoint &p) const
 		return Zone::StartButton;
 
 	const QRect inner = innerRectLocal();
+
+	// While recording, the frame moves but does not resize.
+	//
+	// The output canvas is fixed when the recording starts (see the resetVideo
+	// call in MainWindow::startRecording), so the encoder is committed to one
+	// frame size for the whole file. Moving keeps that size and simply slides
+	// the crop. Resizing does not: the new rectangle gets scaled into the
+	// original canvas, so the picture silently stretches part-way through the
+	// recording, and there is no way to un-stretch it afterwards.
+	//
+	// The eight handles are still painted -- they say where the region is -- but
+	// grabbing any of them now moves it, which is the only thing that can be
+	// done safely and is what the pointer says will happen.
+	if (mode_ == Mode::Recording)
+		return inner.adjusted(-kMargin - 2, -kMargin - 2, kMargin + 2, kMargin + 2).contains(p)
+			       ? Zone::Move
+			       : Zone::None;
+
 	const int m = kMargin + 2;
 	const bool nearL = std::abs(p.x() - inner.left()) <= m;
 	const bool nearR = std::abs(p.x() - inner.right()) <= m;
@@ -248,6 +306,31 @@ RegionTool::Zone RegionTool::zoneAt(const QPoint &p) const
 	if (inner.contains(p))
 		return Zone::Move;
 	return Zone::None;
+}
+
+Qt::CursorShape RegionTool::cursorForZone(Zone z)
+{
+	switch (z) {
+	case Zone::StartButton:
+		return Qt::PointingHandCursor;
+	case Zone::Move:
+		return Qt::SizeAllCursor;
+	case Zone::Left:
+	case Zone::Right:
+		return Qt::SizeHorCursor;
+	case Zone::Top:
+	case Zone::Bottom:
+		return Qt::SizeVerCursor;
+	case Zone::TopLeft:
+	case Zone::BottomRight:
+		return Qt::SizeFDiagCursor;
+	case Zone::TopRight:
+	case Zone::BottomLeft:
+		return Qt::SizeBDiagCursor;
+	case Zone::None:
+		break;
+	}
+	return Qt::ArrowCursor;
 }
 
 void RegionTool::snap(QRect &g) const
@@ -295,17 +378,20 @@ void RegionTool::mouseMoveEvent(QMouseEvent *e)
 		// Not dragging: say what is under the pointer before it is pressed.
 		// Without this the tab is a decoration that happens to be draggable and
 		// the button is a picture that happens to be clickable.
-		const bool overStart = startButtonVisible() && startButtonRect().contains(e->pos());
+		// Not dragging: say what is under the pointer before it is pressed.
+		//
+		// Driven off zoneAt(), so the pointer can never promise something the
+		// press will not do. That matters most while recording: the frame there
+		// only moves, and zoneAt() says so by returning Move for the handles, so
+		// the pointer shows the move arrows rather than a resize arrow that
+		// would be a lie.
+		const Zone z = zoneAt(e->pos());
+		const bool overStart = (z == Zone::StartButton);
 		if (overStart != startHover_) {
 			startHover_ = overStart;
 			update();
 		}
-		if (overStart)
-			setCursor(Qt::PointingHandCursor);
-		else if (moveHandle_ && moveHandleRect().contains(e->pos()))
-			setCursor(Qt::SizeAllCursor);
-		else
-			setCursor(Qt::ArrowCursor);
+		setCursor(cursorForZone(z));
 		return;
 	}
 

@@ -102,6 +102,15 @@ public:
 	// Hidden while recording -- a green "start" beside a running recording would
 	// be a lie, and Stop lives on the floating controls, which is where it
 	// already was.
+	// What the pointer should look like over a given zone. Static and pure so
+	// the mapping can be checked without a screen -- and so the pointer is
+	// always derived from the zone a press would actually use, rather than
+	// worked out separately and left to drift out of step with it.
+	static Qt::CursorShape cursorForZone(Zone z);
+	// Public for the same reason: the "recording only moves" rule is a hit-test
+	// rule, and it is worth being able to ask what a point does.
+	Zone zoneAtForTest(const QPoint &localPos) const { return zoneAt(localPos); }
+
 	bool startButtonVisible() const { return mode_ != Mode::Recording; }
 	QRect startButtonRect() const; // local coords; null when not shown
 	// True while a move or resize is under way. Callers must not change the
@@ -132,6 +141,7 @@ protected:
 	void mouseReleaseEvent(QMouseEvent *) override;
 	void mouseDoubleClickEvent(QMouseEvent *) override;
 	void leaveEvent(QEvent *) override;
+	void showEvent(QShowEvent *) override;
 	void contextMenuEvent(QContextMenuEvent *) override;
 	void keyPressEvent(QKeyEvent *) override;
 
@@ -153,6 +163,9 @@ private:
 	// transparent, so leaving it there costs nothing.
 	int bottomMargin() const;
 	void snap(QRect &globalRect) const;
+	// Windows: keep the frame off the recording. It sits on the boundary of the
+	// captured rectangle, so without this it is baked into every frame.
+	void excludeFromCapture();
 
 	QScreen *screen_ = nullptr;
 	qreal dpr_ = 1.0;

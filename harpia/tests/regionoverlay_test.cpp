@@ -547,6 +547,109 @@ int main(int argc, char **argv)
 		t->deleteLater();
 	}
 
+	// ------------------------------------------------------------------------
+	// While recording, the frame moves but does not resize.
+	//
+	// The output canvas is fixed when recording starts, so the encoder is
+	// committed to one frame size for the whole file. Moving keeps that size and
+	// slides the crop. Resizing does not -- the new rectangle is scaled into the
+	// original canvas, so the picture silently stretches part-way through, and
+	// nothing can undo that afterwards.
+	// ------------------------------------------------------------------------
+
+	std::printf("\n-- recording: grabbing a handle moves, it does not resize --\n");
+	{
+		using Z = RegionTool::Zone;
+		RegionTool *t = buildSmall();
+		t->setMode(RegionTool::Mode::Recording);
+		QApplication::processEvents();
+
+		// Every handle now reports Move. Stated per-corner because "the corner
+		// resizes" is exactly the case that survives a half-done fix.
+		const QRect inner = t->rect().adjusted(10, 37, -10, -37);
+		struct Spot {
+			const char *name;
+			QPoint p;
+		};
+		const Spot spots[] = {
+			{"top-left", inner.topLeft()},        {"top-right", inner.topRight()},
+			{"bottom-left", inner.bottomLeft()},  {"bottom-right", inner.bottomRight()},
+			{"left edge", QPoint(inner.left(), inner.center().y())},
+			{"bottom edge", QPoint(inner.center().x(), inner.bottom())},
+		};
+		bool allMove = true;
+		for (const Spot &s : spots)
+			if (t->zoneAtForTest(s.p) != Z::Move) {
+				std::printf("     %s still resizes\n", s.name);
+				allMove = false;
+			}
+		ok(allMove, "all eight handles report Move while recording");
+
+		// And it really is a move: the size comes out identical.
+		const auto [after, before] = dragBy(t, inner.bottomRight(), QPoint(35, 25));
+		std::printf("     dragged the bottom-right corner: %dx%d at (%d,%d) -> %dx%d at (%d,%d)\n",
+			    before.width, before.height, before.x, before.y, after.width, after.height,
+			    after.x, after.y);
+		ok(after.width == before.width && after.height == before.height,
+		   "dragging a corner leaves the size alone, so the encode canvas still fits");
+		ok(after.x == before.x + 35 && after.y == before.y + 25, "it moved instead");
+		t->deleteLater();
+	}
+
+	std::printf("\n-- CONTROL: the same corner still resizes when NOT recording --\n");
+	{
+		// Without this the section above would pass on a build where the corners
+		// stopped doing anything at all, which would be a different bug.
+		RegionTool *t = buildSmall();
+		t->setMode(RegionTool::Mode::Watching);
+		QApplication::processEvents();
+		const QRect inner = t->rect().adjusted(10, 37, -10, -37);
+		ok(t->zoneAtForTest(inner.bottomRight()) == RegionTool::Zone::BottomRight,
+		   "idle, the bottom-right corner is a resize corner");
+		const auto [after, before] = dragBy(t, inner.bottomRight(), QPoint(35, 25));
+		std::printf("     %dx%d -> %dx%d\n", before.width, before.height, after.width, after.height);
+		ok(after.width != before.width || after.height != before.height,
+		   "CONTROL: and dragging it really does resize");
+		t->deleteLater();
+	}
+
+	std::printf("\n-- the pointer never promises what the press will not do --\n");
+	{
+		using Z = RegionTool::Zone;
+		using RT = RegionTool;
+		// The mapping, stated once. Derived from the zone rather than worked out
+		// separately, so it cannot drift out of step with the hit test.
+		ok(RT::cursorForZone(Z::Move) == Qt::SizeAllCursor, "Move shows the move arrows");
+		ok(RT::cursorForZone(Z::StartButton) == Qt::PointingHandCursor, "the button, a hand");
+		ok(RT::cursorForZone(Z::Left) == Qt::SizeHorCursor, "a side edge, a horizontal arrow");
+		ok(RT::cursorForZone(Z::Bottom) == Qt::SizeVerCursor, "a top/bottom edge, a vertical one");
+		ok(RT::cursorForZone(Z::TopLeft) == Qt::SizeFDiagCursor, "and the corners, diagonals");
+		ok(RT::cursorForZone(Z::TopRight) == Qt::SizeBDiagCursor, "the other way for the other pair");
+		ok(RT::cursorForZone(Z::None) == Qt::ArrowCursor, "and nothing in particular, an arrow");
+
+		// The point of the change: over a corner, the pointer says "resize" when
+		// idle and "move" while recording, because that is what a press does.
+		RegionTool *t = buildSmall();
+		const QRect inner = t->rect().adjusted(10, 37, -10, -37);
+		const QPoint corner = inner.bottomRight();
+		const auto hoverShape = [&](RegionTool::Mode m) {
+			t->setMode(m);
+			QApplication::processEvents();
+			QMouseEvent mv(QEvent::MouseMove, QPointF(corner), t->mapToGlobal(corner),
+				       Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+			QApplication::sendEvent(t, &mv);
+			QApplication::processEvents();
+			return t->cursor().shape();
+		};
+		const Qt::CursorShape idle = hoverShape(RegionTool::Mode::Watching);
+		const Qt::CursorShape rec = hoverShape(RegionTool::Mode::Recording);
+		std::printf("     over the same corner: idle=%d recording=%d (SizeFDiag=%d SizeAll=%d)\n",
+			    int(idle), int(rec), int(Qt::SizeFDiagCursor), int(Qt::SizeAllCursor));
+		ok(idle == Qt::SizeFDiagCursor, "hovering a corner while idle offers a resize");
+		ok(rec == Qt::SizeAllCursor, "and while recording it offers the move arrows instead");
+		t->deleteLater();
+	}
+
 	std::printf("\n-- with the handle on, the frame still behaves --\n");
 	{
 		// The mask was rewritten to build up from the frame band instead of

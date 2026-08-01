@@ -17,6 +17,12 @@ constexpr int kMargin = 10;   // frame margin around the region (for handles)
 constexpr int kHandle = 8;    // handle square size
 constexpr int kSnap = 12;     // snap threshold (logical px)
 constexpr int kMinSize = 32;  // minimum region size (logical px)
+// The move handle: a grab tab above the top edge. The gap deliberately clears
+// the top resize zone (kMargin + 2, see zoneAt) so the two never overlap and
+// hit-testing needs no priority rule between them.
+constexpr int kTabW = 48;
+constexpr int kTabH = 14;
+constexpr int kTabGap = kMargin + 3;
 const QColor kAccent(0, 174, 239);
 
 // Common capture resolutions to snap to (device pixels).
@@ -37,9 +43,56 @@ void RegionTool::setScreen(QScreen *screen)
 	dpr_ = screen ? screen->devicePixelRatio() : 1.0;
 }
 
+int RegionTool::topMargin() const
+{
+	return kMargin + (moveHandle_ ? kTabH + kTabGap : 0);
+}
+
 QRect RegionTool::innerRectLocal() const
 {
-	return rect().adjusted(kMargin, kMargin, -kMargin, -kMargin);
+	return rect().adjusted(kMargin, topMargin(), -kMargin, -kMargin);
+}
+
+QRect RegionTool::moveHandleRect() const
+{
+	if (!moveHandle_)
+		return QRect();
+	const QRect inner = innerRectLocal();
+	// Centred on the region, sitting in the band above it. A region narrower
+	// than the tab still gets one -- clamped, so it never pokes out of the
+	// widget and out of the input mask with it.
+	const int w = std::min(kTabW, inner.width());
+	const int x = inner.center().x() - w / 2 + 1;
+	// Normally above the frame, where it covers nothing that is being captured.
+	// But a region snapped to the top of the screen leaves no room up there, and
+	// a tab hanging off the edge of the display cannot be grabbed at all -- so
+	// there, and only there, it drops just inside the top edge.
+	const int above = inner.top() - kTabGap - kTabH;
+	if (screen_ && mapToGlobal(QPoint(0, above)).y() < screen_->geometry().top())
+		return QRect(x, inner.top() + 3, w, kTabH);
+	return QRect(x, above, w, kTabH);
+}
+
+void RegionTool::setMoveHandleEnabled(bool on)
+{
+	// Idempotent: this comes from the owner's state tick, four times a second.
+	if (moveHandle_ == on)
+		return;
+	// The tab changes the widget's top inset, so the widget has to be re-laid
+	// out around the SAME region. Read the region first, in global coordinates,
+	// and put it back afterwards -- the alternative is the frame jumping up or
+	// down by 27 px every time this is toggled, which would silently rewrite the
+	// user's region through regionChanged().
+	const QRect innerGlobal(mapToGlobal(innerRectLocal().topLeft()), innerRectLocal().size());
+	moveHandle_ = on;
+	// Before the first setRegionDevicePx there is no region to preserve, and
+	// re-applying the empty one would emit a nonsense regionChanged() that the
+	// owner would write straight into the preset.
+	if (!screen_ || innerGlobal.width() < kMinSize || innerGlobal.height() < kMinSize) {
+		update();
+		return;
+	}
+	applyGeometry(innerGlobal);
 }
 
 void RegionTool::setRegionDevicePx(const QRect &deviceRect)
@@ -78,18 +131,22 @@ void RegionTool::emitRegion()
 
 void RegionTool::rebuildMask()
 {
-	if (mode_ == Mode::Editing) {
-		clearMask(); // whole widget grabs input (drag interior to move)
-		return;
-	}
-	// Anything else: only the border frame + handles are interactive, and the
-	// interior is click-through so the app underneath stays usable. That is not
-	// only a recording concern -- an overlay left up over another window with a
-	// solid input area would make that window unclickable.
-	QRegion mask(rect());
-	mask -= QRegion(innerRectLocal().adjusted(2, 2, -2, -2));
-	// Re-add handle squares (they sit on the border, already included, but keep
-	// explicit for clarity).
+	// Start from the frame band -- the region plus the handle margin -- rather
+	// than the whole widget. With the move handle on, the widget extends well
+	// above the frame to make room for the tab, and grabbing that whole empty
+	// band would block clicks on whatever sits above the region.
+	const QRect inner = innerRectLocal();
+	QRegion mask(inner.adjusted(-kMargin, -kMargin, kMargin, kMargin));
+	// Outside Editing the interior is click-through, so the app underneath stays
+	// usable. That is not only a recording concern -- an overlay left up over
+	// another window with a solid input area makes that window unclickable.
+	if (mode_ != Mode::Editing)
+		mask -= QRegion(inner.adjusted(2, 2, -2, -2));
+	// The tab is the one piece deliberately outside the frame. It has to be in
+	// the mask in EVERY mode, since being grabbable while another app is in
+	// front is the whole reason it exists.
+	if (moveHandle_)
+		mask += moveHandleRect();
 	setMask(mask);
 }
 
@@ -112,8 +169,9 @@ void RegionTool::applyGeometry(const QRect &globalRect)
 		if (g.bottom() > s.bottom())
 			g.moveBottom(s.bottom());
 	}
-	// The widget is the region expanded by the handle margin.
-	setGeometry(g.adjusted(-kMargin, -kMargin, kMargin, kMargin));
+	// The widget is the region expanded by the handle margin, plus room for the
+	// move tab above it when that is on.
+	setGeometry(g.adjusted(-kMargin, -topMargin(), kMargin, kMargin));
 	rebuildMask();
 	emitRegion();
 	update();
@@ -121,6 +179,13 @@ void RegionTool::applyGeometry(const QRect &globalRect)
 
 RegionTool::Zone RegionTool::zoneAt(const QPoint &p) const
 {
+	// The tab first. It normally sits clear of every resize zone, but when it has
+	// been flipped inside (region at the top of the screen) it lands on the Top
+	// edge zone, and there it must win: it is the only way to move the region
+	// while another app is in front.
+	if (moveHandle_ && moveHandleRect().contains(p))
+		return Zone::Move;
+
 	const QRect inner = innerRectLocal();
 	const int m = kMargin + 2;
 	const bool nearL = std::abs(p.x() - inner.left()) <= m;
@@ -188,8 +253,14 @@ void RegionTool::mousePressEvent(QMouseEvent *e)
 
 void RegionTool::mouseMoveEvent(QMouseEvent *e)
 {
-	if (dragZone_ == Zone::None || !(e->buttons() & Qt::LeftButton))
+	if (dragZone_ == Zone::None || !(e->buttons() & Qt::LeftButton)) {
+		// Not dragging: say what the tab does before it is grabbed. Without this
+		// it is a decoration that happens to be draggable.
+		if (moveHandle_)
+			setCursor(moveHandleRect().contains(e->pos()) ? Qt::SizeAllCursor
+								     : Qt::ArrowCursor);
 		return;
+	}
 
 	const QPoint delta = e->globalPosition().toPoint() - dragStartGlobal_;
 	QRect g = dragStartGeom_;
@@ -340,6 +411,22 @@ void RegionTool::paintEvent(QPaintEvent *)
 	};
 	for (const QPoint &c : pts)
 		p.drawRect(QRect(c.x() - h / 2, c.y() - h / 2, h, h));
+
+	// The move tab, in the same colour as the frame so it reads as part of it
+	// (and turns red while recording along with everything else).
+	if (moveHandle_) {
+		const QRect tab = moveHandleRect();
+		p.setRenderHint(QPainter::Antialiasing, true);
+		p.setBrush(border);
+		p.setPen(Qt::NoPen);
+		p.drawRoundedRect(tab, 4, 4);
+		// Three grip dots, so it looks like something you drag rather than a
+		// button you click.
+		p.setBrush(QColor(255, 255, 255, 220));
+		for (int i = -1; i <= 1; ++i)
+			p.drawEllipse(QPoint(tab.center().x() + i * 7, tab.center().y() + 1), 2, 2);
+		p.setRenderHint(QPainter::Antialiasing, false);
+	}
 
 	// Live dimensions while resizing.
 	if (showDims_) {

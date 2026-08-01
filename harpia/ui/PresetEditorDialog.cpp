@@ -244,6 +244,16 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	borderThicknessSpin_->setValue(preset.screenBorderThickness > 0 ? preset.screenBorderThickness : 4);
 	addField(v, QStringLiteral("Border thickness"), QString(), borderThicknessSpin_);
 
+	regionHandleCheck_ = new QCheckBox(QStringLiteral("Show a drag handle on the capture region "
+							  "(Custom Region only)"),
+					   this);
+	regionHandleCheck_->setChecked(preset.regionMoveHandle);
+	addCheck(v, regionHandleCheck_,
+		 QStringLiteral("Adds a small grab tab just above the region frame. Drag it to move the "
+				"region — including while another app is in front, or while recording, "
+				"which dragging the middle of the frame cannot do. Only appears when the "
+				"capture mode is Custom Region."));
+
 	v->addStretch(1);
 	addPage(QStringLiteral("Recording"), recordingPage);
 
@@ -871,6 +881,7 @@ void PresetEditorDialog::accept()
 	result_.showScreenBorder = borderCheck_->isChecked();
 	result_.screenBorderColor = borderColor_.name().toStdString();
 	result_.screenBorderThickness = borderThicknessSpin_->value();
+	result_.regionMoveHandle = regionHandleCheck_->isChecked();
 	result_.filenameTemplate = templateEdit_->text().trimmed().toStdString();
 	// An empty template would expand to an extension-only (hidden) filename
 	// like ".mp4" — restore the default naming instead of saving it.

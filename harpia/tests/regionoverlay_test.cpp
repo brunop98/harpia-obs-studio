@@ -25,6 +25,7 @@
 #include <QSignalSpy>
 
 #include <cstdio>
+#include <utility>
 
 using namespace harpia;
 static int failures = 0;
@@ -209,6 +210,235 @@ int main(int argc, char **argv)
 		QApplication::sendEvent(t, &stray);
 		QApplication::processEvents();
 		ok(again.count() == 0, "a release with no drag behind it says nothing");
+		t->deleteLater();
+	}
+
+	// ------------------------------------------------------------------------
+	// The move handle.
+	//
+	// Zone::Move is only returned for a point INSIDE the region, and Watching and
+	// Recording mask the interior out so the app underneath stays clickable. So
+	// the region was resizable but not MOVABLE in the two states that matter:
+	// lining the frame up against the app you are about to record (which means
+	// that app is in front), and while recording. The tab lives outside the
+	// region so it can stay in the input mask without covering a captured pixel.
+	// ------------------------------------------------------------------------
+
+	std::printf("\n-- off unless the preset asks for it --\n");
+	{
+		RegionTool *t = build();
+		ok(!t->moveHandleEnabled(), "no handle by default");
+		ok(t->moveHandleRect().isNull(), "and nothing drawn where it would go");
+		t->deleteLater();
+	}
+
+	std::printf("\n-- turning it on does not move the region --\n");
+	{
+		// The tab needs room above the frame, so the WIDGET grows. The region
+		// must not. Get this wrong -- have innerRectLocal() and applyGeometry()
+		// disagree by the tab's height -- and every toggle silently rewrites the
+		// user's region through regionChanged(), 27 px at a time.
+		RegionTool *t = build();
+		const CaptureRegion before = t->region();
+		const int hBefore = t->height();
+		t->setMoveHandleEnabled(true);
+		QApplication::processEvents();
+		const CaptureRegion after = t->region();
+		std::printf("     widget %d -> %d px tall; region %dx%d at (%d,%d) -> %dx%d at (%d,%d)\n",
+			    hBefore, t->height(), before.width, before.height, before.x, before.y,
+			    after.width, after.height, after.x, after.y);
+		ok(t->height() > hBefore, "the widget grew, so there is somewhere to put the tab");
+		ok(before.x == after.x && before.y == after.y && before.width == after.width &&
+			   before.height == after.height,
+		   "and the region is exactly where it was");
+		ok(!t->moveHandleRect().isNull(), "the tab has a place now");
+		// Above the frame, not over it: covering captured pixels is the thing the
+		// tab exists to avoid, which is why it went outside rather than inside.
+		const int tabBottomGlobal = t->mapToGlobal(t->moveHandleRect().bottomLeft()).y();
+		const int regionTopGlobal = QGuiApplication::primaryScreen()->geometry().top() + after.y;
+		std::printf("     tab bottom at y=%d, region starts at y=%d\n", tabBottomGlobal,
+			    regionTopGlobal);
+		ok(tabBottomGlobal < regionTopGlobal, "and it sits clear above the captured area");
+		ok(t->rect().contains(t->moveHandleRect()), "while staying inside the widget");
+		t->deleteLater();
+	}
+
+	// A region with room to move on every side. build()'s is wide enough that
+	// applyGeometry() clamps it against the right edge of the test screen, so a
+	// rightward drag would be swallowed by the clamp and prove nothing.
+	const auto buildSmall = []() {
+		auto *t = new RegionTool;
+		t->setScreen(QGuiApplication::primaryScreen());
+		t->setRegionDevicePx(QRect(200, 200, 300, 200));
+		t->show();
+		QApplication::processEvents();
+		return t;
+	};
+
+	// Drag the tab from `from` and report how far the region moved.
+	const auto dragBy = [](RegionTool *t, const QPoint &from, const QPoint &delta) {
+		const CaptureRegion before = t->region();
+		QMouseEvent press(QEvent::MouseButtonPress, QPointF(from), t->mapToGlobal(from),
+				  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+		QApplication::sendEvent(t, &press);
+		const QPoint to = from + delta;
+		QMouseEvent move(QEvent::MouseMove, QPointF(to), t->mapToGlobal(to), Qt::NoButton,
+				 Qt::LeftButton, Qt::NoModifier);
+		QApplication::sendEvent(t, &move);
+		QMouseEvent rel(QEvent::MouseButtonRelease, QPointF(to), t->mapToGlobal(to), Qt::LeftButton,
+				Qt::NoButton, Qt::NoModifier);
+		QApplication::sendEvent(t, &rel);
+		QApplication::processEvents();
+		const CaptureRegion after = t->region();
+		return std::make_pair(after, before);
+	};
+
+	std::printf("\n-- the tab moves the region while another app is in front --\n");
+	{
+		RegionTool *t = buildSmall();
+		t->setMoveHandleEnabled(true);
+		t->setMode(RegionTool::Mode::Watching);
+		QApplication::processEvents();
+		const QRect tab = t->moveHandleRect();
+		// Where the tab is on screen BEFORE the drag -- the widget is about to
+		// move, and the control below compares against this spot.
+		const QPoint tabGlobal = t->mapToGlobal(tab.center());
+		const auto [after, before] = dragBy(t, tab.center(), QPoint(40, 25));
+		std::printf("     (%d,%d) -> (%d,%d), size %dx%d -> %dx%d\n", before.x, before.y, after.x,
+			    after.y, before.width, before.height, after.width, after.height);
+		ok(after.x == before.x + 40 && after.y == before.y + 25,
+		   "dragging the tab moves the region by exactly the drag");
+		ok(after.width == before.width && after.height == before.height, "and does not resize it");
+
+		// CONTROL. Not "the same drag with the handle off moves nothing" -- that
+		// cannot be tested this way and would be a lie if written. What stops the
+		// interior taking the mouse in Watching is the WINDOW MASK, and a
+		// synthetic event sent straight to the widget never consults it; the
+		// offscreen platform cannot apply one either. So the mask is checked as a
+		// mask, two sections down.
+		//
+		// What IS true here: with the handle off the widget does not extend far
+		// enough above the frame for that point to exist at all, so a real
+		// windowing system delivers nothing there.
+		RegionTool *off = buildSmall();
+		off->setMode(RegionTool::Mode::Watching);
+		QApplication::processEvents();
+		const QPoint inOff = off->mapFromGlobal(tabGlobal);
+		std::printf("     control: the tab's spot lands at y=%d in a handle-off widget "
+			    "(0..%d is inside it)\n",
+			    inOff.y(), off->height() - 1);
+		ok(!off->rect().contains(inOff),
+		   "CONTROL: with the handle off there is no widget where the tab would be");
+		t->deleteLater();
+		off->deleteLater();
+	}
+
+	std::printf("\n-- and while recording, without changing the size --\n");
+	{
+		// Moving mid-recording is the safe half of live editing: the output
+		// canvas is fixed when recording starts, so a move just slides the crop
+		// and still fills the frame. A RESIZE would not, which is why the size
+		// being untouched is asserted rather than assumed.
+		RegionTool *t = buildSmall();
+		t->setMoveHandleEnabled(true);
+		t->setMode(RegionTool::Mode::Recording);
+		QApplication::processEvents();
+		const auto [after, before] = dragBy(t, t->moveHandleRect().center(), QPoint(-30, 20));
+		std::printf("     (%d,%d) -> (%d,%d), size %dx%d -> %dx%d\n", before.x, before.y, after.x,
+			    after.y, before.width, before.height, after.width, after.height);
+		ok(after.x == before.x - 30 && after.y == before.y + 20, "the region moved while recording");
+		ok(after.width == before.width && after.height == before.height,
+		   "at exactly the same size, so the encode canvas still matches");
+		t->deleteLater();
+	}
+
+	std::printf("\n-- the tab is grabbable, the empty space around it is not --\n");
+	{
+		// The widget now extends well above the frame to make room for the tab.
+		// If that whole band took the mouse it would block clicks on whatever
+		// sits above the region -- the exact failure the interior mask exists to
+		// prevent, moved to a new place.
+		RegionTool *t = build();
+		t->setMoveHandleEnabled(true);
+		t->setMode(RegionTool::Mode::Watching);
+		QApplication::processEvents();
+		const QRegion mask = t->mask();
+		const QRect tab = t->moveHandleRect();
+		const bool tabLive = mask.isNull() || mask.isEmpty() || mask.contains(tab.center());
+		// Same height as the tab, but off to the side of it.
+		const QPoint beside(6, tab.center().y());
+		const bool besideLive = mask.isNull() || mask.isEmpty() || mask.contains(beside);
+		std::printf("     tab live: %s   band beside it live: %s\n", tabLive ? "yes" : "no",
+			    besideLive ? "yes" : "no");
+		ok(tabLive, "the tab takes the mouse");
+		ok(!besideLive, "the empty band beside it does not, so clicks above the region get through");
+		t->deleteLater();
+	}
+
+	std::printf("\n-- a region at the top of the screen still gets a reachable tab --\n");
+	{
+		// "Above the frame" runs out of screen for a region snapped to the top,
+		// and a tab hanging off the edge of the display cannot be grabbed at all
+		// -- which would take the feature away in exactly the case someone
+		// recording a full-width window at the top of their screen hits first.
+		RegionTool *t = new RegionTool;
+		t->setScreen(QGuiApplication::primaryScreen());
+		t->setRegionDevicePx(QRect(200, 0, 300, 200));
+		t->show();
+		t->setMoveHandleEnabled(true);
+		QApplication::processEvents();
+		const QRect tab = t->moveHandleRect();
+		const int tabTopGlobal = t->mapToGlobal(tab.topLeft()).y();
+		const int screenTop = QGuiApplication::primaryScreen()->geometry().top();
+		std::printf("     region at the very top; tab top at y=%d, screen starts at y=%d\n",
+			    tabTopGlobal, screenTop);
+		ok(tabTopGlobal >= screenTop, "the tab stayed on screen");
+		ok(t->rect().contains(tab), "and inside the widget, so it is in the mask");
+
+		// And it still moves the region -- flipping it inside must not cost it
+		// its job, and it now overlaps the Top resize zone, which it has to win.
+		t->setMode(RegionTool::Mode::Watching);
+		QApplication::processEvents();
+		const auto [after, before] = dragBy(t, tab.center(), QPoint(25, 30));
+		std::printf("     (%d,%d) -> (%d,%d), size %dx%d -> %dx%d\n", before.x, before.y, after.x,
+			    after.y, before.width, before.height, after.width, after.height);
+		ok(after.x == before.x + 25 && after.y == before.y + 30, "and it still moves the region");
+		ok(after.width == before.width && after.height == before.height,
+		   "rather than resizing from the top edge it now sits on");
+		t->deleteLater();
+	}
+
+	std::printf("\n-- with the handle on, the frame still behaves --\n");
+	{
+		// The mask was rewritten to build up from the frame band instead of
+		// subtracting from the whole widget, so the two properties the earlier
+		// sections pin are worth re-checking in the new configuration.
+		for (auto m : {RegionTool::Mode::Editing, RegionTool::Mode::Watching,
+			       RegionTool::Mode::Recording}) {
+			RegionTool *t = build();
+			t->setMoveHandleEnabled(true);
+			t->setMode(m);
+			QApplication::processEvents();
+			const QRegion mask = t->mask();
+			// A point on the frame's top edge, below the tab band.
+			const QPoint onFrame(t->width() / 2, t->moveHandleRect().bottom() + 12);
+			ok(mask.isNull() || mask.isEmpty() || mask.contains(onFrame),
+			   "the frame takes the mouse in this mode");
+			t->deleteLater();
+		}
+		RegionTool *t = build();
+		t->setMoveHandleEnabled(true);
+		QApplication::processEvents();
+		const CaptureRegion before = t->region();
+		for (auto m : {RegionTool::Mode::Watching, RegionTool::Mode::Recording,
+			       RegionTool::Mode::Editing}) {
+			t->setMode(m);
+			QApplication::processEvents();
+		}
+		const CaptureRegion after = t->region();
+		ok(before.x == after.x && before.y == after.y && before.width == after.width &&
+			   before.height == after.height,
+		   "and mode changes still leave the region alone");
 		t->deleteLater();
 	}
 

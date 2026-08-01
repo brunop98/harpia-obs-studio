@@ -1522,8 +1522,9 @@ void MainWindow::logRecordingStart(const Preset &p, const QString &recordedPath,
 	if (appCaptureEnabled_ && !appWindowValue_.isEmpty())
 		blog(LOG_INFO, "[harpia] focus-pause app: %s", appWindowValue_.toUtf8().constData());
 	if (captureMode_ == CaptureMode::Region && currentRegion_.enabled)
-		blog(LOG_INFO, "[harpia] region: %dx%d at (%d,%d)", currentRegion_.width, currentRegion_.height,
-		     currentRegion_.x, currentRegion_.y);
+		blog(LOG_INFO, "[harpia] region: %dx%d at (%d,%d)  move-handle: %s", currentRegion_.width,
+		     currentRegion_.height, currentRegion_.x, currentRegion_.y,
+		     p.regionMoveHandle ? "on" : "off");
 	blog(LOG_INFO, "[harpia] output folder: %s", p.outputFolder.c_str());
 	blog(LOG_INFO, "[harpia] recording to: %s", recordedPath.toUtf8().constData());
 	if (recordedPath != finalPath)
@@ -2250,6 +2251,11 @@ void MainWindow::updateRegionToolVisibility()
 	const RegionOverlayState st = regionOverlayState(captureMode_ == CaptureMode::Region,
 							 recorder_.isRecording(), focused,
 							 VideoEditorWindow::anyOpen());
+	// The one place the preset's move-handle flag needs applying: every path that
+	// could change it -- editing the preset, switching preset, switching capture
+	// mode, startup, the 250 ms tick -- ends up here. The setter early-returns
+	// when nothing changed, so the tick costs nothing.
+	regionTool_->setMoveHandleEnabled(activePreset().regionMoveHandle);
 	regionTool_->setMode(st.mode);
 	// Never steals the foreground: showing an always-on-top window normally
 	// activates it, which would yank focus off whatever the user just clicked

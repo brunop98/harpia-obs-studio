@@ -58,6 +58,23 @@ public:
 	};
 	void setMode(Mode m);
 	Mode mode() const { return mode_; }
+
+	// The move handle: a small tab drawn just ABOVE the region's top edge.
+	//
+	// Dragging the interior only works in Editing, because the other two modes
+	// mask the interior out so the app underneath stays clickable. That leaves
+	// the region resizable but NOT movable in exactly the situation the overlay
+	// exists for -- lining the frame up against the app you are about to record,
+	// with that app in front -- and equally while recording. The tab lives
+	// outside the region, so it can stay inside the input mask without covering a
+	// single captured pixel.
+	//
+	// Off unless the active preset asks for it. Idempotent: the owner calls this
+	// from a 250 ms tick.
+	void setMoveHandleEnabled(bool on);
+	bool moveHandleEnabled() const { return moveHandle_; }
+	// Where the tab is, in local coordinates. Null when the handle is off.
+	QRect moveHandleRect() const;
 	// True while a move or resize is under way. Callers must not change the
 	// mode during one: switching to Watching re-masks the widget, and pulling
 	// the interior out from under a drag that started there drops it halfway.
@@ -93,12 +110,18 @@ private:
 	void rebuildMask();
 	void emitRegion();
 	QRect innerRectLocal() const; // the region rect within the widget (handle margin inset)
+	// The widget's top inset. Larger than the side margin when the move handle is
+	// on, since the tab sits above the frame. innerRectLocal() and applyGeometry()
+	// both derive from this, which is what keeps switching the handle on from
+	// moving the region.
+	int topMargin() const;
 	void snap(QRect &globalRect) const;
 
 	QScreen *screen_ = nullptr;
 	qreal dpr_ = 1.0;
 	Mode mode_ = Mode::Editing;
 	bool paused_ = false;
+	bool moveHandle_ = false;
 
 	Zone dragZone_ = Zone::None;
 	QPoint dragStartGlobal_;

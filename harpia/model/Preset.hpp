@@ -142,6 +142,13 @@ struct Preset {
 	std::string screenBorderColor = "#e5484d"; // default red
 	int screenBorderThickness = 4;             // px, 1..10
 
+	// Show a drag tab above the capture region so it can be MOVED, not only
+	// resized. Custom Region only -- there is no region to move otherwise, and
+	// the overlay is hidden in Full Screen anyway. Off by default: a tab that
+	// appeared on everyone's desktop after an update would be a surprise, and
+	// the frame is still resizable without it.
+	bool regionMoveHandle = false;
+
 	// File extension (without the dot) for the current format.
 	std::string extension() const;
 

@@ -66,6 +66,8 @@ private:
 	QPushButton *borderColorBtn_ = nullptr;
 	QSpinBox *borderThicknessSpin_ = nullptr;
 	QColor borderColor_;
+	// Move handle for the capture region (Custom Region only)
+	QCheckBox *regionHandleCheck_ = nullptr;
 	QLineEdit *templateEdit_ = nullptr;
 	QLabel *templatePreview_ = nullptr;
 	QLineEdit *driveLinkEdit_ = nullptr;

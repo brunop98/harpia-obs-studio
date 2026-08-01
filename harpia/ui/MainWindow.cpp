@@ -2878,12 +2878,15 @@ void MainWindow::updateRegionLeaveVisibility()
 		regionLeaveGroup_->setVisible(captureMode_ == CaptureMode::Region &&
 					      (!regionLeaveNarrow_));
 	// Follow Mouse suspends the leave-pause (the region chases the pointer, so
-	// "the pointer left" stops meaning anything). Say so on the control itself
-	// rather than letting a configured setting silently never fire.
-	if (regionLeaveCombo_) {
+	// "the pointer left" stops meaning anything). The WHOLE row disables --
+	// label and combo together, so it reads as a deliberate statement rather
+	// than a rendering glitch -- and the explanation lives on the row, leaving
+	// the combo's own tooltip alone. (The first version of this overwrote the
+	// combo's tooltip with an empty string on the way back.)
+	if (regionLeaveGroup_) {
 		const bool suspended = activePreset().followMouse && captureMode_ == CaptureMode::Region;
-		regionLeaveCombo_->setEnabled(!suspended);
-		regionLeaveCombo_->setToolTip(
+		regionLeaveGroup_->setEnabled(!suspended);
+		regionLeaveGroup_->setToolTip(
 			suspended ? QStringLiteral("Suspended while Follow Mouse is on — the region "
 						   "follows the pointer instead of pausing when it leaves.")
 				  : QString());

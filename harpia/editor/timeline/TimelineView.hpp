@@ -413,6 +413,12 @@ private:
 	// ---- data ----
 	TimelineModel model_;
 	QHash<int, QVector<QImage>> srcThumbs_;
+	// Filmstrip tiles pre-scaled to their painted size, so playback repaints
+	// blit instead of rescaling every visible tile 30 times a second.
+	mutable QHash<int, QVector<QPixmap>> stripPix_;
+	mutable QHash<int, QPair<int, int>> stripPixSize_;
+	const QVector<QPixmap> &scaledStrip(int sourceId, const QVector<QImage> &strip, int tileW,
+					    int th) const;
 	QHash<int, qint64> srcThumbDur_;
 	QHash<int, double> srcAspect_;
 

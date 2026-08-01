@@ -202,6 +202,10 @@ private:
 	int lastScrubSourceId_ = 0; // source of the most recent scrub/hover emit
 	// Per-source filmstrips for rendering Output cuts (keyed by source id).
 	QHash<int, QVector<QImage>> srcThumbs_;
+	// Output-lane tiles pre-scaled to their painted size (see scaledOutStrip).
+	QHash<int, QVector<QPixmap>> outStripPix_;
+	QHash<int, QPair<int, int>> outStripPixSize_;
+	const QVector<QPixmap> &scaledOutStrip(int sourceId, const QVector<QImage> &strip, int tileW, int th);
 	QHash<int, qint64> srcThumbDur_;
 	QHash<int, double> srcAspect_; // cached tile aspect per source (hoisted out of paint)
 	int selected_ = -1;      // primary selection (drives resize + the slider value)

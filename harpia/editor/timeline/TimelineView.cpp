@@ -148,7 +148,33 @@ void TimelineView::setSourceThumbs(int sourceId, const QVector<QImage> &thumbs, 
 			break;
 		}
 	srcAspect_[sourceId] = aspect;
+	// New thumbs invalidate the scaled-pixmap cache built from the old ones.
+	stripPix_.remove(sourceId);
+	stripPixSize_.remove(sourceId);
 	update();
+}
+
+const QVector<QPixmap> &TimelineView::scaledStrip(int sourceId, const QVector<QImage> &strip, int tileW,
+						  int th) const
+{
+	// Rebuilt only when the thumbs changed (handled in setSourceThumbs) or the
+	// tile geometry did (lane height / aspect) -- zooming the timeline does
+	// NOT change tile size, so scrub and playback repaints always hit.
+	auto szIt = stripPixSize_.constFind(sourceId);
+	auto pxIt = stripPix_.find(sourceId);
+	if (szIt == stripPixSize_.constEnd() || szIt.value() != qMakePair(tileW, th) ||
+	    pxIt == stripPix_.end() || pxIt.value().size() != strip.size()) {
+		QVector<QPixmap> v;
+		v.reserve(strip.size());
+		for (const QImage &im : strip)
+			v.append(im.isNull() ? QPixmap()
+					     : QPixmap::fromImage(im.scaled(
+						       tileW, th, Qt::IgnoreAspectRatio,
+						       Qt::SmoothTransformation)));
+		pxIt = stripPix_.insert(sourceId, v);
+		stripPixSize_.insert(sourceId, qMakePair(tileW, th));
+	}
+	return pxIt.value();
 }
 
 QColor TimelineView::randomPastel()
@@ -421,7 +447,23 @@ void TimelineView::commitEdit()
 
 void TimelineView::setPlayhead(qint64 outMs)
 {
+	// Called 30 times a second during playback. A bare update() repainted the
+	// ENTIRE widget -- every lane, every filmstrip tile rescale, every
+	// waveform line -- to move a 1 px marker. Repaint only the two narrow
+	// bands the marker actually occupies (old spot and new), unless the
+	// playhead left the visible view, in which case follow-scroll or a full
+	// repaint is genuinely needed.
+	const qint64 old = playheadMs_;
 	playheadMs_ = outMs;
+	if (old >= 0 && outMs >= 0) {
+		const int x0 = msToX(old);
+		const int x1 = msToX(outMs);
+		if (x0 >= -8 && x0 <= width() + 8 && x1 >= -8 && x1 <= width() + 8) {
+			// ±4 px covers the line, its head triangle and antialiasing.
+			update(QRect(std::min(x0, x1) - 4, 0, std::abs(x1 - x0) + 9, height()));
+			return;
+		}
+	}
 	update();
 }
 
@@ -1178,6 +1220,12 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 			const double aspect = srcAspect_.value(c.sourceId, 16.0 / 9.0);
 			const int th = r.height() - 2;
 			const int tileW = std::max(8, int(th * aspect));
+			// Tiles are blitted from a cache of pre-scaled pixmaps. drawImage
+			// with a target rect rescales the thumb on EVERY paint -- and this
+			// widget paints 30 times a second during playback. The other two
+			// timelines have cached their strips for a long time; this one,
+			// the one with the most lanes, was the only one still rescaling.
+			const QVector<QPixmap> &pix = scaledStrip(c.sourceId, strip, tileW, th);
 			// Start at the first tile at or before the visible edge (tiles must stay
 			// on their original grid, or they'd shift as the view scrolls).
 			const int x0 = r.x() + 1;
@@ -1189,8 +1237,8 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 			for (const StripTile &t :
 			     filmstripTiles(int(strip.size()), sdur, c.srcStartMs, c.srcLenMs(), x0,
 					    std::max(1, r.width()), tileW, 1, content.x(), lastVis)) {
-				if (!strip[t.index].isNull())
-					p.drawImage(QRect(t.x, r.y() + 1, tileW, th), strip[t.index]);
+				if (t.index < pix.size() && !pix[t.index].isNull())
+					p.drawPixmap(QPoint(t.x, r.y() + 1), pix[t.index]);
 			}
 		}
 	} else if (!c.peaks.isEmpty() && c.srcEndMs > 0) {

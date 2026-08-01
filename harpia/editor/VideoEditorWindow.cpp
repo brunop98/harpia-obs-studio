@@ -1353,6 +1353,14 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// short-GOP proxy is built in the background and the preview switches to it
 	// when it is ready. Export never sees it.
 	proxyBuilder_ = std::make_unique<ProxyBuilder>();
+	// Housekeeping while nothing is waiting on the pool: keep the proxy cache
+	// under 2 GB, least-recently-used first. Off the GUI thread -- it lists
+	// and stats a directory that can hold hundreds of files.
+	QThreadPool::globalInstance()->start([]() {
+		const qint64 freed = pruneProxyCache(2LL * 1024 * 1024 * 1024);
+		if (freed > 0)
+			qInfo("[harpia] proxy cache pruned: %lld MB freed", (long long)(freed / (1024 * 1024)));
+	});
 	connect(proxyBuilder_.get(), &ProxyBuilder::ready, this, &VideoEditorWindow::onProxyReady);
 	connect(proxyBuilder_.get(), &ProxyBuilder::progress, this,
 		&VideoEditorWindow::onProxyProgress);
@@ -2342,7 +2350,13 @@ QSize VideoEditorWindow::previewRenderSize(QSize canvas) const
 	if (!canvas_ || canvas_->width() <= 0)
 		return canvas;
 	const double dpr = canvas_->devicePixelRatioF() > 0.0 ? canvas_->devicePixelRatioF() : 1.0;
-	const int wantW = int(std::lround(canvas_->width() * dpr));
+	// Quantized UP to the next 64 px: the decode cache keys on the exact
+	// render size, so deriving it raw from the widget width meant every 1 px
+	// of a splitter drag or window resize threw away every cached frame for
+	// every source. Rounding up (never down) keeps it at least as sharp as
+	// the widget needs while giving resizes a 64 px dead band.
+	const int rawW = int(std::lround(canvas_->width() * dpr));
+	const int wantW = ((rawW + 63) / 64) * 64;
 	// Keeps the aspect exactly, and never goes below a size that is still
 	// legible. Shared with the tests, because clamping the two sides separately
 	// is precisely how a tall project came out stretched.
@@ -2404,6 +2418,38 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 			if (const auto it = w->stillImages_.constFind(sourceId);
 			    it != w->stillImages_.constEnd())
 				return it.value();
+
+			// PLAYBACK decodes sequentially, like Simple Trim and Multi-Cut
+			// always have. The async decoder below is a SCRUBBING cache --
+			// latest-wins, four frames per source, random seeks -- so during
+			// playback every tick was a miss serviced by a seek, and the
+			// late-frame convergence is deliberately off while playing. The
+			// source's own pool seeker (proxy-aware) just rolls forward.
+			if (w->playing_) {
+				if (FrameSeeker *sk = w->seekerFor(sourceId)) {
+					if (w->playFrameCacheSize_ != QSize(decodeW, decodeH)) {
+						w->playFrameCache_.clear();
+						w->playFrameCacheSize_ = QSize(decodeW, decodeH);
+					}
+					QImage &held = w->playFrameCache_[sourceId];
+					// Not due for a new source frame yet (timeline tick
+					// faster than the source's fps): reuse the held one
+					// instead of forcing nextFrameAt to over-advance.
+					if (!held.isNull() && sk->positionMs() >= 0 &&
+					    sk->positionMs() >= srcMs)
+						return held;
+					qint64 got = -1;
+					const QImage img =
+						sk->nextFrameAt(srcMs, &got, decodeW, decodeH, 8);
+					if (!img.isNull()) {
+						held = img;
+						return img;
+					}
+					// Decode failed (e.g. past EOF): fall through to the
+					// scrub cache rather than compositing a hole.
+				}
+			}
+
 			if (!w->previewDecoder_)
 				return QImage();
 			// Decoding straight to the size actually being composited saves both

@@ -419,9 +419,13 @@ struct VideoSink {
 
 	bool operator()(AVFrame *f)
 	{
+		// Downscale FIRST, then shade. The effects are resolution-independent
+		// (they read normalized coordinates), so shading a 4K frame that is
+		// about to become 1080p ran the whole chain on four times the pixels
+		// that survive -- per frame, for the whole export.
+		f = s.scaleForEncode(f); // no-op unless an output size was chosen
 		if (f && shader.active)
 			shader.process(f, float(f->pts * av_q2d(s.venc->time_base)), shaderFrame++);
-		f = s.scaleForEncode(f); // no-op unless an output size was chosen
 		if (avcodec_send_frame(s.venc, f) < 0)
 			return false;
 		while (true) {

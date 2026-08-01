@@ -178,7 +178,32 @@ void TrackEditor::setSourceThumbs(int sourceId, const QVector<QImage> &thumbs, q
 			break;
 		}
 	srcAspect_[sourceId] = aspect;
+	outStripPix_.remove(sourceId); // scaled tiles were built from the old thumbs
+	outStripPixSize_.remove(sourceId);
 	update(); // Output cut tiles for this source can now render
+}
+
+const QVector<QPixmap> &TrackEditor::scaledOutStrip(int sourceId, const QVector<QImage> &strip, int tileW,
+						    int th)
+{
+	// Same idea as ensureStripCache, per source: scale each thumb once for the
+	// current lane geometry, then blit. Zoom and scroll do not change tile
+	// size, so playback and drag repaints always hit.
+	auto szIt = outStripPixSize_.constFind(sourceId);
+	auto pxIt = outStripPix_.find(sourceId);
+	if (szIt == outStripPixSize_.constEnd() || szIt.value() != qMakePair(tileW, th) ||
+	    pxIt == outStripPix_.end() || pxIt.value().size() != strip.size()) {
+		QVector<QPixmap> v;
+		v.reserve(strip.size());
+		for (const QImage &im : strip)
+			v.append(im.isNull() ? QPixmap()
+					     : QPixmap::fromImage(im.scaled(
+						       tileW, th, Qt::IgnoreAspectRatio,
+						       Qt::SmoothTransformation)));
+		pxIt = outStripPix_.insert(sourceId, v);
+		outStripPixSize_.insert(sourceId, qMakePair(tileW, th));
+	}
+	return pxIt.value();
 }
 
 void TrackEditor::ensureStripCache(const QRect &src)
@@ -720,16 +745,18 @@ void TrackEditor::paintEvent(QPaintEvent *)
 			segClip.addRoundedRect(r, 4, 4);
 			p.save();
 			p.setClipPath(segClip);
-			for (int x = r.x() + 1; x < r.right() - 1; x += tileW + tileGap) {
-				// This tile's center → source-time within the cut → strip index.
-				const double f = std::clamp(
-					double(x + tileW / 2 - r.x()) / std::max(1, r.width()), 0.0, 1.0);
-				const qint64 ms = s0 + qint64(f * double(s1 - s0));
-				const int ti =
-					std::clamp(int(double(ms) / srcDur * strip.size()), 0,
-						   int(strip.size()) - 1);
-				if (!strip[ti].isNull())
-					p.drawImage(QRect(x, r.y() + 1, tileW, th), strip[ti]);
+			// One tile per DISTINCT frame via filmstripTiles -- stepping by
+			// tile width repeated the same thumbnail once a cut was zoomed
+			// past the strip's resolution, the exact bug Filmstrip.hpp was
+			// written to fix and which this lane alone still had. Tiles are
+			// blitted from the pre-scaled cache instead of rescaled per paint.
+			const QVector<QPixmap> &pix = scaledOutStrip(segs_[i].sourceId, strip, tileW, th);
+			for (const StripTile &t :
+			     filmstripTiles(int(strip.size()), srcDur, s0, s1 - s0, r.x() + 1,
+					    std::max(1, r.width()), tileW, tileGap, r.x() + 1,
+					    r.right() - 1)) {
+				if (t.index < pix.size() && !pix[t.index].isNull())
+					p.drawPixmap(QPoint(t.x, r.y() + 1), pix[t.index]);
 			}
 			p.restore();
 		}

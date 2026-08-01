@@ -13,6 +13,7 @@
 #include <QThread>
 #include <QWaitCondition>
 
+#include <algorithm>
 #include <atomic>
 
 extern "C" {
@@ -37,6 +38,32 @@ QString proxyCacheDir()
 	const QString dir = base + QStringLiteral("/harpia/proxies");
 	QDir().mkpath(dir);
 	return dir;
+}
+
+qint64 pruneProxyCache(qint64 maxBytes)
+{
+	// The cache had no ceiling at all, and its keys include mtime -- so every
+	// re-encode of a source ORPHANS its old proxy, permanently. Least-recently
+	// -USED first: a proxy that was read yesterday is worth more than one
+	// written last month and never opened since.
+	QDir dir(proxyCacheDir());
+	QFileInfoList files = dir.entryInfoList({QStringLiteral("*.mp4")}, QDir::Files);
+	qint64 total = 0;
+	for (const QFileInfo &f : files)
+		total += f.size();
+	if (total <= maxBytes)
+		return 0;
+	std::sort(files.begin(), files.end(), [](const QFileInfo &a, const QFileInfo &b) {
+		return a.lastRead() < b.lastRead();
+	});
+	qint64 freed = 0;
+	for (const QFileInfo &f : files) {
+		if (total - freed <= maxBytes)
+			break;
+		if (QFile::remove(f.absoluteFilePath()))
+			freed += f.size();
+	}
+	return freed;
 }
 
 QString proxyPathFor(const QString &sourcePath)

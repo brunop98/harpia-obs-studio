@@ -363,6 +363,11 @@ private:
 	// Built from what can actually be opened, so the dialog never offers a
 	// format the editor would then refuse.
 	QHash<int, QImage> stillImages_; // sourceId -> decoded still
+	// Timeline playback: the last sequentially-decoded frame per source, so a
+	// source whose next frame is not due yet (timeline tick faster than its
+	// fps) is reused instead of forcing the seeker to over-advance.
+	QHash<int, QImage> playFrameCache_;
+	QSize playFrameCacheSize_;
 	void addImageClip();
 	// A video or image dropped from the desktop onto the timeline lanes.
 	void onFilesDroppedOnTimeline(const QStringList &paths, int track, int newTrackAt,

@@ -128,8 +128,21 @@ void PreviewCanvas::paintEvent(QPaintEvent *)
 	QPainter p(this);
 	p.fillRect(rect(), QColor(0x0d, 0x0e, 0x11));
 	const QRect d = displayRect();
-	if (!frame_.isNull())
-		p.drawImage(frameRect(), frame_);
+	if (!frame_.isNull()) {
+		// The frame is scaled ONCE per (frame, target size) and blitted on
+		// every repaint after that. Plenty of repaints happen with no new
+		// frame at all -- dragging a transform handle, moving a mask, the
+		// centre guides -- and each was silently re-running a full-frame CPU
+		// rescale to draw exactly the same pixels.
+		const QRect fr = frameRect();
+		if (scaledFrame_.isNull() || scaledFrame_.size() != fr.size() ||
+		    scaledForKey_ != frame_.cacheKey()) {
+			scaledFrame_ = QPixmap::fromImage(frame_.scaled(
+				fr.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+			scaledForKey_ = frame_.cacheKey();
+		}
+		p.drawPixmap(fr.topLeft(), scaledFrame_);
+	}
 
 	// Full editing: dashed outline of the clip being manipulated (canvas px ->
 	// widget px), so it's obvious what scroll/drag will move.

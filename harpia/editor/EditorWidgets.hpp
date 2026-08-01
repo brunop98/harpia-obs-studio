@@ -151,6 +151,11 @@ private:
 
 	PreviewLayoutParams lp_;
 	QImage frame_;
+	// The frame pre-scaled to frameRect(), rebuilt only when the frame or the
+	// target size changes -- handle drags repaint without a new frame, and a
+	// full-frame rescale per repaint was the most expensive no-op here.
+	QPixmap scaledFrame_;
+	qint64 scaledForKey_ = -1;
 	int vw_ = 0, vh_ = 0;
 	bool cropEnabled_ = false;
 	QRect cropVideo_; // source pixels

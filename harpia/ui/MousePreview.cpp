@@ -24,7 +24,33 @@ MousePreview::MousePreview(QWidget *parent) : QWidget(parent)
 			rippleIndex_ = (rippleIndex_ + 1) % 2; // next loop: other button's color
 		update();
 	});
-	timer_->start();
+	// Not started here: syncTimer() runs the animation only while the widget
+	// is actually on screen with an effect to preview. It used to animate at
+	// 30 Hz for the whole life of the dialog -- other tabs, effects off,
+	// dialog covered -- which is a lot of repaints of a picture nobody sees.
+}
+
+void MousePreview::syncTimer()
+{
+	const bool want = isVisible() && (showArea_ || showClicks_);
+	if (want == timer_->isActive())
+		return;
+	if (want)
+		timer_->start();
+	else
+		timer_->stop();
+}
+
+void MousePreview::showEvent(QShowEvent *e)
+{
+	QWidget::showEvent(e);
+	syncTimer();
+}
+
+void MousePreview::hideEvent(QHideEvent *e)
+{
+	QWidget::hideEvent(e);
+	syncTimer();
 }
 
 void MousePreview::configure(bool showArea, const QColor &areaColor, int areaSize, bool showClicks,
@@ -36,6 +62,7 @@ void MousePreview::configure(bool showArea, const QColor &areaColor, int areaSiz
 	showClicks_ = showClicks;
 	leftClickColor_ = leftClickColor;
 	rightClickColor_ = rightClickColor;
+	syncTimer();
 	update();
 }
 

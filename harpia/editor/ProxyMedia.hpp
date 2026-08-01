@@ -35,6 +35,11 @@ QString proxyPathFor(const QString &sourcePath);
 
 // The folder proxies are cached in (created on demand).
 QString proxyCacheDir();
+// Evict least-recently-USED proxies until the cache fits under maxBytes.
+// Returns the bytes freed. Needed because the key includes mtime: re-encoding
+// a source orphans its old proxy forever, so without pruning the cache only
+// ever grows.
+qint64 pruneProxyCache(qint64 maxBytes);
 
 // Whether a source is worth proxying. Yes for anything above 1080p, and for the
 // codecs that are slow to seek even at 1080p (VP8/VP9/AV1 -- WEBM downloads are

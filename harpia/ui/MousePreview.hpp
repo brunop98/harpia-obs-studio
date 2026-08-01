@@ -22,8 +22,13 @@ public:
 
 protected:
 	void paintEvent(QPaintEvent *) override;
+	void showEvent(QShowEvent *) override;
+	void hideEvent(QHideEvent *) override;
 
 private:
+	// Run the 30 Hz loop only while visible with an effect on -- it used to
+	// animate for the dialog's whole lifetime, unseen.
+	void syncTimer();
 	bool showArea_ = false;
 	QColor areaColor_ = QColor(0xff, 0xd5, 0x4a);
 	int areaSize_ = 60;

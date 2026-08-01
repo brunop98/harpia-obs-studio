@@ -109,7 +109,13 @@ std::vector<AudioDevice> WebcamRecorder::cameras()
 		obs_properties_destroy(sp);
 	}
 
-	blog(LOG_INFO, "[harpia] webcam enumeration found %zu device(s) via '%s'", out.size(), id);
+	// Log on CHANGE, not per call: this runs on the periodic readiness probe,
+	// and "still 1 device" hundreds of times an hour buries real log lines.
+	static size_t lastLogged = (size_t)-1;
+	if (out.size() != lastLogged) {
+		lastLogged = out.size();
+		blog(LOG_INFO, "[harpia] webcam enumeration found %zu device(s) via '%s'", out.size(), id);
+	}
 	return out;
 }
 

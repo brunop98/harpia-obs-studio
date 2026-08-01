@@ -3,6 +3,7 @@
 #include "core/AudioManager.hpp"
 #include "core/CaptureManager.hpp"
 #include "core/RecordingController.hpp"
+#include "core/DiskSpace.hpp"
 #include "core/FollowMouse.hpp"
 #include "core/RegionWatch.hpp"
 #include "core/WebcamRecorder.hpp"
@@ -17,11 +18,13 @@
 #include <QPoint>
 #include <QMainWindow>
 #include <QSize>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
+struct os_inhibit_info; // libobs sleep inhibitor (util/platform.h)
 class QListWidget;
 class QListWidgetItem;
 class QPushButton;
@@ -146,7 +149,41 @@ private slots:
 
 private:
 	const Preset &activePreset() const;
-	QScreen *screenForActivePreset() const; // display the active preset captures
+	QScreen *screenForActivePreset() const; // display the active preset captures (memoized)
+	QScreen *resolveScreenForActivePreset() const; // the real (expensive) lookup
+	mutable QScreen *screenCache_ = nullptr;
+	mutable int screenCacheMonitor_ = -1;
+
+	// Free-space label state: queried on a worker thread, cached ~3 s. See
+	// updateDiskLabel for why the GUI thread must never touch QStorageInfo.
+	qint64 diskLabelMs_ = 0;
+	QString diskLabelFolder_;
+	DiskStatus diskLabelStatus_;
+	bool diskQueryBusy_ = false;
+
+	// OS sleep inhibitor, held while a recording is running (created at start,
+	// released when the output finishes). Null when idle. Global-scope type:
+	// libobs declares it outside any namespace.
+	::os_inhibit_info *sleepInhibit_ = nullptr;
+
+	// Stop handoff. The muxer's own "stop" signal (recorder_.onFinished) is
+	// what says the file is closed; finalizeAfterStop() runs from it with no
+	// added delay. The old path -- notice via the 250 ms poll, then sleep
+	// 700 ms "so the muxer finishes flushing" -- survives only as a fallback
+	// for an output that dies without signalling.
+	void finalizeAfterStop();
+	// resetVideo + capture source + crop, extracted so the countdown can run
+	// it early and hide its cost; every call inside dedupes, so re-running at
+	// the countdown's zero mark is nearly free.
+	void armVideoPipeline();
+	// Startup: offer to remux recordings orphaned by a crash into real MP4s.
+	void offerOrphanRecovery(const QStringList &orphans);
+	// What armVideoPipeline() decided, for the filename tokens and the start log.
+	uint32_t armedW_ = 0, armedH_ = 0;
+	int armedFps_ = 0;
+	bool stopHandled_ = false;             // finalize ran (or is scheduled to)
+	std::atomic<bool> outputStopped_{false}; // set on the obs signal thread
+	int lastPrimaryUiState_ = -1; // primary-button churn guard (see updateButtons)
 	QSize canvasForActivePreset() const;    // that display's size in device px
 	QStringList presetFolders() const;
 	ClipLibrary::PresetByFolder presetFolderMap() const;
@@ -386,7 +423,10 @@ private:
 	// Deferred-close bookkeeping: the user confirmed closing while a recording
 	// (or its finalize/remux) was still in flight; close as soon as it's done.
 	bool closePending_ = false;
-	bool remuxActive_ = false;
+	// A COUNT, not a flag: crash recovery can run several remuxes at once, and
+	// a bool would be cleared by whichever finished first while the rest were
+	// still writing.
+	int remuxActive_ = 0;
 
 	// Pre-recording countdown state.
 	bool countingDown_ = false;

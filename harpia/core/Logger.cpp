@@ -131,6 +131,24 @@ void Logger::writeLine(LogLevel level, const std::string &text)
 {
 	if (!file_)
 		return;
+	// A ceiling within the session. Rotation only ever counted FILES, so one
+	// all-day recording session could grow a single log without limit; past
+	// 50 MB the file stops being readable by a human anyway, which is the only
+	// audience it has. Errors and warnings still get through -- they are the
+	// lines an investigation is actually for.
+	constexpr long kMaxLogBytes = 50L * 1024 * 1024;
+	if (level != LogLevel::Error && level != LogLevel::Warning) {
+		const long at = std::ftell(file_);
+		if (at > kMaxLogBytes) {
+			if (!sizeCapNoted_) {
+				sizeCapNoted_ = true;
+				std::fprintf(file_, "===== log size cap reached; info lines suppressed "
+						    "for the rest of the session =====\n");
+				std::fflush(file_);
+			}
+			return;
+		}
+	}
 	const std::string ts = timestamp(nowMs(), "%H:%M:%S");
 	std::fprintf(file_, "[%s] %-7s %s\n", ts.c_str(), logLevelName(level), text.c_str());
 	// Force-flush only what a crash investigation actually needs. libobs is

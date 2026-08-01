@@ -101,6 +101,10 @@ private:
 	obs_source_t *source_ = nullptr;
 	obs_source_t *cropFilter_ = nullptr;
 	CaptureRegion region_;
+	// What the live source was built with, so an identical startCapture() call
+	// can keep it instead of rebuilding. -1 = no live source.
+	int monitorIndex_ = -1;
+	bool captureCursor_ = true;
 };
 
 } // namespace harpia

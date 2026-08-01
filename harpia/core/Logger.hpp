@@ -48,6 +48,7 @@ private:
 	std::string logDir_;
 	std::string filePath_;
 	std::FILE *file_ = nullptr;
+	bool sizeCapNoted_ = false; // the size-cap banner was written this session
 	RawLogHandler prevHandler_ = nullptr;
 	void *prevParam_ = nullptr;
 	bool initialized_ = false;

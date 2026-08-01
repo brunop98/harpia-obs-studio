@@ -31,7 +31,8 @@
 #include "library/ClipLibrary.hpp"
 #include "model/PresetStore.hpp"
 
-#include <util/base.h> // blog
+#include <util/base.h>     // blog
+#include <util/platform.h> // os_inhibit_sleep, os_gettime_ns
 
 #if defined(_WIN32)
 #include <windows.h> // EnumDisplayDevices — correlate OBS monitor_id → QScreen
@@ -85,6 +86,7 @@
 
 #include "core/DiskSpace.hpp"
 #include <QStyle>
+#include <QThread>
 #include <QThreadPool>
 #include <QTime>
 #include <QTimer>
@@ -590,7 +592,12 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(audioPanel_, &AudioPanel::changed, this, &MainWindow::onAudioChanged);
 
 	recorder_.onFinished = [this](const std::string &) {
+		// Fires on the obs signal thread when the output has FULLY stopped --
+		// encoders detached, file closed. This is the muxer's own word, which
+		// is why finalize can run from here with no sleep bolted on top.
+		outputStopped_.store(true);
 		QMetaObject::invokeMethod(this, "refreshRecentList", Qt::QueuedConnection);
+		QMetaObject::invokeMethod(this, [this]() { finalizeAfterStop(); }, Qt::QueuedConnection);
 	};
 
 	mouseFx_ = std::make_unique<MouseFxOverlay>();
@@ -644,6 +651,19 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(regionTool_.get(), &RegionTool::manageRegionsRequested, this,
 		&MainWindow::openSavedRegionsManager);
 
+	// The memoized OBS-monitor -> QScreen mapping holds until the display
+	// topology changes. When it does, the live capture source may also be
+	// pointing at a display that no longer exists, so it is rebuilt too --
+	// applyLiveCapture() is already a no-op while recording.
+	const auto screensChanged = [this]() {
+		screenCache_ = nullptr;
+		screenCacheMonitor_ = -1;
+		if (!recorder_.isRecording() && !starting_ && !stopping_)
+			applyLiveCapture();
+	};
+	connect(qApp, &QGuiApplication::screenAdded, this, screensChanged);
+	connect(qApp, &QGuiApplication::screenRemoved, this, screensChanged);
+
 	// Populate the capture dropdown with any saved regions, and the display list.
 	reloadCaptureModeCombo();
 	reloadMonitorCombo();
@@ -679,7 +699,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	meterTimer_ = new QTimer(this);
 	meterTimer_->setInterval(80);
 	connect(meterTimer_, &QTimer::timeout, audioPanel_, &AudioPanel::updateMeters);
-	meterTimer_->start();
+	// Not started here: tickState starts and stops it (see the gate there).
+	// A 12.5 Hz progress-bar update loop running while the window is minimized
+	// and no audio source is even enabled is the definition of idle work.
 
 	// Re-validate readiness periodically to catch hardware changes (a monitor
 	// disconnected, a webcam/mic unplugged) without a restart.
@@ -736,23 +758,90 @@ void MainWindow::finishStartup()
 	refreshWebcamRow();
 	updateButtons(); // readiness may have changed what is allowed
 
-	// Surface (but never list) recordings orphaned by a crash/kill — they stay
-	// in each output folder's hidden .harpia_tmp for manual salvage instead of
-	// showing up in Recent Recordings as broken clips.
+	// Recordings orphaned by a crash/kill sit in each output folder's hidden
+	// .harpia_tmp. They used to get one WARNING line and nothing else, which
+	// in practice meant: nobody ever saw them, nothing ever deleted them, and
+	// a crashing install quietly accumulated full-size MKVs forever. They are
+	// genuinely recoverable -- MKV finalizes progressively, that is why it is
+	// the temp format -- so recovering them is one remux away.
+	QStringList orphanPaths;
 	for (const QString &folder : presetFolders()) {
 		const QDir tmpDir(folder + QStringLiteral("/.harpia_tmp"));
-		const QStringList orphans = tmpDir.entryList(QDir::Files);
-		for (const QString &f : orphans)
+		for (const QString &f : tmpDir.entryList(QDir::Files)) {
+			const QString path = tmpDir.filePath(f);
 			blog(LOG_WARNING, "[harpia] orphaned partial recording (crash/kill?): %s",
-			     tmpDir.filePath(f).toUtf8().constData());
+			     path.toUtf8().constData());
+			// Tiny stubs (a header and nothing else) hold no recoverable
+			// video -- delete instead of offering a guaranteed-broken file.
+			if (QFileInfo(path).size() < 256 * 1024)
+				QFile::remove(path);
+			else
+				orphanPaths.append(path);
+		}
+	}
+	if (!orphanPaths.isEmpty())
+		offerOrphanRecovery(orphanPaths);
+}
+
+void MainWindow::offerOrphanRecovery(const QStringList &orphans)
+{
+	QMessageBox box(this);
+	box.setWindowTitle(QStringLiteral("Unfinished recordings found"));
+	box.setIcon(QMessageBox::Question);
+	box.setText(QStringLiteral("%1 recording(s) did not finish saving — most likely a crash or "
+				   "forced shutdown.\n\nRecover them into your output folder?")
+			    .arg(orphans.size()));
+	QStringList names;
+	for (const QString &p : orphans)
+		names << QFileInfo(p).fileName();
+	box.setInformativeText(names.join(QLatin1Char('\n')));
+	QPushButton *recover = box.addButton(QStringLiteral("Recover"), QMessageBox::AcceptRole);
+	QPushButton *discard = box.addButton(QStringLiteral("Delete"), QMessageBox::DestructiveRole);
+	box.addButton(QStringLiteral("Later"), QMessageBox::RejectRole);
+	box.setDefaultButton(recover);
+	box.exec();
+
+	if (box.clickedButton() == discard) {
+		for (const QString &p : orphans) {
+			QFile::remove(p);
+			QDir().rmdir(QFileInfo(p).absolutePath()); // the tmp dir, if now empty
+		}
+		return;
+	}
+	if (box.clickedButton() != recover)
+		return; // Later: files stay put, offered again next launch
+
+	// Recovery IS the normal finalize: remux the MKV to an MP4 beside it, in
+	// the output folder, named so it cannot collide with a live recording.
+	for (const QString &p : orphans) {
+		const QFileInfo fi(p);
+		const QString outFolder = QFileInfo(fi.absolutePath()).absolutePath(); // .harpia_tmp's parent
+		const QString target = QDir(outFolder).filePath(fi.completeBaseName() +
+								QStringLiteral("_recovered.mp4"));
+		remuxInBackground(p, target);
 	}
 }
 
 MainWindow::~MainWindow()
 {
 	webcam_.stop();
-	if (recorder_.isRecording())
+	if (recorder_.isRecording()) {
+		// stop() is asynchronous, and destroying RecordingController while the
+		// output is still winding down force-truncates the file. closeEvent
+		// handles the normal quit; this covers every path that bypasses it
+		// (session logout, QApplication::quit, a fatal elsewhere). Bounded:
+		// a stuck muxer must not turn quitting into a hang.
 		recorder_.stop();
+		const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + 8000;
+		while (!outputStopped_.load() && recorder_.isRecording() &&
+		       QDateTime::currentMSecsSinceEpoch() < deadline)
+			QThread::msleep(50);
+	}
+	if (sleepInhibit_) {
+		os_inhibit_sleep_set_active(sleepInhibit_, false);
+		os_inhibit_sleep_destroy(sleepInhibit_);
+		sleepInhibit_ = nullptr;
+	}
 }
 
 void MainWindow::applyStripMetrics()
@@ -995,6 +1084,23 @@ static std::vector<std::pair<QString, QRect>> activeGdiDisplays()
 
 QScreen *MainWindow::screenForActivePreset() const
 {
+	// Memoized: on Windows the resolution below is monitor enumeration plus a
+	// GDI lookup per display plus QueryDisplayConfig per display -- and it was
+	// being re-run three or four times per Record press (canvas, mouse FX,
+	// screen border, countdown), none of which had changed since the last call.
+	// The cache is dropped when the monitor choice changes and when the screen
+	// list itself changes (connected in the constructor).
+	if (screenCache_ && screenCacheMonitor_ == activePreset().monitorIndex &&
+	    QGuiApplication::screens().contains(screenCache_))
+		return screenCache_;
+	QScreen *resolved = resolveScreenForActivePreset();
+	screenCache_ = resolved;
+	screenCacheMonitor_ = activePreset().monitorIndex;
+	return resolved;
+}
+
+QScreen *MainWindow::resolveScreenForActivePreset() const
+{
 	const QList<QScreen *> screens = QGuiApplication::screens();
 	if (screens.isEmpty())
 		return nullptr;
@@ -1090,16 +1196,8 @@ QString MainWindow::buildOutputPath(const Preset &preset) const
 						       QString::fromStdString(preset.extension())));
 }
 
-void MainWindow::startRecording()
+void MainWindow::armVideoPipeline()
 {
-	// Readiness gate: never start while blocking warnings exist.
-	refreshReadiness();
-	if (recordingBlocked_) {
-		starting_ = false;
-		updateButtons();
-		return;
-	}
-
 	const Preset &preset = activePreset();
 
 	// Always record at the native resolution of what's being captured: the exact
@@ -1132,11 +1230,33 @@ void MainWindow::startRecording()
 	capture_.startCapture(preset.monitorIndex, preset.showMouseCursor);
 	capture_.setRegion(currentRegion_);
 
+	armedW_ = baseW;
+	armedH_ = baseH;
+	armedFps_ = fps;
+}
+
+void MainWindow::startRecording()
+{
+	// Readiness gate: never start while blocking warnings exist.
+	refreshReadiness();
+	if (recordingBlocked_) {
+		starting_ = false;
+		updateButtons();
+		return;
+	}
+
+	const Preset &preset = activePreset();
+
+	// The video pipeline. Also run at countdown start (beginRecordFlow), where
+	// its cost hides behind the countdown; the calls inside dedupe, so this
+	// second pass is nearly free when a countdown already armed everything.
+	armVideoPipeline();
+
 	// Build the context tokens the clock can't supply, then expand once so the
 	// screen and webcam files share a base name.
 	std::map<std::string, std::string> vars;
 	vars["Preset"] = preset.name;
-	vars["Resolution"] = std::to_string(baseW) + "x" + std::to_string(baseH);
+	vars["Resolution"] = std::to_string(armedW_) + "x" + std::to_string(armedH_);
 	vars["FPS"] = std::to_string(preset.fps) + "fps";
 	vars["Codec"] = QString::fromUtf8(codecToString(preset.codec)).toUpper().toStdString();
 	vars["Counter"] = QStringLiteral("%1").arg(preset.recordingCounter, 4, 10, QLatin1Char('0')).toStdString();
@@ -1179,6 +1299,20 @@ void MainWindow::startRecording()
 		return;
 	}
 
+	// Keep the machine awake for the life of the recording. Without this a
+	// long unattended take ends when the OS sleep timer does -- and this app's
+	// own idle auto-pause makes unattended recording an expected use, not an
+	// edge case.
+	if (!sleepInhibit_) {
+		sleepInhibit_ = os_inhibit_sleep_create("Harpia recording");
+		if (sleepInhibit_)
+			os_inhibit_sleep_set_active(sleepInhibit_, true);
+	}
+
+	// Arm the stop handoff for this recording.
+	stopHandled_ = false;
+	outputStopped_.store(false);
+
 	// Remember this recording's files + minimum length for the short-clip check
 	// and the post-stop remux.
 	lastRecordedPath_ = recordPath;
@@ -1209,7 +1343,7 @@ void MainWindow::startRecording()
 		}
 	}
 
-	logRecordingStart(preset, recordPath, screenPath, lastWebcamPath_, baseW, baseH, fps);
+	logRecordingStart(preset, recordPath, screenPath, lastWebcamPath_, armedW_, armedH_, armedFps_);
 
 	// Focus auto-pause: "Record only one application" doesn't change the capture
 	// source (that stays the selected mode — region/monitor); it only names the
@@ -1292,6 +1426,12 @@ void MainWindow::beginRecordFlow()
 	if (cd > 0 && countdownOverlay_) {
 		countingDown_ = true;
 		countdownRemaining_ = cd;
+		// Do the slow half NOW, behind the countdown, where it is invisible:
+		// rebuilding the video pipeline and (re)creating the capture source
+		// are the two multi-hundred-ms parts of starting. Both are idempotent
+		// -- startRecording() calls them again at zero and they early-out --
+		// so the zero-mark is left with essentially just obs_output_start.
+		armVideoPipeline();
 		countdownOverlay_->start(cd, screenForActivePreset());
 		updateButtons();
 		return;
@@ -1306,7 +1446,14 @@ void MainWindow::beginRecordFlow()
 bool MainWindow::confirmDiskSpace()
 {
 	const QString folder = QString::fromStdString(activePreset().outputFolder);
-	const DiskStatus st = diskStatusFor(folder);
+	DiskStatus st = diskStatusFor(folder);
+	// MP4 records to a temp MKV and remuxes on the same volume, so finalizing
+	// transiently needs room for BOTH copies. Judging the free space at half
+	// its real value bakes that in: a drive that passes here can also finish.
+	// Without this, a long take could pass every check and then fail at the
+	// one step that cannot be retried.
+	if (activePreset().format == RecordingFormat::MP4 && st.freeBytes >= 0)
+		st.level = diskLevelFor(st.freeBytes / 2);
 	const QString prompt = lowDiskPrompt(st);
 	if (prompt.isEmpty())
 		return true; // plenty of room, or a drive that will not say
@@ -1344,12 +1491,60 @@ void MainWindow::updateDiskLabel()
 	if (!diskLabel_)
 		return;
 	const QString folder = QString::fromStdString(activePreset().outputFolder);
-	const DiskStatus st = diskStatusFor(folder);
+
+	// The query runs OFF the GUI thread. QStorageInfo's constructor stats the
+	// volume, and on a disconnected network share that blocks for seconds --
+	// which, called from a 1.5 s timer, is a frozen window on repeat. Free
+	// space also does not change perceptibly faster than every few seconds, so
+	// the answer is cached and the label simply lags a little instead.
+	const qint64 now = QDateTime::currentMSecsSinceEpoch();
+	const bool stale = diskLabelMs_ == 0 || now - diskLabelMs_ > 3000 || folder != diskLabelFolder_;
+	if (stale && !diskQueryBusy_) {
+		diskQueryBusy_ = true;
+		QThreadPool::globalInstance()->start([this, folder]() {
+			const DiskStatus st = diskStatusFor(folder);
+			QMetaObject::invokeMethod(
+				this,
+				[this, folder, st]() {
+					diskQueryBusy_ = false;
+					diskLabelMs_ = QDateTime::currentMSecsSinceEpoch();
+					diskLabelFolder_ = folder;
+					diskLabelStatus_ = st;
+					updateDiskLabel(); // render the fresh answer
+				},
+				Qt::QueuedConnection);
+		});
+	}
+
+	// Render whatever is known. Until the first answer arrives, that is the
+	// folder alone -- honest, and never a stall.
+	const DiskStatus st = (folder == diskLabelFolder_) ? diskLabelStatus_ : DiskStatus{};
 	diskLabel_->setText(diskLine(folder, st));
 	const char *colour = st.level == DiskLevel::Critical ? "#e5484d"
 			     : st.level == DiskLevel::Low   ? "#f5a524"
 							    : "#7d838f";
 	diskLabel_->setStyleSheet(QStringLiteral("color:%1;").arg(QLatin1String(colour)));
+}
+
+void MainWindow::finalizeAfterStop()
+{
+	// Runs at most once per recording, whichever messenger arrives first: the
+	// output's stop signal (the fast, correct path) or the poll's deferred
+	// fallback. (1) offer to discard a too-short recording, then (2) remux the
+	// temp .mkv to the final .mp4.
+	if (stopHandled_)
+		return;
+	stopHandled_ = true;
+
+	const bool needMinCheck = (lastMinSeconds_ > 0 && lastContentMs_ > 0 &&
+				   lastContentMs_ < (qint64)lastMinSeconds_ * 1000);
+	const bool needsRemux = (!lastRecordedPath_.isEmpty() && lastRecordedPath_ != lastScreenPath_);
+	if (needMinCheck || needsRemux)
+		finalizeStopped(lastRecordedPath_, lastScreenPath_, lastWebcamPath_, markersPath_,
+				lastContentMs_, needMinCheck ? lastMinSeconds_ : 0, needsRemux);
+	else if (closePending_)
+		close(); // close was requested mid-recording; the file is flushed now
+	markersPath_.clear();
 }
 
 void MainWindow::beginStart()
@@ -1470,7 +1665,7 @@ void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Pat
 	// silently appears "late" in the recent strip and saving looks stuck.
 	statusBar()->showMessage(QStringLiteral("Saving recording… (finalizing MP4, %1 MB)")
 					 .arg(srcSize / (1024 * 1024)));
-	remuxActive_ = true; // a pending close must wait for this to finish
+	++remuxActive_; // a pending close must wait for every in-flight remux
 
 	QPointer<MainWindow> guard(this);
 	const qint64 startMs = QDateTime::currentMSecsSinceEpoch();
@@ -1504,7 +1699,7 @@ void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Pat
 					     fallback.toUtf8().constData());
 				}
 				if (guard) {
-					guard->remuxActive_ = false;
+					guard->remuxActive_ = std::max(0, guard->remuxActive_ - 1);
 					if (ok)
 						guard->statusBar()->showMessage(
 							QStringLiteral("Recording saved (%1 MB, %2 s)")
@@ -1517,7 +1712,8 @@ void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Pat
 								       "kept as MKV"),
 							10000);
 					guard->refreshClipViews();
-					if (guard->closePending_)
+					// Only once the LAST in-flight remux is done.
+					if (guard->closePending_ && guard->remuxActive_ == 0)
 						guard->close();
 				}
 			},
@@ -1830,8 +2026,15 @@ void MainWindow::refreshReadiness()
 	// Hardware enumeration (monitors / mics / cameras) is expensive — each call
 	// builds obs source properties, and the camera probe even creates a source.
 	// Re-probe at most every few seconds instead of on every 1.5s readiness tick.
+	// And NEVER while a recording is active. The DirectShow camera probe alone
+	// can stall the UI for hundreds of milliseconds -- against a device the
+	// recording is holding open -- and the answers cannot be acted on anyway:
+	// the controls these probes feed are locked during a recording. The cache
+	// is at most a few seconds stale when the recording ends, and the next
+	// idle tick refreshes it.
+	const bool recActive = recorder_.isRecording() || starting_ || stopping_;
 	const qint64 now = QDateTime::currentMSecsSinceEpoch();
-	if (hwProbeMs_ == 0 || now - hwProbeMs_ > 4000) {
+	if (!recActive && (hwProbeMs_ == 0 || now - hwProbeMs_ > 4000)) {
 		hwProbeMs_ = now;
 		hwMonitorCount_ = (int)CaptureManager::enumerateMonitors().size();
 		hwInputIds_.clear();
@@ -2872,6 +3075,18 @@ void MainWindow::updateButtons()
 				      "\xE2\xA0\x87", "\xE2\xA0\x8F"};
 	const QString spin = QString::fromUtf8(kSpin[((spinPhase_ % 10) + 10) % 10]);
 
+	// The primary button's steady states are re-applied only on change:
+	// setIcon never compares, so calling it four times a second repaints and
+	// re-lays-out a button that looks exactly the same. The transitional
+	// states still update per tick -- their text IS the animation.
+	const int primaryState = countingDown_ ? 0
+				 : starting_  ? 1
+				 : stopping_  ? 2
+				 : recording  ? 3
+					      : (recordingBlocked_ ? 5 : 4);
+	const bool primaryChanged = primaryState != lastPrimaryUiState_;
+	lastPrimaryUiState_ = primaryState;
+
 	// Single Record/Stop toggle, with transitional Starting…/Stopping… states.
 	if (countingDown_) {
 		primaryButton_->setText(QStringLiteral("Starting in %1…").arg(countdownRemaining_));
@@ -2886,11 +3101,13 @@ void MainWindow::updateButtons()
 		primaryButton_->setEnabled(false);
 		primaryButton_->setToolTip(QString());
 	} else if (recording) {
-		primaryButton_->setText(QStringLiteral("Stop"));
-		primaryButton_->setIcon(uiIcon(Glyph::Stop, 14));
-		primaryButton_->setEnabled(true);
-		primaryButton_->setToolTip(QString());
-	} else {
+		if (primaryChanged) {
+			primaryButton_->setText(QStringLiteral("Stop"));
+			primaryButton_->setIcon(uiIcon(Glyph::Stop, 14));
+			primaryButton_->setEnabled(true);
+			primaryButton_->setToolTip(QString());
+		}
+	} else if (primaryChanged) {
 		primaryButton_->setText(QStringLiteral("Record"));
 		primaryButton_->setIcon(uiIcon(Glyph::Record, 14, QColor(0xe5, 0x48, 0x4d)));
 		primaryButton_->setEnabled(!recordingBlocked_);
@@ -3044,6 +3261,20 @@ void MainWindow::tickState()
 	// timer, which only runs while armed.
 	syncFollowMouse();
 
+	// Audio meters animate only when someone could be looking at them AND
+	// there is a live source to meter. QTimer::start on a running timer just
+	// restarts it, so this is guarded to actual transitions.
+	if (meterTimer_ && audioPanel_) {
+		const bool wantMeters = isVisible() && !(windowState() & Qt::WindowMinimized) &&
+					(audioPanel_->desktopOn() || !audioPanel_->enabledMicIds().empty());
+		if (wantMeters != meterTimer_->isActive()) {
+			if (wantMeters)
+				meterTimer_->start();
+			else
+				meterTimer_->stop();
+		}
+	}
+
 	// Stop watchdog: obs_output_stop is async and a stuck muxer/encoder can
 	// hang it indefinitely (previously: kill via Task Manager). After 10s,
 	// force-stop the output — the file may lose its tail, but the app lives.
@@ -3078,6 +3309,12 @@ void MainWindow::tickState()
 			pauseStartMs_ = 0;
 			wasPaused_ = false;
 			updateRegionToolVisibility(); // leave recording mode
+			// The machine may sleep again.
+			if (sleepInhibit_) {
+				os_inhibit_sleep_set_active(sleepInhibit_, false);
+				os_inhibit_sleep_destroy(sleepInhibit_);
+				sleepInhibit_ = nullptr;
+			}
 			if (mouseFx_)
 				mouseFx_->stop();
 			if (screenBorder_)
@@ -3099,32 +3336,14 @@ void MainWindow::tickState()
 					10000);
 			}
 
-			// Post-stop handling — deferred briefly so the muxer finishes
-			// flushing before we read/delete files: (1) offer to discard a
-			// too-short recording, then (2) remux the temp .mkv to the final
-			// .mp4. Only scheduled when there's actually work to do.
-			const bool needMinCheck = (lastMinSeconds_ > 0 && lastContentMs_ > 0 &&
-						   lastContentMs_ < (qint64)lastMinSeconds_ * 1000);
-			const bool needsRemux =
-				(!lastRecordedPath_.isEmpty() && lastRecordedPath_ != lastScreenPath_);
-			if (needMinCheck || needsRemux) {
-				const QString recorded = lastRecordedPath_;
-				const QString finalP = lastScreenPath_;
-				const QString webcam = lastWebcamPath_;
-				const QString markers = markersPath_;
-				const int minS = needMinCheck ? lastMinSeconds_ : 0;
-				const qint64 contentMs = lastContentMs_;
-				QTimer::singleShot(700, this, [this, recorded, finalP, webcam, markers, minS,
-							       contentMs, needsRemux]() {
-					finalizeStopped(recorded, finalP, webcam, markers, contentMs, minS,
-							needsRemux);
-				});
-			} else if (closePending_) {
-				// The user asked to close mid-recording and there is no
-				// finalize work — close once the muxer has flushed.
-				QTimer::singleShot(750, this, [this]() { close(); });
-			}
-			markersPath_.clear();
+			// Post-stop handling normally runs from the output's own "stop"
+			// signal (finalizeAfterStop, via recorder_.onFinished) the moment
+			// the file is closed -- no sleep needed, because the signal IS
+			// the muxer saying it finished. This poll only backstops an
+			// output that died without signalling: if nothing has handled
+			// the stop shortly, fall back to the old deferred path.
+			if (!stopHandled_)
+				QTimer::singleShot(700, this, [this]() { finalizeAfterStop(); });
 		}
 		timerLabel_->setText(QStringLiteral("00:00:00"));
 		updateButtons();

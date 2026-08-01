@@ -164,6 +164,14 @@ bool CaptureManager::startWindowCapture(const std::string &windowValue, bool cap
 
 bool CaptureManager::startCapture(int monitorIndex, bool captureCursor)
 {
+	// Same display, same cursor flag, source already live: keep it. Tearing a
+	// working duplicator/WGC capture down to rebuild an identical one costs
+	// hundreds of milliseconds and risks black first frames -- and it used to
+	// happen on every Record press, throwing away the source finishStartup()
+	// built precisely so the first recording would start instantly.
+	if (source_ && monitorIndex == monitorIndex_ && captureCursor == captureCursor_)
+		return true;
+
 	stopCapture();
 
 	const char *id = platformCaptureId();
@@ -198,6 +206,8 @@ bool CaptureManager::startCapture(int monitorIndex, bool captureCursor)
 	}
 
 	obs_set_output_source(kVideoChannel, source_);
+	monitorIndex_ = monitorIndex;
+	captureCursor_ = captureCursor;
 	return true;
 }
 
@@ -254,6 +264,7 @@ void CaptureManager::stopCapture()
 		cropFilter_ = nullptr;
 	}
 
+	monitorIndex_ = -1; // no live source; the next startCapture must build one
 	if (source_) {
 		obs_source_release(source_);
 		source_ = nullptr;

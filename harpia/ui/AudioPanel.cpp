@@ -116,6 +116,7 @@ AudioPanel::AudioPanel(AudioManager &audio, QWidget *parent) : QWidget(parent), 
 		MicRow row;
 		row.id = dev.id;
 		const QString full = QString::fromStdString(dev.name);
+		row.fullName = full;
 		row.check = new QCheckBox(QStringLiteral("Mic: %1").arg(shortName(full)), this);
 		row.check->setFixedWidth(kLabelColumn);
 		row.check->setToolTip(full); // full name on hover
@@ -130,6 +131,7 @@ AudioPanel::AudioPanel(AudioManager &audio, QWidget *parent) : QWidget(parent), 
 		const std::string id = dev.id;
 		connect(row.check, &QCheckBox::toggled, this, [this, id](bool on) {
 			audio_.setMicEnabled(id, on);
+			syncMicCap();
 			emit changed();
 		});
 		connect(row.slider, &QSlider::valueChanged, this,
@@ -177,6 +179,29 @@ void AudioPanel::load(bool desktopOn, const std::vector<std::string> &micIds, do
 		}
 		audio_.setMicVolume(row.id, float(vol)); // before enable, so it applies on create
 		audio_.setMicEnabled(row.id, on);
+	}
+	syncMicCap();
+}
+
+void AudioPanel::syncMicCap()
+{
+	// The mixer has four mic channels (AudioManager, channels 3..6). A fifth
+	// enable used to be dropped with a log line and a checkbox that stayed
+	// ticked -- lying about what the recording would contain. Instead, once
+	// four are on, the remaining boxes disable with a tooltip that says why.
+	int on = 0;
+	for (const MicRow &row : micRows_)
+		if (row.check->isChecked())
+			++on;
+	const bool full = on >= 4;
+	for (MicRow &row : micRows_) {
+		if (row.check->isChecked())
+			continue; // an enabled row must always stay un-tickable
+		row.check->setEnabled(!full);
+		row.check->setToolTip(full ? QStringLiteral("Up to 4 microphones can record at once — "
+							    "untick one to use this device.\n%1")
+						     .arg(row.fullName)
+					   : row.fullName);
 	}
 }
 

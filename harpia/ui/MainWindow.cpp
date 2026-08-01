@@ -2131,7 +2131,16 @@ void MainWindow::refreshReadiness()
 	// idle tick refreshes it.
 	const bool recActive = recorder_.isRecording() || starting_ || stopping_;
 	const qint64 now = QDateTime::currentMSecsSinceEpoch();
-	if (!recActive && (hwProbeMs_ == 0 || now - hwProbeMs_ > 4000)) {
+	// On Windows, WM_DEVICECHANGE (see nativeEvent) forces an immediate
+	// re-probe the moment a device actually comes or goes, so the timer-based
+	// fallback can be lazy there. Elsewhere there is no such notification and
+	// the shorter TTL stays the only way changes are noticed.
+#if defined(_WIN32)
+	constexpr qint64 kProbeTtlMs = 15000;
+#else
+	constexpr qint64 kProbeTtlMs = 4000;
+#endif
+	if (!recActive && (hwProbeMs_ == 0 || now - hwProbeMs_ > kProbeTtlMs)) {
 		hwProbeMs_ = now;
 		hwMonitorCount_ = (int)CaptureManager::enumerateMonitors().size();
 		hwInputIds_.clear();
@@ -2681,6 +2690,29 @@ void MainWindow::updateRegionToolVisibility()
 	// -- and then bounce it straight back here on the next activation change.
 	regionTool_->setAttribute(Qt::WA_ShowWithoutActivating, !focused);
 	regionTool_->setVisible(st.visible);
+}
+
+bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr *result)
+{
+#if defined(_WIN32)
+	// WM_DEVICECHANGE: a camera, microphone or monitor came or went. This is
+	// the event the periodic hardware probe was standing in for -- with it,
+	// the probe timer can be lazy (15 s) and the answer is still fresh the
+	// moment it matters, because plugging a device in forces a re-probe NOW.
+	constexpr unsigned kDeviceChange = 0x0219;
+	if (eventType == "windows_generic_MSG") {
+		const MSG *msg = static_cast<const MSG *>(message);
+		if (msg->message == kDeviceChange) {
+			hwProbeMs_ = 0; // next readiness pass re-probes for real
+			if (readinessDebounce_)
+				readinessDebounce_->start();
+		}
+	}
+#else
+	Q_UNUSED(eventType);
+	Q_UNUSED(message);
+#endif
+	return QMainWindow::nativeEvent(eventType, message, result);
 }
 
 void MainWindow::changeEvent(QEvent *event)

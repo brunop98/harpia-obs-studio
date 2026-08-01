@@ -113,6 +113,8 @@
 
 #include "../library/ClipLibrary.hpp"
 #include "../library/ThumbnailCache.hpp"
+#include <QPointer>
+#include <QThreadPool>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -2245,7 +2247,41 @@ void VideoEditorWindow::addAudioClipFromSource(int sourceId)
 	EditorSource *s = sourceById(sourceId);
 	if (!s || !timelineView_)
 		return;
-	const QString wav = audioProxyFor(sourceId);
+	// The decode can take a while for a long video, and it used to run right
+	// here with a wait cursor -- the whole editor frozen for the length of an
+	// ffmpeg pass. Cached answers proceed immediately; a fresh decode runs on
+	// the pool and finishes the clip-add when it lands.
+	if (const auto it = audioProxy_.constFind(sourceId); it == audioProxy_.constEnd()) {
+		if (audioProxyPending_.contains(sourceId))
+			return; // one decode is already on its way to this very call
+		audioProxyPending_.insert(sourceId);
+		if (infoLabel_)
+			infoLabel_->setText(
+				QStringLiteral("Extracting audio from \"%1\"…").arg(s->name));
+		const QString path = s->path;
+		const QString cand = sessionAudioDir().isEmpty()
+					     ? QString()
+					     : sessionAudioDir() +
+						       QStringLiteral("/proxy_%1.wav").arg(sourceId);
+		QPointer<VideoEditorWindow> guard(this);
+		QThreadPool::globalInstance()->start([guard, sourceId, path, cand]() {
+			const bool ok = !cand.isEmpty() && VoiceoverMixer::decodeToWav(path, cand);
+			QMetaObject::invokeMethod(
+				qApp,
+				[guard, sourceId, ok, cand]() {
+					if (!guard)
+						return;
+					guard->audioProxyPending_.remove(sourceId);
+					guard->audioProxy_.insert(sourceId,
+								  ok ? cand : QString());
+					guard->updateInfoLabel(); // clears the "extracting…" note
+					guard->addAudioClipFromSource(sourceId); // now cached
+				},
+				Qt::QueuedConnection);
+		});
+		return;
+	}
+	const QString wav = audioProxyFor(sourceId); // cache hit: no decode, no stall
 	if (wav.isEmpty()) {
 		QMessageBox::information(this, QStringLiteral("Add audio"),
 					 QStringLiteral("\"%1\" has no audio track.").arg(s->name));

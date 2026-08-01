@@ -63,34 +63,52 @@ QVector<float> VoiceoverTrack::loadPeaks(const QString &path, int buckets)
 	QFile f(path);
 	if (!f.open(QIODevice::ReadOnly))
 		return peaks;
-	QByteArray all = f.readAll();
-	f.close();
-	if (all.size() <= 44)
-		return peaks;
 
 	// Parse the minimal WAV header we wrote (canonical 44-byte PCM).
-	auto u16 = [&](int off) { return quint16((quint8)all[off] | ((quint8)all[off + 1] << 8)); };
+	const QByteArray hdr = f.read(44);
+	if (hdr.size() < 44)
+		return peaks;
+	auto u16 = [&](int off) { return quint16((quint8)hdr[off] | ((quint8)hdr[off + 1] << 8)); };
 	const int channels = std::max<int>(1, u16(22));
 	const int bits = u16(34);
 	if (bits != 16)
 		return peaks; // only the 16-bit PCM we record
 
-	const char *pcm = all.constData() + 44;
-	const qint64 pcmBytes = all.size() - 44;
+	const qint64 pcmBytes = f.size() - 44;
 	const qint64 frames = pcmBytes / (2 * channels); // one frame = all channels
 	if (frames <= 0)
 		return peaks;
 
+	// Streamed, never readAll(): an hour of stereo WAV is ~700 MB, and this
+	// used to pull the whole of it into one QByteArray -- on the GUI thread,
+	// in the drop handler -- to compute 600 floats. A frame-aligned chunk at a
+	// time computes the same maxima with a fixed few MB in flight.
 	peaks.resize(buckets);
-	const auto *s = reinterpret_cast<const qint16 *>(pcm);
+	const int frameBytes = 2 * channels;
+	const qint64 chunkFrames = std::max<qint64>(1, (4 << 20) / frameBytes);
+	QByteArray chunk;
+	qint64 frameBase = 0; // absolute index of the chunk's first frame
+	qint64 loaded = 0;    // frames currently in `chunk`
 	for (int b = 0; b < buckets; ++b) {
 		const qint64 f0 = frames * b / buckets;
 		const qint64 f1 = std::max<qint64>(f0 + 1, frames * (b + 1) / buckets);
 		int peak = 0;
 		for (qint64 fr = f0; fr < f1 && fr < frames; ++fr) {
+			if (fr < frameBase || fr >= frameBase + loaded) {
+				// Buckets walk strictly forward, so this is a sequential
+				// read, not a seek pattern.
+				frameBase = fr;
+				f.seek(44 + frameBase * frameBytes);
+				chunk = f.read(chunkFrames * frameBytes);
+				loaded = chunk.size() / frameBytes;
+				if (loaded <= 0)
+					break; // short file: keep what we have
+			}
+			const auto *s = reinterpret_cast<const qint16 *>(chunk.constData());
+			const qint64 rel = fr - frameBase;
 			// Max across channels for this frame.
 			for (int c = 0; c < channels; ++c) {
-				const int v = std::abs((int)s[fr * channels + c]);
+				const int v = std::abs((int)s[rel * channels + c]);
 				peak = std::max(peak, v);
 			}
 		}

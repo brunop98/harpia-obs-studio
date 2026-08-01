@@ -49,11 +49,15 @@ private:
 
 	struct MicRow {
 		std::string id;
+		QString fullName; // the device's full name (the checkbox label is shortened)
 		QCheckBox *check = nullptr;
 		QSlider *slider = nullptr;
 		QProgressBar *meter = nullptr;
 	};
 	std::vector<MicRow> micRows_;
+	// Disable the unchecked rows once four mics are on (the mixer's channel
+	// budget), instead of silently dropping a fifth enable.
+	void syncMicCap();
 };
 
 } // namespace harpia

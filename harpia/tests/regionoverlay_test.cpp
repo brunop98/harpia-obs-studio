@@ -27,6 +27,9 @@
 #include <cstdio>
 #include <utility>
 
+// So QSignalSpy can hold regionChanged's payload (a plain struct).
+Q_DECLARE_METATYPE(harpia::CaptureRegion)
+
 using namespace harpia;
 static int failures = 0;
 static void ok(bool c, const char *w)
@@ -681,6 +684,57 @@ int main(int argc, char **argv)
 		ok(before.x == after.x && before.y == after.y && before.width == after.width &&
 			   before.height == after.height,
 		   "and mode changes still leave the region alone");
+		t->deleteLater();
+	}
+
+	std::printf("\n-- a drag coalesces its updates, and the LAST rectangle is exact --\n");
+	{
+		// Mid-drag, the mask rebuild and regionChanged are deferred to a ~16 ms
+		// timer: setMask is a window-manager round trip and regionChanged lands
+		// in the crop filter, and a gaming mouse delivers a thousand events a
+		// second. The release must flush synchronously -- the final rectangle
+		// is the one the recording keeps, and it must never be a tick late.
+		qRegisterMetaType<CaptureRegion>();
+		RegionTool *t = buildSmall();
+		t->setMode(RegionTool::Mode::Editing);
+		QApplication::processEvents();
+		QSignalSpy changed(t, &RegionTool::regionChanged);
+
+		// Fixed GLOBAL coordinates for the whole gesture: the widget moves
+		// under the drag, so points computed against it mid-drag would compound
+		// each step's delta into the next.
+		const QPoint mid = t->rect().center();
+		const QPoint start = t->mapToGlobal(mid);
+		QMouseEvent press(QEvent::MouseButtonPress, QPointF(mid), start, Qt::LeftButton,
+				  Qt::LeftButton, Qt::NoModifier);
+		QApplication::sendEvent(t, &press);
+		// Ten rapid moves with NO event-loop spin between them, like a burst of
+		// raw mouse input. The geometry must track every one; the signal must
+		// not fire per event (the coalescing timer has had no chance to run).
+		for (int i = 1; i <= 10; ++i) {
+			const QPoint g = start + QPoint(3 * i, 2 * i);
+			QMouseEvent move(QEvent::MouseMove, QPointF(t->mapFromGlobal(g)), g,
+					 Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+			QApplication::sendEvent(t, &move);
+		}
+		std::printf("     10 raw moves -> %d regionChanged signal(s) before release\n",
+			    int(changed.count()));
+		ok(changed.count() == 0, "a burst of moves emits nothing by itself -- it is coalesced");
+		const CaptureRegion held = t->region();
+		std::printf("     frame position after the burst: (%d,%d)\n", held.x, held.y);
+		ok(held.x == 230 && held.y == 220, "while the frame itself tracked every event");
+
+		const QPoint end = start + QPoint(30, 20);
+		QMouseEvent rel(QEvent::MouseButtonRelease, QPointF(t->mapFromGlobal(end)), end,
+				Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+		QApplication::sendEvent(t, &rel);
+		ok(changed.count() >= 1, "the release flushes synchronously, no timer wait");
+		const auto args = changed.last();
+		const CaptureRegion fin = args.at(0).value<CaptureRegion>();
+		std::printf("     final emitted region: (%d,%d) %dx%d\n", fin.x, fin.y, fin.width,
+			    fin.height);
+		ok(fin.x == 230 && fin.y == 220 && fin.width == 300 && fin.height == 200,
+		   "and what it emits is the exact final rectangle");
 		t->deleteLater();
 	}
 

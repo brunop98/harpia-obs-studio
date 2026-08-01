@@ -7,6 +7,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QScreen>
+#include <QTimer>
 
 #include <algorithm>
 
@@ -243,8 +244,29 @@ void RegionTool::applyGeometry(const QRect &globalRect)
 	// The widget is the region expanded by the handle margin, plus room for the
 	// move tab above it when that is on.
 	setGeometry(g.adjusted(-kMargin, -topMargin(), kMargin, bottomMargin()));
-	rebuildMask();
-	emitRegion();
+
+	// Mid-drag, the expensive tail is COALESCED to ~60 Hz instead of run per
+	// mouse event: setMask is a window-manager round trip (SetWindowRgn /
+	// XShape forcing a recomposite) and emitRegion() lands in the crop filter
+	// -- and a gaming mouse delivers a thousand events a second. The geometry
+	// itself stays per-event, so the frame never lags the hand; the release
+	// flushes synchronously, so the FINAL rectangle is always exact.
+	if (dragZone_ != Zone::None) {
+		if (!dragSync_) {
+			dragSync_ = new QTimer(this);
+			dragSync_->setInterval(16);
+			dragSync_->setSingleShot(true);
+			connect(dragSync_, &QTimer::timeout, this, [this]() {
+				rebuildMask();
+				emitRegion();
+			});
+		}
+		if (!dragSync_->isActive())
+			dragSync_->start();
+	} else {
+		rebuildMask();
+		emitRegion();
+	}
 	update();
 }
 
@@ -458,6 +480,13 @@ void RegionTool::mouseReleaseEvent(QMouseEvent *e)
 	dragZone_ = Zone::None;
 	startPressed_ = false;
 	showDims_ = false;
+	// Flush anything the drag coalescer still owes: the LAST rectangle of a
+	// drag is the one that matters, and it must never be a timer tick late.
+	if (wasDragging && dragSync_ && dragSync_->isActive()) {
+		dragSync_->stop();
+		rebuildMask();
+		emitRegion();
+	}
 	update();
 
 	if (wasStart) {

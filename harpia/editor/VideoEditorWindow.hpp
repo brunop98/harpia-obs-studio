@@ -356,6 +356,9 @@ private:
 	// that source has no audio. Used for clip waveforms.
 	QString audioProxyFor(int sourceId);
 	QHash<int, QString> audioProxy_;
+	// Sources whose audio proxy is being decoded on the pool right now, so a
+	// second click on "Audio from X" waits for the first instead of racing it.
+	QSet<int> audioProxyPending_;
 	// ---- Still images as clips ----
 	// Registered as sources with no decoder; the frame providers serve the cached
 	// QImage for every timestamp. -1 on failure.

@@ -237,6 +237,9 @@ private:
 
 protected:
 	void changeEvent(QEvent *event) override; // track window activation
+	// Windows: WM_DEVICECHANGE forces an immediate hardware re-probe, so the
+	// periodic probe can be lazy without missing a plugged-in camera or mic.
+	bool nativeEvent(const QByteArray &eventType, void *message, qintptr *result) override;
 	// Refreshes the app list right before the app dropdown's popup opens.
 	bool eventFilter(QObject *obj, QEvent *event) override;
 	// Free space + destination folder, shown on the recording screen, and the

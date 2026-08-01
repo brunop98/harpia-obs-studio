@@ -6,6 +6,7 @@
 #include <QWidget>
 
 class QScreen;
+class QTimer;
 
 namespace harpia {
 
@@ -172,6 +173,10 @@ private:
 	Mode mode_ = Mode::Editing;
 	bool paused_ = false;
 	bool moveHandle_ = false;
+
+	// Coalesces the drag's mask rebuild + regionChanged to ~60 Hz (the window
+	// geometry itself still tracks every mouse event). Created on first drag.
+	QTimer *dragSync_ = nullptr;
 
 	Zone dragZone_ = Zone::None;
 	QPoint dragStartGlobal_;

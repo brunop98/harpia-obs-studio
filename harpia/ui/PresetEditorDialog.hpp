@@ -11,6 +11,7 @@ class QLineEdit;
 class QComboBox;
 class QCheckBox;
 class QSpinBox;
+class QKeySequenceEdit;
 class QLabel;
 class QSlider;
 class QPushButton;
@@ -76,6 +77,9 @@ private:
 	// Audio page
 	QCheckBox *desktopAudioCheck_ = nullptr;
 	QLabel *audioGifNote_ = nullptr; // "GIF has no audio track", shown only for GIF
+	// Hotkeys (app-wide QSettings, edited here for want of a better home)
+	QKeySequenceEdit *recordKeyEdit_ = nullptr;
+	QKeySequenceEdit *pauseKeyEdit_ = nullptr;
 	QList<QCheckBox *> micChecks_;
 	QStringList micIds_;
 

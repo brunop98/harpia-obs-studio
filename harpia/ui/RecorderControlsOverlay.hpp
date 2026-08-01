@@ -27,6 +27,13 @@ public:
 	void showControls();
 	void hideControls();
 
+	// The permanent opt-out: when true, the panel behaves as it did before it
+	// learned to start recordings -- visible only while one is running. Stored
+	// in QSettings (app-wide, not per preset: where the pill lives on the
+	// desktop is a desk preference, not a recording setting). "Hide until next
+	// recording" remains the one-shot version.
+	bool onlyWhileRecording() const;
+
 	// Reflect the recorder state. Idle shows a single green Record button and
 	// nothing else; recording swaps it for Pause and Stop. Hiding rather than
 	// disabling, so the pill is one button wide when there is only one thing to
@@ -41,6 +48,9 @@ signals:
 	// screen whenever the app is, so it needs a way to be got rid of that does
 	// not mean quitting.
 	void dismissed();
+	// The persistent "Only show while recording" toggle changed (see
+	// onlyWhileRecording()).
+	void visibilityPolicyChanged();
 
 protected:
 	void paintEvent(QPaintEvent *) override;

@@ -79,30 +79,6 @@ const char *formatExtension(RecordingFormat format)
 	return formatToString(format);
 }
 
-const char *resolutionModeToString(ResolutionMode mode)
-{
-	switch (mode) {
-	case ResolutionMode::Native:
-		return "native";
-	case ResolutionMode::Scaled:
-		return "scaled";
-	case ResolutionMode::Custom:
-		return "custom";
-	}
-	return "native";
-}
-
-ResolutionMode resolutionModeFromString(const std::string &value, ResolutionMode fallback)
-{
-	if (value == "native")
-		return ResolutionMode::Native;
-	if (value == "scaled")
-		return ResolutionMode::Scaled;
-	if (value == "custom")
-		return ResolutionMode::Custom;
-	return fallback;
-}
-
 std::string Preset::extension() const
 {
 	return formatExtension(format);
@@ -115,7 +91,6 @@ Preset Preset::makeDefault(const std::string &outputFolder)
 	p.name = "Default";
 	p.format = RecordingFormat::MP4;
 	p.fps = 30;
-	p.resolutionMode = ResolutionMode::Native;
 	p.outputFolder = outputFolder;
 	p.gpuCompression = false;
 	p.audioBitrateKbps = 160;

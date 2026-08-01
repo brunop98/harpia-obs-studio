@@ -46,6 +46,14 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/regionwatch_test.cpp" "$H/core/RegionWatch.cpp" -o "$WORK/regionwatch_test" $LF
 
+# Global hotkeys: the QKeySequence -> Win32 (mods, VK) translation. A wrong VK
+# registers FINE and then fires for a different key -- no error path reports
+# it -- so the ABI constants are pinned here, on every platform.
+"$MOC" -I"$H" "$H/core/GlobalHotkeys.hpp" -o "$WORK/moc_GlobalHotkeys.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/globalhotkeys_test.cpp" "$H/core/GlobalHotkeys.cpp" \
+	"$WORK/moc_GlobalHotkeys.cpp" -o "$WORK/globalhotkeys_test" $LF
+
 # The shared auto-resume gate: three auto-pause systems (idle, focus, region)
 # used to resume off their own flag alone, putting slices of the wrong screen
 # in the file. The cross terms in this matrix ARE the bug.
@@ -362,6 +370,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/regionwatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/followmouse_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/crashreport_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/autopause_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/globalhotkeys_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionoverlay_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/recordercontrols_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/startupsplash_test" || rc=1

@@ -31,9 +31,6 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_string(d, "codec", codecToString(p.codec));
 	obs_data_set_string(d, "frame_rate_mode", frameRateModeToString(p.frameRateMode));
 	obs_data_set_int(d, "fps", p.fps);
-	obs_data_set_string(d, "resolution_mode", resolutionModeToString(p.resolutionMode));
-	obs_data_set_int(d, "width", p.width);
-	obs_data_set_int(d, "height", p.height);
 	obs_data_set_string(d, "output_folder", p.outputFolder.c_str());
 	obs_data_set_int(d, "monitor_index", p.monitorIndex);
 	obs_data_set_bool(d, "gpu_compression", p.gpuCompression);
@@ -44,7 +41,7 @@ obs_data_t *presetToData(const Preset &p)
 	// The stored key keeps its original name: it is internal, and renaming it
 	// would silently reset the setting to Off for everyone who already has one.
 	obs_data_set_int(d, "region_leave_stop_seconds", p.regionLeavePauseSeconds);
-	obs_data_set_bool(d, "pause_on_focus_loss", p.pauseOnFocusLoss);
+	obs_data_set_int(d, "capture_mode", p.captureMode);
 	obs_data_set_int(d, "recording_counter", p.recordingCounter);
 	obs_data_set_int(d, "countdown_seconds", p.countdownSeconds);
 	obs_data_set_int(d, "min_recording_seconds", p.minRecordingSeconds);
@@ -106,9 +103,6 @@ Preset presetFromData(obs_data_t *d)
 	p.codec = codecFromString(obs_data_get_string(d, "codec"));
 	p.frameRateMode = frameRateModeFromString(obs_data_get_string(d, "frame_rate_mode"));
 	p.fps = (int)obs_data_get_int(d, "fps");
-	p.resolutionMode = resolutionModeFromString(obs_data_get_string(d, "resolution_mode"));
-	p.width = (int)obs_data_get_int(d, "width");
-	p.height = (int)obs_data_get_int(d, "height");
 	p.outputFolder = obs_data_get_string(d, "output_folder");
 	p.monitorIndex = (int)obs_data_get_int(d, "monitor_index");
 	p.gpuCompression = obs_data_get_bool(d, "gpu_compression");
@@ -121,7 +115,9 @@ Preset presetFromData(obs_data_t *d)
 	// back with the feature not merely on but at its most aggressive setting.
 	obs_data_set_default_int(d, "region_leave_stop_seconds", -1);
 	p.regionLeavePauseSeconds = (int)obs_data_get_int(d, "region_leave_stop_seconds");
-	p.pauseOnFocusLoss = obs_data_get_bool(d, "pause_on_focus_loss");
+	// 0 (Entire Monitor) is both the default and what a missing key reads as,
+	// so presets from before capture_mode behave exactly as they used to.
+	p.captureMode = (int)obs_data_get_int(d, "capture_mode");
 	if (obs_data_has_user_value(d, "recording_counter"))
 		p.recordingCounter = (int)obs_data_get_int(d, "recording_counter");
 	p.countdownSeconds = (int)obs_data_get_int(d, "countdown_seconds");

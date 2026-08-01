@@ -89,6 +89,7 @@
 #include "core/CrashGuard.hpp"
 #include "core/DiskSpace.hpp"
 #include <QStyle>
+#include <QSettings>
 #include <QThread>
 #include <QThreadPool>
 #include <QTime>
@@ -564,11 +565,23 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(primaryButton_, &QPushButton::clicked, this, &MainWindow::onPrimaryButton);
 	connect(pauseButton_, &QPushButton::clicked, this, &MainWindow::onPauseButton);
 
-	// Keyboard shortcuts (also shown in the buttons' tooltips).
-	auto *recordShortcut = new QShortcut(QKeySequence(Qt::Key_F9), this);
-	connect(recordShortcut, &QShortcut::activated, this, &MainWindow::onPrimaryButton);
-	auto *pauseShortcut = new QShortcut(QKeySequence(Qt::Key_F10), this);
-	connect(pauseShortcut, &QShortcut::activated, this, &MainWindow::onPauseButton);
+	// Recording hotkeys. The window-scoped QShortcuts are the FALLBACK; on
+	// Windows the same keys are registered system-wide (rebindHotkeys), which
+	// is the only version that works at the moment hotkeys are for -- during a
+	// recording, when Harpia is almost never the focused window. RegisterHotKey
+	// swallows the key when it succeeds, so the two never double-fire.
+	recordShortcut_ = new QShortcut(QKeySequence(Qt::Key_F9), this);
+	connect(recordShortcut_, &QShortcut::activated, this, &MainWindow::onPrimaryButton);
+	pauseShortcut_ = new QShortcut(QKeySequence(Qt::Key_F10), this);
+	connect(pauseShortcut_, &QShortcut::activated, this, &MainWindow::onPauseButton);
+	hotkeys_ = std::make_unique<GlobalHotkeys>();
+	connect(hotkeys_.get(), &GlobalHotkeys::triggered, this, [this](int id) {
+		if (id == 1)
+			onPrimaryButton();
+		else if (id == 2)
+			onPauseButton();
+	});
+	rebindHotkeys();
 	connect(editPresetButton_, &QPushButton::clicked, this, [this]() { editActivePreset(); });
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
 	connect(webcamCombo_, &QComboBox::activated, this, &MainWindow::onWebcamDeviceChanged);
@@ -617,6 +630,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		floatingDismissed_ = true;
 		updateFloatingControls();
 	});
+	connect(floatingControls_.get(), &RecorderControlsOverlay::visibilityPolicyChanged, this,
+		&MainWindow::updateFloatingControls);
 	connect(floatingControls_.get(), &RecorderControlsOverlay::pauseClicked, this,
 		&MainWindow::onPauseButton);
 	connect(floatingControls_.get(), &RecorderControlsOverlay::stopClicked, this,
@@ -760,6 +775,14 @@ void MainWindow::finishStartup()
 	refreshReadiness();
 	refreshWebcamRow();
 	updateButtons(); // readiness may have changed what is allowed
+
+	// The preset owns its capture mode; restore it for the preset the app
+	// started on (later switches go through onPresetChanged).
+	{
+		const int mode = std::clamp(activePreset().captureMode, 0, 1);
+		if (captureModeCombo_ && captureModeCombo_->currentIndex() != mode)
+			captureModeCombo_->setCurrentIndex(mode);
+	}
 
 	// If the last exit was a crash, say so -- with the DESCRIPTION the crash
 	// handlers captured, not just the fact of it. Shown before the orphan
@@ -1577,6 +1600,28 @@ void MainWindow::updateDiskLabel()
 	diskLabel_->setStyleSheet(QStringLiteral("color:%1;").arg(QLatin1String(colour)));
 }
 
+void MainWindow::rebindHotkeys()
+{
+	QSettings s(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	const QKeySequence rec(s.value(QStringLiteral("hotkeys/record"), QStringLiteral("F9")).toString());
+	const QKeySequence pause(
+		s.value(QStringLiteral("hotkeys/pause"), QStringLiteral("F10")).toString());
+	// The fallback shortcuts follow the configured keys too, so a remap is a
+	// remap everywhere -- not "F7 globally but still F9 when focused".
+	recordShortcut_->setKey(rec);
+	pauseShortcut_->setKey(pause);
+	const bool recGlobal = hotkeys_->bind(1, rec);
+	const bool pauseGlobal = hotkeys_->bind(2, pause);
+	blog(LOG_INFO, "[harpia] hotkeys: record=%s (%s)  pause=%s (%s)",
+	     qUtf8Printable(rec.toString()), recGlobal ? "global" : "window-only",
+	     qUtf8Printable(pause.toString()), pauseGlobal ? "global" : "window-only");
+	if (primaryButton_)
+		primaryButton_->setToolTip(QStringLiteral("Start/stop recording (%1%2)")
+						   .arg(rec.toString())
+						   .arg(recGlobal ? QString()
+								  : QStringLiteral(", when Harpia is focused")));
+}
+
 void MainWindow::finalizeAfterStop()
 {
 	// Runs at most once per recording, whichever messenger arrives first: the
@@ -1943,6 +1988,7 @@ void MainWindow::editActivePreset(const QString &initialPage)
 		refreshReadiness();
 		refreshWebcamRow();
 		refreshDriveLink();
+		rebindHotkeys(); // the Hotkeys page may have re-mapped them
 	}
 }
 
@@ -2324,6 +2370,17 @@ void MainWindow::onCaptureModeChanged()
 		regionTool_->setRegionDevicePx(
 			QRect(currentRegion_.x, currentRegion_.y, currentRegion_.width, currentRegion_.height));
 		capture_.setRegion(currentRegion_);
+	}
+	// The mode belongs to the preset (write-through, exactly like the monitor
+	// choice): switching back to this preset later restores it. No-op when
+	// unchanged, so arriving here from a preset switch does not re-save.
+	if (const Preset *cur = presets_.find(activePresetId_)) {
+		const int m = int(captureMode_);
+		if (cur->captureMode != m) {
+			Preset updated = *cur;
+			updated.captureMode = m;
+			presets_.upsert(updated);
+		}
 	}
 	updateRegionToolVisibility();
 	updateRegionLeaveVisibility();
@@ -2837,13 +2894,20 @@ void MainWindow::onPresetChanged()
 			  activePreset().desktopVolume, activePreset().micVolumes);
 
 	// Switch the live capture to the new preset's display (unless recording).
-	// The previous region was chosen on a possibly-different monitor, so reset
-	// to full-monitor capture to avoid an out-of-bounds crop.
+	// The previous region was chosen on a possibly-different monitor, so it is
+	// cleared -- but the MODE is the preset's own now, not a reset to Monitor:
+	// a Follow Mouse tutorial preset arrives in Region mode with a fresh region
+	// seeded on ITS display, instead of every preset switch quietly dropping
+	// back to full-screen and disabling the preset's own Region-only features.
 	if (!recorder_.isRecording()) {
 		canvasSize_ = canvasForActivePreset();
 		if (!appCaptureEnabled_) {
 			currentRegion_ = CaptureRegion{};
-			captureModeCombo_->setCurrentIndex(int(CaptureMode::Monitor));
+			const int mode = std::clamp(activePreset().captureMode, 0, 1);
+			if (captureModeCombo_->currentIndex() == mode)
+				onCaptureModeChanged(); // same index: reseed the cleared region
+			else
+				captureModeCombo_->setCurrentIndex(mode);
 		}
 		applyLiveCapture();
 	}
@@ -3283,7 +3347,7 @@ void MainWindow::updateFloatingControls()
 	//   * "Hide until next recording" from its right-click menu, which is the
 	//     only way to be rid of a panel that otherwise never leaves.
 	const bool editorInTheWay = VideoEditorWindow::anyOpen() && !active;
-	if (active || (!floatingDismissed_ && !editorInTheWay))
+	if (active || (!floatingDismissed_ && !editorInTheWay && !floatingControls_->onlyWhileRecording()))
 		floatingControls_->showControls();
 	else
 		floatingControls_->hideControls();

@@ -5,6 +5,7 @@
 #include "core/RecordingController.hpp"
 #include "core/DiskSpace.hpp"
 #include "core/FollowMouse.hpp"
+#include "core/GlobalHotkeys.hpp"
 #include "core/RegionWatch.hpp"
 #include "core/WebcamRecorder.hpp"
 #include "library/ClipLibrary.hpp"
@@ -29,6 +30,7 @@ class QListWidget;
 class QListWidgetItem;
 class QPushButton;
 class QComboBox;
+class QShortcut;
 class QCheckBox;
 class QSpinBox;
 class QToolButton;
@@ -304,6 +306,14 @@ private:
 	double lastIdleSecs_ = 0.0;
 	bool lastFocusOk_ = true;
 	bool lastCursorInside_ = true;
+
+	// Recording hotkeys: global (RegisterHotKey) where the platform allows,
+	// with the window-scoped shortcuts as the fallback. Both follow the same
+	// configured keys (see rebindHotkeys).
+	std::unique_ptr<GlobalHotkeys> hotkeys_;
+	QShortcut *recordShortcut_ = nullptr;
+	QShortcut *pauseShortcut_ = nullptr;
+	void rebindHotkeys();
 
 	FollowMouse followMouse_;
 	QTimer *followTimer_ = nullptr;

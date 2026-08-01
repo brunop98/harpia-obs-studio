@@ -275,15 +275,30 @@ void RecorderControlsOverlay::mouseReleaseEvent(QMouseEvent *e)
 	}
 }
 
+bool RecorderControlsOverlay::onlyWhileRecording() const
+{
+	return hudSettings().value(QStringLiteral("floatingControls/onlyWhileRecording"), false).toBool();
+}
+
 void RecorderControlsOverlay::contextMenuEvent(QContextMenuEvent *e)
 {
-	// The panel is on screen for as long as the app is, so there has to be a way
-	// to put it away that is not "quit Harpia". Until the next recording, not
-	// forever: it comes back when it has something to say.
+	// The panel is on screen for as long as the app is, so there has to be a
+	// way to put it away that is not "quit Harpia" -- a one-shot ("until next
+	// recording") and a permanent policy ("only show while recording", which
+	// is the pre-Record-button behaviour, remembered across sessions).
 	QMenu menu;
 	QAction *hideAct = menu.addAction(QStringLiteral("Hide until next recording"));
-	if (menu.exec(e->globalPos()) == hideAct)
+	QAction *onlyRec = menu.addAction(QStringLiteral("Only show while recording"));
+	onlyRec->setCheckable(true);
+	onlyRec->setChecked(onlyWhileRecording());
+	QAction *chosen = menu.exec(e->globalPos());
+	if (chosen == hideAct) {
 		emit dismissed();
+	} else if (chosen == onlyRec) {
+		QSettings s = hudSettings();
+		s.setValue(QStringLiteral("floatingControls/onlyWhileRecording"), onlyRec->isChecked());
+		emit visibilityPolicyChanged();
+	}
 }
 
 void RecorderControlsOverlay::paintEvent(QPaintEvent *)

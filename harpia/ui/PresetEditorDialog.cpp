@@ -25,12 +25,14 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QIntValidator>
+#include <QKeySequenceEdit>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSettings>
 #include <QSlider>
 #include <QSpinBox>
 #include <QStackedWidget>
@@ -725,15 +727,41 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	v->addStretch(1);
 	addPage(QStringLiteral("Webcam"), webcamPage);
 
-	// ===== Hotkeys (placeholder — no hotkey engine yet) =====
+	// ===== Hotkeys =====
+	// App-wide, not per preset: which key starts a recording is a property of
+	// the keyboard in front of the user, not of the format being recorded.
+	// Stored in QSettings; the main window re-registers on save.
 	QWidget *hotkeysPage = makePage(v);
-	auto *hotkeysNote = new QLabel(
-		QStringLiteral("Global start/stop/pause hotkeys are coming soon. For now, use the buttons on "
-			       "the main window."),
-		this);
-	hotkeysNote->setWordWrap(true);
-	hotkeysNote->setStyleSheet(QStringLiteral("color:#8a8f98;"));
-	v->addWidget(hotkeysNote);
+	{
+		QSettings hk(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		recordKeyEdit_ = new QKeySequenceEdit(
+			QKeySequence(hk.value(QStringLiteral("hotkeys/record"), QStringLiteral("F9"))
+					     .toString()),
+			this);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		// One chord only -- RegisterHotKey knows no sequences. Older Qt lacks
+		// the setter; the mapping refuses multi-chord input regardless.
+		recordKeyEdit_->setMaximumSequenceLength(1);
+#endif
+		addField(v, QStringLiteral("Start / stop recording"),
+			 QStringLiteral("Works system-wide on Windows — no need to bring Harpia to the "
+					"front. If another app already owns the key, it still works "
+					"while Harpia is focused."),
+			 recordKeyEdit_);
+		pauseKeyEdit_ = new QKeySequenceEdit(
+			QKeySequence(hk.value(QStringLiteral("hotkeys/pause"), QStringLiteral("F10"))
+					     .toString()),
+			this);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		pauseKeyEdit_->setMaximumSequenceLength(1);
+#endif
+		addField(v, QStringLiteral("Pause / resume"),
+			 QStringLiteral("Same rules. Note GIF recordings can't pause at all."),
+			 pauseKeyEdit_);
+		auto *shared = new QLabel(QStringLiteral("Hotkeys are shared by every preset."), this);
+		shared->setStyleSheet(QStringLiteral("color:#8a8f98;"));
+		v->addWidget(shared);
+	}
 	v->addStretch(1);
 	addPage(QStringLiteral("Hotkeys"), hotkeysPage);
 
@@ -985,17 +1013,25 @@ void PresetEditorDialog::accept()
 			result_.videoBitrateKbps = sel; // a listed preset
 	}
 
-	// Resolution is always native (screen or region) — no scaling.
-	result_.resolutionMode = ResolutionMode::Native;
+	// Hotkeys are app-wide QSettings, written on OK like everything else here
+	// (Cancel leaves them untouched). Empty means "back to the default".
+	{
+		QSettings hk(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		const QString rec = recordKeyEdit_->keySequence().toString();
+		const QString pause = pauseKeyEdit_->keySequence().toString();
+		hk.setValue(QStringLiteral("hotkeys/record"),
+			    rec.isEmpty() ? QStringLiteral("F9") : rec);
+		hk.setValue(QStringLiteral("hotkeys/pause"),
+			    pause.isEmpty() ? QStringLiteral("F10") : pause);
+	}
 
 	result_.outputFolder = folderEdit_->text().trimmed().toStdString();
-	// monitorIndex is intentionally not edited here — the main window owns it.
+	// monitorIndex and captureMode are intentionally not edited here — the main
+	// window owns both (its display and capture combos write through).
 	result_.gpuCompression = gpuCheck_->isChecked();
 	result_.idleTimeoutSeconds = idleSpin_->value();
 	result_.countdownSeconds = countdownCombo_->currentData().toInt();
 	result_.minRecordingSeconds = minLengthSpin_->value();
-	// pauseOnFocusLoss keeps its stored value (no editor control anymore); focus
-	// auto-pause is driven by the main window's "Record only one application".
 	result_.showScreenBorder = borderCheck_->isChecked();
 	result_.screenBorderColor = borderColor_.name().toStdString();
 	result_.screenBorderThickness = borderThicknessSpin_->value();

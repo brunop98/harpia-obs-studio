@@ -32,13 +32,6 @@ enum class FrameRateMode {
 	VFR,
 };
 
-// How the output resolution relates to the captured display.
-enum class ResolutionMode {
-	Native,  // match the captured display exactly
-	Scaled,  // downscale to width/height below, preserving capture as base
-	Custom,  // use width/height below verbatim
-};
-
 // A single, self-contained recording configuration. This is the unit the UI
 // creates/edits/deletes and PresetStore persists. Everything the recording
 // pipeline needs is derived from a Preset, so adding a knob here is the single
@@ -53,9 +46,9 @@ struct Preset {
 
 	int fps = 30;  // 24 / 30 / 60 / 120 or any custom value
 
-	ResolutionMode resolutionMode = ResolutionMode::Native;
-	int width = 0;   // used when resolutionMode != Native
-	int height = 0;  // used when resolutionMode != Native
+	// (Custom output resolutions were removed: recordings are always the native
+	// size of what is captured. The old resolution_mode/width/height JSON keys
+	// are ignored on load.)
 
 	std::string outputFolder;  // where recordings are written
 
@@ -124,10 +117,14 @@ struct Preset {
 	// cannot double as the disabled value.
 	int regionLeavePauseSeconds = -1;
 
-	// Auto-pause recording whenever the target application (the app that was in
-	// the foreground when recording started) loses focus, and resume when it
-	// regains focus. Child windows/dialogs of that app count as still focused.
-	bool pauseOnFocusLoss = false;
+	// Which capture mode this preset records in: 0 = Entire Monitor,
+	// 1 = Custom Region. Owned by the preset so a Follow Mouse tutorial preset
+	// always arrives in Region mode instead of inheriting whatever the last
+	// preset used. The main window's capture combo writes through, the same
+	// way the monitor choice does. (The old pause_on_focus_loss field lived
+	// here; it was dead -- "Record only one application" replaced it -- and a
+	// setting that exists but does nothing is a lie waiting to be believed.)
+	int captureMode = 0;
 
 	// Next value for the {Counter} filename token; incremented after each
 	// recording that uses it so files number 0001, 0002, … across sessions.
@@ -173,8 +170,6 @@ const char *formatToString(RecordingFormat format);
 RecordingFormat formatFromString(const std::string &value, RecordingFormat fallback = RecordingFormat::MP4);
 const char *formatExtension(RecordingFormat format);
 
-const char *resolutionModeToString(ResolutionMode mode);
-ResolutionMode resolutionModeFromString(const std::string &value, ResolutionMode fallback = ResolutionMode::Native);
 
 const char *codecToString(VideoCodec codec);
 VideoCodec codecFromString(const std::string &value, VideoCodec fallback = VideoCodec::H264);

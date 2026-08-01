@@ -86,6 +86,8 @@ target_sources(
     core/AudioManager.cpp
     core/AudioManager.hpp
     core/AutoPause.hpp
+    core/GlobalHotkeys.cpp
+    core/GlobalHotkeys.hpp
     core/CrashGuard.cpp
     core/CrashGuard.hpp
     core/CaptureManager.cpp

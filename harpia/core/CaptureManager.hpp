@@ -36,6 +36,13 @@ struct CaptureRegion {
 	int y = 0;
 	int width = 0;
 	int height = 0;
+
+	bool operator==(const CaptureRegion &o) const
+	{
+		return enabled == o.enabled && x == o.x && y == o.y && width == o.width &&
+		       height == o.height;
+	}
+	bool operator!=(const CaptureRegion &o) const { return !(*this == o); }
 };
 
 // Creates and owns the screen-capture source and wires it into libobs' output

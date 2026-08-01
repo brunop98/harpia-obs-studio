@@ -46,6 +46,13 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/regionwatch_test.cpp" "$H/core/RegionWatch.cpp" -o "$WORK/regionwatch_test" $LF
 
+# Follow Mouse: the dead zone, the target arithmetic and the exponential chase.
+# The chase caught a real design bug on its first run -- a target measured
+# against the smoothed position never settles -- so the "settled means SETTLED"
+# check is load-bearing.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/followmouse_test.cpp" "$H/core/FollowMouse.cpp" -o "$WORK/followmouse_test" $LF
+
 # The component runtime: purity, stage order, dependencies, serialisation.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/component_test.cpp" \
@@ -340,6 +347,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/paramslider_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionwatch_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/followmouse_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionoverlay_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/recordercontrols_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/startupsplash_test" || rc=1

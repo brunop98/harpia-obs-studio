@@ -504,6 +504,93 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	connect(rightColorBtn_, &QPushButton::clicked, this, [this]() { pickColor(rightColor_, rightColorBtn_); });
 	addColorField(v, QStringLiteral("Right click color"), rightColorBtn_);
 
+	// ---- Follow Mouse ----
+	followCheck_ = new QCheckBox(QStringLiteral("Follow Mouse (Custom Region only)"), this);
+	followCheck_->setChecked(preset.followMouse);
+	addCheck(v, followCheck_,
+		 QStringLiteral("While recording a Custom Region, the region pans to keep the cursor "
+				"framed — record mobile-format tutorials without re-framing the video "
+				"afterwards. The region's size never changes, only its position."));
+
+	followProfileCombo_ = new QComboBox(this);
+	followProfileCombo_->addItem(QStringLiteral("Instant"));        // 0
+	followProfileCombo_->addItem(QStringLiteral("Smooth"));         // 1
+	followProfileCombo_->addItem(QStringLiteral("Cinematic"));      // 2
+	followProfileCombo_->addItem(QStringLiteral("Mobile Tutorial")); // 3
+	followProfileCombo_->addItem(QStringLiteral("Custom"));         // 4
+	followProfileCombo_->setCurrentIndex(std::clamp(preset.followProfile, 0, 4));
+	addField(v, QStringLiteral("Follow profile"),
+		 QStringLiteral("A starting point that sets the two sliders below together. Touch a "
+				"slider and it becomes Custom."),
+		 followProfileCombo_);
+
+	// The two sliders, each with the live value label beside it.
+	const auto sliderRow = [this](QSlider *&slider, int min, int max, int value, const QString &suffix) {
+		slider = new QSlider(Qt::Horizontal, this);
+		slider->setRange(min, max);
+		slider->setValue(std::clamp(value, min, max));
+		auto *row = new QWidget(this);
+		auto *lay = new QHBoxLayout(row);
+		lay->setContentsMargins(0, 0, 0, 0);
+		lay->setSpacing(8);
+		auto *label = new QLabel(QStringLiteral("%1%2").arg(slider->value()).arg(suffix), this);
+		label->setMinimumWidth(48);
+		connect(slider, &QSlider::valueChanged, label, [label, suffix](int val) {
+			label->setText(QStringLiteral("%1%2").arg(val).arg(suffix));
+		});
+		lay->addWidget(slider, 1);
+		lay->addWidget(label);
+		return row;
+	};
+
+	QWidget *padRow = sliderRow(followPaddingSlider_, 0, 45, preset.followPaddingPct, QStringLiteral("%"));
+	addField(v, QStringLiteral("Mouse padding"),
+		 QStringLiteral("The safe zone: how far the cursor can wander from the region's centre "
+				"before it starts to follow, as a percentage of the region's size. The "
+				"region holds still while the cursor stays inside it."),
+		 padRow);
+
+	QWidget *smoothRow = sliderRow(followSmoothSlider_, 0, 100, preset.followSmoothness, QString());
+	addField(v, QStringLiteral("Smoothness"),
+		 QStringLiteral("How the region catches up. 0 reacts instantly; higher values glide "
+				"— slower, steadier, more cinematic."),
+		 smoothRow);
+
+	followAxisCombo_ = new QComboBox(this);
+	followAxisCombo_->addItem(QStringLiteral("Both directions"));  // 0
+	followAxisCombo_->addItem(QStringLiteral("Horizontal only")); // 1
+	followAxisCombo_->addItem(QStringLiteral("Vertical only"));   // 2
+	followAxisCombo_->setCurrentIndex(std::clamp(preset.followAxis, 0, 2));
+	addField(v, QStringLiteral("Follow direction"),
+		 QStringLiteral("Lock an axis: a vertical mobile strip usually only slides sideways; a "
+				"full-width bar only follows up and down."),
+		 followAxisCombo_);
+
+	// Profile -> sliders. Values chosen so the names mean what they say:
+	// Instant snaps, Cinematic trails on a long leash, Mobile Tutorial keeps a
+	// tall strip steady with a generous safe zone.
+	connect(followProfileCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+		[this](int idx) {
+			struct P {
+				int pad, smooth;
+			};
+			static constexpr P kProfiles[] = {{10, 0}, {20, 50}, {30, 85}, {25, 65}};
+			if (idx < 0 || idx > 3)
+				return; // Custom: leave the sliders as the user set them
+			followProfileApplying_ = true;
+			followPaddingSlider_->setValue(kProfiles[idx].pad);
+			followSmoothSlider_->setValue(kProfiles[idx].smooth);
+			followProfileApplying_ = false;
+		});
+	// Sliders -> Custom, but only when the USER drags them -- the combo writing
+	// its own profile values must not immediately un-select itself.
+	const auto toCustom = [this]() {
+		if (!followProfileApplying_)
+			followProfileCombo_->setCurrentIndex(4);
+	};
+	connect(followPaddingSlider_, &QSlider::valueChanged, this, toCustom);
+	connect(followSmoothSlider_, &QSlider::valueChanged, this, toCustom);
+
 	mousePreview_ = new MousePreview(this);
 	addField(v, QStringLiteral("Preview"), QString(), mousePreview_);
 	connect(mouseAreaCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::updateMousePreview);
@@ -905,6 +992,11 @@ void PresetEditorDialog::accept()
 	result_.recordMouseClicks = mouseClicksCheck_->isChecked();
 	result_.leftClickColor = leftColor_.name().toStdString();
 	result_.rightClickColor = rightColor_.name().toStdString();
+	result_.followMouse = followCheck_->isChecked();
+	result_.followPaddingPct = followPaddingSlider_->value();
+	result_.followSmoothness = followSmoothSlider_->value();
+	result_.followAxis = followAxisCombo_->currentIndex();
+	result_.followProfile = followProfileCombo_->currentIndex();
 
 	result_.webcamEnabled = webcamCheck_->isChecked();
 	result_.webcamDeviceId = webcamDeviceCombo_->currentData().toString().toStdString();

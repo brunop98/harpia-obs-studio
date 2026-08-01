@@ -87,6 +87,13 @@ private:
 	QPushButton *leftColorBtn_ = nullptr;
 	QPushButton *rightColorBtn_ = nullptr;
 	MousePreview *mousePreview_ = nullptr;
+	// Follow Mouse (Custom Region only)
+	QCheckBox *followCheck_ = nullptr;
+	QComboBox *followProfileCombo_ = nullptr;
+	QSlider *followPaddingSlider_ = nullptr;
+	QSlider *followSmoothSlider_ = nullptr;
+	QComboBox *followAxisCombo_ = nullptr;
+	bool followProfileApplying_ = false; // combo is writing the sliders, not the user
 	QColor highlightColor_;
 	QColor leftColor_;
 	QColor rightColor_;

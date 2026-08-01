@@ -668,6 +668,13 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(regionWatchTimer_, &QTimer::timeout, this, &MainWindow::tickRegionWatch);
 	regionWatchTimer_->start();
 
+	// Follow Mouse pans the crop at display rate, so its timer matches the
+	// mouse-FX overlay's 16 ms -- but unlike every other timer here it only
+	// runs while a follow is actually armed (see syncFollowMouse).
+	followTimer_ = new QTimer(this);
+	followTimer_->setInterval(16);
+	connect(followTimer_, &QTimer::timeout, this, &MainWindow::tickFollowMouse);
+
 	// Live audio meters refresh often for a responsive VU bar.
 	meterTimer_ = new QTimer(this);
 	meterTimer_->setInterval(80);
@@ -1540,6 +1547,9 @@ void MainWindow::logRecordingStart(const Preset &p, const QString &recordedPath,
 		blog(LOG_INFO, "[harpia] region: %dx%d at (%d,%d)  move-handle: %s", currentRegion_.width,
 		     currentRegion_.height, currentRegion_.x, currentRegion_.y,
 		     p.regionMoveHandle ? "on" : "off");
+	if (captureMode_ == CaptureMode::Region && p.followMouse)
+		blog(LOG_INFO, "[harpia] follow mouse: padding %d%%  smoothness %d  axis %d",
+		     p.followPaddingPct, p.followSmoothness, p.followAxis);
 	blog(LOG_INFO, "[harpia] output folder: %s", p.outputFolder.c_str());
 	blog(LOG_INFO, "[harpia] recording to: %s", recordedPath.toUtf8().constData());
 	if (recordedPath != finalPath)
@@ -2239,11 +2249,83 @@ void MainWindow::onAppWindowChanged()
 void MainWindow::onRegionChanged(const CaptureRegion &region)
 {
 	currentRegion_ = region;
+	// When the FOLLOW TICK is the thing moving the overlay, this signal is our
+	// own change echoed back: the crop has already been applied, and restarting
+	// the readiness debounce 60 times a second would keep it from ever firing.
+	if (followApplying_)
+		return;
 	// Live update — crop_filter applies immediately, even while recording.
 	capture_.setRegion(region);
 	// Fired per mouse-move while dragging the region — debounce the readiness
 	// pass instead of running filesystem checks dozens of times a second.
 	readinessDebounce_->start();
+}
+
+void MainWindow::syncFollowMouse()
+{
+	const Preset &p = activePreset();
+	// Armed only while a Custom Region recording is actually rolling. Paused
+	// recordings do not follow: nothing is being captured, and the user is
+	// probably mousing over to the controls -- dragging the frame along on
+	// that trip would move the framing they paused to protect.
+	const bool want = p.followMouse && captureMode_ == CaptureMode::Region &&
+			  currentRegion_.enabled && recorder_.isRecording() && !starting_ &&
+			  !stopping_ && !recorder_.isPaused();
+	if (want == followMouse_.armed())
+		return;
+	if (want) {
+		// Screen geometry once, at arm time -- screenForActivePreset() does
+		// monitor enumeration and GDI lookups on Windows, far too expensive
+		// for the 60 Hz tick. Same trick as tickRegionWatch.
+		const QScreen *scr = screenForActivePreset();
+		followOrigin_ = scr ? scr->geometry().topLeft() : QPoint(0, 0);
+		followDpr_ = scr ? scr->devicePixelRatio() : 1.0;
+		followScreenDevicePx_ = scr ? QSize(int(scr->geometry().width() * followDpr_),
+						    int(scr->geometry().height() * followDpr_))
+					    : QSize(0, 0);
+		followClock_.start();
+		followMouse_.arm(currentRegion_);
+		if (followMouse_.armed())
+			followTimer_->start();
+	} else {
+		followMouse_.disarm();
+		followTimer_->stop();
+	}
+}
+
+void MainWindow::tickFollowMouse()
+{
+	if (!followMouse_.armed()) {
+		followTimer_->stop();
+		return;
+	}
+	// A manual drag of the frame outranks the follow: adopt wherever the user
+	// puts it instead of chasing back toward where the region used to be.
+	if (regionTool_ && regionTool_->isInteracting()) {
+		followMouse_.rebase(currentRegion_);
+		return;
+	}
+
+	const Preset &p = activePreset();
+	FollowParams params;
+	params.paddingPct = p.followPaddingPct;
+	params.smoothness = p.followSmoothness;
+	params.axis = FollowAxis(std::clamp(p.followAxis, 0, 2));
+
+	const QPoint cursor = RegionWatch::toRegionSpace(QCursor::pos(), followOrigin_, followDpr_);
+	if (!followMouse_.tick(cursor, followScreenDevicePx_, params, followClock_.elapsed()))
+		return; // nothing moved by a whole pixel; nothing to apply
+
+	const CaptureRegion r = followMouse_.region();
+	followApplying_ = true;
+	currentRegion_ = r;
+	capture_.setRegion(r);
+	// Keep the on-screen frame gliding with the crop, so what you see framed
+	// is what is going into the file. Its regionChanged echo is swallowed by
+	// the guard in onRegionChanged.
+	if (regionTool_)
+		regionTool_->setRegionDevicePx(QRect(r.x, r.y, r.width, r.height));
+	followApplying_ = false;
 }
 
 void MainWindow::updateRegionToolVisibility()
@@ -2955,6 +3037,12 @@ void MainWindow::tickState()
 	// from either of the two places an editor can be opened. setMode() and
 	// setVisible() are both no-ops when nothing has changed.
 	updateRegionToolVisibility();
+
+	// Follow Mouse arms and disarms off the same state this tick already
+	// tracks (recording / paused / stopping). Early-returns when unchanged, so
+	// four calls a second cost nothing; the 60 Hz work happens on its own
+	// timer, which only runs while armed.
+	syncFollowMouse();
 
 	// Stop watchdog: obs_output_stop is async and a stuck muxer/encoder can
 	// hang it indefinitely (previously: kill via Task Manager). After 10s,

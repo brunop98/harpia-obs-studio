@@ -3,6 +3,7 @@
 #include "core/AudioManager.hpp"
 #include "core/CaptureManager.hpp"
 #include "core/RecordingController.hpp"
+#include "core/FollowMouse.hpp"
 #include "core/RegionWatch.hpp"
 #include "core/WebcamRecorder.hpp"
 #include "library/ClipLibrary.hpp"
@@ -11,6 +12,7 @@
 #include "model/RegionStore.hpp"
 #include "platform/IdleMonitor.hpp"
 
+#include <QElapsedTimer>
 #include <QHash>
 #include <QPoint>
 #include <QMainWindow>
@@ -252,6 +254,23 @@ private:
 	void updateRegionLeaveVisibility();
 	void tickRegionWatch();
 	QTimer *regionWatchTimer_ = nullptr; // idle auto-pause timeout; first item = Off
+
+	// Follow Mouse: the region pans to keep the cursor framed. Armed only while
+	// actively recording a Custom Region with the preset option on, and its
+	// 16 ms timer runs only then -- unlike the other timers here, which are
+	// always on. Screen geometry is cached at arm time, same trick as the
+	// region watch; screenForActivePreset() is far too expensive for 60 Hz.
+	FollowMouse followMouse_;
+	QTimer *followTimer_ = nullptr;
+	QSize followScreenDevicePx_;
+	QPoint followOrigin_;      // screen top-left, logical px (cached at arm)
+	double followDpr_ = 1.0;   // cached at arm
+	QElapsedTimer followClock_;
+	bool followApplying_ = false; // the follow tick is moving the overlay itself;
+	                              // its regionChanged echo must not re-apply the
+	                              // crop or restart the readiness debounce
+	void tickFollowMouse();
+	void syncFollowMouse(); // start/stop the timer to match the current state
 	QWidget *idleGroup_ = nullptr;   // label + combo, hidden when very narrow
 	QComboBox *countdownCombo_ = nullptr;
 	QWidget *countdownGroup_ = nullptr; // label + combo, hidden when narrow

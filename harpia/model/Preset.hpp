@@ -87,6 +87,18 @@ struct Preset {
 	std::string leftClickColor = "#4a90e2";
 	std::string rightClickColor = "#e2534a";
 
+	// Follow Mouse: while recording a Custom Region, the region pans to keep
+	// the cursor framed -- for mobile-format tutorials recorded in a small
+	// region without re-framing in the editor afterwards. Custom Region only;
+	// Entire Monitor has nowhere to pan. The size never changes, only the
+	// position (the encoder is committed to one frame size per file).
+	bool followMouse = false;
+	int followPaddingPct = 20;  // dead-zone inset per side, % of region (0..45)
+	int followSmoothness = 50;  // 0 = instant .. 100 = cinematic glide
+	int followAxis = 0;         // FollowAxis: 0 both, 1 horizontal, 2 vertical
+	int followProfile = 1;      // UI memory: 0 Instant, 1 Smooth, 2 Cinematic,
+	                            // 3 Mobile Tutorial, 4 Custom
+
 	// Webcam: recorded as a SEPARATE synchronized video file (never composited),
 	// at its own resolution/fps.
 	bool webcamEnabled = false;

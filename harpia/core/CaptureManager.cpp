@@ -203,6 +203,12 @@ bool CaptureManager::startCapture(int monitorIndex, bool captureCursor)
 
 void CaptureManager::setRegion(const CaptureRegion &region)
 {
+	// Callers fire this per mouse-move during a drag and at 60 Hz while Follow
+	// Mouse pans -- and both frequently land on the same integer rectangle two
+	// events running. An unchanged region with the filter already in place is
+	// a no-op; skip the obs_data allocation and the graphics-thread update.
+	if (region == region_ && source_ && (cropFilter_ || !region.enabled))
+		return;
 	region_ = region;
 
 	if (!source_)

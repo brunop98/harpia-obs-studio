@@ -53,6 +53,11 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_string(d, "screen_border_color", p.screenBorderColor.c_str());
 	obs_data_set_int(d, "screen_border_thickness", p.screenBorderThickness);
 	obs_data_set_bool(d, "region_move_handle", p.regionMoveHandle);
+	obs_data_set_bool(d, "follow_mouse", p.followMouse);
+	obs_data_set_int(d, "follow_padding_pct", p.followPaddingPct);
+	obs_data_set_int(d, "follow_smoothness", p.followSmoothness);
+	obs_data_set_int(d, "follow_axis", p.followAxis);
+	obs_data_set_int(d, "follow_profile", p.followProfile);
 	obs_data_set_bool(d, "record_desktop_audio", p.recordDesktopAudio);
 	obs_data_array_t *mics = obs_data_array_create();
 	for (const std::string &id : p.micDeviceIds) {
@@ -131,6 +136,17 @@ Preset presetFromData(obs_data_t *d)
 	// No default needed: a missing key reads as false, which is the default, so
 	// presets written before this option stay exactly as they were.
 	p.regionMoveHandle = obs_data_get_bool(d, "region_move_handle");
+	p.followMouse = obs_data_get_bool(d, "follow_mouse");
+	// Non-zero defaults must be seeded, or presets from before this feature
+	// would read back padding 0 / smoothness 0 -- "snap instantly the moment
+	// the cursor leaves the frame", the twitchiest possible setting.
+	obs_data_set_default_int(d, "follow_padding_pct", 20);
+	obs_data_set_default_int(d, "follow_smoothness", 50);
+	obs_data_set_default_int(d, "follow_profile", 1);
+	p.followPaddingPct = (int)obs_data_get_int(d, "follow_padding_pct");
+	p.followSmoothness = (int)obs_data_get_int(d, "follow_smoothness");
+	p.followAxis = (int)obs_data_get_int(d, "follow_axis");
+	p.followProfile = (int)obs_data_get_int(d, "follow_profile");
 	p.recordDesktopAudio = obs_data_get_bool(d, "record_desktop_audio");
 	obs_data_array_t *mics = obs_data_get_array(d, "mic_device_ids");
 	const size_t micCount = mics ? obs_data_array_count(mics) : 0;

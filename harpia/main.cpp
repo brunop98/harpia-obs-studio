@@ -1,4 +1,5 @@
 #include "Version.hpp"
+#include "core/CrashGuard.hpp"
 #include "core/Logger.hpp"
 #include "core/ObsContext.hpp"
 #include "model/PresetStore.hpp"
@@ -7,8 +8,13 @@
 #include "ui/StartupSplash.hpp"
 #include "ui/UiText.hpp"
 
+#include <util/base.h> // base_set_crash_handler
 #include <util/bmem.h>
 #include <util/platform.h>
+
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
 
 #include <QApplication>
 #include <QElapsedTimer>
@@ -60,6 +66,25 @@ std::string resolveLogDir()
 	return dir;
 }
 
+std::string resolveCrashDir()
+{
+	char *path = os_get_config_path_ptr("harpia-recorder/crash");
+	std::string dir = path ? path : "";
+	bfree(path);
+	return dir;
+}
+
+// libobs's own fatal path (bcrash): a graphics-subsystem failure and friends
+// arrive here as printf-style text. Feed it into the same report the OS-level
+// handlers write, then die the way libobs expects.
+void obsCrashToReport(const char *fmt, va_list args, void *)
+{
+	char buf[2048];
+	std::vsnprintf(buf, sizeof(buf), fmt ? fmt : "libobs fatal error", args);
+	harpia::CrashGuard::writeReport(buf);
+	std::abort(); // the SIGABRT handler is a no-op re-report; the first text wins
+}
+
 // Route Qt's own messages into the same session log.
 void qtMessageToLogger(QtMsgType type, const QMessageLogContext &, const QString &msg)
 {
@@ -80,6 +105,11 @@ void qtMessageToLogger(QtMsgType type, const QMessageLogContext &, const QString
 		break;
 	}
 	harpia::Logger::instance().log(level, ("Qt: " + msg).toStdString());
+	// qFatal aborts the process right after this handler returns -- capture
+	// its message as the crash description before that happens. (The SIGABRT
+	// handler that follows is a no-op: the first description wins.)
+	if (type == QtFatalMsg)
+		harpia::CrashGuard::writeReport(("Qt fatal: " + msg).toUtf8().constData());
 }
 
 // Last run's phase durations, which weight this run's progress bar. Stored
@@ -136,6 +166,14 @@ int main(int argc, char *argv[])
 		harpia::SingleInstance::userScopedKey(QStringLiteral("harpia-recorder")));
 	if (!instance.acquire())
 		return 0; // the running copy has been asked to come forward
+
+	// Crash handlers before anything that can crash: fatal signals, unhandled
+	// C++ exceptions and (on Windows) SEH all write a description to a pending
+	// report -- shown as a native message box at crash time on Windows, and as
+	// a proper dialog on the next start. libobs's own fatal path joins in
+	// below via base_set_crash_handler.
+	harpia::CrashGuard::install(resolveCrashDir());
+	base_set_crash_handler(obsCrashToReport, nullptr);
 
 	// Start logging before anything else so startup and any early crash are
 	// captured to disk (flushed per line).

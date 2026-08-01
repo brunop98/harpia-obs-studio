@@ -32,7 +32,8 @@
 #include "model/PresetStore.hpp"
 
 #include <util/base.h>     // blog
-#include <util/platform.h> // os_inhibit_sleep, os_gettime_ns
+#include <util/bmem.h>     // bfree (paths from os_get_config_path_ptr)
+#include <util/platform.h> // os_inhibit_sleep, os_get_config_path_ptr
 
 #if defined(_WIN32)
 #include <windows.h> // EnumDisplayDevices — correlate OBS monitor_id → QScreen
@@ -84,6 +85,7 @@
 #include <QToolButton>
 #include <QStorageInfo>
 
+#include "core/CrashGuard.hpp"
 #include "core/DiskSpace.hpp"
 #include <QStyle>
 #include <QThread>
@@ -757,6 +759,39 @@ void MainWindow::finishStartup()
 	refreshReadiness();
 	refreshWebcamRow();
 	updateButtons(); // readiness may have changed what is allowed
+
+	// If the last exit was a crash, say so -- with the DESCRIPTION the crash
+	// handlers captured, not just the fact of it. Shown before the orphan
+	// offer below, because "it crashed, here is why" is the context that makes
+	// "recover the unfinished recording?" make sense.
+	{
+		char *cd = os_get_config_path_ptr("harpia-recorder/crash");
+		const QString crashDir = QString::fromUtf8(cd ? cd : "");
+		bfree(cd);
+		const QString report = CrashGuard::takePendingReport(crashDir);
+		if (!report.isEmpty()) {
+			blog(LOG_WARNING, "[harpia] previous session crashed: %s",
+			     report.toUtf8().constData());
+			QMessageBox box(this);
+			box.setWindowTitle(QStringLiteral("Harpia crashed last time"));
+			box.setIcon(QMessageBox::Warning);
+			box.setText(QStringLiteral(
+				"The previous session ended in a crash. The description below was "
+				"captured as it happened; the session log has the full lead-up."));
+			box.setInformativeText(report);
+			QPushButton *openLogs =
+				box.addButton(QStringLiteral("Open logs folder"), QMessageBox::ActionRole);
+			box.addButton(QStringLiteral("Close"), QMessageBox::AcceptRole);
+			box.exec();
+			if (box.clickedButton() == openLogs) {
+				char *ld = os_get_config_path_ptr("harpia-recorder/logs");
+				if (ld && *ld)
+					QDesktopServices::openUrl(
+						QUrl::fromLocalFile(QString::fromUtf8(ld)));
+				bfree(ld);
+			}
+		}
+	}
 
 	// Recordings orphaned by a crash/kill sit in each output folder's hidden
 	// .harpia_tmp. They used to get one WARNING line and nothing else, which

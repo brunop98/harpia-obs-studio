@@ -85,6 +85,8 @@ target_sources(
     core/ObsContext.hpp
     core/AudioManager.cpp
     core/AudioManager.hpp
+    core/CrashGuard.cpp
+    core/CrashGuard.hpp
     core/CaptureManager.cpp
     core/CaptureManager.hpp
     core/EncoderFactory.cpp

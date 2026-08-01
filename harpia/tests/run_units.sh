@@ -326,6 +326,14 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" -I"$ROOT/libobs" $CF \
 	"$HERE/regionoverlay_test.cpp" "$H/ui/RegionTool.cpp" \
 	"$WORK/moc_RegionTool.cpp" -o "$WORK/regionoverlay_test" $LF
 
+# The floating desktop controls are on screen while idle now, holding the green
+# Record button -- so the red "recording" dot and the two dead buttons that used
+# to be unconditional both had to learn about the idle state.
+"$MOC" -I"$H" "$H/ui/RecorderControlsOverlay.hpp" -o "$WORK/moc_RecorderControlsOverlay.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/recordercontrols_test.cpp" "$H/ui/RecorderControlsOverlay.cpp" "$H/ui/UiIcons.cpp" \
+	"$WORK/moc_RecorderControlsOverlay.cpp" -o "$WORK/recordercontrols_test" $LF
+
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
@@ -333,6 +341,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/paramslider_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionwatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionoverlay_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/recordercontrols_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/startupsplash_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/monitormatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/canvasfit_test" || rc=1

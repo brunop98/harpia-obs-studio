@@ -408,6 +408,145 @@ int main(int argc, char **argv)
 		t->deleteLater();
 	}
 
+	// ------------------------------------------------------------------------
+	// The Record button below the frame.
+	//
+	// Starting a recording meant going back to the main window -- the one step of
+	// a region recording that pulled you away from the thing you were framing.
+	// Like the move tab, it lives outside the region so it covers no captured
+	// pixel and stays in the input mask while another app is in front.
+	// ------------------------------------------------------------------------
+
+	std::printf("\n-- it is below the frame, and gone while recording --\n");
+	{
+		RegionTool *t = buildSmall();
+		QApplication::processEvents();
+		ok(t->startButtonVisible(), "there is a Record button when there is no recording");
+		const QRect btn = t->startButtonRect();
+		ok(!btn.isNull(), "and it has somewhere to be");
+		ok(t->rect().contains(btn), "inside the widget, so it can be in the mask");
+
+		const CaptureRegion r = t->region();
+		const int regionBottomGlobal =
+			QGuiApplication::primaryScreen()->geometry().top() + r.y + r.height;
+		const int btnTopGlobal = t->mapToGlobal(btn.topLeft()).y();
+		std::printf("     region ends at y=%d, button starts at y=%d\n", regionBottomGlobal,
+			    btnTopGlobal);
+		ok(btnTopGlobal >= regionBottomGlobal, "clear below the captured area, not over it");
+
+		// A green "start" beside a running recording would say the opposite of
+		// the truth, and Stop is not here -- it is on the floating controls.
+		t->setMode(RegionTool::Mode::Recording);
+		QApplication::processEvents();
+		ok(!t->startButtonVisible(), "and it is gone once recording");
+		ok(t->startButtonRect().isNull(), "with nothing left where it was");
+		t->deleteLater();
+	}
+
+	std::printf("\n-- pressing it asks to record, and moves nothing --\n");
+	{
+		RegionTool *t = buildSmall();
+		t->setMoveHandleEnabled(true);
+		t->setMode(RegionTool::Mode::Watching);
+		QApplication::processEvents();
+		QSignalSpy started(t, &RegionTool::startRecordingRequested);
+		QSignalSpy finished(t, &RegionTool::interactionFinished);
+
+		const QRect btn = t->startButtonRect();
+		const CaptureRegion before = t->region();
+		const QPoint c = btn.center();
+		QMouseEvent press(QEvent::MouseButtonPress, QPointF(c), t->mapToGlobal(c), Qt::LeftButton,
+				  Qt::LeftButton, Qt::NoModifier);
+		QApplication::sendEvent(t, &press);
+		QMouseEvent rel(QEvent::MouseButtonRelease, QPointF(c), t->mapToGlobal(c), Qt::LeftButton,
+				Qt::NoButton, Qt::NoModifier);
+		QApplication::sendEvent(t, &rel);
+		QApplication::processEvents();
+		const CaptureRegion after = t->region();
+
+		std::printf("     startRecordingRequested x%d; region (%d,%d) -> (%d,%d)\n",
+			    int(started.count()), before.x, before.y, after.x, after.y);
+		ok(started.count() == 1, "one press, one request to start");
+		ok(after.x == before.x && after.y == before.y && after.width == before.width &&
+			   after.height == before.height,
+		   "and the region did not budge -- a button is not a drag handle");
+		// The owner re-evaluates the overlay's mode on interactionFinished. A
+		// button press changed no geometry, so making it fire would be work for
+		// nothing, four times over on a double click.
+		ok(finished.count() == 0, "pressing a button is not an interaction to finish");
+
+		// CONTROL: the same gesture on the MOVE TAB does move the region. Without
+		// it, "the region did not budge" would also pass on a build where nothing
+		// responds to the mouse at all.
+		const QPoint tabC = t->moveHandleRect().center();
+		const auto [afterTab, beforeTab] = dragBy(t, tabC, QPoint(20, 15));
+		std::printf("     control: the move tab, same gesture: (%d,%d) -> (%d,%d)\n", beforeTab.x,
+			    beforeTab.y, afterTab.x, afterTab.y);
+		ok(afterTab.x == beforeTab.x + 20 && afterTab.y == beforeTab.y + 15,
+		   "CONTROL: the move tab still moves it, so the mouse IS being handled");
+		ok(started.count() == 1, "and dragging the tab did not ask to record");
+		t->deleteLater();
+	}
+
+	std::printf("\n-- a press you slide off is cancelled --\n");
+	{
+		// The ordinary button contract. Starting a recording by accident is not a
+		// thing to shrug at -- it is a file, a countdown and a running encoder.
+		RegionTool *t = buildSmall();
+		t->setMode(RegionTool::Mode::Watching);
+		QApplication::processEvents();
+		QSignalSpy started(t, &RegionTool::startRecordingRequested);
+
+		const QRect btn = t->startButtonRect();
+		const QPoint c = btn.center();
+		const QPoint away = c - QPoint(0, btn.height() * 3); // up into the region
+		QMouseEvent press(QEvent::MouseButtonPress, QPointF(c), t->mapToGlobal(c), Qt::LeftButton,
+				  Qt::LeftButton, Qt::NoModifier);
+		QApplication::sendEvent(t, &press);
+		QMouseEvent move(QEvent::MouseMove, QPointF(away), t->mapToGlobal(away), Qt::NoButton,
+				 Qt::LeftButton, Qt::NoModifier);
+		QApplication::sendEvent(t, &move);
+		QMouseEvent rel(QEvent::MouseButtonRelease, QPointF(away), t->mapToGlobal(away),
+				Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+		QApplication::sendEvent(t, &rel);
+		QApplication::processEvents();
+		std::printf("     pressed the button, released elsewhere: %d request(s)\n",
+			    int(started.count()));
+		ok(started.count() == 0, "sliding off before letting go starts nothing");
+
+		// And the slide itself must not have dragged the region along with it.
+		const CaptureRegion r = t->region();
+		ok(r.x == 200 && r.y == 200, "nor did the slide move the region");
+		t->deleteLater();
+	}
+
+	std::printf("\n-- the button is grabbable, the band beside it is not --\n");
+	{
+		RegionTool *t = buildSmall();
+		t->setMode(RegionTool::Mode::Watching);
+		QApplication::processEvents();
+		const QRegion mask = t->mask();
+		const QRect btn = t->startButtonRect();
+		const auto live = [&](const QPoint &p) {
+			return mask.isNull() || mask.isEmpty() || mask.contains(p);
+		};
+		std::printf("     button live: %s   band beside it live: %s\n",
+			    live(btn.center()) ? "yes" : "no",
+			    live(QPoint(6, btn.center().y())) ? "yes" : "no");
+		ok(live(btn.center()), "the button takes the mouse with another app in front");
+		ok(!live(QPoint(6, btn.center().y())),
+		   "and the reserved band beside it does not block clicks below the region");
+
+		// Once recording, the button is gone and its space must stop grabbing.
+		t->setMode(RegionTool::Mode::Recording);
+		QApplication::processEvents();
+		const QRegion recMask = t->mask();
+		const bool stillLive = recMask.isNull() || recMask.isEmpty() || recMask.contains(btn.center());
+		std::printf("     while recording, that same spot live: %s\n", stillLive ? "yes" : "no");
+		ok(!stillLive, "with no button there, the space stops taking the mouse");
+		t->deleteLater();
+	}
+
 	std::printf("\n-- with the handle on, the frame still behaves --\n");
 	{
 		// The mask was rewritten to build up from the frame band instead of

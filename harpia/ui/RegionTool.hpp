@@ -42,7 +42,22 @@ public:
 	// were trying to frame.
 	// Which part of the frame a press landed on. Public only because
 	// isInteracting() above is inline and needs the type.
-	enum class Zone { None, Move, Left, Right, Top, Bottom, TopLeft, TopRight, BottomLeft, BottomRight };
+	enum class Zone {
+		None,
+		Move,
+		Left,
+		Right,
+		Top,
+		Bottom,
+		TopLeft,
+		TopRight,
+		BottomLeft,
+		BottomRight,
+		// The Record button below the frame. A zone rather than a child widget so
+		// it lives in the same painted, masked surface as everything else here --
+		// and so mouseMoveEvent's geometry switch can simply ignore it.
+		StartButton,
+	};
 
 	enum class Mode {
 		// Harpia is in front. The whole rectangle takes the mouse, so dragging
@@ -75,6 +90,20 @@ public:
 	bool moveHandleEnabled() const { return moveHandle_; }
 	// Where the tab is, in local coordinates. Null when the handle is off.
 	QRect moveHandleRect() const;
+
+	// The green Record button below the frame.
+	//
+	// Starting a recording used to mean going back to the main window, which is
+	// the one step of a region recording that pulled you away from the thing you
+	// were framing. The button sits outside the region for the same reason the
+	// move tab does: it covers no captured pixel, and it stays in the input mask
+	// so it works with the app being recorded in front.
+	//
+	// Hidden while recording -- a green "start" beside a running recording would
+	// be a lie, and Stop lives on the floating controls, which is where it
+	// already was.
+	bool startButtonVisible() const { return mode_ != Mode::Recording; }
+	QRect startButtonRect() const; // local coords; null when not shown
 	// True while a move or resize is under way. Callers must not change the
 	// mode during one: switching to Watching re-masks the widget, and pulling
 	// the interior out from under a drag that started there drops it halfway.
@@ -87,6 +116,7 @@ public:
 signals:
 	void regionChanged(const CaptureRegion &region);
 	void cancelled();            // Esc pressed while not recording
+	void startRecordingRequested(); // the Record button below the frame was pressed
 	void saveRegionRequested();  // "Save Region…" chosen from the right-click menu
 	void manageRegionsRequested(); // "Manage saved regions…" chosen
 	// A move or resize finished. The owner defers mode changes while a drag is
@@ -101,6 +131,7 @@ protected:
 	void mouseMoveEvent(QMouseEvent *) override;
 	void mouseReleaseEvent(QMouseEvent *) override;
 	void mouseDoubleClickEvent(QMouseEvent *) override;
+	void leaveEvent(QEvent *) override;
 	void contextMenuEvent(QContextMenuEvent *) override;
 	void keyPressEvent(QKeyEvent *) override;
 
@@ -115,6 +146,12 @@ private:
 	// both derive from this, which is what keeps switching the handle on from
 	// moving the region.
 	int topMargin() const;
+	// The bottom inset, which always reserves room for the Record button.
+	// Reserved even while recording, when the button is not drawn: recomputing
+	// the widget's geometry every time setMode() flips would churn the window
+	// and re-emit regionChanged() off a state tick, and the reserved band is
+	// transparent, so leaving it there costs nothing.
+	int bottomMargin() const;
 	void snap(QRect &globalRect) const;
 
 	QScreen *screen_ = nullptr;
@@ -127,6 +164,8 @@ private:
 	QPoint dragStartGlobal_;
 	QRect dragStartGeom_;
 	bool showDims_ = false;
+	bool startPressed_ = false; // the Record button is held down
+	bool startHover_ = false;
 };
 
 // What the overlay should be doing, given the three facts that decide it.

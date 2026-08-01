@@ -27,18 +27,27 @@ public:
 	void showControls();
 	void hideControls();
 
-	// Reflect the recorder state: Pause↔Resume label, and per-button enabled.
-	void setState(bool paused, bool pauseEnabled, bool stopEnabled);
+	// Reflect the recorder state. Idle shows a single green Record button and
+	// nothing else; recording swaps it for Pause and Stop. Hiding rather than
+	// disabling, so the pill is one button wide when there is only one thing to
+	// do -- and there are never two dead buttons sitting on the desktop.
+	void setState(bool recording, bool paused, bool pauseEnabled, bool stopEnabled);
 
 signals:
+	void startClicked();
 	void pauseClicked();
 	void stopClicked();
+	// "Hide until next recording" from the right-click menu. The panel is on
+	// screen whenever the app is, so it needs a way to be got rid of that does
+	// not mean quitting.
+	void dismissed();
 
 protected:
 	void paintEvent(QPaintEvent *) override;
 	void mousePressEvent(QMouseEvent *) override;
 	void mouseMoveEvent(QMouseEvent *) override;
 	void mouseReleaseEvent(QMouseEvent *) override;
+	void contextMenuEvent(QContextMenuEvent *) override;
 	void enterEvent(QEnterEvent *) override;
 	void leaveEvent(QEvent *) override;
 	bool eventFilter(QObject *obj, QEvent *event) override;
@@ -50,12 +59,15 @@ private:
 	void savePosition();
 	void excludeFromCapture(); // Windows: WDA_EXCLUDEFROMCAPTURE
 
+	QPushButton *startButton_ = nullptr;
 	QPushButton *pauseButton_ = nullptr;
 	QPushButton *stopButton_ = nullptr;
 	QPropertyAnimation *fade_ = nullptr;
 	QPoint dragOffset_;
 	bool dragging_ = false;
 	bool paused_ = false;
+	bool recording_ = false;
+	bool stateApplied_ = false; // setState has run at least once
 };
 
 } // namespace harpia

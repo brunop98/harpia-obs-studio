@@ -599,6 +599,14 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// Floating desktop Pause/Stop HUD: its buttons reuse the exact same handlers
 	// as the main window's, so behavior stays identical wherever it's clicked.
 	floatingControls_ = std::make_unique<RecorderControlsOverlay>();
+	// Start goes through the same slot as the main Record button, so the
+	// readiness gate, the low-disk prompt and the countdown all still apply.
+	connect(floatingControls_.get(), &RecorderControlsOverlay::startClicked, this,
+		&MainWindow::onPrimaryButton);
+	connect(floatingControls_.get(), &RecorderControlsOverlay::dismissed, this, [this]() {
+		floatingDismissed_ = true;
+		updateFloatingControls();
+	});
 	connect(floatingControls_.get(), &RecorderControlsOverlay::pauseClicked, this,
 		&MainWindow::onPauseButton);
 	connect(floatingControls_.get(), &RecorderControlsOverlay::stopClicked, this,
@@ -628,6 +636,10 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// flight, and grabbing the overlay changes which window is active.
 	connect(regionTool_.get(), &RegionTool::interactionFinished, this,
 		&MainWindow::updateRegionToolVisibility);
+	// The Record button on the region frame goes through the same slot as every
+	// other way of starting, so it inherits the readiness gate, the low-disk
+	// prompt and the countdown rather than quietly bypassing them.
+	connect(regionTool_.get(), &RegionTool::startRecordingRequested, this, &MainWindow::onPrimaryButton);
 	connect(regionTool_.get(), &RegionTool::saveRegionRequested, this, &MainWindow::onSaveRegionRequested);
 	connect(regionTool_.get(), &RegionTool::manageRegionsRequested, this,
 		&MainWindow::openSavedRegionsManager);
@@ -1336,6 +1348,9 @@ void MainWindow::updateDiskLabel()
 void MainWindow::beginStart()
 {
 	starting_ = true;
+	// "Hide until next recording" is now spent -- this is that recording, and
+	// Stop needs to be reachable from the desktop again.
+	floatingDismissed_ = false;
 	updateButtons();
 	startRecording(); // clears starting_ itself on failure; success clears in tickState
 }
@@ -2861,13 +2876,23 @@ void MainWindow::updateFloatingControls()
 	// Present from the moment a start is kicked off until the file is finalized,
 	// so it's a continuous "recording in progress" indicator.
 	const bool active = recording || starting_ || stopping_;
-	if (active) {
-		floatingControls_->setState(paused, recording && !stopping_ && recorder_.canPause(),
-					    recording && !stopping_);
+	floatingControls_->setState(active, paused, recording && !stopping_ && recorder_.canPause(),
+				    recording && !stopping_);
+
+	// The panel is now on screen while idle too, holding the green Record
+	// button, so a recording can be started from wherever you are working
+	// without coming back here. Two exceptions:
+	//   * the editor is a window you work INSIDE, usually maximised -- the same
+	//     reason the region overlay steps aside for it (see
+	//     updateRegionToolVisibility). A recording in progress outranks that,
+	//     since hiding it would be hiding the recording;
+	//   * "Hide until next recording" from its right-click menu, which is the
+	//     only way to be rid of a panel that otherwise never leaves.
+	const bool editorInTheWay = VideoEditorWindow::anyOpen() && !active;
+	if (active || (!floatingDismissed_ && !editorInTheWay))
 		floatingControls_->showControls();
-	} else {
+	else
 		floatingControls_->hideControls();
-	}
 }
 
 void MainWindow::updateStatusChip()

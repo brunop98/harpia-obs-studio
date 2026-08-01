@@ -335,7 +335,10 @@ private:
 	std::unique_ptr<RegionTool> regionTool_;
 	std::unique_ptr<MouseFxOverlay> mouseFx_;
 	std::unique_ptr<ScreenBorderOverlay> screenBorder_;
-	std::unique_ptr<RecorderControlsOverlay> floatingControls_; // desktop Pause/Stop HUD
+	std::unique_ptr<RecorderControlsOverlay> floatingControls_; // desktop Record/Pause/Stop HUD
+	// "Hide until next recording" was chosen from the HUD's right-click menu.
+	// Cleared when a recording starts, which is what "until" means.
+	bool floatingDismissed_ = false;
 
 	std::string activePresetId_;
 	CaptureRegion currentRegion_;

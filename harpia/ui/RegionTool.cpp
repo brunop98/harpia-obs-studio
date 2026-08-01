@@ -23,6 +23,11 @@ constexpr int kMinSize = 32;  // minimum region size (logical px)
 constexpr int kTabW = 48;
 constexpr int kTabH = 14;
 constexpr int kTabGap = kMargin + 3;
+// The Record button below the frame. Same clearance trick against the Bottom
+// resize zone that the tab uses against the Top one.
+constexpr int kStartW = 84;
+constexpr int kStartH = 24;
+constexpr int kStartGap = kMargin + 3;
 const QColor kAccent(0, 174, 239);
 
 // Common capture resolutions to snap to (device pixels).
@@ -48,9 +53,30 @@ int RegionTool::topMargin() const
 	return kMargin + (moveHandle_ ? kTabH + kTabGap : 0);
 }
 
+int RegionTool::bottomMargin() const
+{
+	return kMargin + kStartH + kStartGap;
+}
+
 QRect RegionTool::innerRectLocal() const
 {
-	return rect().adjusted(kMargin, topMargin(), -kMargin, -kMargin);
+	return rect().adjusted(kMargin, topMargin(), -kMargin, -bottomMargin());
+}
+
+QRect RegionTool::startButtonRect() const
+{
+	if (!startButtonVisible())
+		return QRect();
+	const QRect inner = innerRectLocal();
+	const int w = std::min(kStartW, inner.width());
+	const int x = inner.center().x() - w / 2 + 1;
+	// Below the frame, where it covers nothing being captured -- unless the
+	// region runs to the bottom of the display, where there is no "below" and a
+	// button off the edge of the screen could not be pressed at all.
+	const int below = inner.bottom() + kStartGap;
+	if (screen_ && mapToGlobal(QPoint(0, below + kStartH)).y() > screen_->geometry().bottom())
+		return QRect(x, inner.bottom() - kStartH - 3, w, kStartH);
+	return QRect(x, below, w, kStartH);
 }
 
 QRect RegionTool::moveHandleRect() const
@@ -147,6 +173,11 @@ void RegionTool::rebuildMask()
 	// front is the whole reason it exists.
 	if (moveHandle_)
 		mask += moveHandleRect();
+	// Likewise the Record button -- and only while it is actually drawn, so the
+	// reserved band below the frame stops taking the mouse the moment recording
+	// starts and the button goes away.
+	if (startButtonVisible())
+		mask += startButtonRect();
 	setMask(mask);
 }
 
@@ -171,7 +202,7 @@ void RegionTool::applyGeometry(const QRect &globalRect)
 	}
 	// The widget is the region expanded by the handle margin, plus room for the
 	// move tab above it when that is on.
-	setGeometry(g.adjusted(-kMargin, -topMargin(), kMargin, kMargin));
+	setGeometry(g.adjusted(-kMargin, -topMargin(), kMargin, bottomMargin()));
 	rebuildMask();
 	emitRegion();
 	update();
@@ -185,6 +216,11 @@ RegionTool::Zone RegionTool::zoneAt(const QPoint &p) const
 	// while another app is in front.
 	if (moveHandle_ && moveHandleRect().contains(p))
 		return Zone::Move;
+	// The Record button, before the resize zones for the same reason: flipped
+	// inside for a region at the bottom of the screen it lands on the Bottom
+	// edge zone, and pressing a button must not resize the thing it sits on.
+	if (startButtonVisible() && startButtonRect().contains(p))
+		return Zone::StartButton;
 
 	const QRect inner = innerRectLocal();
 	const int m = kMargin + 2;
@@ -247,18 +283,41 @@ void RegionTool::mousePressEvent(QMouseEvent *e)
 	dragStartGlobal_ = e->globalPosition().toPoint();
 	// Store the current region geometry (global) as the drag anchor.
 	dragStartGeom_ = QRect(mapToGlobal(innerRectLocal().topLeft()), innerRectLocal().size());
-	showDims_ = (dragZone_ != Zone::Move && dragZone_ != Zone::None);
+	showDims_ = (dragZone_ != Zone::Move && dragZone_ != Zone::None &&
+		     dragZone_ != Zone::StartButton);
+	startPressed_ = (dragZone_ == Zone::StartButton);
 	update();
 }
 
 void RegionTool::mouseMoveEvent(QMouseEvent *e)
 {
 	if (dragZone_ == Zone::None || !(e->buttons() & Qt::LeftButton)) {
-		// Not dragging: say what the tab does before it is grabbed. Without this
-		// it is a decoration that happens to be draggable.
-		if (moveHandle_)
-			setCursor(moveHandleRect().contains(e->pos()) ? Qt::SizeAllCursor
-								     : Qt::ArrowCursor);
+		// Not dragging: say what is under the pointer before it is pressed.
+		// Without this the tab is a decoration that happens to be draggable and
+		// the button is a picture that happens to be clickable.
+		const bool overStart = startButtonVisible() && startButtonRect().contains(e->pos());
+		if (overStart != startHover_) {
+			startHover_ = overStart;
+			update();
+		}
+		if (overStart)
+			setCursor(Qt::PointingHandCursor);
+		else if (moveHandle_ && moveHandleRect().contains(e->pos()))
+			setCursor(Qt::SizeAllCursor);
+		else
+			setCursor(Qt::ArrowCursor);
+		return;
+	}
+
+	// Holding the Record button and moving is not a drag of anything. Falling
+	// through would re-apply the unchanged geometry on every move and emit a
+	// regionChanged() per mouse event for a region that did not change.
+	if (dragZone_ == Zone::StartButton) {
+		const bool inside = startButtonRect().contains(e->pos());
+		if (inside != startPressed_) {
+			startPressed_ = inside; // un-press when slid off, re-press on return
+			update();
+		}
 		return;
 	}
 
@@ -306,12 +365,24 @@ void RegionTool::mouseMoveEvent(QMouseEvent *e)
 	applyGeometry(g);
 }
 
-void RegionTool::mouseReleaseEvent(QMouseEvent *)
+void RegionTool::mouseReleaseEvent(QMouseEvent *e)
 {
-	const bool wasDragging = dragZone_ != Zone::None;
+	const bool wasStart = dragZone_ == Zone::StartButton;
+	const bool wasDragging = dragZone_ != Zone::None && !wasStart;
 	dragZone_ = Zone::None;
+	startPressed_ = false;
 	showDims_ = false;
 	update();
+
+	if (wasStart) {
+		// The ordinary button contract: a press you slide off before letting go
+		// is cancelled. Starting a recording is not something to do by accident.
+		if (startButtonRect().contains(e->pos()))
+			emit startRecordingRequested();
+		// Deliberately NOT interactionFinished(): nothing about the geometry
+		// changed, and the owner only re-evaluates the overlay mode on that.
+		return;
+	}
 	if (wasDragging)
 		emit interactionFinished();
 }
@@ -324,6 +395,17 @@ void RegionTool::mouseDoubleClickEvent(QMouseEvent *)
 	QRect inner(mapToGlobal(innerRectLocal().topLeft()), innerRectLocal().size());
 	inner.moveCenter(s.center());
 	applyGeometry(inner);
+}
+
+void RegionTool::leaveEvent(QEvent *e)
+{
+	// No move events arrive once the pointer is gone, so a hover left set here
+	// would stay lit until the pointer came back.
+	if (startHover_) {
+		startHover_ = false;
+		update();
+	}
+	QWidget::leaveEvent(e);
 }
 
 void RegionTool::contextMenuEvent(QContextMenuEvent *e)
@@ -425,6 +507,31 @@ void RegionTool::paintEvent(QPaintEvent *)
 		p.setBrush(QColor(255, 255, 255, 220));
 		for (int i = -1; i <= 1; ++i)
 			p.drawEllipse(QPoint(tab.center().x() + i * 7, tab.center().y() + 1), 2, 2);
+		p.setRenderHint(QPainter::Antialiasing, false);
+	}
+
+	// The Record button below the frame. Green: the same green the main window
+	// uses for Resume and this frame uses for its ready border, so "green means
+	// go" holds across all three.
+	if (startButtonVisible()) {
+		const QRect btn = startButtonRect();
+		const QColor fill = startPressed_ ? QColor(0x35, 0xa0, 0x47)
+				    : startHover_ ? QColor(0x4a, 0xc4, 0x62)
+						  : QColor(0x3f, 0xb9, 0x50);
+		p.setRenderHint(QPainter::Antialiasing, true);
+		p.setBrush(fill);
+		p.setPen(Qt::NoPen);
+		p.drawRoundedRect(btn, 6, 6);
+		// A record dot and the word, so it is unmistakably the start control and
+		// not another handle.
+		p.setBrush(Qt::white);
+		p.drawEllipse(QPoint(btn.left() + 15, btn.center().y()), 4, 4);
+		p.setPen(Qt::white);
+		QFont f = p.font();
+		f.setBold(true);
+		p.setFont(f);
+		p.drawText(btn.adjusted(26, 0, -6, 0), Qt::AlignVCenter | Qt::AlignLeft,
+			   QStringLiteral("Record"));
 		p.setRenderHint(QPainter::Antialiasing, false);
 	}
 

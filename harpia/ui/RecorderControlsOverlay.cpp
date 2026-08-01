@@ -2,10 +2,13 @@
 
 #include "UiIcons.hpp"
 
+#include <QAction>
 #include <QApplication>
+#include <QContextMenuEvent>
 #include <QEnterEvent>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -61,6 +64,18 @@ RecorderControlsOverlay::RecorderControlsOverlay(QWidget *parent) : QWidget(pare
 		"QPushButton{color:#f2f3f5;border:none;border-radius:9px;font-size:15px;font-weight:bold;}"
 		"QPushButton:disabled{color:#7d828b;}");
 
+	startButton_ = new QPushButton(this);
+	startButton_->setIcon(uiIcon(Glyph::Record, 14));
+	startButton_->setCursor(Qt::PointingHandCursor);
+	startButton_->setFixedSize(32, 32);
+	startButton_->setToolTip(QStringLiteral("Start recording"));
+	// The same green as the region frame's Record button and the main window's
+	// Resume, so one colour means "go" everywhere.
+	startButton_->setStyleSheet(btnBase + QStringLiteral("QPushButton{background:#3fb950;}"
+							     "QPushButton:hover{background:#4ac462;}"
+							     "QPushButton:disabled{background:#2f5c39;}"));
+	row->addWidget(startButton_);
+
 	pauseButton_ = new QPushButton(this);
 	pauseButton_->setIcon(uiIcon(Glyph::Pause, 14));
 	pauseButton_->setCursor(Qt::PointingHandCursor);
@@ -79,13 +94,19 @@ RecorderControlsOverlay::RecorderControlsOverlay(QWidget *parent) : QWidget(pare
 							    "QPushButton:disabled{background:#5a2f31;}"));
 	row->addWidget(stopButton_);
 
+	connect(startButton_, &QPushButton::clicked, this, &RecorderControlsOverlay::startClicked);
 	connect(pauseButton_, &QPushButton::clicked, this, &RecorderControlsOverlay::pauseClicked);
 	connect(stopButton_, &QPushButton::clicked, this, &RecorderControlsOverlay::stopClicked);
 
 	// Hover tracking must include the child buttons, otherwise entering a button
 	// would read as "left the panel" and fade it out.
+	startButton_->installEventFilter(this);
 	pauseButton_->installEventFilter(this);
 	stopButton_->installEventFilter(this);
+
+	// Idle is the state it now opens in, so start there rather than showing all
+	// three for the first instant.
+	setState(false, false, false, false);
 
 	fade_ = new QPropertyAnimation(this, "windowOpacity", this);
 	fade_->setDuration(180);
@@ -94,14 +115,42 @@ RecorderControlsOverlay::RecorderControlsOverlay(QWidget *parent) : QWidget(pare
 	adjustSize();
 }
 
-void RecorderControlsOverlay::setState(bool paused, bool pauseEnabled, bool stopEnabled)
+void RecorderControlsOverlay::setState(bool recording, bool paused, bool pauseEnabled, bool stopEnabled)
 {
+	// This is driven from updateButtons(), which runs on a timer, so the
+	// expensive half -- swapping which buttons exist and resizing the window
+	// around them -- happens only when the answer actually changed. Otherwise
+	// the panel would re-lay itself out several times a second forever.
+	// The first call always applies: the buttons start out as freshly-built
+	// children, which are neither shown nor hidden, so "nothing changed" would
+	// leave all three of them on screen.
+	const bool layoutChanged = !stateApplied_ || recording != recording_;
+	const bool dotChanged = !stateApplied_ || recording != recording_;
+	stateApplied_ = true;
 	paused_ = paused;
+	recording_ = recording;
+
+	if (layoutChanged) {
+		// One button when there is one thing to do. Hidden, not disabled: two
+		// dead buttons parked on the desktop for as long as the app is running
+		// would be clutter that never does anything.
+		startButton_->setVisible(!recording);
+		pauseButton_->setVisible(recording);
+		stopButton_->setVisible(recording);
+	}
+
 	pauseButton_->setIcon(uiIcon(paused ? Glyph::Play : Glyph::Pause, 14));
 	pauseButton_->setToolTip(paused ? QStringLiteral("Resume recording") : QStringLiteral("Pause recording"));
 	pauseButton_->setEnabled(pauseEnabled);
 	stopButton_->setToolTip(QStringLiteral("Stop recording"));
 	stopButton_->setEnabled(stopEnabled);
+
+	// The pill has to follow its contents, or it keeps the two-button width with
+	// one button rattling around inside it.
+	if (layoutChanged)
+		adjustSize();
+	if (dotChanged)
+		update(); // the recording dot appears and disappears with the state
 }
 
 void RecorderControlsOverlay::showControls()
@@ -192,7 +241,7 @@ bool RecorderControlsOverlay::eventFilter(QObject *obj, QEvent *event)
 {
 	// The buttons' own enter/leave drive the same hover logic so moving between
 	// the background and a button never flickers the opacity.
-	if ((obj == pauseButton_ || obj == stopButton_) &&
+	if ((obj == startButton_ || obj == pauseButton_ || obj == stopButton_) &&
 	    (event->type() == QEvent::Enter || event->type() == QEvent::Leave))
 		updateHover();
 	return QWidget::eventFilter(obj, event);
@@ -226,6 +275,17 @@ void RecorderControlsOverlay::mouseReleaseEvent(QMouseEvent *e)
 	}
 }
 
+void RecorderControlsOverlay::contextMenuEvent(QContextMenuEvent *e)
+{
+	// The panel is on screen for as long as the app is, so there has to be a way
+	// to put it away that is not "quit Harpia". Until the next recording, not
+	// forever: it comes back when it has something to say.
+	QMenu menu;
+	QAction *hideAct = menu.addAction(QStringLiteral("Hide until next recording"));
+	if (menu.exec(e->globalPos()) == hideAct)
+		emit dismissed();
+}
+
 void RecorderControlsOverlay::paintEvent(QPaintEvent *)
 {
 	QPainter p(this);
@@ -239,11 +299,16 @@ void RecorderControlsOverlay::paintEvent(QPaintEvent *)
 	p.setPen(QPen(QColor(0xff, 0xff, 0xff, 0x22), 1));
 	p.drawPath(path);
 
-	// Recording indicator dot on the left.
-	const int cy = height() / 2;
-	p.setPen(Qt::NoPen);
-	p.setBrush(QColor(0xe5, 0x48, 0x4d));
-	p.drawEllipse(QPoint(14, cy), 4, 4);
+	// Recording indicator dot on the left -- only while there is a recording to
+	// indicate. A red dot sitting there while idle would say the opposite of the
+	// truth, which for a recorder is the one thing this must never do. The space
+	// it occupies stays reserved either way, so the pill does not jump.
+	if (recording_) {
+		const int cy = height() / 2;
+		p.setPen(Qt::NoPen);
+		p.setBrush(QColor(0xe5, 0x48, 0x4d));
+		p.drawEllipse(QPoint(14, cy), 4, 4);
+	}
 }
 
 } // namespace harpia

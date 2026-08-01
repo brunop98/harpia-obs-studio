@@ -117,6 +117,20 @@ private:
 	void applyFullTimeline();
 	void applyKeyframe();
 	void applyColors();
+
+public:
+	// The live half of a colour pick, public so the behaviour is testable
+	// without driving a modal QColorDialog:
+	//   * previewColor pushes a candidate to every track widget IMMEDIATELY,
+	//     without saving -- this runs on every move inside the picker, and a
+	//     QSettings write per mouse-move would be disk churn for nothing;
+	//   * finishColorPick settles the row: the picked colour when accepted,
+	//     the ORIGINAL when cancelled -- cancelling a live preview must mean
+	//     "as if I never opened the dialog" -- then saves once.
+	void previewColor(int rowIdx, const QColor &candidate);
+	void finishColorPick(int rowIdx, const QColor &original, bool accepted, const QColor &picked);
+
+private:
 	// "Reset to defaults" used to mean ALL of them, from any tab -- so touching
 	// one number on the Colors page and wanting it back cost you every other
 	// tweak in the panel. Each section resets on its own now; resetDefaults()

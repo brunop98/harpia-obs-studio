@@ -155,6 +155,55 @@ int main(int argc, char **argv)
 		ok(timeline.layoutParams().barH == tlDefault.barH, "with Trim still at its default");
 	}
 
+	std::printf("\n-- picking a colour previews live, and Cancel undoes it --\n");
+	{
+		// The contract behind the live colour picker, tested through the same
+		// two methods the dialog wiring calls -- previewColor per movement,
+		// finishColorPick on close -- so no modal dialog has to be driven.
+		// Row 0 is the first kColorDefs entry: the timeline background.
+		const EditorColors before = full.colors();
+		const QColor loud(255, 0, 255);
+		ok(before.timelineBg != loud, "the sentinel colour is not already in use");
+		// The panel persists to the app's own settings (Harpia/Recorder), not
+		// the test scratch org -- read the same place it writes. The key is
+		// restored at the end of this section so running the test does not
+		// repaint a real install's editor.
+		const auto savedBg = []() {
+			return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+				.value(QStringLiteral("devLayout/color/timelineBg"))
+				.toString();
+		};
+		const QString savedBefore = savedBg();
+
+		p2.previewColor(0, loud);
+		std::printf("     previewed %s -> timeline now paints %s\n", qUtf8Printable(loud.name()),
+			    qUtf8Printable(full.colors().timelineBg.name()));
+		ok(full.colors().timelineBg == loud, "the preview reaches the timeline IMMEDIATELY");
+		ok(tracks.colors().timelineBg == loud, "and the Multi-Cut editor");
+		ok(voice.colors().timelineBg == loud, "and the voiceover track");
+		// The half that must NOT happen per movement: a settings write.
+		ok(savedBg() == savedBefore,
+		   "but previewing saves NOTHING -- the picker moves dozens of times a second");
+
+		// Cancel: as if the dialog was never opened.
+		p2.finishColorPick(0, before.timelineBg, /*accepted=*/false, loud);
+		ok(full.colors() == before, "Cancel restores every widget, byte for byte");
+
+		// Accept: the choice sticks everywhere, and NOW it is saved.
+		p2.finishColorPick(0, before.timelineBg, /*accepted=*/true, loud);
+		ok(full.colors().timelineBg == loud, "accepting keeps the picked colour");
+		std::printf("     settings now hold %s\n", qUtf8Printable(savedBg()));
+		ok(savedBg() == loud.name(),
+		   "and the save happens exactly here, once, on the way out");
+
+		// Leave the real install exactly as found: put the original back
+		// through the same accept path, or drop the key if there was none.
+		p2.finishColorPick(0, before.timelineBg, /*accepted=*/true, before.timelineBg);
+		if (savedBefore.isEmpty())
+			QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+				.remove(QStringLiteral("devLayout/color/timelineBg"));
+	}
+
 	QSettings().clear();
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;

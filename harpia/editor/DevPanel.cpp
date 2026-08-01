@@ -217,6 +217,35 @@ void DevPanel::applyColors()
 		voice_->setColors(colors_);
 }
 
+void DevPanel::previewColor(int rowIdx, const QColor &candidate)
+{
+	if (rowIdx < 0 || rowIdx >= colorRows_.size() || !candidate.isValid())
+		return;
+	colors_.*(colorRows_[rowIdx].field) = candidate;
+	paintSwatch(colorRows_[rowIdx]);
+	// Straight to the widgets, NOT through applyColors(): that saves to
+	// QSettings, and this runs on every movement inside the colour picker.
+	if (fullTimeline_)
+		fullTimeline_->setColors(colors_);
+	if (tracks_)
+		tracks_->setColors(colors_);
+	if (voice_)
+		voice_->setColors(colors_);
+}
+
+void DevPanel::finishColorPick(int rowIdx, const QColor &original, bool accepted, const QColor &picked)
+{
+	if (rowIdx < 0 || rowIdx >= colorRows_.size())
+		return;
+	// Cancel means "as if I never opened the dialog": whatever the live
+	// preview painted in the meantime is rolled back to the colour the row
+	// had before. Accept keeps the choice. Either way the palette is saved
+	// exactly once, here, not per mouse-move.
+	colors_.*(colorRows_[rowIdx].field) = (accepted && picked.isValid()) ? picked : original;
+	paintSwatch(colorRows_[rowIdx]);
+	applyColors();
+}
+
 TimelineViewParams DevPanel::loadFullTimeline()
 {
 	TimelineViewParams p; // struct defaults are the shipped values
@@ -628,8 +657,8 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 	QFormLayout *colForm = addPage(
 		QStringLiteral("colors"), QStringLiteral("Colors"),
 		QStringLiteral("The editor palette, shared by all three track widgets. Click a "
-			       "swatch to pick a new colour — it applies to the timeline "
-			       "immediately."));
+			       "swatch to pick a new colour — the timeline previews it LIVE "
+			       "while you drag around the picker; Cancel puts it back."));
 	for (const ColorDef &cd : kColorDefs) {
 		ColorRow row;
 		row.key = QLatin1String(cd.key);
@@ -642,15 +671,18 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		colorRows_.append(row);
 		const int idx = colorRows_.size() - 1;
 		connect(row.btn, &QPushButton::clicked, this, [this, idx]() {
-			const ColorRow &r = colorRows_[idx];
-			const QColor cur = colors_.*(r.field);
-			const QColor picked = QColorDialog::getColor(
-				cur, this, QStringLiteral("Pick a colour"));
-			if (!picked.isValid() || picked == cur)
-				return; // cancelled, or the same colour again
-			colors_.*(r.field) = picked;
-			paintSwatch(r);
-			applyColors();
+			const QColor original = colors_.*(colorRows_[idx].field);
+			// A real dialog instead of the static getColor(), because the
+			// static one only answers on OK -- and the whole point of tuning
+			// a timeline colour is seeing it ON THE TIMELINE while dragging
+			// around the picker. Every movement previews live; Cancel puts
+			// everything back exactly as it was.
+			QColorDialog dlg(original, this);
+			dlg.setWindowTitle(QStringLiteral("Pick a colour"));
+			connect(&dlg, &QColorDialog::currentColorChanged, this,
+				[this, idx](const QColor &c) { previewColor(idx, c); });
+			const bool accepted = (dlg.exec() == QDialog::Accepted);
+			finishColorPick(idx, original, accepted, dlg.selectedColor());
 		});
 		paintSwatch(colorRows_.back());
 	}

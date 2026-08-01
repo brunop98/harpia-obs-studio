@@ -85,6 +85,7 @@
 #include <QToolButton>
 #include <QStorageInfo>
 
+#include "core/AutoPause.hpp"
 #include "core/CrashGuard.hpp"
 #include "core/DiskSpace.hpp"
 #include <QStyle>
@@ -1480,15 +1481,30 @@ void MainWindow::beginRecordFlow()
 // discovery happens after the thing being recorded has already gone.
 bool MainWindow::confirmDiskSpace()
 {
-	const QString folder = QString::fromStdString(activePreset().outputFolder);
+	const Preset &p = activePreset();
+	QString folder = QString::fromStdString(p.outputFolder);
 	DiskStatus st = diskStatusFor(folder);
 	// MP4 records to a temp MKV and remuxes on the same volume, so finalizing
 	// transiently needs room for BOTH copies. Judging the free space at half
 	// its real value bakes that in: a drive that passes here can also finish.
 	// Without this, a long take could pass every check and then fail at the
 	// one step that cannot be retried.
-	if (activePreset().format == RecordingFormat::MP4 && st.freeBytes >= 0)
+	if (p.format == RecordingFormat::MP4 && st.freeBytes >= 0)
 		st.level = diskLevelFor(st.freeBytes / 2);
+	// The webcam can write to its own folder -- possibly its own, fuller,
+	// drive -- which this check used to ignore entirely. Judge both and warn
+	// about whichever is worse, naming the folder so it is clear which drive
+	// is the problem.
+	if (p.webcamEnabled && p.webcamUseCustomFolder && !p.webcamFolder.empty()) {
+		const QString wcFolder = QString::fromStdString(p.webcamFolder);
+		const DiskStatus wc = diskStatusFor(wcFolder);
+		if (wc.isValid() && (int(wc.level) > int(st.level) ||
+				     (st.isValid() && wc.freeBytes >= 0 && wc.freeBytes < st.freeBytes &&
+				      wc.level != DiskLevel::Ok))) {
+			st = wc;
+			folder = wcFolder + QStringLiteral(" (webcam folder)");
+		}
+	}
 	const QString prompt = lowDiskPrompt(st);
 	if (prompt.isEmpty())
 		return true; // plenty of room, or a drive that will not say
@@ -2163,6 +2179,17 @@ void MainWindow::refreshReadiness()
 				    /*blocking=*/false});
 	}
 
+	// --- Follow Mouse with the cursor hidden --- (non-blocking: annotation
+	// workflows exist where the pointer is deliberately invisible, but for
+	// everyone else the file shows a camera panning after nothing).
+	if (p.followMouse && !p.showMouseCursor && captureMode_ == CaptureMode::Region) {
+		warnings.push_back({QStringLiteral("Follow Mouse is on but the mouse cursor is hidden — "
+						   "viewers won't see what the camera is following."),
+				    [this]() { editActivePreset(QStringLiteral("Mouse")); },
+				    QStringLiteral("Fix mouse"),
+				    /*blocking=*/false});
+	}
+
 	// --- Codec / video settings --- (availability cached above)
 	if (!hwEncoderOk_) {
 		warnings.push_back({QStringLiteral("The selected codec has no available encoder."),
@@ -2677,9 +2704,21 @@ void MainWindow::tickRegionWatch()
 	// recording: the pointer coming back is what resumes, so its position has to
 	// keep being checked. What does not run while paused is the countdown —
 	// hence the separate `armed` below.
+	// Follow Mouse wins over the leave-watch, by preset intent: when the
+	// region's job is to chase the pointer, "the pointer left" is a condition
+	// the region is about to fix, not a reason to pause. Without this, the
+	// watch could never fire on the followed axes anyway -- and with an axis
+	// lock it fired MID-FOLLOW, which read as the follow breaking.
+	const bool suspendedByFollow = activePreset().followMouse;
+
 	const bool regionRec = captureMode_ == CaptureMode::Region && currentRegion_.enabled &&
-			       recorder_.isRecording() && !starting_ && !stopping_;
-	const bool armed = regionRec && !recorder_.isPaused();
+			       recorder_.isRecording() && !starting_ && !stopping_ && !suspendedByFollow;
+	// And never while the user is HOLDING the region's own controls: the move
+	// tab sits above the frame -- outside the captured rect by design -- and a
+	// resize keeps the pointer near the border. Counting either as "left the
+	// region" paused the recording for using the region's own handles.
+	const bool armed = regionRec && !recorder_.isPaused() &&
+			   !(regionTool_ && regionTool_->isInteracting());
 
 	bool inside = true;
 	if (regionRec) {
@@ -2698,8 +2737,10 @@ void MainWindow::tickRegionWatch()
 					       RegionWatch::toRegionSpace(QCursor::pos(),
 									  regionWatchOrigin_,
 									  regionWatchDpr_));
+		lastCursorInside_ = inside; // the shared resume gate reads this
 	} else {
 		regionWatchArmed_ = false;
+		lastCursorInside_ = true; // not armed: never blocks a resume
 	}
 
 	if (regionWatch_.tick(armed, inside, QDateTime::currentMSecsSinceEpoch())) {
@@ -2713,7 +2754,8 @@ void MainWindow::tickRegionWatch()
 				"Auto-pause: pointer left the recording region for " +
 					std::to_string(regionWatch_.timeoutSeconds()) + "s");
 		}
-	} else if (regionRec && recorder_.isPaused() && regionAutoPaused_ && inside) {
+	} else if (regionRec && recorder_.isPaused() && regionAutoPaused_ && inside &&
+		   !autoResumeBlocked()) {
 		// Back inside: pick up where it left off. Only when WE paused it --
 		// a recording the user paused by hand stays paused, however much the
 		// pointer wanders, which is the same rule the idle pause follows.
@@ -2746,6 +2788,17 @@ void MainWindow::updateRegionLeaveVisibility()
 	if (regionLeaveGroup_)
 		regionLeaveGroup_->setVisible(captureMode_ == CaptureMode::Region &&
 					      (!regionLeaveNarrow_));
+	// Follow Mouse suspends the leave-pause (the region chases the pointer, so
+	// "the pointer left" stops meaning anything). Say so on the control itself
+	// rather than letting a configured setting silently never fire.
+	if (regionLeaveCombo_) {
+		const bool suspended = activePreset().followMouse && captureMode_ == CaptureMode::Region;
+		regionLeaveCombo_->setEnabled(!suspended);
+		regionLeaveCombo_->setToolTip(
+			suspended ? QStringLiteral("Suspended while Follow Mouse is on — the region "
+						   "follows the pointer instead of pausing when it leaves.")
+				  : QString());
+	}
 }
 
 void MainWindow::onCountdownSettingChanged()
@@ -3151,10 +3204,17 @@ void MainWindow::updateButtons()
 						   : QString());
 	}
 
-	// Pause/Resume: always visible; enabled only while actively recording.
-	// The moment Stop is pressed (stopping_), the button disables AND drops
-	// its green Resume styling so it can't read as clickable.
-	pauseButton_->setEnabled(recording && !stopping_);
+	// Pause/Resume: always visible; enabled only while actively recording AND
+	// the output can actually pause -- GIF's ffmpeg output cannot, and an
+	// enabled button that silently does nothing is worse than a disabled one
+	// that says why.
+	const bool pausable = recording && !stopping_ && recorder_.canPause();
+	pauseButton_->setEnabled(pausable);
+	if (recording && !recorder_.canPause())
+		pauseButton_->setToolTip(QStringLiteral("This format can't pause (GIF records straight "
+							"through)"));
+	else if (primaryChanged || pauseUiChanged)
+		pauseButton_->setToolTip(QStringLiteral("Pause/resume the recording (F10)"));
 	if (stopping_ && !pauseButton_->styleSheet().isEmpty()) {
 		pauseButton_->setText(QStringLiteral("Pause"));
 		pauseButton_->setIcon(uiIcon(Glyph::Pause, 14));
@@ -3405,6 +3465,25 @@ void MainWindow::tickState()
 	updateButtons();
 }
 
+bool MainWindow::autoResumeBlocked() const
+{
+	AutoPauseState s;
+	const Preset &p = activePreset();
+	s.idleArmed = idle_ != nullptr && p.idleTimeoutSeconds > 0;
+	s.idleTimeoutSec = p.idleTimeoutSeconds;
+	s.idleSecs = lastIdleSecs_;
+	s.focusArmed = appCaptureEnabled_ && !targetExe_.isEmpty();
+	s.targetFocused = lastFocusOk_;
+	// Follow Mouse suspends the leave-watch by PRESET intent, not by armed
+	// state: while paused the follow is disarmed, but the pointer being
+	// outside is still a thing the region will fix on resume, not a reason
+	// to hold the pause.
+	s.regionArmed = captureMode_ == CaptureMode::Region && currentRegion_.enabled &&
+			regionWatch_.enabled() && !p.followMouse;
+	s.pointerInside = lastCursorInside_;
+	return autoPauseStillWanted(s);
+}
+
 void MainWindow::tickIdle()
 {
 	if (!recorder_.isRecording() || !idle_)
@@ -3415,6 +3494,7 @@ void MainWindow::tickIdle()
 		return;
 
 	const double idleSecs = idle_->currentIdleSeconds();
+	lastIdleSecs_ = idleSecs; // the shared resume gate reads this
 
 	if (!recorder_.isPaused()) {
 		if (idleSecs >= timeout && recorder_.pause(true)) {
@@ -3423,7 +3503,7 @@ void MainWindow::tickIdle()
 			autoPaused_ = true;
 			updateButtons();
 		}
-	} else if (autoPaused_ && idleSecs < timeout) {
+	} else if (autoPaused_ && idleSecs < timeout && !autoResumeBlocked()) {
 		recorder_.pause(false);
 		webcam_.pause(false);
 		notePauseTransition(false);
@@ -3458,6 +3538,7 @@ void MainWindow::tickFocus(uint64_t foregroundPid)
 	if (fgExe.isEmpty())
 		return; // can't identify the app — don't change state
 	const bool focused = (fgExe.compare(targetExe_, Qt::CaseInsensitive) == 0);
+	lastFocusOk_ = focused; // the shared resume gate reads this
 
 	if (!focused && !recorder_.isPaused()) {
 		if (recorder_.pause(true)) {
@@ -3467,7 +3548,7 @@ void MainWindow::tickFocus(uint64_t foregroundPid)
 			writeMarker(QStringLiteral("Auto Paused (Application Lost Focus)"));
 			updateButtons();
 		}
-	} else if (focused && focusPaused_ && recorder_.isPaused()) {
+	} else if (focused && focusPaused_ && recorder_.isPaused() && !autoResumeBlocked()) {
 		recorder_.pause(false);
 		webcam_.pause(false);
 		notePauseTransition(false);

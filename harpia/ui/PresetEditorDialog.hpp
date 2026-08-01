@@ -75,6 +75,7 @@ private:
 
 	// Audio page
 	QCheckBox *desktopAudioCheck_ = nullptr;
+	QLabel *audioGifNote_ = nullptr; // "GIF has no audio track", shown only for GIF
 	QList<QCheckBox *> micChecks_;
 	QStringList micIds_;
 

@@ -317,6 +317,15 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 
 	// ===== Audio =====
 	QWidget *audioPage = makePage(v);
+	// Visible only while the format is GIF, which has no audio track at all --
+	// otherwise this page is a set of live-looking controls that do nothing.
+	audioGifNote_ = new QLabel(QStringLiteral("GIF has no audio track — these settings apply to the "
+						  "other formats."),
+				   this);
+	audioGifNote_->setWordWrap(true);
+	audioGifNote_->setStyleSheet(QStringLiteral("color:#d29922;"));
+	audioGifNote_->setVisible(false);
+	v->addWidget(audioGifNote_);
 	desktopAudioCheck_ = new QCheckBox(QStringLiteral("Record PC audio"), this);
 	desktopAudioCheck_->setChecked(preset.recordDesktopAudio);
 	addCheck(v, desktopAudioCheck_,
@@ -891,16 +900,27 @@ void PresetEditorDialog::updateValidation()
 	const auto format = RecordingFormat(formatCombo_->currentData().toInt());
 	const auto codec = VideoCodec(codecCombo_->currentData().toInt());
 
-	// GIF ignores codec/bitrate/fps-mode entirely.
+	// GIF quietly overrides half this dialog, so the dialog says so instead:
+	// every control GIF ignores is disabled while GIF is chosen, and the notes
+	// name each override. A page of live-looking controls that silently do
+	// nothing is how "my settings don't work" reports happen.
 	const bool isGif = (format == RecordingFormat::GIF);
 	codecCombo_->setEnabled(!isGif);
 	bitrateCombo_->setEnabled(!isGif);
 	bitrateSpin_->setEnabled(!isGif);
 	frameRateModeCombo_->setEnabled(!isGif);
+	if (desktopAudioCheck_)
+		desktopAudioCheck_->setEnabled(!isGif);
+	if (audioBitrateCombo_)
+		audioBitrateCombo_->setEnabled(!isGif);
+	if (audioGifNote_)
+		audioGifNote_->setVisible(isGif);
 
 	QString msg;
 	if (isGif) {
-		msg = QStringLiteral("GIF uses its own palette encoder; codec and bitrate are ignored.");
+		msg = QStringLiteral("GIF uses its own palette encoder: codec and bitrate are ignored, "
+				     "the frame rate is capped at 15, the image is downscaled to keep "
+				     "files small, there is no audio track, and recording can't pause.");
 	} else if (format == RecordingFormat::AVI && codec != VideoCodec::H264) {
 		msg = QStringLiteral("AVI has poor support for HEVC/AV1 — MP4 or MKV is recommended.");
 	} else if (format == RecordingFormat::MP4 && codec == VideoCodec::HEVC) {
@@ -919,6 +939,17 @@ void PresetEditorDialog::accept()
 	}
 	if (folderEdit_->text().trimmed().isEmpty()) {
 		QMessageBox::warning(this, windowTitle(), QStringLiteral("Please choose an output folder."));
+		return;
+	}
+	// "Custom folder" ticked with no folder chosen used to fall back to the
+	// screen folder SILENTLY -- the checkbox said one thing and the files did
+	// another. Make it a decision here instead of a surprise later.
+	if (webcamCheck_ && webcamCheck_->isChecked() && webcamCustomFolderCheck_ &&
+	    webcamCustomFolderCheck_->isChecked() && webcamFolderEdit_->text().trimmed().isEmpty()) {
+		QMessageBox::warning(this, windowTitle(),
+				     QStringLiteral("Webcam \"custom folder\" is ticked but no folder is "
+						    "chosen.\n\nPick a folder, or untick it to save the "
+						    "webcam beside the screen recording."));
 		return;
 	}
 	{

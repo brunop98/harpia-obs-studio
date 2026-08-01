@@ -297,6 +297,14 @@ private:
 	// 16 ms timer runs only then -- unlike the other timers here, which are
 	// always on. Screen geometry is cached at arm time, same trick as the
 	// region watch; screenForActivePreset() is far too expensive for 60 Hz.
+	// Shared auto-resume gate (core/AutoPause.hpp): an auto-resume happens only
+	// when no armed system still wants the pause. Each tick refreshes its own
+	// last-known fact here; staleness is bounded by the ticks themselves.
+	bool autoResumeBlocked() const;
+	double lastIdleSecs_ = 0.0;
+	bool lastFocusOk_ = true;
+	bool lastCursorInside_ = true;
+
 	FollowMouse followMouse_;
 	QTimer *followTimer_ = nullptr;
 	QSize followScreenDevicePx_;

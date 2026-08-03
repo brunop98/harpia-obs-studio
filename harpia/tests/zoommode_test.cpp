@@ -155,6 +155,80 @@ int main()
 		   "and on a 16:10 canvas with the cursor near a corner");
 	}
 
+	std::printf("\n-- the push-in does not jump to the centre first --\n");
+	{
+		// The bug: the focus used to be clamped to the rectangle legal AT THE
+		// CURRENT SCALE, and on the first frame -- scale barely above 1 -- the
+		// only legal focus is the screen centre. So every zoom snapped to the
+		// middle and then slid out to the mouse.
+		//
+		// The property that makes that impossible: whatever is under the cursor
+		// stays exactly under the cursor the whole way in. Its screen position
+		// is C/2 + (a - focus) * s, which for a point away from the edges must
+		// come back as the point itself on EVERY frame.
+		const QPoint cursor(1400, 800); // off-centre, but not near an edge
+		ZoomMode z;
+		z.setCanvas(canvas);
+		ZoomParams p;
+		p.follow.smoothness = 0;
+		z.toggle();
+		qint64 t = 0;
+		double worstDrift = 0.0;
+		double firstFrameDrift = -1.0;
+		for (int i = 0; i < 60; ++i) {
+			t += 16;
+			z.tick(cursor, p, t);
+			const ZoomTransform xf = z.transform();
+			// Where the anchored source pixel is drawn on the canvas.
+			const double sx = xf.posX + cursor.x() * xf.scale;
+			const double sy = xf.posY + cursor.y() * xf.scale;
+			const double drift = std::max(std::abs(sx - cursor.x()), std::abs(sy - cursor.y()));
+			if (firstFrameDrift < 0)
+				firstFrameDrift = drift;
+			worstDrift = std::max(worstDrift, drift);
+		}
+		std::printf("     anchored pixel drifts at most %.3f px (first frame %.3f)\n",
+			    worstDrift, firstFrameDrift);
+		ok(firstFrameDrift < 1.0, "the FIRST frame does not throw the picture at the centre");
+		ok(worstDrift < 1.0, "and the pixel under the cursor holds still for the whole push-in");
+
+		// CONTROL: the drift measure can detect a jump. A centre-anchored zoom
+		// -- which is what the bug produced -- moves that pixel a long way.
+		const double centreAnchored =
+			std::abs((canvas.width() / 2.0 + (cursor.x() - canvas.width() / 2.0) * 2.0) -
+				 cursor.x());
+		std::printf("     a centre-anchored 2x would move it %.0f px\n", centreAnchored);
+		ok(centreAnchored > 100.0, "CONTROL: the same measure is large for a centred zoom");
+	}
+
+	std::printf("\n-- and the pull-out retraces it --\n");
+	{
+		// Reversing the animation must put the picture back the way it came,
+		// not slide off somewhere else on the way out.
+		const QPoint cursor(600, 300);
+		ZoomMode z;
+		z.setCanvas(canvas);
+		ZoomParams p;
+		p.follow.smoothness = 0;
+		z.toggle();
+		qint64 t = 0;
+		run(z, cursor, p, t, 60);
+		z.toggle(); // back out, cursor held still
+		double worstDrift = 0.0;
+		for (int i = 0; i < 60; ++i) {
+			t += 16;
+			z.tick(cursor, p, t);
+			const ZoomTransform xf = z.transform();
+			const double sx = xf.posX + cursor.x() * xf.scale;
+			const double sy = xf.posY + cursor.y() * xf.scale;
+			worstDrift = std::max(worstDrift,
+					      std::max(std::abs(sx - cursor.x()), std::abs(sy - cursor.y())));
+		}
+		std::printf("     drift on the way out: %.3f px\n", worstDrift);
+		ok(worstDrift < 1.0, "the anchored pixel holds still on the way out too");
+		ok(z.transform().identity(), "and it lands back at the identity");
+	}
+
 	std::printf("\n-- the visible rectangle --\n");
 	{
 		ZoomMode z;

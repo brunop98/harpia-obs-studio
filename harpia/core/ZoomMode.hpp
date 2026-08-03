@@ -163,14 +163,27 @@ public:
 		const double vw = canvas_.width() / s;  // visible size, source px
 		const double vh = canvas_.height() / s;
 
-		// The focus point: which source pixel sits at the centre of the frame.
-		// Kept in doubles so a slow glide never stalls half a pixel short the
-		// way the old integer crop did.
+		// The chase aims at the SETTLED framing -- the visible rectangle at full
+		// magnification -- not at the rectangle currently on screen. Mid
+		// animation the on-screen rectangle is still most of the display, so a
+		// dead zone measured against it would be enormous, its edges would move
+		// every frame as the picture shrank, and the aim would thrash. Aiming
+		// at where the zoom is GOING is stable at every scale, and it is also
+		// the more useful answer: what matters is that the cursor ends up
+		// framed once the push-in finishes.
+		const double fMax = params.factor();
+		const double vwFull = canvas_.width() / fMax;
+		const double vhFull = canvas_.height() / fMax;
+
 		if (!haveFocus_) {
-			// First frame of a zoom: push in on what is being pointed at.
-			focus_ = QPointF(cursorDevicePx.x(), cursorDevicePx.y());
-			haveFocus_ = true;
+			// First frame of a zoom. Anchor on the pixel under the cursor:
+			// solving "a stays at screen position a" for the focus gives
+			// f = a - (a - C/2)/s, and at full magnification that is the value
+			// below. See the blend at the bottom for the rest of the path.
+			focus_ = anchorFocus(QPointF(cursorDevicePx.x(), cursorDevicePx.y()), fMax);
+			focus_ = clampFocus(focus_, vwFull, vhFull);
 			target_ = focus_;
+			haveFocus_ = true;
 		}
 
 		QPointF target = target_;
@@ -181,12 +194,12 @@ public:
 			// bug is written up in FollowMouse.cpp).
 			const int pad = std::clamp(params.follow.paddingPct, 0,
 						   FollowMouse::kMaxPaddingPct);
-			const double insetX = vw * pad / 100.0;
-			const double insetY = vh * pad / 100.0;
-			const double left = target.x() - vw / 2 + insetX;
-			const double right = target.x() + vw / 2 - insetX;
-			const double top = target.y() - vh / 2 + insetY;
-			const double bottom = target.y() + vh / 2 - insetY;
+			const double insetX = vwFull * pad / 100.0;
+			const double insetY = vhFull * pad / 100.0;
+			const double left = target.x() - vwFull / 2 + insetX;
+			const double right = target.x() + vwFull / 2 - insetX;
+			const double top = target.y() - vhFull / 2 + insetY;
+			const double bottom = target.y() + vhFull / 2 - insetY;
 			if (params.follow.axis != FollowAxis::Vertical) {
 				if (cursorDevicePx.x() < left)
 					target.setX(target.x() + (cursorDevicePx.x() - left));
@@ -200,25 +213,49 @@ public:
 					target.setY(target.y() + (cursorDevicePx.y() - bottom));
 			}
 		}
-		// Keep the visible rectangle inside the picture. Clamped at the TARGET
+		// Keep the settled rectangle inside the picture. Clamped at the TARGET
 		// rather than after the step, so pressure against an edge does not
 		// accumulate as an error the frame later pays back with a lurch.
-		target = clampFocus(target, vw, vh);
+		target = clampFocus(target, vwFull, vhFull);
 		target_ = target;
 
-		// The chase itself.
+		// The chase itself, in settled-framing space.
 		const double a = FollowMouse::stepAlpha(params.follow.smoothness, dtMs);
 		focus_ += (target_ - focus_) * a;
 		if (std::abs(target_.x() - focus_.x()) < 0.02 &&
 		    std::abs(target_.y() - focus_.y()) < 0.02)
 			focus_ = target_;
-		// Re-clamped after the step too: the size shrinks during the push-in,
-		// so a focus that was legal last frame can be out of bounds this one.
-		focus_ = clampFocus(focus_, vw, vh);
+
+		// And now the animation, which is where the old version went wrong.
+		//
+		// It clamped the focus to the rectangle legal AT THE CURRENT SCALE. On
+		// the first frame the scale is a hair above 1, so the visible rectangle
+		// is almost the whole screen and exactly one focus is legal: the
+		// centre. The zoom therefore always began dead centre and only slid out
+		// to the mouse as the magnification grew and the legal range widened --
+		// the jump this fixes.
+		//
+		// The centre start is not itself wrong; at scale 1 it is the only
+		// framing there is. What was missing is that the focus has to travel
+		// along WITH the scale. Anchoring the pixel under the cursor gives the
+		// exact path: with f = a - (a - C/2)/s, the offset from the centre
+		// scales by (1 - 1/s), so relative to the settled offset the factor is
+		// (1 - 1/s) / (1 - 1/fMax). It is 0 at s = 1 and 1 at s = fMax, it
+		// depends only on the scale, and it leaves whatever is under the cursor
+		// sitting still on screen the whole way in -- and, run backwards, the
+		// whole way out again.
+		const double denom = 1.0 - 1.0 / fMax;
+		const double k = denom > 1e-9 ? std::clamp((1.0 - 1.0 / s) / denom, 0.0, 1.0) : 1.0;
+		QPointF eff(canvas_.width() / 2.0 + (focus_.x() - canvas_.width() / 2.0) * k,
+			    canvas_.height() / 2.0 + (focus_.y() - canvas_.height() / 2.0) * k);
+		// A safety net rather than a correction: the blend above can only
+		// produce an offset of (W/2)(1 - 1/s), which is exactly the legal
+		// bound. Rounding is the only thing this catches.
+		eff = clampFocus(eff, vw, vh);
 
 		xf_.scale = s;
-		xf_.posX = canvas_.width() / 2.0 - focus_.x() * s;
-		xf_.posY = canvas_.height() / 2.0 - focus_.y() * s;
+		xf_.posX = canvas_.width() / 2.0 - eff.x() * s;
+		xf_.posY = canvas_.height() / 2.0 - eff.y() * s;
 
 		return changed(before, xf_);
 	}
@@ -228,6 +265,17 @@ public:
 	QRect visibleRect() const { return xf_.visibleRect(canvas_); }
 
 private:
+	// The focus that leaves source point `a` sitting at the same place on
+	// screen as it was before the zoom -- the anchor. Derived from
+	// screen(a) = C/2 + (a - focus) * s: setting screen(a) = a and solving.
+	QPointF anchorFocus(QPointF a, double s) const
+	{
+		if (s <= 1.0)
+			return QPointF(canvas_.width() / 2.0, canvas_.height() / 2.0);
+		return QPointF(a.x() - (a.x() - canvas_.width() / 2.0) / s,
+			       a.y() - (a.y() - canvas_.height() / 2.0) / s);
+	}
+
 	// A focus point whose visible rectangle fits inside the canvas. When the
 	// magnification is barely above 1 the rectangle is nearly the whole
 	// picture, so the legal range collapses to the centre -- max() rather than

@@ -348,6 +348,21 @@ private:
 	// Shares its shape with Follow Mouse above: geometry cached at arm time, a
 	// 60 Hz tick that only runs while there is something to animate.
 	ZoomMode zoom_;
+	// Custom Region recordings whose preset has Zoom on are positioned by the
+	// scene transform instead of a crop filter, for the whole take. A crop
+	// throws away everything outside the region, so a zoom inside one has
+	// nowhere to travel; the transform keeps the whole screen available.
+	//
+	// Decided once, at arm time, rather than switched when the zoom starts:
+	// swapping a crop for a transform mid-recording is two libobs calls with a
+	// frame boundary between them, and whichever order they go in, one frame
+	// can land showing the wrong thing. Presets without Zoom keep the crop and
+	// are completely unaffected.
+	bool regionByTransform_ = false;
+	void applyRegionFraming(); // push the region to the crop or the transform
+	// Give ZoomMode its canvas, source and resting framing. Does the monitor
+	// lookup, so it runs once per recording -- never from the 60 Hz tick.
+	void configureZoomCanvas();
 	QTimer *zoomTimer_ = nullptr;
 	QSize zoomCanvasDevicePx_;
 	QPoint zoomOrigin_;      // screen top-left, logical px (cached at arm)

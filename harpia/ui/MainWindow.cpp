@@ -1308,11 +1308,15 @@ void MainWindow::armVideoPipeline()
 	// Output size == base size (native, no downscale).
 	obs_.resetVideo(baseW, baseH, fps, baseW, baseH);
 
-	// Capture the selected display; a custom region (if any) crops it. The
+	// Capture the selected display. A custom region either crops it or is
+	// positioned by the scene transform -- see regionByTransform_. The
 	// application chosen for "Record only one application" never changes what's
-	// captured — only whether recording is auto-paused when it loses focus.
+	// captured, only whether recording is auto-paused when it loses focus.
 	capture_.startCapture(preset.monitorIndex, preset.showMouseCursor);
-	capture_.setRegion(currentRegion_);
+	regionByTransform_ = captureMode_ == CaptureMode::Region && preset.zoomEnabled &&
+			     currentRegion_.enabled && currentRegion_.width >= 16 &&
+			     currentRegion_.height >= 16;
+	applyRegionFraming();
 
 	armedW_ = baseW;
 	armedH_ = baseH;
@@ -2624,8 +2628,8 @@ void MainWindow::onRegionChanged(const CaptureRegion &region)
 	// the readiness debounce 60 times a second would keep it from ever firing.
 	if (followApplying_)
 		return;
-	// Live update — crop_filter applies immediately, even while recording.
-	capture_.setRegion(region);
+	// Live update — applies immediately, even while recording.
+	applyRegionFraming();
 	// Fired per mouse-move while dragging the region — debounce the readiness
 	// pass instead of running filesystem checks dozens of times a second.
 	readinessDebounce_->start();
@@ -2716,7 +2720,10 @@ void MainWindow::tickFollowMouse()
 	const CaptureRegion r = followMouse_.region();
 	followApplying_ = true;
 	currentRegion_ = r;
-	capture_.setRegion(r);
+	// Following moves the RESTING framing. Zoomed, the magnified picture keeps
+	// its own focus and this just moves what it will settle back to, so the two
+	// compose instead of fighting over the same rectangle.
+	applyRegionFraming();
 	// Keep the on-screen frame gliding with the crop, so what you see framed
 	// is what is going into the file. Its regionChanged echo is swallowed by
 	// the guard in onRegionChanged.
@@ -2879,23 +2886,12 @@ void MainWindow::syncZoom()
 		return;
 	zoomArmed_ = want;
 	if (want) {
-		// Screen geometry once, at arm time -- the same reasoning as
-		// syncFollowMouse: screenForActivePreset() enumerates monitors.
-		const QScreen *scr = screenForActivePreset();
-		zoomOrigin_ = scr ? scr->geometry().topLeft() : QPoint(0, 0);
-		zoomDpr_ = scr ? scr->devicePixelRatio() : 1.0;
-		// The canvas is the item's natural size, which is the CROPPED capture
-		// in Region mode and the whole display otherwise -- the same choice
-		// armVideoPipeline made when it sized the encoder.
-		if (captureMode_ == CaptureMode::Region && currentRegion_.enabled &&
-		    currentRegion_.width >= 16 && currentRegion_.height >= 16)
-			zoomCanvasDevicePx_ = QSize(currentRegion_.width, currentRegion_.height);
-		else
-			zoomCanvasDevicePx_ = scr ? QSize(int(scr->geometry().width() * zoomDpr_),
-							  int(scr->geometry().height() * zoomDpr_))
-						  : QSize(0, 0);
 		zoomClock_.start();
-		zoom_.setCanvas(zoomCanvasDevicePx_); // also clears any previous zoom
+		// The monitor lookup and the canvas/source/home setup, both of which
+		// armVideoPipeline has already done for this recording. Repeated here
+		// because arming can also happen without a fresh pipeline -- a resumed
+		// recording -- and setCanvas is harmless when nothing is zoomed.
+		configureZoomCanvas();
 	} else {
 		// The recording is over. Put the picture back to 1:1 rather than
 		// leaving the last magnification applied to whatever is captured next.
@@ -2903,6 +2899,7 @@ void MainWindow::syncZoom()
 		if (zoomTimer_)
 			zoomTimer_->stop();
 		capture_.clearZoomTransform();
+		regionByTransform_ = false;
 		hideZoomBorder();
 		if (floatingControls_)
 			floatingControls_->setZoom(false, 100);
@@ -2931,11 +2928,11 @@ void MainWindow::tickZoom()
 	// settings already use.
 	params.followCursor = !(p.followMouse && captureMode_ == CaptureMode::Region);
 
-	// The cursor in ITEM pixels. In Region mode the item is the cropped
-	// capture, so the region's own origin comes off as well as the screen's.
-	QPoint cursor = RegionWatch::toRegionSpace(QCursor::pos(), zoomOrigin_, zoomDpr_);
-	if (captureMode_ == CaptureMode::Region && currentRegion_.enabled)
-		cursor -= QPoint(currentRegion_.x, currentRegion_.y);
+	// The cursor in SOURCE pixels. With the region positioned by the transform
+	// the source is the whole screen, so screen coordinates are already the
+	// right space -- no region origin to subtract, which is also why the zoom
+	// can now follow the cursor off the region and onto the rest of the display.
+	const QPoint cursor = RegionWatch::toRegionSpace(QCursor::pos(), zoomOrigin_, zoomDpr_);
 
 	if (zoom_.tick(cursor, params, zoomClock_.elapsed())) {
 		const ZoomTransform xf = zoom_.transform();
@@ -2961,11 +2958,35 @@ void MainWindow::tickZoom()
 // from looking at the screen, which is precisely when a marker earns its place.
 // Excluded from the capture on Windows, like the monitor border and the
 // controls pill, so the viewer gets a clean picture.
+// Put the region on screen, by whichever mechanism this recording is using.
+//
+// A crop filter and a scene offset produce an identical picture; the only
+// difference is what is left over. The crop discards everything outside the
+// region, which is why a zoom inside a cropped region had nowhere to travel and
+// had to be penned in. The transform keeps the whole screen behind the canvas,
+// so the zoom's only limit is the display's edge.
+void MainWindow::applyRegionFraming()
+{
+	if (!regionByTransform_) {
+		capture_.setRegion(currentRegion_);
+		return;
+	}
+	// No crop at all: the source stays the whole screen and the item is slid so
+	// the region's rectangle lands on the canvas.
+	capture_.setRegion(CaptureRegion{});
+	zoom_.setHome(QPoint(currentRegion_.x + currentRegion_.width / 2,
+			     currentRegion_.y + currentRegion_.height / 2));
+	if (zoom_.atRest()) {
+		const ZoomTransform rest = zoom_.restTransform();
+		capture_.setZoomTransform(rest.scale, rest.posX, rest.posY);
+	}
+}
+
 void MainWindow::updateZoomBorder()
 {
 	if (!screenBorder_)
 		return;
-	if (!zoomArmed_ || !zoom_.isBusy() || zoom_.transform().identity()) {
+	if (!zoomArmed_ || !zoom_.isBusy() || zoom_.atRest()) {
 		hideZoomBorder();
 		return;
 	}
@@ -2974,9 +2995,9 @@ void MainWindow::updateZoomBorder()
 		return;
 
 	// Item pixels -> device pixels on the display -> Qt's logical coordinates.
-	QRect v = zoom_.visibleRect();
-	if (captureMode_ == CaptureMode::Region && currentRegion_.enabled)
-		v.translate(currentRegion_.x, currentRegion_.y);
+	// Already in screen pixels: visibleRect is in source space, and the source
+	// is the display.
+	const QRect v = zoom_.visibleRect();
 	const double dpr = zoomDpr_ > 0.01 ? zoomDpr_ : 1.0;
 	const QRect logical(zoomOrigin_ + QPoint(int(std::lround(v.x() / dpr)),
 						 int(std::lround(v.y() / dpr))),

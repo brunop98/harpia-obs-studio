@@ -497,21 +497,87 @@ int main()
 		ok(!z.tick(QPoint(300, 300), p, t + 16), "and its first tick changes nothing");
 	}
 
-	std::printf("\n-- a region-sized canvas --\n");
+	std::printf("\n-- a region on a bigger screen --\n");
 	{
-		// Zoom works in Custom Region too now: the canvas is the region rather
-		// than the display, and nothing else about it differs.
-		const QSize region(720, 1280); // a tall mobile strip
+		// A region is a canvas smaller than the source, positioned by this
+		// transform rather than by a crop. At rest it shows exactly the region;
+		// the difference is that the whole screen is still behind it.
+		const QSize screen(1920, 1080);
+		const QRect region(200, 150, 720, 480);
+		// x + w/2, NOT QRect::center(): Qt's centre uses the inclusive-right
+		// convention ((x1 + x2)/2 with x2 = x + w - 1), which is half a pixel
+		// short and would put the resting framing one pixel off the region.
+		// MainWindow uses the same arithmetic as this line.
+		const QPoint home(region.x() + region.width() / 2, region.y() + region.height() / 2);
 		ZoomMode z;
-		z.setCanvas(region);
+		z.setCanvas(region.size(), screen, home);
 		ZoomParams p;
+
+		ok(z.atRest(), "a region recording starts at rest");
+		const ZoomTransform rest = z.transform();
+		std::printf("     rest transform: scale %.2f at (%.0f, %.0f)\n", rest.scale, rest.posX,
+			    rest.posY);
+		ok(std::abs(rest.scale - 1.0) < 1e-9, "unmagnified");
+		ok(std::abs(rest.posX + region.x()) < 0.51 && std::abs(rest.posY + region.y()) < 0.51,
+		   "and slid by exactly the region's origin — the same picture a crop gave");
+		ok(rest.visibleRect(region.size()) == region,
+		   "so what is on screen IS the region that was drawn");
+	}
+
+	std::printf("\n-- a zoomed region roams the whole screen --\n");
+	{
+		// The point of dropping the crop. Penned inside the region, a zoom had
+		// nowhere useful to go; the only thing that should stop it now is the
+		// edge of the display.
+		const QSize screen(1920, 1080);
+		const QRect region(200, 150, 720, 480);
+		ZoomMode z;
+		z.setCanvas(region.size(), screen,
+			    QPoint(region.x() + region.width() / 2, region.y() + region.height() / 2));
+		ZoomParams p;
+		p.follow.smoothness = 0;
 		z.toggle();
 		qint64 t = 0;
-		const RunResult r = run(z, QPoint(360, 640), p, t, 80);
-		ok(r.coveredThroughout, "a portrait region canvas is covered throughout");
+
+		// Put the cursor far outside the region, near the bottom-right of the
+		// screen, and let it settle.
+		run(z, QPoint(1850, 1000), p, t, 300);
 		const QRect v = z.visibleRect();
-		ok(std::abs(v.width() - 360) <= 1 && std::abs(v.height() - 640) <= 1,
-		   "and 2x means half of the REGION, not half of a display");
+		std::printf("     region was (%d,%d %dx%d); zoomed view is (%d,%d %dx%d)\n", region.x(),
+			    region.y(), region.width(), region.height(), v.x(), v.y(), v.width(),
+			    v.height());
+		ok(!region.contains(v), "the zoomed view left the region entirely");
+		ok(v.x() >= 0 && v.y() >= 0 && v.right() < screen.width() && v.bottom() < screen.height(),
+		   "but stopped at the edge of the SCREEN, which is the only real limit");
+		ok(std::abs(v.width() - region.width() / 2) <= 1,
+		   "and 2x still means half the region's width, not half the screen's");
+
+		// CONTROL: clamped to the region -- the old behaviour -- the view could
+		// never have got there at all.
+		ok(!region.contains(v.center()),
+		   "CONTROL: even its centre is outside the region, so this is not a rounding artefact");
+	}
+
+	std::printf("\n-- following moves the resting framing --\n");
+	{
+		// Follow Mouse pans the region; the zoom magnifies out of wherever it
+		// is. Moving home while zoomed must not disturb the magnified picture.
+		const QSize screen(1920, 1080);
+		ZoomMode z;
+		z.setCanvas(QSize(720, 480), screen, QPoint(560, 390));
+		ZoomParams p;
+		z.setHome(QPoint(900, 600));
+		ok(z.atRest(), "still at rest after the region panned");
+		ok(std::abs(z.transform().posX - (360.0 - 900.0)) < 0.51,
+		   "and the resting offset followed it");
+
+		z.toggle();
+		qint64 t = 0;
+		run(z, QPoint(900, 600), p, t, 120);
+		const ZoomTransform zoomed = z.transform();
+		z.setHome(QPoint(300, 300)); // the region pans while zoomed
+		ok(z.transform().posX == zoomed.posX && z.transform().posY == zoomed.posY,
+		   "moving home while zoomed does not jerk the magnified picture");
 	}
 
 	std::printf("\n%s (%d failures)\n", failures ? "FAILURES" : "all zoom mode checks passed",

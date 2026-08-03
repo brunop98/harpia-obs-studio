@@ -94,6 +94,9 @@ struct ZoomTransform {
 			return QRect(QPoint(0, 0), canvas);
 		const double w = canvas.width() / scale;
 		const double h = canvas.height() / scale;
+		// In SOURCE coordinates: with a region positioned by this transform
+		// rather than by a crop, that is a rectangle on the screen and may sit
+		// anywhere on it -- which is exactly what the border needs to draw.
 		return QRect(int(std::lround(-posX / scale)), int(std::lround(-posY / scale)),
 			     int(std::lround(w)), int(std::lround(h)));
 	}
@@ -107,19 +110,66 @@ public:
 	// animation.
 	static constexpr double kMaxStepMs = 100.0;
 
-	// The canvas being recorded, in device pixels -- which is also the scene
-	// item's natural size, since the item is the capture at 1:1. Resets the
-	// state: a new recording starts unzoomed.
+	// Full Screen: the canvas IS the whole captured picture, so the source is
+	// the same size and the resting framing is its centre.
 	void setCanvas(QSize canvasDevicePx)
 	{
+		setCanvas(canvasDevicePx, canvasDevicePx,
+			  QPoint(canvasDevicePx.width() / 2, canvasDevicePx.height() / 2));
+	}
+
+	// Custom Region: the canvas is the REGION but the source is the whole
+	// screen, and `homeCentre` is the source point the region sits on when
+	// nothing is zoomed.
+	//
+	// The two being different is what lets a zoomed region roam. Positioning
+	// the region with a crop threw the rest of the screen away, so a zoom
+	// inside it had nowhere to go and had to be clamped to the region's own
+	// bounds. Positioning it with this transform keeps the whole screen
+	// available, and the only clamp left is the screen itself.
+	//
+	// Resets the state: a new recording starts unzoomed.
+	void setCanvas(QSize canvasDevicePx, QSize sourceDevicePx, QPoint homeCentre)
+	{
 		canvas_ = canvasDevicePx;
+		source_ = sourceDevicePx.isEmpty() ? canvasDevicePx : sourceDevicePx;
+		home_ = QPointF(homeCentre.x(), homeCentre.y());
 		active_ = false;
 		progress_ = 0.0;
 		lastMs_ = -1;
 		haveFocus_ = false;
-		xf_ = ZoomTransform{};
+		xf_ = restTransform();
 	}
 	QSize canvas() const { return canvas_; }
+	QSize source() const { return source_; }
+
+	// Where the region sits when nothing is zoomed. Follow Mouse moves this
+	// while it pans, so the two compose: following chooses the resting framing,
+	// the zoom magnifies out of it.
+	void setHome(QPoint homeCentre)
+	{
+		home_ = QPointF(homeCentre.x(), homeCentre.y());
+		if (!isBusy())
+			xf_ = restTransform();
+	}
+	QPoint home() const { return QPoint(int(std::lround(home_.x())), int(std::lround(home_.y()))); }
+
+	// The transform that shows exactly the resting framing: no magnification,
+	// the canvas parked over `home`. In Full Screen this is the true identity;
+	// in a region it is the offset that used to be a crop.
+	ZoomTransform restTransform() const
+	{
+		ZoomTransform r;
+		r.scale = 1.0;
+		r.posX = canvas_.width() / 2.0 - home_.x();
+		r.posY = canvas_.height() / 2.0 - home_.y();
+		return r;
+	}
+
+	// Nothing magnified -- the caller can leave the picture alone. Distinct
+	// from ZoomTransform::identity(), which means scale 1 at the origin and is
+	// only the same thing in Full Screen.
+	bool atRest() const { return progress_ <= 0.0001; }
 
 	// The shortcut. Returns the new state so the caller can log it, badge it
 	// and drop a marker in the recording.
@@ -179,8 +229,8 @@ public:
 
 		if (progress_ <= 0.0001) {
 			haveFocus_ = false;
-			xf_ = ZoomTransform{};
-			return !before.identity();
+			xf_ = restTransform();
+			return changed(before, xf_);
 		}
 
 		// Smoothstepped, so the push-in does not arrive and stop dead.
@@ -202,8 +252,8 @@ public:
 
 		if (!haveFocus_) {
 			// First frame of a zoom. Anchor on the pixel under the cursor:
-			// solving "a stays at screen position a" for the focus gives
-			// f = a - (a - C/2)/s, and at full magnification that is the value
+			// solving "a stays where it is on screen" for the focus gives
+			// f = a - (a - home)/s, and at full magnification that is the value
 			// below. See the blend at the bottom for the rest of the path.
 			focus_ = anchorFocus(QPointF(cursorDevicePx.x(), cursorDevicePx.y()), fMax);
 			focus_ = clampFocus(focus_, vwFull, vhFull);
@@ -271,11 +321,12 @@ public:
 		// whole way out again.
 		const double denom = 1.0 - 1.0 / fMax;
 		const double k = denom > 1e-9 ? std::clamp((1.0 - 1.0 / s) / denom, 0.0, 1.0) : 1.0;
-		QPointF eff(canvas_.width() / 2.0 + (focus_.x() - canvas_.width() / 2.0) * k,
-			    canvas_.height() / 2.0 + (focus_.y() - canvas_.height() / 2.0) * k);
-		// A safety net rather than a correction: the blend above can only
-		// produce an offset of (W/2)(1 - 1/s), which is exactly the legal
-		// bound. Rounding is the only thing this catches.
+		// Blended from HOME, not from the canvas centre. In Full Screen they
+		// are the same point; in a region, home is where the region sits on the
+		// screen, and starting the blend anywhere else would make the picture
+		// lurch to the middle of the display the moment the key was pressed.
+		QPointF eff(home_.x() + (focus_.x() - home_.x()) * k,
+			    home_.y() + (focus_.y() - home_.y()) * k);
 		eff = clampFocus(eff, vw, vh);
 
 		xf_.scale = s;
@@ -296,21 +347,24 @@ private:
 	QPointF anchorFocus(QPointF a, double s) const
 	{
 		if (s <= 1.0)
-			return QPointF(canvas_.width() / 2.0, canvas_.height() / 2.0);
-		return QPointF(a.x() - (a.x() - canvas_.width() / 2.0) / s,
-			       a.y() - (a.y() - canvas_.height() / 2.0) / s);
+			return home_;
+		return QPointF(a.x() - (a.x() - home_.x()) / s, a.y() - (a.y() - home_.y()) / s);
 	}
 
 	// A focus point whose visible rectangle fits inside the canvas. When the
 	// magnification is barely above 1 the rectangle is nearly the whole
 	// picture, so the legal range collapses to the centre -- max() rather than
 	// an assert, because that is a legitimate state on the way in and out.
+	// Clamped against the SOURCE -- the whole screen -- not the canvas. In Full
+	// Screen the two are the same and nothing changes. In a region they are
+	// not, and this is the line that lets a zoomed region travel anywhere on
+	// the display instead of being penned inside the rectangle that was drawn.
 	QPointF clampFocus(QPointF f, double vw, double vh) const
 	{
-		const double loX = vw / 2.0, hiX = canvas_.width() - vw / 2.0;
-		const double loY = vh / 2.0, hiY = canvas_.height() - vh / 2.0;
-		return QPointF(hiX < loX ? canvas_.width() / 2.0 : std::clamp(f.x(), loX, hiX),
-			       hiY < loY ? canvas_.height() / 2.0 : std::clamp(f.y(), loY, hiY));
+		const double loX = vw / 2.0, hiX = source_.width() - vw / 2.0;
+		const double loY = vh / 2.0, hiY = source_.height() - vh / 2.0;
+		return QPointF(hiX < loX ? source_.width() / 2.0 : std::clamp(f.x(), loX, hiX),
+			       hiY < loY ? source_.height() / 2.0 : std::clamp(f.y(), loY, hiY));
 	}
 
 	// Worth pushing to the scene? Sub-pixel changes are invisible and the
@@ -331,6 +385,8 @@ private:
 	}
 
 	QSize canvas_;
+	QSize source_;   // the scene item's natural size: the whole screen
+	QPointF home_;   // the source point at the canvas centre when at rest
 	ZoomTransform xf_;
 	QPointF focus_;
 	QPointF target_;

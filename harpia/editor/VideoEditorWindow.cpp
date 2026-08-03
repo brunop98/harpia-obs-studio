@@ -1058,6 +1058,18 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		[this](const QString &t, int o, bool on) {
 			editSharedComponent(t, o, [on](ComponentInstance &ci) { ci.enabled = on; });
 		});
+	connect(componentPanel_, &ComponentPanel::componentTimingChanged, this,
+		[this](const QString &t, int o, qint64 in, qint64 out) {
+			// -1 means "this box did not change". Without that, editing In on a
+			// mixed selection would flatten everyone's Out to whatever this
+			// panel happened to be showing.
+			editSharedComponent(t, o, [in, out](ComponentInstance &ci) {
+				if (in >= 0)
+					ci.inMs = in;
+				if (out >= 0)
+					ci.outMs = out;
+			});
+		});
 	connect(componentPanel_, &ComponentPanel::componentRemoved, this,
 		[this](const QString &t, int o) {
 			timelineView_->applyToSelection([&](TlClip &c) {
@@ -4109,6 +4121,14 @@ ComponentPanel::View VideoEditorWindow::buildComponentView() const
 		sc.enabled = gather(n, [&](int i) {
 			const ComponentInstance *x = nth(clips[i], sc.typeId, sc.ordinal);
 			return x && x->enabled;
+		});
+		sc.inMs = gather(n, [&](int i) {
+			const ComponentInstance *x = nth(clips[i], sc.typeId, sc.ordinal);
+			return x ? QVariant(qlonglong(x->inMs)) : QVariant();
+		});
+		sc.outMs = gather(n, [&](int i) {
+			const ComponentInstance *x = nth(clips[i], sc.typeId, sc.ordinal);
+			return x ? QVariant(qlonglong(x->outMs)) : QVariant();
 		});
 		if (const ComponentType *t = reg.find(ci.typeId)) {
 			for (const PropDef &d : t->props)

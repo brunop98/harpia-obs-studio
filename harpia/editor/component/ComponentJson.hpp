@@ -53,6 +53,12 @@ inline QJsonObject componentToJson(const ComponentInstance &c, const ComponentRe
 	o[QStringLiteral("id")] = c.instanceId;
 	if (!c.enabled)
 		o[QStringLiteral("enabled")] = false; // omitted when true: the common case
+	// Omitted when zero, which is the default and by far the common case --
+	// so this feature adds nothing to the size of an existing project file.
+	if (c.inMs > 0)
+		o[QStringLiteral("inMs")] = double(c.inMs);
+	if (c.outMs > 0)
+		o[QStringLiteral("outMs")] = double(c.outMs);
 	if (const ComponentType *t = reg.find(c.typeId))
 		o[QStringLiteral("version")] = t->version;
 
@@ -94,6 +100,10 @@ inline ComponentInstance componentFromJson(const QJsonObject &in, const Componen
 	c.typeId = o.value(QStringLiteral("type")).toString();
 	c.instanceId = o.value(QStringLiteral("id")).toString();
 	c.enabled = o.value(QStringLiteral("enabled")).toBool(true);
+	// Absent means 0 means "no envelope": an older project opens rendering
+	// exactly as it always did.
+	c.inMs = qint64(o.value(QStringLiteral("inMs")).toDouble(0));
+	c.outMs = qint64(o.value(QStringLiteral("outMs")).toDouble(0));
 
 	// Give the type a chance to bring an older shape forward before anything is
 	// read out of it.
@@ -123,7 +133,7 @@ inline ComponentInstance componentFromJson(const QJsonObject &in, const Componen
 	// Everything we just consumed comes out, so `unknown` holds only what this
 	// build genuinely did not understand. Keeping the whole object here instead
 	// would mean writing stale copies of props back out beside the live ones.
-	for (const char *known : {"type", "id", "enabled", "version", "props", "keys"})
+	for (const char *known : {"type", "id", "enabled", "inMs", "outMs", "version", "props", "keys"})
 		o.remove(QLatin1String(known));
 	c.unknown = o;
 	return c;

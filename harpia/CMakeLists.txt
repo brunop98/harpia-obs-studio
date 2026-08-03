@@ -225,6 +225,7 @@ target_sources(
     editor/component/ComponentRegistry.hpp
     editor/component/ComponentStack.cpp
     editor/component/ComponentStack.hpp
+    editor/component/ComponentEnvelope.hpp
     editor/component/ComponentJson.hpp
     editor/component/ComponentPanel.cpp
     editor/component/ComponentPanel.hpp

@@ -100,6 +100,16 @@ struct ComponentInstance {
 	QString typeId;     // "harpia.blur", "acme.glitch" — namespaced, stable
 	QString instanceId; // unique on the clip; how other components refer to it
 	bool enabled = true;
+
+	// Ramp times, in milliseconds, both 0 by default -- which means "no
+	// envelope", exactly the all-or-nothing behaviour every project written
+	// before this had. Non-zero fades the component in over inMs and out over
+	// outMs, so the common shape (arrive, hold, leave) needs no keyframes at
+	// all. See ComponentEnvelope.hpp for what the weight then does, which
+	// depends on the stage.
+	qint64 inMs = 0;
+	qint64 outMs = 0;
+
 	PropBag props;                        // static values, by key
 	QMap<QString, QVector<PropKey>> keys; // animated properties, by key
 
@@ -114,7 +124,8 @@ struct ComponentInstance {
 	bool operator==(const ComponentInstance &o) const
 	{
 		return typeId == o.typeId && instanceId == o.instanceId && enabled == o.enabled &&
-		       props == o.props && keys == o.keys && unknown == o.unknown;
+		       inMs == o.inMs && outMs == o.outMs && props == o.props && keys == o.keys &&
+		       unknown == o.unknown;
 	}
 	bool operator!=(const ComponentInstance &o) const { return !(*this == o); }
 };

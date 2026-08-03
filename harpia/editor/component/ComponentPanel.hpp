@@ -77,6 +77,10 @@ public:
 		QString typeId;
 		int ordinal = 0;
 		Mixed enabled; // mixed when some of them have it switched off
+		// In / Out ramp times, ms. Mixed when the selection disagrees. Both 0
+		// (the default) means the component is simply on for the whole clip.
+		Mixed inMs;
+		Mixed outMs;
 		QMap<QString, Mixed> values;
 		QStringList keyedHere; // props with a key at the playhead on every clip
 	};
@@ -101,6 +105,10 @@ signals:
 	void componentAdded(const QString &typeId);
 	void componentRemoved(const QString &typeId, int ordinal);
 	void componentEnableChanged(const QString &typeId, int ordinal, bool on);
+	// An In or Out ramp time was edited. -1 for the one that did not change,
+	// so a single signal serves both boxes without the panel having to know
+	// the other's current value across a mixed selection.
+	void componentTimingChanged(const QString &typeId, int ordinal, qint64 inMs, qint64 outMs);
 	void componentMoved(const QString &typeId, int ordinal, int delta);
 	void componentReset(const QString &typeId, int ordinal);
 	void componentDuplicated(const QString &typeId, int ordinal);
@@ -124,7 +132,8 @@ private:
 	// remove, and no keyframe diamonds.
 	Row *makeRow(const QString &typeId, int ordinal, const QMap<QString, Mixed> &values,
 		     const Mixed *enabled, const QStringList &driven, const QString &drivenTip,
-		     const QStringList &keyedHere, bool pinned, bool canUp, bool canDown);
+		     const QStringList &keyedHere, bool pinned, bool canUp, bool canDown,
+		     const Mixed *inMs = nullptr, const Mixed *outMs = nullptr);
 
 	const ComponentRegistry &reg_;
 	View view_;

@@ -52,6 +52,16 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 	"$HERE/sendtofull_test.cpp" -o "$WORK/sendtofull_test" $LF
 
+# Component In/Out ramps: the weight curve, and what the weight DOES. Both
+# ramps zero is the default and must render byte-identically to before -- that
+# compatibility check is the load-bearing one.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/componentenvelope_test.cpp" -o "$WORK/componentenvelope_test" $LF
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/envelopestack_test.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" -o "$WORK/envelopestack_test" $LF
+
 # Global hotkeys: the QKeySequence -> Win32 (mods, VK) translation. A wrong VK
 # registers FINE and then fires for a different key -- no error path reports
 # it -- so the ABI constants are pinned here, on every platform.
@@ -378,6 +388,8 @@ QT_QPA_PLATFORM=offscreen "$WORK/crashreport_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/autopause_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/globalhotkeys_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/sendtofull_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/componentenvelope_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/envelopestack_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionoverlay_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/recordercontrols_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/startupsplash_test" || rc=1

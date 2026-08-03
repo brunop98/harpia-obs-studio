@@ -6,6 +6,7 @@
 #include "ComponentRegistry.hpp"
 
 #include <QCheckBox>
+#include <QSpinBox>
 #include <QFormLayout>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -31,6 +32,8 @@ struct ComponentPanel::Row {
 	QVector<QCheckBox *> checks;    // null for a non-bool property
 	QVector<QPushButton *> keyBtns;
 	QVector<QLabel *> labels;
+	QSpinBox *inMs = nullptr;  // ramp-in time; null on pinned rows
+	QSpinBox *outMs = nullptr;
 };
 
 namespace {
@@ -144,7 +147,8 @@ bool ComponentPanel::shapeChanged(const View &next) const
 		const SharedComponent &a = next.shared[i];
 		const SharedComponent &b = view_.shared[i];
 		if (a.typeId != b.typeId || a.ordinal != b.ordinal || a.keyedHere != b.keyedHere ||
-		    a.enabled.mixed != b.enabled.mixed)
+		    a.enabled.mixed != b.enabled.mixed || a.inMs.mixed != b.inMs.mixed ||
+		    a.outMs.mixed != b.outMs.mixed)
 			return true;
 		for (auto it = a.values.cbegin(); it != a.values.cend(); ++it)
 			if (it->mixed != b.values.value(it.key()).mixed)
@@ -188,7 +192,8 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 					     const QMap<QString, Mixed> &values,
 					     const Mixed *enabled, const QStringList &driven,
 					     const QString &drivenTip, const QStringList &keyedHere,
-					     bool pinned, bool canUp, bool canDown)
+					     bool pinned, bool canUp, bool canDown, const Mixed *inMs,
+					     const Mixed *outMs)
 {
 	const ComponentType *type = reg_.find(typeId);
 
@@ -376,6 +381,62 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 		bv->addLayout(form);
 	}
 
+	// In / Out ramp times, under the properties and above the actions. Every
+	// component gets these -- they are a property of BEING a component, like
+	// the enable box, not something a type opts into. Both 0 (the default)
+	// means "just on", which is what every component did before they existed.
+	if (!pinned && inMs && outMs) {
+		auto *th = new QHBoxLayout;
+		th->setContentsMargins(0, 2, 0, 0);
+		th->setSpacing(4);
+		const auto makeBox = [&](const Mixed &m, const QString &tip) {
+			auto *sp = new QSpinBox(row->box);
+			sp->setRange(0, 600000); // up to ten minutes of ramp
+			sp->setSuffix(QStringLiteral(" ms"));
+			sp->setSpecialValueText(QStringLiteral("0 — instant"));
+			sp->setSingleStep(50);
+			sp->setToolTip(tip);
+			if (m.mixed) {
+				// The em-dash convention the rest of this panel uses for a
+				// value the selection disagrees about.
+				sp->setSpecialValueText(QStringLiteral("—"));
+				sp->setValue(0);
+			} else {
+				sp->setValue(m.value.toInt());
+			}
+			return sp;
+		};
+		auto *inLbl = new QLabel(QStringLiteral("In"), row->box);
+		inLbl->setStyleSheet(QStringLiteral("border:none; color:#9aa0a8;"));
+		row->inMs = makeBox(*inMs,
+				    QStringLiteral("Fade this component in over this long, from the "
+						   "start of the clip. 0 = on immediately."));
+		auto *outLbl = new QLabel(QStringLiteral("Out"), row->box);
+		outLbl->setStyleSheet(QStringLiteral("border:none; color:#9aa0a8;"));
+		row->outMs = makeBox(*outMs,
+				     QStringLiteral("Fade it back out over this long, ending at the "
+						    "end of the clip. 0 = on until the end."));
+		th->addWidget(inLbl);
+		th->addWidget(row->inMs, 1);
+		th->addWidget(outLbl);
+		th->addWidget(row->outMs, 1);
+		bv->addLayout(th);
+
+		// -1 for the box that did not change: the window then leaves that side
+		// alone, which is the only way a mixed selection can have one side
+		// edited without the other being flattened to whatever this box shows.
+		connect(row->inMs, QOverload<int>::of(&QSpinBox::valueChanged), this,
+			[this, typeId, ordinal](int v) {
+				if (!syncing_)
+					emit componentTimingChanged(typeId, ordinal, v, -1);
+			});
+		connect(row->outMs, QOverload<int>::of(&QSpinBox::valueChanged), this,
+			[this, typeId, ordinal](int v) {
+				if (!syncing_)
+					emit componentTimingChanged(typeId, ordinal, -1, v);
+			});
+	}
+
 	// The component's own buttons, under its properties. A component declares
 	// these; the panel does not know what any of them mean, which is what lets a
 	// user-written one have them too.
@@ -424,7 +485,7 @@ void ComponentPanel::rebuild()
 		const SharedComponent &c = view_.shared[i];
 		rows_.append(makeRow(c.typeId, c.ordinal, c.values, &c.enabled, {}, QString(),
 				     c.keyedHere, /*pinned=*/false, i > 0,
-				     i + 1 < view_.shared.size()));
+				     i + 1 < view_.shared.size(), &c.inMs, &c.outMs));
 	}
 	pushValues();
 }
@@ -432,11 +493,23 @@ void ComponentPanel::rebuild()
 void ComponentPanel::pushValues()
 {
 	syncing_ = true;
-	auto apply = [](Row *r, const QMap<QString, Mixed> &values, const Mixed *enabled) {
+	auto apply = [](Row *r, const QMap<QString, Mixed> &values, const Mixed *enabled,
+			const Mixed *inMs = nullptr, const Mixed *outMs = nullptr) {
 		if (r->enabled && enabled) {
 			r->enabled->setTristate(enabled->mixed);
 			r->enabled->setCheckState(stateOf(*enabled));
 		}
+		// Ramp times refresh in place like everything else here, so typing in
+		// one box is not interrupted by a rebuild.
+		const auto pushTime = [](QSpinBox *sp, const Mixed *m) {
+			if (!sp || !m)
+				return;
+			sp->setSpecialValueText(m->mixed ? QStringLiteral("—")
+							 : QStringLiteral("0 — instant"));
+			sp->setValue(m->mixed ? 0 : m->value.toInt());
+		};
+		pushTime(r->inMs, inMs);
+		pushTime(r->outMs, outMs);
 		for (int i = 0; i < r->keys.size(); ++i) {
 			const Mixed m = values.value(r->keys[i]);
 			if (r->sliders[i]) {
@@ -457,7 +530,7 @@ void ComponentPanel::pushValues()
 			apply(rows_[n++], p.values, nullptr);
 	for (const SharedComponent &c : view_.shared)
 		if (n < rows_.size())
-			apply(rows_[n++], c.values, &c.enabled);
+			apply(rows_[n++], c.values, &c.enabled, &c.inMs, &c.outMs);
 	syncing_ = false;
 }
 

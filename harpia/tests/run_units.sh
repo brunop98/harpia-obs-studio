@@ -95,6 +95,20 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/zoommode_test.cpp" "$H/core/FollowMouse.cpp" -o "$WORK/zoommode_test" $LF
 
+# The recording spotlight. Every number here is baked into a video file that
+# cannot be un-baked, so the geometry, the darkness cap and the fade all get
+# pinned -- including the dirty region, whose failure mode is a bright smear
+# left behind the cursor in the FILE.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/spotlight_fx_test.cpp" -o "$WORK/spotlight_fx_test" $LF
+
+# Two actions on one key: nothing reports it and the second feature just never
+# fires, so the rule is that it cannot be saved at all.
+"$MOC" -I"$H" "$H/ui/ShortcutConflictDialog.hpp" -o "$WORK/moc_ShortcutConflictDialog.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/shortcutconflict_test.cpp" "$H/ui/ShortcutConflictDialog.cpp" \
+	"$WORK/moc_ShortcutConflictDialog.cpp" -o "$WORK/shortcutconflict_test" $LF
+
 # The component runtime: purity, stage order, dependencies, serialisation.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/component_test.cpp" \
@@ -406,6 +420,8 @@ QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionwatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/followmouse_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/zoommode_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/spotlight_fx_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/shortcutconflict_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/crashreport_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/autopause_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/globalhotkeys_test" || rc=1

@@ -55,6 +55,12 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_int(d, "follow_smoothness", p.followSmoothness);
 	obs_data_set_int(d, "follow_axis", p.followAxis);
 	obs_data_set_int(d, "follow_profile", p.followProfile);
+	obs_data_set_bool(d, "spotlight_enabled", p.spotlightEnabled);
+	obs_data_set_bool(d, "spotlight_start_on", p.spotlightStartOn);
+	obs_data_set_int(d, "spotlight_size", p.spotlightSize);
+	obs_data_set_int(d, "spotlight_dark_pct", p.spotlightDarkPct);
+	obs_data_set_int(d, "spotlight_roundness", p.spotlightRoundness);
+	obs_data_set_string(d, "spotlight_shortcut", p.spotlightShortcut.c_str());
 	obs_data_set_bool(d, "zoom_enabled", p.zoomEnabled);
 	obs_data_set_int(d, "zoom_percent", p.zoomPercent);
 	obs_data_set_int(d, "zoom_anim_ms", p.zoomAnimMs);
@@ -152,6 +158,18 @@ Preset presetFromData(obs_data_t *d)
 	p.followProfile = (int)obs_data_get_int(d, "follow_profile");
 	// Same reasoning for Zoom: read back raw, a preset written before this
 	// feature would zoom to 0% over 0 ms -- an instant cut to a 16x16 crop.
+	// Non-zero defaults again: a preset written before this feature would read
+	// back a 0 px patch at 0% darkness -- a shortcut that appears to do nothing.
+	p.spotlightEnabled = obs_data_get_bool(d, "spotlight_enabled");
+	p.spotlightStartOn = obs_data_get_bool(d, "spotlight_start_on");
+	obs_data_set_default_int(d, "spotlight_size", 320);
+	obs_data_set_default_int(d, "spotlight_dark_pct", 70);
+	obs_data_set_default_int(d, "spotlight_roundness", 100);
+	obs_data_set_default_string(d, "spotlight_shortcut", "Ctrl+Shift+S");
+	p.spotlightSize = (int)obs_data_get_int(d, "spotlight_size");
+	p.spotlightDarkPct = (int)obs_data_get_int(d, "spotlight_dark_pct");
+	p.spotlightRoundness = (int)obs_data_get_int(d, "spotlight_roundness");
+	p.spotlightShortcut = obs_data_get_string(d, "spotlight_shortcut");
 	p.zoomEnabled = obs_data_get_bool(d, "zoom_enabled");
 	obs_data_set_default_int(d, "zoom_percent", 200);
 	obs_data_set_default_int(d, "zoom_anim_ms", 350);

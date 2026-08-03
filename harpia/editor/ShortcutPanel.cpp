@@ -1,5 +1,7 @@
 #include "ShortcutPanel.hpp"
 
+#include "ui/ShortcutConflictDialog.hpp"
+
 #include "ShortcutRegistry.hpp"
 
 #include <QApplication>
@@ -15,6 +17,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSet>
 #include <QSettings>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -375,17 +378,48 @@ void ShortcutPanel::applyCaptured(const QString &id, const QKeySequence &k, bool
 {
 	const QString owner = reg_->conflict(k, id);
 	if (!owner.isEmpty()) {
+		// Both sides, side by side, either of them re-keyable -- rather than
+		// "replace it?", which forces the new binding to win even when the
+		// right answer is to move the OTHER command. Same dialog and same
+		// no-duplicates rule as the recorder's hotkeys.
+		const ShortcutCommand *mine = reg_->command(id);
 		const ShortcutCommand *other = reg_->command(owner);
-		const QMessageBox::StandardButton r = QMessageBox::question(
-			this, QStringLiteral("Shortcut already assigned"),
-			QStringLiteral("<b>%1</b><br><br>Already assigned to:<br><b>%2</b><br><br>"
-				       "Replace it? The other command loses this shortcut.")
-				.arg(k.toString(QKeySequence::NativeText),
-				     other ? other->label.toHtmlEscaped() : owner),
-			QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
-		if (r != QMessageBox::Yes)
-			return;
+		QVector<ShortcutBinding> rows;
+		rows.append({id, mine ? mine->label : id, k});
+		rows.append({owner, other ? other->label : owner, k});
+		ShortcutConflictDialog dlg(rows, QSet<QString>(), this);
+		if (dlg.exec() != QDialog::Accepted)
+			return; // cancelled: the command keeps whatever it had
+
+		QKeySequence mineKey, otherKey;
+		for (const ShortcutBinding &b : dlg.result()) {
+			if (b.id == owner)
+				otherKey = b.key;
+			else if (b.id == id)
+				mineKey = b.key;
+		}
+
+		// The OTHER command first, and always -- it is the one that must give
+		// up the contested key, and doing it second risks an early exit above
+		// leaving both of them still holding it. Its binding is REPLACED with
+		// whatever the dialog left it with, not merely removed: the user may
+		// well have moved it to a new key rather than clearing it, and dropping
+		// that would make the dialog a lie.
 		reg_->removeBinding(owner, k);
+		if (!otherKey.isEmpty() && shortcutKeyId(otherKey) != shortcutKeyId(k))
+			reg_->addBinding(owner, otherKey);
+
+		// Then this one, with whatever key it ended up with. Cleared means the
+		// command loses its shortcut, which is a legitimate way out.
+		if (mineKey.isEmpty()) {
+			if (!add)
+				reg_->setBindings(id, {});
+		} else if (add) {
+			reg_->addBinding(id, mineKey);
+		} else {
+			reg_->setBindings(id, {mineKey});
+		}
+		return;
 	}
 	if (add)
 		reg_->addBinding(id, k);

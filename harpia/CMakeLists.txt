@@ -100,6 +100,8 @@ target_sources(
     core/FollowMouse.cpp
     core/FollowMouse.hpp
     core/ZoomMode.hpp
+    core/SpotlightFx.hpp
+    core/ShortcutConflicts.hpp
     core/RegionWatch.cpp
     core/RegionWatch.hpp
     core/Remuxer.cpp
@@ -144,6 +146,10 @@ target_sources(
     ui/WebcamPreview.hpp
     ui/MouseFxOverlay.cpp
     ui/MouseFxOverlay.hpp
+    ui/SpotlightPreview.cpp
+    ui/SpotlightPreview.hpp
+    ui/ShortcutConflictDialog.cpp
+    ui/ShortcutConflictDialog.hpp
     ui/ClipLibraryWindow.cpp
     ui/ClipLibraryWindow.hpp
     ui/ExportDoneDialog.cpp

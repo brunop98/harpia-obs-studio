@@ -49,6 +49,11 @@ public:
 	// magnified, and without an indicator there is no way to tell.
 	void setZoom(bool zoomed, int percent);
 
+	// Spotlight, for the same reason as the zoom chip: while it is lit your own
+	// screen is dark, which is unmistakable -- but while it is OFF there is
+	// nothing to tell you the shortcut exists or that the last press registered.
+	void setSpotlight(bool lit);
+
 signals:
 	void startClicked();
 	void pauseClicked();
@@ -79,6 +84,7 @@ private:
 	void excludeFromCapture(); // Windows: WDA_EXCLUDEFROMCAPTURE
 
 	QLabel *zoomChip_ = nullptr;
+	QLabel *spotChip_ = nullptr;
 	QPushButton *startButton_ = nullptr;
 	QPushButton *pauseButton_ = nullptr;
 	QPushButton *stopButton_ = nullptr;

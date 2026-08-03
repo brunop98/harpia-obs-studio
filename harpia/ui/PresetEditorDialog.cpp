@@ -1,10 +1,14 @@
 #include "PresetEditorDialog.hpp"
 
 #include "MousePreview.hpp"
+#include "ShortcutConflictDialog.hpp"
+#include "SpotlightPreview.hpp"
 #include "core/CaptureManager.hpp"
 #include "core/EncoderFactory.hpp"
 #include "core/WebcamRecorder.hpp"
-#include "core/ZoomMode.hpp" // ZoomParams::kMinPercent / kMaxPercent
+#include "core/ShortcutConflicts.hpp" // the no-duplicate-shortcuts rule
+#include "core/SpotlightFx.hpp"     // SpotlightParams limits, shared with the overlay
+#include "core/ZoomMode.hpp"      // ZoomParams::kMinPercent / kMaxPercent
 #include "core/AudioManager.hpp" // AudioDevice
 #include "model/FileNameTemplate.hpp"
 #include "platform/CameraAccess.hpp"
@@ -23,6 +27,7 @@
 #include <QFontMetrics>
 #include <QFont>
 #include <QFrame>
+#include <QGuiApplication>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QIntValidator>
@@ -32,6 +37,8 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QScreen>
+#include <QSet>
 #include <QScrollArea>
 #include <QSettings>
 #include <QSlider>
@@ -622,6 +629,96 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	v->addStretch(1);
 	addPage(QStringLiteral("Mouse"), mousePage);
 
+	// ===== Spotlight =====
+	// The recorded display's width, for the preview's scaling. Resolved here
+	// rather than in the preview so the maths lives with the preset that knows
+	// which monitor it records.
+	{
+		const QList<QScreen *> screens = QGuiApplication::screens();
+		if (!screens.isEmpty()) {
+			const int idx = std::clamp(preset.monitorIndex, 0, int(screens.size()) - 1);
+			const QScreen *sc = screens.at(idx);
+			spotScreenW_ = std::max(320, int(sc->geometry().width() * sc->devicePixelRatio()));
+		}
+	}
+	// Everything but a patch around the cursor goes dark. Drawn by the same
+	// desktop overlay as the cursor highlight, which is what puts it in the
+	// recording -- and also means your own screen really does go dark while it
+	// is lit. That is a feature: you see what the viewer sees.
+	QWidget *spotPage = makePage(v);
+	spotCheck_ = new QCheckBox(QStringLiteral("Spotlight"), this);
+	spotCheck_->setChecked(preset.spotlightEnabled);
+	addCheck(v, spotCheck_,
+		 QStringLiteral("Adds a shortcut that darkens everything except an area around the "
+				"mouse, so a viewer's eye lands where you are pointing. Works in "
+				"every capture mode. Your own screen darkens too — that is what "
+				"gets recorded."));
+
+	spotShortcutEdit_ = new QKeySequenceEdit(
+		QKeySequence(QString::fromStdString(preset.spotlightShortcut)), this);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	spotShortcutEdit_->setMaximumSequenceLength(1);
+#endif
+	addField(v, QStringLiteral("Spotlight shortcut"),
+		 QStringLiteral("Press once to turn it on, again to turn it off. Works system-wide on "
+				"Windows, so it can be used with the app being recorded in front."),
+		 spotShortcutEdit_);
+
+	QSlider *spotSize = nullptr;
+	QWidget *spotSizeRow = makeSliderRow(this, spotSize, SpotlightParams::kMinSize,
+					     SpotlightParams::kMaxSize, preset.spotlightSize,
+					     QStringLiteral(" px"), 20);
+	spotSizeSlider_ = spotSize;
+	addField(v, QStringLiteral("Area size"),
+		 QStringLiteral("How wide the lit area is, in screen pixels. The preview below shows "
+				"it at the size it will actually be on the display this preset "
+				"records."),
+		 spotSizeRow);
+
+	QSlider *spotDark = nullptr;
+	QWidget *spotDarkRow = makeSliderRow(this, spotDark, 0, SpotlightParams::kMaxDark,
+					     preset.spotlightDarkPct, QStringLiteral("%"), 5);
+	spotDarkSlider_ = spotDark;
+	addField(v, QStringLiteral("Dark area opacity"),
+		 QStringLiteral("How dark everything outside the area goes. It stops short of fully "
+				"black on purpose — you still have to find the window you are about "
+				"to click while the spotlight is on."),
+		 spotDarkRow);
+
+	QSlider *spotRound = nullptr;
+	QWidget *spotRoundRow = makeSliderRow(this, spotRound, 0, 100, preset.spotlightRoundness,
+					      QStringLiteral("%"), 5);
+	spotRoundSlider_ = spotRound;
+	addField(v, QStringLiteral("Area roundness"),
+		 QStringLiteral("0% is a hard-edged rectangle; 100% is a circle. In between, a "
+				"rectangle with its corners rounded off."),
+		 spotRoundRow);
+
+	spotStartOnCheck_ = new QCheckBox(QStringLiteral("Start recordings with the spotlight on"), this);
+	spotStartOnCheck_->setChecked(preset.spotlightStartOn);
+	addCheck(v, spotStartOnCheck_,
+		 QStringLiteral("Otherwise a recording starts with a normal screen and waits for the "
+				"shortcut — which is usually what you want, since the first thing "
+				"most recordings show is the whole screen."));
+
+	spotPreview_ = new SpotlightPreview(this);
+	addField(v, QStringLiteral("Preview"),
+		 QStringLiteral("Move the mouse over this to see the spotlight follow it."),
+		 spotPreview_);
+
+	// Every setting on this page feeds the preview, and the preview is the
+	// reason the page is usable at all — the numbers alone say very little
+	// about what 70% dark or 40% round looks like.
+	const auto spotChanged = [this]() { syncSpotlightPreview(); };
+	connect(spotCheck_, &QCheckBox::toggled, this, spotChanged);
+	connect(spotSizeSlider_, &QSlider::valueChanged, this, spotChanged);
+	connect(spotDarkSlider_, &QSlider::valueChanged, this, spotChanged);
+	connect(spotRoundSlider_, &QSlider::valueChanged, this, spotChanged);
+	syncSpotlightPreview();
+
+	v->addStretch(1);
+	addPage(QStringLiteral("Spotlight"), spotPage);
+
 	// ===== Zoom =====
 	// Press a key mid-recording and the picture pushes in on the cursor; press
 	// it again and it pulls back out. Full Screen only, because that is where
@@ -978,6 +1075,30 @@ void PresetEditorDialog::pickColor(QColor &target, QPushButton *button)
 	}
 }
 
+void PresetEditorDialog::syncSpotlightPreview()
+{
+	if (!spotPreview_)
+		return;
+	SpotlightParams sp;
+	sp.sizePx = spotSizeSlider_->value();
+	sp.darkPct = spotDarkSlider_->value();
+	sp.roundnessPct = spotRoundSlider_->value();
+	// Shown against the display this preset actually records, so "320 px" reads
+	// as the fraction of the screen it will really be -- the same number is a
+	// large patch on 1080p and a small one on 4K.
+	spotPreview_->configure(sp, spotScreenW_);
+
+	// The controls are inert while the feature is off, greyed rather than
+	// hidden so they can still be read before deciding to turn it on. The
+	// preview stays live either way: it is how you decide.
+	const bool on = spotCheck_->isChecked();
+	spotShortcutEdit_->setEnabled(on);
+	spotSizeSlider_->setEnabled(on);
+	spotDarkSlider_->setEnabled(on);
+	spotRoundSlider_->setEnabled(on);
+	spotStartOnCheck_->setEnabled(on);
+}
+
 void PresetEditorDialog::updateMousePreview()
 {
 	if (!mousePreview_)
@@ -1063,6 +1184,45 @@ void PresetEditorDialog::updateValidation()
 	validationLabel_->setVisible(!msg.isEmpty());
 }
 
+bool PresetEditorDialog::resolveShortcutConflicts()
+{
+	struct Row {
+		const char *id;
+		const char *label;
+		QKeySequenceEdit *edit;
+	};
+	const Row rows[] = {
+		{"record", "Start / stop recording", recordKeyEdit_},
+		{"pause", "Pause / resume", pauseKeyEdit_},
+		{"zoom", "Zoom in / out", zoomShortcutEdit_},
+		{"spotlight", "Spotlight on / off", spotShortcutEdit_},
+	};
+
+	QVector<ShortcutBinding> bindings;
+	for (const Row &r : rows) {
+		if (!r.edit)
+			continue;
+		bindings.append({QString::fromLatin1(r.id), QString::fromLatin1(r.label),
+				 r.edit->keySequence()});
+	}
+	if (!hasShortcutConflict(bindings))
+		return true;
+
+	ShortcutConflictDialog dlg(bindings, QSet<QString>(), this);
+	if (dlg.exec() != QDialog::Accepted)
+		return false; // cancelled: nothing saved, nothing changed
+
+	// Write the resolution back into the editors rather than straight into the
+	// result, so what the user ends up with is visible on the page they came
+	// from -- and so a later validation failure does not silently discard it.
+	const QVector<ShortcutBinding> fixed = dlg.result();
+	for (const ShortcutBinding &b : fixed)
+		for (const Row &r : rows)
+			if (r.edit && b.id == QLatin1String(r.id))
+				r.edit->setKeySequence(b.key);
+	return true;
+}
+
 void PresetEditorDialog::accept()
 {
 	const QString name = nameEdit_->text().trimmed();
@@ -1085,6 +1245,19 @@ void PresetEditorDialog::accept()
 						    "webcam beside the screen recording."));
 		return;
 	}
+	// Four keyboard shortcuts are reachable from this dialog -- Start/stop and
+	// Pause from the Hotkeys page, Zoom and Spotlight from their own -- and two
+	// of them landing on the same key is the sort of thing nothing ever reports:
+	// the second feature just never fires. So it is settled here, before
+	// anything is written, and there is no way through that leaves a duplicate.
+	//
+	// Checked whether or not the feature is switched ON. A key stored against a
+	// disabled Zoom is not live today, but the moment the box is ticked it is --
+	// and being told about the clash at that point, in a different session, with
+	// no idea which of the two was set first, is exactly the confusion this is
+	// meant to prevent.
+	if (!resolveShortcutConflicts())
+		return;
 	{
 		// Catch a typo'd folder here instead of at record time.
 		const QString folder = folderEdit_->text().trimmed();
@@ -1169,6 +1342,15 @@ void PresetEditorDialog::accept()
 	result_.followSmoothness = followSmoothSlider_->value();
 	result_.followAxis = followAxisCombo_->currentIndex();
 	result_.followProfile = followProfileCombo_->currentIndex();
+
+	result_.spotlightEnabled = spotCheck_->isChecked();
+	result_.spotlightStartOn = spotStartOnCheck_->isChecked();
+	result_.spotlightSize = spotSizeSlider_->value();
+	result_.spotlightDarkPct = spotDarkSlider_->value();
+	result_.spotlightRoundness = spotRoundSlider_->value();
+	// Same rule as the zoom key: an empty sequence means "no shortcut", not
+	// "put the default back".
+	result_.spotlightShortcut = spotShortcutEdit_->keySequence().toString().toStdString();
 
 	result_.zoomEnabled = zoomCheck_->isChecked();
 	result_.zoomPercent = zoomPercentSlider_->value();

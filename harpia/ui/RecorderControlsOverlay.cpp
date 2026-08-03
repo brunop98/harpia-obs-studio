@@ -108,6 +108,19 @@ RecorderControlsOverlay::RecorderControlsOverlay(QWidget *parent) : QWidget(pare
 	zoomChip_->installEventFilter(this);
 	row->addWidget(zoomChip_);
 
+	spotChip_ = new QLabel(this);
+	spotChip_->setAlignment(Qt::AlignCenter);
+	spotChip_->setStyleSheet(QStringLiteral(
+		"QLabel{color:#0d1117;background:#8ab4f8;border-radius:9px;padding:0 8px;"
+		"font-size:12px;font-weight:bold;}"));
+	spotChip_->setFixedHeight(32);
+	spotChip_->setText(QStringLiteral("Spot"));
+	spotChip_->setToolTip(QStringLiteral("The spotlight is on. Press the spotlight shortcut "
+					     "again to turn it off."));
+	spotChip_->setVisible(false);
+	spotChip_->installEventFilter(this);
+	row->addWidget(spotChip_);
+
 	connect(startButton_, &QPushButton::clicked, this, &RecorderControlsOverlay::startClicked);
 	connect(pauseButton_, &QPushButton::clicked, this, &RecorderControlsOverlay::pauseClicked);
 	connect(stopButton_, &QPushButton::clicked, this, &RecorderControlsOverlay::stopClicked);
@@ -183,6 +196,14 @@ void RecorderControlsOverlay::setZoom(bool zoomed, int percent)
 					     "shortcut again to zoom out.")
 				      .arg(percent));
 	zoomChip_->setVisible(zoomed);
+	adjustSize();
+}
+
+void RecorderControlsOverlay::setSpotlight(bool lit)
+{
+	if (!spotChip_ || spotChip_->isVisible() == lit)
+		return;
+	spotChip_->setVisible(lit);
 	adjustSize();
 }
 

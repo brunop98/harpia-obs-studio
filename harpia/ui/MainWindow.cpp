@@ -582,6 +582,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 			onPauseButton();
 		else if (id == 3)
 			onZoomToggle();
+		else if (id == 4)
+			onSpotlightToggle();
 	});
 	// Zoom gets the same treatment: a global hotkey where the platform allows,
 	// a window-scoped fallback otherwise. Unlike the other two its key comes
@@ -589,8 +591,10 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// every save (see rebindZoomHotkey).
 	zoomShortcut_ = new QShortcut(QKeySequence(), this);
 	connect(zoomShortcut_, &QShortcut::activated, this, &MainWindow::onZoomToggle);
+	spotlightShortcut_ = new QShortcut(QKeySequence(), this);
+	connect(spotlightShortcut_, &QShortcut::activated, this, &MainWindow::onSpotlightToggle);
 	rebindHotkeys();
-	rebindZoomHotkey();
+	rebindPresetHotkeys();
 	connect(editPresetButton_, &QPushButton::clicked, this, [this]() { editActivePreset(); });
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
 	connect(webcamCombo_, &QComboBox::activated, this, &MainWindow::onWebcamDeviceChanged);
@@ -1452,8 +1456,9 @@ void MainWindow::startRecording()
 	updateButtons();
 	updateRegionToolVisibility(); // dim the region tool into recording mode
 
-	// Mouse effects overlay (highlight + click ripples) — captured by the screen.
-	if (preset.showMouseArea || preset.recordMouseClicks) {
+	// Mouse effects overlay (highlight, click ripples, spotlight) — captured by
+	// the screen, which is the whole point of drawing them on the desktop.
+	if (preset.showMouseArea || preset.recordMouseClicks || preset.spotlightEnabled) {
 		MouseFxOverlay::Config cfg;
 		cfg.showArea = preset.showMouseArea;
 		cfg.areaColor = QColor(QString::fromStdString(preset.mouseHighlightColor));
@@ -1461,9 +1466,21 @@ void MainWindow::startRecording()
 		cfg.showClicks = preset.recordMouseClicks;
 		cfg.leftColor = QColor(QString::fromStdString(preset.leftClickColor));
 		cfg.rightColor = QColor(QString::fromStdString(preset.rightClickColor));
+		cfg.spotlightAvailable = preset.spotlightEnabled;
+		cfg.spotlightStartOn = preset.spotlightStartOn;
+		cfg.spotlight.sizePx = preset.spotlightSize;
+		cfg.spotlight.darkPct = preset.spotlightDarkPct;
+		cfg.spotlight.roundnessPct = preset.spotlightRoundness;
 		mouseFx_->configure(cfg);
 		mouseFx_->setScreen(screenForActivePreset());
 		mouseFx_->start();
+		if (preset.spotlightEnabled && preset.spotlightStartOn) {
+			writeMarker(QStringLiteral("Spotlight On"));
+			// The chip is only updated by the toggle otherwise, so a
+			// recording that opens lit would show no indicator at all.
+			if (floatingControls_)
+				floatingControls_->setSpotlight(true);
+		}
 	}
 
 	// Recording border around the monitor (Full Screen mode only). Excluded from
@@ -2006,7 +2023,7 @@ void MainWindow::editActivePreset(const QString &initialPage)
 		refreshWebcamRow();
 		refreshDriveLink();
 		rebindHotkeys(); // the Hotkeys page may have re-mapped them
-		rebindZoomHotkey(); // ...and the Zoom page owns its own key
+		rebindPresetHotkeys(); // ...and the Zoom / Spotlight pages own theirs
 	}
 }
 
@@ -2677,6 +2694,48 @@ void MainWindow::tickFollowMouse()
 	followApplying_ = false;
 }
 
+void MainWindow::onSpotlightToggle()
+{
+	const Preset &p = activePreset();
+	// Only while a recording is rolling. Darkening the desktop with nothing
+	// being written would be a light show, and the state would then carry into
+	// the next recording's first frame.
+	if (!mouseFx_ || !p.spotlightEnabled || !recorder_.isRecording() || starting_ || stopping_) {
+		if (p.spotlightEnabled)
+			blog(LOG_INFO, "[harpia] spotlight shortcut ignored: needs a recording "
+				       "in progress");
+		return;
+	}
+	const bool on = mouseFx_->toggleSpotlight();
+	blog(LOG_INFO, "[harpia] spotlight %s (%d px, %d%% dark)", on ? "on" : "off",
+	     p.spotlightSize, p.spotlightDarkPct);
+	writeMarker(on ? QStringLiteral("Spotlight On") : QStringLiteral("Spotlight Off"));
+	if (floatingControls_)
+		floatingControls_->setSpotlight(on);
+}
+
+void MainWindow::rebindPresetHotkeys()
+{
+	rebindZoomHotkey();
+	rebindSpotlightHotkey();
+}
+
+void MainWindow::rebindSpotlightHotkey()
+{
+	const Preset &p = activePreset();
+	const QKeySequence seq = p.spotlightEnabled
+					 ? QKeySequence(QString::fromStdString(p.spotlightShortcut))
+					 : QKeySequence();
+	if (spotlightShortcut_)
+		spotlightShortcut_->setKey(seq);
+	if (!hotkeys_)
+		return;
+	const bool global = hotkeys_->bind(4, seq);
+	if (!seq.isEmpty())
+		blog(LOG_INFO, "[harpia] hotkeys: spotlight=%s (%s)", qUtf8Printable(seq.toString()),
+		     global ? "global" : "window-only");
+}
+
 void MainWindow::rebindZoomHotkey()
 {
 	const Preset &p = activePreset();
@@ -3074,8 +3133,9 @@ void MainWindow::onPresetChanged()
 	refreshReadiness();
 	refreshWebcamRow();
 	refreshDriveLink();
-	// The zoom shortcut belongs to the preset, so it changes with it.
-	rebindZoomHotkey();
+	// The zoom and spotlight shortcuts belong to the preset, so they change
+	// with it.
+	rebindPresetHotkeys();
 }
 
 void MainWindow::syncIdleControls()
@@ -3638,7 +3698,9 @@ void MainWindow::tickState()
 				sleepInhibit_ = nullptr;
 			}
 			if (mouseFx_)
-				mouseFx_->stop();
+				mouseFx_->stop(); // also clears the spotlight
+			if (floatingControls_)
+				floatingControls_->setSpotlight(false);
 			if (screenBorder_)
 				screenBorder_->hideBorder();
 			webcam_.stop();

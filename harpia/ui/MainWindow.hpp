@@ -345,6 +345,15 @@ private:
 	bool zoomArmed_ = false; // a Full Screen recording with zoom configured
 	QShortcut *zoomShortcut_ = nullptr;
 	void rebindZoomHotkey();
+
+	// Spotlight: everything but a patch around the cursor goes dark. No state
+	// of its own here -- the desktop overlay that DRAWS it owns that, because
+	// it is the thing that has to fade and repaint. This side is the shortcut
+	// and the marker. Also preset-owned, so it re-binds alongside the zoom key.
+	QShortcut *spotlightShortcut_ = nullptr;
+	void rebindSpotlightHotkey();
+	void rebindPresetHotkeys(); // both of the preset-owned keys, in one call
+	void onSpotlightToggle();
 	void onZoomToggle();
 	void tickZoom();
 	void syncZoom(); // arm/disarm to match the current recording state

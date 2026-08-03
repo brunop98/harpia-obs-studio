@@ -92,6 +92,18 @@ struct Preset {
 	int followProfile = 1;      // UI memory: 0 Instant, 1 Smooth, 2 Cinematic,
 	                            // 3 Mobile Tutorial, 4 Custom
 
+	// Spotlight: a shortcut that darkens everything except a patch around the
+	// cursor, so the viewer's eye lands where you are pointing. Drawn by the
+	// same desktop overlay as the cursor highlight, which is what puts it in
+	// the recording. Works in every capture mode -- unlike Zoom, it does not
+	// care what the canvas is.
+	bool spotlightEnabled = false;
+	bool spotlightStartOn = false; // lit from the first frame, or wait for the key
+	int spotlightSize = 320;       // the lit patch, px across
+	int spotlightDarkPct = 70;     // how dark the rest goes, 0..95
+	int spotlightRoundness = 100;  // 0 = rectangle, 100 = circle
+	std::string spotlightShortcut = "Ctrl+Shift+S";
+
 	// Automatic Zoom: a shortcut that pushes the recording in on the cursor and
 	// pulls it back out again, for calling attention to a menu or a line of
 	// code mid-take. Full Screen only for now -- the canvas is fixed at the

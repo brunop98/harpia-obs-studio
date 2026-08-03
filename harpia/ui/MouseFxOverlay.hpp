@@ -1,8 +1,11 @@
 #pragma once
 
+#include "core/SpotlightFx.hpp"
+
 #include <QColor>
 #include <QPoint>
 #include <QPointF>
+#include <QElapsedTimer>
 #include <QWidget>
 #include <vector>
 
@@ -28,6 +31,11 @@ public:
 		bool showClicks = false;
 		QColor leftColor = QColor(0x4a, 0x90, 0xe2);
 		QColor rightColor = QColor(0xe2, 0x53, 0x4a);
+		// Spotlight: darken everything but a patch around the cursor. Enabled
+		// per preset; lit and unlit by a shortcut while recording.
+		bool spotlightAvailable = false;
+		bool spotlightStartOn = false;
+		SpotlightParams spotlight;
 	};
 
 	explicit MouseFxOverlay(QWidget *parent = nullptr);
@@ -37,6 +45,12 @@ public:
 
 	void start(); // show + begin the animation timer
 	void stop();  // hide + stop
+
+	// The spotlight shortcut. Returns the new state so the caller can log it,
+	// badge it and drop a marker. No-op (returns false) unless the preset made
+	// the spotlight available.
+	bool toggleSpotlight();
+	bool spotlightOn() const { return spot_.isOn(); }
 
 protected:
 	void paintEvent(QPaintEvent *) override;
@@ -51,6 +65,8 @@ private:
 	};
 
 	Config cfg_;
+	SpotlightMode spot_;
+	QElapsedTimer spotClock_;
 	QScreen *screen_ = nullptr;
 	QTimer *timer_ = nullptr;
 	QPoint cursorLocal_;

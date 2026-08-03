@@ -20,6 +20,7 @@ class QListWidget;
 namespace harpia {
 
 class MousePreview;
+class SpotlightPreview;
 
 // Modal editor for a single recording Preset. Construct with the preset to edit
 // (or a fresh default for "new"), exec(), and on Accepted read back result().
@@ -40,6 +41,12 @@ private slots:
 	void updateMousePreview();
 	void updateFilenamePreview();
 	void accept() override;
+	// The four shortcuts this dialog owns, checked against each other before
+	// anything is saved. Puts the conflict dialog up when two of them share a
+	// key and writes the user's fix back into the editors. False means the save
+	// was abandoned -- either they cancelled, or they left a duplicate, which
+	// the dialog does not permit.
+	bool resolveShortcutConflicts();
 
 private:
 	void pickColor(QColor &target, QPushButton *button);
@@ -99,6 +106,20 @@ private:
 	QSlider *followSmoothSlider_ = nullptr;
 	QComboBox *followAxisCombo_ = nullptr;
 	bool followProfileApplying_ = false; // combo is writing the sliders, not the user
+
+	// Spotlight page
+	QCheckBox *spotCheck_ = nullptr;
+	QCheckBox *spotStartOnCheck_ = nullptr;
+	QKeySequenceEdit *spotShortcutEdit_ = nullptr;
+	QSlider *spotSizeSlider_ = nullptr;
+	QSlider *spotDarkSlider_ = nullptr;
+	QSlider *spotRoundSlider_ = nullptr;
+	SpotlightPreview *spotPreview_ = nullptr;
+	// The width in device pixels of the display this preset records, resolved
+	// once at construction. The preview needs it to show the patch at its true
+	// relative size, and the preset's monitor cannot change from this dialog.
+	int spotScreenW_ = 1920;
+	void syncSpotlightPreview();
 
 	// Zoom page (Full Screen only)
 	QCheckBox *zoomCheck_ = nullptr;

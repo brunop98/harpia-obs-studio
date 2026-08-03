@@ -2,6 +2,7 @@
 
 #include <QCursor>
 #include <QDateTime>
+#include <QPainterPath>
 #include <QGuiApplication>
 #include <QPainter>
 #include <QScreen>
@@ -42,6 +43,14 @@ void MouseFxOverlay::start()
 		setGeometry(screen_->geometry());
 	ripples_.clear();
 	lastLeft_ = lastRight_ = false;
+	// A new recording starts with the spotlight wherever the preset says, not
+	// wherever the last recording left it.
+	spot_.reset(cfg_.spotlightAvailable && cfg_.spotlightStartOn);
+	spotClock_.start();
+	// The cursor position has to be known BEFORE the first paint, or a
+	// spotlight that starts lit puts its patch at the top-left corner for one
+	// frame -- which, at full darkness, is very visible.
+	cursorLocal_ = mapFromGlobal(QCursor::pos());
 	show();
 	timer_->start();
 }
@@ -50,7 +59,19 @@ void MouseFxOverlay::stop()
 {
 	timer_->stop();
 	ripples_.clear();
+	spot_.reset(false);
 	hide();
+}
+
+bool MouseFxOverlay::toggleSpotlight()
+{
+	if (!cfg_.spotlightAvailable)
+		return false;
+	const bool on = spot_.toggle();
+	// The whole screen's shading is about to change, so this one is not a
+	// two-patch repaint.
+	update();
+	return on;
 }
 
 void MouseFxOverlay::tick()
@@ -60,6 +81,16 @@ void MouseFxOverlay::tick()
 
 	const qint64 now = QDateTime::currentMSecsSinceEpoch();
 	bool ripplesChanged = false;
+
+	// The spotlight's fade changes every pixel of the overlay, so while it is
+	// running there is nothing to be gained from working out a dirty region --
+	// repaint the lot and leave. Once it settles, a cursor move is back to two
+	// small patches.
+	const bool spotLive = cfg_.spotlightAvailable && spot_.isBusy();
+	if (cfg_.spotlightAvailable && spot_.tick(spotClock_.elapsed())) {
+		update();
+		return;
+	}
 
 #if defined(_WIN32)
 	if (cfg_.showClicks) {
@@ -99,6 +130,11 @@ void MouseFxOverlay::tick()
 	if (!cursorMoved && ripples_.empty() && !ripplesChanged && dirty.isEmpty())
 		return;
 
+	// A lit spotlight follows the cursor, so its two patches join the dirty
+	// region. Everything outside them was dark before and is dark after.
+	if (spotLive && cursorMoved)
+		dirty += spotlightDirty(prevCursor, cursorLocal_, cfg_.spotlight.sizePx);
+
 	// Repaint only what changed: old + new cursor circles and live ripple areas.
 	if (cfg_.showArea) {
 		const int r = cfg_.areaSize / 2 + 4;
@@ -118,6 +154,29 @@ void MouseFxOverlay::paintEvent(QPaintEvent *)
 {
 	QPainter p(this);
 	p.setRenderHint(QPainter::Antialiasing, true);
+
+	// The spotlight goes down FIRST, so the cursor highlight and the click
+	// ripples sit on top of it and stay visible rather than being dimmed along
+	// with the rest of the screen -- they are the things drawing attention, and
+	// dimming them would be working against the spotlight, not with it.
+	if (cfg_.spotlightAvailable && spot_.isBusy()) {
+		const int alpha = spotlightAlpha(cfg_.spotlight.darkPct, spot_.shade());
+		if (alpha > 0) {
+			const QRect hole = spotlightHole(cursorLocal_, cfg_.spotlight.sizePx);
+			const int r = spotlightRadius(hole, cfg_.spotlight.roundnessPct);
+			// The dark as one filled path with the patch subtracted out,
+			// rather than four rectangles around it: a single antialiased
+			// edge, and it is the only way a rounded corner comes out clean.
+			QPainterPath dark;
+			dark.addRect(rect());
+			QPainterPath lit;
+			if (r > 0)
+				lit.addRoundedRect(hole, r, r);
+			else
+				lit.addRect(hole);
+			p.fillPath(dark.subtracted(lit), QColor(0, 0, 0, alpha));
+		}
+	}
 
 	// Cursor area highlight.
 	if (cfg_.showArea) {

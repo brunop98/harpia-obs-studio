@@ -1316,6 +1316,11 @@ void MainWindow::armVideoPipeline()
 	regionByTransform_ = captureMode_ == CaptureMode::Region && preset.zoomEnabled &&
 			     currentRegion_.enabled && currentRegion_.width >= 16 &&
 			     currentRegion_.height >= 16;
+	// Before the framing, not after: applyRegionFraming computes the resting
+	// offset from the zoom's canvas, and syncZoom does not run until the next
+	// state tick. Left until then, the first frames of the recording would be
+	// offset by half a region.
+	configureZoomCanvas();
 	applyRegionFraming();
 
 	armedW_ = baseW;
@@ -2965,6 +2970,28 @@ void MainWindow::tickZoom()
 // region, which is why a zoom inside a cropped region had nowhere to travel and
 // had to be penned in. The transform keeps the whole screen behind the canvas,
 // so the zoom's only limit is the display's edge.
+void MainWindow::configureZoomCanvas()
+{
+	const QScreen *scr = screenForActivePreset();
+	zoomOrigin_ = scr ? scr->geometry().topLeft() : QPoint(0, 0);
+	zoomDpr_ = scr ? scr->devicePixelRatio() : 1.0;
+	const QSize screenPx = scr ? QSize(int(scr->geometry().width() * zoomDpr_),
+					   int(scr->geometry().height() * zoomDpr_))
+				   : QSize(0, 0);
+	if (regionByTransform_ && currentRegion_.enabled) {
+		// Canvas is the region, source is the whole screen, and the resting
+		// framing is where the region sits on it. Only the screen bounds the
+		// travel from here.
+		zoomCanvasDevicePx_ = QSize(currentRegion_.width, currentRegion_.height);
+		zoom_.setCanvas(zoomCanvasDevicePx_, screenPx,
+				QPoint(currentRegion_.x + currentRegion_.width / 2,
+				       currentRegion_.y + currentRegion_.height / 2));
+	} else {
+		zoomCanvasDevicePx_ = screenPx;
+		zoom_.setCanvas(zoomCanvasDevicePx_);
+	}
+}
+
 void MainWindow::applyRegionFraming()
 {
 	if (!regionByTransform_) {

@@ -99,6 +99,7 @@ target_sources(
     core/RecordingController.hpp
     core/FollowMouse.cpp
     core/FollowMouse.hpp
+    core/ZoomMode.hpp
     core/RegionWatch.cpp
     core/RegionWatch.hpp
     core/Remuxer.cpp

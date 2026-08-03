@@ -8,6 +8,7 @@
 #include <QEnterEvent>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QLabel>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
@@ -94,6 +95,19 @@ RecorderControlsOverlay::RecorderControlsOverlay(QWidget *parent) : QWidget(pare
 							    "QPushButton:disabled{background:#5a2f31;}"));
 	row->addWidget(stopButton_);
 
+	// The zoom chip lives at the right-hand end, after the buttons: it is a
+	// readout, not a control, and putting it before them would shove the
+	// buttons sideways every time the zoom went on or off.
+	zoomChip_ = new QLabel(this);
+	zoomChip_->setAlignment(Qt::AlignCenter);
+	zoomChip_->setStyleSheet(QStringLiteral(
+		"QLabel{color:#0d1117;background:#e5c04a;border-radius:9px;padding:0 8px;"
+		"font-size:12px;font-weight:bold;}"));
+	zoomChip_->setFixedHeight(32);
+	zoomChip_->setVisible(false);
+	zoomChip_->installEventFilter(this);
+	row->addWidget(zoomChip_);
+
 	connect(startButton_, &QPushButton::clicked, this, &RecorderControlsOverlay::startClicked);
 	connect(pauseButton_, &QPushButton::clicked, this, &RecorderControlsOverlay::pauseClicked);
 	connect(stopButton_, &QPushButton::clicked, this, &RecorderControlsOverlay::stopClicked);
@@ -151,6 +165,25 @@ void RecorderControlsOverlay::setState(bool recording, bool paused, bool pauseEn
 		adjustSize();
 	if (dotChanged)
 		update(); // the recording dot appears and disappears with the state
+}
+
+void RecorderControlsOverlay::setZoom(bool zoomed, int percent)
+{
+	if (!zoomChip_)
+		return;
+	// Driven from the same timer-backed update as setState, so guard on an
+	// actual change: relaying the pill out sixty times a second would make it
+	// twitch under the cursor.
+	const QString text = QStringLiteral("%1×").arg(percent / 100.0, 0, 'g', 2);
+	const bool changed = zoomChip_->isVisible() != zoomed || (zoomed && zoomChip_->text() != text);
+	if (!changed)
+		return;
+	zoomChip_->setText(text);
+	zoomChip_->setToolTip(QStringLiteral("The recording is zoomed to %1%. Press the zoom "
+					     "shortcut again to zoom out.")
+				      .arg(percent));
+	zoomChip_->setVisible(zoomed);
+	adjustSize();
 }
 
 void RecorderControlsOverlay::showControls()

@@ -92,6 +92,22 @@ struct Preset {
 	int followProfile = 1;      // UI memory: 0 Instant, 1 Smooth, 2 Cinematic,
 	                            // 3 Mobile Tutorial, 4 Custom
 
+	// Automatic Zoom: a shortcut that pushes the recording in on the cursor and
+	// pulls it back out again, for calling attention to a menu or a line of
+	// code mid-take. Full Screen only for now -- the canvas is fixed at the
+	// display's own resolution there, so a smaller crop is scaled back up to
+	// fill it, and that scaling IS the zoom. In Custom Region the canvas is
+	// already the region, so the same trick would need the region enlarged
+	// first; the code is written against a canvas rather than a capture mode so
+	// that stays a wiring job rather than a rewrite.
+	bool zoomEnabled = false;
+	int zoomPercent = 200;      // 200 = 2x magnification; clamped 110..400
+	int zoomAnimMs = 350;       // how long the push-in and pull-out take
+	int zoomFollowSmoothness = 40; // how tightly the zoomed frame tracks the cursor
+	int zoomFollowPaddingPct = 20; // dead zone: the cursor may roam this far before it pans
+	int zoomFollowAxis = 0;     // FollowAxis: 0 both, 1 horizontal, 2 vertical
+	std::string zoomShortcut = "Ctrl+Shift+Z"; // global hotkey, QKeySequence text
+
 	// Webcam: recorded as a SEPARATE synchronized video file (never composited),
 	// at its own resolution/fps.
 	bool webcamEnabled = false;

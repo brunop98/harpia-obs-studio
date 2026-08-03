@@ -6,6 +6,7 @@
 #include "core/DiskSpace.hpp"
 #include "core/FollowMouse.hpp"
 #include "core/GlobalHotkeys.hpp"
+#include "core/ZoomMode.hpp"
 #include "core/RegionWatch.hpp"
 #include "core/WebcamRecorder.hpp"
 #include "library/ClipLibrary.hpp"
@@ -329,6 +330,24 @@ private:
 	                              // crop or restart the readiness debounce
 	void tickFollowMouse();
 	void syncFollowMouse(); // start/stop the timer to match the current state
+
+	// Automatic Zoom: the shortcut pushes the recorded picture in on the cursor
+	// and pulls it back out. Full Screen only for now -- see ZoomMode.hpp for
+	// why, and for why the core takes a canvas rather than a capture mode.
+	// Shares its shape with Follow Mouse above: geometry cached at arm time, a
+	// 60 Hz tick that only runs while there is something to animate.
+	ZoomMode zoom_;
+	QTimer *zoomTimer_ = nullptr;
+	QSize zoomCanvasDevicePx_;
+	QPoint zoomOrigin_;      // screen top-left, logical px (cached at arm)
+	double zoomDpr_ = 1.0;   // cached at arm
+	QElapsedTimer zoomClock_;
+	bool zoomArmed_ = false; // a Full Screen recording with zoom configured
+	QShortcut *zoomShortcut_ = nullptr;
+	void rebindZoomHotkey();
+	void onZoomToggle();
+	void tickZoom();
+	void syncZoom(); // arm/disarm to match the current recording state
 	QWidget *idleGroup_ = nullptr;   // label + combo, hidden when very narrow
 	QComboBox *countdownCombo_ = nullptr;
 	QWidget *countdownGroup_ = nullptr; // label + combo, hidden when narrow

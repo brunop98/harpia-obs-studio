@@ -99,6 +99,16 @@ private:
 	QSlider *followSmoothSlider_ = nullptr;
 	QComboBox *followAxisCombo_ = nullptr;
 	bool followProfileApplying_ = false; // combo is writing the sliders, not the user
+
+	// Zoom page (Full Screen only)
+	QCheckBox *zoomCheck_ = nullptr;
+	QKeySequenceEdit *zoomShortcutEdit_ = nullptr;
+	QSlider *zoomPercentSlider_ = nullptr;
+	QSlider *zoomAnimSlider_ = nullptr;
+	QSlider *zoomFollowSmoothSlider_ = nullptr;
+	QSlider *zoomFollowPadSlider_ = nullptr;
+	QComboBox *zoomFollowAxisCombo_ = nullptr;
+
 	QColor highlightColor_;
 	QColor leftColor_;
 	QColor rightColor_;

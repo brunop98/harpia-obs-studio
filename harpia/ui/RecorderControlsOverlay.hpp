@@ -3,6 +3,7 @@
 #include <QPoint>
 #include <QWidget>
 
+class QLabel;
 class QPropertyAnimation;
 class QPushButton;
 
@@ -40,6 +41,14 @@ public:
 	// do -- and there are never two dead buttons sitting on the desktop.
 	void setState(bool recording, bool paused, bool pauseEnabled, bool stopEnabled);
 
+	// Automatic Zoom: show a "2×" chip while the recording is zoomed in, and
+	// nothing at all otherwise. The pill is the only thing on screen that is
+	// guaranteed to be visible and guaranteed NOT to be in the file, which
+	// makes it the right place for a state the recorded picture cannot show
+	// you -- while zoomed, the screen still looks normal; only the file is
+	// magnified, and without an indicator there is no way to tell.
+	void setZoom(bool zoomed, int percent);
+
 signals:
 	void startClicked();
 	void pauseClicked();
@@ -69,6 +78,7 @@ private:
 	void savePosition();
 	void excludeFromCapture(); // Windows: WDA_EXCLUDEFROMCAPTURE
 
+	QLabel *zoomChip_ = nullptr;
 	QPushButton *startButton_ = nullptr;
 	QPushButton *pauseButton_ = nullptr;
 	QPushButton *stopButton_ = nullptr;

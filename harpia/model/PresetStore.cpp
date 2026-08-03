@@ -55,6 +55,13 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_int(d, "follow_smoothness", p.followSmoothness);
 	obs_data_set_int(d, "follow_axis", p.followAxis);
 	obs_data_set_int(d, "follow_profile", p.followProfile);
+	obs_data_set_bool(d, "zoom_enabled", p.zoomEnabled);
+	obs_data_set_int(d, "zoom_percent", p.zoomPercent);
+	obs_data_set_int(d, "zoom_anim_ms", p.zoomAnimMs);
+	obs_data_set_int(d, "zoom_follow_smoothness", p.zoomFollowSmoothness);
+	obs_data_set_int(d, "zoom_follow_padding_pct", p.zoomFollowPaddingPct);
+	obs_data_set_int(d, "zoom_follow_axis", p.zoomFollowAxis);
+	obs_data_set_string(d, "zoom_shortcut", p.zoomShortcut.c_str());
 	obs_data_set_bool(d, "record_desktop_audio", p.recordDesktopAudio);
 	obs_data_array_t *mics = obs_data_array_create();
 	for (const std::string &id : p.micDeviceIds) {
@@ -143,6 +150,20 @@ Preset presetFromData(obs_data_t *d)
 	p.followSmoothness = (int)obs_data_get_int(d, "follow_smoothness");
 	p.followAxis = (int)obs_data_get_int(d, "follow_axis");
 	p.followProfile = (int)obs_data_get_int(d, "follow_profile");
+	// Same reasoning for Zoom: read back raw, a preset written before this
+	// feature would zoom to 0% over 0 ms -- an instant cut to a 16x16 crop.
+	p.zoomEnabled = obs_data_get_bool(d, "zoom_enabled");
+	obs_data_set_default_int(d, "zoom_percent", 200);
+	obs_data_set_default_int(d, "zoom_anim_ms", 350);
+	obs_data_set_default_int(d, "zoom_follow_smoothness", 40);
+	obs_data_set_default_int(d, "zoom_follow_padding_pct", 20);
+	obs_data_set_default_string(d, "zoom_shortcut", "Ctrl+Shift+Z");
+	p.zoomPercent = (int)obs_data_get_int(d, "zoom_percent");
+	p.zoomAnimMs = (int)obs_data_get_int(d, "zoom_anim_ms");
+	p.zoomFollowSmoothness = (int)obs_data_get_int(d, "zoom_follow_smoothness");
+	p.zoomFollowPaddingPct = (int)obs_data_get_int(d, "zoom_follow_padding_pct");
+	p.zoomFollowAxis = (int)obs_data_get_int(d, "zoom_follow_axis");
+	p.zoomShortcut = obs_data_get_string(d, "zoom_shortcut");
 	p.recordDesktopAudio = obs_data_get_bool(d, "record_desktop_audio");
 	obs_data_array_t *mics = obs_data_get_array(d, "mic_device_ids");
 	const size_t micCount = mics ? obs_data_array_count(mics) : 0;

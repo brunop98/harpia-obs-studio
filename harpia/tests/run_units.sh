@@ -89,6 +89,12 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/followmouse_test.cpp" "$H/core/FollowMouse.cpp" -o "$WORK/followmouse_test" $LF
 
+# Automatic Zoom: the animated crop that libobs scales back up. Aspect drift is
+# invisible on a still frame and unmissable on a face, so the aspect sweep --
+# with its deliberately-stretched control -- is the load-bearing check here.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/zoommode_test.cpp" "$H/core/FollowMouse.cpp" -o "$WORK/zoommode_test" $LF
+
 # The component runtime: purity, stage order, dependencies, serialisation.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/component_test.cpp" \
@@ -384,6 +390,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/paramslider_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionwatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/followmouse_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/zoommode_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/crashreport_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/autopause_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/globalhotkeys_test" || rc=1

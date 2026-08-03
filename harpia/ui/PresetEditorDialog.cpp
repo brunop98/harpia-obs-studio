@@ -4,6 +4,7 @@
 #include "core/CaptureManager.hpp"
 #include "core/EncoderFactory.hpp"
 #include "core/WebcamRecorder.hpp"
+#include "core/ZoomMode.hpp" // ZoomParams::kMinPercent / kMaxPercent
 #include "core/AudioManager.hpp" // AudioDevice
 #include "model/FileNameTemplate.hpp"
 #include "platform/CameraAccess.hpp"
@@ -93,6 +94,31 @@ void addField(QVBoxLayout *v, const QString &title, const QString &desc, QWidget
 	}
 	v->addWidget(control);
 	v->addSpacing(12);
+}
+
+// A slider with its live value spelled out beside it. A bare slider makes the
+// user guess what "somewhere past the middle" means, and these settings (a
+// padding percentage, a duration in ms) have numbers worth reading.
+QWidget *makeSliderRow(QWidget *parent, QSlider *&slider, int min, int max, int value,
+		       const QString &suffix, int step = 1)
+{
+	slider = new QSlider(Qt::Horizontal, parent);
+	slider->setRange(min, max);
+	slider->setSingleStep(step);
+	slider->setPageStep(step * 5);
+	slider->setValue(std::clamp(value, min, max));
+	auto *row = new QWidget(parent);
+	auto *lay = new QHBoxLayout(row);
+	lay->setContentsMargins(0, 0, 0, 0);
+	lay->setSpacing(8);
+	auto *label = new QLabel(QStringLiteral("%1%2").arg(slider->value()).arg(suffix), parent);
+	label->setMinimumWidth(48);
+	QObject::connect(slider, &QSlider::valueChanged, label, [label, suffix](int val) {
+		label->setText(QStringLiteral("%1%2").arg(val).arg(suffix));
+	});
+	lay->addWidget(slider, 1);
+	lay->addWidget(label);
+	return row;
 }
 
 // A color setting on one compact row: [ bold title ]  [ small swatch ].
@@ -537,21 +563,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 
 	// The two sliders, each with the live value label beside it.
 	const auto sliderRow = [this](QSlider *&slider, int min, int max, int value, const QString &suffix) {
-		slider = new QSlider(Qt::Horizontal, this);
-		slider->setRange(min, max);
-		slider->setValue(std::clamp(value, min, max));
-		auto *row = new QWidget(this);
-		auto *lay = new QHBoxLayout(row);
-		lay->setContentsMargins(0, 0, 0, 0);
-		lay->setSpacing(8);
-		auto *label = new QLabel(QStringLiteral("%1%2").arg(slider->value()).arg(suffix), this);
-		label->setMinimumWidth(48);
-		connect(slider, &QSlider::valueChanged, label, [label, suffix](int val) {
-			label->setText(QStringLiteral("%1%2").arg(val).arg(suffix));
-		});
-		lay->addWidget(slider, 1);
-		lay->addWidget(label);
-		return row;
+		return makeSliderRow(this, slider, min, max, value, suffix);
 	};
 
 	QWidget *padRow = sliderRow(followPaddingSlider_, 0, 45, preset.followPaddingPct, QStringLiteral("%"));
@@ -609,6 +621,99 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	connect(highlightSizeSlider_, &QSlider::valueChanged, this, &PresetEditorDialog::updateMousePreview);
 	v->addStretch(1);
 	addPage(QStringLiteral("Mouse"), mousePage);
+
+	// ===== Zoom =====
+	// Press a key mid-recording and the picture pushes in on the cursor; press
+	// it again and it pulls back out. Full Screen only, because that is where
+	// the encoder canvas is the whole display and a smaller crop gets scaled
+	// back up to fill it -- which is the zoom.
+	QWidget *zoomPage = makePage(v);
+	zoomCheck_ = new QCheckBox(QStringLiteral("Automatic Zoom (Full Screen only)"), this);
+	zoomCheck_->setChecked(preset.zoomEnabled);
+	addCheck(v, zoomCheck_,
+		 QStringLiteral("Adds a shortcut that zooms the recording in on the mouse and back out "
+				"again — for pointing at a menu or a line of code without editing "
+				"afterwards. The zoomed picture follows the cursor."));
+
+	zoomShortcutEdit_ = new QKeySequenceEdit(
+		QKeySequence(QString::fromStdString(preset.zoomShortcut)), this);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	// One chord: RegisterHotKey knows nothing about sequences.
+	zoomShortcutEdit_->setMaximumSequenceLength(1);
+#endif
+	addField(v, QStringLiteral("Zoom shortcut"),
+		 QStringLiteral("Press once to zoom in, again to zoom out. Works system-wide on Windows, "
+				"so it can be used with the app being recorded in front. Unlike the "
+				"start and pause hotkeys, this one belongs to the preset."),
+		 zoomShortcutEdit_);
+
+	QSlider *zoomPercentSlider = nullptr;
+	QWidget *zoomPctRow = makeSliderRow(this, zoomPercentSlider, ZoomParams::kMinPercent,
+					    ZoomParams::kMaxPercent, preset.zoomPercent,
+					    QStringLiteral("%"), 5);
+	zoomPercentSlider_ = zoomPercentSlider;
+	addField(v, QStringLiteral("Zoom percentage"),
+		 QStringLiteral("How far in. 200% shows half the width and half the height, magnified "
+				"twice. Past about 300% a 1080p screen starts to look soft, because "
+				"there are no more real pixels to enlarge."),
+		 zoomPctRow);
+
+	QSlider *zoomAnimSlider = nullptr;
+	QWidget *zoomAnimRow = makeSliderRow(this, zoomAnimSlider, 0, 1500, preset.zoomAnimMs,
+					     QStringLiteral(" ms"), 50);
+	zoomAnimSlider_ = zoomAnimSlider;
+	addField(v, QStringLiteral("Zoom animation speed"),
+		 QStringLiteral("How long the push-in and the pull-out take. 0 cuts straight to the "
+				"zoomed view; a few hundred milliseconds reads as a camera move."),
+		 zoomAnimRow);
+
+	QSlider *zoomSmoothSlider = nullptr;
+	QWidget *zoomSmoothRow = makeSliderRow(this, zoomSmoothSlider, 0, 100,
+					       preset.zoomFollowSmoothness, QString());
+	zoomFollowSmoothSlider_ = zoomSmoothSlider;
+	addField(v, QStringLiteral("Mouse follow speed"),
+		 QStringLiteral("How the zoomed frame catches up with the cursor once it is in. 0 is "
+				"glued to the mouse; higher values trail behind it. Separate from the "
+				"animation speed above — how fast it pushes in and how tightly it "
+				"tracks are different decisions."),
+		 zoomSmoothRow);
+
+	QSlider *zoomPadSlider = nullptr;
+	QWidget *zoomPadRow = makeSliderRow(this, zoomPadSlider, 0, 45, preset.zoomFollowPaddingPct,
+					    QStringLiteral("%"), 5);
+	zoomFollowPadSlider_ = zoomPadSlider;
+	addField(v, QStringLiteral("Mouse padding"),
+		 QStringLiteral("The safe zone inside the zoomed frame. The picture holds still while "
+				"the cursor stays within it, so small movements don't swim the shot."),
+		 zoomPadRow);
+
+	zoomFollowAxisCombo_ = new QComboBox(this);
+	zoomFollowAxisCombo_->addItem(QStringLiteral("Both directions")); // 0
+	zoomFollowAxisCombo_->addItem(QStringLiteral("Horizontal only")); // 1
+	zoomFollowAxisCombo_->addItem(QStringLiteral("Vertical only"));   // 2
+	zoomFollowAxisCombo_->setCurrentIndex(std::clamp(preset.zoomFollowAxis, 0, 2));
+	addField(v, QStringLiteral("Mouse follow mode"),
+		 QStringLiteral("Lock an axis if the zoom should only slide one way — along a toolbar, "
+				"or down a page."),
+		 zoomFollowAxisCombo_);
+
+	// Everything below the checkbox is inert while the feature is off. Greyed
+	// rather than hidden, so the settings can still be read and understood
+	// before deciding to turn it on.
+	const auto syncZoomEnabled = [this]() {
+		const bool on = zoomCheck_->isChecked();
+		zoomShortcutEdit_->setEnabled(on);
+		zoomPercentSlider_->setEnabled(on);
+		zoomAnimSlider_->setEnabled(on);
+		zoomFollowSmoothSlider_->setEnabled(on);
+		zoomFollowPadSlider_->setEnabled(on);
+		zoomFollowAxisCombo_->setEnabled(on);
+	};
+	connect(zoomCheck_, &QCheckBox::toggled, this, syncZoomEnabled);
+	syncZoomEnabled();
+
+	v->addStretch(1);
+	addPage(QStringLiteral("Zoom"), zoomPage);
 
 	// ===== Webcam (recorded as a separate synchronized file) =====
 	QWidget *webcamPage = makePage(v);
@@ -1064,6 +1169,18 @@ void PresetEditorDialog::accept()
 	result_.followSmoothness = followSmoothSlider_->value();
 	result_.followAxis = followAxisCombo_->currentIndex();
 	result_.followProfile = followProfileCombo_->currentIndex();
+
+	result_.zoomEnabled = zoomCheck_->isChecked();
+	result_.zoomPercent = zoomPercentSlider_->value();
+	result_.zoomAnimMs = zoomAnimSlider_->value();
+	result_.zoomFollowSmoothness = zoomFollowSmoothSlider_->value();
+	result_.zoomFollowPaddingPct = zoomFollowPadSlider_->value();
+	result_.zoomFollowAxis = zoomFollowAxisCombo_->currentIndex();
+	// An empty shortcut means "no zoom hotkey" rather than a broken one -- the
+	// main window simply registers nothing, and the feature is unreachable
+	// until a key is set. Better than silently reinstating the default the user
+	// just cleared.
+	result_.zoomShortcut = zoomShortcutEdit_->keySequence().toString().toStdString();
 
 	result_.webcamEnabled = webcamCheck_->isChecked();
 	result_.webcamDeviceId = webcamDeviceCombo_->currentData().toString().toStdString();

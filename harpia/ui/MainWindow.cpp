@@ -580,8 +580,17 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 			onPrimaryButton();
 		else if (id == 2)
 			onPauseButton();
+		else if (id == 3)
+			onZoomToggle();
 	});
+	// Zoom gets the same treatment: a global hotkey where the platform allows,
+	// a window-scoped fallback otherwise. Unlike the other two its key comes
+	// from the preset, so it is re-bound on every preset change as well as on
+	// every save (see rebindZoomHotkey).
+	zoomShortcut_ = new QShortcut(QKeySequence(), this);
+	connect(zoomShortcut_, &QShortcut::activated, this, &MainWindow::onZoomToggle);
 	rebindHotkeys();
+	rebindZoomHotkey();
 	connect(editPresetButton_, &QPushButton::clicked, this, [this]() { editActivePreset(); });
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
 	connect(webcamCombo_, &QComboBox::activated, this, &MainWindow::onWebcamDeviceChanged);
@@ -712,6 +721,14 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	followTimer_ = new QTimer(this);
 	followTimer_->setInterval(16);
 	connect(followTimer_, &QTimer::timeout, this, &MainWindow::tickFollowMouse);
+
+	// Same deal for the zoom: 60 Hz while the picture is moving, stopped the
+	// rest of the time. It keeps running through the zoom-OUT after the toggle
+	// goes off -- stopping the moment the state flips would freeze the frame
+	// part-way out (see ZoomMode::isBusy).
+	zoomTimer_ = new QTimer(this);
+	zoomTimer_->setInterval(16);
+	connect(zoomTimer_, &QTimer::timeout, this, &MainWindow::tickZoom);
 
 	// Live audio meters refresh often for a responsive VU bar.
 	meterTimer_ = new QTimer(this);
@@ -1989,6 +2006,7 @@ void MainWindow::editActivePreset(const QString &initialPage)
 		refreshWebcamRow();
 		refreshDriveLink();
 		rebindHotkeys(); // the Hotkeys page may have re-mapped them
+		rebindZoomHotkey(); // ...and the Zoom page owns its own key
 	}
 }
 
@@ -2659,6 +2677,112 @@ void MainWindow::tickFollowMouse()
 	followApplying_ = false;
 }
 
+void MainWindow::rebindZoomHotkey()
+{
+	const Preset &p = activePreset();
+	// An empty or disabled shortcut binds nothing at all, rather than leaving
+	// the previous preset's key live -- switching presets must not leave a
+	// stale hotkey wired to a feature the new preset has turned off.
+	const QKeySequence seq = p.zoomEnabled
+					 ? QKeySequence(QString::fromStdString(p.zoomShortcut))
+					 : QKeySequence();
+	if (zoomShortcut_)
+		zoomShortcut_->setKey(seq);
+	if (!hotkeys_)
+		return;
+	// bind() with an empty sequence unregisters slot 3, which is exactly what
+	// "zoom off" should do.
+	const bool global = hotkeys_->bind(3, seq);
+	if (!seq.isEmpty())
+		blog(LOG_INFO, "[harpia] hotkeys: zoom=%s (%s)", qUtf8Printable(seq.toString()),
+		     global ? "global" : "window-only");
+}
+
+void MainWindow::onZoomToggle()
+{
+	// Only meaningful while a Full Screen recording is actually rolling: with
+	// nothing being written there is no picture to zoom, and the toggle would
+	// silently set a state that the next recording then starts out in.
+	if (!zoomArmed_) {
+		if (activePreset().zoomEnabled)
+			blog(LOG_INFO, "[harpia] zoom shortcut ignored: needs a Full Screen "
+				       "recording in progress");
+		return;
+	}
+	const bool on = zoom_.toggle();
+	blog(LOG_INFO, "[harpia] zoom %s (%d%%)", on ? "in" : "out", activePreset().zoomPercent);
+	// A marker in the sidecar file, so the zoom is findable in the editor
+	// afterwards without scrubbing for it.
+	writeMarker(on ? QStringLiteral("Zoom In (%1%)").arg(activePreset().zoomPercent)
+		       : QStringLiteral("Zoom Out"));
+	if (zoomTimer_ && !zoomTimer_->isActive())
+		zoomTimer_->start();
+	tickZoom(); // start moving on this frame rather than up to 16 ms later
+}
+
+void MainWindow::syncZoom()
+{
+	const Preset &p = activePreset();
+	// Full Screen only: there, the canvas is the whole display and a smaller
+	// crop is scaled back up to fill it. In Custom Region the canvas IS the
+	// region, so the same crop would just record less -- not zoom.
+	const bool want = p.zoomEnabled && captureMode_ == CaptureMode::Monitor &&
+			  recorder_.isRecording() && !starting_ && !stopping_;
+	if (want == zoomArmed_)
+		return;
+	zoomArmed_ = want;
+	if (want) {
+		// Screen geometry once, at arm time -- the same reasoning as
+		// syncFollowMouse: screenForActivePreset() enumerates monitors.
+		const QScreen *scr = screenForActivePreset();
+		zoomOrigin_ = scr ? scr->geometry().topLeft() : QPoint(0, 0);
+		zoomDpr_ = scr ? scr->devicePixelRatio() : 1.0;
+		zoomCanvasDevicePx_ = scr ? QSize(int(scr->geometry().width() * zoomDpr_),
+						  int(scr->geometry().height() * zoomDpr_))
+					  : QSize(0, 0);
+		zoomClock_.start();
+		zoom_.setCanvas(zoomCanvasDevicePx_); // also clears any previous zoom
+	} else {
+		// The recording is over. Drop the crop rather than leaving the last
+		// zoomed rectangle applied to whatever is captured next.
+		const bool hadCrop = zoom_.region().enabled;
+		zoom_.setCanvas(QSize());
+		if (zoomTimer_)
+			zoomTimer_->stop();
+		if (hadCrop)
+			capture_.setRegion(CaptureRegion{});
+		if (floatingControls_)
+			floatingControls_->setZoom(false, 100);
+	}
+}
+
+void MainWindow::tickZoom()
+{
+	if (!zoomArmed_) {
+		if (zoomTimer_)
+			zoomTimer_->stop();
+		return;
+	}
+	const Preset &p = activePreset();
+	ZoomParams params;
+	params.percent = p.zoomPercent;
+	params.animMs = p.zoomAnimMs;
+	params.follow.paddingPct = p.zoomFollowPaddingPct;
+	params.follow.smoothness = p.zoomFollowSmoothness;
+	params.follow.axis = FollowAxis(std::clamp(p.zoomFollowAxis, 0, 2));
+
+	const QPoint cursor = RegionWatch::toRegionSpace(QCursor::pos(), zoomOrigin_, zoomDpr_);
+	if (zoom_.tick(cursor, params, zoomClock_.elapsed()))
+		capture_.setRegion(zoom_.region());
+	if (floatingControls_)
+		floatingControls_->setZoom(zoom_.isZoomed(), p.zoomPercent);
+
+	// Idle once the picture has both settled AND come all the way back out --
+	// stopping at !isZoomed() alone would abandon the pull-out half finished.
+	if (!zoom_.isBusy() && zoomTimer_)
+		zoomTimer_->stop();
+}
+
 void MainWindow::updateRegionToolVisibility()
 {
 	if (!regionTool_)
@@ -2950,6 +3074,8 @@ void MainWindow::onPresetChanged()
 	refreshReadiness();
 	refreshWebcamRow();
 	refreshDriveLink();
+	// The zoom shortcut belongs to the preset, so it changes with it.
+	rebindZoomHotkey();
 }
 
 void MainWindow::syncIdleControls()
@@ -3454,6 +3580,8 @@ void MainWindow::tickState()
 	// four calls a second cost nothing; the 60 Hz work happens on its own
 	// timer, which only runs while armed.
 	syncFollowMouse();
+	// Zoom arms and disarms off the same state, and for the same reasons.
+	syncZoom();
 
 	// Audio meters animate only when someone could be looking at them AND
 	// there is a live source to meter. QTimer::start on a running timer just

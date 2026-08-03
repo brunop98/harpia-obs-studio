@@ -91,11 +91,14 @@ bool GlobalHotkeys::bind(int id, const QKeySequence &seq)
 {
 #if defined(_WIN32)
 	const WinHotkey hk = winHotkeyFor(seq);
+	// Replace, never stack: RegisterHotKey with an id that is already
+	// registered fails, so the old binding goes first. This happens BEFORE the
+	// validity check, because "bind nothing to this slot" is a real request --
+	// a preset that turns its zoom shortcut off must release the key, not
+	// leave the previous preset's binding live and firing.
+	UnregisterHotKey(nullptr, id);
 	if (!hk.valid)
 		return false;
-	// Replace, never stack: RegisterHotKey with an id that is already
-	// registered fails, so the old binding goes first.
-	UnregisterHotKey(nullptr, id);
 	// MOD_NOREPEAT: holding the key must not machine-gun start/stop.
 	if (!RegisterHotKey(nullptr, id, hk.mods | 0x4000 /*MOD_NOREPEAT*/, hk.vk))
 		return false; // another app holds it; caller keeps its fallback

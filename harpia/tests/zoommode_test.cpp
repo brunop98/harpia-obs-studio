@@ -229,6 +229,101 @@ int main()
 		ok(z.transform().identity(), "and it lands back at the identity");
 	}
 
+	std::printf("\n-- the SECOND zoom of a recording --\n");
+	{
+		// The bug this section exists for, and the reason the checks above did
+		// not catch it: they toggle and tick in the same breath, which is the
+		// one case that always worked.
+		//
+		// The caller's clock runs for the whole recording, but the 60 Hz tick
+		// only runs while there is something to animate. Sit still for ten
+		// seconds between zooms and the next tick arrives with a ten-second dt
+		// -- enough to advance a 350 ms animation to "done" in a single step.
+		// The picture snapped straight to full magnification at the mouse.
+		const auto framesToArrive = [&](ZoomMode &z, QPoint cursor, const ZoomParams &p,
+						qint64 &t) {
+			z.toggle();
+			int n = 0;
+			while (z.transform().scale < p.factor() - 1e-6 && n < 400) {
+				t += 16;
+				z.tick(cursor, p, t);
+				++n;
+			}
+			return n;
+		};
+		ZoomMode z;
+		z.setCanvas(canvas);
+		ZoomParams p; // 350 ms
+		qint64 t = 0;
+		const QPoint cursor(1200, 700);
+
+		const int first = framesToArrive(z, cursor, p, t);
+		// Back out, then sit idle for ten seconds of wall clock with the timer
+		// stopped -- exactly what the app does once the zoom settles.
+		z.toggle();
+		for (int i = 0; i < 40; ++i) {
+			t += 16;
+			z.tick(cursor, p, t);
+		}
+		t += 10000;
+
+		const int second = framesToArrive(z, cursor, p, t);
+		std::printf("     first zoom took %d frames, second took %d\n", first, second);
+		ok(first > 10, "the first zoom is animated");
+		ok(second > 10, "and so is the second, after ten idle seconds — not one frame");
+		ok(std::abs(first - second) <= 3, "both take about the same time");
+
+		// And the anchor still holds on that second zoom: a one-frame jump
+		// would have parked the anchored pixel correctly at the END, so
+		// measuring only the destination would have missed this entirely.
+		// Watching every frame is what makes it visible.
+		ZoomMode z2;
+		z2.setCanvas(canvas);
+		qint64 t2 = 0;
+		framesToArrive(z2, cursor, p, t2);
+		z2.toggle();
+		for (int i = 0; i < 40; ++i) {
+			t2 += 16;
+			z2.tick(cursor, p, t2);
+		}
+		t2 += 10000;
+		z2.toggle();
+		double worst = 0.0;
+		int midFrames = 0;
+		for (int i = 0; i < 60; ++i) {
+			t2 += 16;
+			z2.tick(cursor, p, t2);
+			const ZoomTransform xf = z2.transform();
+			worst = std::max(worst, std::abs(xf.posX + cursor.x() * xf.scale - cursor.x()));
+			if (xf.scale > 1.02 && xf.scale < p.factor() - 0.02)
+				++midFrames;
+		}
+		std::printf("     second zoom: %d part-way frames, anchor drift %.3f px\n", midFrames,
+			    worst);
+		ok(midFrames > 5, "the second zoom really does pass through the middle");
+		ok(worst < 1.0, "and the anchored pixel holds still on it too");
+	}
+
+	std::printf("\n-- a stalled frame is not elapsed time --\n");
+	{
+		// A disk hitch or a long encoder frame must slow the animation down,
+		// never skip it forward.
+		ZoomMode z;
+		z.setCanvas(canvas);
+		ZoomParams p;
+		z.toggle();
+		qint64 t = 0;
+		t += 16;
+		z.tick(QPoint(1200, 700), p, t);
+		const double afterOne = z.transform().scale;
+		t += 5000; // the machine went away for five seconds
+		z.tick(QPoint(1200, 700), p, t);
+		const double afterStall = z.transform().scale;
+		std::printf("     scale %.3f -> %.3f across a 5 s stall\n", afterOne, afterStall);
+		ok(afterStall < p.factor() - 0.01, "the stall did not finish the zoom in one step");
+		ok(afterStall > afterOne, "but it did move it along");
+	}
+
 	std::printf("\n-- the visible rectangle --\n");
 	{
 		ZoomMode z;

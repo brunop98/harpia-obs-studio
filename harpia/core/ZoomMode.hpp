@@ -101,6 +101,12 @@ struct ZoomTransform {
 
 class ZoomMode {
 public:
+	// The largest gap between ticks that counts as elapsed animation time.
+	// About six frames at 60 Hz: long enough that ordinary jitter passes
+	// through untouched, short enough that a real stall cannot skip the
+	// animation.
+	static constexpr double kMaxStepMs = 100.0;
+
 	// The canvas being recorded, in device pixels -- which is also the scene
 	// item's natural size, since the item is the capture at 1:1. Resets the
 	// state: a new recording starts unzoomed.
@@ -120,6 +126,18 @@ public:
 	bool toggle()
 	{
 		active_ = !active_;
+		// A toggle starts a fresh animation, so the clock starts fresh too.
+		//
+		// Without this the zoom teleported. The caller's clock runs for the
+		// whole recording, but the 60 Hz tick only runs while there is
+		// something to animate -- so the gap between one zoom finishing and the
+		// next one being pressed, ten seconds of sitting still, arrived at the
+		// next tick as a ten-second dt. A 350 ms animation advances to "done"
+		// in one step of that size, and the picture snapped straight to full
+		// magnification at the mouse. Only the FIRST zoom of a recording looked
+		// right, which is why it survived a test that toggled and ticked in the
+		// same breath.
+		lastMs_ = -1;
 		return active_;
 	}
 	bool isZoomed() const { return active_; }
@@ -138,6 +156,13 @@ public:
 		if (lastMs_ >= 0 && nowMs > lastMs_)
 			dtMs = double(nowMs - lastMs_);
 		lastMs_ = nowMs;
+		// A stalled frame must not be charged as animation time. The timer can
+		// miss its slot for all sorts of reasons -- a disk hitch, the encoder
+		// taking a long frame, the machine paging -- and honouring the gap
+		// literally would jump the picture forward by however long it was. Past
+		// this much the animation simply runs a little behind the wall clock,
+		// which nobody can see; a jump, everybody can.
+		dtMs = std::min(dtMs, kMaxStepMs);
 
 		// Ease the magnification toward wherever the toggle put it. Linear in
 		// time over animMs, which is what "animation speed" means to someone

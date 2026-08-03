@@ -121,6 +121,12 @@ public:
 		if (lastMs_ >= 0 && nowMs > lastMs_)
 			dtMs = double(nowMs - lastMs_);
 		lastMs_ = nowMs;
+		// A stalled frame is not elapsed animation time. Less exposed than the
+		// zoom -- the overlay's timer runs for the whole recording rather than
+		// only while there is something to animate, so there is no gap to
+		// mis-charge -- but a starved tick would still skip the fade, and the
+		// cure is one line.
+		dtMs = std::min(dtMs, 100.0);
 
 		const double want = on_ ? 1.0 : 0.0;
 		if (std::abs(progress_ - want) < 1e-9)

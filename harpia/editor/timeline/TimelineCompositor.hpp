@@ -28,6 +28,25 @@ public:
 		virtual ~FrameProvider() = default;
 		// RGB(A) frame for a source at a source-time, or a null QImage.
 		virtual QImage frameFor(int sourceId, qint64 srcMs) = 0;
+
+		// The track the clip being decoded lives on, set by compose() before
+		// every frameFor() call. A random-access provider can ignore it; a
+		// SEQUENTIAL one must not.
+		//
+		// One source can be on screen from several tracks at once -- stacked
+		// for a picture-in-picture, split and layered, or simply the same
+		// recording used twice -- each at a DIFFERENT source timestamp. A
+		// single roll-forward decoder cannot serve two positions: whichever
+		// clip asks second drags it past the first, and the first is then
+		// answered forever with the second one's frame. Keying the decoder by
+		// (source, track) gives each stack its own position. At most one clip
+		// per track is composited at a time, so the track index is exactly the
+		// right granularity, and it is stable across frames.
+		int track() const { return track_; }
+		void setTrack(int index) { track_ = index; }
+
+	private:
+		int track_ = 0;
 	};
 
 	// Compose every visible track at `outMs` onto a `canvas`-sized RGBA image.

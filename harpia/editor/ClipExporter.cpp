@@ -18,7 +18,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <map>
 #include <memory>
+#include <utility>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -1437,18 +1439,21 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 	const double fps = std::clamp(opts.timelineFps > 0.1 ? opts.timelineFps : 30.0, 1.0, 240.0);
 	const QSize canvas(cw, ch);
 
-	// One decoder per source the timeline references. FrameSeeker::frameAt rolls
-	// forward without seeking for near-future requests, which is exactly the
-	// access pattern of a linear render.
+	// One decoder per source PER TRACK the timeline references. FrameSeeker's
+	// frameAt rolls forward without seeking for near-future requests, which is
+	// exactly the access pattern of a linear render -- but only if each decoder
+	// gets a monotonic run of requests. Share one across a source that is
+	// stacked on two tracks and it alternates between two distant positions,
+	// paying two full seeks on every single frame of the export.
 	struct Provider : TimelineCompositor::FrameProvider {
-		std::map<int, std::unique_ptr<FrameSeeker>> seekers;
+		std::map<std::pair<int, int>, std::unique_ptr<FrameSeeker>> seekers;
 		std::map<int, QImage> stills; // image clips: same picture at every time
 		int w = 0, h = 0;
 		QImage frameFor(int sourceId, qint64 srcMs) override
 		{
 			if (const auto sit = stills.find(sourceId); sit != stills.end())
 				return sit->second;
-			auto it = seekers.find(sourceId);
+			auto it = seekers.find({sourceId, std::max(0, track())});
 			if (it == seekers.end() || !it->second)
 				return QImage();
 			return it->second->frameAt(srcMs, w, h);
@@ -1456,7 +1461,8 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 	} provider;
 	provider.w = cw;
 	provider.h = ch;
-	for (const TlTrack &t : tl.tracks) {
+	for (int ti = 0; ti < tl.tracks.size(); ++ti) {
+		const TlTrack &t = tl.tracks[ti];
 		if (t.kind != TlTrack::Kind::Video)
 			continue;
 		for (const TlClip &c : t.clips) {
@@ -1476,11 +1482,12 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 						img.convertToFormat(QImage::Format_RGBA8888);
 				continue;
 			}
-			if (c.type != TlClip::Type::Video || provider.seekers.count(c.sourceId))
+			if (c.type != TlClip::Type::Video ||
+			    provider.seekers.count({c.sourceId, ti}))
 				continue;
 			auto fs = std::make_unique<FrameSeeker>();
 			if (fs->open(path))
-				provider.seekers[c.sourceId] = std::move(fs);
+				provider.seekers[{c.sourceId, ti}] = std::move(fs);
 		}
 	}
 

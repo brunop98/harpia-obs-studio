@@ -370,8 +370,35 @@ private:
 	// Timeline playback: the last sequentially-decoded frame per source, so a
 	// source whose next frame is not due yet (timeline tick faster than its
 	// fps) is reused instead of forcing the seeker to over-advance.
-	QHash<int, QImage> playFrameCache_;
+	// Playback decode state, keyed by (sourceId, track) rather than by source
+	// alone -- see TimelineCompositor::FrameProvider::track(). Track 0 of each
+	// source uses the source's own seeker; the extra stacks get their own,
+	// opened lazily on the same file, because a roll-forward decoder can only
+	// be in one place at a time.
+	QHash<quint64, QImage> playFrameCache_;
+	std::map<quint64, std::unique_ptr<FrameSeeker>> playSeekers_;
 	QSize playFrameCacheSize_;
+	// Where each source's playback decoders read from — the original until a
+	// proxy is built for it, the proxy afterwards.
+	QHash<int, QString> playbackPath_;
+	// How far ahead of the decoder a request can be before rolling forward
+	// stops being cheaper than a seek. Two seconds is comfortably more than
+	// any inter-frame gap and comfortably less than a jump worth seeking for.
+	static constexpr qint64 kPlaySeekAheadMs = 2000;
+	// How far PAST a request the decoder may be and still have its held frame
+	// reused. This is the "the timeline ticks faster than the source's frame
+	// rate" allowance, so it only has to cover one frame interval — 100 ms
+	// covers everything down to a 10 fps source. Any bigger gap is a jump
+	// backwards and must seek, not silently freeze the picture.
+	static constexpr qint64 kPlayHoldMs = 100;
+	// (source, track) -> one key. Both halves are small; the shift is plenty.
+	static quint64 playKey(int sourceId, int track)
+	{
+		return (quint64(quint32(sourceId)) << 32) | quint32(track);
+	}
+	// The decoder for one stack, creating it on first use. Null if the source
+	// is gone or the file will not open.
+	FrameSeeker *playSeekerFor(int sourceId, int track);
 	void addImageClip();
 	// A video or image dropped from the desktop onto the timeline lanes.
 	void onFilesDroppedOnTimeline(const QStringList &paths, int track, int newTrackAt,

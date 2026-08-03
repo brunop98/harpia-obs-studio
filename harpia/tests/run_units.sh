@@ -267,6 +267,21 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/timelineslice_test" "$QJSLIB/libqjs.a" $LF
 
+# Playback decodes sequentially, and one source can be on screen from several
+# tracks at once at different timestamps. Keyed by source alone, the lower
+# track freezes on the upper one's frame. The control here keeps the old keying
+# alive so the check is demonstrably able to tell the two apart.
+g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
+	"$HERE/playbacktracks_test.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
+	"$H/editor/timeline/TimelineView.cpp" "$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
+	"$WORK/moc_TimelineView.cpp" \
+	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	-o "$WORK/playbacktracks_test" "$QJSLIB/libqjs.a" $LF
+
 # "Zoom here": the clicked point has to land in the MIDDLE, and pushing in near
 # an edge must not drag the frame off the canvas.
 g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
@@ -426,4 +441,5 @@ QT_QPA_PLATFORM=offscreen "$WORK/propkeys_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/pixelbands_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/mask_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineslice_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/playbacktracks_test" || rc=1
 exit $rc

@@ -1736,6 +1736,31 @@ FrameSeeker *VideoEditorWindow::seekerFor(int id)
 	return s ? s->seeker.get() : nullptr;
 }
 
+FrameSeeker *VideoEditorWindow::playSeekerFor(int sourceId, int track)
+{
+	// Track 0 keeps using the source's own seeker: the overwhelmingly common
+	// single-video-track project then behaves exactly as it did, with no extra
+	// decoder and no extra memory.
+	if (track <= 0)
+		return seekerFor(sourceId);
+	const quint64 key = playKey(sourceId, track);
+	if (const auto it = playSeekers_.find(key); it != playSeekers_.end())
+		return it->second.get();
+	const EditorSource *s = sourceById(sourceId);
+	if (!s)
+		return nullptr;
+	auto sk = std::make_unique<FrameSeeker>();
+	// Whatever the source is PLAYING from, which is the proxy once one has been
+	// built -- opening the 4K original here would undo the proxy's whole point
+	// for every stack past the first.
+	const QString path = playbackPath_.value(sourceId, s->path);
+	if (!sk->open(path))
+		return nullptr;
+	FrameSeeker *raw = sk.get();
+	playSeekers_.emplace(key, std::move(sk));
+	return raw;
+}
+
 bool VideoEditorWindow::sourceInUse(int id) const
 {
 	for (const CutSegment &c : tracks_->segments())
@@ -1930,6 +1955,16 @@ void VideoEditorWindow::onRemoveSource()
 			proxyProgress_.remove(id);
 			proxyPending_.remove(id);
 			proxied_.remove(id);
+			playbackPath_.remove(id);
+			// The per-track playback decoders for this source outlive the
+			// source itself otherwise -- they hold their own open file, so
+			// nothing else would ever close it.
+			for (auto pit = playSeekers_.begin(); pit != playSeekers_.end();) {
+				if (int(pit->first >> 32) == id)
+					pit = playSeekers_.erase(pit);
+				else
+					++pit;
+			}
 			sources_.erase(it);
 			break;
 		}
@@ -2485,21 +2520,53 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 			// late-frame convergence is deliberately off while playing. The
 			// source's own pool seeker (proxy-aware) just rolls forward.
 			if (w->playing_) {
-				if (FrameSeeker *sk = w->seekerFor(sourceId)) {
+				// Per (source, TRACK), not per source. The same recording can
+				// be on screen from two tracks at once at two different
+				// timestamps, and one roll-forward decoder cannot be in both
+				// places: whichever track asked second used to drag the shared
+				// decoder past the first, and every later request from the
+				// first track then hit the "already past it" branch below and
+				// was answered with the other track's frame -- forever. The
+				// symptom is a lower track frozen while the top one plays.
+				const int lane = std::max(0, track());
+				if (FrameSeeker *sk = w->playSeekerFor(sourceId, lane)) {
 					if (w->playFrameCacheSize_ != QSize(decodeW, decodeH)) {
 						w->playFrameCache_.clear();
 						w->playFrameCacheSize_ = QSize(decodeW, decodeH);
 					}
-					QImage &held = w->playFrameCache_[sourceId];
+					QImage &held = w->playFrameCache_[playKey(sourceId, lane)];
+					const qint64 pos = sk->positionMs();
 					// Not due for a new source frame yet (timeline tick
 					// faster than the source's fps): reuse the held one
 					// instead of forcing nextFrameAt to over-advance.
-					if (!held.isNull() && sk->positionMs() >= 0 &&
-					    sk->positionMs() >= srcMs)
+					//
+					// Only while the decoder is a WHISKER ahead, though.
+					// Unbounded, this branch swallows every backwards jump:
+					// a track that cuts to an earlier part of the same file
+					// asks for a moment the decoder is long past, gets the
+					// stale frame back, and never advances again -- the
+					// clip plays as a still for its whole length.
+					if (!held.isNull() && pos >= srcMs && pos - srcMs <= kPlayHoldMs)
 						return held;
+					// Rolling forward only works while the target is AHEAD
+					// and near. It is neither when a track cuts backwards,
+					// nor when a track's first clip starts an hour into the
+					// source: at eight frames a tick, a minute of catching
+					// up is a thousand ticks of frozen picture. Seek once
+					// instead, then go back to rolling.
+					bool seeked = false;
+					if (pos >= 0 && (srcMs < pos || srcMs > pos + kPlaySeekAheadMs)) {
+						seeked = sk->seekTo(srcMs);
+						if (seeked)
+							held = QImage();
+					}
 					qint64 got = -1;
-					const QImage img =
-						sk->nextFrameAt(srcMs, &got, decodeW, decodeH, 8);
+					// A seek lands on the keyframe at or before the target, so
+					// the catch-up after one is allowed a longer run than the
+					// steady-state eight -- otherwise a long GOP leaves the
+					// picture stuck several frames in the past.
+					const QImage img = sk->nextFrameAt(srcMs, &got, decodeW, decodeH,
+									   seeked ? 90 : 8);
 					if (!img.isNull()) {
 						held = img;
 						return img;
@@ -7562,6 +7629,12 @@ void VideoEditorWindow::stopPlayback()
 		voTrack_->clearPlayhead();
 	// A proxy that landed mid-playback is safe to install now.
 	flushPendingPlaybackProxies();
+	// The extra per-track decoders exist only for playback. Each holds an open
+	// file and a decoder's worth of buffers, and a stopped editor left sitting
+	// open should not be carrying several of them around; they cost one seek to
+	// rebuild on the next Play.
+	playSeekers_.clear();
+	playFrameCache_.clear();
 }
 
 void VideoEditorWindow::onPlayTick()
@@ -7954,6 +8027,13 @@ void VideoEditorWindow::applyProxyToPlayback(int sourceId, const QString &proxyP
 	}
 	if (activeSourceId_ == sourceId)
 		seeker_ = s->seeker.get(); // same object, but be explicit about it
+	// Remember where playback now reads from, and drop the extra per-track
+	// decoders so they are rebuilt against the proxy on the next frame. They
+	// are cheap to recreate and would otherwise keep chewing through the 4K
+	// original while track 0 sails along on the proxy.
+	playbackPath_[sourceId] = proxyPath;
+	playSeekers_.clear();
+	playFrameCache_.clear();
 }
 
 // Kick off the filmstrip for a source, reading from `fromPath`. TimelineThumbs

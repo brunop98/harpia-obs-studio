@@ -463,8 +463,12 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 			// size to work out where a point in the picture lands on the canvas,
 			// and that is only known once the frame (or the caption) exists.
 			QImage frame;
-			if (c.type == TlClip::Type::Video || c.type == TlClip::Type::Image)
+			if (c.type == TlClip::Type::Video || c.type == TlClip::Type::Image) {
+				// Which track is asking, so a sequential provider can keep
+				// one decoder per stack rather than one per source.
+				fp.setTrack(ti);
 				frame = fp.frameFor(c.sourceId, srcMs);
+			}
 
 			// Base pose / keyframes, then the Transform components, then the
 			// clip's scripts on top of both. Scripts stay last of the three

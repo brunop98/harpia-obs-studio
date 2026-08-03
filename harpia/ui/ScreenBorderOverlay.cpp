@@ -40,6 +40,31 @@ void ScreenBorderOverlay::showBorder(QScreen *screen, const QColor &color, int t
 	update();
 }
 
+void ScreenBorderOverlay::showRect(const QRect &rectLogical, const QColor &color, int thickness)
+{
+	if (rectLogical.width() < 2 * thickness || rectLogical.height() < 2 * thickness) {
+		// Smaller than its own border: there would be nothing left inside it,
+		// and the mask would come out empty. Nothing to show.
+		hideBorder();
+		return;
+	}
+	const int t = qBound(1, thickness, 10);
+	const bool sameShape = isVisible() && rectLogical == lastRect_ && t == thickness_;
+	const bool sameColour = color == color_;
+	if (sameShape && sameColour)
+		return; // called every frame of the animation; most frames change nothing
+	color_ = color;
+	thickness_ = t;
+	if (!sameShape)
+		applyRectAndMask(rectLogical);
+	if (!isVisible()) {
+		show();
+		raise();
+		excludeFromCapture();
+	}
+	update();
+}
+
 void ScreenBorderOverlay::setColor(const QColor &color)
 {
 	color_ = color;
@@ -51,11 +76,22 @@ void ScreenBorderOverlay::hideBorder()
 	hide();
 }
 
+void ScreenBorderOverlay::applyRectAndMask(const QRect &rectLogical)
+{
+	lastRect_ = rectLogical;
+	setGeometry(rectLogical);
+	const QRect r(QPoint(0, 0), rectLogical.size());
+	QRegion ring(r);
+	ring -= r.adjusted(thickness_, thickness_, -thickness_, -thickness_);
+	setMask(ring);
+}
+
 void ScreenBorderOverlay::applyGeometryAndMask(QScreen *screen)
 {
 	if (!screen)
 		return;
 	setGeometry(screen->geometry());
+	lastRect_ = screen->geometry();
 
 	// Mask to just the border ring so the interior is fully click-through and
 	// nothing is drawn over the desktop.

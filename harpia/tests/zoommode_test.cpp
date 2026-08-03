@@ -1,25 +1,27 @@
-// Automatic Zoom: the animated crop that IS the zoom.
+// Automatic Zoom: the scene transform that magnifies the recorded picture.
 //
-// In Full Screen the encoder's canvas is nailed to the display resolution at
-// record start, so handing libobs a smaller crop makes it scale that rectangle
-// back up to fill the canvas. That scaling is the whole feature -- which makes
-// the failure modes geometric rather than visual, and invisible until someone
-// watches the finished file:
+// The first version of this cropped the capture source and assumed libobs
+// would scale the crop back up to fill the canvas. It does not. A source bound
+// straight to an output channel is drawn at its own size at the top-left
+// corner, so a "2x zoom" recorded a quarter-size picture in the corner of an
+// otherwise black frame -- and every check in the old version of this file
+// passed, because they all tested the CROP RECTANGLE and the crop rectangle was
+// perfectly correct. It was the wrong output entirely.
 //
-//   * a crop whose aspect drifts from the canvas is STRETCHED on the way back
-//     up. A 1% drift is not obvious on a still frame and is very obvious on a
-//     face, so the aspect check here is tight enough to catch it (see the
-//     control, which stretches by 1% deliberately and must fail);
-//   * a crop that runs off the screen near a corner records pixels that do not
-//     exist;
-//   * a zoom-out that leaves a canvas-SIZED crop behind is not the same thing
-//     as no crop at all -- it pins the recording to a resampled copy of itself
-//     for the rest of the file;
-//   * and a caller that stops ticking the moment the toggle goes off freezes
-//     the frame part-way out, which is why isBusy() must outlive isZoomed().
+// So the checks here are written against the two things that actually decide
+// what a viewer sees:
 //
-// Pure: the cursor is a parameter and the clock is a number, so no window, no
-// libobs and no real mouse -- the same shape as followmouse_test.
+//   * the frame is always FULLY COVERED. At every magnification and every step
+//     of the animation, the magnified item must reach every edge of the canvas.
+//     A gap is black in the recording, which was the bug;
+//   * the visible rectangle stays inside the picture, so a zoom in a corner
+//     stops at the edge instead of showing what is not there.
+//
+// Plus the things that make it usable: scale is continuous rather than stepping
+// in whole pixels, a settled zoom over a still cursor pushes nothing, and the
+// pull-out outlives the toggle so it is not abandoned half-finished.
+//
+// Pure: the cursor is a parameter and the clock is a number.
 #include "core/ZoomMode.hpp"
 
 #include <cmath>
@@ -34,19 +36,42 @@ static void ok(bool c, const char *w)
 		++failures;
 }
 
-// The aspect of a rectangle, and how far two aspects are apart in relative
-// terms. Rounding to whole pixels can move the ratio by about half a pixel on
-// each axis; at 1080p that is ~0.15%, so 0.5% is comfortably above the noise
-// and comfortably below a distortion anyone would notice.
-static double aspect(QSize s)
+// THE check. The item is drawn at `pos` with size canvas*scale; the canvas is
+// (0,0,W,H). Every canvas pixel must be inside the item, or the recording has
+// black in it.
+static bool coversCanvas(const ZoomTransform &xf, QSize canvas)
 {
-	return double(s.width()) / double(s.height());
+	const double right = xf.posX + canvas.width() * xf.scale;
+	const double bottom = xf.posY + canvas.height() * xf.scale;
+	// A hair of tolerance for float noise; a real gap is whole pixels wide.
+	return xf.posX <= 0.01 && xf.posY <= 0.01 && right >= canvas.width() - 0.01 &&
+	       bottom >= canvas.height() - 0.01;
 }
-static double aspectDrift(QSize s, QSize canvas)
+
+// Run a zoom to completion and hand back the transform, checking coverage on
+// every single frame along the way.
+struct RunResult {
+	ZoomTransform xf;
+	bool coveredThroughout = true;
+	int frames = 0;
+	double minScale = 1e9, maxScale = 0.0;
+};
+static RunResult run(ZoomMode &z, QPoint cursor, const ZoomParams &p, qint64 &t, int frames)
 {
-	return std::abs(aspect(s) - aspect(canvas)) / aspect(canvas);
+	RunResult r;
+	for (int i = 0; i < frames; ++i) {
+		t += 16;
+		z.tick(cursor, p, t);
+		const ZoomTransform xf = z.transform();
+		if (!coversCanvas(xf, z.canvas()))
+			r.coveredThroughout = false;
+		r.minScale = std::min(r.minScale, xf.scale);
+		r.maxScale = std::max(r.maxScale, xf.scale);
+		++r.frames;
+	}
+	r.xf = z.transform();
+	return r;
 }
-static constexpr double kAspectTol = 0.005;
 
 int main()
 {
@@ -56,266 +81,236 @@ int main()
 	std::printf("\n-- the magnification --\n");
 	{
 		ZoomParams p;
-		ok(p.percent == 200 && std::abs(p.factor() - 2.0) < 1e-9,
-		   "the default is 200%% == 2x");
-		const QSize two = zoomedSize(canvas, 2.0);
-		std::printf("     1920x1080 at 2x -> %dx%d\n", two.width(), two.height());
-		ok(two == QSize(960, 540), "2x captures exactly half the width AND half the height");
-
-		// "2x" has to mean the same thing on both axes or it is not a zoom.
-		ZoomParams p3;
-		p3.percent = 150;
-		ok(zoomedSize(canvas, p3.factor()) == QSize(1280, 720), "150%% is 1.5x on both axes");
-
-		ok(zoomedSize(canvas, 0.5) == canvas,
-		   "a factor below 1 cannot make the crop LARGER than the canvas");
-		ok(zoomedSize(QSize(), 2.0).isEmpty(), "an empty canvas stays empty rather than 16x16");
-	}
-
-	std::printf("\n-- the percent clamp --\n");
-	{
+		ok(p.percent == 200 && std::abs(p.factor() - 2.0) < 1e-9, "the default is 200%% == 2x");
 		ZoomParams lo;
 		lo.percent = 10;
 		ZoomParams hi;
 		hi.percent = 5000;
 		ok(std::abs(lo.factor() - ZoomParams::kMinPercent / 100.0) < 1e-9,
-		   "a silly-small percent clamps up to the floor, not to a no-op zoom");
+		   "a silly-small percent clamps up to the floor");
 		ok(std::abs(hi.factor() - ZoomParams::kMaxPercent / 100.0) < 1e-9,
-		   "a silly-large percent clamps down instead of cropping to 16x16 mush");
-		// CONTROL: an in-range value passes through untouched, so the clamp is
-		// clamping rather than pinning everything to one value.
+		   "a silly-large one clamps down");
 		ZoomParams mid;
 		mid.percent = 250;
-		ok(std::abs(mid.factor() - 2.5) < 1e-9, "an in-range percent is not clamped");
+		ok(std::abs(mid.factor() - 2.5) < 1e-9, "CONTROL: an in-range percent is untouched");
 	}
 
-	std::printf("\n-- aspect is preserved at every magnification --\n");
+	std::printf("\n-- the frame is never uncovered --\n");
 	{
-		bool allOk = true;
-		double worst = 0.0;
-		int worstPct = 0;
-		for (int pct = ZoomParams::kMinPercent; pct <= ZoomParams::kMaxPercent; ++pct) {
-			ZoomParams p;
-			p.percent = pct;
-			const double d = aspectDrift(zoomedSize(canvas, p.factor()), canvas);
-			if (d > worst) {
-				worst = d;
-				worstPct = pct;
-			}
-			if (d > kAspectTol)
-				allOk = false;
-		}
-		std::printf("     worst drift over 110..400%%: %.4f%% (at %d%%)\n", worst * 100.0,
-			    worstPct);
-		ok(allOk, "every whole percent keeps the canvas aspect within tolerance");
-
-		// The same sweep on a 16:10 canvas -- a shape whose halves do not land
-		// on round numbers, where a lazy "divide width, keep height" bug shows.
-		const QSize wide(1680, 1050);
-		bool wideOk = true;
-		for (int pct = ZoomParams::kMinPercent; pct <= ZoomParams::kMaxPercent; ++pct) {
-			ZoomParams p;
-			p.percent = pct;
-			if (aspectDrift(zoomedSize(wide, p.factor()), wide) > kAspectTol)
-				wideOk = false;
-		}
-		ok(wideOk, "same on a 16:10 canvas, where the halves are not round numbers");
-
-		// CONTROL: the check is tight enough to matter. A crop stretched by a
-		// single percent on one axis -- the sort of thing a stray rounding of
-		// only the width produces -- must FAIL the same tolerance.
-		const QSize stretched(int(960 * 1.01), 540);
-		ok(aspectDrift(stretched, canvas) > kAspectTol,
-		   "CONTROL: a 1%% stretch is caught by that same tolerance");
-	}
-
-	std::printf("\n-- the push-in --\n");
-	{
-		ok(sizeForProgress(canvas, 2.0, 0.0) == canvas, "progress 0 is the whole canvas");
-		ok(sizeForProgress(canvas, 2.0, 1.0) == QSize(960, 540), "progress 1 is the full zoom");
-		ok(sizeForProgress(canvas, 2.0, 2.0) == QSize(960, 540),
-		   "progress past 1 is clamped, not extrapolated into a 480x270 crop");
-
-		// Monotone and aspect-clean the whole way in: the intermediate frames
-		// are the ones a viewer actually watches.
-		bool monotone = true, clean = true;
-		QSize prev = canvas;
-		for (int i = 0; i <= 100; ++i) {
-			const QSize s = sizeForProgress(canvas, 2.0, i / 100.0);
-			if (s.width() > prev.width() || s.height() > prev.height())
-				monotone = false;
-			if (aspectDrift(s, canvas) > kAspectTol)
-				clean = false;
-			prev = s;
-		}
-		ok(monotone, "the crop only ever shrinks on the way in -- no wobble");
-		ok(clean, "every intermediate frame keeps the aspect too, not just the endpoints");
-	}
-
-	std::printf("\n-- toggling --\n");
-	{
-		ZoomMode z;
-		z.setCanvas(canvas);
-		ZoomParams p; // 200%, 350 ms
-		ok(!z.isZoomed() && !z.isBusy(), "a fresh recording starts unzoomed and idle");
-		ok(!z.region().enabled, "and with no crop at all");
-
-		ok(z.toggle(), "the shortcut reports the new state: zoomed");
-		ok(z.isZoomed(), "and the object agrees");
-
-		// Push in. The cursor sits still in the middle of the screen.
-		const QPoint mid(960, 540);
-		qint64 t = 0;
-		for (int i = 0; i < 40; ++i) { // 40 * 16 ms = 640 ms, well past 350
-			t += 16;
-			z.tick(mid, p, t);
-		}
-		const CaptureRegion in = z.region();
-		std::printf("     after the animation: %dx%d at (%d,%d)\n", in.width, in.height, in.x,
-			    in.y);
-		ok(in.enabled, "the crop is on");
-		ok(in.width == 960 && in.height == 540, "and has arrived at exactly 2x");
-		ok(aspectDrift(QSize(in.width, in.height), canvas) <= kAspectTol,
-		   "with the canvas aspect intact");
-
-		// A settled zoom over a still cursor pushes nothing further. This is
-		// the crop-filter-thrash check: the first Follow Mouse draft failed
-		// exactly here.
-		int churn = 0;
-		for (int i = 0; i < 200; ++i) {
-			t += 16;
-			if (z.tick(mid, p, t))
-				++churn;
-		}
-		std::printf("     updates over 200 idle ticks: %d\n", churn);
-		ok(churn == 0, "a settled zoom over a still cursor pushes no further updates");
-
-		// Back out.
-		ok(!z.toggle(), "the second press reports unzoomed");
-		ok(!z.isZoomed(), "and the object agrees");
-		ok(z.isBusy(), "but it is still BUSY -- the caller must keep ticking through the ease-out");
-
-		bool sawIntermediate = false;
-		for (int i = 0; i < 40; ++i) {
-			t += 16;
-			z.tick(mid, p, t);
-			const CaptureRegion r = z.region();
-			if (r.enabled && r.width > 960 && r.width < 1920)
-				sawIntermediate = true;
-		}
-		ok(sawIntermediate, "the way out is animated, not a cut");
-		ok(!z.isBusy(), "and it eventually stops being busy");
-		ok(z.region() == CaptureRegion{},
-		   "ending fully zoomed out means NO crop -- not a canvas-sized one");
-	}
-
-	std::printf("\n-- the crop stays on the screen --\n");
-	{
-		// The cursor parked in the top-left corner. A crop centred on it would
-		// start at (-480,-270) and record pixels that do not exist.
+		// The bug, stated directly. At 2x centred, the item is 3840x2160 placed
+		// at (-960,-540): it covers the canvas with a screen's worth to spare.
+		// The old crop produced a 960x540 picture at (0,0) and three quarters
+		// of black -- which is what this refuses to let happen again.
 		ZoomMode z;
 		z.setCanvas(canvas);
 		ZoomParams p;
 		z.toggle();
 		qint64 t = 0;
-		// Long enough for the glide to settle, not just to be under way -- the
-		// interesting claim is where it COMES TO REST against the edge.
-		for (int i = 0; i < 400; ++i) {
-			t += 16;
-			z.tick(QPoint(0, 0), p, t);
-		}
-		CaptureRegion r = z.region();
-		std::printf("     cursor at (0,0): %dx%d at (%d,%d)\n", r.width, r.height, r.x, r.y);
-		ok(r.x >= 0 && r.y >= 0, "the crop does not run off the top-left");
-		ok(r.x + r.width <= canvas.width() && r.y + r.height <= canvas.height(),
-		   "nor off the bottom-right");
-		ok(r.x == 0 && r.y == 0, "it sits flush in the corner rather than short of it");
+		const RunResult r = run(z, QPoint(960, 540), p, t, 60);
+		std::printf("     settled: scale %.3f at (%.1f, %.1f)\n", r.xf.scale, r.xf.posX,
+			    r.xf.posY);
+		ok(r.coveredThroughout,
+		   "the canvas is fully covered on EVERY frame of the push-in — no black");
+		ok(std::abs(r.xf.scale - 2.0) < 1e-6, "and it arrives at exactly 2x");
+		ok(r.xf.posX < 0 && r.xf.posY < 0,
+		   "with the item hanging off the top-left, which is what a zoom looks like");
 
-		// And the opposite corner, where the clamp is the other bound.
+		// CONTROL: the coverage check can actually fail. A transform that scales
+		// but forgets to move the item -- the shape of the original bug, and the
+		// most likely way to reintroduce it -- must be caught.
+		ZoomTransform naive;
+		naive.scale = 0.5; // what a crop-shaped mistake produces
+		ok(!coversCanvas(naive, canvas),
+		   "CONTROL: an item smaller than the canvas is caught as uncovered");
+	}
+
+	std::printf("\n-- covered at every magnification --\n");
+	{
+		bool allCovered = true;
+		int worstPct = 0;
+		for (int pct = ZoomParams::kMinPercent; pct <= ZoomParams::kMaxPercent; pct += 1) {
+			ZoomMode z;
+			z.setCanvas(canvas);
+			ZoomParams p;
+			p.percent = pct;
+			z.toggle();
+			qint64 t = 0;
+			const RunResult r = run(z, QPoint(400, 900), p, t, 80);
+			if (!r.coveredThroughout) {
+				allCovered = false;
+				worstPct = pct;
+			}
+		}
+		std::printf("     swept 110..400%%%s\n",
+			    allCovered ? "" : (" — first gap at " + std::to_string(worstPct) + "%").c_str());
+		ok(allCovered, "every whole percent, all the way in, off-centre, stays covered");
+
+		// A 16:10 canvas, where the halves are not round numbers.
+		ZoomMode z;
+		z.setCanvas(QSize(1680, 1050));
+		ZoomParams p;
+		z.toggle();
+		qint64 t = 0;
+		ok(run(z, QPoint(200, 200), p, t, 80).coveredThroughout,
+		   "and on a 16:10 canvas with the cursor near a corner");
+	}
+
+	std::printf("\n-- the visible rectangle --\n");
+	{
+		ZoomMode z;
+		z.setCanvas(canvas);
+		ZoomParams p;
+		z.toggle();
+		qint64 t = 0;
+		run(z, QPoint(960, 540), p, t, 60);
+		const QRect v = z.visibleRect();
+		std::printf("     2x centred shows %dx%d at (%d,%d)\n", v.width(), v.height(), v.x(),
+			    v.y());
+		ok(std::abs(v.width() - 960) <= 1 && std::abs(v.height() - 540) <= 1,
+		   "2x shows half the width and half the height");
+		ok(QRect(QPoint(0, 0), canvas).contains(v.adjusted(1, 1, -1, -1)),
+		   "and it is inside the picture");
+		// Aspect: the visible rectangle is the canvas over one number, so it
+		// keeps the canvas shape by construction. Worth pinning anyway -- a
+		// non-uniform scale would stretch faces and nothing else would report it.
+		const double a = double(v.width()) / v.height();
+		const double c = double(canvas.width()) / canvas.height();
+		ok(std::abs(a - c) / c < 0.005, "with the canvas aspect intact");
+	}
+
+	std::printf("\n-- corners --\n");
+	{
+		// The cursor parked in a corner. The visible rectangle must stop at the
+		// edge, not run past it into pixels that do not exist.
+		for (const QPoint &corner : {QPoint(0, 0), QPoint(1919, 0), QPoint(0, 1079),
+					     QPoint(1919, 1079)}) {
+			ZoomMode z;
+			z.setCanvas(canvas);
+			ZoomParams p;
+			p.follow.smoothness = 0; // instant, so it settles where it aims
+			z.toggle();
+			qint64 t = 0;
+			const RunResult r = run(z, corner, p, t, 200);
+			const QRect v = z.visibleRect();
+			const bool inside = v.x() >= -1 && v.y() >= -1 &&
+					    v.x() + v.width() <= canvas.width() + 1 &&
+					    v.y() + v.height() <= canvas.height() + 1;
+			std::printf("     cursor (%d,%d) -> %dx%d at (%d,%d)\n", corner.x(),
+				    corner.y(), v.width(), v.height(), v.x(), v.y());
+			ok(inside && r.coveredThroughout, "a zoom in a corner stays on the picture");
+		}
+	}
+
+	std::printf("\n-- the scale is continuous --\n");
+	{
+		// The old crop stepped in whole pixels, so a slow push-in ratcheted. A
+		// float scale should produce a different value on essentially every
+		// frame of a long animation.
+		ZoomMode z;
+		z.setCanvas(canvas);
+		ZoomParams p;
+		p.animMs = 1000;
+		z.toggle();
+		qint64 t = 0;
+		double prev = -1;
+		int distinct = 0, steps = 0;
+		while (z.transform().scale < 1.999 && steps < 200) {
+			t += 16;
+			z.tick(QPoint(960, 540), p, t);
+			const double s = z.transform().scale;
+			if (std::abs(s - prev) > 1e-9)
+				++distinct;
+			prev = s;
+			++steps;
+		}
+		std::printf("     %d distinct scales over %d frames\n", distinct, steps);
+		ok(steps > 40, "a 1000 ms zoom really does take about a second");
+		ok(distinct >= steps - 1, "and essentially every frame is a new scale, not a step");
+	}
+
+	std::printf("\n-- following the cursor --\n");
+	{
+		ZoomMode z;
+		z.setCanvas(canvas);
+		ZoomParams p;
+		p.follow.smoothness = 0;
+		z.toggle();
+		qint64 t = 0;
+		run(z, QPoint(960, 540), p, t, 60);
+		const QRect centred = z.visibleRect();
+		run(z, QPoint(1700, 540), p, t, 120);
+		const QRect chased = z.visibleRect();
+		std::printf("     centred x=%d -> chased x=%d\n", centred.x(), chased.x());
+		ok(chased.x() > centred.x(), "the frame followed the cursor right");
+		ok(chased.y() == centred.y(), "and held its row");
+		ok(std::abs(chased.width() - centred.width()) <= 1,
+		   "the magnification did not change while it panned");
+
+		// CONTROL: inside the dead zone, nothing moves.
 		ZoomMode z2;
 		z2.setCanvas(canvas);
 		z2.toggle();
 		t = 0;
-		for (int i = 0; i < 400; ++i) {
-			t += 16;
-			z2.tick(QPoint(1919, 1079), p, t);
-		}
-		r = z2.region();
-		std::printf("     cursor at (1919,1079): %dx%d at (%d,%d)\n", r.width, r.height, r.x,
-			    r.y);
-		ok(r.x + r.width <= canvas.width() && r.y + r.height <= canvas.height(),
-		   "the crop does not run off the bottom-right either");
-		ok(r.x == 960 && r.y == 540, "it sits flush in the corner rather than short of it");
+		run(z2, QPoint(960, 540), p, t, 60);
+		const QRect before = z2.visibleRect();
+		run(z2, QPoint(975, 548), p, t, 60);
+		ok(z2.visibleRect() == before, "CONTROL: a nudge inside the dead zone moves nothing");
 	}
 
-	std::printf("\n-- it follows the cursor while zoomed --\n");
+	std::printf("\n-- follow can be switched off --\n");
+	{
+		// Region recording with Follow Mouse on: the region is already tracking
+		// the cursor, so the zoom must not track it too.
+		ZoomMode z;
+		z.setCanvas(canvas);
+		ZoomParams p;
+		p.followCursor = false;
+		p.follow.smoothness = 0;
+		z.toggle();
+		qint64 t = 0;
+		run(z, QPoint(960, 540), p, t, 60);
+		const QRect start = z.visibleRect();
+		run(z, QPoint(1900, 1000), p, t, 120);
+		std::printf("     centre %dx%d at (%d,%d) after the cursor ran to the corner\n",
+			    z.visibleRect().width(), z.visibleRect().height(), z.visibleRect().x(),
+			    z.visibleRect().y());
+		ok(z.visibleRect() == start, "the frame ignored the cursor entirely");
+		ok(coversCanvas(z.transform(), canvas), "and still covers the canvas");
+	}
+
+	std::printf("\n-- settling and toggling off --\n");
 	{
 		ZoomMode z;
 		z.setCanvas(canvas);
 		ZoomParams p;
-		p.follow.smoothness = 0; // instant, so the test measures aim not easing
 		z.toggle();
 		qint64 t = 0;
+		run(z, QPoint(960, 540), p, t, 60);
+
+		int churn = 0;
+		for (int i = 0; i < 200; ++i) {
+			t += 16;
+			if (z.tick(QPoint(960, 540), p, t))
+				++churn;
+		}
+		std::printf("     updates over 200 idle ticks: %d\n", churn);
+		ok(churn == 0, "a settled zoom over a still cursor pushes nothing to the scene");
+
+		ok(!z.toggle(), "the second press reports unzoomed");
+		ok(z.isBusy(), "but it is still busy — the caller must tick through the pull-out");
+		bool sawPartial = false;
 		for (int i = 0; i < 60; ++i) {
 			t += 16;
 			z.tick(QPoint(960, 540), p, t);
+			const double s = z.transform().scale;
+			if (s > 1.05 && s < 1.95)
+				sawPartial = true;
+			if (!coversCanvas(z.transform(), canvas))
+				ok(false, "covered on the way out too");
 		}
-		const CaptureRegion centred = z.region();
-
-		// Walk the cursor right, well past the dead zone.
-		for (int i = 0; i < 60; ++i) {
-			t += 16;
-			z.tick(QPoint(1700, 540), p, t);
-		}
-		const CaptureRegion chased = z.region();
-		std::printf("     centred x=%d -> chased x=%d\n", centred.x, chased.x);
-		ok(chased.x > centred.x, "the crop followed the cursor to the right");
-		ok(chased.y == centred.y, "and did not drift vertically while the cursor held its row");
-		ok(chased.width == centred.width && chased.height == centred.height,
-		   "the SIZE never changed -- the encoder is committed to one frame size");
-
-		// CONTROL: a cursor that stays inside the dead zone moves nothing, so
-		// the check above measures following rather than any-motion-at-all.
-		ZoomMode z3;
-		z3.setCanvas(canvas);
-		z3.toggle();
-		t = 0;
-		for (int i = 0; i < 60; ++i) {
-			t += 16;
-			z3.tick(QPoint(960, 540), p, t);
-		}
-		const CaptureRegion before = z3.region();
-		for (int i = 0; i < 60; ++i) {
-			t += 16;
-			z3.tick(QPoint(980, 550), p, t); // a nudge, still well inside the padding
-		}
-		ok(z3.region() == before, "CONTROL: a nudge inside the dead zone moves nothing");
-	}
-
-	std::printf("\n-- the animation honours the configured speed --\n");
-	{
-		// The point of exposing "animation speed" in ms is that the number
-		// means something. A 100 ms zoom must be done well before a 1000 ms one.
-		const auto ticksToArrive = [&](int animMs) {
-			ZoomMode z;
-			z.setCanvas(canvas);
-			ZoomParams p;
-			p.animMs = animMs;
-			z.toggle();
-			qint64 t = 0;
-			for (int i = 0; i < 400; ++i) {
-				t += 16;
-				z.tick(QPoint(960, 540), p, t);
-				if (z.region().width == 960)
-					return i + 1;
-			}
-			return 9999;
-		};
-		const int fast = ticksToArrive(100);
-		const int slow = ticksToArrive(1000);
-		std::printf("     100 ms took %d ticks, 1000 ms took %d ticks\n", fast, slow);
-		ok(fast >= 5 && fast <= 12, "a 100 ms zoom lands in roughly 100 ms of 16 ms ticks");
-		ok(slow > fast * 5, "and a 1000 ms zoom takes about ten times as long");
+		ok(sawPartial, "the way out is animated, not a cut");
+		ok(!z.isBusy(), "and it eventually stops being busy");
+		ok(z.transform().identity(), "ending fully zoomed out is the IDENTITY transform");
 	}
 
 	std::printf("\n-- a new recording starts clean --\n");
@@ -325,17 +320,29 @@ int main()
 		ZoomParams p;
 		z.toggle();
 		qint64 t = 0;
-		for (int i = 0; i < 40; ++i) {
-			t += 16;
-			z.tick(QPoint(300, 300), p, t);
-		}
-		ok(z.isZoomed() && z.region().enabled, "zoomed mid-recording");
-		z.setCanvas(canvas); // stop, then start again
+		run(z, QPoint(300, 300), p, t, 40);
+		ok(z.isZoomed() && !z.transform().identity(), "zoomed mid-recording");
+		z.setCanvas(canvas);
 		ok(!z.isZoomed() && !z.isBusy(), "the next recording starts unzoomed");
-		// Read BEFORE ticking: this is what a caller arming the pipeline sees,
-		// and a stale rectangle here starts the new file already cropped.
-		ok(z.region() == CaptureRegion{}, "and with no crop left over from the last one");
-		ok(!z.tick(QPoint(300, 300), p, t + 16), "and its first tick pushes no crop");
+		ok(z.transform().identity(), "with no magnification left over — read BEFORE any tick");
+		ok(!z.tick(QPoint(300, 300), p, t + 16), "and its first tick changes nothing");
+	}
+
+	std::printf("\n-- a region-sized canvas --\n");
+	{
+		// Zoom works in Custom Region too now: the canvas is the region rather
+		// than the display, and nothing else about it differs.
+		const QSize region(720, 1280); // a tall mobile strip
+		ZoomMode z;
+		z.setCanvas(region);
+		ZoomParams p;
+		z.toggle();
+		qint64 t = 0;
+		const RunResult r = run(z, QPoint(360, 640), p, t, 80);
+		ok(r.coveredThroughout, "a portrait region canvas is covered throughout");
+		const QRect v = z.visibleRect();
+		ok(std::abs(v.width() - 360) <= 1 && std::abs(v.height() - 640) <= 1,
+		   "and 2x means half of the REGION, not half of a display");
 	}
 
 	std::printf("\n%s (%d failures)\n", failures ? "FAILURES" : "all zoom mode checks passed",

@@ -6,6 +6,10 @@
 
 struct obs_source;
 typedef struct obs_source obs_source_t;
+struct obs_scene;
+typedef struct obs_scene obs_scene_t;
+struct obs_scene_item;
+typedef struct obs_scene_item obs_sceneitem_t;
 
 namespace harpia {
 
@@ -78,6 +82,18 @@ public:
 	// capturing; pass an empty/disabled region to record the full display.
 	void setRegion(const CaptureRegion &region);
 
+	// Scale and offset the captured picture inside the canvas -- the Automatic
+	// Zoom. `scale` multiplies the item's natural size and `posX/posY` place its
+	// top-left corner in canvas pixels, so a magnified picture hangs off the
+	// top-left and the canvas clips it. Scale 1 at (0,0) is the identity.
+	//
+	// This is why the capture goes into a SCENE rather than straight onto the
+	// output channel: a source on a channel is drawn at its own size in the
+	// corner with no transform available, which is what made the first zoom
+	// produce a small picture on a black frame instead of a magnified one.
+	void setZoomTransform(double scale, double posX, double posY);
+	void clearZoomTransform() { setZoomTransform(1.0, 0.0, 0.0); }
+
 	// Remove the source from channel 0 and release it.
 	void stopCapture();
 
@@ -98,8 +114,18 @@ public:
 	static std::vector<WindowOption> enumerateWindows();
 
 private:
+	// Rebuild the scene around the current source and bind it to the output
+	// channel. Called by both capture paths; leaves the zoom at identity.
+	void bindSceneToOutput();
+	void releaseScene();
+
 	obs_source_t *source_ = nullptr;
 	obs_source_t *cropFilter_ = nullptr;
+	obs_scene_t *scene_ = nullptr;
+	obs_sceneitem_t *item_ = nullptr; // owned by scene_, not released here
+	double zoomScale_ = 1.0;
+	double zoomPosX_ = 0.0;
+	double zoomPosY_ = 0.0;
 	CaptureRegion region_;
 	// What the live source was built with, so an identical startCapture() call
 	// can keep it instead of rebuilding. -1 = no live source.

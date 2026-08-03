@@ -106,12 +106,9 @@ struct Preset {
 
 	// Automatic Zoom: a shortcut that pushes the recording in on the cursor and
 	// pulls it back out again, for calling attention to a menu or a line of
-	// code mid-take. Full Screen only for now -- the canvas is fixed at the
-	// display's own resolution there, so a smaller crop is scaled back up to
-	// fill it, and that scaling IS the zoom. In Custom Region the canvas is
-	// already the region, so the same trick would need the region enlarged
-	// first; the code is written against a canvas rather than a capture mode so
-	// that stays a wiring job rather than a rewrite.
+	// code mid-take. Works in every capture mode: it is a scene transform that
+	// scales the captured picture inside the canvas, so it does not care
+	// whether that canvas is a display or a region.
 	bool zoomEnabled = false;
 	int zoomPercent = 200;      // 200 = 2x magnification; clamped 110..400
 	int zoomAnimMs = 350;       // how long the push-in and pull-out take

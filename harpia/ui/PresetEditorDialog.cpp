@@ -721,16 +721,19 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 
 	// ===== Zoom =====
 	// Press a key mid-recording and the picture pushes in on the cursor; press
-	// it again and it pulls back out. Full Screen only, because that is where
-	// the encoder canvas is the whole display and a smaller crop gets scaled
-	// back up to fill it -- which is the zoom.
+	// it again and it pulls back out. Works in every capture mode: it scales
+	// the captured picture inside whatever canvas the recording has, so it does
+	// not care whether that canvas is a display or a region.
 	QWidget *zoomPage = makePage(v);
-	zoomCheck_ = new QCheckBox(QStringLiteral("Automatic Zoom (Full Screen only)"), this);
+	zoomCheck_ = new QCheckBox(QStringLiteral("Automatic Zoom"), this);
 	zoomCheck_->setChecked(preset.zoomEnabled);
 	addCheck(v, zoomCheck_,
 		 QStringLiteral("Adds a shortcut that zooms the recording in on the mouse and back out "
 				"again — for pointing at a menu or a line of code without editing "
-				"afterwards. The zoomed picture follows the cursor."));
+				"afterwards. The zoomed picture follows the cursor, and a border "
+				"marks the area being recorded while it is on. With Follow Mouse "
+				"on in a Custom Region, the region does the following and the "
+				"zoom just magnifies."));
 
 	zoomShortcutEdit_ = new QKeySequenceEdit(
 		QKeySequence(QString::fromStdString(preset.zoomShortcut)), this);

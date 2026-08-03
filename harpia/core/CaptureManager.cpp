@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <string>
 
 namespace harpia {
@@ -158,7 +159,7 @@ bool CaptureManager::startWindowCapture(const std::string &windowValue, bool cap
 		return false;
 	}
 
-	obs_set_output_source(kVideoChannel, source_);
+	bindSceneToOutput();
 	return true;
 }
 
@@ -205,10 +206,82 @@ bool CaptureManager::startCapture(int monitorIndex, bool captureCursor)
 		return false;
 	}
 
-	obs_set_output_source(kVideoChannel, source_);
+	bindSceneToOutput();
 	monitorIndex_ = monitorIndex;
 	captureCursor_ = captureCursor;
 	return true;
+}
+
+// Wrap the live source in a scene and put THAT on the output channel.
+//
+// A source bound straight to a channel has no transform: libobs draws it at its
+// own size at (0,0) and whatever the canvas has left over stays black. That is
+// fine while the two are the same size -- which they always were until the zoom
+// arrived -- and it is exactly why the first zoom produced a quarter-size
+// picture in the corner of a black frame. A scene item has a scale and a
+// position, so the same capture can be magnified to fill the canvas.
+void CaptureManager::bindSceneToOutput()
+{
+	releaseScene();
+	if (!source_)
+		return;
+
+	// Unique name, same reasoning as the source: a released scene lingers until
+	// a later video tick, so a mode switch can briefly have two.
+	static std::atomic<uint64_t> sceneCounter{0};
+	const std::string name = "harpia_scene_" + std::to_string(sceneCounter.fetch_add(1));
+	scene_ = obs_scene_create_private(name.c_str());
+	if (!scene_) {
+		// No scene means no zoom, but the recording still has to happen --
+		// fall back to the old direct binding rather than capturing nothing.
+		blog(LOG_ERROR, "[harpia] could not create the capture scene; zoom unavailable");
+		obs_set_output_source(kVideoChannel, source_);
+		return;
+	}
+	item_ = obs_scene_add(scene_, source_);
+	if (item_) {
+		// Unscaled and unmoved: identical to what a bare source on the channel
+		// produced, so every recording that does not zoom is unchanged.
+		vec2 pos = {0.0f, 0.0f};
+		vec2 scale = {1.0f, 1.0f};
+		obs_sceneitem_set_pos(item_, &pos);
+		obs_sceneitem_set_scale(item_, &scale);
+		obs_sceneitem_set_alignment(item_, OBS_ALIGN_LEFT | OBS_ALIGN_TOP);
+		obs_sceneitem_set_bounds_type(item_, OBS_BOUNDS_NONE);
+	}
+	zoomScale_ = 1.0;
+	zoomPosX_ = zoomPosY_ = 0.0;
+	obs_set_output_source(kVideoChannel, obs_scene_get_source(scene_));
+}
+
+void CaptureManager::releaseScene()
+{
+	if (!scene_)
+		return;
+	obs_source_t *ss = obs_scene_get_source(scene_);
+	if (ss && obs_get_output_source(kVideoChannel) == ss)
+		obs_set_output_source(kVideoChannel, nullptr);
+	item_ = nullptr; // owned by the scene
+	obs_scene_release(scene_);
+	scene_ = nullptr;
+}
+
+void CaptureManager::setZoomTransform(double scale, double posX, double posY)
+{
+	// Driven from a 60 Hz tick, and every call crosses to the graphics thread.
+	// The caller already filters sub-pixel changes; this catches the rest.
+	if (std::abs(scale - zoomScale_) < 1e-6 && std::abs(posX - zoomPosX_) < 1e-3 &&
+	    std::abs(posY - zoomPosY_) < 1e-3)
+		return;
+	zoomScale_ = scale;
+	zoomPosX_ = posX;
+	zoomPosY_ = posY;
+	if (!item_)
+		return;
+	vec2 s = {float(scale), float(scale)};
+	vec2 p = {float(posX), float(posY)};
+	obs_sceneitem_set_scale(item_, &s);
+	obs_sceneitem_set_pos(item_, &p);
 }
 
 void CaptureManager::setRegion(const CaptureRegion &region)
@@ -254,6 +327,7 @@ void CaptureManager::setRegion(const CaptureRegion &region)
 
 void CaptureManager::stopCapture()
 {
+	releaseScene();
 	if (source_ && obs_get_output_source(kVideoChannel) == source_)
 		obs_set_output_source(kVideoChannel, nullptr);
 

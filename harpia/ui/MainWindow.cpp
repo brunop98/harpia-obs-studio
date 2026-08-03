@@ -2782,11 +2782,12 @@ void MainWindow::onZoomToggle()
 void MainWindow::syncZoom()
 {
 	const Preset &p = activePreset();
-	// Full Screen only: there, the canvas is the whole display and a smaller
-	// crop is scaled back up to fill it. In Custom Region the canvas IS the
-	// region, so the same crop would just record less -- not zoom.
-	const bool want = p.zoomEnabled && captureMode_ == CaptureMode::Monitor &&
-			  recorder_.isRecording() && !starting_ && !stopping_;
+	// Every capture mode. The zoom is a scene TRANSFORM now -- it scales the
+	// captured picture inside whatever canvas the recording has -- so it no
+	// longer cares whether that canvas is a display or a region. (The first
+	// version cropped, which only ever made sense in Full Screen, and did not
+	// actually work there either: see ZoomMode.hpp.)
+	const bool want = p.zoomEnabled && recorder_.isRecording() && !starting_ && !stopping_;
 	if (want == zoomArmed_)
 		return;
 	zoomArmed_ = want;
@@ -2796,20 +2797,26 @@ void MainWindow::syncZoom()
 		const QScreen *scr = screenForActivePreset();
 		zoomOrigin_ = scr ? scr->geometry().topLeft() : QPoint(0, 0);
 		zoomDpr_ = scr ? scr->devicePixelRatio() : 1.0;
-		zoomCanvasDevicePx_ = scr ? QSize(int(scr->geometry().width() * zoomDpr_),
-						  int(scr->geometry().height() * zoomDpr_))
-					  : QSize(0, 0);
+		// The canvas is the item's natural size, which is the CROPPED capture
+		// in Region mode and the whole display otherwise -- the same choice
+		// armVideoPipeline made when it sized the encoder.
+		if (captureMode_ == CaptureMode::Region && currentRegion_.enabled &&
+		    currentRegion_.width >= 16 && currentRegion_.height >= 16)
+			zoomCanvasDevicePx_ = QSize(currentRegion_.width, currentRegion_.height);
+		else
+			zoomCanvasDevicePx_ = scr ? QSize(int(scr->geometry().width() * zoomDpr_),
+							  int(scr->geometry().height() * zoomDpr_))
+						  : QSize(0, 0);
 		zoomClock_.start();
 		zoom_.setCanvas(zoomCanvasDevicePx_); // also clears any previous zoom
 	} else {
-		// The recording is over. Drop the crop rather than leaving the last
-		// zoomed rectangle applied to whatever is captured next.
-		const bool hadCrop = zoom_.region().enabled;
+		// The recording is over. Put the picture back to 1:1 rather than
+		// leaving the last magnification applied to whatever is captured next.
 		zoom_.setCanvas(QSize());
 		if (zoomTimer_)
 			zoomTimer_->stop();
-		if (hadCrop)
-			capture_.setRegion(CaptureRegion{});
+		capture_.clearZoomTransform();
+		hideZoomBorder();
 		if (floatingControls_)
 			floatingControls_->setZoom(false, 100);
 	}
@@ -2830,9 +2837,24 @@ void MainWindow::tickZoom()
 	params.follow.smoothness = p.zoomFollowSmoothness;
 	params.follow.axis = FollowAxis(std::clamp(p.zoomFollowAxis, 0, 2));
 
-	const QPoint cursor = RegionWatch::toRegionSpace(QCursor::pos(), zoomOrigin_, zoomDpr_);
-	if (zoom_.tick(cursor, params, zoomClock_.elapsed()))
-		capture_.setRegion(zoom_.region());
+	// In Region mode with Follow Mouse on, the region is already keeping the
+	// cursor framed. A zoom that also chased it would be tracking one mouse
+	// twice, so the zoom stops following and just magnifies about the middle of
+	// the frame -- the same "Follow Mouse has priority" rule the auto-pause
+	// settings already use.
+	params.followCursor = !(p.followMouse && captureMode_ == CaptureMode::Region);
+
+	// The cursor in ITEM pixels. In Region mode the item is the cropped
+	// capture, so the region's own origin comes off as well as the screen's.
+	QPoint cursor = RegionWatch::toRegionSpace(QCursor::pos(), zoomOrigin_, zoomDpr_);
+	if (captureMode_ == CaptureMode::Region && currentRegion_.enabled)
+		cursor -= QPoint(currentRegion_.x, currentRegion_.y);
+
+	if (zoom_.tick(cursor, params, zoomClock_.elapsed())) {
+		const ZoomTransform xf = zoom_.transform();
+		capture_.setZoomTransform(xf.scale, xf.posX, xf.posY);
+	}
+	updateZoomBorder();
 	if (floatingControls_)
 		floatingControls_->setZoom(zoom_.isZoomed(), p.zoomPercent);
 
@@ -2840,6 +2862,66 @@ void MainWindow::tickZoom()
 	// stopping at !isZoomed() alone would abandon the pull-out half finished.
 	if (!zoom_.isBusy() && zoomTimer_)
 		zoomTimer_->stop();
+}
+
+// The on-screen border around the part of the display being recorded while
+// zoomed. Driven from the zoom tick rather than computed separately, and from
+// the SAME transform that is on the scene, so the border and the file cannot
+// disagree about where the frame is.
+//
+// It is shown whenever the zoom is on, regardless of the preset's monitor
+// border setting: while zoomed, what is being recorded is no longer obvious
+// from looking at the screen, which is precisely when a marker earns its place.
+// Excluded from the capture on Windows, like the monitor border and the
+// controls pill, so the viewer gets a clean picture.
+void MainWindow::updateZoomBorder()
+{
+	if (!screenBorder_)
+		return;
+	if (!zoomArmed_ || !zoom_.isBusy() || zoom_.transform().identity()) {
+		hideZoomBorder();
+		return;
+	}
+	const QScreen *scr = screenForActivePreset();
+	if (!scr)
+		return;
+
+	// Item pixels -> device pixels on the display -> Qt's logical coordinates.
+	QRect v = zoom_.visibleRect();
+	if (captureMode_ == CaptureMode::Region && currentRegion_.enabled)
+		v.translate(currentRegion_.x, currentRegion_.y);
+	const double dpr = zoomDpr_ > 0.01 ? zoomDpr_ : 1.0;
+	const QRect logical(zoomOrigin_ + QPoint(int(std::lround(v.x() / dpr)),
+						 int(std::lround(v.y() / dpr))),
+			    QSize(int(std::lround(v.width() / dpr)), int(std::lround(v.height() / dpr))));
+
+	const Preset &p = activePreset();
+	QColor c(QString::fromStdString(p.screenBorderColor));
+	if (!c.isValid())
+		c = QColor(0xe5, 0x48, 0x4d);
+	zoomBorderShown_ = true;
+	screenBorder_->showRect(logical, c, p.screenBorderThickness);
+}
+
+void MainWindow::hideZoomBorder()
+{
+	if (!zoomBorderShown_)
+		return;
+	zoomBorderShown_ = false;
+	if (!screenBorder_)
+		return;
+	// Hand the monitor border back if the preset wanted one -- the zoom
+	// borrowed the same overlay, and dropping it silently would turn the
+	// recording indicator off for the rest of the take.
+	const Preset &p = activePreset();
+	if (captureMode_ == CaptureMode::Monitor && p.showScreenBorder && recorder_.isRecording()) {
+		QColor c(QString::fromStdString(p.screenBorderColor));
+		if (!c.isValid())
+			c = QColor(0xe5, 0x48, 0x4d);
+		screenBorder_->showBorder(screenForActivePreset(), c, p.screenBorderThickness);
+	} else {
+		screenBorder_->hideBorder();
+	}
 }
 
 void MainWindow::updateRegionToolVisibility()

@@ -356,6 +356,12 @@ private:
 	void onSpotlightToggle();
 	void onZoomToggle();
 	void tickZoom();
+	// The border marking the zoomed area, driven from the same transform that
+	// is on the scene so the two cannot disagree. Borrows the monitor-border
+	// overlay, and hands it back when the zoom ends.
+	void updateZoomBorder();
+	void hideZoomBorder();
+	bool zoomBorderShown_ = false;
 	void syncZoom(); // arm/disarm to match the current recording state
 	QWidget *idleGroup_ = nullptr;   // label + combo, hidden when very narrow
 	QComboBox *countdownCombo_ = nullptr;

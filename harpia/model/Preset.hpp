@@ -91,6 +91,12 @@ struct Preset {
 	int followAxis = 0;         // FollowAxis: 0 both, 1 horizontal, 2 vertical
 	int followProfile = 1;      // UI memory: 0 Instant, 1 Smooth, 2 Cinematic,
 	                            // 3 Mobile Tutorial, 4 Custom
+	// Optional shortcut to stop and resume following mid-recording. Unlike Zoom
+	// and Spotlight, following is ON from the first frame -- the key is a way to
+	// park the framing on something and stop the camera chasing, then let it
+	// resume. Only live where followMouse is set: the checkbox decides whether
+	// the feature exists, the key toggles it within a take.
+	std::string followShortcut = "Ctrl+Shift+F";
 
 	// Spotlight: a shortcut that darkens everything except a patch around the
 	// cursor, so the viewer's eye lands where you are pointing. Drawn by the

@@ -55,6 +55,7 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_int(d, "follow_smoothness", p.followSmoothness);
 	obs_data_set_int(d, "follow_axis", p.followAxis);
 	obs_data_set_int(d, "follow_profile", p.followProfile);
+	obs_data_set_string(d, "follow_shortcut", p.followShortcut.c_str());
 	obs_data_set_bool(d, "spotlight_enabled", p.spotlightEnabled);
 	obs_data_set_bool(d, "spotlight_start_on", p.spotlightStartOn);
 	obs_data_set_int(d, "spotlight_size", p.spotlightSize);
@@ -156,6 +157,8 @@ Preset presetFromData(obs_data_t *d)
 	p.followSmoothness = (int)obs_data_get_int(d, "follow_smoothness");
 	p.followAxis = (int)obs_data_get_int(d, "follow_axis");
 	p.followProfile = (int)obs_data_get_int(d, "follow_profile");
+	obs_data_set_default_string(d, "follow_shortcut", "Ctrl+Shift+F");
+	p.followShortcut = obs_data_get_string(d, "follow_shortcut");
 	// Same reasoning for Zoom: read back raw, a preset written before this
 	// feature would zoom to 0% over 0 ms -- an instant cut to a 16x16 crop.
 	// Non-zero defaults again: a preset written before this feature would read

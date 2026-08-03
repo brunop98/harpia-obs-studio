@@ -105,6 +105,7 @@ private:
 	QSlider *followPaddingSlider_ = nullptr;
 	QSlider *followSmoothSlider_ = nullptr;
 	QComboBox *followAxisCombo_ = nullptr;
+	QKeySequenceEdit *followShortcutEdit_ = nullptr;
 	bool followProfileApplying_ = false; // combo is writing the sliders, not the user
 
 	// Spotlight page

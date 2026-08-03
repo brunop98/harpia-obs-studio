@@ -62,13 +62,34 @@ void FollowMouse::arm(const CaptureRegion &region)
 	pos_ = QPointF(region.x, region.y);
 	target_ = pos_;
 	lastMs_ = -1;
+	returning_ = false;
 	armed_ = region.enabled && region.width > 0 && region.height > 0;
 }
 
 void FollowMouse::disarm()
 {
 	armed_ = false;
+	returning_ = false;
 	lastMs_ = -1;
+}
+
+void FollowMouse::returnTo(QPoint topLeftDevicePx)
+{
+	returning_ = true;
+	target_ = QPointF(topLeftDevicePx.x(), topLeftDevicePx.y());
+}
+
+void FollowMouse::resumeFollowing()
+{
+	// No re-seeding: the position is already wherever the glide got to, and the
+	// next tick will pick a target from the cursor relative to it. Snapping
+	// here would undo the smoothing the glide just did.
+	returning_ = false;
+}
+
+bool FollowMouse::settled() const
+{
+	return std::abs(target_.x() - pos_.x()) < 0.5 && std::abs(target_.y() - pos_.y()) < 0.5;
 }
 
 void FollowMouse::rebase(const CaptureRegion &region)
@@ -79,6 +100,7 @@ void FollowMouse::rebase(const CaptureRegion &region)
 	base_ = region;
 	pos_ = QPointF(region.x, region.y);
 	target_ = pos_;
+	returning_ = false;
 }
 
 bool FollowMouse::tick(QPoint cursorDevicePx, QSize screenDevicePx, const FollowParams &params, qint64 nowMs)
@@ -101,6 +123,18 @@ bool FollowMouse::tick(QPoint cursorDevicePx, QSize screenDevicePx, const Follow
 	// updates the whole time. Against the target, a parked cursor means a
 	// parked target, the chase converges geometrically, and the snap below
 	// genuinely ends it.
+	// Gliding home: the target is fixed at where returnTo() put it, so the
+	// cursor is ignored entirely and the chase below just eases into it.
+	if (returning_) {
+		const double aBack = stepAlpha(params.smoothness, dtMs);
+		const QPointF beforeBack = pos_;
+		pos_ += (target_ - pos_) * aBack;
+		if (std::abs(target_.x() - pos_.x()) < 0.5 && std::abs(target_.y() - pos_.y()) < 0.5)
+			pos_ = target_;
+		return std::lround(beforeBack.x()) != std::lround(pos_.x()) ||
+		       std::lround(beforeBack.y()) != std::lround(pos_.y());
+	}
+
 	CaptureRegion atTarget = base_;
 	atTarget.x = int(std::lround(target_.x()));
 	atTarget.y = int(std::lround(target_.y()));

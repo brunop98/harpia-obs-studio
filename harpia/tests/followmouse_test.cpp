@@ -235,6 +235,94 @@ int main()
 		ok(!f.armed(), "nor can a zero-size one");
 	}
 
+	std::printf("\n-- switching following off mid-recording --\n");
+	{
+		// The shortcut parks the camera. Switching off does not freeze the
+		// region where the cursor last dragged it -- it glides back to the
+		// rectangle that was framed before recording started, so the take ends
+		// on what the user actually chose.
+		const CaptureRegion home = reg(600, 400, 600, 400);
+		FollowMouse f;
+		f.arm(home);
+		FollowParams p;
+		p.smoothness = 30;
+		qint64 t = 0;
+
+		// Chase the cursor away from home for a while.
+		for (int i = 0; i < 200; ++i)
+			f.tick(QPoint(3000, 1800), screen, p, t += 16);
+		const CaptureRegion away = f.region();
+		std::printf("     wandered to (%d,%d) from (%d,%d)\n", away.x, away.y, home.x, home.y);
+		ok(away.x != home.x || away.y != home.y, "the region really did wander off");
+
+		// Now switch off.
+		f.returnTo(QPoint(home.x, home.y));
+		ok(f.returning(), "it reports that it is on its way back");
+		ok(!f.settled(), "and that it has not arrived");
+
+		// The cursor stays parked far away for the whole return: if the return
+		// were still reading it, the region would be dragged straight back out.
+		bool sawIntermediate = false;
+		int steps = 0;
+		while (!f.settled() && steps < 600) {
+			f.tick(QPoint(3000, 1800), screen, p, t += 16);
+			const CaptureRegion r = f.region();
+			if (r.x != home.x && r.x != away.x)
+				sawIntermediate = true;
+			++steps;
+		}
+		const CaptureRegion back = f.region();
+		std::printf("     glided home in %d steps, landing at (%d,%d)\n", steps, back.x, back.y);
+		ok(sawIntermediate, "the return is a glide, not a cut");
+		ok(back.x == home.x && back.y == home.y,
+		   "and it lands exactly on the original rectangle, not a pixel short");
+		ok(back.width == home.width && back.height == home.height,
+		   "the SIZE never changed, as always");
+		ok(f.armed(), "it is still armed — the caller keeps ticking, it did not disarm itself");
+
+		// CONTROL: without returnTo, the same ticks with the same far-away
+		// cursor keep it away. So the check above measures the return rather
+		// than the region drifting home on its own.
+		FollowMouse f2;
+		f2.arm(home);
+		qint64 t2 = 0;
+		for (int i = 0; i < 800; ++i)
+			f2.tick(QPoint(3000, 1800), screen, p, t2 += 16);
+		ok(f2.region().x != home.x,
+		   "CONTROL: without returnTo it stays out where the cursor took it");
+	}
+
+	std::printf("\n-- and switching it back on --\n");
+	{
+		// Resuming must not snap. The region carries on from wherever the glide
+		// reached, which is the whole reason resumeFollowing does not re-seed.
+		const CaptureRegion home = reg(600, 400, 600, 400);
+		FollowMouse f;
+		f.arm(home);
+		FollowParams p;
+		p.smoothness = 60; // slow, so the return is still in progress
+		qint64 t = 0;
+		for (int i = 0; i < 200; ++i)
+			f.tick(QPoint(3000, 1800), screen, p, t += 16);
+
+		f.returnTo(QPoint(home.x, home.y));
+		for (int i = 0; i < 10; ++i) // a few frames in, nowhere near home yet
+			f.tick(QPoint(3000, 1800), screen, p, t += 16);
+		const CaptureRegion midGlide = f.region();
+		ok(!f.settled(), "the glide is genuinely still under way");
+
+		f.resumeFollowing();
+		ok(!f.returning(), "resuming clears the return");
+		const CaptureRegion afterResume = f.region();
+		ok(afterResume.x == midGlide.x && afterResume.y == midGlide.y,
+		   "and does not move the region by itself — no snap");
+
+		// From there it chases the cursor again.
+		for (int i = 0; i < 200; ++i)
+			f.tick(QPoint(3000, 1800), screen, p, t += 16);
+		ok(f.region().x > midGlide.x, "and it is following the cursor once more");
+	}
+
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
 }

@@ -596,6 +596,18 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 				"full-width bar only follows up and down."),
 		 followAxisCombo_);
 
+	followShortcutEdit_ = new QKeySequenceEdit(
+		QKeySequence(QString::fromStdString(preset.followShortcut)), this);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	followShortcutEdit_->setMaximumSequenceLength(1);
+#endif
+	addField(v, QStringLiteral("Follow shortcut"),
+		 QStringLiteral("Stops and resumes the following mid-recording. Unlike Zoom and "
+				"Spotlight, following is already on from the first frame — this key "
+				"parks the camera so you can hold a shot, and switching it off glides "
+				"the region back to the rectangle you framed before recording."),
+		 followShortcutEdit_);
+
 	// Profile -> sliders. Values chosen so the names mean what they say:
 	// Instant snaps, Cinematic trails on a long leash, Mobile Tutorial keeps a
 	// tall strip steady with a generous safe zone.
@@ -1199,6 +1211,7 @@ bool PresetEditorDialog::resolveShortcutConflicts()
 		{"pause", "Pause / resume", pauseKeyEdit_},
 		{"zoom", "Zoom in / out", zoomShortcutEdit_},
 		{"spotlight", "Spotlight on / off", spotShortcutEdit_},
+		{"follow", "Follow Mouse on / off", followShortcutEdit_},
 	};
 
 	QVector<ShortcutBinding> bindings;
@@ -1345,6 +1358,7 @@ void PresetEditorDialog::accept()
 	result_.followSmoothness = followSmoothSlider_->value();
 	result_.followAxis = followAxisCombo_->currentIndex();
 	result_.followProfile = followProfileCombo_->currentIndex();
+	result_.followShortcut = followShortcutEdit_->keySequence().toString().toStdString();
 
 	result_.spotlightEnabled = spotCheck_->isChecked();
 	result_.spotlightStartOn = spotStartOnCheck_->isChecked();

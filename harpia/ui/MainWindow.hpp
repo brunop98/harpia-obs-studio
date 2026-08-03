@@ -331,6 +331,17 @@ private:
 	void tickFollowMouse();
 	void syncFollowMouse(); // start/stop the timer to match the current state
 
+	// The Follow Mouse shortcut. Unlike Zoom and Spotlight, following is on
+	// from the first frame, so the key parks the camera rather than starting
+	// it. Switching it off glides the region back to the rectangle that was
+	// framed before the recording started -- followHome_ -- rather than
+	// abandoning it wherever the cursor last dragged it.
+	QShortcut *followShortcut_ = nullptr;
+	bool followSuspended_ = false; // the key switched following off for this take
+	QPoint followHome_;            // region top-left when following armed
+	void rebindFollowHotkey();
+	void onFollowToggle();
+
 	// Automatic Zoom: the shortcut pushes the recorded picture in on the cursor
 	// and pulls it back out. Full Screen only for now -- see ZoomMode.hpp for
 	// why, and for why the core takes a canvas rather than a capture mode.

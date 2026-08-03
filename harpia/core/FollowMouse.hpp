@@ -99,6 +99,27 @@ public:
 	// the region under us (the user dragging the frame mid-recording).
 	void rebase(const CaptureRegion &region);
 
+	// Stop tracking the cursor and glide the region back to `topLeftDevicePx`
+	// -- where it was framed before following started. tick() must keep being
+	// called until settled() reports it has arrived; the return uses the same
+	// smoothing as the chase, so it looks like the camera easing back rather
+	// than a cut.
+	//
+	// Separate from disarm() on purpose. Disarming stops the ticks, which would
+	// abandon the region wherever the cursor last dragged it -- the point of
+	// returning is that the recording ends framed on what the user originally
+	// chose.
+	void returnTo(QPoint topLeftDevicePx);
+	bool returning() const { return returning_; }
+
+	// Has the position reached the target? While returning, this is how the
+	// caller knows the glide is over and it can disarm.
+	bool settled() const;
+
+	// Resume tracking from wherever the region is now. Cancels a return in
+	// progress without snapping.
+	void resumeFollowing();
+
 	// One step: chase the cursor. Returns true if the region MOVED, in which
 	// case region() is the new rectangle to apply. nowMs is an injected clock
 	// (monotonic ms); the first tick after arm() takes a nominal step.
@@ -114,6 +135,7 @@ private:
 	QPointF pos_;          // smoothed top-left, kept fractional so slow chases
 	                       // do not stall on integer rounding
 	QPointF target_;       // where the top-left is headed
+	bool returning_ = false; // gliding home; the cursor no longer moves target_
 	qint64 lastMs_ = -1;
 };
 

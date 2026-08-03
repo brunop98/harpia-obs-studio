@@ -121,6 +121,19 @@ RecorderControlsOverlay::RecorderControlsOverlay(QWidget *parent) : QWidget(pare
 	spotChip_->installEventFilter(this);
 	row->addWidget(spotChip_);
 
+	followChip_ = new QLabel(this);
+	followChip_->setAlignment(Qt::AlignCenter);
+	followChip_->setStyleSheet(QStringLiteral(
+		"QLabel{color:#0d1117;background:#9aa3b0;border-radius:9px;padding:0 8px;"
+		"font-size:12px;font-weight:bold;}"));
+	followChip_->setFixedHeight(32);
+	followChip_->setText(QStringLiteral("Follow off"));
+	followChip_->setToolTip(QStringLiteral("The region has stopped following the mouse. Press "
+					       "the follow shortcut again to resume."));
+	followChip_->setVisible(false);
+	followChip_->installEventFilter(this);
+	row->addWidget(followChip_);
+
 	connect(startButton_, &QPushButton::clicked, this, &RecorderControlsOverlay::startClicked);
 	connect(pauseButton_, &QPushButton::clicked, this, &RecorderControlsOverlay::pauseClicked);
 	connect(stopButton_, &QPushButton::clicked, this, &RecorderControlsOverlay::stopClicked);
@@ -204,6 +217,14 @@ void RecorderControlsOverlay::setSpotlight(bool lit)
 	if (!spotChip_ || spotChip_->isVisible() == lit)
 		return;
 	spotChip_->setVisible(lit);
+	adjustSize();
+}
+
+void RecorderControlsOverlay::setFollowPaused(bool paused)
+{
+	if (!followChip_ || followChip_->isVisible() == paused)
+		return;
+	followChip_->setVisible(paused);
 	adjustSize();
 }
 

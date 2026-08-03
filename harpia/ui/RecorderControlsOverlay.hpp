@@ -54,6 +54,12 @@ public:
 	// nothing to tell you the shortcut exists or that the last press registered.
 	void setSpotlight(bool lit);
 
+	// Follow Mouse, shown while it is PAUSED rather than while it is running.
+	// The other two chips mark an active effect; following is the default state
+	// for a preset that has it, so a permanent chip would be noise. What needs
+	// reporting is the exception -- and that the key press registered.
+	void setFollowPaused(bool paused);
+
 signals:
 	void startClicked();
 	void pauseClicked();
@@ -85,6 +91,7 @@ private:
 
 	QLabel *zoomChip_ = nullptr;
 	QLabel *spotChip_ = nullptr;
+	QLabel *followChip_ = nullptr;
 	QPushButton *startButton_ = nullptr;
 	QPushButton *pauseButton_ = nullptr;
 	QPushButton *stopButton_ = nullptr;

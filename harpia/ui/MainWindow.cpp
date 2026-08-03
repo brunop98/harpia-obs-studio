@@ -584,6 +584,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 			onZoomToggle();
 		else if (id == 4)
 			onSpotlightToggle();
+		else if (id == 5)
+			onFollowToggle();
 	});
 	// Zoom gets the same treatment: a global hotkey where the platform allows,
 	// a window-scoped fallback otherwise. Unlike the other two its key comes
@@ -593,6 +595,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(zoomShortcut_, &QShortcut::activated, this, &MainWindow::onZoomToggle);
 	spotlightShortcut_ = new QShortcut(QKeySequence(), this);
 	connect(spotlightShortcut_, &QShortcut::activated, this, &MainWindow::onSpotlightToggle);
+	followShortcut_ = new QShortcut(QKeySequence(), this);
+	connect(followShortcut_, &QShortcut::activated, this, &MainWindow::onFollowToggle);
 	rebindHotkeys();
 	rebindPresetHotkeys();
 	connect(editPresetButton_, &QPushButton::clicked, this, [this]() { editActivePreset(); });
@@ -2023,7 +2027,7 @@ void MainWindow::editActivePreset(const QString &initialPage)
 		refreshWebcamRow();
 		refreshDriveLink();
 		rebindHotkeys(); // the Hotkeys page may have re-mapped them
-		rebindPresetHotkeys(); // ...and the Zoom / Spotlight pages own theirs
+		rebindPresetHotkeys(); // ...and the Zoom / Spotlight / Follow pages own theirs
 	}
 }
 
@@ -2639,6 +2643,14 @@ void MainWindow::syncFollowMouse()
 			  !stopping_ && !recorder_.isPaused();
 	if (want == followMouse_.armed())
 		return;
+	if (!want) {
+		// A recording is ending (or pausing). The suspend flag belongs to a
+		// take, so it goes with it -- the next recording follows from its first
+		// frame, which is what the preset says.
+		followSuspended_ = false;
+		if (floatingControls_)
+			floatingControls_->setFollowPaused(false);
+	}
 	if (want) {
 		// Screen geometry once, at arm time -- screenForActivePreset() does
 		// monitor enumeration and GDI lookups on Windows, far too expensive
@@ -2650,6 +2662,9 @@ void MainWindow::syncFollowMouse()
 						    int(scr->geometry().height() * followDpr_))
 					    : QSize(0, 0);
 		followClock_.start();
+		// Where the region was framed before the camera started moving it. The
+		// shortcut glides back to this.
+		followHome_ = QPoint(currentRegion_.x, currentRegion_.y);
 		followMouse_.arm(currentRegion_);
 		if (followMouse_.armed())
 			followTimer_->start();
@@ -2665,8 +2680,18 @@ void MainWindow::tickFollowMouse()
 		followTimer_->stop();
 		return;
 	}
+	// Switched off by the shortcut and finished gliding home: the region is
+	// parked and nothing is chasing it, so stop burning a 60 Hz timer until the
+	// key switches following back on.
+	if (followSuspended_ && !followMouse_.returning()) {
+		followTimer_->stop();
+		return;
+	}
 	// A manual drag of the frame outranks the follow: adopt wherever the user
-	// puts it instead of chasing back toward where the region used to be.
+	// puts it instead of chasing back toward where the region used to be. That
+	// includes taking over mid-glide -- rebase() cancels the return, and the
+	// suspend check above then parks it wherever the drag left it, which is
+	// what "the user grabbed the frame" should mean.
 	if (regionTool_ && regionTool_->isInteracting()) {
 		followMouse_.rebase(currentRegion_);
 		return;
@@ -2679,7 +2704,13 @@ void MainWindow::tickFollowMouse()
 	params.axis = FollowAxis(std::clamp(p.followAxis, 0, 2));
 
 	const QPoint cursor = RegionWatch::toRegionSpace(QCursor::pos(), followOrigin_, followDpr_);
-	if (!followMouse_.tick(cursor, followScreenDevicePx_, params, followClock_.elapsed()))
+	const bool moved = followMouse_.tick(cursor, followScreenDevicePx_, params, followClock_.elapsed());
+	// The glide home has arrived. Checked after the tick, so the last fractional
+	// step is applied before the timer stops -- otherwise the region parks a
+	// pixel short of where it started, every time.
+	if (followMouse_.returning() && followMouse_.settled())
+		followMouse_.resumeFollowing(); // clears the return; the suspend gate above parks it
+	if (!moved)
 		return; // nothing moved by a whole pixel; nothing to apply
 
 	const CaptureRegion r = followMouse_.region();
@@ -2718,6 +2749,62 @@ void MainWindow::rebindPresetHotkeys()
 {
 	rebindZoomHotkey();
 	rebindSpotlightHotkey();
+	rebindFollowHotkey();
+}
+
+void MainWindow::rebindFollowHotkey()
+{
+	const Preset &p = activePreset();
+	// Live only where the preset enables following: the checkbox decides
+	// whether the feature exists, the key toggles it within a take. Binding it
+	// anyway would let one preset's key do nothing visible in another, which
+	// reads as a broken shortcut rather than an inapplicable one.
+	const QKeySequence seq = p.followMouse
+					 ? QKeySequence(QString::fromStdString(p.followShortcut))
+					 : QKeySequence();
+	if (followShortcut_)
+		followShortcut_->setKey(seq);
+	if (!hotkeys_)
+		return;
+	const bool global = hotkeys_->bind(5, seq);
+	if (!seq.isEmpty())
+		blog(LOG_INFO, "[harpia] hotkeys: follow=%s (%s)", qUtf8Printable(seq.toString()),
+		     global ? "global" : "window-only");
+}
+
+void MainWindow::onFollowToggle()
+{
+	const Preset &p = activePreset();
+	if (!p.followMouse || captureMode_ != CaptureMode::Region || !recorder_.isRecording() ||
+	    starting_ || stopping_) {
+		if (p.followMouse)
+			blog(LOG_INFO, "[harpia] follow shortcut ignored: needs a Custom Region "
+				       "recording in progress");
+		return;
+	}
+	followSuspended_ = !followSuspended_;
+	blog(LOG_INFO, "[harpia] follow mouse %s", followSuspended_ ? "off" : "on");
+	writeMarker(followSuspended_ ? QStringLiteral("Follow Mouse Off")
+				     : QStringLiteral("Follow Mouse On"));
+
+	if (followSuspended_) {
+		// Glide back to the framing chosen before recording started, rather
+		// than freezing wherever the cursor happened to drag the region. The
+		// tick keeps running until it arrives -- disarming now would abandon it
+		// mid-journey.
+		if (followMouse_.armed())
+			followMouse_.returnTo(followHome_);
+		if (followTimer_ && !followTimer_->isActive())
+			followTimer_->start();
+	} else if (followMouse_.armed()) {
+		// Resume from wherever the glide got to. No re-seeding: snapping here
+		// would undo the easing that just happened.
+		followMouse_.resumeFollowing();
+		if (followTimer_ && !followTimer_->isActive())
+			followTimer_->start();
+	}
+	if (floatingControls_)
+		floatingControls_->setFollowPaused(followSuspended_);
 }
 
 void MainWindow::rebindSpotlightHotkey()

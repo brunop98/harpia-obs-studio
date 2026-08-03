@@ -254,6 +254,17 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	segBox->addWidget(cutModeBtn_);
 	segBox->addWidget(fullModeBtn_);
 	bar->addLayout(segBox);
+	bar->addSpacing(6);
+
+	// The bridge between the fast modes and the powerful one. Shown only in
+	// Trim and Multi-Cut, where there is something to send.
+	sendToFullBtn_ = new QPushButton(QStringLiteral("Send to Full Editing →"), this);
+	sendToFullBtn_->setToolTip(QStringLiteral(
+		"Put this result on the Full Editing timeline as clips — one per cut, keeping "
+		"every edit point — and switch to it.\n\nNothing is lost: the clips are ADDED "
+		"after whatever is already there, and this mode keeps its own work too."));
+	connect(sendToFullBtn_, &QPushButton::clicked, this, &VideoEditorWindow::sendToFullEditing);
+	bar->addWidget(sendToFullBtn_);
 	bar->addSpacing(12);
 
 	// Undo/redo, grouped tightly as one cluster.
@@ -5989,6 +6000,51 @@ void VideoEditorWindow::showInspector(bool on)
 	});
 }
 
+void VideoEditorWindow::sendToFullEditing()
+{
+	if (!timelineView_)
+		return;
+
+	// Append, never overwrite: sending twice piles clips up, which is visible
+	// and undoable, whereas sending ON TOP of Full-editing work is neither.
+	const qint64 at = timelineView_->durationMs();
+	QVector<TlClip> clips;
+	if (multiCut()) {
+		clips = clipsFromSegments(tracks_->segments(), at);
+	} else {
+		// Trim: one clip, carrying its in/out, speed and crop. The active
+		// source is what Trim was showing.
+		const EditorSource *src = activeSource();
+		clips = clipsFromTrim(src ? src->id : 0, timeline_->start(), timeline_->end(), speed_,
+				      canvas_->cropEnabled(), canvas_->cropRectVideo(), at);
+	}
+
+	if (clips.isEmpty()) {
+		QMessageBox::information(
+			this, QStringLiteral("Send to Full Editing"),
+			multiCut() ? QStringLiteral("There are no cuts to send yet.")
+				   : QStringLiteral("The trim range is empty — set an in and out point "
+						    "first."));
+		return;
+	}
+
+	for (const TlClip &c : clips)
+		timelineView_->addClip(TlTrack::Kind::Video, c);
+
+	// One undo entry for the whole send, not one per clip: it was one action.
+	commitSnapshot();
+	setEditMode(EditMode::Full);
+
+	const qint64 ms = sentDurationMs(clips);
+	if (infoLabel_)
+		infoLabel_->setText(QStringLiteral("Sent %1 clip%2 (%3 s) to Full Editing%4")
+					    .arg(clips.size())
+					    .arg(clips.size() == 1 ? "" : "s")
+					    .arg(ms / 1000.0, 0, 'f', 1)
+					    .arg(at > 0 ? QStringLiteral(", after the existing clips")
+							: QString()));
+}
+
 void VideoEditorWindow::setEditMode(EditMode m)
 {
 	stopPlayback();
@@ -6000,6 +6056,9 @@ void VideoEditorWindow::setEditMode(EditMode m)
 	cutModeBtn_->setChecked(m == EditMode::MultiCut);
 	fullModeBtn_->setChecked(m == EditMode::Full);
 	stack_->setCurrentIndex(int(m));
+	// Nothing to send FROM Full editing -- it is the destination.
+	if (sendToFullBtn_)
+		sendToFullBtn_->setVisible(m != EditMode::Full);
 
 	// The speed control and the separate Voiceover foldout only apply to Trim /
 	// Multi-Cut; Full editing puts audio on its own timeline tracks. Only touch

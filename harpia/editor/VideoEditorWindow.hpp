@@ -5,6 +5,7 @@
 #include "shader/ShaderEffect.hpp"    // ShaderState / ShaderParam (post-processing)
 #include "timeline/TimelineModel.hpp"  // TlClip / TlTransform (Full-editing timeline)
 #include "timeline/ZoomKeyframes.hpp"  // ZoomSettings (the "Zoom here" shape)
+#include "SendToFull.hpp"             // clipsFromSegments / clipsFromTrim
 #include "DevPanel.hpp"                 // EditorChromeParams / EditorInspectorParams
 #include "component/ComponentPanel.hpp"  // ComponentPanel::View (Inspector model)
 #include "timeline/TimelineView.hpp"    // ClipboardEntry (timeline copy/paste)
@@ -472,6 +473,10 @@ private:
 	QPushButton *trimModeBtn_ = nullptr;
 	QPushButton *cutModeBtn_ = nullptr;
 	QPushButton *fullModeBtn_ = nullptr;
+	// Trim / Multi-Cut -> Full editing, keeping every cut boundary as its own
+	// clip. Hidden in Full editing, which is the destination.
+	QPushButton *sendToFullBtn_ = nullptr;
+	void sendToFullEditing();
 	QCheckBox *cropToggle_ = nullptr;
 	QPushButton *audioHeader_ = nullptr; // voiceover disclosure (hidden in Full mode)
 	QWidget *audioBody_ = nullptr;

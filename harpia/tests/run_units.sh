@@ -46,6 +46,12 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/regionwatch_test.cpp" "$H/core/RegionWatch.cpp" -o "$WORK/regionwatch_test" $LF
 
+# Send to Full Editing: Trim / Multi-Cut results as timeline clips. The output
+# time arithmetic is what rots silently -- a bad offset leaves a gap that looks
+# like a decoding fault rather than an off-by-one.
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
+	"$HERE/sendtofull_test.cpp" -o "$WORK/sendtofull_test" $LF
+
 # Global hotkeys: the QKeySequence -> Win32 (mods, VK) translation. A wrong VK
 # registers FINE and then fires for a different key -- no error path reports
 # it -- so the ABI constants are pinned here, on every platform.
@@ -371,6 +377,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/followmouse_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/crashreport_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/autopause_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/globalhotkeys_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/sendtofull_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionoverlay_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/recordercontrols_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/startupsplash_test" || rc=1

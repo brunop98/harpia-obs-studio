@@ -171,6 +171,7 @@ target_sources(
     editor/PreviewDecoder.hpp
     editor/ProxyMedia.cpp
     editor/ProxyMedia.hpp
+    editor/SendToFull.hpp
     editor/StillImage.cpp
     editor/StillImage.hpp
     editor/CanvasFit.hpp

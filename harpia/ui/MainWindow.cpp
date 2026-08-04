@@ -191,6 +191,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// or "manage". Saved regions are appended by reloadCaptureModeCombo().
 	captureModeCombo_->addItem(QStringLiteral("Entire Monitor"), QStringLiteral("monitor"));
 	captureModeCombo_->addItem(QStringLiteral("Custom Region"), QStringLiteral("region"));
+	captureModeCombo_->addItem(QStringLiteral("Audio Only"), QStringLiteral("audio"));
 	captureModeCombo_->setToolTip(
 		QStringLiteral("What to record: the whole monitor, a custom region you drag on screen, "
 			       "or a saved region. Right-click a region to save it."));
@@ -1289,6 +1290,18 @@ void MainWindow::armVideoPipeline()
 	// region size in Region mode, otherwise the full display resolution. No
 	// scaling / custom sizes. ("Record only one application" doesn't affect the
 	// captured area — it only drives focus auto-pause.)
+	// Audio Only: no canvas, no capture source, no video encoder. Returning
+	// here is the entire saving -- the GPU encoder never starts, nothing is
+	// composited, and a twenty-minute take costs about a megabyte a minute
+	// instead of hundreds.
+	if (recordMode() == RecordMode::AudioOnly) {
+		regionByTransform_ = false;
+		capture_.stopCapture();
+		armedW_ = armedH_ = 0;
+		armedFps_ = preset.fps;
+		return;
+	}
+
 	canvasSize_ = canvasForActivePreset();
 	uint32_t baseW, baseH;
 
@@ -1379,7 +1392,8 @@ void MainWindow::startRecording()
 	tmp.mkpath(QStringLiteral("."));
 	const QString recordPath =
 		tmp.filePath(baseName + QLatin1Char('.') +
-			     (preset.format == RecordingFormat::MP4
+			     ((preset.format == RecordingFormat::MP4 &&
+			       recordMode() != RecordMode::AudioOnly)
 				      ? QStringLiteral("mkv")
 				      : QString::fromStdString(preset.extension())));
 
@@ -2399,7 +2413,14 @@ void MainWindow::onCaptureModeChanged()
 	}
 	prevCaptureIndex_ = captureModeCombo_->currentIndex();
 
-	if (sel == QStringLiteral("monitor")) {
+	if (sel == QStringLiteral("audio")) {
+		// No picture at all. The region goes with it, and the capture source is
+		// left alone -- armVideoPipeline skips it entirely for this mode, so
+		// nothing is capturing while an audio-only recording runs.
+		captureMode_ = CaptureMode::AudioOnly;
+		currentRegion_ = CaptureRegion{};
+		capture_.setRegion(currentRegion_);
+	} else if (sel == QStringLiteral("monitor")) {
 		captureMode_ = CaptureMode::Monitor;
 		currentRegion_ = CaptureRegion{};
 		capture_.setRegion(currentRegion_);
@@ -2442,6 +2463,7 @@ void MainWindow::onCaptureModeChanged()
 			presets_.upsert(updated);
 		}
 	}
+	applyModeCapabilities();
 	updateRegionToolVisibility();
 	updateRegionLeaveVisibility();
 	updateButtons();
@@ -2456,6 +2478,7 @@ void MainWindow::reloadCaptureModeCombo()
 	captureModeCombo_->clear();
 	captureModeCombo_->addItem(QStringLiteral("Entire Monitor"), QStringLiteral("monitor"));
 	captureModeCombo_->addItem(QStringLiteral("Custom Region"), QStringLiteral("region"));
+	captureModeCombo_->addItem(QStringLiteral("Audio Only"), QStringLiteral("audio"));
 
 	const auto &regions = regionStore_->regions();
 	if (!regions.empty()) {
@@ -3496,6 +3519,61 @@ void MainWindow::openAudioExtract(const QString &path)
 	if (dlg.exec() == QDialog::Accepted && !dlg.exportedPath().isEmpty()) {
 		blog(LOG_INFO, "[harpia] extracted audio to %s", qUtf8Printable(dlg.exportedPath()));
 		refreshClipViews();
+	}
+}
+
+// Every control that depends on the capture mode, enabled or disabled in one
+// pass, each with the reason on its tooltip.
+//
+// One function rather than a check at each site. The scattered version drifts
+// the moment a mode is added -- and the symptom is a control that looks
+// available while doing nothing, which is the specific confusion this is meant
+// to end. The rules themselves live in ModeCapabilities.hpp so the preset
+// editor can consult the same table.
+void MainWindow::applyModeCapabilities()
+{
+	const RecordMode m = recordMode();
+	// While recording, the existing lock takes precedence: nothing here may
+	// re-enable a control that updateButtons() just disabled for the take.
+	const bool locked = recorder_.isRecording() || starting_ || stopping_;
+
+	const auto gate = [&](QWidget *w, bool applies) {
+		if (!w)
+			return;
+		w->setEnabled(applies && !locked);
+		const QString why = modeDisabledReason(m, applies);
+		if (!applies)
+			w->setToolTip(why);
+		else if (w->toolTip() == modeDisabledReason(m, false) ||
+			 w->toolTip().startsWith(QStringLiteral("Not available")) ||
+			 w->toolTip().startsWith(QStringLiteral("Only available")))
+			w->setToolTip(QString()); // clear a reason we set earlier
+	};
+
+	gate(monitorCombo_, modeUsesMonitor(m));
+	gate(webcamCombo_, modeSupportsWebcam(m));
+	gate(regionLeaveCombo_, modeSupportsRegionLeavePause(m));
+	// "Record only one application", the idle timeout and the countdown are
+	// about WHEN to record rather than what, so they survive every mode --
+	// including an audio-only take.
+	gate(appCombo_, modeSupportsAppFocus(m));
+	gate(idleCombo_, modeSupportsIdlePause(m));
+	gate(countdownCombo_, modeSupportsCountdown(m));
+
+	// The region-leave row already has a label+combo group that hides as a
+	// whole, from the Follow Mouse conflict work; reuse it rather than leaving
+	// a caption beside a dead control.
+	if (regionLeaveGroup_)
+		regionLeaveGroup_->setVisible(modeSupportsRegionLeavePause(m));
+
+	// With no picture there is nothing to preview or overlay.
+	if (webcamPreview_ && !modeSupportsWebcam(m))
+		webcamPreview_->clearDevice();
+	if (!modeHasVideo(m)) {
+		if (mouseFx_)
+			mouseFx_->stop();
+		if (screenBorder_)
+			screenBorder_->hideBorder();
 	}
 }
 

@@ -100,6 +100,7 @@ target_sources(
     core/FollowMouse.cpp
     core/FollowMouse.hpp
     core/ZoomMode.hpp
+    core/ModeCapabilities.hpp
     core/SpotlightFx.hpp
     core/ShortcutConflicts.hpp
     core/RegionWatch.cpp

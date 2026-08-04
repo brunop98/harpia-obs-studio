@@ -6,6 +6,7 @@
 #include "core/CaptureManager.hpp"
 #include "core/EncoderFactory.hpp"
 #include "core/WebcamRecorder.hpp"
+#include "core/ModeCapabilities.hpp"   // one table of what each mode supports
 #include "core/ShortcutConflicts.hpp" // the no-duplicate-shortcuts rule
 #include "core/SpotlightFx.hpp"     // SpotlightParams limits, shared with the overlay
 #include "core/ZoomMode.hpp"      // ZoomParams::kMinPercent / kMaxPercent
@@ -551,6 +552,16 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	// ---- Follow Mouse ----
 	followCheck_ = new QCheckBox(QStringLiteral("Follow Mouse (Custom Region only)"), this);
 	followCheck_->setChecked(preset.followMouse);
+	// Greyed out with the reason on the tooltip when this preset does not record
+	// a region, rather than sitting there tickable and inert. Same table the main
+	// window uses, so the two cannot disagree about when it applies.
+	{
+		const RecordMode pm = recordModeFromInt(preset.captureMode);
+		if (!modeSupportsFollowMouse(pm)) {
+			followCheck_->setEnabled(false);
+			followCheck_->setToolTip(modeDisabledReason(pm, false));
+		}
+	}
 	addCheck(v, followCheck_,
 		 QStringLiteral("While recording a Custom Region, the region pans to keep the cursor "
 				"framed — record mobile-format tutorials without re-framing the video "

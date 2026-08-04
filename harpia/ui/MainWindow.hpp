@@ -6,6 +6,7 @@
 #include "core/DiskSpace.hpp"
 #include "core/FollowMouse.hpp"
 #include "core/GlobalHotkeys.hpp"
+#include "core/ModeCapabilities.hpp"
 #include "core/ZoomMode.hpp"
 #include "core/RegionWatch.hpp"
 #include "core/WebcamRecorder.hpp"
@@ -256,7 +257,15 @@ protected:
 
 private:
 	// How the screen is captured (a global tool, not part of a preset).
-	enum class CaptureMode { Monitor, Region };
+	// Mirrors RecordMode in core/ModeCapabilities.hpp, which owns the rules for
+	// what each mode supports. Kept as a separate enum only because this one is
+	// woven through the window already; recordMode() converts.
+	enum class CaptureMode { Monitor, Region, AudioOnly };
+	RecordMode recordMode() const { return recordModeFromInt(int(captureMode_)); }
+	// Enable, disable and explain every control that depends on the capture
+	// mode. One pass over the whole window rather than a check at each site --
+	// see ModeCapabilities.hpp for why.
+	void applyModeCapabilities();
 	CaptureMode captureMode_ = CaptureMode::Monitor;
 
 	// Rebuild the capture dropdown (modes + saved regions + Manage). The last

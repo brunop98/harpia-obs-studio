@@ -1,6 +1,7 @@
 #include "RecordingController.hpp"
 
 #include "EncoderFactory.hpp"
+#include "ModeCapabilities.hpp"
 
 #include <obs.h>
 
@@ -96,28 +97,40 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 			vid = "obs_x264"; // last-resort baseline
 		const std::string aid = EncoderFactory::audioEncoderId(preset);
 
-		obs_data_t *vsettings = obs_data_create();
-		// Constant quality on "Auto" bitrate, CBR when the user set a number.
-		EncoderFactory::applyRecordingQuality(vsettings, vid, preset.videoBitrateKbps);
-		videoEncoder_ = obs_video_encoder_create(vid.c_str(), "harpia_video", vsettings, nullptr);
-		obs_data_release(vsettings);
+		// Audio Only: no video encoder is created and none is attached, so the
+		// muxer writes a single AAC track. This is why the two encoders are set
+		// on separate calls below rather than in one helper -- an audio-only
+		// output is a real libobs configuration, not a video output with the
+		// picture blanked, and it never touches the GPU encoder at all.
+		const bool audioOnly = !modeUsesVideoEncoder(recordModeFromInt(preset.captureMode));
+
+		if (!audioOnly) {
+			obs_data_t *vsettings = obs_data_create();
+			// Constant quality on "Auto" bitrate, CBR when the user set a number.
+			EncoderFactory::applyRecordingQuality(vsettings, vid, preset.videoBitrateKbps);
+			videoEncoder_ =
+				obs_video_encoder_create(vid.c_str(), "harpia_video", vsettings, nullptr);
+			obs_data_release(vsettings);
+		}
 
 		obs_data_t *asettings = obs_data_create();
 		obs_data_set_int(asettings, "bitrate", preset.audioBitrateKbps > 0 ? preset.audioBitrateKbps : 160);
 		audioEncoder_ = obs_audio_encoder_create(aid.c_str(), "harpia_audio", asettings, 0, nullptr);
 		obs_data_release(asettings);
 
-		if (!videoEncoder_ || !audioEncoder_) {
+		if ((!audioOnly && !videoEncoder_) || !audioEncoder_) {
 			blog(LOG_ERROR, "[harpia] failed to create encoders (video='%s' audio='%s')", vid.c_str(),
 			     aid.c_str());
 			teardown();
 			return false;
 		}
 
-		obs_encoder_set_video(videoEncoder_, obs_get_video());
+		if (videoEncoder_)
+			obs_encoder_set_video(videoEncoder_, obs_get_video());
 		obs_encoder_set_audio(audioEncoder_, obs_get_audio());
 
-		obs_output_set_video_encoder(output_, videoEncoder_);
+		if (videoEncoder_)
+			obs_output_set_video_encoder(output_, videoEncoder_);
 		obs_output_set_audio_encoder(output_, audioEncoder_, 0);
 
 		obs_data_t *osettings = obs_data_create();

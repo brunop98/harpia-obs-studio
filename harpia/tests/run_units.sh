@@ -109,6 +109,12 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/audioextract_test.cpp" -o "$WORK/audioextract_test" $LF
 
+# Which options apply in which capture mode. The alternative to this table is an
+# `if (mode == Region)` at a dozen call sites, which drifts -- and the symptom of
+# drift is a setting that looks switched on while doing nothing.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/modecapabilities_test.cpp" -o "$WORK/modecapabilities_test" $LF
+
 # Two actions on one key: nothing reports it and the second feature just never
 # fires, so the rule is that it cannot be saved at all.
 "$MOC" -I"$H" "$H/ui/ShortcutConflictDialog.hpp" -o "$WORK/moc_ShortcutConflictDialog.cpp"
@@ -429,6 +435,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/followmouse_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/zoommode_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/spotlight_fx_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/audioextract_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/modecapabilities_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/shortcutconflict_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/crashreport_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/autopause_test" || rc=1

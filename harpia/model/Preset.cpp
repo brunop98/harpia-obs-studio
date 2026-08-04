@@ -1,5 +1,7 @@
 #include "Preset.hpp"
 
+#include "core/ModeCapabilities.hpp"
+
 namespace harpia {
 
 const char *formatToString(RecordingFormat format)
@@ -81,6 +83,12 @@ const char *formatExtension(RecordingFormat format)
 
 std::string Preset::extension() const
 {
+	// Audio Only overrides the video container entirely: there is no picture,
+	// so the preset's MP4/MKV/GIF choice describes nothing. Handled here rather
+	// than at each call site so the temp file, the final file and the library
+	// all agree without three separate checks.
+	if (recordModeFromInt(captureMode) == RecordMode::AudioOnly)
+		return audioOnlyExtension();
 	return formatExtension(format);
 }
 

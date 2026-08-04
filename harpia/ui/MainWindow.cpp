@@ -2351,6 +2351,22 @@ void MainWindow::refreshReadiness()
 				    QStringLiteral("Fix video")});
 	}
 
+	// Audio Only cannot start yet. libobs gates obs_output_start on the
+	// output's REGISTERED flags, and every FFmpeg output in this build is
+	// declared OBS_OUTPUT_AV -- so it demands a video encoder no matter what is
+	// actually attached, and refuses with no error string. Nothing in the mode
+	// plumbing is wrong; there is simply no audio-only output to hand it to.
+	// Blocked here, with the reason visible, until the raw-audio tap replaces
+	// the output for this mode -- rather than letting Record fail with
+	// "(unknown)".
+	if (recordMode() == RecordMode::AudioOnly) {
+		warnings.push_back(
+			{QStringLiteral("Audio Only recording isn't available in this build yet. "
+					"Use Extract Audio Only on a recording for now."),
+			 [this]() { captureModeCombo_->setCurrentIndex(0); onCaptureModeChanged(); },
+			 QStringLiteral("Switch to Entire Monitor")});
+	}
+
 	// Recompute the blocking state + status headline (cheap, always).
 	bool anyBlocking = false;
 	for (const Warning &w : warnings) {

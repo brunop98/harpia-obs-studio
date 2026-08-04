@@ -30,6 +30,9 @@ public:
 
 	bool desktopOn() const;
 	std::vector<std::string> enabledMicIds() const;
+	// Every microphone the panel is showing, enabled or not. The recorder holds
+	// a source open for each so they can be switched on mid-take.
+	std::vector<std::string> knownMicIds() const;
 	double desktopVolume() const;                    // linear 0..1
 	std::map<std::string, double> micVolumes() const; // every row, keyed by id
 

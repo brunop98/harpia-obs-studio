@@ -171,12 +171,63 @@ float AudioManager::desktopPeakDb() const
 	return desktop_ ? desktop_->peakDb.load(std::memory_order_relaxed) : kFloorDb;
 }
 
+void AudioManager::beginHold(const std::vector<std::string> &micDeviceIds)
+{
+	hold_ = true;
+	for (const std::string &id : micDeviceIds) {
+		if (mics_.count(id))
+			continue; // already live; leave it exactly as it is
+		const uint32_t ch = allocMicChannel();
+		if (ch == 0) {
+			// Only four channels exist. The ones that got them still work;
+			// the rest simply cannot be switched on mid-recording.
+			blog(LOG_INFO, "[harpia] mic '%s' not held: all audio channels in use",
+			     id.c_str());
+			break;
+		}
+		const std::string name = "harpia_mic_" + std::to_string(ch);
+		auto meter = makeMeter(inputCaptureId(), name.c_str(), id.c_str(), ch);
+		if (!meter)
+			continue;
+		// Created silent: it exists so libobs has it in the mix from the first
+		// frame, but nothing of it reaches the file until it is switched on.
+		obs_source_set_muted(meter->source, true);
+		meter->muted = true;
+		auto vol = micVols_.find(id);
+		if (vol != micVols_.end() && meter->source)
+			obs_source_set_volume(meter->source, vol->second);
+		mics_.emplace(id, std::move(meter));
+	}
+}
+
+void AudioManager::endHold()
+{
+	hold_ = false;
+	// Whatever is still muted was only being held for the recording; drop it so
+	// an idle app is not holding microphones open.
+	for (auto it = mics_.begin(); it != mics_.end();) {
+		if (it->second && it->second->muted) {
+			destroyMeter(it->second);
+			it = mics_.erase(it);
+		} else {
+			++it;
+		}
+	}
+}
+
 void AudioManager::setMicEnabled(const std::string &deviceId, bool on)
 {
 	auto it = mics_.find(deviceId);
 	if (on) {
-		if (it != mics_.end())
-			return; // already enabled
+		if (it != mics_.end()) {
+			// Already there -- held for the recording, or genuinely on
+			// already. Unmuting is what makes a mid-recording switch work.
+			if (it->second && it->second->muted) {
+				obs_source_set_muted(it->second->source, false);
+				it->second->muted = false;
+			}
+			return;
+		}
 		const uint32_t ch = allocMicChannel();
 		if (ch == 0) {
 			blog(LOG_WARNING, "[harpia] no free audio channel for mic '%s'", deviceId.c_str());
@@ -192,14 +243,25 @@ void AudioManager::setMicEnabled(const std::string &deviceId, bool on)
 			mics_.emplace(deviceId, std::move(meter));
 		}
 	} else if (it != mics_.end()) {
+		if (hold_ && it->second && it->second->source) {
+			// Mid-recording: mute rather than destroy. Destroying frees the
+			// channel, and re-creating on the same channel later is the very
+			// thing libobs will not accept once the output is running.
+			obs_source_set_muted(it->second->source, true);
+			it->second->muted = true;
+			return;
+		}
 		destroyMeter(it->second);
 		mics_.erase(it);
 	}
 }
 
+// Enabled means audible, not merely present: a held-but-muted source exists and
+// is not being recorded.
 bool AudioManager::micEnabled(const std::string &deviceId) const
 {
-	return mics_.find(deviceId) != mics_.end();
+	const auto it = mics_.find(deviceId);
+	return it != mics_.end() && it->second && !it->second->muted;
 }
 
 float AudioManager::micPeakDb(const std::string &deviceId) const

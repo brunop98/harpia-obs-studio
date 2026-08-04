@@ -59,6 +59,23 @@ public:
 	// Release every audio source/meter.
 	void clear();
 
+	// Hold every source alive for the duration of a recording.
+	//
+	// libobs fixes its audio buffering window when the output starts. A source
+	// created AFTER that delivers timestamps outside the window and its samples
+	// are dropped, which is why switching a microphone on mid-recording did
+	// nothing at all. OBS Studio never hits this because its sources exist from
+	// launch and the checkbox only mutes them -- so this does the same.
+	//
+	// beginHold() creates a source for every id in `micDeviceIds` that does not
+	// have one yet, muted, and switches setMicEnabled over to muting instead of
+	// destroying. endHold() releases that and tidies away whatever is still
+	// muted. Channels 3..6 are the hard limit: at most four microphones can be
+	// held at once, and beginHold takes them in the order given.
+	void beginHold(const std::vector<std::string> &micDeviceIds);
+	void endHold();
+	bool holding() const { return hold_; }
+
 	static const char *outputCaptureId(); // desktop/system audio
 	static const char *inputCaptureId();   // microphone/line-in
 
@@ -68,6 +85,7 @@ private:
 		obs_volmeter_t *volmeter = nullptr;
 		std::atomic<float> peakDb{-60.f};
 		uint32_t channel = 0;
+		bool muted = false; // held alive but not being recorded
 	};
 
 	static void volmeterCallback(void *param, const float *magnitude, const float *peak,
@@ -82,6 +100,7 @@ private:
 	std::map<std::string, std::unique_ptr<Meter>> mics_;
 	float desktopVol_ = 1.f;
 	std::map<std::string, float> micVols_;
+	bool hold_ = false; // a recording is running: mute rather than destroy
 };
 
 } // namespace harpia

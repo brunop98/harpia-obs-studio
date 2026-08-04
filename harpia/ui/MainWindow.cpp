@@ -1514,6 +1514,10 @@ void MainWindow::startRecording()
 	wasPaused_ = false;
 	autoPaused_ = false;
 	regionAutoPaused_ = false;
+	// Hold a source open for every microphone the machine offers, muted, so
+	// switching one on mid-recording only has to unmute it. Created after the
+	// output starts, libobs drops their samples -- see AudioManager::beginHold.
+	audio_.beginHold(audioPanel_->knownMicIds());
 	updateButtons();
 	updateRegionToolVisibility(); // dim the region tool into recording mode
 
@@ -2064,6 +2068,26 @@ void MainWindow::showPresetMenu(const QPoint &pos)
 
 void MainWindow::editActivePreset(const QString &initialPage)
 {
+	// Settings cannot change mid-file. Guarded at the one entry point rather
+	// than by disabling each button, because the editor is reachable from
+	// several places -- the toolbar button, the preset combo's right-click
+	// menu, and the "Fix" links on readiness warnings -- and a guard per
+	// button is a guard someone forgets to add to the next one.
+	//
+	// Almost everything in here is baked into the output when recording starts:
+	// the canvas size, the encoder, the frame rate, the container. Changing
+	// them mid-take either does nothing (and looks broken) or corrupts the
+	// file. The audio panel is deliberately NOT covered -- levels and
+	// microphones are the one thing worth changing while talking, and
+	// AudioManager holds sources open for exactly that.
+	if (recorder_.isRecording() || starting_ || stopping_) {
+		QMessageBox::information(
+			this, QStringLiteral("Preset settings"),
+			QStringLiteral("Settings can't be changed while a recording is running.\n\n"
+				       "Stop the recording first. Audio levels and microphones can "
+				       "still be adjusted from the panel below."));
+		return;
+	}
 	const Preset *cur = presets_.find(activePresetId_);
 	if (!cur)
 		return;
@@ -4099,6 +4123,7 @@ void MainWindow::tickState()
 				os_inhibit_sleep_destroy(sleepInhibit_);
 				sleepInhibit_ = nullptr;
 			}
+			audio_.endHold();
 			if (mouseFx_)
 				mouseFx_->stop(); // also clears the spotlight
 			if (floatingControls_)

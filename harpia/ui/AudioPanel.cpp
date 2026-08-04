@@ -210,6 +210,15 @@ bool AudioPanel::desktopOn() const
 	return pcCheck_->isChecked();
 }
 
+std::vector<std::string> AudioPanel::knownMicIds() const
+{
+	std::vector<std::string> out;
+	out.reserve(micRows_.size());
+	for (const MicRow &row : micRows_)
+		out.push_back(row.id);
+	return out;
+}
+
 std::vector<std::string> AudioPanel::enabledMicIds() const
 {
 	std::vector<std::string> ids;

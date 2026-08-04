@@ -658,11 +658,36 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(&thumbnails_, &ThumbnailCache::ready, this, &MainWindow::onThumbnailReady);
 	connect(audioPanel_, &AudioPanel::changed, this, &MainWindow::onAudioChanged);
 
-	recorder_.onFinished = [this](const std::string &) {
+	recorder_.onFinished = [this](const std::string &writtenPath) {
 		// Fires on the obs signal thread when the output has FULLY stopped --
 		// encoders detached, file closed. This is the muxer's own word, which
 		// is why finalize can run from here with no sleep bolted on top.
 		outputStopped_.store(true);
+		// Audio Only can finish on a DIFFERENT path than it was given: if the
+		// encode to M4A fails, the captured WAV is kept rather than thrown
+		// away, and everything downstream has to point at the file that
+		// actually exists. Every other path reports the path it was handed.
+		// Compared on the GUI thread rather than here: this runs on a libobs
+		// (or the tap's writer) thread, and lastRecordedPath_ belongs to the
+		// window. Queued before the finalize below, so it lands first.
+		const QString written = QString::fromStdString(writtenPath);
+		QMetaObject::invokeMethod(
+			this,
+			[this, written]() {
+				if (written.isEmpty())
+					return;
+				lastRecordedPath_ = written;
+				// A kept WAV must not be filed away under a .m4a name: the
+				// destination follows the file that actually exists.
+				if (written.endsWith(QStringLiteral(".wav"), Qt::CaseInsensitive) &&
+				    !lastScreenPath_.isEmpty() &&
+				    !lastScreenPath_.endsWith(QStringLiteral(".wav"), Qt::CaseInsensitive)) {
+					QFileInfo fi(lastScreenPath_);
+					lastScreenPath_ = fi.dir().filePath(fi.completeBaseName() +
+									   QStringLiteral(".wav"));
+				}
+			},
+			Qt::QueuedConnection);
 		QMetaObject::invokeMethod(this, "refreshRecentList", Qt::QueuedConnection);
 		QMetaObject::invokeMethod(this, [this]() { finalizeAfterStop(); }, Qt::QueuedConnection);
 	};
@@ -2366,29 +2391,30 @@ void MainWindow::refreshReadiness()
 	}
 
 	// --- Codec / video settings --- (availability cached above)
-	if (!hwEncoderOk_) {
+	// Skipped entirely in Audio Only, which creates no video encoder: a
+	// missing H.264 encoder or a nonsense frame rate cannot stop a take that
+	// never asks for either, and blocking on one would be a wall with no door.
+	const bool needsVideoEncoder = modeUsesVideoEncoder(recordMode());
+	if (needsVideoEncoder && !hwEncoderOk_) {
 		warnings.push_back({QStringLiteral("The selected codec has no available encoder."),
 				    [this]() { editActivePreset(); }, QStringLiteral("Change codec")});
 	}
-	if (p.fps <= 0) {
+	if (needsVideoEncoder && p.fps <= 0) {
 		warnings.push_back({QStringLiteral("Invalid frame rate."), [this]() { editActivePreset(); },
 				    QStringLiteral("Fix video")});
 	}
 
-	// Audio Only cannot start yet. libobs gates obs_output_start on the
-	// output's REGISTERED flags, and every FFmpeg output in this build is
-	// declared OBS_OUTPUT_AV -- so it demands a video encoder no matter what is
-	// actually attached, and refuses with no error string. Nothing in the mode
-	// plumbing is wrong; there is simply no audio-only output to hand it to.
-	// Blocked here, with the reason visible, until the raw-audio tap replaces
-	// the output for this mode -- rather than letting Record fail with
-	// "(unknown)".
-	if (recordMode() == RecordMode::AudioOnly) {
-		warnings.push_back(
-			{QStringLiteral("Audio Only recording isn't available in this build yet. "
-					"Use Extract Audio Only on a recording for now."),
-			 [this]() { captureModeCombo_->setCurrentIndex(0); onCaptureModeChanged(); },
-			 QStringLiteral("Switch to Entire Monitor")});
+	// Audio Only with nothing switched on records a file of silence. In every
+	// other mode that is a legitimate choice -- a silent screen recording is
+	// still a recording -- so this one is blocking only here, where it would
+	// produce a file with nothing in it at all.
+	if (!needsVideoEncoder && !audioPanel_->desktopOn() && audioPanel_->enabledMicIds().empty()) {
+		warnings.push_back({QStringLiteral("Audio Only is selected but no audio source is switched "
+						   "on — the recording would be silent."),
+				    // Through the toggle, not the body, so the disclosure
+				    // arrow does not end up pointing the wrong way.
+				    [this]() { audioToggleButton_->setChecked(true); },
+				    QStringLiteral("Show audio")});
 	}
 
 	// Recompute the blocking state + status headline (cheap, always).
@@ -3896,7 +3922,12 @@ void MainWindow::updateButtons()
 		primaryButton_->setEnabled(false);
 		primaryButton_->setToolTip(QString());
 	} else if (stopping_) {
-		primaryButton_->setText(QStringLiteral("%1  Stopping…").arg(spin));
+		// "Encoding" rather than "Stopping" once the tap has closed: on a long
+		// Audio Only take this is the part that takes a moment, and a button
+		// that says Stopping for ten seconds reads as a hang.
+		primaryButton_->setText(recorder_.isFinishing()
+						? QStringLiteral("%1  Encoding…").arg(spin)
+						: QStringLiteral("%1  Stopping…").arg(spin));
 		primaryButton_->setEnabled(false);
 		primaryButton_->setToolTip(QString());
 	} else if (recording) {
@@ -4086,7 +4117,11 @@ void MainWindow::tickState()
 	// Stop watchdog: obs_output_stop is async and a stuck muxer/encoder can
 	// hang it indefinitely (previously: kill via Task Manager). After 10s,
 	// force-stop the output — the file may lose its tail, but the app lives.
-	if (stopping_ && !forcedStop_ && stopRequestMs_ > 0 &&
+	// Not armed against an Audio Only encode: that path stops capturing
+	// immediately and then spends real time turning an hour of PCM into M4A.
+	// It is progress, not a stuck muxer, and force-closing it would throw away
+	// the file it is in the middle of writing.
+	if (stopping_ && !forcedStop_ && stopRequestMs_ > 0 && !recorder_.isFinishing() &&
 	    QDateTime::currentMSecsSinceEpoch() - stopRequestMs_ > 10000) {
 		forcedStop_ = true;
 		blog(LOG_WARNING, "[harpia] stop timed out after 10s — forcing the output to stop");

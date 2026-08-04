@@ -1,5 +1,7 @@
 #include "AudioExtract.hpp"
 
+#include "core/AudioFileWriter.hpp"
+
 #include <QFile>
 #include <QFileInfo>
 
@@ -93,28 +95,6 @@ bool writeWav(const QString &path, const std::vector<float> &pcm, int rate, int 
 	return true;
 }
 
-// The sample format an encoder wants. FFmpeg 7.1 removed AVCodec::sample_fmts
-// in favour of avcodec_get_supported_config(), and this builds against both the
-// system FFmpeg here and whatever obs-deps ships on Windows -- so ask whichever
-// way this header offers, rather than finding out at someone else's build.
-AVSampleFormat preferredSampleFormat(const AVCodec *enc, AVCodecContext *ac)
-{
-#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 13, 100)
-	const void *cfg = nullptr;
-	int count = 0;
-	if (avcodec_get_supported_config(ac, enc, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0, &cfg, &count) >= 0 &&
-	    cfg && count > 0)
-		return static_cast<const AVSampleFormat *>(cfg)[0];
-#else
-	Q_UNUSED(ac);
-	if (enc->sample_fmts)
-		return enc->sample_fmts[0];
-#endif
-	// Planar float is what both libmp3lame and the native AAC encoder take, so
-	// it is the right guess when the query gives nothing.
-	return AV_SAMPLE_FMT_FLTP;
-}
-
 } // namespace
 
 bool audioFormatAvailable(AudioFormat f)
@@ -122,7 +102,7 @@ bool audioFormatAvailable(AudioFormat f)
 	const char *enc = encoderNameFor(f);
 	if (!enc)
 		return true; // WAV: written directly, always possible
-	return avcodec_find_encoder_by_name(enc) != nullptr;
+	return audioEncoderAvailable(enc);
 }
 
 QStringList availableAudioFormatNames()
@@ -342,141 +322,32 @@ bool encodeAudioFile(const QString &path, AudioFormat format, const std::vector<
 		return writeWav(path, pcm, rate, channels, err);
 
 	const char *encName = encoderNameFor(format);
-	const AVCodec *enc = encName ? avcodec_find_encoder_by_name(encName) : nullptr;
-	if (!enc) {
+	if (!audioEncoderAvailable(encName)) {
 		if (err)
 			*err = QStringLiteral("This build cannot write %1 files.")
 				       .arg(QString::fromLatin1(audioFormatName(format)));
 		return false;
 	}
 
-	const QByteArray p = path.toUtf8();
-	AVFormatContext *fmt = nullptr;
-	if (avformat_alloc_output_context2(&fmt, nullptr, nullptr, p.constData()) < 0 || !fmt) {
-		if (err)
-			*err = QStringLiteral("Could not create %1").arg(QFileInfo(path).fileName());
-		return false;
-	}
-	AVStream *st = avformat_new_stream(fmt, nullptr);
-	AVCodecContext *ac = avcodec_alloc_context3(enc);
-	if (!st || !ac) {
-		if (ac)
-			avcodec_free_context(&ac);
-		avformat_free_context(fmt);
-		if (err)
-			*err = QStringLiteral("Could not set up the audio encoder.");
-		return false;
-	}
-
-	// The encoder picks its own sample format; the resampler below converts
-	// into it. Hard-coding interleaved float here works for AAC and fails for
-	// MP3, which wants planar.
-	ac->sample_fmt = preferredSampleFormat(enc, ac);
-	ac->sample_rate = rate;
-	ac->bit_rate = qint64(std::clamp(bitrateKbps, 32, 512)) * 1000;
-	av_channel_layout_default(&ac->ch_layout, channels);
-	if (fmt->oformat->flags & AVFMT_GLOBALHEADER)
-		ac->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-
-	QString failure;
-	SwrContext *swr = nullptr;
-	AVFrame *frame = nullptr;
-	AVPacket *pkt = nullptr;
-	bool wroteHeader = false;
-
-	const auto fail = [&](const QString &why) {
-		failure = why;
-		return false;
+	// The encoder itself lives in core/AudioFileWriter, shared with Audio Only
+	// recording, which streams a file too long to hold in memory. Here the
+	// whole clip is already decoded, so the pull is a walk through it.
+	const qint64 totalFrames = qint64(pcm.size()) / channels;
+	qint64 done = 0;
+	const auto pull = [&](float *dst, int maxFrames) -> int {
+		const int n = int(std::min<qint64>(maxFrames, totalFrames - done));
+		if (n <= 0)
+			return 0;
+		std::memcpy(dst, pcm.data() + done * channels,
+			    size_t(n) * size_t(channels) * sizeof(float));
+		done += n;
+		return n;
 	};
 
-	bool okAll = true;
-	if (avcodec_open2(ac, enc, nullptr) < 0)
-		okAll = fail(QStringLiteral("Could not start the audio encoder."));
-	if (okAll && avcodec_parameters_from_context(st->codecpar, ac) < 0)
-		okAll = fail(QStringLiteral("Could not describe the audio stream."));
-	if (okAll) {
-		st->time_base = AVRational{1, rate};
-		if (!(fmt->oformat->flags & AVFMT_NOFILE) &&
-		    avio_open(&fmt->pb, p.constData(), AVIO_FLAG_WRITE) < 0)
-			okAll = fail(QStringLiteral("Could not create %1")
-					     .arg(QFileInfo(path).fileName()));
-	}
-	if (okAll && avformat_write_header(fmt, nullptr) < 0)
-		okAll = fail(QStringLiteral("Could not write the file header."));
-	else if (okAll)
-		wroteHeader = true;
-
-	if (okAll) {
-		AVChannelLayout inLayout;
-		av_channel_layout_default(&inLayout, channels);
-		if (swr_alloc_set_opts2(&swr, &ac->ch_layout, ac->sample_fmt, rate, &inLayout,
-					AV_SAMPLE_FMT_FLT, rate, 0, nullptr) < 0 ||
-		    swr_init(swr) < 0)
-			okAll = fail(QStringLiteral("Could not set up audio conversion."));
-	}
-
-	// Some encoders take any frame size; the ones that do not state it.
-	const int frameSize = (okAll && ac->frame_size > 0) ? ac->frame_size : 1024;
-	if (okAll) {
-		frame = av_frame_alloc();
-		pkt = av_packet_alloc();
-		frame->format = ac->sample_fmt;
-		frame->sample_rate = rate;
-		frame->nb_samples = frameSize;
-		av_channel_layout_copy(&frame->ch_layout, &ac->ch_layout);
-		if (!frame || !pkt || av_frame_get_buffer(frame, 0) < 0)
-			okAll = fail(QStringLiteral("Out of memory preparing the audio."));
-	}
-
-	const auto writeEncoded = [&]() {
-		while (avcodec_receive_packet(ac, pkt) >= 0) {
-			pkt->stream_index = st->index;
-			av_packet_rescale_ts(pkt, AVRational{1, rate}, st->time_base);
-			av_interleaved_write_frame(fmt, pkt);
-			av_packet_unref(pkt);
-		}
-	};
-
-	if (okAll) {
-		const qint64 totalFrames = qint64(pcm.size()) / channels;
-		qint64 done = 0;
-		qint64 pts = 0;
-		while (done < totalFrames) {
-			const int n = int(std::min<qint64>(frameSize, totalFrames - done));
-			if (av_frame_make_writable(frame) < 0)
-				break;
-			const uint8_t *src =
-				reinterpret_cast<const uint8_t *>(pcm.data() + done * channels);
-			// A short final frame is normal; the encoder pads it.
-			frame->nb_samples = n;
-			swr_convert(swr, frame->extended_data, n, &src, n);
-			frame->pts = pts;
-			pts += n;
-			done += n;
-			if (avcodec_send_frame(ac, frame) >= 0)
-				writeEncoded();
-		}
-		avcodec_send_frame(ac, nullptr);
-		writeEncoded();
-	}
-
-	if (wroteHeader)
-		av_write_trailer(fmt);
-	if (frame)
-		av_frame_free(&frame);
-	if (pkt)
-		av_packet_free(&pkt);
-	if (swr)
-		swr_free(&swr);
-	avcodec_free_context(&ac);
-	if (fmt->pb && !(fmt->oformat->flags & AVFMT_NOFILE))
-		avio_closep(&fmt->pb);
-	avformat_free_context(fmt);
-
-	if (!okAll) {
-		QFile::remove(path); // no half-written file left behind
+	std::string why;
+	if (!encodeAudioStream(path.toStdString(), encName, pull, rate, channels, bitrateKbps, &why)) {
 		if (err)
-			*err = failure;
+			*err = QString::fromStdString(why);
 		return false;
 	}
 	return true;

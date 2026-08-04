@@ -109,6 +109,16 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/audioextract_test.cpp" -o "$WORK/audioextract_test" $LF
 
+# Audio Only recording: the tap's bookkeeping, its scratch file and the encoder.
+# Every failure mode of a mode with no picture is silent, so two of these checks
+# write real audio and read it back through FFmpeg -- in particular the float
+# WAV header, which is what the user is left holding if the encode fails.
+AVCF="$(pkg-config --cflags libavcodec libavformat libavutil libswresample libavfilter)"
+AVLF="$(pkg-config --libs libavcodec libavformat libavutil libswresample libavfilter)"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF $AVCF \
+	"$HERE/audiotap_test.cpp" "$H/core/AudioFileWriter.cpp" "$H/editor/AudioExtract.cpp" \
+	-o "$WORK/audiotap_test" $LF $AVLF
+
 # Which options apply in which capture mode. The alternative to this table is an
 # `if (mode == Region)` at a dozen call sites, which drifts -- and the symptom of
 # drift is a setting that looks switched on while doing nothing.
@@ -436,6 +446,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/zoommode_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/spotlight_fx_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/audioextract_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/modecapabilities_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/audiotap_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/shortcutconflict_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/crashreport_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/autopause_test" || rc=1

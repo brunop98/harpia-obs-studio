@@ -1,8 +1,10 @@
 #pragma once
 
+#include "AudioOnlyRecorder.hpp"
 #include "model/Preset.hpp"
 
 #include <functional>
+#include <memory>
 #include <string>
 
 struct obs_output;
@@ -19,6 +21,11 @@ namespace harpia {
 // Builds the encode+mux pipeline for a Preset and drives a single recording:
 // start / stop / pause / resume. Models the OBS SimpleOutput recording path but
 // stripped to just file recording.
+//
+// Audio Only is the one mode that does not go through an obs output -- it
+// cannot, see AudioOnlyRecorder for why -- so it is handled here behind the
+// same six methods. Everything above this class asks isRecording()/pause()/
+// stop() and never learns which of the two paths is running.
 //
 // Threading: the finished-callback may fire on a libobs thread. UI code must
 // marshal it onto the GUI thread (MainWindow does this).
@@ -58,6 +65,12 @@ public:
 	bool isPaused() const;
 	bool canPause() const;
 
+	// True while an Audio Only take has stopped capturing and is encoding the
+	// file. This is work, not a hang: the stop watchdog has to know the
+	// difference, or it force-closes a perfectly healthy encode of a long
+	// recording and tells the user the file may be incomplete.
+	bool isFinishing() const;
+
 	const std::string &currentFilePath() const { return currentFilePath_; }
 
 	// Why the last recording stopped: 0 = clean stop (OBS_OUTPUT_SUCCESS),
@@ -70,6 +83,10 @@ private:
 	void teardown();
 	static void onStartSignal(void *data, calldata_t *cd);
 	static void onStopSignal(void *data, calldata_t *cd);
+
+	// Non-null only for an Audio Only take; output_ stays null in that case and
+	// vice versa, which is what every branch below tests on.
+	std::unique_ptr<AudioOnlyRecorder> tap_;
 
 	obs_output_t *output_ = nullptr;
 	obs_encoder_t *videoEncoder_ = nullptr;

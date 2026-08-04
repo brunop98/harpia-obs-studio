@@ -85,6 +85,11 @@ target_sources(
     core/ObsContext.hpp
     core/AudioManager.cpp
     core/AudioManager.hpp
+    core/AudioFileWriter.cpp
+    core/AudioFileWriter.hpp
+    core/AudioOnlyRecorder.cpp
+    core/AudioOnlyRecorder.hpp
+    core/AudioTap.hpp
     core/AutoPause.hpp
     core/GlobalHotkeys.cpp
     core/GlobalHotkeys.hpp

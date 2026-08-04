@@ -14,6 +14,12 @@ RecordingController::~RecordingController()
 
 void RecordingController::teardown()
 {
+	if (tap_) {
+		// Blocks in the destructor until the writer thread has closed the
+		// file, for the same reason the output is stopped rather than
+		// released below: a half-written recording is worse than a wait.
+		tap_.reset();
+	}
 	if (output_) {
 		// Never release an output that is still writing — stop it first so the
 		// muxer finalizes the file (matters when the app quits mid-recording).
@@ -49,6 +55,36 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 	activePreset_ = preset;
 	currentFilePath_ = fullFilePath;
 	usesFfmpegOutput_ = EncoderFactory::usesFfmpegOutput(preset);
+
+	// Audio Only: no output, no encoders, no video graph -- a tap straight on
+	// the audio mix. libobs will not start an FFmpeg output without a video
+	// encoder whatever is attached to it (the flag is registered by the
+	// plugin, not derived from the wiring), so this mode has to go around it.
+	if (!modeUsesVideoEncoder(recordModeFromInt(preset.captureMode))) {
+		tap_ = std::make_unique<AudioOnlyRecorder>();
+		tap_->onFinished = [this](const std::string &path, bool ok, const std::string &why) {
+			lastStopCode_ = ok ? 0 : -1;
+			lastStopError_ = ok ? std::string() : why;
+			// The path can differ from the one asked for: a failed encode
+			// leaves the captured WAV behind rather than nothing, and the
+			// user should be shown the file that exists.
+			currentFilePath_ = path;
+			if (onFinished)
+				onFinished(path);
+		};
+
+		std::string err;
+		if (!tap_->start(fullFilePath, preset.audioBitrateKbps > 0 ? preset.audioBitrateKbps : 160,
+				 &err)) {
+			blog(LOG_ERROR, "[harpia] audio-only recording failed to start: %s", err.c_str());
+			lastStopError_ = err;
+			tap_.reset();
+			return false;
+		}
+		if (onStarted)
+			onStarted();
+		return true;
+	}
 
 	const std::string outputId = EncoderFactory::outputId(preset);
 	output_ = obs_output_create(outputId.c_str(), "harpia_file_output", nullptr, nullptr);
@@ -155,12 +191,22 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 
 void RecordingController::stop()
 {
+	if (tap_) {
+		tap_->requestStop(); // asynchronous; onFinished fires once encoded
+		return;
+	}
 	if (output_ && obs_output_active(output_))
 		obs_output_stop(output_);
 }
 
 void RecordingController::forceStop()
 {
+	if (tap_) {
+		// There is nothing to abort: the tap's stop path is a drain and an
+		// encode, both bounded. Asking it to stop is the fastest exit there is.
+		tap_->requestStop();
+		return;
+	}
 	if (output_ && obs_output_active(output_)) {
 		blog(LOG_WARNING, "[harpia] force-stopping the recording output");
 		obs_output_force_stop(output_);
@@ -169,6 +215,8 @@ void RecordingController::forceStop()
 
 bool RecordingController::canPause() const
 {
+	if (tap_)
+		return true; // pausing a tap is just dropping what arrives
 	if (!output_ || usesFfmpegOutput_)
 		return false;
 	return (obs_output_get_flags(output_) & OBS_OUTPUT_CAN_PAUSE) != 0;
@@ -176,6 +224,10 @@ bool RecordingController::canPause() const
 
 bool RecordingController::pause(bool paused)
 {
+	if (tap_) {
+		tap_->setPaused(paused);
+		return tap_->paused();
+	}
 	if (!canPause())
 		return false;
 	obs_output_pause(output_, paused);
@@ -189,11 +241,20 @@ bool RecordingController::togglePause()
 
 bool RecordingController::isRecording() const
 {
+	if (tap_)
+		return tap_->active();
 	return output_ && obs_output_active(output_);
+}
+
+bool RecordingController::isFinishing() const
+{
+	return tap_ && tap_->active() && !tap_->capturing();
 }
 
 bool RecordingController::isPaused() const
 {
+	if (tap_)
+		return tap_->paused();
 	return output_ && obs_output_paused(output_);
 }
 

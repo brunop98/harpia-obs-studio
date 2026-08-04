@@ -102,6 +102,13 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/spotlight_fx_test.cpp" -o "$WORK/spotlight_fx_test" $LF
 
+# Extract Audio Only: the edit arithmetic. All of it operates on a buffer of
+# samples, where a mistake is inaudible in review and obvious in the exported
+# file -- a trim computed in samples rather than frames swaps the stereo
+# channels for the rest of the export.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/audioextract_test.cpp" -o "$WORK/audioextract_test" $LF
+
 # Two actions on one key: nothing reports it and the second feature just never
 # fires, so the rule is that it cannot be saved at all.
 "$MOC" -I"$H" "$H/ui/ShortcutConflictDialog.hpp" -o "$WORK/moc_ShortcutConflictDialog.cpp"
@@ -421,6 +428,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/regionwatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/followmouse_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/zoommode_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/spotlight_fx_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/audioextract_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/shortcutconflict_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/crashreport_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/autopause_test" || rc=1

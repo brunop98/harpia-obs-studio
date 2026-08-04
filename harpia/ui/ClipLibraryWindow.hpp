@@ -29,6 +29,12 @@ class ClipLibraryWindow : public QWidget {
 public:
 	explicit ClipLibraryWindow(PresetStore &store, QWidget *parent = nullptr);
 
+signals:
+	// "Extract Audio Only". Raised rather than handled here: the main window
+	// already owns the one launcher, so both file menus reach the same code and
+	// cannot drift apart on what the item does.
+	void extractAudioRequested(const QString &path);
+
 public slots:
 	void refresh();
 

@@ -471,10 +471,14 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 	QAction *optLowAct = nullptr;
 	QAction *optBalAct = nullptr;
 	QAction *optHighAct = nullptr;
+	QAction *extractAct = nullptr;
+	// One at a time: the trim is per file, so a multi-selection has no single
+	// answer for where to cut.
 	const bool oneVideo = sel.size() == 1 && !sel.front().endsWith(QStringLiteral(".gif"), Qt::CaseInsensitive);
 	if (oneVideo) {
 		menu.addSeparator();
 		trimAct = menu.addAction(QStringLiteral("Trim / Crop…"));
+		extractAct = menu.addAction(QStringLiteral("Extract Audio Only…"));
 		QMenu *opt = menu.addMenu(QStringLiteral("Optimize for sharing"));
 		optLowAct = opt->addAction(QStringLiteral("Low — smallest file"));
 		optBalAct = opt->addAction(QStringLiteral("Balanced (Default)"));
@@ -485,6 +489,10 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 	QAction *deleteAct = menu.addAction(QStringLiteral("Delete"));
 
 	QAction *chosen = menu.exec(grid_->viewport()->mapToGlobal(pos));
+	if (chosen == extractAct) {
+		emit extractAudioRequested(sel.front());
+		return;
+	}
 	if (chosen == openAct)
 		openSelected();
 	else if (chosen == favAct)

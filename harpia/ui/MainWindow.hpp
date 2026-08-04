@@ -144,6 +144,7 @@ private slots:
 	void refreshClipViews(); // recent strip + open Clip Library window
 	void reloadPresetCombo();
 	void showStripContextMenu(const QPoint &pos);
+	void openAudioExtract(const QString &path); // "Extract Audio Only", from either file menu
 	void onThumbnailReady(const QString &path);
 	void tickState();  // recording/paused state + timer
 	void tickIdle();   // auto-pause/resume based on idle time

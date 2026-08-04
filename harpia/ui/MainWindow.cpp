@@ -21,6 +21,7 @@
 #include "ScreenBorderOverlay.hpp"
 #include "ShareExportDialog.hpp"
 #include "StatusBadge.hpp"
+#include "editor/AudioExtractDialog.hpp"
 #include "editor/VideoEditorWindow.hpp"
 #include "WebcamPreview.hpp"
 #include "core/EncoderFactory.hpp"
@@ -2366,6 +2367,8 @@ void MainWindow::onOpenClipLibrary()
 {
 	if (!clipWindow_)
 		clipWindow_ = std::make_unique<ClipLibraryWindow>(presets_);
+		connect(clipWindow_.get(), &ClipLibraryWindow::extractAudioRequested, this,
+			&MainWindow::openAudioExtract);
 	clipWindow_->show();
 	clipWindow_->raise();
 	clipWindow_->activateWindow();
@@ -3474,6 +3477,28 @@ void MainWindow::onThumbnailReady(const QString &path)
 	}
 }
 
+// "Extract Audio Only" from either file menu. Shared so the recent strip and the
+// Clip Library cannot drift apart on what the item does -- including the check
+// for a file with no audio, which is common enough (a screen recording made with
+// nothing plugged in) that it deserves a plain sentence rather than an empty
+// window with a dead Export button.
+void MainWindow::openAudioExtract(const QString &path)
+{
+	QString why;
+	if (!AudioExtractDialog::fileHasAudio(path, &why)) {
+		QMessageBox::information(this, QStringLiteral("Extract Audio"),
+					 why.isEmpty()
+						 ? QStringLiteral("This file has no audio to extract.")
+						 : why);
+		return;
+	}
+	AudioExtractDialog dlg(path, this);
+	if (dlg.exec() == QDialog::Accepted && !dlg.exportedPath().isEmpty()) {
+		blog(LOG_INFO, "[harpia] extracted audio to %s", qUtf8Printable(dlg.exportedPath()));
+		refreshClipViews();
+	}
+}
+
 void MainWindow::showStripContextMenu(const QPoint &pos)
 {
 	QListWidgetItem *item = recentStrip_->itemAt(pos);
@@ -3495,9 +3520,11 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 	QAction *optLowAct = nullptr;
 	QAction *optBalAct = nullptr;
 	QAction *optHighAct = nullptr;
+	QAction *extractAct = nullptr;
 	if (!path.endsWith(QStringLiteral(".gif"), Qt::CaseInsensitive)) {
 		menu.addSeparator();
 		trimAct = menu.addAction(QStringLiteral("Trim / Crop…"));
+		extractAct = menu.addAction(QStringLiteral("Extract Audio Only…"));
 		QMenu *opt = menu.addMenu(QStringLiteral("Optimize for sharing"));
 		optLowAct = opt->addAction(QStringLiteral("Low — smallest file"));
 		optBalAct = opt->addAction(QStringLiteral("Balanced (Default)"));
@@ -3512,6 +3539,10 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 	if (!chosen)
 		return;
 
+	if (chosen == extractAct) {
+		openAudioExtract(path);
+		return;
+	}
 	if (chosen == trimAct) {
 		auto *editor = new VideoEditorWindow(path, presetFolders(), this);
 		if (!editor->isValid()) {

@@ -199,6 +199,10 @@ target_sources(
     editor/ShortcutPanel.hpp
     editor/DevPanel.cpp
     editor/DevPanel.hpp
+    editor/AudioExtract.cpp
+    editor/AudioExtract.hpp
+    editor/AudioExtractDialog.cpp
+    editor/AudioExtractDialog.hpp
     editor/AudioRecorder.cpp
     editor/AudioRecorder.hpp
     editor/LevelMeter.cpp

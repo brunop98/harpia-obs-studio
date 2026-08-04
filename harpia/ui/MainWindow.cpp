@@ -74,6 +74,7 @@
 #include <QPixmap>
 #include <QPointer>
 #include <QProcess>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QRunnable>
 #include <QCursor>
@@ -412,6 +413,37 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	webcamPreview_->setFixedSize(100, 56);
 	webcamPreview_->setToolTip(QStringLiteral("Live preview of the webcam being recorded to its own file."));
 	wcLayout->addWidget(webcamPreview_);
+
+	// The Audio Only stand-in, in the same slot and hidden until that mode is
+	// chosen. Two bars rather than the audio panel's full list: this is a
+	// glance-at-it-while-talking readout, not a mixer -- the panel below is
+	// still where levels get set.
+	audioMeterBox_ = new QWidget(webcamBox_);
+	{
+		auto *ml = new QVBoxLayout(audioMeterBox_);
+		ml->setContentsMargins(0, 0, 0, 0);
+		ml->setSpacing(3);
+		const QString barCss = QStringLiteral(
+			"QProgressBar{background:#20242c;border:none;border-radius:3px;}"
+			"QProgressBar::chunk{background:#3fb950;border-radius:3px;}");
+		const auto bar = [&](const QString &caption) {
+			auto *cap = new QLabel(caption, audioMeterBox_);
+			cap->setStyleSheet(QStringLiteral("color:#8a8f98; font-size:10px;"));
+			auto *b = new QProgressBar(audioMeterBox_);
+			b->setRange(0, 100);
+			b->setTextVisible(false);
+			b->setFixedHeight(10);
+			b->setStyleSheet(barCss);
+			ml->addWidget(cap);
+			ml->addWidget(b);
+			return b;
+		};
+		bigDesktopMeter_ = bar(QStringLiteral("System"));
+		bigMicMeter_ = bar(QStringLiteral("Microphone"));
+		ml->addStretch(1);
+	}
+	audioMeterBox_->setVisible(false);
+	wcLayout->addWidget(audioMeterBox_);
 	webcamWarn_ = new QLabel(QStringLiteral("Webcam not found"), webcamBox_);
 	webcamWarn_->setStyleSheet(QStringLiteral("color:#e5484d;"));
 	webcamWarn_->setVisible(false);
@@ -744,6 +776,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	meterTimer_ = new QTimer(this);
 	meterTimer_->setInterval(80);
 	connect(meterTimer_, &QTimer::timeout, audioPanel_, &AudioPanel::updateMeters);
+	connect(meterTimer_, &QTimer::timeout, this, &MainWindow::updateBigMeters);
 	// Not started here: tickState starts and stops it (see the gate there).
 	// A 12.5 Hz progress-bar update loop running while the window is minimized
 	// and no audio source is even enabled is the definition of idle work.
@@ -3566,15 +3599,42 @@ void MainWindow::applyModeCapabilities()
 	if (regionLeaveGroup_)
 		regionLeaveGroup_->setVisible(modeSupportsRegionLeavePause(m));
 
-	// With no picture there is nothing to preview or overlay.
-	if (webcamPreview_ && !modeSupportsWebcam(m))
-		webcamPreview_->clearDevice();
+	// With no picture there is nothing to preview or overlay. The webcam slot
+	// shows level meters instead, which is the one thing worth watching while
+	// recording sound.
+	const bool audioOnly = !modeHasVideo(m);
+	if (webcamPreview_) {
+		webcamPreview_->setVisible(!audioOnly);
+		if (audioOnly)
+			webcamPreview_->clearDevice();
+	}
+	if (audioMeterBox_)
+		audioMeterBox_->setVisible(audioOnly);
 	if (!modeHasVideo(m)) {
 		if (mouseFx_)
 			mouseFx_->stop();
 		if (screenBorder_)
 			screenBorder_->hideBorder();
 	}
+}
+
+// The Audio Only meters, from the same AudioManager peaks the audio panel's own
+// bars read. Driven by the meter timer, which already runs only when someone
+// could be looking and there is a live source to meter.
+void MainWindow::updateBigMeters()
+{
+	if (!audioMeterBox_ || !audioMeterBox_->isVisible() || !audioPanel_)
+		return;
+	// -60..0 dB mapped to 0..100, the same scale as the panel's bars, so a
+	// level that reads half way in one place reads half way in the other.
+	const auto pct = [](float db) {
+		return std::clamp(int((db + 60.f) / 60.f * 100.f), 0, 100);
+	};
+	bigDesktopMeter_->setValue(audioPanel_->desktopOn() ? pct(audio_.desktopPeakDb()) : 0);
+	int micPeak = 0;
+	for (const std::string &id : audioPanel_->enabledMicIds())
+		micPeak = std::max(micPeak, pct(audio_.micPeakDb(id)));
+	bigMicMeter_->setValue(micPeak);
 }
 
 void MainWindow::showStripContextMenu(const QPoint &pos)

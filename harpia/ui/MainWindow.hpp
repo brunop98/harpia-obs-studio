@@ -38,6 +38,7 @@ class QSpinBox;
 class QToolButton;
 class QLabel;
 class QTimer;
+class QProgressBar;
 class QScreen;
 class QVBoxLayout;
 class QHBoxLayout;
@@ -415,6 +416,13 @@ private:
 
 	// Inline webcam controls (shown only when the active preset uses a webcam)
 	QWidget *webcamBox_ = nullptr;
+	// Audio Only fills the webcam slot with big level meters. It is the one
+	// thing worth watching while recording sound, and it occupies space that
+	// would otherwise be a disabled camera preview.
+	QWidget *audioMeterBox_ = nullptr;
+	QProgressBar *bigDesktopMeter_ = nullptr;
+	QProgressBar *bigMicMeter_ = nullptr;
+	void updateBigMeters();
 	QComboBox *webcamCombo_ = nullptr;
 	QLabel *webcamWarn_ = nullptr;
 	WebcamPreview *webcamPreview_ = nullptr;

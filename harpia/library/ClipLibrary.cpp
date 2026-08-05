@@ -75,10 +75,29 @@ QStringList ClipLibrary::videoExtensions()
 	return {QStringLiteral("mp4"), QStringLiteral("mkv"), QStringLiteral("mov"), QStringLiteral("gif")};
 }
 
+QStringList ClipLibrary::audioExtensions()
+{
+	return {QStringLiteral("m4a"), QStringLiteral("wav")};
+}
+
+QStringList ClipLibrary::recordingExtensions()
+{
+	return videoExtensions() + audioExtensions();
+}
+
+bool ClipLibrary::isAudioPath(const QString &path)
+{
+	const QString suffix = QFileInfo(path).suffix();
+	for (const QString &ext : audioExtensions())
+		if (suffix.compare(ext, Qt::CaseInsensitive) == 0)
+			return true;
+	return false;
+}
+
 QVector<ClipInfo> ClipLibrary::scan(const QStringList &folders, const PresetByFolder &presetByFolder)
 {
 	QStringList nameFilters;
-	for (const QString &ext : videoExtensions())
+	for (const QString &ext : recordingExtensions())
 		nameFilters << QStringLiteral("*.%1").arg(ext);
 
 	// Normalize the preset-folder keys to absolute paths for reliable matching.
@@ -123,6 +142,7 @@ QVector<ClipInfo> ClipLibrary::scan(const QStringList &folders, const PresetByFo
 			info.modified = fi.lastModified();
 			info.presetName = presetName;
 			info.isGif = fi.suffix().compare(QStringLiteral("gif"), Qt::CaseInsensitive) == 0;
+			info.isAudio = isAudioPath(abs);
 			clips.push_back(info);
 		}
 	}

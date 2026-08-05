@@ -22,6 +22,7 @@ struct ClipInfo {
 	QDateTime modified;
 	QString presetName; // best-effort; empty if unknown
 	bool isGif = false; // recording is a .gif
+	bool isAudio = false; // an Audio Only recording: no picture to show
 	qint64 durationMs = 0; // 0 = unknown (probed lazily by the UI)
 
 	// Human "time ago" string, e.g. "5 minutes ago", "3 hours ago".
@@ -46,8 +47,16 @@ public:
 	// writes there.
 	using PresetByFolder = QHash<QString, QString>;
 
-	// File extensions considered recordings.
+	// File extensions considered recordings. Audio Only writes .m4a, and the
+	// .wav a failed encode leaves behind is a real recording too -- the whole
+	// point of keeping it was that the user still has their take.
 	static QStringList videoExtensions();
+	static QStringList audioExtensions();
+	static QStringList recordingExtensions(); // video + audio
+
+	// Is this path one of the audio extensions? Asked all over the UI, which
+	// has to know there is no picture before it goes looking for one.
+	static bool isAudioPath(const QString &path);
 
 	// All clips across the given folders, newest first.
 	static QVector<ClipInfo> scan(const QStringList &folders, const PresetByFolder &presetByFolder = {});

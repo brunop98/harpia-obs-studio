@@ -29,6 +29,7 @@
 #include "platform/CameraAccess.hpp"
 #include "platform/ForegroundWatcher.hpp"
 #include "core/ObsContext.hpp"
+#include "library/AudioCard.hpp"
 #include "library/ClipLibrary.hpp"
 #include "model/PresetStore.hpp"
 
@@ -3589,11 +3590,18 @@ void MainWindow::refreshRecentList()
 		// the icon-mode layout leaves it overlapping its neighbor.
 		item->setSizeHint(cell);
 
-		const QImage thumb = thumbnails_.cached(clip.filePath, kStripThumb);
-		if (!thumb.isNull())
+		if (clip.isAudio) {
+			// No frame to decode. Asking the cache anyway would start a
+			// worker per audio clip on every refresh, forever: a failed
+			// decode is not cached, so it would never stop being retried.
+			item->setIcon(QIcon(
+				QPixmap::fromImage(audioCardImage(clip.filePath, kStripThumb))));
+		} else if (const QImage thumb = thumbnails_.cached(clip.filePath, kStripThumb);
+			   !thumb.isNull()) {
 			item->setIcon(cardIcon(thumb));
-		else
+		} else {
 			thumbnails_.ensure(clip.filePath, kStripThumb);
+		}
 
 		itemByPath_.insert(clip.filePath, item);
 		recentStrip_->addItem(item);
@@ -3750,7 +3758,12 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 	QAction *optBalAct = nullptr;
 	QAction *optHighAct = nullptr;
 	QAction *extractAct = nullptr;
-	if (!path.endsWith(QStringLiteral(".gif"), Qt::CaseInsensitive)) {
+	if (ClipLibrary::isAudioPath(path)) {
+		// An Audio Only recording: nothing to crop and no video to re-encode
+		// smaller, but the audio editor takes it exactly as it stands.
+		menu.addSeparator();
+		extractAct = menu.addAction(QStringLiteral("Edit Audio…"));
+	} else if (!path.endsWith(QStringLiteral(".gif"), Qt::CaseInsensitive)) {
 		menu.addSeparator();
 		trimAct = menu.addAction(QStringLiteral("Trim / Crop…"));
 		extractAct = menu.addAction(QStringLiteral("Extract Audio Only…"));

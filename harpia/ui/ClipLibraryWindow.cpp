@@ -4,6 +4,7 @@
 #include "editor/VideoEditorWindow.hpp"
 
 #include "RecentListWidget.hpp"
+#include "library/AudioCard.hpp"
 #include "model/PresetStore.hpp"
 
 #include <QApplication>
@@ -55,6 +56,7 @@ constexpr int kDurationRole = Qt::UserRole + 5; // qint64 ms
 constexpr int kIsGifRole = Qt::UserRole + 6;    // bool
 constexpr int kIsFavRole = Qt::UserRole + 7;    // bool
 constexpr int kIsRecentRole = Qt::UserRole + 8; // bool
+constexpr int kIsAudioRole = Qt::UserRole + 9;  // bool: an Audio Only recording
 
 // Thumbnails are generated once at this size and scaled down per card, so the
 // size slider never forces a re-decode.
@@ -166,13 +168,22 @@ public:
 		QPainterPath clip;
 		clip.addRoundedRect(thumbRect, 9, 9);
 		p->setClipPath(clip);
-		const QPixmap pm = qvariant_cast<QIcon>(idx.data(Qt::DecorationRole)).pixmap(thumbRect.size());
-		const QPixmap s = scaledThumb(pm, thumbRect.size());
-		if (!s.isNull()) {
-			p->drawPixmap(thumbRect.x() + (thumbRect.width() - s.width()) / 2,
-				      thumbRect.y() + (thumbRect.height() - s.height()) / 2, s);
+		const bool isAudio = idx.data(kIsAudioRole).toBool();
+		if (isAudio) {
+			// There is no frame in an .m4a to show, so the card draws a
+			// waveform derived from the path -- AudioCard.hpp says why it is
+			// not the real one.
+			paintAudioCard(*p, thumbRect, idx.data(kClipPathRole).toString());
 		} else {
-			p->fillRect(thumbRect, QColor(0x15, 0x16, 0x1a));
+			const QPixmap pm =
+				qvariant_cast<QIcon>(idx.data(Qt::DecorationRole)).pixmap(thumbRect.size());
+			const QPixmap s = scaledThumb(pm, thumbRect.size());
+			if (!s.isNull()) {
+				p->drawPixmap(thumbRect.x() + (thumbRect.width() - s.width()) / 2,
+					      thumbRect.y() + (thumbRect.height() - s.height()) / 2, s);
+			} else {
+				p->fillRect(thumbRect, QColor(0x15, 0x16, 0x1a));
+			}
 		}
 		p->restore();
 
@@ -190,16 +201,20 @@ public:
 			p->drawText(tb, Qt::AlignCenter, dur);
 		}
 
-		// GIF badge (top-left of the thumbnail).
-		if (idx.data(kIsGifRole).toBool()) {
+		// Kind badge (top-left of the thumbnail): GIF or AUDIO. Both say the
+		// same kind of thing -- a GIF has no sound, an audio recording has no
+		// picture -- so they share the slot rather than competing for it.
+		const bool isGif = idx.data(kIsGifRole).toBool();
+		if (isGif || isAudio) {
+			const QString tag = isGif ? QStringLiteral("GIF") : QStringLiteral("AUDIO");
 			p->setFont(cf.gif);
-			QRect gb = cf.gifFm.boundingRect(QStringLiteral("GIF")).adjusted(-6, -3, 6, 3);
+			QRect gb = cf.gifFm.boundingRect(tag).adjusted(-6, -3, 6, 3);
 			gb.moveTopLeft(QPoint(thumbRect.left() + 6, thumbRect.top() + 6));
-			p->setBrush(QColor(0x89, 0x57, 0xe5));
+			p->setBrush(isGif ? QColor(0x89, 0x57, 0xe5) : QColor(0x2f, 0x6f, 0xd0));
 			p->setPen(Qt::NoPen);
 			p->drawRoundedRect(gb, 4, 4);
 			p->setPen(Qt::white);
-			p->drawText(gb, Qt::AlignCenter, QStringLiteral("GIF"));
+			p->drawText(gb, Qt::AlignCenter, tag);
 		}
 
 		// Favorite star (top-right) — shown filled when favorited, faint otherwise.
@@ -414,21 +429,29 @@ void ClipLibraryWindow::refresh()
 		item->setData(kIsGifRole, clip.isGif);
 		item->setData(kIsFavRole, favorites_.contains(clip.filePath));
 		item->setData(kIsRecentRole, recentlyViewed_.contains(clip.filePath));
+		item->setData(kIsAudioRole, clip.isAudio);
 		item->setData(kDurationRole, durationMs_.value(clip.filePath, 0));
 		// Tooltip: full name (may be elided in the card) + relative age.
 		item->setToolTip(QStringLiteral("%1\n%2").arg(clip.fileName, clip.relativeAge()));
 
-		const QImage thumb = thumbnails_.cached(clip.filePath, kGenThumb);
-		if (!thumb.isNull())
-			item->setIcon(QIcon(QPixmap::fromImage(thumb)));
-		else {
-			item->setIcon(iconProvider.icon(QFileInfo(clip.filePath)));
-			thumbnails_.ensure(clip.filePath, kGenThumb);
+		// Audio has no frame to decode, and a failed decode is not cached --
+		// asking would restart a doomed worker on every single refresh. The
+		// delegate paints these cards itself.
+		if (!clip.isAudio) {
+			const QImage thumb = thumbnails_.cached(clip.filePath, kGenThumb);
+			if (!thumb.isNull())
+				item->setIcon(QIcon(QPixmap::fromImage(thumb)));
+			else {
+				item->setIcon(iconProvider.icon(QFileInfo(clip.filePath)));
+				thumbnails_.ensure(clip.filePath, kGenThumb);
+			}
 		}
 
 		itemByPath_.insert(clip.filePath, item);
 		grid_->addItem(item);
 
+		// The duration probe reads the container header, which an .m4a has
+		// exactly like an .mp4 -- so an audio recording shows its length too.
 		if (!clip.isGif && !durationMs_.contains(clip.filePath))
 			probeDurationAsync(clip.filePath);
 	}
@@ -528,8 +551,15 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 	QAction *extractAct = nullptr;
 	// One at a time: the trim is per file, so a multi-selection has no single
 	// answer for where to cut.
-	const bool oneVideo = sel.size() == 1 && !sel.front().endsWith(QStringLiteral(".gif"), Qt::CaseInsensitive);
-	if (oneVideo) {
+	const bool oneAudio = sel.size() == 1 && ClipLibrary::isAudioPath(sel.front());
+	const bool oneVideo = sel.size() == 1 && !oneAudio &&
+			      !sel.front().endsWith(QStringLiteral(".gif"), Qt::CaseInsensitive);
+	if (oneAudio) {
+		// Nothing to crop, no video to re-encode smaller. The audio editor is
+		// the one thing that does apply.
+		menu.addSeparator();
+		extractAct = menu.addAction(QStringLiteral("Edit Audio…"));
+	} else if (oneVideo) {
 		menu.addSeparator();
 		trimAct = menu.addAction(QStringLiteral("Trim / Crop…"));
 		extractAct = menu.addAction(QStringLiteral("Extract Audio Only…"));

@@ -117,6 +117,7 @@ AVCF="$(pkg-config --cflags libavcodec libavformat libavutil libswresample libav
 AVLF="$(pkg-config --libs libavcodec libavformat libavutil libswresample libavfilter)"
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF $AVCF \
 	"$HERE/audiotap_test.cpp" "$H/core/AudioFileWriter.cpp" "$H/editor/AudioExtract.cpp" \
+	"$H/library/ClipLibrary.cpp" \
 	-o "$WORK/audiotap_test" $LF $AVLF
 
 # Which options apply in which capture mode. The alternative to this table is an

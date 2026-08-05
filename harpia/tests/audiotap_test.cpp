@@ -12,6 +12,8 @@
 // covered -- there is no libobs in this container -- but everything that
 // decides what lands in the file is.
 #include "core/AudioFileWriter.hpp"
+#include "library/AudioCard.hpp"
+#include "library/ClipLibrary.hpp"
 #include "core/AudioTap.hpp"
 #include "editor/AudioExtract.hpp"
 
@@ -228,6 +230,48 @@ int main()
 		   "asking for one fails");
 		ok(!why.empty(), "with a reason to show the user");
 		ok(!QFile::exists(path), "and leaves no half-written file behind");
+	}
+
+	std::printf("\n-- how an audio recording looks in the library --\n");
+	{
+		// There is no frame to show, so the card draws a shape derived from the
+		// path. What matters is that it is STABLE -- a recording that looked
+		// different every time the strip repainted, or after a restart, would
+		// read as a different file.
+		const QString a = QStringLiteral("/recordings/Take 1.m4a");
+		const QString b = QStringLiteral("/recordings/Take 2.m4a");
+		const QVector<float> barsA = audioCardBars(a, 34);
+		ok(barsA.size() == 34, "the card asks for bars and gets that many");
+		ok(barsA == audioCardBars(a, 34), "the same recording draws the same shape every time");
+		ok(barsA != audioCardBars(b, 34),
+		   "and two recordings in a row do not look like copies of each other");
+
+		bool inRange = true;
+		for (float v : barsA)
+			if (v < 0.15f || v > 1.0f)
+				inRange = false;
+		// The floor is not cosmetic: a zero-height bar reads as a gap in the
+		// recording, which this function is in no position to claim.
+		ok(inRange, "every bar is between the floor and full height");
+
+		ok(audioCardBars(a, 0).isEmpty(), "asking for no bars gives none rather than crashing");
+		ok(audioCardBars(QString(), 8).size() == 8, "and an empty path still draws something");
+	}
+
+	std::printf("\n-- which files count as recordings --\n");
+	{
+		ok(ClipLibrary::isAudioPath(QStringLiteral("/x/take.m4a")), "an m4a is audio");
+		// The .wav matters as much as the m4a: it is what a failed encode
+		// leaves behind, and the whole reason for keeping it was that the user
+		// still has their recording. A library that hid it would undo that.
+		ok(ClipLibrary::isAudioPath(QStringLiteral("/x/take.m4a.part.wav")),
+		   "so is the WAV a failed encode leaves behind");
+		ok(ClipLibrary::isAudioPath(QStringLiteral("/x/TAKE.M4A")), "case does not matter");
+		ok(!ClipLibrary::isAudioPath(QStringLiteral("/x/take.mp4")), "an mp4 is not");
+		ok(!ClipLibrary::isAudioPath(QStringLiteral("/x/m4a")), "and neither is a file merely named m4a");
+		ok(ClipLibrary::recordingExtensions().contains(QStringLiteral("mp4")) &&
+			   ClipLibrary::recordingExtensions().contains(QStringLiteral("m4a")),
+		   "the scan looks for both kinds");
 	}
 
 	std::printf("\n%s (%d failures)\n", failures ? "FAILURES" : "all audio-tap checks passed",

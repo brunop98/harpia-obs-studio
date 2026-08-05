@@ -125,6 +125,8 @@ target_sources(
     model/RegionStore.cpp
     model/RegionStore.hpp
     platform/IdleMonitor.hpp
+    library/AudioCard.cpp
+    library/AudioCard.hpp
     library/ClipLibrary.cpp
     library/ClipLibrary.hpp
     library/ThumbnailCache.cpp

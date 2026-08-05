@@ -188,11 +188,12 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		QStringLiteral("Capture"),
 		QStringLiteral("What to record: the entire monitor, a custom on-screen region, or a saved region.")));
 	captureModeCombo_ = new QComboBox(central);
-	// Items carry a string tag in their data: "monitor", "region", "saved:<id>",
-	// or "manage". Saved regions are appended by reloadCaptureModeCombo().
-	captureModeCombo_->addItem(QStringLiteral("Entire Monitor"), QStringLiteral("monitor"));
-	captureModeCombo_->addItem(QStringLiteral("Custom Region"), QStringLiteral("region"));
-	captureModeCombo_->addItem(QStringLiteral("Audio Only"), QStringLiteral("audio"));
+	// Items carry a string tag in their data: "monitor", "region", "audio",
+	// "saved:<id>" or "manage". The three modes come from the capability table
+	// so their labels and tags cannot drift from what reads them back. Saved
+	// regions are appended by reloadCaptureModeCombo().
+	for (RecordMode m : {RecordMode::Monitor, RecordMode::Region, RecordMode::AudioOnly})
+		captureModeCombo_->addItem(recordModeLabel(m), QString::fromLatin1(recordModeTag(m)));
 	captureModeCombo_->setToolTip(
 		QStringLiteral("What to record: the whole monitor, a custom region you drag on screen, "
 			       "or a saved region. Right-click a region to save it."));
@@ -1487,8 +1488,11 @@ void MainWindow::startRecording()
 	lastMinSeconds_ = preset.minRecordingSeconds;
 	lastContentMs_ = 0; // set at Stop; stays 0 if it ends without a user Stop
 
-	// Webcam as a separate synchronized file (never composited).
-	if (preset.webcamEnabled) {
+	// Webcam as a separate synchronized file (never composited). Not in Audio
+	// Only: the preset's webcam switch survives a mode change, and "record
+	// audio only" that quietly writes a video of your face is a surprise
+	// nobody asked for.
+	if (preset.webcamEnabled && modeSupportsWebcam(recordMode())) {
 		QString wcFolder = (preset.webcamUseCustomFolder && !preset.webcamFolder.empty())
 					   ? QString::fromStdString(preset.webcamFolder)
 					   : QString::fromStdString(preset.outputFolder);
@@ -1548,7 +1552,12 @@ void MainWindow::startRecording()
 
 	// Mouse effects overlay (highlight, click ripples, spotlight) — captured by
 	// the screen, which is the whole point of drawing them on the desktop.
-	if (preset.showMouseArea || preset.recordMouseClicks || preset.spotlightEnabled) {
+	// Gated on the mode: with no picture being captured, the highlight, the
+	// ripples and the spotlight decorate the user's own desktop for a file
+	// nobody is writing -- the spotlight in particular dims the whole screen
+	// for the length of the take.
+	if (modeSupportsMouseFx(recordMode()) &&
+	    (preset.showMouseArea || preset.recordMouseClicks || preset.spotlightEnabled)) {
 		MouseFxOverlay::Config cfg;
 		cfg.showArea = preset.showMouseArea;
 		cfg.areaColor = QColor(QString::fromStdString(preset.mouseHighlightColor));
@@ -1575,7 +1584,7 @@ void MainWindow::startRecording()
 
 	// Recording border around the monitor (Full Screen mode only). Excluded from
 	// the capture on Windows, so it isn't part of the video.
-	if (captureMode_ == CaptureMode::Monitor && preset.showScreenBorder && screenBorder_) {
+	if (modeSupportsScreenBorder(recordMode()) && preset.showScreenBorder && screenBorder_) {
 		QColor c(QString::fromStdString(preset.screenBorderColor));
 		if (!c.isValid())
 			c = QColor(0xe5, 0x48, 0x4d);
@@ -1955,8 +1964,10 @@ void MainWindow::logRecordingStart(const Preset &p, const QString &recordedPath,
 	const std::string bitrate = p.videoBitrateKbps > 0 ? (std::to_string(p.videoBitrateKbps) + " kbps")
 							   : std::string("auto");
 	blog(LOG_INFO, "[harpia] bitrate: %s  gpu-encode: %s", bitrate.c_str(), p.gpuCompression ? "yes" : "no");
-	const char *captureKind = captureMode_ == CaptureMode::Region ? "region" : "monitor";
-	blog(LOG_INFO, "[harpia] capture: %s  monitor#%d", captureKind, p.monitorIndex);
+	// From the capability table, so the log cannot describe an audio-only take
+	// as a monitor capture -- the log is the first thing read when a recording
+	// goes wrong, and it has already misled once.
+	blog(LOG_INFO, "[harpia] capture: %s  monitor#%d", recordModeTag(recordMode()), p.monitorIndex);
 	if (appCaptureEnabled_ && !appWindowValue_.isEmpty())
 		blog(LOG_INFO, "[harpia] focus-pause app: %s", appWindowValue_.toUtf8().constData());
 	if (captureMode_ == CaptureMode::Region && currentRegion_.enabled)
@@ -2478,10 +2489,14 @@ void MainWindow::refreshReadiness()
 
 void MainWindow::onOpenClipLibrary()
 {
-	if (!clipWindow_)
+	// Braces matter here: without them the connect ran on EVERY open, so the
+	// second time the library was opened, "Extract Audio Only" opened two
+	// dialogs, the third time three.
+	if (!clipWindow_) {
 		clipWindow_ = std::make_unique<ClipLibraryWindow>(presets_);
 		connect(clipWindow_.get(), &ClipLibraryWindow::extractAudioRequested, this,
 			&MainWindow::openAudioExtract);
+	}
 	clipWindow_->show();
 	clipWindow_->raise();
 	clipWindow_->activateWindow();
@@ -2575,9 +2590,8 @@ void MainWindow::reloadCaptureModeCombo()
 	const QString prev = captureModeCombo_->currentData().toString();
 
 	captureModeCombo_->clear();
-	captureModeCombo_->addItem(QStringLiteral("Entire Monitor"), QStringLiteral("monitor"));
-	captureModeCombo_->addItem(QStringLiteral("Custom Region"), QStringLiteral("region"));
-	captureModeCombo_->addItem(QStringLiteral("Audio Only"), QStringLiteral("audio"));
+	for (RecordMode m : {RecordMode::Monitor, RecordMode::Region, RecordMode::AudioOnly})
+		captureModeCombo_->addItem(recordModeLabel(m), QString::fromLatin1(recordModeTag(m)));
 
 	const auto &regions = regionStore_->regions();
 	if (!regions.empty()) {
@@ -2592,7 +2606,12 @@ void MainWindow::reloadCaptureModeCombo()
 	// Keep the previous selection if it still exists, else reflect the mode.
 	int idx = captureModeCombo_->findData(prev.isEmpty() ? QStringLiteral("monitor") : prev);
 	if (idx < 0)
-		idx = (captureMode_ == CaptureMode::Region) ? 1 : 0;
+		// By tag, not by index: the old "Region ? 1 : 0" silently moved an
+		// Audio Only session to Entire Monitor whenever the list was rebuilt
+		// (which saving or deleting a region does).
+		idx = captureModeCombo_->findData(QString::fromLatin1(recordModeTag(recordMode())));
+	if (idx < 0)
+		idx = 0;
 	captureModeCombo_->setCurrentIndex(idx);
 	prevCaptureIndex_ = captureModeCombo_->currentIndex();
 }
@@ -3011,7 +3030,12 @@ void MainWindow::syncZoom()
 	// longer cares whether that canvas is a display or a region. (The first
 	// version cropped, which only ever made sense in Full Screen, and did not
 	// actually work there either: see ZoomMode.hpp.)
-	const bool want = p.zoomEnabled && recorder_.isRecording() && !starting_ && !stopping_;
+	// modeSupportsZoom, not just the preset switch: in Audio Only this armed a
+	// 60 Hz timer that read the cursor, drove a transform onto a scene that
+	// does not exist, and painted the zoom border onto the desktop -- for a
+	// recording with no picture in it.
+	const bool want = p.zoomEnabled && modeSupportsZoom(recordMode()) && recorder_.isRecording() &&
+			  !starting_ && !stopping_;
 	if (want == zoomArmed_)
 		return;
 	zoomArmed_ = want;

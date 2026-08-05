@@ -28,6 +28,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QPixmapCache>
 #include <QPointer>
 #include <QPushButton>
 #include <QRunnable>
@@ -73,6 +74,70 @@ public:
 
 	QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &) const override { return cardSize; }
 
+	// The five derived fonts, built once per base font rather than five times
+	// per card. Scrolling a library of a few hundred recordings repaints every
+	// visible card on every wheel step, and each card was constructing five
+	// QFonts and four QFontMetrics that were identical to the last card's.
+	struct CardFonts {
+		QFont duration, gif, star, heart, name;
+		QFontMetrics durationFm{QFont()}, gifFm{QFont()}, nameFm{QFont()}, metaFm{QFont()};
+	};
+
+	const CardFonts &fontsFor(const QFont &base) const
+	{
+		if (fontsValid_ && fontsBase_ == base)
+			return fonts_;
+		fontsBase_ = base;
+		fontsValid_ = true;
+		fonts_.duration = base;
+		fonts_.duration.setPointSizeF(base.pointSizeF() * 0.9);
+		fonts_.gif = base;
+		fonts_.gif.setBold(true);
+		fonts_.gif.setPointSizeF(base.pointSizeF() * 0.85);
+		fonts_.star = base;
+		fonts_.star.setPointSize(15);
+		fonts_.heart = base;
+		fonts_.heart.setPointSize(12);
+		fonts_.name = base;
+		fonts_.name.setBold(true);
+		fonts_.durationFm = QFontMetrics(fonts_.duration);
+		fonts_.gifFm = QFontMetrics(fonts_.gif);
+		fonts_.nameFm = QFontMetrics(fonts_.name);
+		fonts_.metaFm = QFontMetrics(base);
+		return fonts_;
+	}
+
+	// The thumbnail scaled to the card, kept in the application pixmap cache.
+	// Without it every repaint re-ran a smooth scale of a 320x180 image for
+	// every visible card -- the most expensive thing on this screen, producing
+	// a byte-identical result each time. Keyed on the source pixmap's cacheKey
+	// so a regenerated thumbnail is never served stale, and on the size so the
+	// zoom slider does not hand back the previous one.
+	static QPixmap scaledThumb(const QPixmap &src, QSize to)
+	{
+		if (src.isNull() || to.isEmpty())
+			return QPixmap();
+		const QString key = QStringLiteral("harpia_clipthumb_%1_%2x%3")
+					    .arg(src.cacheKey())
+					    .arg(to.width())
+					    .arg(to.height());
+		QPixmap out;
+		if (QPixmapCache::find(key, &out))
+			return out;
+		out = src.scaled(to, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+		QPixmapCache::insert(key, out);
+		return out;
+	}
+
+private:
+	// paint() is const, so the font cache has to be: it caches a pure function
+	// of opt.font, not state anyone outside can observe.
+	mutable bool fontsValid_ = false;
+	mutable QFont fontsBase_;
+	mutable CardFonts fonts_;
+
+public:
+
 	QRect starRect(const QRect &card) const
 	{
 		const int s = 24;
@@ -102,9 +167,8 @@ public:
 		clip.addRoundedRect(thumbRect, 9, 9);
 		p->setClipPath(clip);
 		const QPixmap pm = qvariant_cast<QIcon>(idx.data(Qt::DecorationRole)).pixmap(thumbRect.size());
-		if (!pm.isNull()) {
-			const QPixmap s = pm.scaled(thumbRect.size(), Qt::KeepAspectRatioByExpanding,
-						    Qt::SmoothTransformation);
+		const QPixmap s = scaledThumb(pm, thumbRect.size());
+		if (!s.isNull()) {
 			p->drawPixmap(thumbRect.x() + (thumbRect.width() - s.width()) / 2,
 				      thumbRect.y() + (thumbRect.height() - s.height()) / 2, s);
 		} else {
@@ -113,13 +177,11 @@ public:
 		p->restore();
 
 		// Duration overlay (bottom-right of the thumbnail).
+		const CardFonts &cf = fontsFor(opt.font);
 		const QString dur = ClipInfo::durationString(idx.data(kDurationRole).toLongLong());
 		if (!dur.isEmpty()) {
-			QFont f = opt.font;
-			f.setPointSizeF(f.pointSizeF() * 0.9);
-			p->setFont(f);
-			const QFontMetrics fm(f);
-			QRect tb = fm.boundingRect(dur).adjusted(-6, -3, 6, 3);
+			p->setFont(cf.duration);
+			QRect tb = cf.durationFm.boundingRect(dur).adjusted(-6, -3, 6, 3);
 			tb.moveBottomRight(QPoint(thumbRect.right() - 6, thumbRect.bottom() - 6));
 			p->setBrush(QColor(0, 0, 0, 170));
 			p->setPen(Qt::NoPen);
@@ -130,12 +192,8 @@ public:
 
 		// GIF badge (top-left of the thumbnail).
 		if (idx.data(kIsGifRole).toBool()) {
-			QFont f = opt.font;
-			f.setBold(true);
-			f.setPointSizeF(f.pointSizeF() * 0.85);
-			p->setFont(f);
-			const QFontMetrics fm(f);
-			QRect gb = fm.boundingRect(QStringLiteral("GIF")).adjusted(-6, -3, 6, 3);
+			p->setFont(cf.gif);
+			QRect gb = cf.gifFm.boundingRect(QStringLiteral("GIF")).adjusted(-6, -3, 6, 3);
 			gb.moveTopLeft(QPoint(thumbRect.left() + 6, thumbRect.top() + 6));
 			p->setBrush(QColor(0x89, 0x57, 0xe5));
 			p->setPen(Qt::NoPen);
@@ -145,50 +203,46 @@ public:
 		}
 
 		// Favorite star (top-right) — shown filled when favorited, faint otherwise.
+		const QRect star = starRect(card);
 		{
 			const bool fav = idx.data(kIsFavRole).toBool();
-			QFont sf = opt.font;
-			sf.setPointSize(15);
-			p->setFont(sf);
+			p->setFont(cf.star);
 			p->setPen(fav ? QColor(0xf5, 0xc5, 0x18) : QColor(255, 255, 255, 140));
-			p->drawText(starRect(card), Qt::AlignCenter,
+			p->drawText(star, Qt::AlignCenter,
 				    fav ? QString::fromUtf8("\xE2\x98\x85") : QString::fromUtf8("\xE2\x98\x86"));
 		}
 
 		// Recently-viewed heart, left of the star.
 		if (idx.data(kIsRecentRole).toBool()) {
-			QFont hf = opt.font;
-			hf.setPointSize(12);
-			p->setFont(hf);
+			p->setFont(cf.heart);
 			p->setPen(QColor(0xe5, 0x48, 0x4d));
-			p->drawText(starRect(card).translated(-24, 1), Qt::AlignCenter,
+			p->drawText(star.translated(-24, 1), Qt::AlignCenter,
 				    QString::fromUtf8("\xE2\x99\xA5"));
 		}
 
 		// Text block.
 		const int textTop = thumbRect.bottom() + 6;
 		const QRect textRect(card.left() + 10, textTop, card.width() - 20, card.bottom() - textTop - 8);
-		QFont nameF = opt.font;
-		nameF.setBold(true);
-		p->setFont(nameF);
-		const QFontMetrics nfm(nameF);
+		p->setFont(cf.name);
 		p->setPen(QColor(0xe6, 0xe6, 0xe6));
-		int y = textRect.top() + nfm.ascent();
+		int y = textRect.top() + cf.nameFm.ascent();
 		p->drawText(textRect.left(), y,
-			    nfm.elidedText(idx.data(kFileNameRole).toString(), Qt::ElideRight, textRect.width()));
+			    cf.nameFm.elidedText(idx.data(kFileNameRole).toString(), Qt::ElideRight,
+						 textRect.width()));
 
 		p->setFont(opt.font);
-		const QFontMetrics sfm(opt.font);
+		const int metaH = cf.metaFm.height();
 		p->setPen(QColor(0x9a, 0xa0, 0xa8));
-		y += sfm.height() + 2;
+		y += metaH + 2;
 		p->drawText(textRect.left(), y,
-			    sfm.elidedText(idx.data(kMetaRole).toString(), Qt::ElideRight, textRect.width()));
+			    cf.metaFm.elidedText(idx.data(kMetaRole).toString(), Qt::ElideRight,
+						 textRect.width()));
 
 		const QString preset = idx.data(kPresetRole).toString();
-		if (!preset.isEmpty() && y + sfm.height() <= textRect.bottom()) {
-			y += sfm.height();
+		if (!preset.isEmpty() && y + metaH <= textRect.bottom()) {
+			y += metaH;
 			p->drawText(textRect.left(), y,
-				    sfm.elidedText(preset, Qt::ElideRight, textRect.width()));
+				    cf.metaFm.elidedText(preset, Qt::ElideRight, textRect.width()));
 		}
 		p->restore();
 	}

@@ -1725,6 +1725,17 @@ EditorSource *VideoEditorWindow::sourceById(int id)
 	return nullptr;
 }
 
+EditorSource *VideoEditorWindow::sourceByPath(const QString &path)
+{
+	if (path.isEmpty())
+		return nullptr;
+	const QString want = QFileInfo(path).absoluteFilePath();
+	for (auto &s : sources_)
+		if (QFileInfo(s.path).absoluteFilePath() == want)
+			return &s;
+	return nullptr;
+}
+
 EditorSource *VideoEditorWindow::activeSource()
 {
 	return sourceById(activeSourceId_);
@@ -2017,11 +2028,10 @@ void VideoEditorWindow::onLibraryDoubleClicked(QListWidgetItem *item)
 	if (path.isEmpty())
 		return;
 	// Already loaded as a source? Just make it active. Otherwise add it.
-	for (const EditorSource &es : sources_)
-		if (QFileInfo(es.path).absoluteFilePath() == QFileInfo(path).absoluteFilePath()) {
-			setActiveSource(es.id);
-			return;
-		}
+	if (const EditorSource *es = sourceByPath(path)) {
+		setActiveSource(es->id);
+		return;
+	}
 	const int id = addSource(path);
 	if (id >= 0)
 		setActiveSource(id);
@@ -6943,13 +6953,8 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 			const int pid = so.value(QStringLiteral("id")).toInt();
 			QString spath = so.value(QStringLiteral("path")).toString();
 			const QString sname = so.value(QStringLiteral("name")).toString();
-			int eid = -1;
-			for (const EditorSource &es : sources_)
-				if (QFileInfo(es.path).absoluteFilePath() ==
-				    QFileInfo(spath).absoluteFilePath()) {
-					eid = es.id;
-					break;
-				}
+			const EditorSource *known = sourceByPath(spath);
+			int eid = known ? known->id : -1;
 			if (eid < 0) {
 				// A quiet open never puts a dialog up: a missing file is
 				// left missing rather than stopping an automated caller.

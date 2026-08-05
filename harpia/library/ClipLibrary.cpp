@@ -102,6 +102,9 @@ QVector<ClipInfo> ClipLibrary::scan(const QStringList &folders, const PresetByFo
 
 		const QFileInfoList entries =
 			dir.entryInfoList(nameFilters, QDir::Files | QDir::NoSymLinks, QDir::Time);
+		// One allocation per folder instead of a reallocation every time the
+		// vector doubles. A library of a few hundred recordings is ordinary.
+		clips.reserve(clips.size() + entries.size());
 		for (const QFileInfo &fi : entries) {
 			const QString abs = fi.absoluteFilePath();
 			if (seen.contains(abs))

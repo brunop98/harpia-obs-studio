@@ -3573,7 +3573,8 @@ void MainWindow::refreshRecentList()
 	recentStrip_->clear();
 	itemByPath_.clear();
 	const QFontMetrics fm = recentStrip_->fontMetrics();
-	const int captionW = recentStrip_->gridSize().width() - 12;
+	const QSize cell = recentStrip_->gridSize(); // loop-invariant; was re-read per card
+	const int captionW = cell.width() - 12;
 	for (const ClipInfo &clip : clips) {
 		// Two caption lines, both always visible: the clip's name (middle-
 		// elided when long) and "date · size".
@@ -3586,7 +3587,7 @@ void MainWindow::refreshRecentList()
 		// Pin each card to the full grid cell so its footprint is fixed even before
 		// the thumbnail loads — otherwise a late-arriving icon grows the item and
 		// the icon-mode layout leaves it overlapping its neighbor.
-		item->setSizeHint(recentStrip_->gridSize());
+		item->setSizeHint(cell);
 
 		const QImage thumb = thumbnails_.cached(clip.filePath, kStripThumb);
 		if (!thumb.isNull())

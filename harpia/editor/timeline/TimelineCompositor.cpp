@@ -366,15 +366,6 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 				ectx.canvas = logicalCanvas;
 			}
 
-			// Grading a cut-out is only safe when nothing in the stack reads its
-			// NEIGHBOURS: a blur handed a sub-rect samples the cut edge instead
-			// of the pixels really there and leaves a seam at the border. So a
-			// point-op stack -- a curve, a matrix, a hue rotation -- grades just
-			// the area's bounding box, and everything else grades the whole
-			// frame and is painted back through the clip path.
-			//
-			// Worth the branch: at 1080p a quarter-area effect costs 0.48 ms
-			// against 2.24 ms, and the copy 0.20 ms against 0.75 ms.
 			QRect sub;
 			if (!whole && stack && stack->pixelStageIsPointOp())
 				sub = area.boundingRect().toAlignedRect().intersected(out.rect());

@@ -484,6 +484,10 @@ private:
 	bool sourcesFirstShown_ = false;         // gate the one-time initial show
 	void showSourcesPanel();                 // position (first time) + show + raise
 	EditorSource *sourceById(int id);
+	// The source already open for this file, or nullptr. Two callers were
+	// writing this loop themselves and both rebuilt a QFileInfo for the SEARCH
+	// path on every iteration; here it is built once.
+	EditorSource *sourceByPath(const QString &path);
 	EditorSource *activeSource();
 	FrameSeeker *seekerFor(int id); // nullptr if unknown
 	int addSource(const QString &path); // opens + starts filmstrip; -1 on failure

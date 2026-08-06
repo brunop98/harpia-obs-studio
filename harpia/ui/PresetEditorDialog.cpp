@@ -4,6 +4,7 @@
 #include "ShortcutConflictDialog.hpp"
 #include "AudioPanel.hpp"
 #include "SpotlightPreview.hpp"
+#include "ZoomPreview.hpp"
 #include "core/CaptureManager.hpp"
 #include "core/EncoderFactory.hpp"
 #include "core/WebcamRecorder.hpp"
@@ -842,8 +843,27 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 					  QStringLiteral("Lock an axis so the zoom only slides one way."),
 					  zoomFollowAxisCombo_);
 
+	zoomPreview_ = new ZoomPreview(this);
+	QWidget *zoomPreviewRow =
+		addField(v, QStringLiteral("Preview"),
+			 QStringLiteral("Zooms in and out on its own. Move the mouse over it."),
+			 zoomPreview_);
+
+	// Every slider on this page describes behaviour over time -- how long the
+	// push-in takes, how tightly the frame chases, how far the cursor may roam
+	// first -- and a number says none of that. The preview runs the recorder's
+	// own ZoomMode with these exact values.
+	const auto zoomChanged = [this]() { syncZoomPreview(); };
+	connect(zoomCheck_, &QCheckBox::toggled, this, zoomChanged);
+	connect(zoomPercentSlider_, &QSlider::valueChanged, this, zoomChanged);
+	connect(zoomAnimSlider_, &QSlider::valueChanged, this, zoomChanged);
+	connect(zoomFollowSmoothSlider_, &QSlider::valueChanged, this, zoomChanged);
+	connect(zoomFollowPadSlider_, &QSlider::valueChanged, this, zoomChanged);
+	connect(zoomFollowAxisCombo_, &QComboBox::currentIndexChanged, this, zoomChanged);
+	syncZoomPreview();
+
 	dependsOn(zoomCheck_, {zoomShortcutRow, zoomPctField, zoomAnimField, zoomSmoothField,
-			       zoomPadField, zoomAxisField});
+			       zoomPadField, zoomAxisField, zoomPreviewRow});
 
 	v->addStretch(1);
 	addPage(QStringLiteral("Zoom"), zoomPage);
@@ -1069,6 +1089,11 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 		bitrateSpin_->setVisible(!gif && bitrateCombo_->currentData().toInt() == -1);
 	};
 	connect(bitrateCombo_, &QComboBox::currentIndexChanged, this, syncBitrate);
+	// The note lives on the Video page and the bitrate on Advanced, so the
+	// warning has to be recomputed from here or it never appears.
+	connect(bitrateCombo_, &QComboBox::currentIndexChanged, this,
+		&PresetEditorDialog::updateValidation);
+	connect(bitrateSpin_, &QSpinBox::valueChanged, this, &PresetEditorDialog::updateValidation);
 
 	bitrateRow_ = addField(v, QStringLiteral("Bitrate"),
 			       QStringLiteral("Higher means better quality and bigger files. Auto picks sensibly."),
@@ -1211,6 +1236,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 
 	connect(formatCombo_, &QComboBox::currentIndexChanged, this, &PresetEditorDialog::updateValidation);
 	connect(codecCombo_, &QComboBox::currentIndexChanged, this, &PresetEditorDialog::updateValidation);
+	connect(fpsCombo_, &QComboBox::currentTextChanged, this, &PresetEditorDialog::updateValidation);
 	updateValidation();
 	updateMousePreview();
 	updateFilenamePreview();
@@ -1525,6 +1551,19 @@ void PresetEditorDialog::pickColor(QColor &target, QPushButton *button)
 	}
 }
 
+void PresetEditorDialog::syncZoomPreview()
+{
+	if (!zoomPreview_)
+		return;
+	ZoomParams zp;
+	zp.percent = zoomPercentSlider_->value();
+	zp.animMs = zoomAnimSlider_->value();
+	zp.follow.smoothness = zoomFollowSmoothSlider_->value();
+	zp.follow.paddingPct = zoomFollowPadSlider_->value();
+	zp.follow.axis = FollowAxis(std::clamp(zoomFollowAxisCombo_->currentIndex(), 0, 2));
+	zoomPreview_->configure(zp);
+}
+
 void PresetEditorDialog::syncSpotlightPreview()
 {
 	if (!spotPreview_)
@@ -1614,14 +1653,34 @@ void PresetEditorDialog::updateValidation()
 	if (audioGifNote_)
 		audioGifNote_->setVisible(isGif);
 
-	QString msg;
+	// Warnings, never refusals. Every one of these is a setting somebody might
+	// mean on hardware this code cannot see, so the dialog says what it expects
+	// to happen and lets the choice stand -- the one thing it will not do is
+	// stay quiet and let the surprise arrive in the finished file.
+	QStringList notes;
 	if (isGif) {
-		msg = QStringLiteral("GIF ignores codec and bitrate, caps at 15 fps, and cannot pause.");
-	} else if (format == RecordingFormat::AVI && codec != VideoCodec::H264) {
-		msg = QStringLiteral("AVI has poor support for HEVC/AV1 — MP4 or MKV is recommended.");
-	} else if (format == RecordingFormat::MP4 && codec == VideoCodec::HEVC) {
-		msg = QStringLiteral("HEVC in MP4 may not play everywhere. MKV is safest.");
+		notes << QStringLiteral("GIF ignores codec and bitrate, caps at 15 fps, and cannot pause.");
+	} else {
+		if (format == RecordingFormat::AVI && codec != VideoCodec::H264)
+			notes << QStringLiteral("AVI supports HEVC and AV1 poorly. MP4 or MKV is safer.");
+		if (format == RecordingFormat::MP4 && codec == VideoCodec::HEVC)
+			notes << QStringLiteral("HEVC in MP4 may not play everywhere. MKV is safest.");
+
+		const int fps = fpsCombo_->currentText().toInt();
+		if (fps > 60)
+			notes << QStringLiteral("Above 60 fps, screen capture drops frames on most machines.");
+		if (fps > 0 && fps < 10)
+			notes << QStringLiteral("Below 10 fps the recording will look like a slideshow.");
+
+		const int kbps = bitrateCombo_->currentData().toInt() == -1
+					 ? bitrateSpin_->value()
+					 : bitrateCombo_->currentData().toInt();
+		if (kbps > 60000)
+			notes << QStringLiteral("Past 60 Mbps the file grows without looking better.");
+		else if (kbps > 0 && kbps < 2000)
+			notes << QStringLiteral("Under 2 Mbps, text and fine detail will smear.");
 	}
+	const QString msg = notes.join(QLatin1Char('\n'));
 	validationLabel_->setText(msg);
 	validationLabel_->setVisible(!msg.isEmpty());
 }

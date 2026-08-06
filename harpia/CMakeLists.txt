@@ -156,6 +156,8 @@ target_sources(
     ui/MouseFxOverlay.hpp
     ui/SpotlightPreview.cpp
     ui/SpotlightPreview.hpp
+    ui/ZoomPreview.cpp
+    ui/ZoomPreview.hpp
     ui/ShortcutConflictDialog.cpp
     ui/ShortcutConflictDialog.hpp
     ui/ClipLibraryWindow.cpp

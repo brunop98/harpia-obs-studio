@@ -28,6 +28,7 @@ namespace harpia {
 
 class MousePreview;
 class SpotlightPreview;
+class ZoomPreview;
 
 // Modal editor for a single recording Preset. Construct with the preset to edit
 // (or a fresh default for "new"), exec(), and on Accepted read back result().
@@ -81,6 +82,7 @@ private:
 	// A dot on each navigation entry whose page differs from a fresh preset,
 	// so "what have I changed?" has an answer without opening two dialogs.
 	void refreshChangedMarks();
+	void syncZoomPreview();
 	void rememberGeometry() const;
 
 	QListWidget *nav_ = nullptr;
@@ -179,6 +181,7 @@ private:
 
 	// Zoom page (Full Screen only)
 	QCheckBox *zoomCheck_ = nullptr;
+	ZoomPreview *zoomPreview_ = nullptr;
 	QKeySequenceEdit *zoomShortcutEdit_ = nullptr;
 	QSlider *zoomPercentSlider_ = nullptr;
 	QSlider *zoomAnimSlider_ = nullptr;

@@ -33,6 +33,7 @@ public:
 	// here; anything else is shown greyed as context. Empty means all of them.
 	ShortcutConflictDialog(QVector<ShortcutBinding> entries, QSet<QString> editable,
 			       QWidget *parent = nullptr);
+	~ShortcutConflictDialog() override;
 
 	// The bindings as the user left them. Guaranteed conflict-free: OK cannot
 	// be pressed otherwise.

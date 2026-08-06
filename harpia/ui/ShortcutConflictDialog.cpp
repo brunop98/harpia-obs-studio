@@ -105,6 +105,25 @@ ShortcutConflictDialog::ShortcutConflictDialog(QVector<ShortcutBinding> entries,
 		edits_.first()->setFocus();
 }
 
+ShortcutConflictDialog::~ShortcutConflictDialog()
+{
+	// Cut the key fields loose before anything is torn down.
+	//
+	// QKeySequenceEdit emits keySequenceChanged from focusOutEvent -- it
+	// finalises whatever was typed when it loses focus -- and closing this
+	// dialog moves focus off it. By then the destructor chain has already run
+	// this class's part: entries_, edits_ and marks_ are gone. QObject only
+	// severs connections in ~QObject, which runs last, so the slot fires in
+	// between and refresh() walks a QVector that no longer exists.
+	//
+	// A debug Qt catches it as an assertion; a release build reads freed memory
+	// and carries on until the heap notices. Either way the dialog could take
+	// the app down on its way out.
+	for (QKeySequenceEdit *e : edits_)
+		if (e)
+			e->disconnect(this);
+}
+
 bool ShortcutConflictDialog::resolvedForTest() const
 {
 	return !hasShortcutConflict(entries_);

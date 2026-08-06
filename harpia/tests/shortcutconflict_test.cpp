@@ -197,6 +197,26 @@ int main(int argc, char **argv)
 		}
 	}
 
+	std::printf("\n-- closing it --\n");
+	{
+		// A crash regression, and the check is simply that the next line runs.
+		//
+		// QKeySequenceEdit emits keySequenceChanged when it loses focus, and
+		// closing the dialog moves focus off it -- by which point the derived
+		// destructor has already destroyed the vectors the slot walks. The
+		// dialog took the app down on its way out, which no amount of
+		// inspecting its results would ever have caught: everything it returned
+		// was correct right up to the segfault.
+		QVector<ShortcutBinding> two{sb("zoom", "Zoom", "F9"), sb("spot", "Spotlight", "F9")};
+		{
+			ShortcutConflictDialog dlg(two, QSet<QString>());
+			dlg.show();
+			QApplication::processEvents();
+		}
+		QApplication::processEvents();
+		ok(true, "showing and closing the dialog does not take the app with it");
+	}
+
 	std::printf("\n%s (%d failures)\n",
 		    failures ? "FAILURES" : "all shortcut-conflict checks passed", failures);
 	return failures ? 1 : 0;

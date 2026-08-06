@@ -17,6 +17,8 @@
 //     "OK is disabled" is not just its permanent state.
 #include "core/ShortcutConflicts.hpp"
 #include "ui/ShortcutConflictDialog.hpp"
+#include <QPushButton>
+#include <QKeySequenceEdit>
 
 #include <QApplication>
 #include <QKeySequence>
@@ -155,6 +157,44 @@ int main(int argc, char **argv)
 		ok(groups.size() == 1 && groups[0].size() == 3, "all three are reported in one group");
 		ShortcutConflictDialog dlg(three, QSet<QString>());
 		ok(!dlg.resolvedForTest(), "and the dialog holds out until all three are settled");
+	}
+
+	std::printf("\n-- typing into the dialog --\n");
+	{
+		// The bug this screen actually had: the keys it asks you to press were
+		// registered system-wide, so the OS ate them before the field saw
+		// anything and no new shortcut could be entered. That half is fixed in
+		// MainWindow (the keys are released while a key field has focus) and
+		// cannot be tested without an OS. What CAN be tested is the second
+		// half: after Clear, the field must still be the thing the keyboard is
+		// talking to.
+		QVector<ShortcutBinding> two{sb("zoom", "Zoom", "F9"), sb("spot", "Spotlight", "F9")};
+		ShortcutConflictDialog dlg(two, QSet<QString>());
+		dlg.show();
+		QApplication::processEvents();
+
+		const QList<QKeySequenceEdit *> edits = dlg.findChildren<QKeySequenceEdit *>();
+		const QList<QPushButton *> buttons = dlg.findChildren<QPushButton *>();
+		ok(edits.size() == 2, "one key field per contested action");
+
+		QPushButton *clear = nullptr;
+		for (QPushButton *b : buttons)
+			if (b->text() == QStringLiteral("Clear")) {
+				clear = b;
+				break;
+			}
+		ok(clear != nullptr, "and a Clear beside it");
+		if (clear && edits.size() == 2) {
+			clear->click();
+			QApplication::processEvents();
+			ok(edits[0]->keySequence().isEmpty(), "Clear empties the field");
+			// Without this the next keypress goes to the button, and the user
+			// concludes the dialog is broken -- which is how this started.
+			ok(edits[0]->hasFocus(),
+			   "and leaves the keyboard talking to the field, not the button");
+			ok(dlg.resolvedForTest(),
+			   "clearing one of two identical keys settles the conflict");
+		}
 	}
 
 	std::printf("\n%s (%d failures)\n",

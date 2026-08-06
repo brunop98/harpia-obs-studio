@@ -329,6 +329,12 @@ private:
 	QShortcut *recordShortcut_ = nullptr;
 	QShortcut *pauseShortcut_ = nullptr;
 	void rebindHotkeys();
+	// Release every global hotkey while a shortcut is being typed, and take
+	// them back afterwards. A registered key never reaches the focused widget,
+	// so without this a key field cannot be given any key already in use --
+	// which is precisely what the conflict dialog asks for.
+	void setHotkeysSuspended(bool on);
+	bool hotkeysSuspended_ = false;
 
 	FollowMouse followMouse_;
 	QTimer *followTimer_ = nullptr;

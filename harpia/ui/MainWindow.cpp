@@ -80,6 +80,7 @@
 #include <QRunnable>
 #include <QCursor>
 #include <QScreen>
+#include <QKeySequenceEdit>
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -625,6 +626,21 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(followShortcut_, &QShortcut::activated, this, &MainWindow::onFollowToggle);
 	rebindHotkeys();
 	rebindPresetHotkeys();
+
+	// A registered global hotkey is swallowed by the OS before any window sees
+	// it -- which is the whole point of RegisterHotKey, and the reason the
+	// shortcut fields could not be typed into. Pressing F9 into a key field
+	// started a recording; pressing the zoom key zoomed. The conflict dialog
+	// got the worst of it: it exists to re-key the actions that clash, so the
+	// keys it asks you to press are exactly the ones that are registered.
+	//
+	// So the keys are released while any key field has focus, anywhere in the
+	// app, and taken back when focus leaves. Done here rather than around each
+	// dialog because four places edit a shortcut today and nothing stops there
+	// being a fifth.
+	connect(qApp, &QApplication::focusChanged, this, [this](QWidget *, QWidget *now) {
+		setHotkeysSuspended(qobject_cast<QKeySequenceEdit *>(now) != nullptr);
+	});
 	connect(editPresetButton_, &QPushButton::clicked, this, [this]() { editActivePreset(); });
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
 	connect(webcamCombo_, &QComboBox::activated, this, &MainWindow::onWebcamDeviceChanged);
@@ -1724,8 +1740,36 @@ void MainWindow::updateDiskLabel()
 	diskLabel_->setStyleSheet(QStringLiteral("color:%1;").arg(QLatin1String(colour)));
 }
 
+void MainWindow::setHotkeysSuspended(bool on)
+{
+	if (on == hotkeysSuspended_)
+		return;
+	hotkeysSuspended_ = on;
+
+	// The window-scoped QShortcuts go too. They do not fire for a separate
+	// dialog window today, but they are the fallback wherever RegisterHotKey
+	// does not exist, and there a key field would have the same problem for a
+	// different reason.
+	for (QShortcut *s : {recordShortcut_, pauseShortcut_, zoomShortcut_, spotlightShortcut_,
+			     followShortcut_})
+		if (s)
+			s->setEnabled(!on);
+
+	if (on) {
+		hotkeys_->unbindAll();
+		blog(LOG_INFO, "[harpia] hotkeys released while a shortcut is being edited");
+	} else {
+		rebindHotkeys();
+		rebindPresetHotkeys();
+	}
+}
+
 void MainWindow::rebindHotkeys()
 {
+	// Nothing to bind while a key is being typed. The preset pages re-bind on
+	// every change, so without this the keys would be taken back mid-edit.
+	if (hotkeysSuspended_)
+		return;
 	QSettings s(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
 	const QKeySequence rec(s.value(QStringLiteral("hotkeys/record"), QStringLiteral("F9")).toString());
 	const QKeySequence pause(
@@ -2911,6 +2955,8 @@ void MainWindow::onSpotlightToggle()
 
 void MainWindow::rebindPresetHotkeys()
 {
+	if (hotkeysSuspended_)
+		return;
 	rebindZoomHotkey();
 	rebindSpotlightHotkey();
 	rebindFollowHotkey();

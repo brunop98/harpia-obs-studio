@@ -68,7 +68,15 @@ ShortcutConflictDialog::ShortcutConflictDialog(QVector<ShortcutBinding> entries,
 		auto *clear = new QPushButton(QStringLiteral("Clear"), this);
 		clear->setEnabled(canEdit);
 		clear->setToolTip(QStringLiteral("Leave this action with no shortcut."));
-		connect(clear, &QPushButton::clicked, this, [edit]() { edit->clear(); });
+		// Focus goes back to the field, not to the button that was clicked.
+		// Clearing a key is almost always the first half of "and now type a
+		// different one", and a QKeySequenceEdit only records what it has focus
+		// for -- so leaving focus on the button meant the next keypress went
+		// nowhere.
+		connect(clear, &QPushButton::clicked, this, [edit]() {
+			edit->clear();
+			edit->setFocus(Qt::OtherFocusReason);
+		});
 		grid->addWidget(clear, i, 2);
 
 		auto *mark = new QLabel(this);

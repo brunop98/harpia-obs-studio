@@ -2,6 +2,7 @@
 
 #include "MousePreview.hpp"
 #include "ShortcutConflictDialog.hpp"
+#include "AudioPanel.hpp"
 #include "SpotlightPreview.hpp"
 #include "core/CaptureManager.hpp"
 #include "core/EncoderFactory.hpp"
@@ -44,6 +45,7 @@
 #include <QSettings>
 #include <QSlider>
 #include <QSpinBox>
+#include <QTimer>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 
@@ -211,7 +213,7 @@ QWidget *folderRowWidget(QLineEdit *edit, QPushButton *browse)
 
 } // namespace
 
-PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
+PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio, QWidget *parent)
 	: QDialog(parent), result_(preset), original_(preset)
 {
 	setWindowTitle(QStringLiteral("Preset Settings"));
@@ -405,43 +407,39 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	audioGifNote_->setStyleSheet(QStringLiteral("color:#d29922;"));
 	audioGifNote_->setVisible(false);
 	v->addWidget(audioGifNote_);
-	desktopAudioCheck_ = new QCheckBox(QStringLiteral("Record PC audio"), this);
-	desktopAudioCheck_->setChecked(preset.recordDesktopAudio);
-	desktopAudioRow_ = addCheck(v, desktopAudioCheck_,
-				    QStringLiteral("Records whatever comes out of the speakers."));
+	// The main window's audio panel, not a second implementation of it. It
+	// carries the volume sliders the preset already stored but had nowhere to
+	// edit, and live level bars -- which is the only way to answer "is this the
+	// right microphone?" without recording something first.
+	//
+	// It drives the live capture as you tick things, exactly as it does on the
+	// main window. The caller re-asserts the active preset's audio afterwards,
+	// so Cancel puts the sound back the way it was.
+	audioSection_ = new QWidget(this);
+	auto *audioLayout = new QVBoxLayout(audioSection_);
+	audioLayout->setContentsMargins(0, 0, 0, 12);
+	audioLayout->setSpacing(6);
+	audioPanel_ = new AudioPanel(audio, audioSection_);
+	audioPanel_->load(preset.recordDesktopAudio, preset.micDeviceIds, preset.desktopVolume,
+			  preset.micVolumes);
+	audioLayout->addWidget(audioPanel_);
 
-	micSection_ = new QWidget(this);
-	auto *micLayout = new QVBoxLayout(micSection_);
-	micLayout->setContentsMargins(0, 0, 0, 0);
-	micLayout->setSpacing(4);
-	auto *micCaption = new QLabel(QStringLiteral("<b>Microphones</b>"), this);
-	micLayout->addWidget(micCaption);
-	auto *micDesc = new QLabel(QStringLiteral("Tick a device to mix it into the recording."), this);
-	micDesc->setWordWrap(true);
-	micDesc->setStyleSheet(QStringLiteral("color:#8a8f98;"));
-	micLayout->addWidget(micDesc);
-	v->addWidget(micSection_);
+	auto *rescanBtn = new QPushButton(QStringLiteral("Rescan devices"), this);
+	rescanBtn->setToolTip(QStringLiteral("Look for microphones plugged in since this opened."));
+	connect(rescanBtn, &QPushButton::clicked, this, [this]() { audioPanel_->rescanDevices(); });
+	auto *rescanRow = new QHBoxLayout;
+	rescanRow->setContentsMargins(0, 0, 0, 0);
+	rescanRow->addWidget(rescanBtn);
+	rescanRow->addStretch(1);
+	audioLayout->addLayout(rescanRow);
+	v->addWidget(audioSection_);
 
-	for (const AudioDevice &d : AudioManager::inputDevices()) {
-		// Skip the synthetic "default" entry, matching the main window's
-		// AudioPanel — a mic ticked here must be displayable there.
-		if (d.id == "default")
-			continue;
-		auto *c = new QCheckBox(QString::fromStdString(d.name), this);
-		const QString id = QString::fromStdString(d.id);
-		c->setChecked(std::find(preset.micDeviceIds.begin(), preset.micDeviceIds.end(), d.id) !=
-			      preset.micDeviceIds.end());
-		micChecks_.append(c);
-		micIds_.append(id);
-		micLayout->addWidget(c);
-	}
-	if (micChecks_.isEmpty()) {
-		auto *none = new QLabel(QStringLiteral("(no microphones detected)"), this);
-		none->setStyleSheet(QStringLiteral("color:#8a8f98;"));
-		micLayout->addWidget(none);
-	}
+	// The bars only move while something is polling them.
+	auto *meterTimer = new QTimer(this);
+	meterTimer->setInterval(100);
+	connect(meterTimer, &QTimer::timeout, audioPanel_, &AudioPanel::updateMeters);
+	meterTimer->start();
 
-	v->addSpacing(8);
 	audioBitrateCombo_ = new QComboBox(this);
 	for (int kbps : {96, 128, 160, 192, 256, 320})
 		audioBitrateCombo_->addItem(QStringLiteral("%1 kbps").arg(kbps), kbps);
@@ -1258,8 +1256,7 @@ void PresetEditorDialog::updateValidation()
 	showRow(bitrateRow_, !isGif);
 	showRow(frameRateModeRow_, !isGif);
 	bitrateSpin_->setVisible(!isGif && bitrateCombo_->currentData().toInt() == -1);
-	showRow(desktopAudioRow_, !isGif);
-	showRow(micSection_, !isGif);
+	showRow(audioSection_, !isGif);
 	showRow(audioBitrateRow_, !isGif);
 	if (audioGifNote_)
 		audioGifNote_->setVisible(isGif);
@@ -1367,13 +1364,14 @@ void PresetEditorDialog::collectInto(Preset &out) const
 
 	out.googleDriveLink = driveLinkEdit_->text().trimmed().toStdString();
 
-	out.recordDesktopAudio = desktopAudioCheck_->isChecked();
+	out.recordDesktopAudio = audioPanel_->desktopOn();
 	out.audioBitrateKbps = audioBitrateCombo_->currentData().toInt();
-	out.micDeviceIds.clear();
-	for (int i = 0; i < micChecks_.size(); ++i) {
-		if (micChecks_[i]->isChecked())
-			out.micDeviceIds.push_back(micIds_[i].toStdString());
-	}
+	// Volumes come back too. They were stored in the preset all along and could
+	// only be changed from the main window, so opening this dialog and saving
+	// used to be able to leave them behind.
+	out.micDeviceIds = audioPanel_->enabledMicIds();
+	out.desktopVolume = audioPanel_->desktopVolume();
+	out.micVolumes = audioPanel_->micVolumes();
 
 	out.showMouseCursor = mouseCursorCheck_->isChecked();
 	out.showMouseArea = mouseAreaCheck_->isChecked();

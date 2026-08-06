@@ -2009,8 +2009,16 @@ void MainWindow::onNewPreset()
 	base.id = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
 	base.name = "New preset";
 
-	PresetEditorDialog dlg(base, this);
-	if (dlg.exec() == QDialog::Accepted) {
+	PresetEditorDialog dlg(base, audio_, this);
+	const int answer = dlg.exec();
+	// The dialog's Audio page drives the live capture as you tick things, so
+	// the state is put back from whatever preset is active once it closes --
+	// on Cancel that undoes the fiddling, on Save it is the new preset's.
+	const auto restoreAudio = [this]() {
+		audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds,
+				  activePreset().desktopVolume, activePreset().micVolumes);
+	};
+	if (answer == QDialog::Accepted) {
 		Preset created = dlg.result();
 		created.name = uniquePresetName(created.name, created.id);
 		presets_.upsert(created);
@@ -2019,6 +2027,7 @@ void MainWindow::onNewPreset()
 		syncIdleControls();
 		refreshRecentList();
 	}
+	restoreAudio();
 }
 
 std::string MainWindow::uniquePresetName(const std::string &wanted, const std::string &selfId) const
@@ -2118,10 +2127,18 @@ void MainWindow::editActivePreset(const QString &initialPage)
 	const Preset *cur = presets_.find(activePresetId_);
 	if (!cur)
 		return;
-	PresetEditorDialog dlg(*cur, this);
+	PresetEditorDialog dlg(*cur, audio_, this);
 	if (!initialPage.isEmpty())
 		dlg.showPage(initialPage);
-	if (dlg.exec() == QDialog::Accepted) {
+	const int answer = dlg.exec();
+	if (answer != QDialog::Accepted) {
+		// Cancel: the Audio page has been driving the live capture, so put it
+		// back to what the active preset says.
+		audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds,
+				  activePreset().desktopVolume, activePreset().micVolumes);
+		return;
+	}
+	{
 		Preset updated = dlg.result();
 		updated.name = uniquePresetName(updated.name, updated.id);
 		presets_.upsert(updated);

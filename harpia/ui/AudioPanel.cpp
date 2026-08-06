@@ -74,25 +74,23 @@ AudioPanel::AudioPanel(AudioManager &audio, QWidget *parent) : QWidget(parent), 
 {
 	// Grid keeps the label + slider columns a fixed width and lets the meter
 	// fill the rest, so all bars line up regardless of label length.
-	auto *grid = new QGridLayout(this);
-	grid->setContentsMargins(0, 0, 0, 0);
-	grid->setHorizontalSpacing(12);
-	grid->setVerticalSpacing(2);
-	grid->setColumnMinimumWidth(0, kLabelColumn);
-	grid->setColumnStretch(2, 1);
+	grid_ = new QGridLayout(this);
+	grid_->setContentsMargins(0, 0, 0, 0);
+	grid_->setHorizontalSpacing(12);
+	grid_->setVerticalSpacing(2);
+	grid_->setColumnMinimumWidth(0, kLabelColumn);
+	grid_->setColumnStretch(2, 1);
 
-	int r = 0;
-
-	// PC (desktop/system) audio row.
+	// PC (desktop/system) audio row. Always row 0; the mic rows follow and are
+	// rebuilt from scratch on a rescan.
 	pcCheck_ = new QCheckBox(QStringLiteral("PC Audio"), this);
 	pcCheck_->setFixedWidth(kLabelColumn);
 	pcCheck_->setToolTip(QStringLiteral("System / desktop audio"));
 	pcSlider_ = makeVolumeSlider(this);
 	pcMeter_ = makeMeter(this);
-	grid->addWidget(pcCheck_, r, 0);
-	grid->addWidget(pcSlider_, r, 1);
-	grid->addWidget(pcMeter_, r, 2);
-	++r;
+	grid_->addWidget(pcCheck_, 0, 0);
+	grid_->addWidget(pcSlider_, 0, 1);
+	grid_->addWidget(pcMeter_, 0, 2);
 
 	connect(pcCheck_, &QCheckBox::toggled, this, [this](bool on) {
 		audio_.setDesktopEnabled(on);
@@ -106,8 +104,14 @@ AudioPanel::AudioPanel(AudioManager &audio, QWidget *parent) : QWidget(parent), 
 	});
 	connect(pcSlider_, &QSlider::sliderReleased, this, [this]() { emit changed(); });
 
-	// One row per detected input (mic) device — excluding the synthetic
-	// "Default" entry so only real devices are shown.
+	buildMicRows();
+}
+
+// One row per detected input (mic) device — excluding the synthetic "Default"
+// entry so only real devices are shown.
+void AudioPanel::buildMicRows()
+{
+	int r = 1; // row 0 is PC Audio
 	const std::vector<AudioDevice> devices = AudioManager::inputDevices();
 	for (const AudioDevice &dev : devices) {
 		if (dev.id == "default")
@@ -123,9 +127,9 @@ AudioPanel::AudioPanel(AudioManager &audio, QWidget *parent) : QWidget(parent), 
 		row.slider = makeVolumeSlider(this);
 		row.meter = makeMeter(this);
 
-		grid->addWidget(row.check, r, 0);
-		grid->addWidget(row.slider, r, 1);
-		grid->addWidget(row.meter, r, 2);
+		grid_->addWidget(row.check, r, 0);
+		grid_->addWidget(row.slider, r, 1);
+		grid_->addWidget(row.meter, r, 2);
 		++r;
 
 		const std::string id = dev.id;
@@ -145,6 +149,27 @@ AudioPanel::AudioPanel(AudioManager &audio, QWidget *parent) : QWidget(parent), 
 
 		micRows_.push_back(row);
 	}
+}
+
+void AudioPanel::rescanDevices()
+{
+	// Keep what the user has set. A device that is still present comes back
+	// ticked and at the same volume; one that has been unplugged goes away,
+	// taking its live source with it.
+	const std::vector<std::string> wasOn = enabledMicIds();
+	const std::map<std::string, double> vols = micVolumes();
+
+	for (MicRow &row : micRows_) {
+		// Deleted, not hidden: a stale row would keep answering
+		// enabledMicIds() for a device that is no longer there.
+		delete row.check;
+		delete row.slider;
+		delete row.meter;
+	}
+	micRows_.clear();
+
+	buildMicRows();
+	load(pcCheck_->isChecked(), wasOn, pcSlider_->value() / 100.0, vols);
 }
 
 void AudioPanel::load(bool desktopOn, const std::vector<std::string> &micIds, double desktopVolume,

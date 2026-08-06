@@ -6,6 +6,7 @@
 #include <vector>
 
 class QCheckBox;
+class QGridLayout;
 class QProgressBar;
 class QSlider;
 class QVBoxLayout;
@@ -28,6 +29,13 @@ public:
 	void load(bool desktopOn, const std::vector<std::string> &micIds, double desktopVolume,
 		  const std::map<std::string, double> &micVolumes);
 
+	// Rebuild the microphone rows from the devices present RIGHT NOW, keeping
+	// what is ticked and each volume. The list was built once at construction,
+	// so a microphone plugged in afterwards simply did not exist as far as this
+	// panel was concerned -- which is the normal case for a headset someone
+	// puts on when they sit down to record.
+	void rescanDevices();
+
 	bool desktopOn() const;
 	std::vector<std::string> enabledMicIds() const;
 	// Every microphone the panel is showing, enabled or not. The recorder holds
@@ -45,7 +53,12 @@ public slots:
 private:
 	static int dbToPercent(float db);
 
+	// Build one row per detected input device. Called at construction and again
+	// by rescanDevices().
+	void buildMicRows();
+
 	AudioManager &audio_;
+	QGridLayout *grid_ = nullptr;
 	QCheckBox *pcCheck_ = nullptr;
 	QSlider *pcSlider_ = nullptr;
 	QProgressBar *pcMeter_ = nullptr;

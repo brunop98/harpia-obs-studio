@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/AudioManager.hpp"
 #include "core/ModeCapabilities.hpp"
 #include "model/Preset.hpp"
 
@@ -11,6 +12,11 @@
 class QLineEdit;
 class QComboBox;
 class QCheckBox;
+
+namespace harpia {
+class AudioPanel;
+}
+using harpia::AudioPanel;
 class QSpinBox;
 class QKeySequenceEdit;
 class QLabel;
@@ -28,7 +34,11 @@ class SpotlightPreview;
 class PresetEditorDialog : public QDialog {
 	Q_OBJECT
 public:
-	explicit PresetEditorDialog(const Preset &preset, QWidget *parent = nullptr);
+	// `audio` is the live capture: the Audio page drives it directly, so the
+	// level bars are real and a microphone can be heard before recording rather
+	// than after. The caller re-asserts its own state afterwards, whichever
+	// button was pressed.
+	PresetEditorDialog(const Preset &preset, AudioManager &audio, QWidget *parent = nullptr);
 
 	// Cancel asks before throwing away real edits, and says nothing when there
 	// are none.
@@ -92,14 +102,16 @@ private:
 	QLabel *validationLabel_ = nullptr;
 
 	// Audio page
-	QCheckBox *desktopAudioCheck_ = nullptr;
+	// The same panel the main window uses, so "PC audio, mics, volumes, levels"
+	// looks and behaves identically in both places -- and there is one
+	// implementation of it rather than two that drift.
+	AudioPanel *audioPanel_ = nullptr;
 	// Rows (label + description + control) that GIF hides, held so the format
 	// gate can take them off the page rather than grey them out.
 	QWidget *codecRow_ = nullptr;
 	QWidget *frameRateModeRow_ = nullptr;
 	QWidget *bitrateRow_ = nullptr;
-	QWidget *desktopAudioRow_ = nullptr;
-	QWidget *micSection_ = nullptr;
+	QWidget *audioSection_ = nullptr; // the panel + its rescan button
 	QWidget *audioBitrateRow_ = nullptr;
 	// What this preset records. Fixed for the life of the dialog -- the capture
 	// mode is chosen on the main window -- and decides which pages exist.
@@ -108,8 +120,7 @@ private:
 	// Hotkeys (app-wide QSettings, edited here for want of a better home)
 	QKeySequenceEdit *recordKeyEdit_ = nullptr;
 	QKeySequenceEdit *pauseKeyEdit_ = nullptr;
-	QList<QCheckBox *> micChecks_;
-	QStringList micIds_;
+
 
 	// Mouse section
 	QCheckBox *mouseCursorCheck_ = nullptr;

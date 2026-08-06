@@ -187,7 +187,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	row1->addSpacing(kGroupGap);
 	row1->addWidget(fieldLabel(
 		QStringLiteral("Capture"),
-		QStringLiteral("What to record: the entire monitor, a custom on-screen region, or a saved region.")));
+		QStringLiteral("The whole monitor, a region you drag, or a saved region.")));
 	captureModeCombo_ = new QComboBox(central);
 	// Items carry a string tag in their data: "monitor", "region", "audio",
 	// "saved:<id>" or "manage". The three modes come from the capability table
@@ -196,8 +196,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	for (RecordMode m : {RecordMode::Monitor, RecordMode::Region, RecordMode::AudioOnly})
 		captureModeCombo_->addItem(recordModeLabel(m), QString::fromLatin1(recordModeTag(m)));
 	captureModeCombo_->setToolTip(
-		QStringLiteral("What to record: the whole monitor, a custom region you drag on screen, "
-			       "or a saved region. Right-click a region to save it."));
+		QStringLiteral("What to record. Right-click a region to save it."));
 	row1->addWidget(captureModeCombo_);
 
 	row1->addSpacing(kGroupGap);
@@ -208,9 +207,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	monitorCombo_->setMinimumWidth(140); // without this the adjust policy collapses it
 	monitorCombo_->setMaximumWidth(200);
 	monitorCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-	monitorCombo_->setToolTip(QStringLiteral(
-		"Which display to record — applies to Entire Monitor and to Custom Region "
-		"(the region overlay opens on this display)."));
+	monitorCombo_->setToolTip(
+		QStringLiteral("Which display to record. The region opens on it too."));
 	// The display list refreshes right before the popup opens (eventFilter).
 	monitorCombo_->installEventFilter(this);
 	row1->addWidget(monitorCombo_);
@@ -230,9 +228,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	for (int s = 1; s <= 10; ++s)
 		countdownCombo_->addItem(QStringLiteral("%1s").arg(s), s);
 	countdownCombo_->setMaximumWidth(80);
-	countdownCombo_->setToolTip(QStringLiteral(
-		"Show an on-screen countdown before recording starts, so you can get ready. "
-		"Saved on the active preset; never part of the recording."));
+	countdownCombo_->setToolTip(
+		QStringLiteral("A countdown before recording starts. Never part of it."));
 	countdownLayout->addWidget(countdownCombo_);
 	row1->addWidget(countdownGroup_);
 	row1->addStretch(1);
@@ -250,8 +247,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	diskLabel_->setAlignment(Qt::AlignHCenter);
 	diskLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
 	diskLabel_->setCursor(Qt::PointingHandCursor);
-	diskLabel_->setToolTip(QStringLiteral("Free space on the output drive, and where recordings "
-					      "are saved. Click to open the folder."));
+	diskLabel_->setToolTip(
+		QStringLiteral("Free space, and where recordings go. Click to open."));
 	diskLabel_->installEventFilter(this);
 	root->addWidget(diskLabel_);
 
@@ -288,10 +285,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	appCombo_ = new QComboBox(central);
 	appCombo_->setFixedWidth(kBehaviorComboW);
 	appCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-	appCombo_->setToolTip(QStringLiteral(
-		"Pick an application to auto-pause recording whenever it isn't focused "
-		"(resumes when it is). Does not change what's captured — the capture mode "
-		"still applies. First entry disables this."));
+	appCombo_->setToolTip(
+		QStringLiteral("Pauses whenever this app is not focused. Capture is unchanged."));
 	appCombo_->addItem(QStringLiteral("Off"), QString());
 	// The window list is refreshed just before the popup opens (eventFilter).
 	appCombo_->installEventFilter(this);
@@ -299,9 +294,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	webcamCombo_ = new QComboBox(central);
 	webcamCombo_->setFixedWidth(kBehaviorComboW);
 	webcamCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-	webcamCombo_->setToolTip(QStringLiteral(
-		"Record this camera to its own file alongside the screen recording. "
-		"First entry disables the webcam."));
+	webcamCombo_->setToolTip(
+		QStringLiteral("Records this camera to its own file, alongside the screen."));
 	webcamCombo_->addItem(QStringLiteral("No webcam"), QString());
 	// The camera list is filled just before the popup opens; see eventFilter.
 	webcamCombo_->installEventFilter(this);
@@ -311,9 +305,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	for (int s : {1, 2, 3, 5, 10})
 		idleCombo_->addItem(QStringLiteral("%1 s").arg(s), s);
 	idleCombo_->setFixedWidth(kBehaviorComboW);
-	idleCombo_->setToolTip(QStringLiteral(
-		"Auto-pause the recording after this many seconds without mouse/keyboard "
-		"input, and resume on input. Off records regardless of activity."));
+	idleCombo_->setToolTip(
+		QStringLiteral("Pauses after this long with no input. Resumes on input."));
 
 	// Region recording only: pause once the pointer has been outside the region
 	// long enough, and resume when it returns. "Off" is -1 rather than 0 because
@@ -323,11 +316,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	for (int s : kRegionWatchSeconds)
 		regionLeaveCombo_->addItem(QStringLiteral("%1 s").arg(s), s);
 	regionLeaveCombo_->setFixedWidth(kBehaviorComboW);
-	regionLeaveCombo_->setToolTip(QStringLiteral(
-		"Pause the recording once the mouse pointer has been outside the "
-		"recording region for this long, and resume it when the pointer comes "
-		"back. 0 s pauses as soon as it leaves. Only applies to Custom Region "
-		"capture."));
+	regionLeaveCombo_->setToolTip(
+		QStringLiteral("Pauses once the pointer has left the region this long."));
 
 	auto behaviorRow = [&](const QString &text, QWidget *control) -> QWidget * {
 		auto *roww = new QWidget(central);
@@ -3437,8 +3427,7 @@ void MainWindow::updateRegionLeaveVisibility()
 		const bool suspended = activePreset().followMouse && captureMode_ == CaptureMode::Region;
 		regionLeaveGroup_->setEnabled(!suspended);
 		regionLeaveGroup_->setToolTip(
-			suspended ? QStringLiteral("Suspended while Follow Mouse is on — the region "
-						   "follows the pointer instead of pausing when it leaves.")
+			suspended ? QStringLiteral("Suspended: Follow Mouse moves the region instead.")
 				  : QString());
 	}
 }

@@ -88,20 +88,33 @@ QWidget *makePage(QVBoxLayout *&outLayout)
 	return scroll;
 }
 
-// A titled setting: bold label, a small gray description, then the control.
-// PowerRec/VS-style — every setting explains itself in one line.
-void addField(QVBoxLayout *v, const QString &title, const QString &desc, QWidget *control)
+// A titled setting: bold label, one short gray line, then the control.
+//
+// Returned as a single widget so a caller can hide the whole setting -- label,
+// description and control together -- with one call. That is what dependsOn()
+// below is built on; hiding only the control would leave a heading over an
+// empty space.
+//
+// The gap below the setting is the row's own bottom margin rather than spacing
+// added to the page, because spacing added to the page stays behind when the
+// row is hidden and the page ends up full of holes.
+QWidget *addField(QVBoxLayout *v, const QString &title, const QString &desc, QWidget *control)
 {
+	auto *row = new QWidget;
+	auto *rv = new QVBoxLayout(row);
+	rv->setContentsMargins(0, 0, 0, 12);
+	rv->setSpacing(4);
 	auto *t = new QLabel(QStringLiteral("<b>%1</b>").arg(title));
-	v->addWidget(t);
+	rv->addWidget(t);
 	if (!desc.isEmpty()) {
 		auto *d = new QLabel(desc);
 		d->setWordWrap(true);
 		d->setStyleSheet(QStringLiteral("color:#8a8f98;"));
-		v->addWidget(d);
+		rv->addWidget(d);
 	}
-	v->addWidget(control);
-	v->addSpacing(12);
+	rv->addWidget(control);
+	v->addWidget(row);
+	return row;
 }
 
 // A slider with its live value spelled out beside it. A bare slider makes the
@@ -131,11 +144,11 @@ QWidget *makeSliderRow(QWidget *parent, QSlider *&slider, int min, int max, int 
 
 // A color setting on one compact row: [ bold title ]  [ small swatch ].
 // Keeps the swatch small (not full-width) and aligns swatches across fields.
-void addColorField(QVBoxLayout *v, const QString &title, QPushButton *swatch)
+QWidget *addColorField(QVBoxLayout *v, const QString &title, QPushButton *swatch)
 {
 	auto *row = new QWidget;
 	auto *h = new QHBoxLayout(row);
-	h->setContentsMargins(0, 0, 0, 0);
+	h->setContentsMargins(0, 0, 0, 8);
 	h->setSpacing(10);
 	auto *t = new QLabel(QStringLiteral("<b>%1</b>").arg(title));
 	t->setMinimumWidth(130); // aligns the three swatches on the Mouse page
@@ -144,20 +157,45 @@ void addColorField(QVBoxLayout *v, const QString &title, QPushButton *swatch)
 	h->addWidget(swatch);
 	h->addStretch(1);
 	v->addWidget(row);
-	v->addSpacing(8);
+	return row;
 }
 
 // A checkbox setting: the checkbox is its own label; the description sits beneath.
-void addCheck(QVBoxLayout *v, QCheckBox *check, const QString &desc)
+QWidget *addCheck(QVBoxLayout *v, QCheckBox *check, const QString &desc)
 {
-	v->addWidget(check);
+	auto *row = new QWidget;
+	auto *rv = new QVBoxLayout(row);
+	rv->setContentsMargins(0, 0, 0, 12);
+	rv->setSpacing(4);
+	rv->addWidget(check);
 	if (!desc.isEmpty()) {
 		auto *d = new QLabel(desc);
 		d->setWordWrap(true);
 		d->setStyleSheet(QStringLiteral("color:#8a8f98; margin-left:22px;"));
-		v->addWidget(d);
+		rv->addWidget(d);
 	}
-	v->addSpacing(12);
+	v->addWidget(row);
+	return row;
+}
+
+// Settings that only mean something while `parent` is ticked: hidden while it
+// is not, rather than greyed.
+//
+// Greying was the old behaviour and the argument for it was that a greyed
+// setting can still be read before you decide to turn the feature on. In
+// practice it made every page look like a wall of dead controls -- the Zoom
+// page is six sliders and a shortcut, all inert, under one checkbox. Hiding
+// them means the page is the size of what it currently does.
+void dependsOn(QCheckBox *parent, const QVector<QWidget *> &rows)
+{
+	const auto apply = [parent, rows]() {
+		const bool on = parent->isChecked();
+		for (QWidget *row : rows)
+			if (row)
+				row->setVisible(on);
+	};
+	QObject::connect(parent, &QCheckBox::toggled, parent, apply);
+	apply();
 }
 
 // Wrap a control + trailing "Browse…" button into a single row widget.
@@ -208,9 +246,8 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	QWidget *generalPage = makePage(v);
 	// The display to record is chosen on the main window (next to Capture),
 	// not per preset.
-	auto *resNote = new QLabel(QStringLiteral("Recordings use the full display — or the selected "
-						  "capture region — at its native resolution."),
-				   this);
+	auto *resNote = new QLabel(
+		QStringLiteral("The whole display, or the chosen region, at native resolution."), this);
 	resNote->setWordWrap(true);
 	resNote->setStyleSheet(QStringLiteral("color:#8a8f98;"));
 	addField(v, QStringLiteral("Resolution"), QString(), resNote);
@@ -221,8 +258,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	idleSpin_->setSpecialValueText(QStringLiteral("Disabled"));
 	idleSpin_->setValue(preset.idleTimeoutSeconds);
 	addField(v, QStringLiteral("Auto-pause after idle"),
-		 QStringLiteral("Pause recording automatically after this many seconds of no "
-				"mouse/keyboard activity. Set to Disabled to always keep recording."),
+		 QStringLiteral("Pauses after this long with no mouse or keyboard activity."),
 		 idleSpin_);
 
 	v->addStretch(1);
@@ -239,8 +275,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		countdownCombo_->setCurrentIndex(ci >= 0 ? ci : 0);
 	}
 	addField(v, QStringLiteral("Countdown before recording"),
-		 QStringLiteral("Show a large countdown on screen before recording starts, so you can get "
-				"ready. The countdown itself is never part of the recording."),
+		 QStringLiteral("A countdown on screen first. Never part of the recording."),
 		 countdownCombo_);
 
 	minLengthSpin_ = new QSpinBox(this);
@@ -249,8 +284,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	minLengthSpin_->setSpecialValueText(QStringLiteral("Disabled"));
 	minLengthSpin_->setValue(preset.minRecordingSeconds);
 	addField(v, QStringLiteral("Minimum recording length"),
-		 QStringLiteral("If a finished recording is shorter than this (excluding paused time), you'll "
-				"be asked whether to discard it — handy for throwing away accidental clips."),
+		 QStringLiteral("Shorter recordings ask before saving. Catches accidental clips."),
 		 minLengthSpin_);
 
 	// Focus auto-pause now lives on the main window's "Record only one
@@ -261,9 +295,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 				     this);
 	borderCheck_->setChecked(preset.showScreenBorder);
 	addCheck(v, borderCheck_,
-		 QStringLiteral("Outline the recorded monitor while recording so you can see which screen is "
-				"captured. The border is excluded from the video (Windows) and only appears in "
-				"Full Screen capture mode."));
+		 QStringLiteral("Outlines the recorded monitor. Kept out of the video. Full Screen only."));
 
 	borderColor_ = QColor(QString::fromStdString(preset.screenBorderColor));
 	if (!borderColor_.isValid())
@@ -272,23 +304,22 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	setButtonColor(borderColorBtn_, borderColor_);
 	connect(borderColorBtn_, &QPushButton::clicked, this,
 		[this]() { pickColor(borderColor_, borderColorBtn_); });
-	addColorField(v, QStringLiteral("Border color"), borderColorBtn_);
+	QWidget *borderColorRow = addColorField(v, QStringLiteral("Border color"), borderColorBtn_);
 
 	borderThicknessSpin_ = new QSpinBox(this);
 	borderThicknessSpin_->setRange(1, 10);
 	borderThicknessSpin_->setSuffix(QStringLiteral(" px"));
 	borderThicknessSpin_->setValue(preset.screenBorderThickness > 0 ? preset.screenBorderThickness : 4);
-	addField(v, QStringLiteral("Border thickness"), QString(), borderThicknessSpin_);
+	QWidget *borderThickRow =
+		addField(v, QStringLiteral("Border thickness"), QString(), borderThicknessSpin_);
+	dependsOn(borderCheck_, {borderColorRow, borderThickRow});
 
 	regionHandleCheck_ = new QCheckBox(QStringLiteral("Show a drag handle on the capture region "
 							  "(Custom Region only)"),
 					   this);
 	regionHandleCheck_->setChecked(preset.regionMoveHandle);
 	addCheck(v, regionHandleCheck_,
-		 QStringLiteral("Adds a small grab tab just above the region frame. Drag it to move the "
-				"region — including while another app is in front, or while recording, "
-				"which dragging the middle of the frame cannot do. Only appears when the "
-				"capture mode is Custom Region."));
+		 QStringLiteral("A grab tab above the frame. Drag it to move the region."));
 
 	v->addStretch(1);
 	addPage(QStringLiteral("Recording"), recordingPage);
@@ -303,8 +334,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	formatCombo_->addItem(QStringLiteral("GIF"), int(RecordingFormat::GIF));
 	formatCombo_->setCurrentIndex(formatCombo_->findData(int(preset.format)));
 	addField(v, QStringLiteral("Format"),
-		 QStringLiteral("Container/file type. MP4 is the most compatible; MKV survives crashes "
-				"best; GIF makes a short silent animation."),
+		 QStringLiteral("MP4 plays everywhere. MKV survives crashes. GIF is short and silent."),
 		 formatCombo_);
 
 	codecCombo_ = new QComboBox(this);
@@ -322,9 +352,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	}
 	codecCombo_->setCurrentIndex(codecIdx);
 	addField(v, QStringLiteral("Codec"),
-		 QStringLiteral("How video is compressed. H.264 plays everywhere; HEVC/AV1 give smaller "
-				"files at the same quality but need newer players. Only codecs your PC "
-				"can encode are listed."),
+		 QStringLiteral("H.264 plays everywhere. HEVC and AV1 are smaller, need newer players."),
 		 codecCombo_);
 
 	fpsCombo_ = new QComboBox(this);
@@ -334,15 +362,13 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		fpsCombo_->addItem(QString::number(val));
 	fpsCombo_->setCurrentText(QString::number(preset.fps));
 	addField(v, QStringLiteral("Frame rate (fps)"),
-		 QStringLiteral("Frames per second. 30 is fine for most screen capture; 60 is smoother "
-				"for fast motion and games but makes larger files."),
+		 QStringLiteral("30 suits most screen capture. 60 is smoother, and larger."),
 		 fpsCombo_);
 
 	gpuCheck_ = new QCheckBox(QStringLiteral("Use GPU compression while recording"), this);
 	gpuCheck_->setChecked(preset.gpuCompression);
 	addCheck(v, gpuCheck_,
-		 QStringLiteral("Encode with the graphics card (NVENC/AMF/QSV) instead of the CPU. Much "
-				"lighter on the system while recording; falls back to CPU if unavailable."));
+		 QStringLiteral("Encodes on the graphics card. Much lighter on the system."));
 
 	validationLabel_ = new QLabel(this);
 	validationLabel_->setWordWrap(true);
@@ -355,9 +381,8 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	QWidget *audioPage = makePage(v);
 	// Visible only while the format is GIF, which has no audio track at all --
 	// otherwise this page is a set of live-looking controls that do nothing.
-	audioGifNote_ = new QLabel(QStringLiteral("GIF has no audio track — these settings apply to the "
-						  "other formats."),
-				   this);
+	audioGifNote_ =
+		new QLabel(QStringLiteral("GIF has no audio track. These settings apply elsewhere."), this);
 	audioGifNote_->setWordWrap(true);
 	audioGifNote_->setStyleSheet(QStringLiteral("color:#d29922;"));
 	audioGifNote_->setVisible(false);
@@ -365,13 +390,12 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	desktopAudioCheck_ = new QCheckBox(QStringLiteral("Record PC audio"), this);
 	desktopAudioCheck_->setChecked(preset.recordDesktopAudio);
 	addCheck(v, desktopAudioCheck_,
-		 QStringLiteral("Capture the system/desktop sound — anything you hear from the speakers."));
+		 QStringLiteral("Records whatever comes out of the speakers."));
 
 	auto *micCaption = new QLabel(QStringLiteral("<b>Microphones</b>"), this);
 	v->addWidget(micCaption);
-	auto *micDesc = new QLabel(QStringLiteral("Tick each input device to mix into the recording. Each "
-						 "is captured live so you can watch its level on the main window."),
-				   this);
+	auto *micDesc = new QLabel(
+		QStringLiteral("Tick a device to mix it in. Levels are live."), this);
 	micDesc->setWordWrap(true);
 	micDesc->setStyleSheet(QStringLiteral("color:#8a8f98;"));
 	v->addWidget(micDesc);
@@ -409,8 +433,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		audioBitrateCombo_->setCurrentIndex(bi);
 	}
 	addField(v, QStringLiteral("Audio quality"),
-		 QStringLiteral("Bitrate of the recorded audio track. 160 kbps is transparent for voice and "
-				"desktop sound; go higher for music."),
+		 QStringLiteral("160 kbps is transparent for voice. Go higher for music."),
 		 audioBitrateCombo_);
 
 	v->addStretch(1);
@@ -430,7 +453,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	templateEdit_->setPlaceholderText(
 		QStringLiteral("Recording_{Year}-{Month}-{Day}_{Hour}-{Minute}-{Second}"));
 	addField(v, QStringLiteral("Filename template"),
-		 QStringLiteral("Names each file. Click a token below to insert it at the cursor."),
+		 QStringLiteral("Names each file. Click a token to insert it."),
 		 templateEdit_);
 
 	// Quick-insert token buttons — no need to remember token names.
@@ -476,8 +499,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	driveLinkEdit_ = new QLineEdit(QString::fromStdString(preset.googleDriveLink), this);
 	driveLinkEdit_->setPlaceholderText(QStringLiteral("https://drive.google.com/…"));
 	addField(v, QStringLiteral("Google Drive share link"),
-		 QStringLiteral("Optional. When set, a clickable \"Google Drive\" shortcut appears at the "
-				"bottom of the main window and opens this link."),
+		 QStringLiteral("Optional. Adds a Drive shortcut to the main window."),
 		 driveLinkEdit_);
 
 	connect(templateEdit_, &QLineEdit::textChanged, this, &PresetEditorDialog::updateFilenamePreview);
@@ -495,12 +517,12 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	mouseCursorCheck_ = new QCheckBox(QStringLiteral("Show mouse cursor"), this);
 	mouseCursorCheck_->setChecked(preset.showMouseCursor);
 	addCheck(v, mouseCursorCheck_,
-		 QStringLiteral("Include the cursor in the recording. Turn off for cursor-free captures."));
+		 QStringLiteral("Includes the cursor in the recording."));
 
 	mouseAreaCheck_ = new QCheckBox(QStringLiteral("Highlight around cursor"), this);
 	mouseAreaCheck_->setChecked(preset.showMouseArea);
 	addCheck(v, mouseAreaCheck_,
-		 QStringLiteral("Draw a soft colored ring following the cursor so viewers can find it."));
+		 QStringLiteral("A soft coloured ring follows the cursor."));
 
 	highlightColor_ = QColor(QString::fromStdString(preset.mouseHighlightColor));
 	if (!highlightColor_.isValid())
@@ -509,7 +531,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	setButtonColor(highlightColorBtn_, highlightColor_);
 	connect(highlightColorBtn_, &QPushButton::clicked, this,
 		[this]() { pickColor(highlightColor_, highlightColorBtn_); });
-	addColorField(v, QStringLiteral("Highlight color"), highlightColorBtn_);
+	QWidget *highlightColorRow = addColorField(v, QStringLiteral("Highlight color"), highlightColorBtn_);
 
 	highlightSizeSlider_ = new QSlider(Qt::Horizontal, this);
 	highlightSizeSlider_->setRange(10, 200);
@@ -525,13 +547,14 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		[sizeValue](int px) { sizeValue->setText(QStringLiteral("%1 px").arg(px)); });
 	sizeLayout->addWidget(highlightSizeSlider_, 1);
 	sizeLayout->addWidget(sizeValue);
-	addField(v, QStringLiteral("Highlight size"),
-		 QStringLiteral("Diameter of the cursor highlight ring, in pixels."), sizeRow);
+	QWidget *highlightSizeRow = addField(v, QStringLiteral("Highlight size"),
+					     QStringLiteral("Diameter of the ring, in pixels."), sizeRow);
+	dependsOn(mouseAreaCheck_, {highlightColorRow, highlightSizeRow});
 
 	mouseClicksCheck_ = new QCheckBox(QStringLiteral("Show click animations"), this);
 	mouseClicksCheck_->setChecked(preset.recordMouseClicks);
 	addCheck(v, mouseClicksCheck_,
-		 QStringLiteral("Ripple where you click — left and right buttons use the colors below."));
+		 QStringLiteral("Ripples where you click, in the colours below."));
 
 	leftColor_ = QColor(QString::fromStdString(preset.leftClickColor));
 	if (!leftColor_.isValid())
@@ -539,7 +562,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	leftColorBtn_ = new QPushButton(this);
 	setButtonColor(leftColorBtn_, leftColor_);
 	connect(leftColorBtn_, &QPushButton::clicked, this, [this]() { pickColor(leftColor_, leftColorBtn_); });
-	addColorField(v, QStringLiteral("Left click color"), leftColorBtn_);
+	QWidget *leftColorRow = addColorField(v, QStringLiteral("Left click color"), leftColorBtn_);
 
 	rightColor_ = QColor(QString::fromStdString(preset.rightClickColor));
 	if (!rightColor_.isValid())
@@ -547,7 +570,8 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	rightColorBtn_ = new QPushButton(this);
 	setButtonColor(rightColorBtn_, rightColor_);
 	connect(rightColorBtn_, &QPushButton::clicked, this, [this]() { pickColor(rightColor_, rightColorBtn_); });
-	addColorField(v, QStringLiteral("Right click color"), rightColorBtn_);
+	QWidget *rightColorRow = addColorField(v, QStringLiteral("Right click color"), rightColorBtn_);
+	dependsOn(mouseClicksCheck_, {leftColorRow, rightColorRow});
 
 	// ---- Follow Mouse ----
 	followCheck_ = new QCheckBox(QStringLiteral("Follow Mouse (Custom Region only)"), this);
@@ -563,9 +587,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		}
 	}
 	addCheck(v, followCheck_,
-		 QStringLiteral("While recording a Custom Region, the region pans to keep the cursor "
-				"framed — record mobile-format tutorials without re-framing the video "
-				"afterwards. The region's size never changes, only its position."));
+		 QStringLiteral("The region pans to keep the cursor framed. Its size never changes."));
 
 	followProfileCombo_ = new QComboBox(this);
 	followProfileCombo_->addItem(QStringLiteral("Instant"));        // 0
@@ -574,10 +596,9 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	followProfileCombo_->addItem(QStringLiteral("Mobile Tutorial")); // 3
 	followProfileCombo_->addItem(QStringLiteral("Custom"));         // 4
 	followProfileCombo_->setCurrentIndex(std::clamp(preset.followProfile, 0, 4));
-	addField(v, QStringLiteral("Follow profile"),
-		 QStringLiteral("A starting point that sets the two sliders below together. Touch a "
-				"slider and it becomes Custom."),
-		 followProfileCombo_);
+	QWidget *followProfileRow = addField(v, QStringLiteral("Follow profile"),
+					     QStringLiteral("Sets both sliders below. Move one and this becomes Custom."),
+					     followProfileCombo_);
 
 	// The two sliders, each with the live value label beside it.
 	const auto sliderRow = [this](QSlider *&slider, int min, int max, int value, const QString &suffix) {
@@ -585,39 +606,36 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	};
 
 	QWidget *padRow = sliderRow(followPaddingSlider_, 0, 45, preset.followPaddingPct, QStringLiteral("%"));
-	addField(v, QStringLiteral("Mouse padding"),
-		 QStringLiteral("The safe zone: how far the cursor can wander from the region's centre "
-				"before it starts to follow, as a percentage of the region's size. The "
-				"region holds still while the cursor stays inside it."),
-		 padRow);
+	QWidget *followPadRow = addField(
+		v, QStringLiteral("Mouse padding"),
+		QStringLiteral("How far the cursor wanders before the region starts following."), padRow);
 
 	QWidget *smoothRow = sliderRow(followSmoothSlider_, 0, 100, preset.followSmoothness, QString());
-	addField(v, QStringLiteral("Smoothness"),
-		 QStringLiteral("How the region catches up. 0 reacts instantly; higher values glide "
-				"— slower, steadier, more cinematic."),
-		 smoothRow);
+	QWidget *followSmoothRow =
+		addField(v, QStringLiteral("Smoothness"),
+			 QStringLiteral("0 reacts instantly. Higher glides — slower and steadier."),
+			 smoothRow);
 
 	followAxisCombo_ = new QComboBox(this);
 	followAxisCombo_->addItem(QStringLiteral("Both directions"));  // 0
 	followAxisCombo_->addItem(QStringLiteral("Horizontal only")); // 1
 	followAxisCombo_->addItem(QStringLiteral("Vertical only"));   // 2
 	followAxisCombo_->setCurrentIndex(std::clamp(preset.followAxis, 0, 2));
-	addField(v, QStringLiteral("Follow direction"),
-		 QStringLiteral("Lock an axis: a vertical mobile strip usually only slides sideways; a "
-				"full-width bar only follows up and down."),
-		 followAxisCombo_);
+	QWidget *followAxisRow = addField(v, QStringLiteral("Follow direction"),
+					  QStringLiteral("Lock an axis so it only slides one way."),
+					  followAxisCombo_);
 
 	followShortcutEdit_ = new QKeySequenceEdit(
 		QKeySequence(QString::fromStdString(preset.followShortcut)), this);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
 	followShortcutEdit_->setMaximumSequenceLength(1);
 #endif
-	addField(v, QStringLiteral("Follow shortcut"),
-		 QStringLiteral("Stops and resumes the following mid-recording. Unlike Zoom and "
-				"Spotlight, following is already on from the first frame — this key "
-				"parks the camera so you can hold a shot, and switching it off glides "
-				"the region back to the rectangle you framed before recording."),
-		 followShortcutEdit_);
+	QWidget *followShortcutRow =
+		addField(v, QStringLiteral("Follow shortcut"),
+			 QStringLiteral("Parks the camera mid-recording. Switching off glides back."),
+			 followShortcutEdit_);
+	dependsOn(followCheck_, {followProfileRow, followPadRow, followSmoothRow, followAxisRow,
+				 followShortcutRow});
 
 	// Profile -> sliders. Values chosen so the names mean what they say:
 	// Instant snaps, Cinematic trails on a long leash, Mobile Tutorial keeps a
@@ -672,62 +690,58 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	spotCheck_ = new QCheckBox(QStringLiteral("Spotlight"), this);
 	spotCheck_->setChecked(preset.spotlightEnabled);
 	addCheck(v, spotCheck_,
-		 QStringLiteral("Adds a shortcut that darkens everything except an area around the "
-				"mouse, so a viewer's eye lands where you are pointing. Works in "
-				"every capture mode. Your own screen darkens too — that is what "
-				"gets recorded."));
+		 QStringLiteral("Darkens everything but an area around the mouse. Your screen too."));
 
 	spotShortcutEdit_ = new QKeySequenceEdit(
 		QKeySequence(QString::fromStdString(preset.spotlightShortcut)), this);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
 	spotShortcutEdit_->setMaximumSequenceLength(1);
 #endif
-	addField(v, QStringLiteral("Spotlight shortcut"),
-		 QStringLiteral("Press once to turn it on, again to turn it off. Works system-wide on "
-				"Windows, so it can be used with the app being recorded in front."),
-		 spotShortcutEdit_);
+	QWidget *spotShortcutRow =
+		addField(v, QStringLiteral("Spotlight shortcut"),
+			 QStringLiteral("Press to turn on, again to turn off. Works system-wide."),
+			 spotShortcutEdit_);
 
 	QSlider *spotSize = nullptr;
 	QWidget *spotSizeRow = makeSliderRow(this, spotSize, SpotlightParams::kMinSize,
 					     SpotlightParams::kMaxSize, preset.spotlightSize,
 					     QStringLiteral(" px"), 20);
 	spotSizeSlider_ = spotSize;
-	addField(v, QStringLiteral("Area size"),
-		 QStringLiteral("How wide the lit area is, in screen pixels. The preview below shows "
-				"it at the size it will actually be on the display this preset "
-				"records."),
-		 spotSizeRow);
+	QWidget *spotSizeField = addField(v, QStringLiteral("Area size"),
+					  QStringLiteral("Width of the lit area, in screen pixels."),
+					  spotSizeRow);
 
 	QSlider *spotDark = nullptr;
 	QWidget *spotDarkRow = makeSliderRow(this, spotDark, 0, SpotlightParams::kMaxDark,
 					     preset.spotlightDarkPct, QStringLiteral("%"), 5);
 	spotDarkSlider_ = spotDark;
-	addField(v, QStringLiteral("Dark area opacity"),
-		 QStringLiteral("How dark everything outside the area goes. It stops short of fully "
-				"black on purpose — you still have to find the window you are about "
-				"to click while the spotlight is on."),
-		 spotDarkRow);
+	QWidget *spotDarkField = addField(v, QStringLiteral("Dark area opacity"),
+					  QStringLiteral("How dark the rest goes. Never fully black, deliberately."),
+					  spotDarkRow);
 
 	QSlider *spotRound = nullptr;
 	QWidget *spotRoundRow = makeSliderRow(this, spotRound, 0, 100, preset.spotlightRoundness,
 					      QStringLiteral("%"), 5);
 	spotRoundSlider_ = spotRound;
-	addField(v, QStringLiteral("Area roundness"),
-		 QStringLiteral("0% is a hard-edged rectangle; 100% is a circle. In between, a "
-				"rectangle with its corners rounded off."),
-		 spotRoundRow);
+	QWidget *spotRoundField = addField(v, QStringLiteral("Area roundness"),
+					   QStringLiteral("0% is a rectangle, 100% a circle."),
+					   spotRoundRow);
 
 	spotStartOnCheck_ = new QCheckBox(QStringLiteral("Start recordings with the spotlight on"), this);
 	spotStartOnCheck_->setChecked(preset.spotlightStartOn);
-	addCheck(v, spotStartOnCheck_,
-		 QStringLiteral("Otherwise a recording starts with a normal screen and waits for the "
-				"shortcut — which is usually what you want, since the first thing "
-				"most recordings show is the whole screen."));
+	QWidget *spotStartRow =
+		addCheck(v, spotStartOnCheck_,
+			 QStringLiteral("Otherwise recordings start normal and wait for the shortcut."));
 
 	spotPreview_ = new SpotlightPreview(this);
-	addField(v, QStringLiteral("Preview"),
-		 QStringLiteral("Move the mouse over this to see the spotlight follow it."),
-		 spotPreview_);
+	QWidget *spotPreviewRow = addField(v, QStringLiteral("Preview"),
+					   QStringLiteral("Move the mouse here to see it follow."),
+					   spotPreview_);
+	// The preview goes with the rest: with the feature off there is nothing to
+	// preview, and a live spotlight demo under an unticked box invites the
+	// question of whether it is on.
+	dependsOn(spotCheck_, {spotShortcutRow, spotSizeField, spotDarkField, spotRoundField,
+			       spotStartRow, spotPreviewRow});
 
 	// Every setting on this page feeds the preview, and the preview is the
 	// reason the page is usable at all — the numbers alone say very little
@@ -751,12 +765,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	zoomCheck_ = new QCheckBox(QStringLiteral("Automatic Zoom"), this);
 	zoomCheck_->setChecked(preset.zoomEnabled);
 	addCheck(v, zoomCheck_,
-		 QStringLiteral("Adds a shortcut that zooms the recording in on the mouse and back out "
-				"again — for pointing at a menu or a line of code without editing "
-				"afterwards. The zoomed picture follows the cursor, and a border "
-				"marks the area being recorded while it is on. With Follow Mouse "
-				"on in a Custom Region, the region does the following and the "
-				"zoom just magnifies."));
+		 QStringLiteral("A shortcut zooms in on the mouse, and back out again."));
 
 	zoomShortcutEdit_ = new QKeySequenceEdit(
 		QKeySequence(QString::fromStdString(preset.zoomShortcut)), this);
@@ -764,76 +773,56 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	// One chord: RegisterHotKey knows nothing about sequences.
 	zoomShortcutEdit_->setMaximumSequenceLength(1);
 #endif
-	addField(v, QStringLiteral("Zoom shortcut"),
-		 QStringLiteral("Press once to zoom in, again to zoom out. Works system-wide on Windows, "
-				"so it can be used with the app being recorded in front. Unlike the "
-				"start and pause hotkeys, this one belongs to the preset."),
-		 zoomShortcutEdit_);
+	QWidget *zoomShortcutRow =
+		addField(v, QStringLiteral("Zoom shortcut"),
+			 QStringLiteral("Press to zoom in, again to zoom out. Works system-wide."),
+			 zoomShortcutEdit_);
 
 	QSlider *zoomPercentSlider = nullptr;
 	QWidget *zoomPctRow = makeSliderRow(this, zoomPercentSlider, ZoomParams::kMinPercent,
 					    ZoomParams::kMaxPercent, preset.zoomPercent,
 					    QStringLiteral("%"), 5);
 	zoomPercentSlider_ = zoomPercentSlider;
-	addField(v, QStringLiteral("Zoom percentage"),
-		 QStringLiteral("How far in. 200% shows half the width and half the height, magnified "
-				"twice. Past about 300% a 1080p screen starts to look soft, because "
-				"there are no more real pixels to enlarge."),
-		 zoomPctRow);
+	QWidget *zoomPctField =
+		addField(v, QStringLiteral("Zoom percentage"),
+			 QStringLiteral("200% shows half the screen, twice the size. Past 300% softens."),
+			 zoomPctRow);
 
 	QSlider *zoomAnimSlider = nullptr;
 	QWidget *zoomAnimRow = makeSliderRow(this, zoomAnimSlider, 0, 1500, preset.zoomAnimMs,
 					     QStringLiteral(" ms"), 50);
 	zoomAnimSlider_ = zoomAnimSlider;
-	addField(v, QStringLiteral("Zoom animation speed"),
-		 QStringLiteral("How long the push-in and the pull-out take. 0 cuts straight to the "
-				"zoomed view; a few hundred milliseconds reads as a camera move."),
-		 zoomAnimRow);
+	QWidget *zoomAnimField = addField(v, QStringLiteral("Zoom animation speed"),
+					  QStringLiteral("How long the push-in takes. 0 cuts straight there."),
+					  zoomAnimRow);
 
 	QSlider *zoomSmoothSlider = nullptr;
 	QWidget *zoomSmoothRow = makeSliderRow(this, zoomSmoothSlider, 0, 100,
 					       preset.zoomFollowSmoothness, QString());
 	zoomFollowSmoothSlider_ = zoomSmoothSlider;
-	addField(v, QStringLiteral("Mouse follow speed"),
-		 QStringLiteral("How the zoomed frame catches up with the cursor once it is in. 0 is "
-				"glued to the mouse; higher values trail behind it. Separate from the "
-				"animation speed above — how fast it pushes in and how tightly it "
-				"tracks are different decisions."),
-		 zoomSmoothRow);
+	QWidget *zoomSmoothField = addField(v, QStringLiteral("Mouse follow speed"),
+					    QStringLiteral("How the zoomed frame chases the cursor. 0 is glued."),
+					    zoomSmoothRow);
 
 	QSlider *zoomPadSlider = nullptr;
 	QWidget *zoomPadRow = makeSliderRow(this, zoomPadSlider, 0, 45, preset.zoomFollowPaddingPct,
 					    QStringLiteral("%"), 5);
 	zoomFollowPadSlider_ = zoomPadSlider;
-	addField(v, QStringLiteral("Mouse padding"),
-		 QStringLiteral("The safe zone inside the zoomed frame. The picture holds still while "
-				"the cursor stays within it, so small movements don't swim the shot."),
-		 zoomPadRow);
+	QWidget *zoomPadField = addField(v, QStringLiteral("Mouse padding"),
+					 QStringLiteral("How far the cursor wanders before the frame follows."),
+					 zoomPadRow);
 
 	zoomFollowAxisCombo_ = new QComboBox(this);
 	zoomFollowAxisCombo_->addItem(QStringLiteral("Both directions")); // 0
 	zoomFollowAxisCombo_->addItem(QStringLiteral("Horizontal only")); // 1
 	zoomFollowAxisCombo_->addItem(QStringLiteral("Vertical only"));   // 2
 	zoomFollowAxisCombo_->setCurrentIndex(std::clamp(preset.zoomFollowAxis, 0, 2));
-	addField(v, QStringLiteral("Mouse follow mode"),
-		 QStringLiteral("Lock an axis if the zoom should only slide one way — along a toolbar, "
-				"or down a page."),
-		 zoomFollowAxisCombo_);
+	QWidget *zoomAxisField = addField(v, QStringLiteral("Mouse follow mode"),
+					  QStringLiteral("Lock an axis so the zoom only slides one way."),
+					  zoomFollowAxisCombo_);
 
-	// Everything below the checkbox is inert while the feature is off. Greyed
-	// rather than hidden, so the settings can still be read and understood
-	// before deciding to turn it on.
-	const auto syncZoomEnabled = [this]() {
-		const bool on = zoomCheck_->isChecked();
-		zoomShortcutEdit_->setEnabled(on);
-		zoomPercentSlider_->setEnabled(on);
-		zoomAnimSlider_->setEnabled(on);
-		zoomFollowSmoothSlider_->setEnabled(on);
-		zoomFollowPadSlider_->setEnabled(on);
-		zoomFollowAxisCombo_->setEnabled(on);
-	};
-	connect(zoomCheck_, &QCheckBox::toggled, this, syncZoomEnabled);
-	syncZoomEnabled();
+	dependsOn(zoomCheck_, {zoomShortcutRow, zoomPctField, zoomAnimField, zoomSmoothField,
+			       zoomPadField, zoomAxisField});
 
 	v->addStretch(1);
 	addPage(QStringLiteral("Zoom"), zoomPage);
@@ -843,8 +832,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	webcamCheck_ = new QCheckBox(QStringLiteral("Record webcam as a separate video file"), this);
 	webcamCheck_->setChecked(preset.webcamEnabled);
 	addCheck(v, webcamCheck_,
-		 QStringLiteral("Save the camera to its own file alongside the screen recording, kept in "
-				"sync. It is never composited onto the screen video."));
+		 QStringLiteral("Saves the camera to its own file, kept in sync."));
 
 	const std::vector<AudioDevice> cams = WebcamRecorder::cameras();
 	webcamDeviceCombo_ = new QComboBox(this);
@@ -864,7 +852,8 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		if (di >= 0)
 			webcamDeviceCombo_->setCurrentIndex(di);
 	}
-	addField(v, QStringLiteral("Camera"), QStringLiteral("Which webcam to record."), webcamDeviceCombo_);
+	QWidget *webcamDeviceRow = addField(v, QStringLiteral("Camera"),
+					    QStringLiteral("Which webcam to record."), webcamDeviceCombo_);
 
 	// Diagnostic status line: explain an empty list (plugin missing / privacy /
 	// not connected) or confirm success.
@@ -917,9 +906,10 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		}
 		webcamResCombo_->setCurrentIndex(ri);
 	}
-	addField(v, QStringLiteral("Webcam resolution"),
-		 QStringLiteral("Capture size of the camera file, independent of the screen resolution."),
-		 webcamResCombo_);
+	QWidget *webcamResRow =
+		addField(v, QStringLiteral("Webcam resolution"),
+			 QStringLiteral("Capture size of the camera file. Independent of the screen."),
+			 webcamResCombo_);
 
 	webcamFpsCombo_ = new QComboBox(this);
 	webcamFpsCombo_->setEditable(true);
@@ -927,14 +917,15 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	for (int val : {24, 30, 60})
 		webcamFpsCombo_->addItem(QString::number(val));
 	webcamFpsCombo_->setCurrentText(QString::number(preset.webcamFps > 0 ? preset.webcamFps : 30));
-	addField(v, QStringLiteral("Webcam frame rate"), QStringLiteral("Frames per second for the camera file."),
-		 webcamFpsCombo_);
+	QWidget *webcamFpsRow = addField(v, QStringLiteral("Webcam frame rate"),
+					 QStringLiteral("Frames per second for the camera file."),
+					 webcamFpsCombo_);
 
 	webcamCustomFolderCheck_ = new QCheckBox(QStringLiteral("Use a custom folder for the webcam file"), this);
 	webcamCustomFolderCheck_->setChecked(preset.webcamUseCustomFolder);
-	addCheck(v, webcamCustomFolderCheck_,
-		 QStringLiteral("By default the camera file sits next to the screen recording; enable this "
-				"to send it elsewhere."));
+	QWidget *webcamFolderCheckRow =
+		addCheck(v, webcamCustomFolderCheck_,
+			 QStringLiteral("Send the camera file somewhere other than beside the recording."));
 
 	webcamFolderEdit_ = new QLineEdit(QString::fromStdString(preset.webcamFolder), this);
 	webcamFolderEdit_->setPlaceholderText(QStringLiteral("Same folder as the screen recording"));
@@ -946,12 +937,25 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		if (!dir.isEmpty())
 			webcamFolderEdit_->setText(dir);
 	});
-	addField(v, QStringLiteral("Webcam folder"), QString(), folderRowWidget(webcamFolderEdit_, wcBrowse));
-	auto syncWebcamFolder = [this]() {
-		webcamFolderEdit_->setEnabled(webcamCustomFolderCheck_->isChecked());
+	QWidget *webcamFolderRow = addField(v, QStringLiteral("Webcam folder"), QString(),
+					    folderRowWidget(webcamFolderEdit_, wcBrowse));
+
+	// Two levels deep: the folder picker needs the webcam on AND a custom
+	// folder asked for, so it cannot go through dependsOn() alone -- that
+	// watches one box, and the outer one would show the picker again the
+	// moment the webcam was switched back on.
+	const auto syncWebcamRows = [this, webcamDeviceRow, webcamResRow, webcamFpsRow,
+				     webcamFolderCheckRow, webcamFolderRow]() {
+		const bool on = webcamCheck_->isChecked();
+		webcamDeviceRow->setVisible(on);
+		webcamResRow->setVisible(on);
+		webcamFpsRow->setVisible(on);
+		webcamFolderCheckRow->setVisible(on);
+		webcamFolderRow->setVisible(on && webcamCustomFolderCheck_->isChecked());
 	};
-	connect(webcamCustomFolderCheck_, &QCheckBox::toggled, this, syncWebcamFolder);
-	syncWebcamFolder();
+	connect(webcamCheck_, &QCheckBox::toggled, this, syncWebcamRows);
+	connect(webcamCustomFolderCheck_, &QCheckBox::toggled, this, syncWebcamRows);
+	syncWebcamRows();
 	v->addStretch(1);
 	addPage(QStringLiteral("Webcam"), webcamPage);
 
@@ -972,9 +976,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		recordKeyEdit_->setMaximumSequenceLength(1);
 #endif
 		addField(v, QStringLiteral("Start / stop recording"),
-			 QStringLiteral("Works system-wide on Windows — no need to bring Harpia to the "
-					"front. If another app already owns the key, it still works "
-					"while Harpia is focused."),
+			 QStringLiteral("Works system-wide on Windows. Harpia does not need focus."),
 			 recordKeyEdit_);
 		pauseKeyEdit_ = new QKeySequenceEdit(
 			QKeySequence(hk.value(QStringLiteral("hotkeys/pause"), QStringLiteral("F10"))
@@ -984,7 +986,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		pauseKeyEdit_->setMaximumSequenceLength(1);
 #endif
 		addField(v, QStringLiteral("Pause / resume"),
-			 QStringLiteral("Same rules. Note GIF recordings can't pause at all."),
+			 QStringLiteral("Same rules. GIF recordings cannot pause at all."),
 			 pauseKeyEdit_);
 		auto *shared = new QLabel(QStringLiteral("Hotkeys are shared by every preset."), this);
 		shared->setStyleSheet(QStringLiteral("color:#8a8f98;"));
@@ -1000,8 +1002,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	frameRateModeCombo_->addItem(QStringLiteral("Variable (VFR)"), int(FrameRateMode::VFR));
 	frameRateModeCombo_->setCurrentIndex(frameRateModeCombo_->findData(int(preset.frameRateMode)));
 	addField(v, QStringLiteral("Frame rate mode"),
-		 QStringLiteral("Constant (CFR) writes an even frame every tick — safest for editing. "
-				"Variable (VFR) saves space but some editors handle it poorly."),
+		 QStringLiteral("CFR is safest for editing. VFR saves space, some editors struggle."),
 		 frameRateModeCombo_);
 
 	// Bitrate: a dropdown of common presets, plus Auto and a Custom escape hatch
@@ -1036,9 +1037,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	connect(bitrateCombo_, &QComboBox::currentIndexChanged, this, syncBitrate);
 
 	addField(v, QStringLiteral("Bitrate"),
-		 QStringLiteral("Higher bitrate = better quality and larger files. Auto picks a sensible "
-				"value from the resolution, frame rate, and codec; Custom… lets you type "
-				"an exact number."),
+		 QStringLiteral("Higher means better quality and bigger files. Auto picks sensibly."),
 		 bitrateCombo_);
 	v->addWidget(bitrateSpin_);
 	v->addSpacing(12);
@@ -1114,15 +1113,6 @@ void PresetEditorDialog::syncSpotlightPreview()
 	// large patch on 1080p and a small one on 4K.
 	spotPreview_->configure(sp, spotScreenW_);
 
-	// The controls are inert while the feature is off, greyed rather than
-	// hidden so they can still be read before deciding to turn it on. The
-	// preview stays live either way: it is how you decide.
-	const bool on = spotCheck_->isChecked();
-	spotShortcutEdit_->setEnabled(on);
-	spotSizeSlider_->setEnabled(on);
-	spotDarkSlider_->setEnabled(on);
-	spotRoundSlider_->setEnabled(on);
-	spotStartOnCheck_->setEnabled(on);
 }
 
 void PresetEditorDialog::updateMousePreview()
@@ -1198,13 +1188,11 @@ void PresetEditorDialog::updateValidation()
 
 	QString msg;
 	if (isGif) {
-		msg = QStringLiteral("GIF uses its own palette encoder: codec and bitrate are ignored, "
-				     "the frame rate is capped at 15, the image is downscaled to keep "
-				     "files small, there is no audio track, and recording can't pause.");
+		msg = QStringLiteral("GIF ignores codec and bitrate, caps at 15 fps, and cannot pause.");
 	} else if (format == RecordingFormat::AVI && codec != VideoCodec::H264) {
 		msg = QStringLiteral("AVI has poor support for HEVC/AV1 — MP4 or MKV is recommended.");
 	} else if (format == RecordingFormat::MP4 && codec == VideoCodec::HEVC) {
-		msg = QStringLiteral("Tip: HEVC in MP4 may not play everywhere; MKV is the safest container.");
+		msg = QStringLiteral("HEVC in MP4 may not play everywhere. MKV is safest.");
 	}
 	validationLabel_->setText(msg);
 	validationLabel_->setVisible(!msg.isEmpty());

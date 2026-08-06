@@ -212,7 +212,7 @@ QWidget *folderRowWidget(QLineEdit *edit, QPushButton *browse)
 } // namespace
 
 PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
-	: QDialog(parent), result_(preset)
+	: QDialog(parent), result_(preset), original_(preset)
 {
 	setWindowTitle(QStringLiteral("Preset Settings"));
 	setModal(true);
@@ -1316,6 +1316,131 @@ bool PresetEditorDialog::resolveShortcutConflicts()
 	return true;
 }
 
+void PresetEditorDialog::collectInto(Preset &out) const
+{
+	// Every widget on every page, written into `out`. Split out of accept()
+	// so Cancel can build the same thing and compare: the only honest way to
+	// answer "did anything change?" is to collect it and look.
+	out.name = nameEdit_->text().trimmed().toStdString();
+	out.format = RecordingFormat(formatCombo_->currentData().toInt());
+	out.codec = VideoCodec(codecCombo_->currentData().toInt());
+	out.frameRateMode = FrameRateMode(frameRateModeCombo_->currentData().toInt());
+	out.fps = qMax(1, fpsCombo_->currentText().toInt());
+	{
+		const int sel = bitrateCombo_->currentData().toInt();
+		if (sel == 0)
+			out.videoBitrateKbps = 0; // Auto
+		else if (sel == -1)
+			out.videoBitrateKbps = bitrateSpin_->value(); // Custom
+		else
+			out.videoBitrateKbps = sel; // a listed preset
+	}
+
+	// Hotkeys are app-wide QSettings, written on OK like everything else here
+	// (Cancel leaves them untouched). Empty means "back to the default".
+	{
+		QSettings hk(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		const QString rec = recordKeyEdit_->keySequence().toString();
+		const QString pause = pauseKeyEdit_->keySequence().toString();
+		hk.setValue(QStringLiteral("hotkeys/record"),
+			    rec.isEmpty() ? QStringLiteral("F9") : rec);
+		hk.setValue(QStringLiteral("hotkeys/pause"),
+			    pause.isEmpty() ? QStringLiteral("F10") : pause);
+	}
+
+	out.outputFolder = folderEdit_->text().trimmed().toStdString();
+	// monitorIndex and captureMode are intentionally not edited here — the main
+	// window owns both (its display and capture combos write through).
+	out.gpuCompression = gpuCheck_->isChecked();
+	out.idleTimeoutSeconds = idleSpin_->value();
+	out.countdownSeconds = countdownCombo_->currentData().toInt();
+	out.minRecordingSeconds = minLengthSpin_->value();
+	out.showScreenBorder = borderCheck_->isChecked();
+	out.screenBorderColor = borderColor_.name().toStdString();
+	out.screenBorderThickness = borderThicknessSpin_->value();
+	out.regionMoveHandle = regionHandleCheck_->isChecked();
+	out.filenameTemplate = templateEdit_->text().trimmed().toStdString();
+	// An empty template would expand to an extension-only (hidden) filename
+	// like ".mp4" — restore the default naming instead of saving it.
+	if (out.filenameTemplate.empty())
+		out.filenameTemplate = Preset::makeDefault("").filenameTemplate;
+
+	out.googleDriveLink = driveLinkEdit_->text().trimmed().toStdString();
+
+	out.recordDesktopAudio = desktopAudioCheck_->isChecked();
+	out.audioBitrateKbps = audioBitrateCombo_->currentData().toInt();
+	out.micDeviceIds.clear();
+	for (int i = 0; i < micChecks_.size(); ++i) {
+		if (micChecks_[i]->isChecked())
+			out.micDeviceIds.push_back(micIds_[i].toStdString());
+	}
+
+	out.showMouseCursor = mouseCursorCheck_->isChecked();
+	out.showMouseArea = mouseAreaCheck_->isChecked();
+	out.mouseHighlightColor = highlightColor_.name().toStdString();
+	out.mouseHighlightSize = highlightSizeSlider_->value();
+	out.recordMouseClicks = mouseClicksCheck_->isChecked();
+	out.leftClickColor = leftColor_.name().toStdString();
+	out.rightClickColor = rightColor_.name().toStdString();
+	out.followMouse = followCheck_->isChecked();
+	out.followPaddingPct = followPaddingSlider_->value();
+	out.followSmoothness = followSmoothSlider_->value();
+	out.followAxis = followAxisCombo_->currentIndex();
+	out.followProfile = followProfileCombo_->currentIndex();
+	out.followShortcut = followShortcutEdit_->keySequence().toString().toStdString();
+
+	out.spotlightEnabled = spotCheck_->isChecked();
+	out.spotlightStartOn = spotStartOnCheck_->isChecked();
+	out.spotlightSize = spotSizeSlider_->value();
+	out.spotlightDarkPct = spotDarkSlider_->value();
+	out.spotlightRoundness = spotRoundSlider_->value();
+	// Same rule as the zoom key: an empty sequence means "no shortcut", not
+	// "put the default back".
+	out.spotlightShortcut = spotShortcutEdit_->keySequence().toString().toStdString();
+
+	out.zoomEnabled = zoomCheck_->isChecked();
+	out.zoomPercent = zoomPercentSlider_->value();
+	out.zoomAnimMs = zoomAnimSlider_->value();
+	out.zoomFollowSmoothness = zoomFollowSmoothSlider_->value();
+	out.zoomFollowPaddingPct = zoomFollowPadSlider_->value();
+	out.zoomFollowAxis = zoomFollowAxisCombo_->currentIndex();
+	// An empty shortcut means "no zoom hotkey" rather than a broken one -- the
+	// main window simply registers nothing, and the feature is unreachable
+	// until a key is set. Better than silently reinstating the default the user
+	// just cleared.
+	out.zoomShortcut = zoomShortcutEdit_->keySequence().toString().toStdString();
+
+	out.webcamEnabled = webcamCheck_->isChecked();
+	out.webcamDeviceId = webcamDeviceCombo_->currentData().toString().toStdString();
+	{
+		const QStringList wh = webcamResCombo_->currentData().toString().split(QLatin1Char('x'));
+		out.webcamWidth = wh.value(0).toInt();
+		out.webcamHeight = wh.value(1).toInt();
+	}
+	out.webcamFps = qMax(1, webcamFpsCombo_->currentText().toInt());
+	out.webcamUseCustomFolder = webcamCustomFolderCheck_->isChecked();
+	out.webcamFolder = webcamFolderEdit_->text().trimmed().toStdString();
+}
+
+void PresetEditorDialog::reject()
+{
+	// Cancel used to throw the whole edit away without a word -- the only
+	// destructive action in the app that did not ask. It still does not ask
+	// when there is nothing to lose, which is most of the time: the dialog is
+	// opened to look at something far more often than to change it.
+	Preset edited = original_;
+	collectInto(edited);
+	if (edited != original_) {
+		const auto btn = QMessageBox::question(
+			this, windowTitle(),
+			QStringLiteral("Discard the changes to this preset?"),
+			QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Cancel);
+		if (btn != QMessageBox::Discard)
+			return;
+	}
+	QDialog::reject();
+}
+
 void PresetEditorDialog::accept()
 {
 	const QString name = nameEdit_->text().trimmed();
@@ -1369,105 +1494,7 @@ void PresetEditorDialog::accept()
 		}
 	}
 
-	result_.name = name.toStdString();
-	result_.format = RecordingFormat(formatCombo_->currentData().toInt());
-	result_.codec = VideoCodec(codecCombo_->currentData().toInt());
-	result_.frameRateMode = FrameRateMode(frameRateModeCombo_->currentData().toInt());
-	result_.fps = qMax(1, fpsCombo_->currentText().toInt());
-	{
-		const int sel = bitrateCombo_->currentData().toInt();
-		if (sel == 0)
-			result_.videoBitrateKbps = 0; // Auto
-		else if (sel == -1)
-			result_.videoBitrateKbps = bitrateSpin_->value(); // Custom
-		else
-			result_.videoBitrateKbps = sel; // a listed preset
-	}
-
-	// Hotkeys are app-wide QSettings, written on OK like everything else here
-	// (Cancel leaves them untouched). Empty means "back to the default".
-	{
-		QSettings hk(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
-		const QString rec = recordKeyEdit_->keySequence().toString();
-		const QString pause = pauseKeyEdit_->keySequence().toString();
-		hk.setValue(QStringLiteral("hotkeys/record"),
-			    rec.isEmpty() ? QStringLiteral("F9") : rec);
-		hk.setValue(QStringLiteral("hotkeys/pause"),
-			    pause.isEmpty() ? QStringLiteral("F10") : pause);
-	}
-
-	result_.outputFolder = folderEdit_->text().trimmed().toStdString();
-	// monitorIndex and captureMode are intentionally not edited here — the main
-	// window owns both (its display and capture combos write through).
-	result_.gpuCompression = gpuCheck_->isChecked();
-	result_.idleTimeoutSeconds = idleSpin_->value();
-	result_.countdownSeconds = countdownCombo_->currentData().toInt();
-	result_.minRecordingSeconds = minLengthSpin_->value();
-	result_.showScreenBorder = borderCheck_->isChecked();
-	result_.screenBorderColor = borderColor_.name().toStdString();
-	result_.screenBorderThickness = borderThicknessSpin_->value();
-	result_.regionMoveHandle = regionHandleCheck_->isChecked();
-	result_.filenameTemplate = templateEdit_->text().trimmed().toStdString();
-	// An empty template would expand to an extension-only (hidden) filename
-	// like ".mp4" — restore the default naming instead of saving it.
-	if (result_.filenameTemplate.empty())
-		result_.filenameTemplate = Preset::makeDefault("").filenameTemplate;
-
-	result_.googleDriveLink = driveLinkEdit_->text().trimmed().toStdString();
-
-	result_.recordDesktopAudio = desktopAudioCheck_->isChecked();
-	result_.audioBitrateKbps = audioBitrateCombo_->currentData().toInt();
-	result_.micDeviceIds.clear();
-	for (int i = 0; i < micChecks_.size(); ++i) {
-		if (micChecks_[i]->isChecked())
-			result_.micDeviceIds.push_back(micIds_[i].toStdString());
-	}
-
-	result_.showMouseCursor = mouseCursorCheck_->isChecked();
-	result_.showMouseArea = mouseAreaCheck_->isChecked();
-	result_.mouseHighlightColor = highlightColor_.name().toStdString();
-	result_.mouseHighlightSize = highlightSizeSlider_->value();
-	result_.recordMouseClicks = mouseClicksCheck_->isChecked();
-	result_.leftClickColor = leftColor_.name().toStdString();
-	result_.rightClickColor = rightColor_.name().toStdString();
-	result_.followMouse = followCheck_->isChecked();
-	result_.followPaddingPct = followPaddingSlider_->value();
-	result_.followSmoothness = followSmoothSlider_->value();
-	result_.followAxis = followAxisCombo_->currentIndex();
-	result_.followProfile = followProfileCombo_->currentIndex();
-	result_.followShortcut = followShortcutEdit_->keySequence().toString().toStdString();
-
-	result_.spotlightEnabled = spotCheck_->isChecked();
-	result_.spotlightStartOn = spotStartOnCheck_->isChecked();
-	result_.spotlightSize = spotSizeSlider_->value();
-	result_.spotlightDarkPct = spotDarkSlider_->value();
-	result_.spotlightRoundness = spotRoundSlider_->value();
-	// Same rule as the zoom key: an empty sequence means "no shortcut", not
-	// "put the default back".
-	result_.spotlightShortcut = spotShortcutEdit_->keySequence().toString().toStdString();
-
-	result_.zoomEnabled = zoomCheck_->isChecked();
-	result_.zoomPercent = zoomPercentSlider_->value();
-	result_.zoomAnimMs = zoomAnimSlider_->value();
-	result_.zoomFollowSmoothness = zoomFollowSmoothSlider_->value();
-	result_.zoomFollowPaddingPct = zoomFollowPadSlider_->value();
-	result_.zoomFollowAxis = zoomFollowAxisCombo_->currentIndex();
-	// An empty shortcut means "no zoom hotkey" rather than a broken one -- the
-	// main window simply registers nothing, and the feature is unreachable
-	// until a key is set. Better than silently reinstating the default the user
-	// just cleared.
-	result_.zoomShortcut = zoomShortcutEdit_->keySequence().toString().toStdString();
-
-	result_.webcamEnabled = webcamCheck_->isChecked();
-	result_.webcamDeviceId = webcamDeviceCombo_->currentData().toString().toStdString();
-	{
-		const QStringList wh = webcamResCombo_->currentData().toString().split(QLatin1Char('x'));
-		result_.webcamWidth = wh.value(0).toInt();
-		result_.webcamHeight = wh.value(1).toInt();
-	}
-	result_.webcamFps = qMax(1, webcamFpsCombo_->currentText().toInt());
-	result_.webcamUseCustomFolder = webcamCustomFolderCheck_->isChecked();
-	result_.webcamFolder = webcamFolderEdit_->text().trimmed().toStdString();
+	collectInto(result_);
 
 	QDialog::accept();
 }

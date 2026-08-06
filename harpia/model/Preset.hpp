@@ -196,6 +196,61 @@ struct Preset {
 	static Preset makeDefault(const std::string &outputFolder);
 };
 
+// Field-by-field equality, so a dialog can ask "did anything actually change?"
+// before warning that Cancel will throw work away. Written out rather than
+// defaulted because Preset has to compile as C++17, where there is no
+// `= default` for operator==.
+//
+// A field added above and forgotten here makes two presets compare EQUAL when
+// they differ, which shows up as a discarded edit and nothing else -- so
+// preset_equality_test pins every field by changing it and demanding a
+// difference. Add new fields in both places.
+inline bool operator==(const Preset &a, const Preset &b)
+{
+	return a.id == b.id && a.name == b.name && a.format == b.format && a.codec == b.codec &&
+	       a.frameRateMode == b.frameRateMode && a.fps == b.fps &&
+	       a.outputFolder == b.outputFolder && a.monitorIndex == b.monitorIndex &&
+	       a.gpuCompression == b.gpuCompression && a.videoBitrateKbps == b.videoBitrateKbps &&
+	       a.audioBitrateKbps == b.audioBitrateKbps &&
+	       a.recordDesktopAudio == b.recordDesktopAudio && a.micDeviceIds == b.micDeviceIds &&
+	       a.desktopVolume == b.desktopVolume && a.micVolumes == b.micVolumes &&
+	       a.showMouseCursor == b.showMouseCursor && a.showMouseArea == b.showMouseArea &&
+	       a.mouseHighlightColor == b.mouseHighlightColor &&
+	       a.mouseHighlightSize == b.mouseHighlightSize &&
+	       a.recordMouseClicks == b.recordMouseClicks && a.leftClickColor == b.leftClickColor &&
+	       a.rightClickColor == b.rightClickColor && a.followMouse == b.followMouse &&
+	       a.followPaddingPct == b.followPaddingPct && a.followSmoothness == b.followSmoothness &&
+	       a.followAxis == b.followAxis && a.followProfile == b.followProfile &&
+	       a.followShortcut == b.followShortcut && a.spotlightEnabled == b.spotlightEnabled &&
+	       a.spotlightStartOn == b.spotlightStartOn && a.spotlightSize == b.spotlightSize &&
+	       a.spotlightDarkPct == b.spotlightDarkPct &&
+	       a.spotlightRoundness == b.spotlightRoundness &&
+	       a.spotlightShortcut == b.spotlightShortcut && a.zoomEnabled == b.zoomEnabled &&
+	       a.zoomPercent == b.zoomPercent && a.zoomAnimMs == b.zoomAnimMs &&
+	       a.zoomFollowSmoothness == b.zoomFollowSmoothness &&
+	       a.zoomFollowPaddingPct == b.zoomFollowPaddingPct &&
+	       a.zoomFollowAxis == b.zoomFollowAxis && a.zoomShortcut == b.zoomShortcut &&
+	       a.webcamEnabled == b.webcamEnabled && a.webcamDeviceId == b.webcamDeviceId &&
+	       a.webcamWidth == b.webcamWidth && a.webcamHeight == b.webcamHeight &&
+	       a.webcamFps == b.webcamFps && a.webcamUseCustomFolder == b.webcamUseCustomFolder &&
+	       a.webcamFolder == b.webcamFolder && a.filenameTemplate == b.filenameTemplate &&
+	       a.idleTimeoutSeconds == b.idleTimeoutSeconds &&
+	       a.regionLeavePauseSeconds == b.regionLeavePauseSeconds &&
+	       a.captureMode == b.captureMode && a.recordingCounter == b.recordingCounter &&
+	       a.countdownSeconds == b.countdownSeconds &&
+	       a.minRecordingSeconds == b.minRecordingSeconds &&
+	       a.googleDriveLink == b.googleDriveLink && a.showScreenBorder == b.showScreenBorder &&
+	       a.screenBorderColor == b.screenBorderColor &&
+	       a.screenBorderThickness == b.screenBorderThickness &&
+	       a.regionMoveHandle == b.regionMoveHandle;
+}
+
+inline bool operator!=(const Preset &a, const Preset &b)
+{
+	return !(a == b);
+}
+
+
 // Format<->string helpers used by persistence and the UI.
 const char *formatToString(RecordingFormat format);
 RecordingFormat formatFromString(const std::string &value, RecordingFormat fallback = RecordingFormat::MP4);

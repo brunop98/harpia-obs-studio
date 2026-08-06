@@ -30,6 +30,10 @@ class PresetEditorDialog : public QDialog {
 public:
 	explicit PresetEditorDialog(const Preset &preset, QWidget *parent = nullptr);
 
+	// Cancel asks before throwing away real edits, and says nothing when there
+	// are none.
+	void reject() override;
+
 	// The edited preset (valid after the dialog is accepted).
 	Preset result() const { return result_; }
 
@@ -53,7 +57,12 @@ private:
 	void pickColor(QColor &target, QPushButton *button);
 
 private:
-	Preset result_; // seeded from the input; updated on accept
+	Preset result_;   // seeded from the input; updated on accept
+	Preset original_; // exactly what was passed in, for the Cancel comparison
+
+	// Read every page's widgets into `out`. Used by accept() to produce the
+	// result, and by reject() to work out whether anything was actually edited.
+	void collectInto(Preset &out) const;
 
 	QListWidget *nav_ = nullptr; // page selector, for showPage()
 	QLineEdit *nameEdit_ = nullptr;

@@ -120,6 +120,14 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF $AVCF \
 	"$H/library/ClipLibrary.cpp" \
 	-o "$WORK/audiotap_test" $LF $AVLF
 
+# Preset equality, which Cancel in the preset editor asks before warning that it
+# is about to discard work. A field left out of the comparison makes two
+# different presets compare equal, and the edit is thrown away silently -- so
+# every field is pinned by changing it and demanding a difference.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/preset_equality_test.cpp" "$H/model/Preset.cpp" \
+	-o "$WORK/preset_equality_test" $LF
+
 # Which options apply in which capture mode. The alternative to this table is an
 # `if (mode == Region)` at a dozen call sites, which drifts -- and the symptom of
 # drift is a setting that looks switched on while doing nothing.
@@ -447,6 +455,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/zoommode_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/spotlight_fx_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/audioextract_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/modecapabilities_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/preset_equality_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/audiotap_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/shortcutconflict_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/crashreport_test" || rc=1

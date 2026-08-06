@@ -235,9 +235,18 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	nav_->setSpacing(2);
 	auto *stack = new QStackedWidget(this);
 
-	auto addPage = [&](const QString &title, QWidget *page) {
-		nav_->addItem(title);
-		stack->addWidget(page);
+	// Pages are collected first and added at the end, because whether a page
+	// belongs in this dialog depends on what the preset records: an Audio Only
+	// preset has no picture, so Video, Mouse, Spotlight, Zoom, Webcam and
+	// Advanced are settings it can never use. They were fully editable before,
+	// and everything set in them was silently ignored at record time.
+	//
+	// The capability table answers each one, so the dialog and the recorder
+	// cannot disagree about which of them apply.
+	mode_ = recordModeFromInt(preset.captureMode);
+	QVector<QPair<QString, QWidget *>> pages;
+	auto addPage = [&pages](const QString &title, QWidget *page) {
+		pages.append({title, page});
 	};
 
 	QVBoxLayout *v = nullptr; // filled per page by makePage()
@@ -291,11 +300,11 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	// application" toggle (pick the app there and it pauses when that app isn't
 	// focused). The old per-preset checkbox was redundant, so it's removed here.
 
-	borderCheck_ = new QCheckBox(QStringLiteral("Show border around recorded screen (Full Screen only)"),
-				     this);
+	borderCheck_ = new QCheckBox(QStringLiteral("Show border around recorded screen"), this);
 	borderCheck_->setChecked(preset.showScreenBorder);
-	addCheck(v, borderCheck_,
-		 QStringLiteral("Outlines the recorded monitor. Kept out of the video. Full Screen only."));
+	QWidget *borderCheckRow =
+		addCheck(v, borderCheck_,
+			 QStringLiteral("Outlines the recorded monitor. Kept out of the video."));
 
 	borderColor_ = QColor(QString::fromStdString(preset.screenBorderColor));
 	if (!borderColor_.isValid())
@@ -313,13 +322,21 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	QWidget *borderThickRow =
 		addField(v, QStringLiteral("Border thickness"), QString(), borderThicknessSpin_);
 	dependsOn(borderCheck_, {borderColorRow, borderThickRow});
+	// The border is drawn around a whole display, so it means nothing when the
+	// recording is a region -- and nothing at all with no picture.
+	if (!modeSupportsScreenBorder(mode_)) {
+		borderCheckRow->hide();
+		borderColorRow->hide();
+		borderThickRow->hide();
+	}
 
-	regionHandleCheck_ = new QCheckBox(QStringLiteral("Show a drag handle on the capture region "
-							  "(Custom Region only)"),
-					   this);
+	regionHandleCheck_ = new QCheckBox(QStringLiteral("Show a drag handle on the capture region"), this);
 	regionHandleCheck_->setChecked(preset.regionMoveHandle);
-	addCheck(v, regionHandleCheck_,
-		 QStringLiteral("A grab tab above the frame. Drag it to move the region."));
+	QWidget *regionHandleRow =
+		addCheck(v, regionHandleCheck_,
+			 QStringLiteral("A grab tab above the frame. Drag it to move the region."));
+	if (!modeUsesRegion(mode_))
+		regionHandleRow->hide();
 
 	v->addStretch(1);
 	addPage(QStringLiteral("Recording"), recordingPage);
@@ -351,9 +368,10 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		codecIdx = codecCombo_->count() - 1;
 	}
 	codecCombo_->setCurrentIndex(codecIdx);
-	addField(v, QStringLiteral("Codec"),
-		 QStringLiteral("H.264 plays everywhere. HEVC and AV1 are smaller, need newer players."),
-		 codecCombo_);
+	codecRow_ = addField(
+		v, QStringLiteral("Codec"),
+		QStringLiteral("H.264 plays everywhere. HEVC and AV1 are smaller, need newer players."),
+		codecCombo_);
 
 	fpsCombo_ = new QComboBox(this);
 	fpsCombo_->setEditable(true);
@@ -389,16 +407,20 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	v->addWidget(audioGifNote_);
 	desktopAudioCheck_ = new QCheckBox(QStringLiteral("Record PC audio"), this);
 	desktopAudioCheck_->setChecked(preset.recordDesktopAudio);
-	addCheck(v, desktopAudioCheck_,
-		 QStringLiteral("Records whatever comes out of the speakers."));
+	desktopAudioRow_ = addCheck(v, desktopAudioCheck_,
+				    QStringLiteral("Records whatever comes out of the speakers."));
 
+	micSection_ = new QWidget(this);
+	auto *micLayout = new QVBoxLayout(micSection_);
+	micLayout->setContentsMargins(0, 0, 0, 0);
+	micLayout->setSpacing(4);
 	auto *micCaption = new QLabel(QStringLiteral("<b>Microphones</b>"), this);
-	v->addWidget(micCaption);
-	auto *micDesc = new QLabel(
-		QStringLiteral("Tick a device to mix it in. Levels are live."), this);
+	micLayout->addWidget(micCaption);
+	auto *micDesc = new QLabel(QStringLiteral("Tick a device to mix it into the recording."), this);
 	micDesc->setWordWrap(true);
 	micDesc->setStyleSheet(QStringLiteral("color:#8a8f98;"));
-	v->addWidget(micDesc);
+	micLayout->addWidget(micDesc);
+	v->addWidget(micSection_);
 
 	for (const AudioDevice &d : AudioManager::inputDevices()) {
 		// Skip the synthetic "default" entry, matching the main window's
@@ -411,12 +433,12 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 			      preset.micDeviceIds.end());
 		micChecks_.append(c);
 		micIds_.append(id);
-		v->addWidget(c);
+		micLayout->addWidget(c);
 	}
 	if (micChecks_.isEmpty()) {
 		auto *none = new QLabel(QStringLiteral("(no microphones detected)"), this);
 		none->setStyleSheet(QStringLiteral("color:#8a8f98;"));
-		v->addWidget(none);
+		micLayout->addWidget(none);
 	}
 
 	v->addSpacing(8);
@@ -432,9 +454,9 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 		}
 		audioBitrateCombo_->setCurrentIndex(bi);
 	}
-	addField(v, QStringLiteral("Audio quality"),
-		 QStringLiteral("160 kbps is transparent for voice. Go higher for music."),
-		 audioBitrateCombo_);
+	audioBitrateRow_ = addField(v, QStringLiteral("Audio quality"),
+				    QStringLiteral("160 kbps is transparent for voice. Go higher for music."),
+				    audioBitrateCombo_);
 
 	v->addStretch(1);
 	addPage(QStringLiteral("Audio"), audioPage);
@@ -574,19 +596,9 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	dependsOn(mouseClicksCheck_, {leftColorRow, rightColorRow});
 
 	// ---- Follow Mouse ----
-	followCheck_ = new QCheckBox(QStringLiteral("Follow Mouse (Custom Region only)"), this);
+	followCheck_ = new QCheckBox(QStringLiteral("Follow Mouse"), this);
 	followCheck_->setChecked(preset.followMouse);
-	// Greyed out with the reason on the tooltip when this preset does not record
-	// a region, rather than sitting there tickable and inert. Same table the main
-	// window uses, so the two cannot disagree about when it applies.
-	{
-		const RecordMode pm = recordModeFromInt(preset.captureMode);
-		if (!modeSupportsFollowMouse(pm)) {
-			followCheck_->setEnabled(false);
-			followCheck_->setToolTip(modeDisabledReason(pm, false));
-		}
-	}
-	addCheck(v, followCheck_,
+	QWidget *followCheckRow = addCheck(v, followCheck_,
 		 QStringLiteral("The region pans to keep the cursor framed. Its size never changes."));
 
 	followProfileCombo_ = new QComboBox(this);
@@ -636,6 +648,16 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 			 followShortcutEdit_);
 	dependsOn(followCheck_, {followProfileRow, followPadRow, followSmoothRow, followAxisRow,
 				 followShortcutRow});
+	// Only a region has anywhere to pan to. Previously this was a greyed
+	// checkbox with the reason on a tooltip -- which is a tooltip nobody hovers.
+	if (!modeSupportsFollowMouse(mode_)) {
+		followCheckRow->hide();
+		followProfileRow->hide();
+		followPadRow->hide();
+		followSmoothRow->hide();
+		followAxisRow->hide();
+		followShortcutRow->hide();
+	}
 
 	// Profile -> sliders. Values chosen so the names mean what they say:
 	// Instant snaps, Cinematic trails on a long leash, Mobile Tutorial keeps a
@@ -1001,9 +1023,10 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 	frameRateModeCombo_->addItem(QStringLiteral("Constant (CFR)"), int(FrameRateMode::CFR));
 	frameRateModeCombo_->addItem(QStringLiteral("Variable (VFR)"), int(FrameRateMode::VFR));
 	frameRateModeCombo_->setCurrentIndex(frameRateModeCombo_->findData(int(preset.frameRateMode)));
-	addField(v, QStringLiteral("Frame rate mode"),
-		 QStringLiteral("CFR is safest for editing. VFR saves space, some editors struggle."),
-		 frameRateModeCombo_);
+	frameRateModeRow_ = addField(
+		v, QStringLiteral("Frame rate mode"),
+		QStringLiteral("CFR is safest for editing. VFR saves space, some editors struggle."),
+		frameRateModeCombo_);
 
 	// Bitrate: a dropdown of common presets, plus Auto and a Custom escape hatch
 	// that reveals the numeric field below.
@@ -1031,26 +1054,77 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, QWidget *parent)
 			bitrateCombo_->setCurrentIndex(bitrateCombo_->count() - 1); // Custom…
 	}
 
+	// Also consults the format: GIF hides the whole bitrate row, and the
+	// Custom… spin box must not reappear underneath a hidden dropdown.
 	auto syncBitrate = [this]() {
-		bitrateSpin_->setVisible(bitrateCombo_->currentData().toInt() == -1);
+		const bool gif = RecordingFormat(formatCombo_->currentData().toInt()) == RecordingFormat::GIF;
+		bitrateSpin_->setVisible(!gif && bitrateCombo_->currentData().toInt() == -1);
 	};
 	connect(bitrateCombo_, &QComboBox::currentIndexChanged, this, syncBitrate);
 
-	addField(v, QStringLiteral("Bitrate"),
-		 QStringLiteral("Higher means better quality and bigger files. Auto picks sensibly."),
-		 bitrateCombo_);
+	bitrateRow_ = addField(v, QStringLiteral("Bitrate"),
+			       QStringLiteral("Higher means better quality and bigger files. Auto picks sensibly."),
+			       bitrateCombo_);
 	v->addWidget(bitrateSpin_);
 	v->addSpacing(12);
 	syncBitrate();
 	v->addStretch(1);
 	addPage(QStringLiteral("Advanced"), advancedPage);
 
+	// ---- Which pages this preset actually has ---------------------------
+	const auto pageApplies = [this](const QString &title) {
+		if (title == QStringLiteral("Video"))
+			return modeHasVideo(mode_);
+		if (title == QStringLiteral("Advanced"))
+			return modeUsesVideoEncoder(mode_);
+		if (title == QStringLiteral("Mouse"))
+			return modeSupportsMouseFx(mode_);
+		if (title == QStringLiteral("Spotlight"))
+			return modeSupportsSpotlight(mode_);
+		if (title == QStringLiteral("Zoom"))
+			return modeSupportsZoom(mode_);
+		if (title == QStringLiteral("Webcam"))
+			return modeSupportsWebcam(mode_);
+		return true; // Recording, Audio, Output, Hotkeys apply to everything
+	};
+
+	int hidden = 0;
+	for (const auto &entry : pages) {
+		if (pageApplies(entry.first)) {
+			nav_->addItem(entry.first);
+			stack->addWidget(entry.second);
+		} else {
+			// Still built, still parented, just not reachable: every widget
+			// on it keeps the preset's stored value, and accept() writes it
+			// back untouched. Switching the capture mode back brings the page
+			// and its settings back exactly as they were.
+			++hidden;
+			entry.second->setParent(this);
+			entry.second->hide();
+		}
+	}
+
 	// ---- Assemble: header on top, nav | pages, buttons at the bottom ----
 	connect(nav_, &QListWidget::currentRowChanged, stack, &QStackedWidget::setCurrentIndex);
 	nav_->setCurrentRow(0);
 
+	auto *navColumn = new QVBoxLayout;
+	navColumn->setContentsMargins(0, 0, 0, 0);
+	navColumn->addWidget(nav_, 1);
+	if (hidden > 0) {
+		// Said out loud, because a page that is simply gone reads as a bug --
+		// and the setting that brings it back is on the main window, not here.
+		auto *note = new QLabel(QStringLiteral("Some pages don't apply to %1.")
+						.arg(recordModeLabel(mode_)),
+					this);
+		note->setWordWrap(true);
+		note->setStyleSheet(QStringLiteral("color:#8a8f98; font-size:11px;"));
+		note->setFixedWidth(nav_->width());
+		navColumn->addWidget(note);
+	}
+
 	auto *body = new QHBoxLayout;
-	body->addWidget(nav_);
+	body->addLayout(navColumn);
 	body->addWidget(stack, 1);
 
 	auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
@@ -1170,19 +1244,23 @@ void PresetEditorDialog::updateValidation()
 	const auto format = RecordingFormat(formatCombo_->currentData().toInt());
 	const auto codec = VideoCodec(codecCombo_->currentData().toInt());
 
-	// GIF quietly overrides half this dialog, so the dialog says so instead:
-	// every control GIF ignores is disabled while GIF is chosen, and the notes
-	// name each override. A page of live-looking controls that silently do
-	// nothing is how "my settings don't work" reports happen.
+	// GIF quietly overrides half this dialog, so the dialog stops offering the
+	// parts it overrides. Hidden rather than greyed, which is what every other
+	// inapplicable setting here now does -- and a page of live-looking controls
+	// that silently do nothing is how "my settings don't work" reports happen.
+	// The notes below still name each override, so the reason is on screen.
 	const bool isGif = (format == RecordingFormat::GIF);
-	codecCombo_->setEnabled(!isGif);
-	bitrateCombo_->setEnabled(!isGif);
-	bitrateSpin_->setEnabled(!isGif);
-	frameRateModeCombo_->setEnabled(!isGif);
-	if (desktopAudioCheck_)
-		desktopAudioCheck_->setEnabled(!isGif);
-	if (audioBitrateCombo_)
-		audioBitrateCombo_->setEnabled(!isGif);
+	const auto showRow = [](QWidget *row, bool on) {
+		if (row)
+			row->setVisible(on);
+	};
+	showRow(codecRow_, !isGif);
+	showRow(bitrateRow_, !isGif);
+	showRow(frameRateModeRow_, !isGif);
+	bitrateSpin_->setVisible(!isGif && bitrateCombo_->currentData().toInt() == -1);
+	showRow(desktopAudioRow_, !isGif);
+	showRow(micSection_, !isGif);
+	showRow(audioBitrateRow_, !isGif);
 	if (audioGifNote_)
 		audioGifNote_->setVisible(isGif);
 

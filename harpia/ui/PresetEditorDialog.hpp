@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/ModeCapabilities.hpp"
 #include "model/Preset.hpp"
 
 #include <QColor>
@@ -83,6 +84,17 @@ private:
 
 	// Audio page
 	QCheckBox *desktopAudioCheck_ = nullptr;
+	// Rows (label + description + control) that GIF hides, held so the format
+	// gate can take them off the page rather than grey them out.
+	QWidget *codecRow_ = nullptr;
+	QWidget *frameRateModeRow_ = nullptr;
+	QWidget *bitrateRow_ = nullptr;
+	QWidget *desktopAudioRow_ = nullptr;
+	QWidget *micSection_ = nullptr;
+	QWidget *audioBitrateRow_ = nullptr;
+	// What this preset records. Fixed for the life of the dialog -- the capture
+	// mode is chosen on the main window -- and decides which pages exist.
+	RecordMode mode_ = RecordMode::Monitor;
 	QLabel *audioGifNote_ = nullptr; // "GIF has no audio track", shown only for GIF
 	// Hotkeys (app-wide QSettings, edited here for want of a better home)
 	QKeySequenceEdit *recordKeyEdit_ = nullptr;

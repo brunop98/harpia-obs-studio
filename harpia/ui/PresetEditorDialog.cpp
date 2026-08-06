@@ -1124,6 +1124,40 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 		}
 	}
 
+	// ---- Search: every setting, by anything written on it ----------------
+	// Eleven pages and forty-odd settings, and the only way to find one was to
+	// remember which page it lived on. The text comes from the rows themselves
+	// -- their labels, descriptions and checkbox captions -- so a setting is
+	// findable by its description as well as its title, and nothing has to be
+	// kept in step by hand.
+	for (int i = 0; i < nav_->count(); ++i) {
+		QListWidgetItem *navItem = nav_->item(i);
+		if (!navItem->data(Qt::UserRole).isValid())
+			continue; // a separator
+		auto *page = qobject_cast<QScrollArea *>(stack->widget(navItem->data(Qt::UserRole).toInt()));
+		if (!page || !page->widget())
+			continue;
+		for (QObject *child : page->widget()->children()) {
+			auto *row = qobject_cast<QWidget *>(child);
+			if (!row)
+				continue;
+			QString text = navItem->text();
+			for (const QLabel *l : row->findChildren<QLabel *>())
+				text += QLatin1Char(' ') + l->text();
+			for (const QAbstractButton *b : row->findChildren<QAbstractButton *>())
+				text += QLatin1Char(' ') + b->text();
+			if (auto *asLabel = qobject_cast<QLabel *>(row))
+				text += QLatin1Char(' ') + asLabel->text();
+			searchRows_.push_back({row, i, text.toLower()});
+		}
+	}
+
+	searchEdit_ = new QLineEdit(this);
+	searchEdit_->setPlaceholderText(QStringLiteral("Search settings…"));
+	searchEdit_->setClearButtonEnabled(true);
+	searchEdit_->setFixedWidth(nav_->width());
+	connect(searchEdit_, &QLineEdit::textChanged, this, &PresetEditorDialog::applySearch);
+
 	// ---- Assemble: header on top, nav | pages, buttons at the bottom ----
 	connect(nav_, &QListWidget::currentItemChanged, this,
 		[stack](QListWidgetItem *cur, QListWidgetItem *) {
@@ -1134,6 +1168,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 
 	auto *navColumn = new QVBoxLayout;
 	navColumn->setContentsMargins(0, 0, 0, 0);
+	navColumn->addWidget(searchEdit_);
 	navColumn->addWidget(nav_, 1);
 	if (hidden > 0) {
 		// Said out loud, because a page that is simply gone reads as a bug --
@@ -1173,7 +1208,54 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	updateValidation();
 	updateMousePreview();
 	updateFilenamePreview();
-	resize(640, 580);
+
+	// Reopen where it was left. The size mattered more once pages started
+	// hiding what does not apply: the window was sized for the fullest page
+	// this dialog ever had, and most of them no longer fill it.
+	{
+		QSettings ui(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		const QSize saved = ui.value(QStringLiteral("presetEditor/size")).toSize();
+		resize(saved.isValid() && saved.width() > 300 && saved.height() > 300 ? saved
+										     : QSize(640, 580));
+		const QString page = ui.value(QStringLiteral("presetEditor/page")).toString();
+		if (!page.isEmpty())
+			showPage(page); // no-op if that page does not apply to this preset
+	}
+}
+
+void PresetEditorDialog::applySearch(const QString &needle)
+{
+	const QString n = needle.trimmed().toLower();
+
+	// Tinted rather than hidden. Visibility on these rows already has two
+	// owners -- the capability table and the depends-on-a-checkbox rule -- and
+	// a third would fight them: a search that "revealed" a Zoom slider while
+	// Zoom is switched off would be showing a control that does nothing.
+	int firstHit = -1;
+	QSet<int> pagesWithHits;
+	for (const SearchRow &r : searchRows_) {
+		const bool hit = !n.isEmpty() && r.text.contains(n);
+		r.row->setStyleSheet(hit ? QStringLiteral("background:#2a3550; border-radius:4px;")
+					 : QString());
+		if (hit) {
+			pagesWithHits.insert(r.navIndex);
+			if (firstHit < 0)
+				firstHit = r.navIndex;
+		}
+	}
+
+	for (int i = 0; i < nav_->count(); ++i) {
+		QListWidgetItem *item = nav_->item(i);
+		if (!item->data(Qt::UserRole).isValid()) {
+			item->setHidden(!n.isEmpty()); // the Hotkeys gap, while filtering
+			continue;
+		}
+		item->setHidden(!n.isEmpty() && !pagesWithHits.contains(i));
+	}
+
+	// Land on the first page that has a match, so one keystroke gets you there.
+	if (firstHit >= 0 && nav_->currentRow() != firstHit)
+		nav_->setCurrentRow(firstHit);
 }
 
 void PresetEditorDialog::showPage(const QString &title)
@@ -1448,8 +1530,19 @@ void PresetEditorDialog::collectInto(Preset &out) const
 	out.webcamFolder = webcamFolderEdit_->text().trimmed().toStdString();
 }
 
+// Both ways out remember the window, so it does not matter which was pressed.
+void PresetEditorDialog::rememberGeometry() const
+{
+	QSettings ui(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	ui.setValue(QStringLiteral("presetEditor/size"), size());
+	if (QListWidgetItem *cur = nav_ ? nav_->currentItem() : nullptr)
+		if (cur->data(Qt::UserRole).isValid())
+			ui.setValue(QStringLiteral("presetEditor/page"), cur->text());
+}
+
 void PresetEditorDialog::reject()
 {
+	rememberGeometry();
 	// Cancel used to throw the whole edit away without a word -- the only
 	// destructive action in the app that did not ask. It still does not ask
 	// when there is nothing to lose, which is most of the time: the dialog is
@@ -1469,6 +1562,7 @@ void PresetEditorDialog::reject()
 
 void PresetEditorDialog::accept()
 {
+	rememberGeometry();
 	const QString name = nameEdit_->text().trimmed();
 	if (name.isEmpty()) {
 		QMessageBox::warning(this, windowTitle(), QStringLiteral("Please enter a preset name."));

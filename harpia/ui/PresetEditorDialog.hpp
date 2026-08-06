@@ -73,8 +73,23 @@ private:
 	// Read every page's widgets into `out`. Used by accept() to produce the
 	// result, and by reject() to work out whether anything was actually edited.
 	void collectInto(Preset &out) const;
+	void rememberGeometry() const;
 
-	QListWidget *nav_ = nullptr; // page selector, for showPage()
+	QListWidget *nav_ = nullptr;
+	QLineEdit *searchEdit_ = nullptr;
+
+	// One entry per setting on every page: the row widget, the page it is on,
+	// and everything written on it folded into one lowercase string to match
+	// against. Collected after the pages are built by walking them, rather than
+	// recorded at each of the forty-odd call sites -- a list maintained by hand
+	// is a list that goes stale.
+	struct SearchRow {
+		QWidget *row = nullptr;
+		int navIndex = -1;
+		QString text;
+	};
+	QVector<SearchRow> searchRows_;
+	void applySearch(const QString &needle); // page selector, for showPage()
 	QLineEdit *nameEdit_ = nullptr;
 	QComboBox *formatCombo_ = nullptr;
 	QComboBox *codecCombo_ = nullptr;

@@ -73,6 +73,14 @@ private:
 	// Read every page's widgets into `out`. Used by accept() to produce the
 	// result, and by reject() to work out whether anything was actually edited.
 	void collectInto(Preset &out) const;
+	// The exact inverse: put a preset's values back into the widgets. Used by
+	// the per-page reset, which is "take the defaults for these fields and
+	// re-apply the rest unchanged".
+	void applyFrom(const Preset &p);
+	void resetCurrentPage();
+	// A dot on each navigation entry whose page differs from a fresh preset,
+	// so "what have I changed?" has an answer without opening two dialogs.
+	void refreshChangedMarks();
 	void rememberGeometry() const;
 
 	QListWidget *nav_ = nullptr;

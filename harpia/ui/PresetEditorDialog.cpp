@@ -44,6 +44,7 @@
 #include <QScrollArea>
 #include <QSettings>
 #include <QSlider>
+#include <QPainter>
 #include <QSpinBox>
 #include <QTimer>
 #include <QStackedWidget>
@@ -1186,7 +1187,12 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	body->addLayout(navColumn);
 	body->addWidget(stack, 1);
 
+	auto *resetBtn = new QPushButton(QStringLiteral("Reset page"), this);
+	resetBtn->setToolTip(QStringLiteral("Put this page back to the default settings."));
+	connect(resetBtn, &QPushButton::clicked, this, &PresetEditorDialog::resetCurrentPage);
+
 	auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
+	buttons->addButton(resetBtn, QDialogButtonBox::ResetRole);
 	connect(buttons, &QDialogButtonBox::accepted, this, &PresetEditorDialog::accept);
 	connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 	// Enter in a line edit (name, filename template, editable fps combos) must
@@ -1209,6 +1215,16 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	updateMousePreview();
 	updateFilenamePreview();
 
+	// The dots follow the widgets. Polled rather than wired to every control on
+	// every page: forty-odd connections to keep in step is precisely the kind
+	// of list that goes stale, and comparing two presets twice a second costs
+	// nothing measurable.
+	refreshChangedMarks();
+	auto *markTimer = new QTimer(this);
+	markTimer->setInterval(400);
+	connect(markTimer, &QTimer::timeout, this, &PresetEditorDialog::refreshChangedMarks);
+	markTimer->start();
+
 	// Reopen where it was left. The size mattered more once pages started
 	// hiding what does not apply: the window was sized for the fullest page
 	// this dialog ever had, and most of them no longer fill it.
@@ -1220,6 +1236,233 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 		const QString page = ui.value(QStringLiteral("presetEditor/page")).toString();
 		if (!page.isEmpty())
 			showPage(page); // no-op if that page does not apply to this preset
+	}
+}
+
+namespace {
+
+// Which preset fields each page owns, written once and used twice: to reset a
+// page to defaults, and to mark a page that differs from them. A generic lambda
+// means the list does not have to be repeated per type.
+//
+// Hotkeys is deliberately absent: those keys are app-wide, so "reset this page"
+// there would reach outside the preset entirely.
+//
+// outputFolder is absent for the same kind of reason -- resetting the Output
+// page should tidy the filename template, not throw away where recordings go.
+template <class F> void forEachPageField(const QString &page, F &&f)
+{
+	if (page == QStringLiteral("Recording")) {
+		f(&Preset::countdownSeconds);
+		f(&Preset::idleTimeoutSeconds);
+		f(&Preset::minRecordingSeconds);
+		f(&Preset::showScreenBorder);
+		f(&Preset::screenBorderColor);
+		f(&Preset::screenBorderThickness);
+		f(&Preset::regionMoveHandle);
+	} else if (page == QStringLiteral("Video")) {
+		f(&Preset::format);
+		f(&Preset::codec);
+		f(&Preset::fps);
+		f(&Preset::gpuCompression);
+	} else if (page == QStringLiteral("Audio")) {
+		f(&Preset::recordDesktopAudio);
+		f(&Preset::micDeviceIds);
+		f(&Preset::desktopVolume);
+		f(&Preset::micVolumes);
+		f(&Preset::audioBitrateKbps);
+	} else if (page == QStringLiteral("Output")) {
+		f(&Preset::filenameTemplate);
+		f(&Preset::googleDriveLink);
+	} else if (page == QStringLiteral("Mouse")) {
+		f(&Preset::showMouseCursor);
+		f(&Preset::showMouseArea);
+		f(&Preset::mouseHighlightColor);
+		f(&Preset::mouseHighlightSize);
+		f(&Preset::recordMouseClicks);
+		f(&Preset::leftClickColor);
+		f(&Preset::rightClickColor);
+		f(&Preset::followMouse);
+		f(&Preset::followPaddingPct);
+		f(&Preset::followSmoothness);
+		f(&Preset::followAxis);
+		f(&Preset::followProfile);
+		f(&Preset::followShortcut);
+	} else if (page == QStringLiteral("Spotlight")) {
+		f(&Preset::spotlightEnabled);
+		f(&Preset::spotlightStartOn);
+		f(&Preset::spotlightSize);
+		f(&Preset::spotlightDarkPct);
+		f(&Preset::spotlightRoundness);
+		f(&Preset::spotlightShortcut);
+	} else if (page == QStringLiteral("Zoom")) {
+		f(&Preset::zoomEnabled);
+		f(&Preset::zoomPercent);
+		f(&Preset::zoomAnimMs);
+		f(&Preset::zoomFollowSmoothness);
+		f(&Preset::zoomFollowPaddingPct);
+		f(&Preset::zoomFollowAxis);
+		f(&Preset::zoomShortcut);
+	} else if (page == QStringLiteral("Webcam")) {
+		f(&Preset::webcamEnabled);
+		f(&Preset::webcamDeviceId);
+		f(&Preset::webcamWidth);
+		f(&Preset::webcamHeight);
+		f(&Preset::webcamFps);
+		f(&Preset::webcamUseCustomFolder);
+		f(&Preset::webcamFolder);
+	} else if (page == QStringLiteral("Advanced")) {
+		f(&Preset::frameRateMode);
+		f(&Preset::videoBitrateKbps);
+	}
+}
+
+// A small filled circle, for the "this page differs from the defaults" dot.
+QPixmap changedDot()
+{
+	QPixmap pm(8, 8);
+	pm.fill(Qt::transparent);
+	QPainter p(&pm);
+	p.setRenderHint(QPainter::Antialiasing, true);
+	p.setPen(Qt::NoPen);
+	p.setBrush(QColor(0x4c, 0x8b, 0xf5));
+	p.drawEllipse(0, 0, 7, 7);
+	return pm;
+}
+
+} // namespace
+
+void PresetEditorDialog::applyFrom(const Preset &p)
+{
+	// The inverse of collectInto. Everything the dialog can edit, put back.
+	nameEdit_->setText(QString::fromStdString(p.name));
+	formatCombo_->setCurrentIndex(formatCombo_->findData(int(p.format)));
+	{
+		const int ci = codecCombo_->findData(int(p.codec));
+		if (ci >= 0)
+			codecCombo_->setCurrentIndex(ci);
+	}
+	frameRateModeCombo_->setCurrentIndex(frameRateModeCombo_->findData(int(p.frameRateMode)));
+	fpsCombo_->setCurrentText(QString::number(p.fps));
+	if (p.videoBitrateKbps <= 0) {
+		bitrateCombo_->setCurrentIndex(0);
+	} else {
+		const int idx = bitrateCombo_->findData(p.videoBitrateKbps);
+		if (idx >= 0) {
+			bitrateCombo_->setCurrentIndex(idx);
+		} else {
+			bitrateSpin_->setValue(p.videoBitrateKbps);
+			bitrateCombo_->setCurrentIndex(bitrateCombo_->count() - 1); // Custom…
+		}
+	}
+	folderEdit_->setText(QString::fromStdString(p.outputFolder));
+	gpuCheck_->setChecked(p.gpuCompression);
+	idleSpin_->setValue(p.idleTimeoutSeconds);
+	{
+		const int ci = countdownCombo_->findData(p.countdownSeconds);
+		countdownCombo_->setCurrentIndex(ci >= 0 ? ci : 0);
+	}
+	minLengthSpin_->setValue(p.minRecordingSeconds);
+	borderCheck_->setChecked(p.showScreenBorder);
+	borderColor_ = QColor(QString::fromStdString(p.screenBorderColor));
+	setButtonColor(borderColorBtn_, borderColor_);
+	borderThicknessSpin_->setValue(p.screenBorderThickness);
+	regionHandleCheck_->setChecked(p.regionMoveHandle);
+	templateEdit_->setText(QString::fromStdString(p.filenameTemplate));
+	driveLinkEdit_->setText(QString::fromStdString(p.googleDriveLink));
+
+	audioPanel_->load(p.recordDesktopAudio, p.micDeviceIds, p.desktopVolume, p.micVolumes);
+	{
+		const int bi = audioBitrateCombo_->findData(p.audioBitrateKbps);
+		if (bi >= 0)
+			audioBitrateCombo_->setCurrentIndex(bi);
+	}
+
+	mouseCursorCheck_->setChecked(p.showMouseCursor);
+	mouseAreaCheck_->setChecked(p.showMouseArea);
+	highlightColor_ = QColor(QString::fromStdString(p.mouseHighlightColor));
+	setButtonColor(highlightColorBtn_, highlightColor_);
+	highlightSizeSlider_->setValue(p.mouseHighlightSize);
+	mouseClicksCheck_->setChecked(p.recordMouseClicks);
+	leftColor_ = QColor(QString::fromStdString(p.leftClickColor));
+	setButtonColor(leftColorBtn_, leftColor_);
+	rightColor_ = QColor(QString::fromStdString(p.rightClickColor));
+	setButtonColor(rightColorBtn_, rightColor_);
+	followCheck_->setChecked(p.followMouse);
+	followPaddingSlider_->setValue(p.followPaddingPct);
+	followSmoothSlider_->setValue(p.followSmoothness);
+	followAxisCombo_->setCurrentIndex(std::clamp(p.followAxis, 0, 2));
+	followProfileCombo_->setCurrentIndex(std::clamp(p.followProfile, 0, 4));
+	followShortcutEdit_->setKeySequence(QKeySequence(QString::fromStdString(p.followShortcut)));
+
+	spotCheck_->setChecked(p.spotlightEnabled);
+	spotStartOnCheck_->setChecked(p.spotlightStartOn);
+	spotSizeSlider_->setValue(p.spotlightSize);
+	spotDarkSlider_->setValue(p.spotlightDarkPct);
+	spotRoundSlider_->setValue(p.spotlightRoundness);
+	spotShortcutEdit_->setKeySequence(QKeySequence(QString::fromStdString(p.spotlightShortcut)));
+
+	zoomCheck_->setChecked(p.zoomEnabled);
+	zoomPercentSlider_->setValue(p.zoomPercent);
+	zoomAnimSlider_->setValue(p.zoomAnimMs);
+	zoomFollowSmoothSlider_->setValue(p.zoomFollowSmoothness);
+	zoomFollowPadSlider_->setValue(p.zoomFollowPaddingPct);
+	zoomFollowAxisCombo_->setCurrentIndex(std::clamp(p.zoomFollowAxis, 0, 2));
+	zoomShortcutEdit_->setKeySequence(QKeySequence(QString::fromStdString(p.zoomShortcut)));
+
+	webcamCheck_->setChecked(p.webcamEnabled);
+	{
+		const int di = webcamDeviceCombo_->findData(QString::fromStdString(p.webcamDeviceId));
+		if (di >= 0)
+			webcamDeviceCombo_->setCurrentIndex(di);
+		const int ri = webcamResCombo_->findData(
+			QStringLiteral("%1x%2").arg(p.webcamWidth).arg(p.webcamHeight));
+		if (ri >= 0)
+			webcamResCombo_->setCurrentIndex(ri);
+	}
+	webcamFpsCombo_->setCurrentText(QString::number(p.webcamFps));
+	webcamCustomFolderCheck_->setChecked(p.webcamUseCustomFolder);
+	webcamFolderEdit_->setText(QString::fromStdString(p.webcamFolder));
+}
+
+void PresetEditorDialog::resetCurrentPage()
+{
+	QListWidgetItem *cur = nav_ ? nav_->currentItem() : nullptr;
+	if (!cur || !cur->data(Qt::UserRole).isValid())
+		return;
+	const QString page = cur->text();
+
+	Preset now = original_;
+	collectInto(now);
+	// Defaults for this page only; everything else stays exactly as edited, so
+	// this is a reset of one page and not of the preset.
+	const Preset def = Preset::makeDefault(now.outputFolder);
+	Preset next = now;
+	forEachPageField(page, [&](auto member) { next.*member = def.*member; });
+	if (next == now)
+		return; // already at defaults
+	applyFrom(next);
+	refreshChangedMarks();
+}
+
+void PresetEditorDialog::refreshChangedMarks()
+{
+	if (!nav_)
+		return;
+	Preset now = original_;
+	collectInto(now);
+	const Preset def = Preset::makeDefault(now.outputFolder);
+	static const QPixmap dot = changedDot();
+	for (int i = 0; i < nav_->count(); ++i) {
+		QListWidgetItem *item = nav_->item(i);
+		if (!item->data(Qt::UserRole).isValid())
+			continue;
+		bool differs = false;
+		forEachPageField(item->text(), [&](auto member) {
+			if (now.*member != def.*member)
+				differs = true;
+		});
+		item->setIcon(differs ? QIcon(dot) : QIcon());
 	}
 }
 

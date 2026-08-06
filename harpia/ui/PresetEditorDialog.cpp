@@ -253,8 +253,11 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 
 	QVBoxLayout *v = nullptr; // filled per page by makePage()
 
-	// ===== General =====
-	QWidget *generalPage = makePage(v);
+	// ===== Recording (everything about how a take begins and ends) =====
+	// This was two pages. "General" held a static note about resolution and the
+	// idle auto-pause; both are behaviours around recording, and a page with
+	// one setting on it is a page you have to visit to find out it is empty.
+	QWidget *recordingPage = makePage(v);
 	// The display to record is chosen on the main window (next to Capture),
 	// not per preset.
 	auto *resNote = new QLabel(
@@ -263,20 +266,6 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	resNote->setStyleSheet(QStringLiteral("color:#8a8f98;"));
 	addField(v, QStringLiteral("Resolution"), QString(), resNote);
 
-	idleSpin_ = new QSpinBox(this);
-	idleSpin_->setRange(0, 3600);
-	idleSpin_->setSuffix(QStringLiteral(" s"));
-	idleSpin_->setSpecialValueText(QStringLiteral("Disabled"));
-	idleSpin_->setValue(preset.idleTimeoutSeconds);
-	addField(v, QStringLiteral("Auto-pause after idle"),
-		 QStringLiteral("Pauses after this long with no mouse or keyboard activity."),
-		 idleSpin_);
-
-	v->addStretch(1);
-	addPage(QStringLiteral("General"), generalPage);
-
-	// ===== Recording (behavior around start/stop) =====
-	QWidget *recordingPage = makePage(v);
 	countdownCombo_ = new QComboBox(this);
 	countdownCombo_->addItem(QStringLiteral("Disabled"), 0);
 	for (int s = 1; s <= 10; ++s)
@@ -285,9 +274,20 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 		int ci = countdownCombo_->findData(preset.countdownSeconds);
 		countdownCombo_->setCurrentIndex(ci >= 0 ? ci : 0);
 	}
+	// The main window has this too, and neither used to mention the other, so
+	// the same setting in two places read as two settings that disagreed.
 	addField(v, QStringLiteral("Countdown before recording"),
-		 QStringLiteral("A countdown on screen first. Never part of the recording."),
+		 QStringLiteral("A countdown first, never recorded. Also on the main window."),
 		 countdownCombo_);
+
+	idleSpin_ = new QSpinBox(this);
+	idleSpin_->setRange(0, 3600);
+	idleSpin_->setSuffix(QStringLiteral(" s"));
+	idleSpin_->setSpecialValueText(QStringLiteral("Disabled"));
+	idleSpin_->setValue(preset.idleTimeoutSeconds);
+	addField(v, QStringLiteral("Auto-pause after idle"),
+		 QStringLiteral("Pauses after this long with no input. Also on the main window."),
+		 idleSpin_);
 
 	minLengthSpin_ = new QSpinBox(this);
 	minLengthSpin_->setRange(0, 3600);
@@ -985,6 +985,18 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	// Stored in QSettings; the main window re-registers on save.
 	QWidget *hotkeysPage = makePage(v);
 	{
+		// The one page in a per-preset dialog whose settings are not per
+		// preset. It says so in a caption at the bottom already; the caption
+		// is easy to miss when the two fields above it look exactly like the
+		// forty other fields in this dialog.
+		auto *banner = new QLabel(QStringLiteral("These keys belong to the app, not to this "
+							 "preset — changing them changes them everywhere."),
+					  this);
+		banner->setWordWrap(true);
+		banner->setStyleSheet(QStringLiteral("color:#d29922; border:1px solid #4a3f1e; "
+						     "background:#2b2415; border-radius:4px; padding:6px;"));
+		v->addWidget(banner);
+		v->addSpacing(10);
 		QSettings hk(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
 		recordKeyEdit_ = new QKeySequenceEdit(
 			QKeySequence(hk.value(QStringLiteral("hotkeys/record"), QStringLiteral("F9"))
@@ -1008,9 +1020,6 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 		addField(v, QStringLiteral("Pause / resume"),
 			 QStringLiteral("Same rules. GIF recordings cannot pause at all."),
 			 pauseKeyEdit_);
-		auto *shared = new QLabel(QStringLiteral("Hotkeys are shared by every preset."), this);
-		shared->setStyleSheet(QStringLiteral("color:#8a8f98;"));
-		v->addWidget(shared);
 	}
 	v->addStretch(1);
 	addPage(QStringLiteral("Hotkeys"), hotkeysPage);
@@ -1089,8 +1098,21 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	int hidden = 0;
 	for (const auto &entry : pages) {
 		if (pageApplies(entry.first)) {
-			nav_->addItem(entry.first);
-			stack->addWidget(entry.second);
+			// A thin unselectable gap above Hotkeys, so the app-wide page
+			// reads as a different kind of thing rather than the last item
+			// in a list of preset settings.
+			if (entry.first == QStringLiteral("Hotkeys")) {
+				auto *gap = new QListWidgetItem;
+				gap->setFlags(Qt::NoItemFlags);
+				gap->setSizeHint(QSize(0, 10));
+				nav_->addItem(gap);
+			}
+			const int pageIndex = stack->addWidget(entry.second);
+			auto *item = new QListWidgetItem(entry.first);
+			// Which page this row shows, because the separators mean the
+			// row number and the page number no longer agree.
+			item->setData(Qt::UserRole, pageIndex);
+			nav_->addItem(item);
 		} else {
 			// Still built, still parented, just not reachable: every widget
 			// on it keeps the preset's stored value, and accept() writes it
@@ -1103,7 +1125,11 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	}
 
 	// ---- Assemble: header on top, nav | pages, buttons at the bottom ----
-	connect(nav_, &QListWidget::currentRowChanged, stack, &QStackedWidget::setCurrentIndex);
+	connect(nav_, &QListWidget::currentItemChanged, this,
+		[stack](QListWidgetItem *cur, QListWidgetItem *) {
+			if (cur && cur->data(Qt::UserRole).isValid())
+				stack->setCurrentIndex(cur->data(Qt::UserRole).toInt());
+		});
 	nav_->setCurrentRow(0);
 
 	auto *navColumn = new QVBoxLayout;
@@ -1155,7 +1181,9 @@ void PresetEditorDialog::showPage(const QString &title)
 	if (!nav_)
 		return;
 	for (int i = 0; i < nav_->count(); ++i) {
-		if (nav_->item(i)->text() == title) {
+		// Separator rows have no text and cannot be selected, so a lookup that
+		// matched one would leave the dialog showing nothing.
+		if (nav_->item(i)->data(Qt::UserRole).isValid() && nav_->item(i)->text() == title) {
 			nav_->setCurrentRow(i);
 			return;
 		}

@@ -125,6 +125,8 @@ private slots:
 	void showPresetMenu(const QPoint &pos); // right-click combo: edit/delete
 	void onOpenClipLibrary();
 	void onOpenErrorLogs();
+	// Open the video editor with nothing loaded (status-bar button).
+	void openBlankEditor();
 	void onCaptureModeChanged();
 	void onSaveRegionRequested();    // "Save Region…" from the region right-click
 	void openSavedRegionsManager();  // rename/edit/delete saved regions

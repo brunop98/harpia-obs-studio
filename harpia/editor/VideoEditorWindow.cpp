@@ -171,7 +171,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	: QDialog(parent), inPath_(inPath), libraryFolders_(libraryFolders)
 {
 	++openCount_; // the recorder hides its region overlay while one is up
-	setWindowTitle(QStringLiteral("Edit — %1").arg(QFileInfo(inPath).fileName()));
+	setWindowTitle(inPath.isEmpty() ? QStringLiteral("Video Editor")
+					: QStringLiteral("Edit — %1").arg(QFileInfo(inPath).fileName()));
 	// A real window with minimize/maximize (QDialog hides them by default), so
 	// the editor can use the full screen — the preview canvas takes the extra
 	// space and the timelines widen for finer control.
@@ -1614,6 +1615,20 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		voTrack_->setColors(cl);
 	}
 
+	// Opened blank: no source to load, and the editor is perfectly valid -- it
+	// is simply waiting for one. Everything that needs a video is switched off
+	// by updateEmptyState() until the first one arrives.
+	buildEmptyPanel();
+	if (inPath_.isEmpty()) {
+		valid_ = true;
+		history_.clear();
+		history_.push_back(snapshot());
+		histIndex_ = 0;
+		updateUndoRedoButtons();
+		updateEmptyState();
+		return;
+	}
+
 	// Open the launch file as the first source.
 	const int firstId = addSource(inPath_);
 	valid_ = (firstId >= 0);
@@ -1851,6 +1866,17 @@ int VideoEditorWindow::addSource(const QString &path)
 	if (!proxyPending_.contains(id))
 		thumbs->start(path, 60, 128, 72);
 	refreshSourceList();
+
+	// The first video added to a blank editor BECOMES the launch file. One
+	// assignment, and everything downstream behaves as if the editor had been
+	// opened on it: the canvas size and frame rate already come from
+	// sources_.front(), and inPath_ is what names the project, seeds the export
+	// folder and titles the window.
+	if (inPath_.isEmpty()) {
+		inPath_ = path;
+		setWindowTitle(QStringLiteral("Edit — %1").arg(QFileInfo(path).fileName()));
+	}
+	updateEmptyState();
 	return id;
 }
 
@@ -1930,6 +1956,80 @@ void VideoEditorWindow::onAddSource()
 	const int id = addSource(path);
 	if (id >= 0)
 		setActiveSource(id);
+}
+
+void VideoEditorWindow::buildEmptyPanel()
+{
+	if (!canvas_)
+		return;
+	// A child of the preview, like the timeline overview above it: it floats
+	// over the picture, takes no layout space, and is placed by hand whenever
+	// the preview resizes.
+	emptyPanel_ = new QWidget(canvas_);
+	emptyPanel_->setStyleSheet(QStringLiteral(
+		"QWidget{background:rgba(24,27,33,220); border:1px solid #3a3f48; border-radius:8px;}"));
+	auto *lay = new QVBoxLayout(emptyPanel_);
+	lay->setContentsMargins(24, 20, 24, 20);
+	lay->setSpacing(10);
+
+	auto *title = new QLabel(QStringLiteral("<b>Nothing loaded yet</b>"), emptyPanel_);
+	title->setAlignment(Qt::AlignCenter);
+	title->setStyleSheet(QStringLiteral("border:none; background:transparent; color:#e6e6e6;"));
+	lay->addWidget(title);
+
+	auto *hint = new QLabel(QStringLiteral("Add a video, load a project, or drop a file here."),
+				emptyPanel_);
+	hint->setAlignment(Qt::AlignCenter);
+	hint->setStyleSheet(QStringLiteral("border:none; background:transparent; color:#8a8f98;"));
+	lay->addWidget(hint);
+
+	auto *row = new QHBoxLayout;
+	row->setSpacing(8);
+	auto *addBtn = new QPushButton(QStringLiteral("Add video…"), emptyPanel_);
+	addBtn->setStyleSheet(QStringLiteral(
+		"QPushButton{background:#3d84b8; color:white; border:none; border-radius:4px; padding:6px 14px;}"
+		"QPushButton:hover{background:#4a97cf;}"));
+	connect(addBtn, &QPushButton::clicked, this, &VideoEditorWindow::onAddSource);
+	auto *projBtn = new QPushButton(QStringLiteral("Load project…"), emptyPanel_);
+	connect(projBtn, &QPushButton::clicked, this, &VideoEditorWindow::onOpenProject);
+	row->addStretch(1);
+	row->addWidget(addBtn);
+	row->addWidget(projBtn);
+	row->addStretch(1);
+	lay->addLayout(row);
+
+	emptyPanel_->hide();
+}
+
+void VideoEditorWindow::layOutEmptyPanel()
+{
+	if (!emptyPanel_ || !canvas_ || !emptyPanel_->isVisible())
+		return;
+	const QSize hint = emptyPanel_->sizeHint();
+	const int w = std::min(hint.width(), canvas_->width() - 24);
+	const int h = hint.height();
+	emptyPanel_->setGeometry((canvas_->width() - w) / 2, (canvas_->height() - h) / 2, w, h);
+}
+
+void VideoEditorWindow::updateEmptyState()
+{
+	const bool empty = sources_.empty();
+	if (emptyPanel_) {
+		emptyPanel_->setVisible(empty);
+		layOutEmptyPanel();
+	}
+	// Everything that needs a video to act on. The two ways OUT of the empty
+	// state -- adding a source and loading a project -- stay live, as does the
+	// shortcut panel, which is a reference rather than an action.
+	for (QWidget *w : {static_cast<QWidget *>(playBtn_), static_cast<QWidget *>(speedSlider_),
+			   static_cast<QWidget *>(speedSpin_), static_cast<QWidget *>(cropToggle_),
+			   static_cast<QWidget *>(trimModeBtn_), static_cast<QWidget *>(cutModeBtn_),
+			   static_cast<QWidget *>(voRecordBtn_), static_cast<QWidget *>(voImportBtn_),
+			   static_cast<QWidget *>(voDevice_)})
+		if (w)
+			w->setEnabled(!empty);
+	if (empty && infoLabel_)
+		infoLabel_->setText(QStringLiteral("Empty project"));
 }
 
 void VideoEditorWindow::onSourceRowChanged()
@@ -5562,8 +5662,10 @@ void VideoEditorWindow::onTimelineViewChanged(qint64 totalMs, qint64 startMs, qi
 
 bool VideoEditorWindow::eventFilter(QObject *watched, QEvent *e)
 {
-	if (watched == canvas_ && e->type() == QEvent::Resize)
+	if (watched == canvas_ && e->type() == QEvent::Resize) {
 		layOutOverview();
+		layOutEmptyPanel();
+	}
 	// Closing the floating panel via its title-bar X mirrors the toolbar toggle.
 	if (watched == sourcesPanel_ && e->type() == QEvent::Close) {
 		if (sourcesBtn_ && sourcesBtn_->isChecked()) {

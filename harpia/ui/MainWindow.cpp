@@ -566,6 +566,22 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	devButton->setToolTip(QStringLiteral("Developer Panel — live-tweak the window layout sizes (auto-saved)"));
 	statusBar()->addPermanentWidget(devButton);
 	connect(devButton, &QPushButton::clicked, this, &MainWindow::openDevPanel);
+	// Opens the editor with nothing in it, for the times the work does not start
+	// from a recording in the strip -- resuming a saved project, or building
+	// something out of files from elsewhere. The first video added there decides
+	// the canvas size and frame rate, exactly as the launch file does when the
+	// editor is opened on a recording.
+	auto *editorButton = new QPushButton(QStringLiteral("Video Editor"), this);
+	editorButton->setToolTip(QStringLiteral("Open the editor empty, with no recording loaded."));
+	editorButton->setFlat(true);
+	editorButton->setCursor(Qt::PointingHandCursor);
+	editorButton->setStyleSheet(QStringLiteral(
+		"QPushButton{color:#9a9fa8; background:transparent; border:none; font-size:%1px; padding:2px 8px;}"
+		"QPushButton:hover{color:#e6e6e6;}")
+						    .arg(uiCaptionPx()));
+	statusBar()->addPermanentWidget(editorButton);
+	connect(editorButton, &QPushButton::clicked, this, &MainWindow::openBlankEditor);
+
 	errorLogsButton_ = new QPushButton(QStringLiteral("Error Logs"), this);
 	errorLogsButton_->setToolTip(QStringLiteral("View recent warnings and errors written by the recorder."));
 	errorLogsButton_->setFlat(true);
@@ -2553,6 +2569,20 @@ void MainWindow::onOpenClipLibrary()
 	clipWindow_->raise();
 	clipWindow_->activateWindow();
 	clipWindow_->refresh();
+}
+
+void MainWindow::openBlankEditor()
+{
+	auto *editor = new VideoEditorWindow(QString(), presetFolders(), this);
+	// No isValid() gate: an empty editor is always valid. That check is for a
+	// launch file that could not be decoded, and there is no launch file.
+	connect(editor, &VideoEditorWindow::exported, this, [this]() { refreshClipViews(); });
+	editor->setAttribute(Qt::WA_DeleteOnClose);
+	// exec(), like every other way into the editor: one modal editor at a time
+	// is the rule this app already follows, and a modeless one here would be the
+	// only window from which a recording could be started with the editor open
+	// -- a different and much larger question than adding a button.
+	editor->exec();
 }
 
 void MainWindow::onOpenErrorLogs()

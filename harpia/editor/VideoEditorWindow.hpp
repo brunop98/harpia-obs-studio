@@ -132,6 +132,11 @@ class VideoEditorWindow : public QDialog {
 public:
 	// libraryFolders: the app's recording output folders, so the Sources panel's
 	// "Library" tab can offer existing recordings to add as sources.
+	// An EMPTY inPath opens the editor blank: no source, no clips, and a panel
+	// over the preview offering "Add video" and "Load project". The first video
+	// added then becomes the launch file in every sense -- the canvas size, the
+	// frame rate and the export defaults all come from it, exactly as they
+	// would have if the editor had been opened on that file to begin with.
 	explicit VideoEditorWindow(const QString &inPath, const QStringList &libraryFolders = {},
 				   QWidget *parent = nullptr);
 	~VideoEditorWindow() override;
@@ -483,6 +488,12 @@ private:
 	bool sourcesPlaced_ = false;             // has the panel been positioned yet?
 	bool sourcesFirstShown_ = false;         // gate the one-time initial show
 	void showSourcesPanel();                 // position (first time) + show + raise
+	// The "nothing loaded yet" panel: shown while there are no sources, hidden
+	// the moment one arrives, and kept centred over the preview.
+	QWidget *emptyPanel_ = nullptr;
+	void buildEmptyPanel();
+	void layOutEmptyPanel();
+	void updateEmptyState();
 	EditorSource *sourceById(int id);
 	// The source already open for this file, or nullptr. Two callers were
 	// writing this loop themselves and both rebuilt a QFileInfo for the SEARCH

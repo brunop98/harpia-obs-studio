@@ -333,12 +333,38 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 			const bool hasComponents = !ec.components.isEmpty();
 			if (!hasComponents && !ec.fx.enabled)
 				continue;
+			// The stack is built HERE, before the area, because the area is
+			// partly its answer to give. It used to be built further down and
+			// asked only for pixels, which meant an effect clip ran the Pixel
+			// and Composite stages and nothing else -- so a Transform-stage
+			// component on one did nothing at all, silently. Always Rotate,
+			// Always Grow, Always Zoom and Transform were all inert there, on a
+			// clip whose own comment promises you can spin it.
+			std::unique_ptr<ComponentStack> stack;
+			EvalContext ectx;
+			if (hasComponents) {
+				stack.reset(new ComponentStack(ec.components,
+							       ComponentRegistry::instance()));
+				ectx.tMs = outMs - ec.outStartMs;
+				ectx.outMs = outMs;
+				ectx.durMs = std::max<qint64>(1, ec.outDurationMs());
+				ectx.fps = fps;
+				// The project's size, not the render size: a half-resolution
+				// preview must not change what a component computes.
+				ectx.canvas = logicalCanvas;
+			}
+
 			// An effect clip has a transform like any other clip, and it
 			// bounds WHERE the grade lands: move it, shrink it, spin it, and
 			// only that part of the picture is affected. At the default pose
 			// (centred, scale 1, no rotation) the area is the whole canvas, so
 			// an effect clip nobody has moved behaves exactly as it did.
-			const TlTransform exf = ec.transformAt(outMs);
+			//
+			// Seeded with the clip's own pose and then run through the Transform
+			// stage, exactly as an ordinary clip's pose is -- which is what makes
+			// "spin it" something a component can do and not just a slider.
+			const TlTransform exf = stack ? stack->evaluatePose(ectx, ec.transformAt(outMs)).xf
+						      : ec.transformAt(outMs);
 			const QPainterPath area = effectAreaPath(exf, out.size());
 			const bool whole = isWholeCanvas(exf);
 
@@ -361,17 +387,7 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 			// Effects::apply had. On an ordinary clip the identical components
 			// see only that clip's own frame; what they grade is decided by
 			// where the clip sits, not by the component.
-			std::unique_ptr<ComponentStack> stack;
-			EvalContext ectx;
-			if (hasComponents) {
-				stack.reset(new ComponentStack(ec.components,
-							       ComponentRegistry::instance()));
-				ectx.tMs = outMs - ec.outStartMs;
-				ectx.outMs = outMs;
-				ectx.durMs = std::max<qint64>(1, ec.outDurationMs());
-				ectx.fps = fps;
-				ectx.canvas = logicalCanvas;
-			}
+			// (The stack itself was built above, where the area needed it.)
 
 			QRect sub;
 			if (!whole && stack && stack->pixelStageIsPointOp())

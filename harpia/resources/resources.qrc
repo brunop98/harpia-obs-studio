@@ -10,6 +10,8 @@
     <file alias="shaders/grain.frag">../editor/shader/presets/grain.frag</file>
     <file alias="shaders/pixelate.frag">../editor/shader/presets/pixelate.frag</file>
     <file alias="shaders/backdrop.frag">../editor/shader/presets/backdrop.frag</file>
+    <file alias="shaders/solid.frag">../editor/shader/presets/solid.frag</file>
+    <file alias="shaders/gradient.frag">../editor/shader/presets/gradient.frag</file>
     <!-- Bundled transform scripts, seeded into the user scripts folder. -->
     <file alias="scripts/tutorial-zoom.js">../editor/script/presets/tutorial-zoom.js</file>
     <file alias="scripts/zoom-in.js">../editor/script/presets/zoom-in.js</file>

@@ -8132,7 +8132,8 @@ QString VideoEditorWindow::shadersDirPath()
 	for (const QString &name :
 	     {QStringLiteral("adjust"), QStringLiteral("crt"), QStringLiteral("grayscale"),
 	      QStringLiteral("vignette"), QStringLiteral("sharpen"), QStringLiteral("grain"),
-	      QStringLiteral("pixelate"), QStringLiteral("backdrop")}) {
+	      QStringLiteral("pixelate"), QStringLiteral("backdrop"), QStringLiteral("solid"),
+	      QStringLiteral("gradient")}) {
 		const QString dst = shadersDir_ + QLatin1Char('/') + name + QStringLiteral(".frag");
 		if (QFile::exists(dst))
 			continue;

@@ -43,6 +43,20 @@ public:
 	// returns false (and stays false) if OpenGL 3.3 is unavailable here.
 	bool ensureGl();
 
+	// Free the GL objects NOW, on the thread that owns them, instead of leaving
+	// it to the destructor.
+	//
+	// Worth calling explicitly from any worker that rendered with one, because
+	// the destructor is not always able to do the job: freeing a GL context
+	// requires making it current, and making it current from the wrong thread
+	// is a qFatal -- an abort, not an error. A renderer left to a thread_local
+	// destructor at thread exit can find itself in exactly that position. See
+	// the comment on release() for how that plays out.
+	//
+	// Safe to call more than once, and safe to call on a renderer that never
+	// got as far as creating a context.
+	void release();
+
 	// Compile a chain of effects (applied in order). Returns false and fills *err
 	// on the first layer that fails to compile; the previous chain is left intact.
 	// An empty list clears the chain (apply() then returns frames untouched).

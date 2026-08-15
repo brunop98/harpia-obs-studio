@@ -58,6 +58,25 @@ public:
 	// pass-through, so opening a project on a machine without GL does not
 	// silently throw the shaders away.
 	static bool available();
+
+	// Free this thread's GL context and surface. Every worker that renders
+	// shader components MUST call this before it finishes.
+	//
+	// Not tidiness -- correctness. The per-thread renderer is a thread_local,
+	// and a thread_local is destroyed as the thread exits. Freeing a GL context
+	// means making it current, and QOpenGLContext::makeCurrent ends in a qFatal
+	// when the calling thread is not the context's own. On the export thread,
+	// which is a std::thread and therefore only an ADOPTED QThread to Qt, that
+	// check can fail at exit even though the physical thread has not changed:
+	// Qt tears the adopted thread's data down through its own hook, and the
+	// order of that against C++ thread_local destructors is unspecified.
+	//
+	// v0.1.286 aborted exactly there, with the export finished and the file
+	// written. The destructor now declines to do the unsafe thing, so this is
+	// no longer the difference between working and crashing -- it is the
+	// difference between freeing the GPU resources and leaking them until the
+	// process ends.
+	static void releaseThreadResources();
 };
 
 } // namespace harpia

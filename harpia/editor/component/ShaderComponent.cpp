@@ -73,6 +73,18 @@ public:
 		return glOk_;
 	}
 
+	// Give the GL objects back while this thread is still fully itself. See
+	// ShaderComponents::releaseThreadResources.
+	void release()
+	{
+		r_.release();
+		triedGl_ = false;
+		glOk_ = false;
+		compileOk_ = false;
+		compiledId_.clear();
+		compiledGen_ = -1;
+	}
+
 private:
 	ShaderRenderer r_;
 	bool triedGl_ = false, glOk_ = false, compileOk_ = false;
@@ -121,6 +133,11 @@ private:
 bool ShaderComponents::available()
 {
 	return ThreadRenderers::get().glUsable();
+}
+
+void ShaderComponents::releaseThreadResources()
+{
+	ThreadRenderers::get().release();
 }
 
 int ShaderComponents::loadFolder(const QString &folder, ComponentRegistry &reg,

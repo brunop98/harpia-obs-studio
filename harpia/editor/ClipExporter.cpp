@@ -6,6 +6,7 @@
 #include "GifEncoder.hpp"
 #include "TimelineAudio.hpp"
 #include "VoiceoverMixer.hpp"
+#include "component/ShaderComponent.hpp"
 #include "script/TransformScript.hpp"
 #include "shader/ShaderRenderer.hpp"
 #include "timeline/TimelineCompositor.hpp"
@@ -452,6 +453,20 @@ struct VideoSink {
 void ClipExporter::run(const QString &inPath, const QString &outPath, const Options &opts)
 {
 	cancel_.store(false);
+
+	// However this returns -- finished, cancelled, or any of the dozen early
+	// errors below -- give back the GL a shader component created on THIS
+	// thread, here, while the thread is still fully itself.
+	//
+	// A scope guard rather than a call at the end, because there is no single
+	// end: run() returns from a dozen places, and the one path that forgets is
+	// the one that leaks a GPU context per export. It used to be left to the
+	// thread_local destructor at thread exit, which is where v0.1.286 aborted --
+	// with the export finished and a good file on disk. See
+	// ShaderComponents::releaseThreadResources.
+	struct ReleaseGl {
+		~ReleaseGl() { ShaderComponents::releaseThreadResources(); }
+	} releaseGl;
 
 	if (opts.format == Format::Gif) {
 		if (!opts.cuts.empty()) {

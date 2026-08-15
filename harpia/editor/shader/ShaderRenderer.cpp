@@ -6,6 +6,7 @@
 #include <QOpenGLFunctions>
 #include <QOpenGLShaderProgram>
 #include <QSurfaceFormat>
+#include <QThread>
 #include <QVector3D>
 
 namespace harpia {
@@ -17,24 +18,94 @@ const char *kVert = R"(#version 330 core
 layout(location = 0) in vec2 aPos;
 void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
 )";
+
+// Destroy a QObject on the thread that owns it.
+//
+// Both of the ones here are owned objects with thread affinity: a
+// QOffscreenSurface is backed by a hidden QWindow, and a QOpenGLContext belongs
+// to the thread that created it. `delete` from anywhere else is undefined, and
+// "undefined" in a teardown path means a crash report that names a random
+// destructor rather than this one.
+void deleteGlObject(QObject *o)
+{
+	if (!o)
+		return;
+	if (o->thread() == QThread::currentThread()) {
+		delete o;
+		return;
+	}
+	// deleteLater hands it to the owning thread's event loop. If that thread is
+	// gone the object leaks -- which is the right trade here: this only happens
+	// on a path where the alternative is undefined behaviour, and the process is
+	// on its way out anyway.
+	o->deleteLater();
+}
 } // namespace
 
 ShaderRenderer::ShaderRenderer() = default;
 
 ShaderRenderer::~ShaderRenderer()
 {
-	if (ctx_ && surface_ && ctx_->makeCurrent(surface_)) {
+	release();
+}
+
+// GL teardown, separated from ~ShaderRenderer so it can be called EARLY -- while
+// the owning thread is still fully alive -- and so the destructor can decline to
+// do it when that is no longer safe. See ShaderComponents::releaseThreadResources.
+void ShaderRenderer::release()
+{
+	// The thread check is not a nicety. QOpenGLContext::makeCurrent ends in
+	//
+	//     qFatal("Cannot make QOpenGLContext current in a different thread")
+	//
+	// which aborts the process outright -- no exception, no return value, no
+	// way for a caller to recover. So it must never be reached, and the only
+	// way to guarantee that is to ask first.
+	//
+	// It was reached. A thread_local ShaderRenderer on the export thread is
+	// destroyed as that thread exits, and the export thread is a std::thread,
+	// so Qt only knows it as an ADOPTED QThread. Qt tears that adopted thread's
+	// data down through its own thread-detach hook, and the order of that
+	// against C++ thread_local destructors is unspecified. Lose the race and
+	// QThread::currentThread() hands back a different QThread object than the
+	// one the context was created on -- on the very same physical thread -- and
+	// the qFatal fires. v0.1.286 died exactly there: the export had finished
+	// and written a perfectly good file, and the app aborted on the way out.
+	//
+	// The null check on the current thread matters at process exit, where a
+	// thread_local renderer on the main thread is destroyed after Qt has begun
+	// packing up. Two null thread pointers would compare EQUAL and send us
+	// straight into makeCurrent, which is the branch this exists to avoid.
+	QThread *cur = QThread::currentThread();
+	const bool sameThread = ctx_ && cur && ctx_->thread() == cur;
+	if (ctx_ && surface_ && sameThread && ctx_->makeCurrent(surface_)) {
 		if (tex_)
 			ctx_->functions()->glDeleteTextures(1, &tex_);
 		deletePasses();
 		delete fbo_[0];
 		delete fbo_[1];
+		fbo_[0] = fbo_[1] = nullptr;
 		vbo_.destroy();
 		vao_.destroy();
 		ctx_->doneCurrent();
+	} else if (ctx_) {
+		// Wrong thread: the GL objects cannot be freed from here, and trying is
+		// fatal. Dropping the handles leaks them -- which only happens on a
+		// thread that is already dying, taking its context with it, and a leak
+		// on a dead thread is a far better outcome than an abort.
+		passes_.clear(); // the QOpenGLShaderProgram* go with the context
+		fbo_[0] = fbo_[1] = nullptr;
 	}
-	delete ctx_;
-	delete surface_;
+	// Both are QObjects. Deleting one from a thread that does not own it is
+	// undefined, and the surface owns a QWindow, which belongs to the GUI
+	// thread. Hand them back rather than destroying them here.
+	deleteGlObject(ctx_);
+	deleteGlObject(surface_);
+	ctx_ = nullptr;
+	surface_ = nullptr;
+	tex_ = 0;
+	fboW_ = fboH_ = 0;
+	glReady_ = false;
 }
 
 void ShaderRenderer::deletePasses()

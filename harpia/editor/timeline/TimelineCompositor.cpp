@@ -75,9 +75,13 @@ struct CachedText {
 	QPainterPath stroke;
 };
 
+// The lines as DRAWN -- the case style applied here, at the one point the words
+// become geometry, so the path, the block measurement and therefore the
+// background box and the selection outline all agree without any of them having
+// to know the style exists.
 QStringList textLines(const TlText &t)
 {
-	QStringList lines = t.text.split(QLatin1Char('\n'));
+	QStringList lines = tlDisplayText(t).split(QLatin1Char('\n'));
 	if (lines.isEmpty())
 		lines << QString();
 	return lines;
@@ -118,7 +122,10 @@ CachedText &cachedText(const TlText &t, const QFont &f, QSize canvas)
 {
 	static thread_local QHash<TextPathKey, CachedText> cache;
 	TextPathKey k;
-	k.text = t.text;
+	// The CASED text, not the typed text: two clips with the same words and
+	// different case styles are two different paths, and keying on the raw
+	// string would serve the first one's shape to the second.
+	k.text = tlDisplayText(t);
 	k.family = t.fontFamily;
 	k.px = f.pixelSize();
 	k.align = t.align;

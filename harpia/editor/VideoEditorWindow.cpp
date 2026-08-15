@@ -502,6 +502,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 
 	connect(timelineView_, &TimelineView::scrub, this, &VideoEditorWindow::onTimelineScrub);
 	connect(timelineView_, &TimelineView::hoverScrub, this, &VideoEditorWindow::onTimelineHoverScrub);
+	connect(timelineView_, &TimelineView::hoverScrubEnded, this,
+		&VideoEditorWindow::showPlayheadFrame);
 	connect(timelineView_, &TimelineView::clipsChanged, this, [this]() {
 		// A fade drag rounds to the project frame, which only exists once a
 		// source is loaded — refresh it whenever the timeline changes.
@@ -1566,6 +1568,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 
 	connect(timeline_, &Timeline::scrub, this, &VideoEditorWindow::onScrub);
 	connect(timeline_, &Timeline::hoverScrub, this, &VideoEditorWindow::onHoverScrub);
+	connect(timeline_, &Timeline::hoverScrubEnded, this, &VideoEditorWindow::showPlayheadFrame);
 	connect(timeline_, &Timeline::startChanged, this, [this]() {
 		updateVoiceoverAxis();
 		updateInspector();
@@ -1578,6 +1581,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	});
 	connect(tracks_, &TrackEditor::scrubSource, this, &VideoEditorWindow::onScrub);
 	connect(tracks_, &TrackEditor::hoverScrub, this, &VideoEditorWindow::onHoverScrub);
+	connect(tracks_, &TrackEditor::hoverScrubEnded, this, &VideoEditorWindow::showPlayheadFrame);
 	connect(tracks_, &TrackEditor::segmentsChanged, this, &VideoEditorWindow::onSegmentsChanged);
 	connect(tracks_, &TrackEditor::segmentsChanged, this, &VideoEditorWindow::scheduleSnapshot);
 	connect(tracks_, &TrackEditor::selectionChanged, this, &VideoEditorWindow::onSegmentSelected);
@@ -4707,6 +4711,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	tForm->setContentsMargins(0, 0, 0, 0);
 	tForm->setHorizontalSpacing(8);
 	tForm->setVerticalSpacing(4);
+	textForm_ = tForm; // the box rows are hidden through it, see syncTextBoxRows
 
 	fontSizeSpin_ = new QSpinBox(textBox_);
 	fontSizeSpin_->setRange(6, 400);
@@ -4749,17 +4754,26 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		editSelectedClip([i](TlClip &c) { c.text.align = i; });
 	});
 
+	// Case is a STYLE, not an edit: the box above keeps the words as typed and
+	// this changes how they are drawn. Right under Align, since both are about
+	// how the block reads rather than what it says.
+	caseCombo_ = new QComboBox(textBox_);
+	caseCombo_->addItems({QStringLiteral("As typed"), QStringLiteral("Title Case"),
+			      QStringLiteral("ALL UPPER"), QStringLiteral("all lower")});
+	caseCombo_->setToolTip(QStringLiteral(
+		"Changes how the caption is drawn, not what it says. Your typed wording "
+		"is kept, so going back to As typed restores your own capitalisation."));
+	tForm->addRow(QStringLiteral("Case"), caseCombo_);
+	connect(caseCombo_, &QComboBox::currentIndexChanged, this, [this](int i) {
+		if (syncingClip_)
+			return;
+		editSelectedClip([i](TlClip &c) { c.text.textCase = i; });
+	});
+
 	textColorBtn_ = new QPushButton(textBox_);
 	tForm->addRow(QStringLiteral("Colour"), textColorBtn_);
-	connect(textColorBtn_, &QPushButton::clicked, this, [this]() {
-		const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
-		if (!sel)
-			return;
-		const QColor c = QColorDialog::getColor(sel->text.color, this,
-							QStringLiteral("Text colour"));
-		if (c.isValid())
-			editSelectedClip([c](TlClip &cl) { cl.text.color = c; });
-	});
+	connect(textColorBtn_, &QPushButton::clicked, this,
+		[this]() { pickTextColor(QStringLiteral("Text colour"), &TlText::color); });
 
 	outlineWSpin_ = new QDoubleSpinBox(textBox_);
 	outlineWSpin_->setRange(0.0, 30.0);
@@ -4776,18 +4790,15 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	outlineColorBtn_ = new QPushButton(textBox_);
 	tForm->addRow(QStringLiteral("Outline colour"), outlineColorBtn_);
 	connect(outlineColorBtn_, &QPushButton::clicked, this, [this]() {
-		const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
-		if (!sel)
-			return;
-		const QColor c = QColorDialog::getColor(sel->text.outlineColor, this,
-							QStringLiteral("Outline colour"));
-		if (c.isValid())
-			editSelectedClip([c](TlClip &cl) { cl.text.outlineColor = c; });
+		pickTextColor(QStringLiteral("Outline colour"), &TlText::outlineColor);
 	});
 
 	boxChk_ = new QCheckBox(QStringLiteral("Background box"), textBox_);
 	tForm->addRow(QString(), boxChk_);
 	connect(boxChk_, &QCheckBox::toggled, this, [this](bool on) {
+		// Before the syncingClip_ guard: the rows follow the CHECKBOX, whether
+		// it was clicked or set from the clip being selected.
+		syncTextBoxRows();
 		if (syncingClip_)
 			return;
 		editSelectedClip([on](TlClip &c) { c.text.boxEnabled = on; });
@@ -4795,17 +4806,10 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 
 	boxColorBtn_ = new QPushButton(textBox_);
 	tForm->addRow(QStringLiteral("Box colour"), boxColorBtn_);
-	connect(boxColorBtn_, &QPushButton::clicked, this, [this]() {
-		const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
-		if (!sel)
-			return;
-		// No alpha channel here: the transparency is its own control below, so
-		// two places can't disagree about how see-through the box is.
-		const QColor c = QColorDialog::getColor(sel->text.boxColor, this,
-							QStringLiteral("Box colour"));
-		if (c.isValid())
-			editSelectedClip([c](TlClip &cl) { cl.text.boxColor = c; });
-	});
+	// No alpha channel in the picker: the transparency is its own control below,
+	// so two places can't disagree about how see-through the box is.
+	connect(boxColorBtn_, &QPushButton::clicked, this,
+		[this]() { pickTextColor(QStringLiteral("Box colour"), &TlText::boxColor); });
 
 	boxOpacitySpin_ = new QDoubleSpinBox(textBox_);
 	boxOpacitySpin_->setRange(0.0, 1.0);
@@ -4945,6 +4949,63 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	av->addWidget(aHint);
 
 	into->addWidget(clipBox_);
+}
+
+// The background box's own settings only mean something when there IS a box.
+//
+// Five rows of colour, opacity, padding and radius sat under the toggle whether
+// it was on or off, so the commonest text clip -- no box -- showed five controls
+// that did nothing, and the ones that mattered were pushed off the bottom.
+void VideoEditorWindow::syncTextBoxRows()
+{
+	if (!textForm_ || !boxChk_)
+		return;
+	const bool on = boxChk_->isChecked();
+	for (QWidget *w : {static_cast<QWidget *>(boxColorBtn_),
+			   static_cast<QWidget *>(boxOpacitySpin_),
+			   static_cast<QWidget *>(boxPadXSpin_), static_cast<QWidget *>(boxPadYSpin_),
+			   static_cast<QWidget *>(boxRadiusSpin_)})
+		setFormRowVisible(textForm_, w, on);
+}
+
+// Pick one of a caption's colours, with the canvas following the picker.
+//
+// The static QColorDialog::getColor only answers on OK, so choosing a text or
+// outline colour meant picking against a swatch, pressing OK, looking at the
+// result and going back in -- on a caption whose legibility is the entire point
+// of the colour. This is the live picker the Dev panel's timeline colours
+// already use: every movement inside the dialog applies to the clip and
+// repaints the preview, and Cancel puts the original back exactly.
+//
+// The colour is reached by member pointer so text, outline and box share one
+// implementation; three copies of this would be three chances for one of them
+// to keep the old dead-end behaviour.
+void VideoEditorWindow::pickTextColor(const QString &title, QColor TlText::*field)
+{
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!sel)
+		return;
+	const QColor original = sel->text.*field;
+	QColorDialog dlg(original, this);
+	dlg.setWindowTitle(title);
+	connect(&dlg, &QColorDialog::currentColorChanged, this, [this, field](const QColor &c) {
+		if (c.isValid())
+			editSelectedClip([c, field](TlClip &cl) { cl.text.*field = c; });
+	});
+	const bool accepted = dlg.exec() == QDialog::Accepted;
+	// Land on one final value either way: the chosen colour, or -- on Cancel --
+	// the one the clip had before the dialog opened, undoing whatever the live
+	// preview painted in the meantime. Through editSelectedClip like every
+	// other inspector edit, so the snapshot coalescing that already covers a
+	// dragged slider covers a dragged colour too.
+	const QColor settled = accepted && dlg.selectedColor().isValid() ? dlg.selectedColor()
+									: original;
+	// Re-read the selection rather than reusing `sel`: every live preview above
+	// went through updateSelectedClip, so the pointer taken before the dialog
+	// opened is not one to dereference now.
+	const TlClip *now = timelineView_->selectedClipPtr();
+	if (now && now->text.*field != settled)
+		editSelectedClip([settled, field](TlClip &cl) { cl.text.*field = settled; });
 }
 
 void VideoEditorWindow::editSelectedClip(const std::function<void(TlClip &)> &fn)
@@ -5234,8 +5295,13 @@ void VideoEditorWindow::syncClipInspector()
 		boldChk_->setChecked(c->text.bold);
 		italicChk_->setChecked(c->text.italic);
 		alignCombo_->setCurrentIndex(std::clamp(c->text.align, 0, 2));
+		caseCombo_->setCurrentIndex(std::clamp(c->text.textCase, 0, kTlTextCaseCount - 1));
 		outlineWSpin_->setValue(c->text.outlineWidth);
 		boxChk_->setChecked(c->text.boxEnabled);
+		// setChecked only emits when the value CHANGES, so selecting a second
+		// clip with the same box setting would leave the rows as the last one
+		// left them. Called directly, it is right either way.
+		syncTextBoxRows();
 		boxPadXSpin_->setValue(c->text.boxPadX);
 		boxPadYSpin_->setValue(c->text.boxPadY);
 		boxRadiusSpin_->setValue(c->text.boxRadius);
@@ -5981,6 +6047,22 @@ void VideoEditorWindow::copySelectedClips(bool cut)
 {
 	if (!timelineView_)
 		return;
+	// A selected track header means the whole track, clips and settings. The two
+	// selections are exclusive in the view, so this is never a guess about which
+	// the user meant -- whichever one is lit is the one Ctrl+C takes.
+	const int hdr = timelineView_->selectedHeaderTrack();
+	if (hdr >= 0) {
+		TlTrack t;
+		if (!timelineView_->copySelectedTrack(&t))
+			return;
+		trackClipboard_ = t;
+		haveTrackClipboard_ = true;
+		trackCopiedFrom_ = hdr;
+		trackCopySeq_ = ++seqCounter_;
+		if (cut)
+			timelineView_->deleteTrack(hdr);
+		return;
+	}
 	const auto sel = timelineView_->copySelection();
 	if (sel.isEmpty())
 		return;
@@ -6132,6 +6214,22 @@ bool VideoEditorWindow::pasteImageFromClipboard(qint64 atMs)
 // expects from every other editor.
 void VideoEditorWindow::pasteFromClipboard()
 {
+	// A copied track wins when it is the most recent copy, by the same
+	// newest-wins rule that already settles clips against the system clipboard.
+	// Landing ABOVE the track it came from makes Ctrl+C, Ctrl+V read as
+	// "duplicate this", and a second Ctrl+V stacks another copy above that one
+	// rather than piling them all in the same place.
+	const bool haveTrack = timelineView_ && fullEdit() && haveTrackClipboard_;
+	if (haveTrack && trackCopySeq_ > copySeq_ && trackCopySeq_ > systemCopySeq_) {
+		const int at = timelineView_->pasteTrack(trackClipboard_, trackCopiedFrom_);
+		if (at >= 0) {
+			// The pasted lane is the one a further paste duplicates.
+			trackCopiedFrom_ = at;
+			updateInfoLabel();
+			showTimelineFrame(timelinePlayheadMs());
+		}
+		return;
+	}
 	const bool haveClips = timelineView_ && fullEdit() && !clipboard_.isEmpty();
 	const bool haveMedia = systemClipboardHasMedia();
 	if (!haveClips && !haveMedia) {
@@ -7360,6 +7458,55 @@ void VideoEditorWindow::onHoverScrub(qint64 ms)
 		return;
 	cursorTimeLabel_->setText(previewTimeText(ms));
 	requestPreview(multiCut() ? tracks_->scrubSourceId() : activeSourceId_, ms);
+}
+
+// The pointer stopped hovering: put the preview back where the marker is.
+//
+// Without this the picture simply stayed on the last frame the pointer happened
+// to be over, which reads as the preview having lost its place -- the playhead
+// says one time and the picture shows another, and nothing on screen explains
+// why. Hovering is a look-ahead, so it has to be undone when the look ends.
+//
+// NOT refreshPreviewAtPlayhead: that re-renders wherever the preview last WAS,
+// which is the right answer after a quality or canvas change and precisely the
+// wrong one here, since hovering is exactly what moved it. This asks the marker.
+//
+// Through requestPreview rather than showFrame so it takes the same paced,
+// newest-wins path a hover does. A hover render already in flight would
+// otherwise land after this one and put the hovered frame back up.
+void VideoEditorWindow::showPlayheadFrame()
+{
+	// Never during playback, for the same reason hovering does not preview
+	// then: the play loop owns the picture and would fight this for it.
+	if (!valid_ || playing_)
+		return;
+	if (fullEdit()) {
+		requestPreview(-1, timelinePlayheadMs());
+		return;
+	}
+	if (multiCut()) {
+		if (!tracks_)
+			return;
+		// The marker is in OUTPUT time; the preview wants the source frame that
+		// output instant maps to, which is the same lookup playback and Reset
+		// marker both do.
+		const qint64 ph = std::max<qint64>(0, tracks_->playhead());
+		qint64 srcMs = 0;
+		const int seg = tracks_->sourceForOutput(ph, &srcMs);
+		if (seg < 0 || seg >= tracks_->segments().size())
+			return; // the marker is past the last cut: nothing to show
+		cursorTimeLabel_->setText(previewTimeText(srcMs));
+		requestPreview(tracks_->segments()[seg].sourceId, srcMs);
+		return;
+	}
+	if (!timeline_)
+		return;
+	// Trim: the marker is source time already, clamped into the trimmed region
+	// so leaving the strip cannot park the preview outside the kept part.
+	const qint64 ph = std::clamp<qint64>(timeline_->playhead(), timeline_->start(),
+					     std::max<qint64>(timeline_->start(), timeline_->end()));
+	cursorTimeLabel_->setText(previewTimeText(ph));
+	requestPreview(activeSourceId_, ph);
 }
 
 void VideoEditorWindow::onPlayPause()

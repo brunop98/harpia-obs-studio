@@ -179,6 +179,21 @@ public:
 	void addTrack(TlTrack::Kind kind, int atIndex = -1); // -1 = top of that kind's group
 	void deleteTrack(int index);
 
+	// ---- Whole-track copy / paste -------------------------------------------
+	//
+	// Clicking a track's header selects the TRACK rather than a clip, which is
+	// what tells Ctrl+C it is being asked for all of it. The two selections are
+	// exclusive: selecting one clears the other, so the shortcut never has to
+	// guess and the user can see which it will act on.
+	int selectedHeaderTrack() const { return selHeaderTrack_; }
+	// The selected track, clips and all, or false when no header is selected.
+	bool copySelectedTrack(TlTrack *out) const;
+	// Insert a copy directly ABOVE `above`, clips at their original times -- a
+	// duplicate, not a re-timing. Returns the index it landed at, or -1.
+	// Clamped into the kind's own group: a video track cannot land among the
+	// audio lanes, which is the ordering the compositor relies on.
+	int pasteTrack(const TlTrack &t, int above);
+
 	// Fit the whole timeline in the view (zoom out to 1:1 on the full span).
 	void zoomToFit();
 
@@ -244,6 +259,11 @@ signals:
 	void selectionChanged(int track, int clip);
 	void scrub(qint64 outMs);      // preview at this output time (click/drag)
 	void hoverScrub(qint64 outMs); // preview while hovering (no click)
+	// The pointer stopped hovering clips -- it left the view, or moved off onto
+	// empty lane space. The preview has to go back to the playhead: a hover
+	// borrows the picture, and something has to give it back, or the preview is
+	// left showing a frame nothing on screen points at.
+	void hoverScrubEnded();
 	void inspectClipRequested();   // "Show in inspector" from a clip's menu
 	void keyframeEditorRequested();// "Keyframes…" from a clip's menu
 	// "Export this clip…" / "Export selection…". The window owns the export
@@ -423,6 +443,10 @@ private:
 	QHash<int, double> srcAspect_;
 
 	int selTrack_ = -1, selClip_ = -1;
+	// The track whose HEADER is selected, or -1. Exclusive with the clip
+	// selection above: a gesture in the lanes clears this, and a click on a
+	// header clears that.
+	int selHeaderTrack_ = -1;
 	// True when the click landed in an overlap: the same (track, clip) pair, but
 	// meaning "the transition arriving on this clip" rather than the clip.
 	bool selTransition_ = false;

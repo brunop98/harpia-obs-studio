@@ -124,6 +124,16 @@ struct TlText {
 	int boxRadius = 16;       // corner radius; clamped to half the shorter side,
 				  // so a large value gives a clean pill
 	int align = 1; // 0 = left, 1 = centre, 2 = right (multi-line blocks)
+	// Case style, applied when the caption is DRAWN and never to `text` itself.
+	// 0 = as typed, 1 = Title Case, 2 = ALL UPPER, 3 = all lower.
+	//
+	// A style rather than a rewrite, so the words you typed are still the words
+	// the clip holds: switching back to "As typed" gives your original casing
+	// back, and correcting a typo in an all-caps caption does not mean retyping
+	// it in caps. An int, like `align` above, so it serialises and migrates the
+	// same way -- an older build reading a newer project gets 0 and draws the
+	// text as typed, which is the right thing to do with a style it cannot name.
+	int textCase = 0;
 
 	bool operator==(const TlText &o) const
 	{
@@ -132,9 +142,56 @@ struct TlText {
 		       outlineWidth == o.outlineWidth && outlineColor == o.outlineColor &&
 		       boxEnabled == o.boxEnabled && boxColor == o.boxColor &&
 		       boxOpacity == o.boxOpacity && boxPadX == o.boxPadX && boxPadY == o.boxPadY &&
-		       boxRadius == o.boxRadius && align == o.align;
+		       boxRadius == o.boxRadius && align == o.align && textCase == o.textCase;
 	}
 };
+
+// The case styles, in the order the Inspector's dropdown lists them.
+enum TlTextCase { TlCaseAsTyped = 0, TlCaseTitle = 1, TlCaseUpper = 2, TlCaseLower = 3 };
+inline constexpr int kTlTextCaseCount = 4;
+
+// One string, restyled. Kept next to TlText because three places need the same
+// answer -- the renderer, the path cache's key and the timeline's clip label --
+// and a caption that reads one way on the canvas and another on the strip is
+// exactly the kind of drift this file exists to prevent.
+inline QString tlApplyTextCase(const QString &s, int textCase)
+{
+	switch (textCase) {
+	case TlCaseUpper:
+		return s.toUpper();
+	case TlCaseLower:
+		return s.toLower();
+	case TlCaseTitle: {
+		// Lower first, then lift each word's opening letter: "hELLO wORLD"
+		// becomes "Hello World" rather than keeping the shouted middles. A
+		// "word" starts after any whitespace, so newlines and multiple spaces
+		// are handled without splitting and rejoining (which would flatten the
+		// line breaks the renderer needs).
+		QString out = s.toLower();
+		bool atWordStart = true;
+		for (int i = 0; i < out.size(); ++i) {
+			const QChar ch = out.at(i);
+			if (ch.isSpace()) {
+				atWordStart = true;
+				continue;
+			}
+			if (atWordStart) {
+				out[i] = ch.toUpper();
+				atWordStart = false;
+			}
+		}
+		return out;
+	}
+	default:
+		return s;
+	}
+}
+
+// What a caption actually draws: its words, with its case style applied.
+inline QString tlDisplayText(const TlText &t)
+{
+	return tlApplyTextCase(t.text, t.textCase);
+}
 
 // One entry in a clip's transform-script stack: which script (file stem in the
 // user's scripts folder) and the //@param values it was given.

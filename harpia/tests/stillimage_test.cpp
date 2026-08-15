@@ -11,6 +11,7 @@
 // WebP, which now falls back to the libav decoder already linked for video. And
 // that a failure names a cause, because a message that cannot be acted on is
 // barely better than no message.
+#include "editor/FrameSeeker.hpp"
 #include "editor/VideoEditorWindow.hpp"
 
 #include <QApplication>
@@ -83,6 +84,31 @@ int main(int argc, char **argv)
 		if (!qtDoesWebp)
 			std::printf("     (the webp above came through the libav fallback, which "
 				    "is the case that used to fail)\n");
+	}
+
+	std::printf("\n-- the libav fallback alone can read a JPEG --\n");
+	{
+		// The regression that made a dragged .jpg unreadable on the release
+		// build. Qt there has no JPEG plugin, so the fallback is the ONLY
+		// decoder -- and the fallback used to seek before decoding. A lone .jpg
+		// is demuxed by image2, the one still-image demuxer with a read_seek,
+		// and in single-file mode that seek reports success while rewinding
+		// nothing: it drops the packet find_stream_info had buffered and leaves
+		// the stream at EOF, so nothing decodes. PNG/WebP/BMP open with *_pipe
+		// demuxers, which have no read_seek, so libav's generic seek rewinds
+		// them properly -- which is why only JPEG was affected and why the case
+		// above did not catch it.
+		//
+		// Checked through FrameSeeker directly, because readStillImage would
+		// answer from Qt on any machine whose Qt DOES have the plugin, and this
+		// has to fail on a developer's box too when the bug comes back.
+		FrameSeeker fs;
+		const bool opened = fs.open(jpg);
+		ok(opened, "libav opens a jpg");
+		const QImage viaLibav = opened ? fs.nextFrame(nullptr, 16384, 16384) : QImage();
+		std::printf("     libav-only jpg -> %dx%d\n", viaLibav.width(), viaLibav.height());
+		ok(!viaLibav.isNull() && viaLibav.width() == 320 && viaLibav.height() == 180,
+		   "and decodes it at its real size WITHOUT Qt's help");
 	}
 
 	std::printf("\n-- a failure says WHY --\n");

@@ -136,6 +136,9 @@ signals:
 	void selectionChanged(int index); // -1 = nothing selected
 	void scrubSource(qint64 ms);      // preview the source frame while interacting
 	void hoverScrub(qint64 ms);       // preview while merely hovering (no click)
+	// The pointer left, or moved off the cuts. A hover borrows the preview; this
+	// is what gives it back to the marker.
+	void hoverScrubEnded();
 	void autoCutRequested();          // "Auto-cut on scene changes" from the source menu
 	void inspectRequested();          // "Show in inspector" from a cut's menu
 

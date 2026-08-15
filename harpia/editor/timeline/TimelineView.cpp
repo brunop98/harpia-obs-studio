@@ -330,6 +330,50 @@ int TimelineView::addClipAt(TlTrack::Kind kind, const TlClip &clip, int track, i
 	return target;
 }
 
+bool TimelineView::copySelectedTrack(TlTrack *out) const
+{
+	if (!out || selHeaderTrack_ < 0 || selHeaderTrack_ >= model_.tracks.size())
+		return false;
+	*out = model_.tracks[selHeaderTrack_]; // clips and all -- a track IS its clips
+	return true;
+}
+
+int TimelineView::pasteTrack(const TlTrack &t, int above)
+{
+	TlTrack copy = t;
+	// A fresh colour, so the duplicate is telling apart from its original at a
+	// glance. The NAME is left to renumberTracks below for the same reason: two
+	// lanes both called V1 is how you lose track of which one you just made.
+	copy.color = randomPastel();
+	copy.name.clear();
+
+	// Clamp into the kind's own group. Picture tracks occupy [0, np) and audio
+	// [np, n): dropping a video lane in among the audio ones would break the
+	// ordering the compositor and the mixer both read.
+	const int np = model_.pictureTrackCount();
+	const bool picture = TimelineModel::isPictureKind(copy.kind);
+	const int lo = picture ? 0 : np;
+	const int hi = picture ? np : int(model_.tracks.size());
+	// "Above" is a smaller index: index 0 is the TOP lane.
+	const int at = std::clamp(above >= 0 ? above : lo, lo, hi);
+
+	model_.tracks.insert(at, copy);
+	renumberTracks();
+	// Select the new lane's header, not a clip: you just asked for a track, so
+	// the thing now selected is a track -- and a second Ctrl+V stacks another
+	// copy above this one rather than re-pasting onto the original.
+	selHeaderTrack_ = at;
+	selTrack_ = selClip_ = -1;
+	selTransition_ = false;
+	extraSel_.clear();
+	clampView();
+	updateGeometry();
+	update();
+	commitEdit();
+	emit selectionChanged(-1, -1);
+	return at;
+}
+
 // True when every file in the drag is audio-only, so the whole drag belongs on
 // an audio lane. A mixed drag (a video and its music) is a picture drag: the
 // audio in it finds its own lane once the window unpacks it.
@@ -1313,8 +1357,10 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 		p.setPen(QColor(0xe6, 0xe6, 0xe6));
 		QString what;
 		if (isText)
+			// The cased text, so the strip's label reads the way the
+			// canvas does rather than showing what was typed.
 			what = QStringLiteral("T  %1").arg(
-				c.text.text.split(QLatin1Char('\n')).value(0));
+				tlDisplayText(c.text).split(QLatin1Char('\n')).value(0));
 		else if (isImage)
 			what = QStringLiteral("IMG #%1").arg(c.sourceId);
 		else
@@ -1509,6 +1555,15 @@ void TimelineView::paintEvent(QPaintEvent *)
 		// Colour chip down the left edge of the header.
 		p.setBrush(t.color);
 		p.drawRect(QRect(hdr.x(), hdr.y() + 1, 4, hdr.height() - 2));
+		// A selected header, so Ctrl+C has something visible to act on. Without
+		// a mark, "copy the track" would be a shortcut whose target the user has
+		// to remember rather than see.
+		if (i == selHeaderTrack_) {
+			p.setBrush(Qt::NoBrush);
+			p.setPen(QPen(cl_.selection, 2));
+			p.drawRect(hdr.adjusted(1, 1, -1, -1));
+			p.setPen(Qt::NoPen);
+		}
 
 		p.setPen((t.hidden || t.muted) ? cl_.caption : QColor(0xe8, 0xea, 0xed));
 		p.setFont(hdrFont_);
@@ -1761,12 +1816,26 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 			ht.muted = !ht.muted;
 			break;
 		case HeaderHit::None:
+			// The header itself, away from the toggles: select the TRACK. That
+			// is what gives Ctrl+C a whole track to copy, and it clears the clip
+			// selection so the shortcut is never ambiguous about which of the
+			// two it means -- one selection is live at a time, and you can see
+			// which.
+			selHeaderTrack_ = hTrack;
+			selTrack_ = selClip_ = -1;
+			selTransition_ = false;
+			extraSel_.clear();
+			emit selectionChanged(-1, -1);
+			update();
 			return;
 		}
 		update();
 		commitEdit(); // repaints the preview + records an undo step
 		return;
 	}
+
+	// Anything in the lanes is a clip gesture, so the header selection lets go.
+	selHeaderTrack_ = -1;
 
 	int track = -1;
 	const int clip = clipAtPoint(pos, &track);
@@ -2100,6 +2169,7 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 		if (hoverMs_ >= 0) { // off the clips: the preview is no longer following
 			hoverMs_ = -1;
 			update();
+			emit hoverScrubEnded(); // ...so put it back on the playhead
 		}
 	}
 }
@@ -2263,10 +2333,16 @@ void TimelineView::changeEvent(QEvent *e)
 
 void TimelineView::leaveEvent(QEvent *)
 {
+	const bool wasHovering = hoverMs_ >= 0;
 	hoverMs_ = -1;
 	hoverSeamTrack_ = -1;
 	hoverSeamMs_ = -1;
 	update(); // drop the hover marker and any lit seam
+	// Only when the pointer really had the preview: leaving the view is also
+	// what happens on the way to a menu or another panel, and re-rendering the
+	// playhead frame every time the mouse crosses this edge is work for nothing.
+	if (wasHovering)
+		emit hoverScrubEnded();
 }
 
 // Every selected clip, primary included, as (track, clip).

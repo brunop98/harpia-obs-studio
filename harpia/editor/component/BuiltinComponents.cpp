@@ -47,6 +47,35 @@ public:
 	}
 };
 
+// ---- Always Grow ---------------------------------------------------------
+// Always Rotate's counterpart for size, and the one place the two deliberately
+// differ. Rotation has no natural end, so it is stated as a RATE. Growth does
+// have one -- the clip's last frame -- so it is stated as a DESTINATION.
+// "Half again as big by the end" still means that after the clip is trimmed,
+// retimed or moved to a project at another frame rate; "0.2 per second" quietly
+// means something different after every one of those.
+//
+// Pure, like everything here, and for the reason the header gives: it reads
+// ctx.u(), the clip's own 0..1 progress, so scrubbing to the middle shows the
+// middle size whether or not a single frame before it was ever rendered.
+class AlwaysGrowComponent : public IComponent {
+public:
+	void evaluate(const EvalContext &ctx, ClipState &io) const override
+	{
+		// Clamped at zero: a negative scale is a mirror, which is a different
+		// feature wearing this one's clothes.
+		const double endScale = std::max(0.0, ctx.f("endScale", 1.5));
+		const TlEase ease = tlEaseFromInt(int(std::lround(ctx.f("ease", 0.0))));
+		// *= starting from 1, not =, so the clip's own scale -- and its scale
+		// keyframes, and any other Transform component -- still mean what they
+		// meant. This multiplies the size the clip already has instead of
+		// replacing it, the same way Always Rotate adds to its rotation.
+		// tlEaseAt clamps u itself, so a clip evaluated past its end holds at
+		// the final size rather than sailing on past it.
+		io.xf.scale *= 1.0 + (endScale - 1.0) * tlEaseAt(ease, ctx.u());
+	}
+};
+
 // ---- Blur ----------------------------------------------------------------
 class BlurComponent : public IComponent {
 public:
@@ -336,6 +365,33 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 			    PropType::Float, -720.0, 720.0, 90.0, true,
 			    QStringLiteral("Negative turns anticlockwise.")}};
 		t.make = [] { return std::unique_ptr<IComponent>(new AlwaysRotateComponent); };
+		reg.add(t);
+	}
+	{
+		ComponentType t;
+		t.id = QStringLiteral("harpia.alwaysGrow");
+		t.displayName = QStringLiteral("Always Grow");
+		t.category = QStringLiteral("Transform");
+		t.stage = Stage::Transform;
+		t.help = QStringLiteral("Grow the clip steadily, reaching its final size on the "
+					"last frame. Multiplies whatever size the clip already "
+					"has, so it composes with the clip's own scale.");
+		t.props = {
+			{QStringLiteral("endScale"), QStringLiteral("Final size"), PropType::Float,
+			 0.0, 10.0, 1.5, true,
+			 QStringLiteral("A multiple of the clip's own size, reached on its last "
+					"frame. 1 is unchanged, 2 is twice as big, 0.5 shrinks "
+					"by half. The clip is at its own size on the first "
+					"frame whatever this says.")},
+			// An Int, like Mask's shape and for the same reason: it lands on
+			// whole numbers between keys, so animating it steps cleanly from
+			// one curve to the next rather than resolving to half an ease.
+			{QStringLiteral("ease"), QStringLiteral("Ease"), PropType::Int, 0.0, 3.0,
+			 0.0, true,
+			 QStringLiteral("How the growth is paced: 0 linear, 1 ease in, 2 ease "
+					"out, 3 ease in-out.")},
+		};
+		t.make = [] { return std::unique_ptr<IComponent>(new AlwaysGrowComponent); };
 		reg.add(t);
 	}
 	{

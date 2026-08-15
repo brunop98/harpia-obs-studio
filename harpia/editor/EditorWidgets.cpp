@@ -1445,6 +1445,7 @@ void Timeline::leaveEvent(QEvent *)
 	if (hoverMs_ >= 0) {
 		hoverMs_ = -1;
 		update();
+		emit hoverScrubEnded();
 	}
 }
 

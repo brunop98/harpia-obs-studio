@@ -282,6 +282,9 @@ signals:
 	void endChanged(qint64 ms);
 	void scrub(qint64 ms);      // frame to preview while interacting
 	void hoverScrub(qint64 ms); // preview while merely hovering (no click)
+	// The pointer left, so the preview goes back to the marker. A hover borrows
+	// the picture; this is what gives it back.
+	void hoverScrubEnded();
 
 protected:
 	void paintEvent(QPaintEvent *) override;

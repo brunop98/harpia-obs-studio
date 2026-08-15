@@ -1103,20 +1103,28 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 			dirty += rects[hoverOutSeg_].adjusted(-2, -2, 2, 2);
 		if (newOutSeg >= 0 && newOutSeg < rects.size())
 			dirty += rects[newOutSeg].adjusted(-2, -2, 2, 2);
+		const bool letGo = hoverMs_ >= 0 && newHover < 0;
 		hoverMs_ = newHover;
 		hoverOutSeg_ = newOutSeg;
 		hoverOutX_ = newOutX;
 		update(dirty);
+		// Moved off the cuts without leaving the widget: the preview stops
+		// following the pointer here, so it goes back to the marker.
+		if (letGo)
+			emit hoverScrubEnded();
 	}
 }
 
 void TrackEditor::leaveEvent(QEvent *)
 {
 	if (hoverMs_ >= 0 || hoverOutSeg_ >= 0) {
+		const bool wasHovering = hoverMs_ >= 0;
 		hoverMs_ = -1;
 		hoverOutSeg_ = -1;
 		hoverOutX_ = -1;
 		update();
+		if (wasHovering)
+			emit hoverScrubEnded();
 	}
 }
 

@@ -28,13 +28,23 @@ inline bool isVideoFile(const QString &path)
 	return kExts.contains(QFileInfo(path).suffix().toLower());
 }
 
-inline bool isImageFile(const QString &path)
+// Every still the editor can read. Exposed rather than kept inside isImageFile
+// because the Add image dialog has to offer exactly what the drop path accepts,
+// and it used to derive its list from Qt's plugins instead -- which on the
+// release build's trimmed Qt meant the dialog would not even show *.jpg. See
+// imageOpenFilter in StillImage.cpp.
+inline const QStringList &imageFileExtensions()
 {
 	static const QStringList kExts = {QStringLiteral("png"),  QStringLiteral("jpg"),
 					  QStringLiteral("jpeg"), QStringLiteral("bmp"),
 					  QStringLiteral("gif"),  QStringLiteral("webp"),
 					  QStringLiteral("tif"),  QStringLiteral("tiff")};
-	return kExts.contains(QFileInfo(path).suffix().toLower());
+	return kExts;
+}
+
+inline bool isImageFile(const QString &path)
+{
+	return imageFileExtensions().contains(QFileInfo(path).suffix().toLower());
 }
 
 // Audio-only files: no picture to composite, so these land on an audio lane

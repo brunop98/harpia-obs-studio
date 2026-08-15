@@ -209,6 +209,15 @@ private slots:
 	void copySelectedClipsForTest() { copySelectedClips(false); }
 	void onScrub(qint64 ms);
 	void onHoverScrub(qint64 ms); // hover preview — never interrupts playback
+	// Hovering ended: put the preview back on the marker, in whatever mode.
+	// A slot so a test can reach it the way a mouse leaving the widget does.
+	void showPlayheadFrame();
+	// Show only the rows that apply: the background box's colour, opacity,
+	// padding and corner radius are meaningless while the box is switched off.
+	void syncTextBoxRows();
+	// Pick one of the caption's colours with the canvas following the picker.
+	// `field` names which colour, so the three text colours share one path.
+	void pickTextColor(const QString &title, QColor TlText::*field);
 	void onPreviewTick();
 	void onCropToggled(bool on);
 	// Delete/Backspace: remove whatever is selected, in whatever mode.
@@ -330,9 +339,17 @@ private:
 	// worker thread. Written to the app's own folder rather than a temp dir, so
 	// a project saved today still opens tomorrow. Empty on failure, with *why.
 	static QString writePastedImage(const QImage &img, QString *why);
+	// A whole track on the clipboard, from Ctrl+C with a track header selected.
+	// Its own slot rather than a list of clips: a track carries its name, colour,
+	// lock/hide/mute and ripple setting too, and pasting it as loose clips would
+	// drop all of that on the floor.
+	TlTrack trackClipboard_;
+	bool haveTrackClipboard_ = false;
+	int trackCopiedFrom_ = -1; // where it came from, so the copy lands above it
 	quint64 copySeq_ = 0;       // bumped when clips are copied inside Harpia
+	quint64 trackCopySeq_ = 0;  // ...and when a whole track is
 	quint64 systemCopySeq_ = 0; // bumped when the system clipboard changes
-	quint64 seqCounter_ = 0;    // the tick both of the above are stamped from
+	quint64 seqCounter_ = 0;    // the tick all of the above are stamped from
 	QSplitter *hsplit_ = nullptr;   // preview+editing | inspector
 	QSplitter *vsplit_ = nullptr;   // preview / editing area
 	QWidget *bottomPane_ = nullptr; // mode bar + mode stack + audio + buttons
@@ -560,9 +577,14 @@ private:
 	QCheckBox *boldChk_ = nullptr;
 	QCheckBox *italicChk_ = nullptr;
 	QComboBox *alignCombo_ = nullptr;
+	QComboBox *caseCombo_ = nullptr; // As typed / Title Case / ALL UPPER / all lower
 	QPushButton *textColorBtn_ = nullptr;
 	QDoubleSpinBox *outlineWSpin_ = nullptr;
 	QPushButton *outlineColorBtn_ = nullptr;
+	// The form the text rows live in. Held because the background-box rows are
+	// hidden AS ROWS when the box is off, and a QFormLayout can only do that
+	// through the layout itself -- hiding the field leaves its label behind.
+	QFormLayout *textForm_ = nullptr;
 	QCheckBox *boxChk_ = nullptr;
 	QPushButton *boxColorBtn_ = nullptr;
 	QSpinBox *boxPadXSpin_ = nullptr;

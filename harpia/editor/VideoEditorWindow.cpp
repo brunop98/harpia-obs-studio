@@ -2208,8 +2208,25 @@ int VideoEditorWindow::addImageSource(const QString &path)
 	s.width = img.width();
 	s.height = img.height();
 	stillImages_.insert(s.id, img);
+	// A still's filmstrip: one tile, at the same 128x72 bound the video strips
+	// use. That single tile is what lets the timeline draw an image clip with
+	// its own picture, the way a video clip is drawn with its frames -- an image
+	// clip was previously a flat rectangle with "IMG #3" on it, which told you
+	// there was a picture but not which one, and stills are usually chosen by
+	// looking rather than by name.
+	//
+	// Scaled here rather than on a worker: a still is already decoded, and one
+	// smooth scale of an image in memory is not work worth a thread.
+	s.thumbCache = {img.scaled(128, 72, Qt::KeepAspectRatio, Qt::SmoothTransformation)};
 	const int id = s.id;
+	const QVector<QImage> strip = s.thumbCache;
 	sources_.push_back(std::move(s));
+	// Duration 0: a still has no source timeline to space tiles along, and the
+	// timeline's image path repeats the one tile instead of asking. Nothing
+	// consults srcThumbDur_ for a still -- its clip is freeDuration(), so a trim
+	// is never capped by a decoder's length.
+	if (timelineView_)
+		timelineView_->setSourceThumbs(id, strip, 0);
 	refreshSourceList();
 	return id;
 }
@@ -7178,7 +7195,18 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 					if (!picked.isEmpty())
 						spath = picked;
 				}
-				eid = addSource(spath);
+				// A still comes back as a STILL. Every source used to be
+				// reopened through addSource, which builds a video source
+				// around a FrameSeeker -- so a reopened project had no
+				// entry in stillImages_ for its image clips, and the one
+				// place that serves a still's picture is that map. They
+				// came back as sources with no picture behind them, and
+				// now they also come back with their thumbnail.
+				// isVideoFile FIRST, as everywhere else that asks: a GIF is
+				// in both lists on purpose, and the video reader is what
+				// people mean by one (MediaFiles.hpp says so at length).
+				eid = (!isVideoFile(spath) && isImageFile(spath)) ? addImageSource(spath)
+										 : addSource(spath);
 			}
 			if (eid >= 0) {
 				srcMap.insert(pid, eid);

@@ -1232,7 +1232,8 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	const bool roomInside = r.width() >= kMinWidthForContents;
 	const bool wantsInside =
 		isFx ||
-		(roomInside && ((video && srcThumbs_.contains(c.sourceId)) || !c.peaks.isEmpty() ||
+		(roomInside && (((video || isImage) && srcThumbs_.contains(c.sourceId)) ||
+				!c.peaks.isEmpty() ||
 				(!dragging && !c.keys.isEmpty()) || clipTakesFades(track, clip))) ||
 		(!dragging && r.width() >= 28);
 	if (!wantsInside) {
@@ -1283,6 +1284,37 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 					    std::max(1, r.width()), tileW, 1, content.x(), lastVis)) {
 				if (t.index < pix.size() && !pix[t.index].isNull())
 					p.drawPixmap(QPoint(t.x, r.y() + 1), pix[t.index]);
+			}
+		}
+	} else if (isImage) {
+		// A still repeats across its clip, at the same tile size and aspect the
+		// video filmstrip uses -- so a row of clips reads as one row whether the
+		// pictures move or not. Repeated rather than stretched: stretching one
+		// thumbnail across a long clip distorts it into a smear, and the clip's
+		// LENGTH is a thing you read off the strip, which needs the tiles to be
+		// a constant width whatever that length is.
+		const auto it = srcThumbs_.constFind(c.sourceId);
+		if (it != srcThumbs_.constEnd() && !it.value().isEmpty()) {
+			const double aspect = srcAspect_.value(c.sourceId, 16.0 / 9.0);
+			const int th = r.height() - 2;
+			const int tileW = std::max(8, int(th * aspect));
+			// Through the same pre-scaled pixmap cache: this widget repaints
+			// 30 times a second during playback, and rescaling the still on
+			// every one of those is exactly what that cache exists to avoid.
+			const QVector<QPixmap> &pix = scaledStrip(c.sourceId, it.value(), tileW, th);
+			if (!pix.isEmpty() && !pix.front().isNull()) {
+				const int x0 = r.x() + 1;
+				const int lastVis = std::min(r.right() - 1, content.right() + 1);
+				// Start at the first tile at or before the visible edge, on
+				// the clip's OWN grid -- tiles anchored to the viewport
+				// would crawl sideways as the timeline scrolls.
+				const int firstTile = std::max(0, (content.x() - x0) / tileW);
+				for (int i = firstTile;; ++i) {
+					const int x = x0 + i * tileW;
+					if (x > lastVis)
+						break;
+					p.drawPixmap(QPoint(x, r.y() + 1), pix.front());
+				}
 			}
 		}
 	} else if (!c.peaks.isEmpty() && c.srcEndMs > 0) {

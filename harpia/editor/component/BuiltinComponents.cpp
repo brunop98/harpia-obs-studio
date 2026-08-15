@@ -385,7 +385,10 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 		ComponentType t;
 		t.id = QStringLiteral("harpia.alwaysRotate");
 		t.displayName = QStringLiteral("Always Rotate");
-		t.category = QStringLiteral("Transform");
+		// Motion, with the rest of the family. Transform is now what it says on
+		// the tin -- the static pose -- and everything that moves a clip over
+		// time is in one menu, next to the Pulse script that named the category.
+		t.category = QStringLiteral("Motion");
 		t.stage = Stage::Transform;
 		t.help = QStringLiteral("Spin the clip continuously. Adds to whatever rotation the "
 					"clip already has.");

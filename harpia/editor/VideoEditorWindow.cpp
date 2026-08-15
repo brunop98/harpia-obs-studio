@@ -3,6 +3,7 @@
 #include <QUuid>
 
 #include "../ui/ExportDoneDialog.hpp"
+#include "../ui/ColorField.hpp"
 #include "../ui/UiIcons.hpp"
 #include "component/BuiltinComponents.hpp"
 #include "component/ComponentRegistry.hpp"
@@ -3938,10 +3939,11 @@ void VideoEditorWindow::buildSpotlightInspector(QVBoxLayout *into)
 	connect(spotColor_, &QPushButton::clicked, this, [this]() {
 		const QColor cur = timelineView_ ? spotTarget().dimColor
 						 : QColor(Qt::black);
-		const QColor c = QColorDialog::getColor(cur, this, QStringLiteral("Dim colour"));
-		if (!c.isValid())
-			return;
-		editSpotlight([c](SpotlightSpec &s) { s.dimColor = c; });
+		// Live, like every other colour here: a dim colour is judged against
+		// the picture it is dimming, not against the picker's own swatch.
+		pickColorLive(this, QStringLiteral("Dim colour"), cur, [this](const QColor &c) {
+			editSpotlight([c](SpotlightSpec &s) { s.dimColor = c; });
+		});
 	});
 	v->addLayout(gf);
 
@@ -5003,26 +5005,19 @@ void VideoEditorWindow::pickTextColor(const QString &title, QColor TlText::*fiel
 	if (!sel)
 		return;
 	const QColor original = sel->text.*field;
-	QColorDialog dlg(original, this);
-	dlg.setWindowTitle(title);
-	connect(&dlg, &QColorDialog::currentColorChanged, this, [this, field](const QColor &c) {
-		if (c.isValid())
+	// The shared picker (ui/ColorField.hpp) previews on every movement and
+	// calls back once more with the settled colour -- the chosen one, or the
+	// original on Cancel, undoing whatever the live preview painted.
+	//
+	// Each call goes through editSelectedClip like every other inspector edit,
+	// so the snapshot coalescing that already covers a dragged slider covers a
+	// dragged colour too, and the selection is re-read every time: `sel` was
+	// taken before the dialog opened and every preview since has replaced it.
+	pickColorLive(this, title, original, [this, field](const QColor &c) {
+		const TlClip *now = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+		if (now && now->text.*field != c)
 			editSelectedClip([c, field](TlClip &cl) { cl.text.*field = c; });
 	});
-	const bool accepted = dlg.exec() == QDialog::Accepted;
-	// Land on one final value either way: the chosen colour, or -- on Cancel --
-	// the one the clip had before the dialog opened, undoing whatever the live
-	// preview painted in the meantime. Through editSelectedClip like every
-	// other inspector edit, so the snapshot coalescing that already covers a
-	// dragged slider covers a dragged colour too.
-	const QColor settled = accepted && dlg.selectedColor().isValid() ? dlg.selectedColor()
-									: original;
-	// Re-read the selection rather than reusing `sel`: every live preview above
-	// went through updateSelectedClip, so the pointer taken before the dialog
-	// opened is not one to dereference now.
-	const TlClip *now = timelineView_->selectedClipPtr();
-	if (now && now->text.*field != settled)
-		editSelectedClip([settled, field](TlClip &cl) { cl.text.*field = settled; });
 }
 
 void VideoEditorWindow::editSelectedClip(const std::function<void(TlClip &)> &fn)

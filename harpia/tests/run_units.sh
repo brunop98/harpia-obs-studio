@@ -40,6 +40,11 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/uitext_test.cpp" "$H/ui/UiText.cpp" -o "$WORK/uitext_test" $LF
 
+# The colour convention: a swatch that carries its colour, and a Cancel that
+# puts back what was there rather than the last thing hovered.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/colorfield_test.cpp" -o "$WORK/colorfield_test" $LF
+
 # Auto-stop when the pointer leaves the recording region: the coordinate
 # conversion and the countdown. No libobs needed -- CaptureManager.hpp is
 # obs-free and RegionWatch is deliberately separable from MainWindow.
@@ -449,6 +454,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/paramslider_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/colorfield_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionwatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/followmouse_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/zoommode_test" || rc=1

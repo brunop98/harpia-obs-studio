@@ -131,6 +131,44 @@ harpia/
     RegionTool              interactive resizable region overlay (handles/snap)
 ```
 
+### Conventions
+
+**Colours.** A colour is picked from a **colour field** — a swatch you click —
+and whatever it colours **updates while you pick it**. Never a row of
+Hue/Saturation/Brightness sliders, and never `QColorDialog::getColor`, which
+only answers on OK.
+
+Both halves are the same point: a colour is judged by looking at it in place.
+Sliders make you solve backwards for a colour you can already picture; a picker
+that stays silent until OK makes you pick, commit, look, and go back in.
+
+`ui/ColorField.hpp` is the whole implementation — header-only, so it is one
+`#include` away from anywhere:
+
+- `pickColorLive(parent, title, initial, apply)` — `apply` runs on every
+  movement inside the dialog and once more with the settled colour, so the
+  caller does its saving, undo snapshot or repaint exactly once. **Cancel puts
+  back the colour that was there**, not the last one hovered.
+- `paintColorSwatch(button, colour)` / `paintMixedSwatch(button)` — the field
+  itself; the colour is readable back off the button via its `harpiaColor`
+  property.
+
+A shader or script parameter declares a colour the same way, and gets the same
+field in the Inspector:
+
+```glsl
+//@param uColor color #3F73B8 Colour
+```
+
+It arrives as a `uniform vec4` in 0..1, and travels everywhere else as a packed
+`0xAARRGGBB` in a double — exact in 32 bits — so persistence, keyframes and the
+props map need no special case. Colour keyframes interpolate per channel.
+
+The one licensed variation: a swatch that lives in a property row (the component
+Inspector) opens a **non-modal** dialog, so the rest of the UI stays usable
+while it is up. It is still wired to `currentColorChanged`. The rule is
+live-updating, not one particular function.
+
 ### Reused OBS backend APIs
 
 - Startup: `obs_startup` → `obs_add_module_path` → `obs_load_all_modules2` →

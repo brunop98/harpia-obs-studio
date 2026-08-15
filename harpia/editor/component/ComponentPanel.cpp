@@ -6,6 +6,8 @@
 #include "ComponentRegistry.hpp"
 
 #include <QCheckBox>
+#include "ui/ColorField.hpp"
+
 #include <QColorDialog>
 #include <QSpinBox>
 #include <QFormLayout>
@@ -49,25 +51,16 @@ void setSwatchColor(QPushButton *b, const ComponentPanel::Mixed &m)
 	if (!b)
 		return;
 	if (m.mixed) {
-		b->setText(QStringLiteral("—"));
-		b->setProperty("harpiaColor", QColor());
-		b->setStyleSheet(QStringLiteral(
-			"QPushButton{border:1px solid #4a4f58; border-radius:3px; color:#8a8f98;}"));
+		paintMixedSwatch(b);
 		return;
 	}
 	const QColor c = m.value.canConvert<QColor>()
 				 ? m.value.value<QColor>()
 				 : QColor::fromRgba(QRgb(quint32(m.value.toUInt())));
-	b->setText(QString());
-	b->setProperty("harpiaColor", c);
-	b->setToolTip(c.name(QColor::HexArgb));
-	// A chequer would be better under a translucent colour, but the panel is
-	// dark and flat, and one more painted widget here is one more thing to keep
-	// in step with the theme.
-	b->setStyleSheet(QStringLiteral("QPushButton{background:%1; border:1px solid #4a4f58; "
-					"border-radius:3px;}"
-					"QPushButton:hover{border:1px solid #6c9af5;}")
-				 .arg(c.name(QColor::HexRgb)));
+	// No hex on the face: these rows are narrow and already labelled. (A
+	// chequer under a translucent colour would be better still, but the panel
+	// is dark and flat and that is one more thing to keep in step with it.)
+	paintColorSwatch(b, c, /*showHex=*/false);
 }
 
 // How wide a property's name may get before it wraps. Narrow on purpose: the

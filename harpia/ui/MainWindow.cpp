@@ -3847,7 +3847,7 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 		extractAct = menu.addAction(QStringLiteral("Edit Audio…"));
 	} else if (!path.endsWith(QStringLiteral(".gif"), Qt::CaseInsensitive)) {
 		menu.addSeparator();
-		trimAct = menu.addAction(QStringLiteral("Trim / Crop…"));
+		trimAct = menu.addAction(QStringLiteral("Edit…"));
 		extractAct = menu.addAction(QStringLiteral("Extract Audio Only…"));
 		QMenu *opt = menu.addMenu(QStringLiteral("Optimize for sharing"));
 		optLowAct = opt->addAction(QStringLiteral("Low — smallest file"));
@@ -3870,7 +3870,7 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 	if (chosen == trimAct) {
 		auto *editor = new VideoEditorWindow(path, presetFolders(), this);
 		if (!editor->isValid()) {
-			QMessageBox::warning(this, QStringLiteral("Trim"),
+			QMessageBox::warning(this, QStringLiteral("Edit"),
 					     QStringLiteral("Could not open this video for editing."));
 			editor->deleteLater();
 			return;

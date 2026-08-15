@@ -7,6 +7,8 @@
 // PreviewCanvas + PreviewLayoutParams come from EditorWidgets.hpp.
 
 #include <QCheckBox>
+#include "../ui/ColorField.hpp"
+
 #include <QColorDialog>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
@@ -196,14 +198,8 @@ void DevPanel::saveColors(const EditorColors &c)
 
 void DevPanel::paintSwatch(const ColorRow &r) const
 {
-	const QColor c = colors_.*(r.field);
-	// Readable label whichever way the colour goes.
-	const QString fg = (c.lightness() > 140) ? QStringLiteral("#101214")
-						 : QStringLiteral("#f0f0f0");
-	r.btn->setText(c.name(QColor::HexRgb).toUpper());
-	r.btn->setStyleSheet(QStringLiteral("background:%1; color:%2; border:1px solid #444; "
-					    "padding:4px 8px; text-align:left;")
-				     .arg(c.name(QColor::HexRgb), fg));
+	// The project's colour field, not this panel's own (ui/ColorField.hpp).
+	paintColorSwatch(r.btn, colors_.*(r.field));
 }
 
 void DevPanel::applyColors()
@@ -672,17 +668,19 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		const int idx = colorRows_.size() - 1;
 		connect(row.btn, &QPushButton::clicked, this, [this, idx]() {
 			const QColor original = colors_.*(colorRows_[idx].field);
-			// A real dialog instead of the static getColor(), because the
-			// static one only answers on OK -- and the whole point of tuning
-			// a timeline colour is seeing it ON THE TIMELINE while dragging
-			// around the picker. Every movement previews live; Cancel puts
-			// everything back exactly as it was.
-			QColorDialog dlg(original, this);
-			dlg.setWindowTitle(QStringLiteral("Pick a colour"));
-			connect(&dlg, &QColorDialog::currentColorChanged, this,
-				[this, idx](const QColor &c) { previewColor(idx, c); });
-			const bool accepted = (dlg.exec() == QDialog::Accepted);
-			finishColorPick(idx, original, accepted, dlg.selectedColor());
+			// The shared live picker: every movement previews ON THE
+			// TIMELINE, which is the whole point of tuning a timeline
+			// colour, and its last callback hands back the settled value.
+			QColor settled = original;
+			const bool accepted = pickColorLive(
+				this, QStringLiteral("Pick a colour"), original,
+				[this, idx, &settled](const QColor &c) {
+					settled = c;
+					previewColor(idx, c);
+				});
+			// Still through finishColorPick: it is what saves the palette
+			// exactly once, and what a Cancel rolls back through.
+			finishColorPick(idx, original, accepted, settled);
 		});
 		paintSwatch(colorRows_.back());
 	}

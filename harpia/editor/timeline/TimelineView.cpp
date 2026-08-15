@@ -8,6 +8,7 @@
 #include "../component/ComponentRegistry.hpp"
 
 #include "../../ui/UiIcons.hpp"
+#include "../../ui/ColorField.hpp"
 #include "../TimeText.hpp"
 
 #include <QColorDialog>
@@ -846,9 +847,17 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 			return;
 		}
 	} else if (chosen == colour) {
-		const QColor c = QColorDialog::getColor(t.color, this, QStringLiteral("Track colour"));
-		if (c.isValid())
-			t.color = c;
+		// Live, and by index rather than through `t`: the reference points into
+		// the track vector, and repainting between every movement is the point.
+		const int ti = track;
+		const QColor before = t.color;
+		pickColorLive(this, QStringLiteral("Track colour"), before,
+			      [this, ti](const QColor &c) {
+				      if (ti >= 0 && ti < model_.tracks.size()) {
+					      model_.tracks[ti].color = c;
+					      update();
+				      }
+			      });
 	} else if (chosen == reroll) {
 		t.color = randomPastel();
 	} else if (chosen == addAbove) {

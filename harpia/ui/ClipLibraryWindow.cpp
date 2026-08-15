@@ -543,7 +543,7 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 	QAction *copyAct = menu.addAction(QStringLiteral("Copy"));
 	QAction *renameAct = menu.addAction(QStringLiteral("Rename…"));
 
-	// Trim/crop editor + internet-sharing copy — one video clip at a time (not GIFs).
+	// Video editor + internet-sharing copy — one video clip at a time (not GIFs).
 	QAction *trimAct = nullptr;
 	QAction *optLowAct = nullptr;
 	QAction *optBalAct = nullptr;
@@ -561,7 +561,7 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 		extractAct = menu.addAction(QStringLiteral("Edit Audio…"));
 	} else if (oneVideo) {
 		menu.addSeparator();
-		trimAct = menu.addAction(QStringLiteral("Trim / Crop…"));
+		trimAct = menu.addAction(QStringLiteral("Edit…"));
 		extractAct = menu.addAction(QStringLiteral("Extract Audio Only…"));
 		QMenu *opt = menu.addMenu(QStringLiteral("Optimize for sharing"));
 		optLowAct = opt->addAction(QStringLiteral("Low — smallest file"));
@@ -590,7 +590,7 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 	else if (oneVideo && chosen == trimAct) {
 		auto *editor = new VideoEditorWindow(sel.front(), folders(), this);
 		if (!editor->isValid()) {
-			QMessageBox::warning(this, QStringLiteral("Trim"),
+			QMessageBox::warning(this, QStringLiteral("Edit"),
 					     QStringLiteral("Could not open this video for editing."));
 			editor->deleteLater();
 			return;

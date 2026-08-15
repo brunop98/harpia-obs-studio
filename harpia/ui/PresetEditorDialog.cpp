@@ -5,6 +5,7 @@
 #include "AudioPanel.hpp"
 #include "SpotlightPreview.hpp"
 #include "ZoomPreview.hpp"
+#include "ColorField.hpp"
 #include "core/CaptureManager.hpp"
 #include "core/EncoderFactory.hpp"
 #include "core/WebcamRecorder.hpp"
@@ -68,12 +69,11 @@ const char *codecLabel(VideoCodec c)
 	return "H.264";
 }
 
-// Paint a color-swatch button with the given color.
+// Paint a color-swatch button with the given color. One line, because the
+// swatch's look is the project's, not this dialog's -- see ui/ColorField.hpp.
 void setButtonColor(QPushButton *b, const QColor &c)
 {
-	b->setStyleSheet(QStringLiteral("background:%1; border:1px solid #555; border-radius:4px;")
-				 .arg(c.name()));
-	b->setText(c.name());
+	paintColorSwatch(b, c);
 }
 
 // Create an empty settings page: a scrollable widget whose inner QVBoxLayout is
@@ -1543,12 +1543,15 @@ void PresetEditorDialog::showPage(const QString &title)
 
 void PresetEditorDialog::pickColor(QColor &target, QPushButton *button)
 {
-	const QColor c = QColorDialog::getColor(target, this, QStringLiteral("Choose color"));
-	if (c.isValid()) {
-		target = c;
-		setButtonColor(button, c);
-		updateMousePreview();
-	}
+	// Live: these colours are the cursor highlight and the click rings, and the
+	// preview beside the picker is the only place you can see whether the one
+	// you are hovering actually reads against the footage.
+	pickColorLive(this, QStringLiteral("Choose color"), target,
+		      [this, &target, button](const QColor &c) {
+			      target = c;
+			      setButtonColor(button, c);
+			      updateMousePreview();
+		      });
 }
 
 void PresetEditorDialog::syncZoomPreview()

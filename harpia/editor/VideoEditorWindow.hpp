@@ -212,12 +212,6 @@ private slots:
 	// Hovering ended: put the preview back on the marker, in whatever mode.
 	// A slot so a test can reach it the way a mouse leaving the widget does.
 	void showPlayheadFrame();
-	// Show only the rows that apply: the background box's colour, opacity,
-	// padding and corner radius are meaningless while the box is switched off.
-	void syncTextBoxRows();
-	// Pick one of the caption's colours with the canvas following the picker.
-	// `field` names which colour, so the three text colours share one path.
-	void pickTextColor(const QString &title, QColor TlText::*field);
 	void onPreviewTick();
 	void onCropToggled(bool on);
 	// Delete/Backspace: remove whatever is selected, in whatever mode.
@@ -251,6 +245,18 @@ private slots:
 	void onThumbReady(const QString &path);             // library thumbnail decoded
 
 private:
+	// Show only the rows that apply: the background box's colour, opacity,
+	// padding and corner radius are meaningless while the box is switched off.
+	void syncTextBoxRows();
+	// Pick one of the caption's colours with the canvas following the picker.
+	// `field` names which colour, so the three text colours share one path.
+	//
+	// Plain methods, NOT slots: moc parses everything in a slots section, and it
+	// reads the pointer-to-member parameter below as a bare QColor -- which
+	// compiles into a call that cannot exist. Neither is connected to anything,
+	// so neither needs to be a slot.
+	void pickTextColor(const QString &title, QColor TlText::*field);
+
 	// Apply a speed value (multi-cut: to the selection; trim: global) and refresh
 	// the count label. Callers keep the slider + spin box in sync.
 	void applySpeed(double value);

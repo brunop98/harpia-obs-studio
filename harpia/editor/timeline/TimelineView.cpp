@@ -1560,7 +1560,7 @@ void TimelineView::paintEvent(QPaintEvent *)
 		// to remember rather than see.
 		if (i == selHeaderTrack_) {
 			p.setBrush(Qt::NoBrush);
-			p.setPen(QPen(cl_.selection, 2));
+			p.setPen(QPen(cl_.accent, 2));
 			p.drawRect(hdr.adjusted(1, 1, -1, -1));
 			p.setPen(Qt::NoPen);
 		}

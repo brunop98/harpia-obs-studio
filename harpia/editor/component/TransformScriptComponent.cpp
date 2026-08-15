@@ -144,8 +144,9 @@ int TransformScriptComponents::loadFolder(const QString &folder, ComponentRegist
 			PropDef d;
 			d.key = p.uniform;
 			d.label = p.label.isEmpty() ? p.uniform : p.label;
-			d.type = p.type == ShaderParam::Type::Bool ? PropType::Bool
-								   : PropType::Float;
+			d.type = p.type == ShaderParam::Type::Bool    ? PropType::Bool
+			 : p.type == ShaderParam::Type::Color ? PropType::Color
+							      : PropType::Float;
 			d.min = p.min;
 			d.max = p.max;
 			d.def = p.def;

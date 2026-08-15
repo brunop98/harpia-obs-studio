@@ -6,6 +6,7 @@
 #include "ComponentRegistry.hpp"
 
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QSpinBox>
 #include <QFormLayout>
 #include <QFrame>
@@ -30,6 +31,7 @@ struct ComponentPanel::Row {
 	QVector<QString> keys;
 	QVector<ParamSlider *> sliders; // null for a non-float property
 	QVector<QCheckBox *> checks;    // null for a non-bool property
+	QVector<QPushButton *> swatches; // null for a non-colour property
 	QVector<QPushButton *> keyBtns;
 	QVector<QLabel *> labels;
 	QSpinBox *inMs = nullptr;  // ramp-in time; null on pinned rows
@@ -37,6 +39,36 @@ struct ComponentPanel::Row {
 };
 
 namespace {
+
+// Paint a swatch button with the colour it stands for, and remember that colour
+// on the widget so the picker can open on it. A mixed selection -- two clips
+// with different colours -- shows a dash rather than one of them, matching what
+// the sliders do.
+void setSwatchColor(QPushButton *b, const ComponentPanel::Mixed &m)
+{
+	if (!b)
+		return;
+	if (m.mixed) {
+		b->setText(QStringLiteral("—"));
+		b->setProperty("harpiaColor", QColor());
+		b->setStyleSheet(QStringLiteral(
+			"QPushButton{border:1px solid #4a4f58; border-radius:3px; color:#8a8f98;}"));
+		return;
+	}
+	const QColor c = m.value.canConvert<QColor>()
+				 ? m.value.value<QColor>()
+				 : QColor::fromRgba(QRgb(quint32(m.value.toUInt())));
+	b->setText(QString());
+	b->setProperty("harpiaColor", c);
+	b->setToolTip(c.name(QColor::HexArgb));
+	// A chequer would be better under a translucent colour, but the panel is
+	// dark and flat, and one more painted widget here is one more thing to keep
+	// in step with the theme.
+	b->setStyleSheet(QStringLiteral("QPushButton{background:%1; border:1px solid #4a4f58; "
+					"border-radius:3px;}"
+					"QPushButton:hover{border:1px solid #6c9af5;}")
+				 .arg(c.name(QColor::HexRgb)));
+}
 
 // How wide a property's name may get before it wraps. Narrow on purpose: the
 // controls are what the eye needs to land on, and a component's own //@param
@@ -280,8 +312,49 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 			QWidget *control = nullptr;
 			ParamSlider *slider = nullptr;
 			QCheckBox *check = nullptr;
+			QPushButton *swatch = nullptr;
 
-			if (d.type == PropType::Bool) {
+			if (d.type == PropType::Color) {
+				// One swatch instead of three sliders somebody has to convert
+				// in their head. The picker is opened NON-modal and wired to
+				// currentColorChanged, so the frame behind it repaints while
+				// the mouse is still down in the colour wheel -- which is the
+				// only way to choose a colour against the actual footage
+				// rather than against a memory of it.
+				swatch = new QPushButton(row->box);
+				swatch->setFixedHeight(20);
+				swatch->setCursor(Qt::PointingHandCursor);
+				setSwatchColor(swatch, m);
+				const QString tid = typeId;
+				connect(swatch, &QPushButton::clicked, this,
+					[this, tid, ordinal, key = d.key, swatch]() {
+						const QColor start =
+							swatch->property("harpiaColor").value<QColor>();
+						auto *dlg = new QColorDialog(start.isValid() ? start
+											     : Qt::white,
+									     this);
+						dlg->setAttribute(Qt::WA_DeleteOnClose);
+						dlg->setOption(QColorDialog::ShowAlphaChannel, true);
+						dlg->setModal(false);
+						// Always the property signal, never the pinned one:
+						// pinnedEdited carries a double because the pinned
+						// rows are the clip's own pose and speed, and a
+						// colour is not one of those.
+						const auto push = [this, tid, ordinal, key](const QColor &c) {
+							if (syncing_ || !c.isValid())
+								return;
+							emit propertyEdited(tid, ordinal, key, c);
+						};
+						connect(dlg, &QColorDialog::currentColorChanged, this, push);
+						// Cancel puts back what was there: a live preview that
+						// leaves the last hovered colour behind is a preview
+						// that edits by accident.
+						connect(dlg, &QColorDialog::rejected, this,
+							[push, start]() { push(start); });
+						dlg->show();
+					});
+				control = swatch;
+			} else if (d.type == PropType::Bool) {
 				check = new QCheckBox(row->box);
 				check->setTristate(m.mixed);
 				check->setCheckState(stateOf(m));
@@ -315,6 +388,7 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 			}
 			row->sliders.append(slider);
 			row->checks.append(check);
+			row->swatches.append(swatch);
 			if (!d.help.isEmpty())
 				control->setToolTip(d.help);
 
@@ -522,6 +596,8 @@ void ComponentPanel::pushValues()
 				r->checks[i]->setTristate(m.mixed);
 				r->checks[i]->setCheckState(stateOf(m));
 			}
+			if (r->swatches[i])
+				setSwatchColor(r->swatches[i], m);
 		}
 	};
 	int n = 0;

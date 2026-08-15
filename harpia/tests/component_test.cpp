@@ -14,6 +14,7 @@
 #include "editor/component/ComponentJson.hpp"
 #include "editor/component/ComponentRegistry.hpp"
 #include "editor/component/ComponentStack.hpp"
+#include "editor/shader/ShaderEffect.hpp"
 
 #include <QGuiApplication>
 #include <QImage>
@@ -330,6 +331,49 @@ int main(int argc, char **argv)
 		   "a save writes it back intact, so the plugin's work is not destroyed");
 		ok(!c.unknown.contains(QStringLiteral("props")),
 		   "and the fields we DID understand are not duplicated into the unknown bag");
+	}
+
+	std::printf("\n-- a colour is one parameter, not three sliders --\n");
+	{
+		// A colour rides in the same double every other parameter uses. That is
+		// what lets one keyframe track, one props map and one persistence path
+		// carry it — but only if the packing is EXACT. A double that rounds a
+		// channel by one is a colour that drifts every save.
+		const QString glsl = QStringLiteral(
+			"//@param uColor   color #FF8040 Tint\n"
+			"//@param uGhost   color #80102030 Ghost\n"
+			"//@param uBroken  color\n"
+			"//@param uAmount  float 0.0 1.0 0.5 Amount\n");
+		const QVector<ShaderParam> ps = parseShaderParams(glsl);
+		ok(ps.size() == 3, "a colour line with no value is dropped, the rest survive");
+		ok(ps[0].uniform == QStringLiteral("uColor") &&
+			   ps[0].type == ShaderParam::Type::Color,
+		   "#RRGGBB parses as a colour");
+		ok(ps[0].label == QStringLiteral("Tint"), "and keeps its label");
+
+		const QColor got = QColor::fromRgba(quint32(ps[0].def));
+		ok(got.red() == 0xFF && got.green() == 0x80 && got.blue() == 0x40,
+		   "the channels come back exactly as written");
+		ok(got.alpha() == 0xFF, "an #RRGGBB colour is fully opaque");
+		ok(QColor::fromRgba(quint32(ps[1].def)).alpha() == 0x80,
+		   "and #AARRGGBB carries its alpha");
+
+		// The round trip that decides whether a saved project reopens the same
+		// colour: every channel at both extremes, through the double and back.
+		bool lossless = true;
+		for (int a = 0; a <= 255; a += 51)
+			for (int r = 0; r <= 255; r += 51) {
+				const QColor c(r, 255 - r, a, a);
+				if (QColor::fromRgba(quint32(double(quint32(c.rgba())))) != c)
+					lossless = false;
+			}
+		ok(lossless, "packed 0xAARRGGBB survives the double round trip on every channel");
+
+		const QString wrapped = wrapShaderToy(QStringLiteral("void mainImage(out vec4 o, in vec2 p){}\n"), ps);
+		ok(wrapped.contains(QStringLiteral("uniform vec4 uColor;")),
+		   "and reaches the shader as a vec4, not a float");
+		ok(wrapped.contains(QStringLiteral("uniform float uAmount;")),
+		   "while a float parameter is still a float");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

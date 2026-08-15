@@ -10,6 +10,7 @@
 // deliberately pulls in no OpenGL so both the GUI and the export worker can use
 // it; the actual rendering lives in ShaderRenderer.
 
+#include <QColor>
 #include <QMap>
 #include <QRegularExpression>
 #include <QString>
@@ -22,7 +23,11 @@ namespace harpia {
 //   //@param <uniform> float <min> <max> <default> <Label...>
 //   //@param <uniform> bool  <default(0|1)> <Label...>
 struct ShaderParam {
-	enum class Type { Float, Bool };
+	// Color travels in `def` (and in the params map) as a packed 0xAARRGGBB in
+	// a double, exactly as PropType::Color does in the component model: 32 bits
+	// are exact in a double, so one number carries every parameter kind and the
+	// persistence, the keyframes and the uniforms all stay uniform.
+	enum class Type { Float, Bool, Color };
 	QString uniform;      // GLSL uniform name (also the JSON/persistence key)
 	Type type = Type::Float;
 	double min = 0.0;
@@ -70,6 +75,22 @@ inline QVector<ShaderParam> parseShaderParams(const QString &glsl)
 			p.max = t[3].toDouble();
 			p.def = t[4].toDouble();
 			p.label = QStringList(t.mid(5)).join(QLatin1Char(' '));
+		} else if (kind == QLatin1String("color")) {
+			// uniform color #RRGGBB|#AARRGGBB [label...]
+			//
+			// Reaches the shader as a vec4 in 0..1, which is what a colour is
+			// for in GLSL; the editor shows one swatch instead of three
+			// sliders someone has to solve in their head.
+			if (t.size() < 3)
+				continue;
+			p.type = ShaderParam::Type::Color;
+			QColor c(t[2]);
+			if (!c.isValid())
+				c = QColor(Qt::white);
+			p.min = 0.0;
+			p.max = 0.0; // no range: a colour is not a scalar
+			p.def = double(quint32(c.rgba()));
+			p.label = QStringList(t.mid(3)).join(QLatin1Char(' '));
 		} else if (kind == QLatin1String("bool")) {
 			// uniform bool default [label...]
 			if (t.size() < 3)
@@ -104,8 +125,13 @@ inline QString wrapShaderToy(const QString &userGlsl, const QVector<ShaderParam>
 	head += QStringLiteral("uniform int iFrame;\n");
 	head += QStringLiteral("uniform sampler2D iChannel0;\n");
 	for (const ShaderParam &p : params) {
-		head += (p.type == ShaderParam::Type::Bool) ? QStringLiteral("uniform bool ")
-							    : QStringLiteral("uniform float ");
+		switch (p.type) {
+		case ShaderParam::Type::Bool: head += QStringLiteral("uniform bool "); break;
+		// vec4, not vec3: a colour parameter that cannot be faded is a colour
+		// parameter someone immediately wants an opacity slider beside.
+		case ShaderParam::Type::Color: head += QStringLiteral("uniform vec4 "); break;
+		case ShaderParam::Type::Float: head += QStringLiteral("uniform float "); break;
+		}
 		head += p.uniform;
 		head += QStringLiteral(";\n");
 	}

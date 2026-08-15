@@ -319,10 +319,20 @@ QImage ShaderRenderer::apply(const QImage &src, float iTime, int iFrame,
 		for (const ShaderParam &sp : p.defs) {
 			const double v = vals.value(sp.uniform, sp.def);
 			const QByteArray name = sp.uniform.toUtf8();
-			if (sp.type == ShaderParam::Type::Bool)
+			if (sp.type == ShaderParam::Type::Bool) {
 				p.prog->setUniformValue(name.constData(), v != 0.0);
-			else
+			} else if (sp.type == ShaderParam::Type::Color) {
+				// Unpacked here rather than stored unpacked: the value has to
+				// survive as ONE double through the project file, the keyframe
+				// list and the property bag, and this is the only place that
+				// wants four floats.
+				const QColor c = QColor::fromRgba(QRgb(quint32(std::llround(v))));
+				p.prog->setUniformValue(name.constData(),
+							QVector4D(float(c.redF()), float(c.greenF()),
+								  float(c.blueF()), float(c.alphaF())));
+			} else {
 				p.prog->setUniformValue(name.constData(), GLfloat(v));
+			}
 		}
 
 		vao_.bind();

@@ -5,16 +5,14 @@
 // the input to blend against it. Put it on an effect clip on a track BELOW a
 // caption and the caption sits on moving colour.
 //
-// Colours are Hue/Saturation/Brightness rather than R/G/B. Both are three
-// numbers, but one Hue slider re-themes the whole thing -- blue to purple to
-// teal -- where R/G/B means solving for the mix you want. (The shader parameter
-// system carries floats and bools; there is no colour swatch to declare.)
+// Each colour is one swatch you pick by looking at it, with a separate
+// Brightness beside it. The brightness is NOT folded into the swatch: it runs
+// past 1, and the glow this shader is built around lives up there -- a swatch
+// alone tops out at white and the field goes flat.
 //
-//@param uHue       float 0.0 1.0 0.606 Background hue
-//@param uSat       float 0.0 1.0 0.976 Background saturation
+//@param uColor     color #0661FF Background colour
 //@param uVal       float 0.0 2.0 0.42  Background brightness
-//@param uRectHue   float 0.0 1.0 0.592 Shape hue
-//@param uRectSat   float 0.0 1.0 0.982 Shape saturation
+//@param uRectColor color #0575FF Shape colour
 //@param uRectVal   float 0.0 2.0 0.57  Shape brightness
 //@param uSpeed     float 0.0 4.0 1.0   Speed
 //@param uCount     float 0.0 200.0 60.0 Shapes
@@ -31,12 +29,6 @@ const float kMaxShapes = 200.0;
 const float noiseIntensity = 2.8;
 const float noiseDefinition = 0.6;
 const vec2 glowPos = vec2(-2.0, 0.0);
-
-vec3 hsv2rgb(vec3 c)
-{
-    vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-    return c.z * mix(vec3(1.0), rgb, c.y);
-}
 
 float random(vec2 co)
 {
@@ -113,8 +105,8 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     uv.x *= iResolution.x / iResolution.y;
 
     float t = iTime * uSpeed;
-    vec3 bgTint = hsv2rgb(vec3(uHue, uSat, uVal));
-    vec3 rectTint = hsv2rgb(vec3(uRectHue, uRectSat, uRectVal));
+    vec3 bgTint = uColor.rgb * uVal;
+    vec3 rectTint = uRectColor.rgb * uRectVal;
 
     vec3 color = bg(uv, t, bgTint) * (2.0 - abs(uv.y * 2.0));
 

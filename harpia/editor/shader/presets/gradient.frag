@@ -10,22 +10,12 @@
 // anything between is a band. Position alone could not give you the split, and
 // Softness alone could not tell you where to put it.
 //
-//@param uHueA     float 0.0 1.0 0.62 Colour A hue
-//@param uSatA     float 0.0 1.0 0.70 Colour A saturation
-//@param uValA     float 0.0 1.0 0.80 Colour A brightness
-//@param uHueB     float 0.0 1.0 0.83 Colour B hue
-//@param uSatB     float 0.0 1.0 0.70 Colour B saturation
-//@param uValB     float 0.0 1.0 0.55 Colour B brightness
+//@param uColorA   color #4A7FE0 Colour A
+//@param uColorB   color #B94FD4 Colour B
 //@param uAngle    float 0.0 360.0 90.0 Angle
 //@param uPosition float 0.0 1.0 0.5  Transition position
 //@param uSoftness float 0.0 1.0 1.0  Transition softness
 //@param uOpacity  float 0.0 1.0 1.0  Opacity
-
-vec3 hsv2rgb(vec3 c)
-{
-    vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-    return c.z * mix(vec3(1.0), rgb, c.y);
-}
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord)
 {
@@ -60,12 +50,15 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     float w = max(uSoftness, 1e-4);
     float g = smoothstep(uPosition - w * 0.5, uPosition + w * 0.5, t01);
 
-    vec3 colA = hsv2rgb(vec3(uHueA, uSatA, uValA));
-    vec3 colB = hsv2rgb(vec3(uHueB, uSatB, uValB));
-    vec3 col = mix(colA, colB, g);
+    vec3 col = mix(uColorA.rgb, uColorB.rgb, g);
+
+    // Each swatch carries its own alpha, so the ramp can fade from a solid
+    // colour into nothing as well as from one colour into another; Opacity
+    // then scales the whole thing on top.
+    float amount = uOpacity * mix(uColorA.a, uColorB.a, g);
 
     // Opacity 1 replaces whatever is beneath; below 1 it is a wash over the
     // picture, alpha included, so at 0 the frame comes back untouched.
     vec4 under = texture(iChannel0, uv);
-    fragColor = vec4(mix(under.rgb, col, uOpacity), mix(under.a, 1.0, uOpacity));
+    fragColor = vec4(mix(under.rgb, col, amount), mix(under.a, 1.0, amount));
 }

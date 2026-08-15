@@ -76,6 +76,34 @@ public:
 	}
 };
 
+// ---- Always Zoom ---------------------------------------------------------
+// The RATE half of the pair Always Grow is the destination half of. Grow is
+// told where to end up and works out its own pace from the clip's length; Zoom
+// is told a pace and holds it for as long as the clip lasts. Both exist because
+// both questions get asked -- "end up half again as big" and "drift in slowly,
+// I'll decide the length later" -- and answering one with the other means doing
+// arithmetic the component should be doing.
+//
+// Per second, like Always Rotate's degrees per second, so every "Always"
+// component reads as a rate in the units of the thing it moves.
+class AlwaysZoomComponent : public IComponent {
+public:
+	void evaluate(const EvalContext &ctx, ClipState &io) const override
+	{
+		const double pctPerSec = ctx.f("percentPerSecond", 10.0);
+		// Linear in the clip's OWN size: 10 means "a tenth of its original size
+		// every second", so ten seconds at 10 is twice the size. Deliberately
+		// not compounded. 1.1^t looks the same to the eye over a second or two
+		// and turns a plausible-looking number into 2.6x over ten seconds,
+		// which nobody predicts from the number they typed.
+		const double factor = 1.0 + (pctPerSec / 100.0) * ctx.tSec();
+		// A clip cannot be zoomed away to nothing: at -10%/s, a clip past ten
+		// seconds would reach zero and then go negative, and a negative scale
+		// is a mirror, not a zoom.
+		io.xf.scale *= std::max(0.01, factor);
+	}
+};
+
 // ---- Blur ----------------------------------------------------------------
 class BlurComponent : public IComponent {
 public:
@@ -371,7 +399,11 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 		ComponentType t;
 		t.id = QStringLiteral("harpia.alwaysGrow");
 		t.displayName = QStringLiteral("Always Grow");
-		t.category = QStringLiteral("Transform");
+		// Motion, not Transform: this was asked for as "a component for motion",
+		// and Motion is a category that already exists -- the bundled Pulse
+		// script declares it. Filing it under Transform put it in a different
+		// menu from its own family, which is exactly where it was not found.
+		t.category = QStringLiteral("Motion");
 		t.stage = Stage::Transform;
 		t.help = QStringLiteral("Grow the clip steadily, reaching its final size on the "
 					"last frame. Multiplies whatever size the clip already "
@@ -392,6 +424,23 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 					"out, 3 ease in-out.")},
 		};
 		t.make = [] { return std::unique_ptr<IComponent>(new AlwaysGrowComponent); };
+		reg.add(t);
+	}
+	{
+		ComponentType t;
+		t.id = QStringLiteral("harpia.alwaysZoom");
+		t.displayName = QStringLiteral("Always Zoom");
+		t.category = QStringLiteral("Motion");
+		t.stage = Stage::Transform;
+		t.help = QStringLiteral("Zoom the clip continuously, at a steady rate for as long "
+					"as the clip lasts. Multiplies whatever size the clip "
+					"already has, so it composes with the clip's own scale.");
+		t.props = {{QStringLiteral("percentPerSecond"), QStringLiteral("Zoom % / second"),
+			    PropType::Float, -50.0, 200.0, 10.0, true,
+			    QStringLiteral("A percentage of the clip's own size, added every "
+					   "second. 10 makes it twice its size after ten "
+					   "seconds. Negative zooms out.")}};
+		t.make = [] { return std::unique_ptr<IComponent>(new AlwaysZoomComponent); };
 		reg.add(t);
 	}
 	{

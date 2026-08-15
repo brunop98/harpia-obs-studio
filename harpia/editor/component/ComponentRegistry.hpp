@@ -10,6 +10,7 @@
 
 #include "Component.hpp"
 
+#include <QHash>
 #include <QStringList>
 #include <QVector>
 
@@ -40,6 +41,15 @@ public:
 
 private:
 	QVector<ComponentType> types_;
+	// id -> index into types_.
+	//
+	// find() is not an occasional call. Building one clip's stack asks about
+	// FIVE times per component -- resolveOrder alone asks twice -- and a stack
+	// is built per clip per frame, so a linear scan was walking every
+	// registered type (the built-ins, all fifteen effects, every shader and
+	// every script) with a string compare each, thirty times a second per clip.
+	QHash<QString, int> byId_;
+	void reindex(); // after any change that can move existing indices
 	int indexOf(const QString &id) const;
 };
 

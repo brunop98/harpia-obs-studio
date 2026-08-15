@@ -30,7 +30,20 @@ class ComponentStack {
 public:
 	// `reg` must outlive the stack. Resolves the run order once; call again
 	// after the component list changes.
-	ComponentStack(const QVector<ComponentInstance> &list, const ComponentRegistry &reg);
+	//
+	// `conflicts` off skips the conflict scan, which builds a set of every
+	// enabled type id to answer a question only the Inspector asks. The
+	// renderer builds a stack per clip per FRAME and never reads warnings(),
+	// so it was paying for that set thirty times a second per clip to throw
+	// the (almost always empty) answer away. On by default: a caller that
+	// wants the diagnostics gets them by asking for nothing.
+	//
+	// Only the CONFLICT scan is optional. Missing types and unresolvable
+	// requirements still land in warnings(), and pure() is always computed --
+	// a purity flag that silently reads "pure" because someone turned
+	// diagnostics off is a trap, not an optimisation.
+	ComponentStack(const QVector<ComponentInstance> &list, const ComponentRegistry &reg,
+		       bool conflicts = true);
 
 	// Time + Transform, evaluated in resolved order. `seed` carries the clip's
 	// own pose so a component that offsets rather than overwrites composes with

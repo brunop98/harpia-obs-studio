@@ -343,8 +343,11 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 			std::unique_ptr<ComponentStack> stack;
 			EvalContext ectx;
 			if (hasComponents) {
-				stack.reset(new ComponentStack(ec.components,
-							       ComponentRegistry::instance()));
+				// No conflict scan: this runs per frame and the
+				// composite never reads warnings(). The Inspector
+				// does its own, once, when the selection changes.
+				stack.reset(new ComponentStack(
+					ec.components, ComponentRegistry::instance(), false));
 				ectx.tMs = outMs - ec.outStartMs;
 				ectx.outMs = outMs;
 				ectx.durMs = std::max<qint64>(1, ec.outDurationMs());
@@ -445,8 +448,9 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 			std::unique_ptr<ComponentStack> stack;
 			EvalContext ectx;
 			if (hasComponents) {
-				stack.reset(new ComponentStack(c.components,
-							       ComponentRegistry::instance()));
+				// As above: no conflict scan on the render path.
+				stack.reset(new ComponentStack(
+					c.components, ComponentRegistry::instance(), false));
 				ectx.tMs = outMs - c.outStartMs;
 				ectx.outMs = outMs;
 				ectx.durMs = std::max<qint64>(1, c.outDurationMs());

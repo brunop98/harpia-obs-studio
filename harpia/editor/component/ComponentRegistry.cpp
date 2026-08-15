@@ -13,12 +13,18 @@ ComponentRegistry &ComponentRegistry::instance()
 	return r;
 }
 
+void ComponentRegistry::reindex()
+{
+	byId_.clear();
+	byId_.reserve(types_.size());
+	for (int i = 0; i < types_.size(); ++i)
+		byId_.insert(types_[i].id, i);
+}
+
 int ComponentRegistry::indexOf(const QString &id) const
 {
-	for (int i = 0; i < types_.size(); ++i)
-		if (types_[i].id == id)
-			return i;
-	return -1;
+	const auto it = byId_.constFind(id);
+	return it == byId_.constEnd() ? -1 : *it;
 }
 
 bool ComponentRegistry::add(const ComponentType &type)
@@ -26,18 +32,28 @@ bool ComponentRegistry::add(const ComponentType &type)
 	if (type.id.isEmpty() || !type.make)
 		return false;
 	const int i = indexOf(type.id);
-	if (i >= 0)
+	if (i >= 0) {
 		types_[i] = type; // re-registering is how hot reload lands
-	else
-		types_.append(type);
+		return true;      // same slot, so the index still points at it
+	}
+	types_.append(type);
+	// An append cannot move the earlier entries, so only the new one is added
+	// rather than rebuilding the whole map -- which matters on startup, where
+	// this is called once per built-in, effect, shader and script.
+	byId_.insert(type.id, int(types_.size()) - 1);
 	return true;
 }
 
 void ComponentRegistry::remove(const QString &id)
 {
 	const int i = indexOf(id);
-	if (i >= 0)
-		types_.remove(i);
+	if (i < 0)
+		return;
+	types_.remove(i);
+	// Everything after i shifted down by one. Rebuilding the whole map is the
+	// simple correct answer, and remove() happens when a script file is deleted
+	// -- not in any loop worth optimising for.
+	reindex();
 }
 
 const ComponentType *ComponentRegistry::find(const QString &id) const
@@ -76,6 +92,7 @@ std::unique_ptr<IComponent> ComponentRegistry::make(const QString &typeId) const
 void ComponentRegistry::clear()
 {
 	types_.clear();
+	byId_.clear();
 }
 
 QVector<int> resolveOrder(const QVector<ComponentInstance> &list, const ComponentRegistry &reg,

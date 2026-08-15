@@ -7,11 +7,13 @@
 
 namespace harpia {
 
-ComponentStack::ComponentStack(const QVector<ComponentInstance> &list, const ComponentRegistry &reg)
+ComponentStack::ComponentStack(const QVector<ComponentInstance> &list, const ComponentRegistry &reg,
+			       bool conflicts)
 	: owned_(list)
 {
 	const QVector<int> order = resolveOrder(owned_, reg, &warnings_);
-	warnings_ += findConflicts(owned_, reg);
+	if (conflicts)
+		warnings_ += findConflicts(owned_, reg);
 	pure_ = allPure(owned_, reg);
 
 	entries_.reserve(order.size());

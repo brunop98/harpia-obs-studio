@@ -113,6 +113,29 @@ QVariant valueFromKeys(const PropDef &d, const QVector<PropKey> &keys, qint64 tM
 	return coerce(d, interpolate(keys, tMs));
 }
 
+// One property's value, with its definition already in hand.
+//
+// Split out of propAt so resolveProps can skip the defFor() lookup: it walks
+// type.props, so it is holding each PropDef when it asks, and looking the same
+// one back up BY NAME made resolving a component's properties quadratic in the
+// number of properties. That happens per component per clip per frame, and a
+// twelve-parameter shader was paying about seventy string comparisons a frame
+// to rediscover twelve things it already had.
+QVariant propFor(const PropDef &d, const ComponentInstance &inst, qint64 tMs)
+{
+	// Keyframes win over the static value: they are what the user sees moving,
+	// and a static field that silently overrode them is how an Inspector comes
+	// to look broken (the Spotlight pose fields did exactly that).
+	const auto k = inst.keys.find(d.key);
+	if (k != inst.keys.end() && !k->isEmpty())
+		return valueFromKeys(d, *k, tMs);
+
+	const auto p = inst.props.find(d.key);
+	if (p != inst.props.end() && p->isValid())
+		return *p;
+	return coerce(d, d.def);
+}
+
 } // namespace
 
 double propKeyValue(const PropDef &def, const QVariant &v)
@@ -131,27 +154,14 @@ QVariant propAt(const ComponentType &type, const ComponentInstance &inst, const 
 		qint64 tMs)
 {
 	const PropDef *d = defFor(type, key);
-	if (!d)
-		return {};
-
-	// Keyframes win over the static value: they are what the user sees moving,
-	// and a static field that silently overrode them is how an Inspector comes
-	// to look broken (the Spotlight pose fields did exactly that).
-	const auto k = inst.keys.find(key);
-	if (k != inst.keys.end() && !k->isEmpty())
-		return valueFromKeys(*d, *k, tMs);
-
-	const auto p = inst.props.find(key);
-	if (p != inst.props.end() && p->isValid())
-		return *p;
-	return coerce(*d, d->def);
+	return d ? propFor(*d, inst, tMs) : QVariant();
 }
 
 PropBag resolveProps(const ComponentType &type, const ComponentInstance &inst, qint64 tMs)
 {
 	PropBag out;
 	for (const PropDef &d : type.props)
-		out.insert(d.key, propAt(type, inst, d.key, tMs));
+		out.insert(d.key, propFor(d, inst, tMs)); // the def is in hand; don't re-find it
 	return out;
 }
 

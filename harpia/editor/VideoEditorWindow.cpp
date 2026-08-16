@@ -2772,11 +2772,57 @@ void VideoEditorWindow::onTimelineScrub(qint64 outMs)
 	requestPreview(-1, outMs); // -1 = "composite the timeline"
 }
 
+// Move the keyframe list's highlight to whichever key `atMs` sits on, without
+// touching the list itself. Split out of syncClipInspector for the hover path:
+// that runs on every mouse-move, and rebuilding a QListWidget at that rate
+// wastes work and makes the scrollbar jump under the pointer.
+void VideoEditorWindow::highlightKeyAt(qint64 atMs)
+{
+	if (!keyList_ || !timelineView_)
+		return;
+	const TlClip *c = timelineView_->selectedClipPtr();
+	if (!c || keyList_->count() != c->keys.size())
+		return;
+	const bool wasSyncing = syncingClip_;
+	syncingClip_ = true;
+	keyList_->setCurrentRow(c->keyframeIndexAt(atMs));
+	syncingClip_ = wasSyncing;
+}
+
+qint64 VideoEditorWindow::inspectTimeMs() const
+{
+	return hoverInspectMs_ >= 0 ? hoverInspectMs_ : timelinePlayheadMs();
+}
+
+void VideoEditorWindow::setHoverInspect(qint64 outMs)
+{
+	if (hoverInspectMs_ == outMs)
+		return;
+	const bool was = hoverInspectMs_ >= 0;
+	hoverInspectMs_ = outMs;
+	if (componentPanel_ && was != (outMs >= 0))
+		componentPanel_->setPreviewing(outMs >= 0);
+	// The values only -- not syncClipInspector(), which rebuilds the keyframe
+	// list. This runs on every mouse-move across the timeline, and rebuilding a
+	// list widget at that rate is both wasted work and a scrollbar that jumps
+	// under the pointer. The list's contents do not depend on the instant
+	// anyway; only which row is highlighted does, and that is done below.
+	syncComponentPanel();
+	syncSpotlightInspector();
+	highlightKeyAt(inspectTimeMs());
+}
+
 void VideoEditorWindow::onTimelineHoverScrub(qint64 outMs)
 {
 	if (playing_)
 		return;
 	requestPreview(-1, outMs);
+	// The Inspector describes the frame you are looking at. Hovering the
+	// timeline changes which frame that is, and the panel used to keep showing
+	// the playhead's numbers over a preview of somewhere else entirely -- so
+	// reading off what a keyframed move is doing at 4.2 s meant dragging the
+	// playhead there and losing where you were.
+	setHoverInspect(outMs);
 }
 
 // ---- Per-clip transform scripting ----------------------------------------
@@ -4254,7 +4300,11 @@ ComponentPanel::View VideoEditorWindow::buildComponentView() const
 	if (clips.isEmpty())
 		return v;
 
-	const qint64 ph = timelinePlayheadMs();
+	// The instant being described, not the playhead: while the pointer is over
+	// the timeline these rows report the frame under it, which is the frame the
+	// preview is showing. Values only -- every EDIT path still asks for the
+	// playhead, so what a keyframe button writes never moves with the mouse.
+	const qint64 ph = inspectTimeMs();
 	const int n = clips.size();
 	// Each clip's own time, not the raw playhead: two clips at different
 	// positions are at different points in their own animations.
@@ -4550,7 +4600,9 @@ void VideoEditorWindow::syncSpotlightInspector()
 	// PLAYHEAD, so a keyframed mask's handles sit on the shape you can see
 	// rather than on its resting pose.
 	if (canvas_) {
-		const qint64 now = timelinePlayheadMs();
+		// The instant on screen: the handles have to sit on the shape you can
+		// SEE, and while the timeline is hovered that is the hovered frame.
+		const qint64 now = inspectTimeMs();
 		QVector<PreviewCanvas::SpotDraw> draw;
 		draw.reserve(s.masks.size());
 		for (const SpotMask &m : s.masks) {
@@ -5211,7 +5263,7 @@ void VideoEditorWindow::syncClipInspector()
 	// being repopulated write back into the clip.
 	const bool wasSyncing = syncingClip_;
 	syncingClip_ = true;
-	const qint64 ph = timelinePlayheadMs();
+	const qint64 ph = inspectTimeMs();
 	autoKeyChk_->setChecked(autoKeyframe_);
 	const int here = c->keyframeIndexAt(ph);
 	keyInfo_->setText(c->keys.isEmpty()
@@ -5245,8 +5297,8 @@ void VideoEditorWindow::syncClipInspector()
 			item->setData(Qt::UserRole, qlonglong(k.tMs));
 			keyList_->addItem(item);
 		}
-		// Highlight the one the playhead is on, so the list and the preview
-		// agree about where you are.
+		// Highlight the one the instant being described is on, so the list and
+		// the preview agree about where you are.
 		keyList_->setCurrentRow(here);
 		keyList_->setVisible(!c->keys.isEmpty());
 	}
@@ -7499,6 +7551,13 @@ void VideoEditorWindow::onHoverScrub(qint64 ms)
 // otherwise land after this one and put the hovered frame back up.
 void VideoEditorWindow::showPlayheadFrame()
 {
+	// The pointer has left the timeline (or something else asked for the
+	// playhead's frame): the Inspector goes back to describing the playhead,
+	// the same instant the picture is about to show. Before the early-out
+	// below, so a panel left in its dimmed preview state is always released --
+	// including while playing, where the hover preview is refused but the
+	// dimming would otherwise stick.
+	setHoverInspect(-1);
 	// Never during playback, for the same reason hovering does not preview
 	// then: the play loop owns the picture and would fight this for it.
 	if (!valid_ || playing_)

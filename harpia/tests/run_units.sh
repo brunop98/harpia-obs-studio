@@ -448,6 +448,23 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_kf_KeyframeEditor.cpp" \
 	-o "$WORK/keyframetabs_test" $LF
 
+# Hovering the timeline turns the Inspector into a read-only readout of the
+# frame under the pointer -- and hands the controls back when it leaves.
+for h in editor/component/ComponentPanel editor/ParamSlider; do
+	"$MOC" -I"$H" "$H/$h.hpp" -o "$WORK/moc_hi_$(basename "$h").cpp"
+done
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
+	"$HERE/hoverinspect_test.cpp" "$H/editor/component/ComponentPanel.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/component/ShaderComponent.cpp" "$H/editor/component/ScriptComponent.cpp" \
+	"$H/editor/component/TransformScriptComponent.cpp" "$H/editor/ParamSlider.cpp" \
+	"$H/editor/shader/ShaderRenderer.cpp" "$H/editor/script/TransformScript.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK"/moc_hi_*.cpp \
+	-o "$WORK/hoverinspect_test" $LF
+
 # Does the Display dropdown point at the monitor the recording area lives on?
 # Two independent lists (OBS's and Qt's) name the same displays.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -520,6 +537,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/effectarea_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/gutterspill_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinekeys_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keyframetabs_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/hoverinspect_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/splitseam_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinepan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineperf_test" || rc=1

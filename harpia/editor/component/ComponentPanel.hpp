@@ -120,8 +120,24 @@ signals:
 	// clip, as one undo step, like any other edit from here.
 	void actionInvoked(const QString &typeId, int ordinal, const QString &actionId);
 
+public:
+	// Show values as a READ-ONLY look at another instant -- the frame under the
+	// pointer while the timeline is hovered -- rather than as the clip's own
+	// editable state.
+	//
+	// Read-only because the value under the cursor is about to be replaced by
+	// the next mouse-move: a field you can type into while its content is being
+	// rewritten thirty times a second is a field that will eat an edit. Dimmed
+	// and italic because "0.42" that came from interpolating two keys is not
+	// the same fact as "0.42" that is stored on the clip, and the panel would
+	// otherwise present them identically.
+	void setPreviewing(bool on);
+	bool previewing() const { return previewing_; }
+
 private:
 	struct Row;
+	void applyPreviewStyle();
+	bool previewing_ = false;
 
 	void rebuild();
 	void pushValues();

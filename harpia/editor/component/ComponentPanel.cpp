@@ -555,6 +555,48 @@ void ComponentPanel::rebuild()
 				     i + 1 < view_.shared.size(), &c.inMs, &c.outMs));
 	}
 	pushValues();
+	applyPreviewStyle(); // a rebuild makes new widgets; the state outlives them
+}
+
+void ComponentPanel::setPreviewing(bool on)
+{
+	if (previewing_ == on)
+		return;
+	previewing_ = on;
+	applyPreviewStyle();
+}
+
+void ComponentPanel::applyPreviewStyle()
+{
+	// The VALUE controls only. The component's own enable box, its arrows and
+	// its remove button are not readings of an instant -- they belong to the
+	// clip whatever frame you are looking at -- and greying the whole panel
+	// would read as "the Inspector has stopped working" rather than as "these
+	// numbers are from the frame under your pointer".
+	for (Row *r : rows_) {
+		if (!r)
+			continue;
+		for (ParamSlider *s : r->sliders)
+			if (s)
+				s->setEnabled(!previewing_);
+		for (QCheckBox *c : r->checks)
+			if (c)
+				c->setEnabled(!previewing_);
+		for (QPushButton *b : r->swatches)
+			if (b)
+				b->setEnabled(!previewing_);
+		// The keyframe diamond writes AT THE PLAYHEAD, which is not the frame
+		// being shown -- so while previewing it would key the wrong instant.
+		for (QPushButton *b : r->keyBtns)
+			if (b)
+				b->setEnabled(!previewing_);
+		for (QLabel *l : r->labels)
+			if (l) {
+				QFont f = l->font();
+				f.setItalic(previewing_);
+				l->setFont(f);
+			}
+	}
 }
 
 void ComponentPanel::pushValues()

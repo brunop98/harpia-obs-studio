@@ -1922,7 +1922,16 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	setFocus();
 	// The hover marker tracks the preview, which stops following the pointer the
 	// moment a drag starts — leaving it drawn would point at nothing.
+	//
+	// And the hover is genuinely OVER: say so, the same as leaving the widget
+	// does. Anything following the hovered frame rather than the playhead --
+	// the preview, and the Inspector's read-only readout of it -- has to be
+	// released here, or a press leaves it describing whichever frame the
+	// pointer last crossed for as long as the drag lasts.
+	const bool wasHovering = hoverMs_ >= 0;
 	hoverMs_ = -1;
+	if (wasHovering)
+		emit hoverScrubEnded();
 
 	// Grab the timeline and slide it. Tested first, before the ruler and before
 	// anything under the pointer, because it has to work from anywhere: a pan

@@ -491,6 +491,19 @@ private:
 	QComboBox *previewQualityCombo_ = nullptr;
 	// Size to render the preview at, for a given project canvas.
 	QSize previewRenderSize(QSize canvas) const;
+	// The instant the INSPECTOR is describing. -1 = the playhead, which is the
+	// normal case; while the pointer is over the timeline it is the frame under
+	// the pointer, so the numbers agree with the picture the preview is already
+	// showing there.
+	//
+	// Display paths read inspectTimeMs(); EDIT paths keep asking for the
+	// playhead outright. That split is the whole safety property: hovering must
+	// never move where a keyframe would be written.
+	qint64 hoverInspectMs_ = -1;
+	qint64 inspectTimeMs() const;
+	void highlightKeyAt(qint64 atMs);
+	void setHoverInspect(qint64 outMs); // -1 to go back to the playhead
+
 	bool autoKeyframe_ = false; // record a keyframe on every transform edit
 	void updateInfoLabel();
 	bool hasUnsavedEdits() const;

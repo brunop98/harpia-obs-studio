@@ -38,6 +38,7 @@ class QListWidgetItem;
 class QProgressDialog;
 class QPushButton;
 class QSlider;
+class QTabWidget;
 class QSplitter;
 class QStackedWidget;
 class QTimer;
@@ -530,6 +531,7 @@ private:
 	void buildEmptyPanel();
 	void layOutEmptyPanel();
 	void updateEmptyState();
+	bool projectIsEmpty() const;
 	EditorSource *sourceById(int id);
 	// The source already open for this file, or nullptr. Two callers were
 	// writing this loop themselves and both rebuilt a QFileInfo for the SEARCH
@@ -567,6 +569,14 @@ private:
 	// Right-side inspector (fills the dead space beside portrait previews):
 	// live properties of the selected cut / trim range. Collapsible.
 	QWidget *inspector_ = nullptr;
+	// The Inspector's two tabs. The panel holds two different kinds of thing --
+	// the project's own facts and settings, true whatever is selected, and the
+	// properties of the clip being worked on -- and stacked in one column the
+	// clip you had just clicked sat below a screenful of project metadata.
+	QTabWidget *insTabs_ = nullptr;
+	QLabel *clipEmpty_ = nullptr; // "select a clip", shown when nothing is
+	static constexpr int kInsTabProject = 0;
+	static constexpr int kInsTabClip = 1;
 	QPushButton *inspectorBtn_ = nullptr; // toolbar toggle (show/hide the panel)
 	QLabel *inspTitle_ = nullptr;
 	QLabel *inspInMs_ = nullptr;

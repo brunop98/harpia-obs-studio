@@ -516,6 +516,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		// Moving or trimming a clip on the timeline changes where the playhead
 		// falls inside it, so the pose and keyframe readout the Inspector shows
 		// have to follow along live.
+		// A clip can arrive without a source -- a caption, a still, an effect --
+		// so whether the project is empty is a question about the TIMELINE too,
+		// and it is only ever answered here for those.
+		updateEmptyState();
 		syncClipInspector();
 		// The composed picture depends on the clips, so a change to them has to
 		// re-render it. Dragging and trimming got away without this because the
@@ -537,10 +541,16 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// Ctrl+Z look broken.
 	connect(timelineView_, &TimelineView::editCommitted, this,
 		&VideoEditorWindow::commitSnapshot);
-	connect(timelineView_, &TimelineView::selectionChanged, this, [this](int, int) {
+	connect(timelineView_, &TimelineView::selectionChanged, this, [this](int track, int clip) {
 		syncPreviewTransformTarget();
 		updateInspector();
 		refreshKeyframeEditor(); // it follows the selection
+		// Clicking a clip is a statement that you want to work on it, so the
+		// panel follows. Only on SELECT: switching back on a deselect would
+		// yank the tab away every time you clicked empty timeline, and going
+		// back to Project is one click that then stays put.
+		if (insTabs_ && track >= 0 && clip >= 0)
+			insTabs_->setCurrentIndex(kInsTabClip);
 	});
 	// "Show in inspector" from a clip's right-click menu (any mode).
 	connect(timelineView_, &TimelineView::filesDropped, this,
@@ -907,34 +917,79 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		QStringLiteral("font-weight:bold; color:#e8eaed; padding:8px 10px 2px 10px;"));
 	insOuter->addWidget(insHeader);
 
+	// Two tabs, because the panel holds two different KINDS of thing and they
+	// were stacked in one column: the project's own facts and settings, which
+	// are true whatever is selected, and the properties of the clip you are
+	// working on. Stacked, the clip you had just clicked was below a screenful
+	// of project metadata, and every selection meant scrolling past it again.
+	insTabs_ = new QTabWidget(inspector_);
+	insTabs_->setDocumentMode(true);
+	insOuter->addWidget(insTabs_, 1);
+
+	// Each tab scrolls on its own. One shared scroll area would carry the
+	// project tab's position into the clip tab, which lands you half-way down a
+	// panel you have just opened.
+	//
 	// Project, Effects, clip transform, keyframes, text and script add up to far
 	// more than a window's height. Without a scroll area the layout squeezes the
 	// sections past their minimums and they overlap, so the content lives in one.
-	auto *insScroll = new QScrollArea(inspector_);
-	insScroll->setWidgetResizable(true);
-	insScroll->setFrameShape(QFrame::NoFrame);
-	// AsNeeded, not AlwaysOff: the panel can be dragged narrower than a row's
-	// minimum width, and with no bar those controls would just be cut off.
-	insScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-	insScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-	insScroll->viewport()->setAutoFillBackground(false);
-	insScroll->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; }"));
-	// The wheel scrolls this panel; it never edits what happens to be under the
-	// pointer. See ui/WheelGuard.hpp -- a spin box quietly taking a scroll meant
-	// for the panel is a value changed without anyone deciding to change it.
-	new WheelGuard(insScroll, this);
-	insOuter->addWidget(insScroll, 1);
+	auto mkTab = [this](const QString &title) {
+		auto *scroll = new QScrollArea(insTabs_);
+		scroll->setWidgetResizable(true);
+		scroll->setFrameShape(QFrame::NoFrame);
+		// AsNeeded, not AlwaysOff: the panel can be dragged narrower than a
+		// row's minimum width, and with no bar those controls would just be cut
+		// off.
+		scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+		scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+		scroll->viewport()->setAutoFillBackground(false);
+		scroll->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; }"));
+		// The wheel scrolls this panel; it never edits what happens to be under
+		// the pointer. See ui/WheelGuard.hpp -- a spin box quietly taking a
+		// scroll meant for the panel is a value changed without anyone deciding
+		// to change it.
+		new WheelGuard(scroll, this);
+		auto *content = new QWidget(scroll);
+		content->setAutoFillBackground(false);
+		scroll->setWidget(content);
+		auto *lay = new QVBoxLayout(content);
+		lay->setContentsMargins(10, 6, 10, 8);
+		lay->setSpacing(6);
+		insTabs_->addTab(scroll, title);
+		return lay;
+	};
 
-	auto *insContent = new QWidget(insScroll);
-	insContent->setAutoFillBackground(false);
-	insScroll->setWidget(insContent);
-	auto *insLayout = new QVBoxLayout(insContent);
+	QVBoxLayout *projLayout = mkTab(QStringLiteral("Project"));
+	QVBoxLayout *insLayout = mkTab(QStringLiteral("Clip"));
+	// The tab stays there with nothing selected rather than disappearing: a tab
+	// strip that changes shape as you work is a strip you cannot aim at.
+	clipEmpty_ = new QLabel(QStringLiteral("Select a clip to see its properties."), this);
+	clipEmpty_->setWordWrap(true);
+	clipEmpty_->setStyleSheet(QStringLiteral("color:#7f858e; padding:10px 2px;"));
+	insLayout->addWidget(clipEmpty_);
+	// The Dev panel tunes the inspector's margins through this; the clip tab is
+	// the one with the rows it is talking about.
 	insContentLayout_ = insLayout;
-	insLayout->setContentsMargins(10, 6, 10, 8);
-	insLayout->setSpacing(6);
 
-	// Project-level metadata + actions (collapsible, above the per-clip panels).
-	buildProjectInspector(insLayout);
+	// Come back to the tab you were last on, like the Dev panel does.
+	{
+		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		const int want = st.value(QStringLiteral("editor/inspectorTab"), kInsTabProject).toInt();
+		if (want >= 0 && want < insTabs_->count())
+			insTabs_->setCurrentIndex(want);
+	}
+	connect(insTabs_, &QTabWidget::currentChanged, this, [this](int i) {
+		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		st.setValue(QStringLiteral("editor/inspectorTab"), i);
+		// The clip tab's panels are only synced when something asks; arriving on
+		// it by hand is one of those times.
+		if (i == kInsTabClip)
+			syncClipInspector();
+	});
+
+	// Project-level metadata + actions.
+	buildProjectInspector(projLayout);
+	projLayout->addStretch(1);
 	// The project-level "Shader effects" panel used to live here. A shader is a
 	// component now ("Add Component -> Shader"), so it is added to a clip -- or to
 	// an effect clip spanning the timeline, which is what the old whole-output
@@ -2016,9 +2071,26 @@ void VideoEditorWindow::layOutEmptyPanel()
 	emptyPanel_->setGeometry((canvas_->width() - w) / 2, (canvas_->height() - h) / 2, w, h);
 }
 
+// Is there NOTHING in this project? Not "is the media pool empty" -- that was
+// the old test, and it is wrong for everything the editor can make on its own.
+//
+// A caption, a still, an effect clip: none of them adds a source, so a project
+// with a text clip on the timeline reported itself empty and left "Nothing
+// loaded yet" floating over the caption it was busy rendering.
+bool VideoEditorWindow::projectIsEmpty() const
+{
+	if (!sources_.empty())
+		return false;
+	if (timelineView_)
+		for (const TlTrack &t : timelineView_->model().tracks)
+			if (!t.clips.isEmpty())
+				return false;
+	return true;
+}
+
 void VideoEditorWindow::updateEmptyState()
 {
-	const bool empty = sources_.empty();
+	const bool empty = projectIsEmpty();
 	if (emptyPanel_) {
 		emptyPanel_->setVisible(empty);
 		layOutEmptyPanel();
@@ -5255,6 +5327,11 @@ void VideoEditorWindow::syncClipInspector()
 	const bool onTransition = fullEdit() && timelineView_->transitionSelected();
 	const TlClip *c = (fullEdit() && !onTransition) ? timelineView_->selectedClipPtr() : nullptr;
 	clipBox_->setVisible(c != nullptr);
+	// The tab is never blank: with nothing selected it says so, rather than
+	// showing an empty column that reads as a panel that failed to load.
+	if (clipEmpty_)
+		clipEmpty_->setVisible(!c && !onTransition &&
+				       (!componentPanel_ || componentPanel_->isHidden()));
 	if (!c)
 		return;
 

@@ -268,6 +268,12 @@ const PropDef *defFor(const ComponentType &type, const QString &key);
 // toDouble() on it would write black and look like the key did not take.
 double propKeyValue(const PropDef &def, const QVariant &v);
 
+// One property's keyframe track, resolved at `tMs`. Public because the keyframe
+// editor draws a component property's curve with it -- the shape it draws has
+// to be the shape the renderer produces, easing, held Bools, per-channel colour
+// and all, and that is only guaranteed if it is the same function.
+QVariant valueFromKeys(const PropDef &d, const QVector<PropKey> &keys, qint64 tMs);
+
 QVariant propAt(const ComponentType &type, const ComponentInstance &inst, const QString &key,
 		qint64 tMs);
 

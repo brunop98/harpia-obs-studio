@@ -433,6 +433,21 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF $AVCF \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK"/moc_dp_*.cpp \
 	-o "$WORK/devpanelreset_test" $LF $AVLF
 
+# The keyframe editor's tabs: one per transform channel, plus one for every
+# component property that actually has keys -- and none for the ones that do not.
+"$MOC" -I"$H" "$H/editor/timeline/KeyframeEditor.hpp" -o "$WORK/moc_kf_KeyframeEditor.cpp"
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
+	"$HERE/keyframetabs_test.cpp" "$H/editor/timeline/KeyframeEditor.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/shader/ShaderRenderer.cpp" "$H/editor/script/TransformScript.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/component/ShaderComponent.cpp" "$H/editor/component/ScriptComponent.cpp" \
+	"$H/editor/component/TransformScriptComponent.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_kf_KeyframeEditor.cpp" \
+	-o "$WORK/keyframetabs_test" $LF
+
 # Does the Display dropdown point at the monitor the recording area lives on?
 # Two independent lists (OBS's and Qt's) name the same displays.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -504,6 +519,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/assetcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectarea_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/gutterspill_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinekeys_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/keyframetabs_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/splitseam_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinepan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineperf_test" || rc=1

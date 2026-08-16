@@ -75,6 +75,8 @@ double interpolate(const QVector<PropKey> &keys, qint64 tMs)
 		return keys[s.i].v;
 	return keys[s.i].v + (keys[s.i + 1].v - keys[s.i].v) * s.u;
 }
+} // namespace
+
 
 // One property's value at one instant, from its keys.
 //
@@ -112,6 +114,8 @@ QVariant valueFromKeys(const PropDef &d, const QVector<PropKey> &keys, qint64 tM
 	}
 	return coerce(d, interpolate(keys, tMs));
 }
+
+namespace {
 
 // One property's value, with its definition already in hand.
 //

@@ -556,6 +556,154 @@ inline int stepKeyIndex(const QVector<TlKeyframe> &keys, qint64 relMs, int dir)
 	return keys.size() > 1 ? keys.size() - 1 : -1;
 }
 
+// Every moment this clip has a keyframe at, whatever KIND of keyframe it is.
+//
+// A clip can be animated four different ways -- the pose (`keys`), an effect's
+// parameters (`fx.keys`), a Spotlight area's pose (`fx.spot`), and any keyed
+// component property -- and until now only the first was visible on the
+// timeline. A clip animated entirely through an effect or a component read as
+// not animated at all.
+//
+// Times are CLIP-RELATIVE output ms, which is what every caller draws and hit
+// tests against. Spotlight keys are the exception in storage -- they are
+// absolute output time (see SpotKey) -- so they are converted here, once,
+// rather than at each of the three call sites.
+//
+// A callback rather than a returned vector because the magnet calls this for
+// every clip in the project on every mouse-move of a drag; clipKeyTimes()
+// below is the allocating convenience for the paths that want a list.
+template <typename F> inline void forEachClipKeyTime(const TlClip &c, F &&fn)
+{
+	const qint64 dur = c.outDurationMs();
+	const auto emit1 = [&](qint64 t) {
+		if (t >= 0 && t <= dur)
+			fn(t);
+	};
+	for (const TlKeyframe &k : c.keys)
+		emit1(k.tMs);
+	for (const FxKey &k : c.fx.keys)
+		emit1(k.tMs);
+	for (const SpotMask &m : c.fx.spot.masks)
+		for (const SpotKey &k : m.keys)
+			emit1(k.tMs - c.outStartMs); // stored in OUTPUT time
+	for (const ComponentInstance &ci : c.components)
+		for (auto it = ci.keys.cbegin(); it != ci.keys.cend(); ++it)
+			for (const PropKey &k : *it)
+				emit1(k.tMs);
+}
+
+// Is this clip animated at all? The cheap question, for the paint path that
+// asks it of every clip before deciding whether the clip is worth drawing
+// anything inside -- gathering and sorting the times to find out would be work
+// done for the answer "no".
+inline bool clipHasKeys(const TlClip &c)
+{
+	bool any = false;
+	forEachClipKeyTime(c, [&](qint64) { any = true; });
+	return any;
+}
+
+// The same times, sorted and de-duplicated: one entry per MOMENT, however many
+// channels are keyed there. That is the unit the timeline shows and moves --
+// a column of keys, not one key of one channel.
+inline QVector<qint64> clipKeyTimes(const TlClip &c)
+{
+	QVector<qint64> out;
+	forEachClipKeyTime(c, [&](qint64 t) { out.append(t); });
+	std::sort(out.begin(), out.end());
+	out.erase(std::unique(out.begin(), out.end()), out.end());
+	return out;
+}
+
+// Move every key at `fromMs` to `toMs` (both clip-relative output ms).
+//
+// Refuses -- and reports false -- when another key column already sits at the
+// destination. Two columns landing on one instant would silently merge channels
+// that were separate, and there is no undo for "which of these two keys was the
+// one I dragged". Refusing turns a neighbour into a wall the drag stops at,
+// which is what a clip hitting another clip already does.
+inline bool retimeClipKeys(TlClip &c, qint64 fromMs, qint64 toMs)
+{
+	const qint64 dur = c.outDurationMs();
+	toMs = std::clamp<qint64>(toMs, 0, dur);
+	if (toMs == fromMs)
+		return false;
+	bool occupied = false;
+	forEachClipKeyTime(c, [&](qint64 t) {
+		if (t == toMs)
+			occupied = true;
+	});
+	if (occupied)
+		return false;
+
+	bool moved = false;
+	for (TlKeyframe &k : c.keys)
+		if (k.tMs == fromMs) {
+			k.tMs = toMs;
+			moved = true;
+		}
+	std::sort(c.keys.begin(), c.keys.end(),
+		  [](const TlKeyframe &a, const TlKeyframe &b) { return a.tMs < b.tMs; });
+
+	for (FxKey &k : c.fx.keys)
+		if (k.tMs == fromMs) {
+			k.tMs = toMs;
+			moved = true;
+		}
+	std::sort(c.fx.keys.begin(), c.fx.keys.end(),
+		  [](const FxKey &a, const FxKey &b) { return a.tMs < b.tMs; });
+
+	for (SpotMask &m : c.fx.spot.masks) {
+		for (SpotKey &k : m.keys)
+			if (k.tMs - c.outStartMs == fromMs) {
+				k.tMs = c.outStartMs + toMs;
+				moved = true;
+			}
+		std::sort(m.keys.begin(), m.keys.end(),
+			  [](const SpotKey &x, const SpotKey &y) { return x.tMs < y.tMs; });
+	}
+
+	for (ComponentInstance &ci : c.components)
+		for (auto it = ci.keys.begin(); it != ci.keys.end(); ++it) {
+			for (PropKey &k : *it)
+				if (k.tMs == fromMs) {
+					k.tMs = toMs;
+					moved = true;
+				}
+			std::sort(it->begin(), it->end(),
+				  [](const PropKey &a, const PropKey &b) { return a.tMs < b.tMs; });
+		}
+	return moved;
+}
+
+// Delete every key at `tMs` (clip-relative output ms), of every kind. Returns
+// true if anything went.
+//
+// An emptied property key list is erased rather than left behind: propAt()
+// treats "has a keys entry" as "is animated", so an empty vector would leave
+// the property looking keyed with nothing in it.
+inline bool removeClipKeysAt(TlClip &c, qint64 tMs)
+{
+	bool gone = false;
+	const auto cut = [&](auto &vec, auto pred) {
+		const int before = vec.size();
+		vec.erase(std::remove_if(vec.begin(), vec.end(), pred), vec.end());
+		if (vec.size() != before)
+			gone = true;
+	};
+	cut(c.keys, [&](const TlKeyframe &k) { return k.tMs == tMs; });
+	cut(c.fx.keys, [&](const FxKey &k) { return k.tMs == tMs; });
+	for (SpotMask &m : c.fx.spot.masks)
+		cut(m.keys, [&](const SpotKey &k) { return k.tMs - c.outStartMs == tMs; });
+	for (ComponentInstance &ci : c.components) {
+		for (auto it = ci.keys.begin(); it != ci.keys.end();) {
+			cut(*it, [&](const PropKey &k) { return k.tMs == tMs; });
+			it = it->isEmpty() ? ci.keys.erase(it) : std::next(it);
+		}
+	}
+	return gone;
+}
+
 // Hand a split clip's fades to the two halves it became: the head keeps the
 // fade-in, the tail keeps the fade-out, neither inherits the other's, and both
 // are pulled in to fit. Shared by the two split paths so a context-menu split

@@ -211,6 +211,16 @@ public:
 		return headerToggleRect(track, h);
 	}
 
+	// The magnet, asked directly. Snapping is only observable through a drag,
+	// and a test that drove a drag to check WHICH candidate won would be
+	// testing the drag as much as the candidate list.
+	qint64 snapForTest(qint64 ms) const { return snap(ms, -1, -1); }
+	// Where a key's pip is, and what is under a point. Both for tests: the pip
+	// has to sit on its key's time, and a test computing the rect itself would
+	// be checking its own arithmetic instead of the widget's.
+	QPoint keyPipCenterForTest(int track, int clip, qint64 tMs) const;
+	bool keyPipHitForTest(const QPoint &p, int *track, int *clip, qint64 *tMs) const;
+
 	const EditorColors &colors() const { return cl_; }
 	void setColors(const EditorColors &c)
 	{
@@ -382,6 +392,33 @@ private:
 	// held) rounded to the timeline's frame grid.
 	int fadeMsForX(const TlClip &c, const QRect &r, int x, FadeSide side, bool fine) const;
 
+	// ---- keyframe pips (the diamonds along a clip's top edge) ----
+	// One pip per MOMENT the clip has keys at, whatever kind they are (see
+	// forEachClipKeyTime). They used to be paint-only: an animated clip said so
+	// and that was all you could do with it -- retiming a key meant a separate
+	// window. Now they are things you can click, drag and delete, on the
+	// timeline where the rest of the edit happens.
+	struct KeyHit {
+		int track = -1;
+		int clip = -1;
+		qint64 tMs = -1; // clip-relative output ms of the key column
+		bool valid() const { return track >= 0 && clip >= 0 && tMs >= 0; }
+		bool operator==(const KeyHit &o) const
+		{
+			return track == o.track && clip == o.clip && tMs == o.tMs;
+		}
+	};
+	// The pip's centre for a key at `tMs` inside the clip drawn in `r`.
+	QPoint keyPipCenter(const QRect &r, qint64 tMs, qint64 durMs) const;
+	KeyHit keyPipAt(const QPoint &p) const;
+	void drawKeyPips(QPainter &p, int track, int clip) const;
+	// Scratch for the paint and hit-test paths, reused rather than reallocated:
+	// both run per clip, the second on every mouse-move.
+	mutable QVector<qint64> keyTimes_;
+	KeyHit keyDrag_;      // the pip being dragged (invalid when none)
+	KeyHit keyHover_;     // the pip under the pointer, lit so the grab is honest
+	qint64 keyDragFrom_ = -1; // where that pip started, so a drag can be undone
+
 	int clipAtPoint(const QPoint &p, int *trackOut) const; // clip index or -1
 	// The overlap under a point: the INCOMING clip's index, or -1.
 	int transitionAtPoint(const QPoint &p, int *trackOut) const;
@@ -480,7 +517,7 @@ private:
 	// Pan drags the VIEW under a still timeline, the opposite of Scrub, which
 	// drags the playhead across a still view. Both are "navigating", and mixing
 	// them up is why it needs its own mode rather than a flag on Scrub.
-	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan };
+	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan, KeyDrag };
 	Mode mode_ = Mode::None;
 	QPoint pressPos_;
 	bool dragMoved_ = false;
@@ -504,6 +541,11 @@ private:
 	EditorColors cl_;
 
 	void showClipMenu(int track, int clip, const QPoint &globalPos, qint64 atOutMs);
+	// The right-click menu on a keyframe pip: go to it, or delete it. Its own
+	// menu rather than entries on the clip's, because what is under the cursor
+	// is one MOMENT of one clip, and half the clip menu (split, export, make a
+	// transition) has nothing to do with it.
+	void showKeyMenu(const KeyHit &hit, const QPoint &globalPos);
 	void splitClip(int track, int clip, qint64 atOutMs);
 	void emitScrubAt(qint64 outMs);
 };

@@ -1078,6 +1078,12 @@ qint64 TimelineView::snap(qint64 ms, int ignoreTrack, int ignoreClip, bool *hit)
 	consider(0);
 	if (playheadMs_ >= 0)
 		consider(playheadMs_);
+	// Markers. A marker is a moment you noted ON PURPOSE -- the beat, the click,
+	// the word -- so it is the strongest thing on the timeline to line something
+	// up with. Until it was a candidate here it was decoration: you could see
+	// the flag and drag a clip straight through it.
+	for (const qint64 mk : model_.markers)
+		consider(mk);
 	// Every clip on every track is a candidate -- the magnet is deliberately
 	// cross-track, so a cut on V2 can be lined up with one on V1.
 	for (int ti = 0; ti < model_.tracks.size(); ++ti)
@@ -1090,8 +1096,19 @@ qint64 TimelineView::snap(qint64 ms, int ignoreTrack, int ignoreClip, bool *hit)
 			if (mode_ == Mode::Move && dragStarts_.size() > 1 &&
 			    dragStarts_.contains(qMakePair(ti, ci)))
 				continue;
-			consider(model_.tracks[ti].clips[ci].outStartMs);
-			consider(model_.tracks[ti].clips[ci].outEndMs());
+			const TlClip &cc = model_.tracks[ti].clips[ci];
+			consider(cc.outStartMs);
+			consider(cc.outEndMs());
+			// Keyframes, of every kind. Lining a cut up with the moment a zoom
+			// lands is the same job as lining it up with a marker.
+			//
+			// Not the keys of the clip whose OWN key is being dragged: those are
+			// moving with the gesture (the one under the cursor is at the cursor,
+			// so it would win every candidate and the key would never move), and
+			// dropping one key onto another is a merge, not an alignment.
+			if (mode_ == Mode::KeyDrag && ti == keyDrag_.track && ci == keyDrag_.clip)
+				continue;
+			forEachClipKeyTime(cc, [&](qint64 t) { consider(cc.outStartMs + t); });
 		}
 	if (hit)
 		*hit = (bestD <= tol);
@@ -1243,7 +1260,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 		isFx ||
 		(roomInside && (((video || isImage) && srcThumbs_.contains(c.sourceId)) ||
 				!c.peaks.isEmpty() ||
-				(!dragging && !c.keys.isEmpty()) || clipTakesFades(track, clip))) ||
+				(!dragging && clipHasKeys(c)) || clipTakesFades(track, clip))) ||
 		(!dragging && r.width() >= 28);
 	if (!wantsInside) {
 		p.setPen(sel ? QPen(cl_.accent, 2) : QPen(cl_.border, 1));
@@ -1341,24 +1358,8 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 			p.drawLine(x, midY - hh, x, midY + hh);
 		}
 	}
-	// Keyframe diamonds along the top edge, so an animated clip reads as such.
-	if (!dragging && !c.keys.isEmpty() && c.outDurationMs() > 0) {
-		p.setPen(Qt::NoPen);
-		p.setBrush(QColor(0xff, 0xd4, 0x4f));
-		for (const TlKeyframe &k : c.keys) {
-			const double f = std::clamp(double(k.tMs) / double(c.outDurationMs()), 0.0, 1.0);
-			const int kx = r.x() + int(f * r.width());
-			const int ky = r.y() + 5;
-			QPainterPath d;
-			d.moveTo(kx, ky - 4);
-			d.lineTo(kx + 4, ky);
-			d.lineTo(kx, ky + 4);
-			d.lineTo(kx - 4, ky);
-			d.closeSubpath();
-			AaOn aa(p);
-			p.drawPath(d);
-		}
-	}
+	if (!dragging)
+		drawKeyPips(p, track, clip);
 
 	// Effect clip: a marker glyph and the effect's name, so what it does is
 	// readable without selecting it. No filmstrip, no waveform -- it has neither.
@@ -1488,6 +1489,119 @@ TimelineView::FadeHit TimelineView::fadeHandleAt(const QPoint &pt) const
 		}
 	}
 	return {};
+}
+
+namespace {
+// The pip's own geometry. Grab is generous against draw, for the same reason
+// the fade grip is: a marker you can see but cannot reliably hit is worse than
+// no marker, and these sit in the top few pixels of a clip that is also
+// draggable.
+constexpr int kPipDraw = 4;   // half-width as drawn
+constexpr int kPipGrabX = 6;  // half-width you can click
+constexpr int kPipBandY = 11; // how far down the clip the pip band reaches
+constexpr int kPipMinClipW = 12;
+} // namespace
+
+QPoint TimelineView::keyPipCenter(const QRect &r, qint64 tMs, qint64 durMs) const
+{
+	const double f = durMs > 0 ? std::clamp(double(tMs) / double(durMs), 0.0, 1.0) : 0.0;
+	return QPoint(r.x() + int(f * r.width()), r.y() + 5);
+}
+
+void TimelineView::drawKeyPips(QPainter &p, int track, int clip) const
+{
+	const TlClip &c = model_.tracks[track].clips[clip];
+	const qint64 dur = c.outDurationMs();
+	if (dur <= 0)
+		return;
+	const QRect r = clipRect(track, clip);
+	if (r.width() < kPipMinClipW)
+		return;
+	keyTimes_ = clipKeyTimes(c);
+	if (keyTimes_.isEmpty())
+		return;
+
+	p.setPen(Qt::NoPen);
+	const AaOn aa(p);
+	for (const qint64 t : keyTimes_) {
+		const QPoint ctr = keyPipCenter(r, t, dur);
+		// The one being dragged is drawn brighter and a size up, so the pip
+		// under the cursor is unmistakably the one that is moving -- on a dense
+		// clip the neighbours are only a few pixels away.
+		const KeyHit me{track, clip, t};
+		const bool held = (keyDrag_.valid() && keyDrag_ == me) ||
+				  (keyHover_.valid() && keyHover_ == me);
+		const int h = held ? kPipDraw + 2 : kPipDraw;
+		p.setBrush(held ? QColor(0xff, 0xff, 0xff) : QColor(0xff, 0xd4, 0x4f));
+		QPainterPath d;
+		d.moveTo(ctr.x(), ctr.y() - h);
+		d.lineTo(ctr.x() + h, ctr.y());
+		d.lineTo(ctr.x(), ctr.y() + h);
+		d.lineTo(ctr.x() - h, ctr.y());
+		d.closeSubpath();
+		p.drawPath(d);
+	}
+}
+
+TimelineView::KeyHit TimelineView::keyPipAt(const QPoint &pt) const
+{
+	// Same shape as fadeHandleAt: one lane can hold the hit, so the search is
+	// that lane's clips rather than the project's.
+	const SpanGuard span(this);
+	const int lane = laneAtY(pt.y());
+	if (lane < 0)
+		return {};
+	for (int ci = 0; ci < model_.tracks[lane].clips.size(); ++ci) {
+		const TlClip &c = model_.tracks[lane].clips[ci];
+		const qint64 dur = c.outDurationMs();
+		if (dur <= 0)
+			continue;
+		const QRect r = clipRect(lane, ci);
+		if (r.width() < kPipMinClipW)
+			continue;
+		// Only the top band belongs to the pips; everything below still moves
+		// and trims the clip exactly as it did.
+		if (pt.y() < r.top() || pt.y() > r.top() + kPipBandY)
+			continue;
+		if (pt.x() < r.left() - kPipGrabX || pt.x() > r.right() + kPipGrabX)
+			continue;
+		KeyHit best;
+		int bestD = kPipGrabX + 1;
+		forEachClipKeyTime(c, [&](qint64 t) {
+			const int d = std::abs(pt.x() - keyPipCenter(r, t, dur).x());
+			// `<` not `<=`: two keys the same distance away means the earlier
+			// one wins, which is stable rather than dependent on the order the
+			// four key stores happen to be visited in.
+			if (d <= kPipGrabX && d < bestD) {
+				bestD = d;
+				best = KeyHit{lane, ci, t};
+			}
+		});
+		if (best.valid())
+			return best;
+	}
+	return {};
+}
+
+QPoint TimelineView::keyPipCenterForTest(int track, int clip, qint64 tMs) const
+{
+	if (track < 0 || track >= model_.tracks.size() || clip < 0 ||
+	    clip >= model_.tracks[track].clips.size())
+		return {};
+	const TlClip &c = model_.tracks[track].clips[clip];
+	return keyPipCenter(clipRect(track, clip), tMs, c.outDurationMs());
+}
+
+bool TimelineView::keyPipHitForTest(const QPoint &p, int *track, int *clip, qint64 *tMs) const
+{
+	const KeyHit h = keyPipAt(p);
+	if (track)
+		*track = h.track;
+	if (clip)
+		*clip = h.clip;
+	if (tMs)
+		*tMs = h.tMs;
+	return h.valid();
 }
 
 int TimelineView::fadeMsForX(const TlClip &c, const QRect &r, int x, FadeSide side,
@@ -1882,6 +1996,10 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	const int clip = clipAtPoint(pos, &track);
 
 	if (e->button() == Qt::RightButton) {
+		if (const KeyHit kh = keyPipAt(pos); kh.valid()) {
+			showKeyMenu(kh, e->globalPosition().toPoint());
+			return;
+		}
 		if (clip >= 0) {
 			selTrack_ = track;
 			selClip_ = clip;
@@ -1916,6 +2034,31 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 			update();
 			return;
 		}
+	}
+
+	// A keyframe pip wins over the clip under it, for the same reason a fade
+	// grip does: it is drawn inside the clip, and without this the only thing
+	// the top edge could do was start a trim.
+	if (const KeyHit kh = keyPipAt(pos); kh.valid() && !model_.tracks[kh.track].locked) {
+		keyDrag_ = kh;
+		keyDragFrom_ = kh.tMs;
+		mode_ = Mode::KeyDrag;
+		pressPos_ = pos;
+		dragMoved_ = false;
+		snapLineMs_ = -1;
+		dragTrack_ = kh.track;
+		dragClip_ = kh.clip;
+		// Selecting the clip too: the Inspector is where the key's VALUES are,
+		// and grabbing a key without its clip selected shows you a moving
+		// diamond and no numbers.
+		if (!isSelected(kh.track, kh.clip)) {
+			extraSel_.clear();
+			selTrack_ = kh.track;
+			selClip_ = kh.clip;
+			emit selectionChanged(selTrack_, selClip_);
+		}
+		update();
+		return;
 	}
 
 	// A fade grip wins over the clip under it — it sits inside the clip, and
@@ -2037,6 +2180,38 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 	if (mode_ == Mode::Scrub) {
 		playheadMs_ = xToMs(pos.x());
 		emitScrubAt(playheadMs_);
+		update();
+		return;
+	}
+
+	if (mode_ == Mode::KeyDrag && keyDrag_.valid() && (e->buttons() & Qt::LeftButton)) {
+		if (!dragMoved_ && (pos - pressPos_).manhattanLength() > 3)
+			dragMoved_ = true;
+		if (!dragMoved_)
+			return;
+		if (keyDrag_.track >= model_.tracks.size() ||
+		    keyDrag_.clip >= model_.tracks[keyDrag_.track].clips.size())
+			return;
+		TlClip &c = model_.tracks[keyDrag_.track].clips[keyDrag_.clip];
+		// The magnet works in OUTPUT time, where the markers, the playhead and
+		// every other clip's edges are; the key is stored clip-relative, so the
+		// conversion happens here rather than in three places inside snap().
+		const bool fine = e->modifiers() & Qt::ShiftModifier;
+		bool hit = false;
+		qint64 wantOut = xToMs(pos.x());
+		if (!fine)
+			wantOut = snap(wantOut, -1, -1, &hit);
+		const qint64 want = std::clamp<qint64>(wantOut - c.outStartMs, 0, c.outDurationMs());
+		if (retimeClipKeys(c, keyDrag_.tMs, want)) {
+			keyDrag_.tMs = want;
+			snapLineMs_ = hit ? c.outStartMs + want : -1;
+			// Live, like a fade drag: the preview and the Inspector's key list
+			// follow the diamond instead of jumping when it is dropped.
+			emit clipsChanged();
+			emit selectionChanged(keyDrag_.track, keyDrag_.clip);
+		}
+		QToolTip::showText(e->globalPosition().toPoint(),
+				   QStringLiteral("%1 s").arg(keyDrag_.tMs / 1000.0, 0, 'f', 2), this);
 		update();
 		return;
 	}
@@ -2186,12 +2361,22 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 	}
 	updateHoverSeam(pos);
 
+	// A pip under the cursor claims the cursor shape too: it sits in the same
+	// top band as the trim handle, and an arrow there promises a trim.
+	const KeyHit kh = keyPipAt(pos);
+	if (!(kh == keyHover_)) {
+		keyHover_ = kh;
+		update();
+	}
+
 	int track = -1;
 	const int clip = clipAtPoint(pos, &track);
 	if (clip >= 0) {
 		const QRect r = clipRect(track, clip);
 		const int edge = std::min(8, r.width() / 3);
-		if (fh.valid())
+		if (kh.valid())
+			setCursor(Qt::SizeHorCursor);
+		else if (fh.valid())
 			setCursor(Qt::SizeHorCursor);
 		else if (pos.x() - r.left() <= edge || r.right() - pos.x() <= edge)
 			setCursor(Qt::SizeHorCursor);
@@ -2256,6 +2441,30 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 		return;
 	if (mode_ == Mode::Scrub) {
 		mode_ = Mode::None;
+		return;
+	}
+	if (mode_ == Mode::KeyDrag) {
+		const bool moved = dragMoved_ && keyDrag_.tMs != keyDragFrom_;
+		const KeyHit kh = keyDrag_;
+		mode_ = Mode::None;
+		keyDrag_ = KeyHit();
+		keyDragFrom_ = -1;
+		dragTrack_ = dragClip_ = -1;
+		dragMoved_ = false;
+		snapLineMs_ = -1;
+		QToolTip::hideText();
+		update();
+		if (moved) {
+			commitEdit(); // one undo step for the whole drag
+		} else if (kh.valid() && kh.track < model_.tracks.size() &&
+			   kh.clip < model_.tracks[kh.track].clips.size()) {
+			// A click that did not drag means "take me to this key" -- the
+			// thing you always want before editing its values, and previously a
+			// trip to the Inspector's Prev/Next buttons.
+			playheadMs_ = model_.tracks[kh.track].clips[kh.clip].outStartMs + kh.tMs;
+			emitScrubAt(playheadMs_);
+			update();
+		}
 		return;
 	}
 	if (mode_ == Mode::Fade) {
@@ -2813,6 +3022,37 @@ void TimelineView::makeTransitionWithNext(int track, int clip)
 	update();
 	emit selectionChanged(selTrack_, selClip_);
 	commitEdit();
+}
+
+void TimelineView::showKeyMenu(const KeyHit &hit, const QPoint &globalPos)
+{
+	if (!hit.valid() || hit.track >= model_.tracks.size() ||
+	    hit.clip >= model_.tracks[hit.track].clips.size())
+		return;
+	const bool locked = model_.tracks[hit.track].locked;
+	const qint64 outMs = model_.tracks[hit.track].clips[hit.clip].outStartMs + hit.tMs;
+
+	QMenu menu(this);
+	QAction *goTo = menu.addAction(QStringLiteral("Go to this keyframe"));
+	QAction *del = menu.addAction(QStringLiteral("Delete keyframe"));
+	del->setEnabled(!locked);
+	// One pip can stand for several channels keyed at the same instant, and
+	// deleting "the keyframe" then takes all of them. Say so rather than
+	// letting it be a surprise.
+	del->setToolTip(QStringLiteral("Removes every channel keyed at this moment."));
+	menu.setToolTipsVisible(true);
+
+	const QAction *chosen = menu.exec(globalPos);
+	if (chosen == goTo) {
+		playheadMs_ = outMs;
+		emitScrubAt(playheadMs_);
+		update();
+	} else if (chosen == del && !locked) {
+		if (removeClipKeysAt(model_.tracks[hit.track].clips[hit.clip], hit.tMs)) {
+			update();
+			commitEdit();
+		}
+	}
 }
 
 void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qint64 atOutMs)

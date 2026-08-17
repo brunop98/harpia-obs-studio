@@ -7298,8 +7298,12 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 // without a dialog in front of it.
 void VideoEditorWindow::onOpenProject()
 {
-	if (!valid_)
-		return;
+	// No `valid_` guard. It used to return here, silently, and that made this
+	// button do NOTHING -- no dialog, no message -- in the one state where it
+	// matters most: an editor whose launch file failed to open is exactly the
+	// editor you want to load a project into. Opening a project is how you get
+	// out of an invalid state, so it cannot be gated on being in a valid one.
+	//
 	// Where projects are kept, not where the current media happens to live.
 	const QString startIn = QDir(defaultProjectsFolder()).exists()
 					? defaultProjectsFolder()
@@ -7331,8 +7335,6 @@ void VideoEditorWindow::onOpenProject()
 // the dialog and without a message box on failure.
 bool VideoEditorWindow::openProjectAt(const QString &path)
 {
-	if (!valid_)
-		return false;
 	QFile f(path);
 	if (!f.open(QIODevice::ReadOnly))
 		return false;
@@ -7682,6 +7684,20 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	}
 	captureSnapshot(); // make the load an undo step
 	updateUndoRedoButtons();
+
+	// A loaded project IS a working editor, whatever state this window was in
+	// before -- including the one where its launch file would not open.
+	valid_ = true;
+	// And the project may have brought in no SOURCES at all: a caption, a
+	// still or an effect needs none. updateEmptyState was only ever reached
+	// through addSource, so a text-only project loaded into a blank editor
+	// left "Nothing loaded yet" sitting over the caption it was rendering and
+	// every control switched off -- which reads exactly like Open Project
+	// having done nothing.
+	updateEmptyState();
+	updateInspector();
+	if (fullEdit())
+		showTimelineFrame(timelinePlayheadMs());
 	if (!quiet)
 		QMessageBox::information(this, QStringLiteral("Open project"),
 					 QStringLiteral("Project loaded."));

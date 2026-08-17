@@ -211,6 +211,20 @@ public:
 		return headerToggleRect(track, h);
 	}
 
+	// The volume line's position and what is under a point. For tests: the
+	// line's height IS the value, so a test that computed the mapping itself
+	// would be checking its own arithmetic rather than the widget's.
+	int volumeLineYForTest(int track, int clip) const { return volumeLineY(track, clip); }
+	bool volumeHitForTest(const QPoint &p, int *track, int *clip) const
+	{
+		const VolHit h = volumeLineAt(p);
+		if (track)
+			*track = h.track;
+		if (clip)
+			*clip = h.clip;
+		return h.valid();
+	}
+
 	// The magnet, asked directly. Snapping is only observable through a drag,
 	// and a test that drove a drag to check WHICH candidate won would be
 	// testing the drag as much as the candidate list.
@@ -393,6 +407,41 @@ private:
 		}
 	};
 	bool clipTakesFades(int track, int clip) const; // audio-track media clips
+
+	// ---- the volume rubber-band ------------------------------------------
+	// A horizontal line across an audio clip whose HEIGHT is the level: the
+	// bottom of the clip is silence, the top is kMaxClipVolume, and unity sits
+	// across the middle. Drag it to set the level where you can see the
+	// waveform it applies to, which is where every other editor puts it.
+	//
+	// Linear and 0..2, deliberately the same numbers as the Inspector's slider:
+	// two controls for one value that disagree about its scale are two controls
+	// you have to convert between in your head.
+	static constexpr double kMaxClipVolume = 2.0;
+	struct VolHit {
+		int track = -1;
+		int clip = -1;
+		bool valid() const { return track >= 0 && clip >= 0; }
+		bool operator==(const VolHit &o) const { return track == o.track && clip == o.clip; }
+	};
+	// The band the line is drawn and grabbed in: the clip's rect, inset so the
+	// line is still visible (and grabbable) at 0 and at maximum.
+	QRect volumeBand(int track, int clip) const;
+	int volumeLineY(int track, int clip) const;              // -1 = no line here
+	// The level a drag has reached: from where it STARTED, by how far the
+	// pointer has moved. Relative rather than absolute so that "fine" can mean
+	// something -- an audio lane is about thirty pixels tall, which is the whole
+	// 0..2 range in thirty steps, and no amount of care gets you 1.05 out of
+	// that. At normal speed the two agree exactly, because the drag starts on
+	// the line.
+	double volumeForDrag(int track, int clip, int pressY, double fromVol, int y,
+			     bool fine) const;
+	VolHit volumeLineAt(const QPoint &p) const;
+	void drawVolumeLine(QPainter &p, int track, int clip) const;
+	VolHit volDrag_;   // the line being dragged
+	VolHit volHover_;  // the line under the pointer, lit so the grab is honest
+	double volDragFrom_ = -1.0; // the level it started at, so a no-op is not an edit
+	int volDragFromY_ = 0;      // and where the pointer was when it did
 	// Where the grip sits: at the far end of the fade it controls.
 	QRect fadeHandleRect(int track, int clip, FadeSide side) const;
 	FadeHit fadeHandleAt(const QPoint &p) const;
@@ -526,7 +575,7 @@ private:
 	// Pan drags the VIEW under a still timeline, the opposite of Scrub, which
 	// drags the playhead across a still view. Both are "navigating", and mixing
 	// them up is why it needs its own mode rather than a flag on Scrub.
-	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan, KeyDrag };
+	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan, KeyDrag, Volume };
 	Mode mode_ = Mode::None;
 	QPoint pressPos_;
 	bool dragMoved_ = false;

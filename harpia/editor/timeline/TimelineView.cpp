@@ -1363,8 +1363,10 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 			p.drawLine(x, midY - hh, x, midY + hh);
 		}
 	}
-	if (!dragging)
+	if (!dragging) {
 		drawKeyPips(p, track, clip);
+		drawVolumeLine(p, track, clip);
+	}
 
 	// Effect clip: a marker glyph and the effect's name, so what it does is
 	// readable without selecting it. No filmstrip, no waveform -- it has neither.
@@ -1607,6 +1609,98 @@ bool TimelineView::keyPipHitForTest(const QPoint &p, int *track, int *clip, qint
 	if (tMs)
 		*tMs = h.tMs;
 	return h.valid();
+}
+
+namespace {
+// The line's own geometry. Grab is generous against draw for the same reason
+// every other handle here is: a 1px line you cannot reliably hit is worse than
+// no line. kVolInset keeps the extremes on screen -- a level of 0 drawn exactly
+// on the clip's bottom edge is a line you can neither see nor grab.
+constexpr int kVolInset = 5;
+constexpr int kVolGrab = 5;
+constexpr int kVolMinClipH = 22;
+constexpr int kVolMinClipW = 14;
+constexpr int kVolSnapPx = 4; // how close to unity counts as unity
+} // namespace
+
+QRect TimelineView::volumeBand(int track, int clip) const
+{
+	if (!clipTakesFades(track, clip))
+		return {}; // audio-track media clips: the same set that takes fades
+	const QRect r = clipRect(track, clip);
+	if (r.height() < kVolMinClipH || r.width() < kVolMinClipW)
+		return {};
+	return r.adjusted(0, kVolInset, 0, -kVolInset);
+}
+
+int TimelineView::volumeLineY(int track, int clip) const
+{
+	const QRect band = volumeBand(track, clip);
+	if (band.isNull())
+		return -1;
+	const double v = std::clamp(model_.tracks[track].clips[clip].volume, 0.0, kMaxClipVolume);
+	// Bottom is silence, top is the maximum.
+	return band.bottom() - int(std::lround(v / kMaxClipVolume * band.height()));
+}
+
+double TimelineView::volumeForDrag(int track, int clip, int pressY, double fromVol, int y,
+				   bool fine) const
+{
+	const QRect band = volumeBand(track, clip);
+	if (band.isNull())
+		return fromVol;
+	const double perPx = kMaxClipVolume / double(std::max(1, band.height()));
+	// Shift is the "let me place it exactly" modifier, as everywhere else on
+	// this timeline. Here it does BOTH halves of exact: a quarter-speed drag,
+	// and no snap to pull the result off what you chose.
+	const double scale = fine ? 0.25 : 1.0;
+	double v = std::clamp(fromVol + double(pressY - y) * perPx * scale, 0.0, kMaxClipVolume);
+	// Unity is the value people want most of the time, and it sits in the
+	// middle of a continuous range where nothing else would stop you on it.
+	if (!fine && std::abs(v - 1.0) <= perPx * kVolSnapPx)
+		v = 1.0;
+	return v;
+}
+
+TimelineView::VolHit TimelineView::volumeLineAt(const QPoint &pt) const
+{
+	const SpanGuard span(this);
+	const int lane = laneAtY(pt.y());
+	if (lane < 0 || model_.tracks[lane].locked)
+		return {};
+	for (int ci = 0; ci < model_.tracks[lane].clips.size(); ++ci) {
+		const QRect r = clipRect(lane, ci);
+		if (pt.x() < r.left() || pt.x() > r.right())
+			continue;
+		const int y = volumeLineY(lane, ci);
+		if (y < 0)
+			continue;
+		if (std::abs(pt.y() - y) <= kVolGrab)
+			return VolHit{lane, ci};
+	}
+	return {};
+}
+
+void TimelineView::drawVolumeLine(QPainter &p, int track, int clip) const
+{
+	const QRect band = volumeBand(track, clip);
+	if (band.isNull())
+		return;
+	const int y = volumeLineY(track, clip);
+	const VolHit me{track, clip};
+	const bool hot = (volDrag_.valid() && volDrag_ == me) || (volHover_.valid() && volHover_ == me);
+
+	// The unity guide, so the line's height means something absolute rather
+	// than only relative to itself. Drawn under the line and only when the
+	// level is not already sitting on it.
+	const int unityY = band.bottom() - band.height() / 2;
+	if (std::abs(unityY - y) > 1) {
+		p.setPen(QPen(QColor(0xff, 0xff, 0xff, 40), 1, Qt::DotLine));
+		p.drawLine(band.left() + 1, unityY, band.right() - 1, unityY);
+	}
+
+	p.setPen(QPen(hot ? QColor(0xff, 0xff, 0xff) : QColor(0xff, 0xd4, 0x4f, 210), hot ? 3 : 2));
+	p.drawLine(band.left() + 1, y, band.right() - 1, y);
 }
 
 int TimelineView::fadeMsForX(const TlClip &c, const QRect &r, int x, FadeSide side,
@@ -2075,6 +2169,28 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 		return;
 	}
 
+	// The volume line, checked after the pips and the fade grips (which live in
+	// the top band and would otherwise be shadowed by a level near maximum) and
+	// before the clip body, which would take the drag as a move.
+	if (const VolHit vh = volumeLineAt(pos); vh.valid()) {
+		volDrag_ = vh;
+		volDragFrom_ = model_.tracks[vh.track].clips[vh.clip].volume;
+		volDragFromY_ = pos.y();
+		mode_ = Mode::Volume;
+		pressPos_ = pos;
+		dragMoved_ = false;
+		dragTrack_ = vh.track;
+		dragClip_ = vh.clip;
+		if (!isSelected(vh.track, vh.clip)) {
+			extraSel_.clear();
+			selTrack_ = vh.track;
+			selClip_ = vh.clip;
+			emit selectionChanged(selTrack_, selClip_);
+		}
+		update();
+		return;
+	}
+
 	// A fade grip wins over the clip under it — it sits inside the clip, and
 	// the top corners are also where a trim would otherwise start.
 	if (const FadeHit fh = fadeHandleAt(pos); fh.valid()) {
@@ -2242,6 +2358,26 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 		return;
 	}
 
+	if (mode_ == Mode::Volume && volDrag_.valid() && (e->buttons() & Qt::LeftButton)) {
+		dragMoved_ = true;
+		if (volDrag_.track >= model_.tracks.size() ||
+		    volDrag_.clip >= model_.tracks[volDrag_.track].clips.size())
+			return;
+		TlClip &c = model_.tracks[volDrag_.track].clips[volDrag_.clip];
+		const bool fine = e->modifiers() & Qt::ShiftModifier;
+		c.volume = volumeForDrag(volDrag_.track, volDrag_.clip, volDragFromY_, volDragFrom_,
+					 pos.y(), fine);
+		QToolTip::showText(e->globalPosition().toPoint(),
+				   QStringLiteral("%1×").arg(c.volume, 0, 'f', 2), this);
+		update();
+		// Live, like a fade drag: the Inspector's slider follows the line, and
+		// clipsChanged is what tells the window to rebuild the audio mix -- so
+		// what you hear follows it too, while you are still dragging.
+		emit clipsChanged();
+		emit selectionChanged(volDrag_.track, volDrag_.clip);
+		return;
+	}
+
 	if (mode_ == Mode::Fade && fadeDrag_.valid() && (e->buttons() & Qt::LeftButton)) {
 		dragMoved_ = true;
 		TlTrack &t = model_.tracks[fadeDrag_.track];
@@ -2394,13 +2530,20 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 		keyHover_ = kh;
 		update();
 	}
+	const VolHit vh = volumeLineAt(pos);
+	if (!(vh == volHover_)) {
+		volHover_ = vh;
+		update();
+	}
 
 	int track = -1;
 	const int clip = clipAtPoint(pos, &track);
 	if (clip >= 0) {
 		const QRect r = clipRect(track, clip);
 		const int edge = std::min(8, r.width() / 3);
-		if (kh.valid())
+		if (vh.valid())
+			setCursor(Qt::SizeVerCursor); // it moves up and down, not along
+		else if (kh.valid())
 			setCursor(Qt::SizeHorCursor);
 		else if (fh.valid())
 			setCursor(Qt::SizeHorCursor);
@@ -2507,6 +2650,24 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 			emitScrubAt(playheadMs_);
 			update();
 		}
+		return;
+	}
+	if (mode_ == Mode::Volume) {
+		const bool changed = dragMoved_ && volDrag_.valid() &&
+				     volDrag_.track < model_.tracks.size() &&
+				     volDrag_.clip < model_.tracks[volDrag_.track].clips.size() &&
+				     !qFuzzyCompare(model_.tracks[volDrag_.track].clips[volDrag_.clip].volume,
+						    volDragFrom_);
+		mode_ = Mode::None;
+		volDrag_ = VolHit();
+		volDragFrom_ = -1.0;
+		dragTrack_ = dragClip_ = -1;
+		dragMoved_ = false;
+		QToolTip::hideText();
+		releaseSpan();
+		update();
+		if (changed)
+			commitEdit(); // one undo step for the whole drag
 		return;
 	}
 	if (mode_ == Mode::Fade) {

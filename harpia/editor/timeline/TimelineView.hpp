@@ -340,6 +340,15 @@ private:
 		qint64 prev_;
 	};
 	mutable qint64 spanCache_ = -1;
+	// The axis span, held for the length of a drag that moves or trims a clip.
+	// -1 = not dragging, measure it.
+	//
+	// Every pixel on this widget derives from the project's TOTAL span, so a
+	// clip dragged past the end grows the span and rescales the whole timeline
+	// -- while the drag is still going. The ruler stretches, the other clips
+	// shrink, and the clip under the cursor stops tracking the cursor. Holding
+	// it means the one rescale that has to happen happens once, on the drop.
+	qint64 dragSpanMs_ = -1;
 
 public:
 	using SpanGuardForTest = SpanGuard;

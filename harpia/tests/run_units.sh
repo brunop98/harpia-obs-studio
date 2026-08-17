@@ -236,6 +236,17 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
 	-o "$WORK/gutterspill_test" $LF
 
+# The timeline must not rescale itself while a clip is being dragged: every
+# pixel comes from the project's total span, and dragging past the end grows it.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/timelinedragspan_test.cpp" "$H/editor/timeline/TimelineView.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
+	-o "$WORK/timelinedragspan_test" $LF
+
 # Keyframes on the timeline: every kind of key is drawn, a pip can be grabbed
 # and retimed without moving its clip, and the magnet knows about markers and
 # keys as well as clip edges.
@@ -561,6 +572,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/assetcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectarea_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/gutterspill_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinekeys_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/timelinedragspan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keyframetabs_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/hoverinspect_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/projectpaths_test" || rc=1

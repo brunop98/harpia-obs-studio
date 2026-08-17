@@ -602,6 +602,11 @@ qint64 TimelineView::spanMs() const
 {
 	if (spanCache_ >= 0)
 		return spanCache_; // held by a SpanGuard, see the header
+	// Held for the length of a drag that moves or trims a clip. See
+	// dragSpanMs_: without this the whole timeline rescales under the cursor,
+	// continuously, for as long as you are dragging.
+	if (dragSpanMs_ > 0)
+		return dragSpanMs_;
 	return std::max<qint64>(kMinSpanMs, model_.durationMs() + kTailMs);
 }
 
@@ -2156,6 +2161,18 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	dragStarts_.clear();
 	for (const auto &sp : selectedPairs())
 		dragStarts_.insert(sp, model_.tracks[sp.first].clips[sp.second].outStartMs);
+	// The axis stops moving for the length of this drag. Every pixel position
+	// on this widget is derived from the project's TOTAL span (duration + a
+	// tail), so dragging a clip past the current end grows the span and rescales
+	// everything -- the ruler, the other clips, and the clip in your hand, which
+	// then no longer keeps up with the pointer. It reads as the timeline zooming
+	// itself while you work.
+	//
+	// Frozen at the value it had when the drag began, and released on the way
+	// out, so the one rescale that does happen happens once, after the drop,
+	// when the project really has got longer.
+	dragSpanMs_ = spanMs();
+
 	const int edge = std::min(8, r.width() / 3);
 	if (pos.x() - r.left() <= edge)
 		mode_ = Mode::ResizeLeft;
@@ -2441,15 +2458,30 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 	// Before the left-button gate below: a pan is usually a MIDDLE-button drag,
 	// and that gate would leave mode_ stuck at Pan forever -- after which every
 	// mouse-move slides the view whether a button is down or not.
+	// Whatever this release ends, the axis is free to follow the project again.
+	// Cleared before every early return below, not after them: a drag that ends
+	// through one of those paths would otherwise leave the timeline frozen at a
+	// span it has outgrown.
+	const auto releaseSpan = [this]() {
+		if (dragSpanMs_ > 0) {
+			dragSpanMs_ = -1;
+			clampView(); // the span it was clamped against has just changed
+		}
+	};
+
 	if (mode_ == Mode::Pan) {
 		mode_ = Mode::None;
 		unsetCursor();
+		releaseSpan();
 		return;
 	}
-	if (e->button() != Qt::LeftButton)
+	if (e->button() != Qt::LeftButton) {
+		releaseSpan();
 		return;
+	}
 	if (mode_ == Mode::Scrub) {
 		mode_ = Mode::None;
+		releaseSpan();
 		return;
 	}
 	if (mode_ == Mode::KeyDrag) {
@@ -2462,6 +2494,7 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 		dragMoved_ = false;
 		snapLineMs_ = -1;
 		QToolTip::hideText();
+		releaseSpan();
 		update();
 		if (moved) {
 			commitEdit(); // one undo step for the whole drag
@@ -2483,6 +2516,7 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 		dragTrack_ = dragClip_ = -1;
 		dragMoved_ = false;
 		QToolTip::hideText();
+		releaseSpan();
 		update();
 		if (changed)
 			commitEdit(); // repaint the preview + record one undo step
@@ -2537,12 +2571,18 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 		drop_ = DropTarget();
 		snapLineMs_ = -1;
 		unsetCursor();
+		// The drop is where the project's real length is allowed to reach the
+		// axis again -- BEFORE clampView, which measures against it.
+		releaseSpan();
 		clampView();
 		updateGeometry();
 		update();
 		if (changed)
 			commitEdit();
 	}
+	// Nothing above ran (an unrecognised state, a stray release): the axis must
+	// not stay frozen whatever happens, so this is the backstop.
+	releaseSpan();
 }
 
 void TimelineView::wheelEvent(QWheelEvent *e)

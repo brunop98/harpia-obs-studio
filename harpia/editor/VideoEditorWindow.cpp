@@ -1205,9 +1205,29 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 				if (ci.typeId == t && seen++ == o) {
 					componentClipboard_ = ci;
 					componentClipboardValid_ = true;
+					// So the Add menu can offer to paste it by name, onto
+					// clips that do not have one yet.
+					const ComponentType *ty =
+						ComponentRegistry::instance().find(t);
+					componentPanel_->setClipboard(
+						t, ty ? ty->displayName : t,
+						ty ? ty->clipKinds : unsigned(ClipKindAll));
 					return;
 				}
 		});
+	connect(componentPanel_, &ComponentPanel::componentPasteRequested, this, [this]() {
+		if (!componentClipboardValid_)
+			return;
+		// Onto EVERY selected clip, in one edit and so one undo step, like
+		// every other component operation here. Each clip gets its own fresh
+		// instance id when the component is new to it: two clips sharing one id
+		// would be two rows the Inspector cannot tell apart.
+		timelineView_->applyToSelection([this](TlClip &c) {
+			pasteComponentInto(c.components, componentClipboard_,
+					   QUuid::createUuid().toString(QUuid::WithoutBraces).left(8));
+		});
+		afterComponentEdit();
+	});
 	connect(componentPanel_, &ComponentPanel::componentPasted, this,
 		[this](const QString &t, int o) {
 			if (!componentClipboardValid_ || componentClipboard_.typeId != t)

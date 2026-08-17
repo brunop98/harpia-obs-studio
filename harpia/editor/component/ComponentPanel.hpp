@@ -114,6 +114,10 @@ signals:
 	void componentDuplicated(const QString &typeId, int ordinal);
 	void componentCopied(const QString &typeId, int ordinal);
 	void componentPasted(const QString &typeId, int ordinal);
+	// Paste the copied component ONTO the selection, from the Add menu rather
+	// than from an existing component's own menu -- which is the case the panel
+	// could not express: pasting onto a clip that does not have one yet.
+	void componentPasteRequested();
 	void keyframeToggled(const QString &typeId, int ordinal, const QString &key);
 	// One of the component's own buttons. The panel does not know what it does;
 	// the window looks the action up on the type and runs it on every selected
@@ -126,6 +130,12 @@ public:
 	// meaningless on a video, and finding that out by adding it and watching
 	// nothing happen is not a discovery worth making.
 	void setAllowedKinds(unsigned kinds);
+
+	// What is on the component clipboard, so the Add menu can offer to paste
+	// it. `label` is what the entry reads; `kinds` is the copied type's own
+	// clipKinds, so a Text-only component is not offered onto a video clip.
+	// An empty typeId means nothing has been copied yet.
+	void setClipboard(const QString &typeId, const QString &label, unsigned kinds);
 
 	// Show values as a READ-ONLY look at another instant -- the frame under the
 	// pointer while the timeline is hovered -- rather than as the clip's own
@@ -145,6 +155,8 @@ private:
 	void applyPreviewStyle();
 	bool previewing_ = false;
 	unsigned allowedKinds_ = ClipKindAll;
+	QString clipTypeId_, clipLabel_;
+	unsigned clipKinds_ = ClipKindAll;
 
 	void rebuild();
 	void pushValues();

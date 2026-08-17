@@ -376,6 +376,58 @@ int main(int argc, char **argv)
 		   "while a float parameter is still a float");
 	}
 
+	std::printf("\n-- pasting a component onto a clip --\n");
+	{
+		// Copy is easy; what "paste" MEANS is the part with a decision in it.
+		// Onto a clip without one, it is an add. Onto a clip that already has
+		// one, it is an update of that one -- not a second copy, which under
+		// stage ordering would silently apply the effect twice and not even
+		// look like a duplicate.
+		ComponentInstance src = inst("harpia.blur", "src");
+		src.props.insert(QStringLiteral("radius"), 0.8);
+		src.keys.insert(QStringLiteral("radius"), {PropKey{500, 0.8, TlEase::Linear, 0, 0}});
+		src.inMs = 200;
+		src.enabled = false;
+
+		QVector<ComponentInstance> fresh;
+		ok(pasteComponentInto(fresh, src, QStringLiteral("new1")), "onto an empty clip: added");
+		eq(fresh.size(), 1, "one component");
+		ok(fresh[0].typeId == src.typeId, "of the copied type");
+		ok(fresh[0].instanceId == QStringLiteral("new1"),
+		   "under its OWN id — two clips sharing one instance id are two rows the "
+		   "Inspector cannot tell apart");
+		eq(fresh[0].props.value(QStringLiteral("radius")).toDouble(), 0.8, "with the values");
+		ok(fresh[0].keys.contains(QStringLiteral("radius")), "and the keyframes");
+		eq(fresh[0].inMs, 200, "and the ramp");
+		ok(!fresh[0].enabled, "and even switched off, because that is how it was copied");
+
+		// Now onto a clip that already has one, plus something else to prove
+		// the rest of the stack is left alone.
+		QVector<ComponentInstance> had{inst("harpia.speed", "s1"), inst("harpia.blur", "b1")};
+		had[1].props.insert(QStringLiteral("radius"), 0.1);
+		had[0].props.insert(QStringLiteral("factor"), 2.0);
+		ok(pasteComponentInto(had, src, QStringLiteral("new2")), "onto a clip that has one");
+		eq(had.size(), 2, "no second Blur was added");
+		ok(had[1].instanceId == QStringLiteral("b1"),
+		   "the one it had keeps its identity: a paste edits this component, it does "
+		   "not replace it");
+		eq(had[1].props.value(QStringLiteral("radius")).toDouble(), 0.8, "its values came over");
+		ok(had[1].keys.contains(QStringLiteral("radius")), "with its keyframes");
+		eq(had[0].props.value(QStringLiteral("factor")).toDouble(), 2.0,
+		   "and the OTHER component on the clip was not touched");
+		ok(had[0].typeId == QStringLiteral("harpia.speed") &&
+			   had[1].typeId == QStringLiteral("harpia.blur"),
+		   "stack order unchanged");
+
+		// The first of two, not the last: the Inspector's rows are ordinal 0
+		// and 1, and "paste" from the panel means the one you would see first.
+		QVector<ComponentInstance> two{inst("harpia.blur", "b1"), inst("harpia.blur", "b2")};
+		pasteComponentInto(two, src, QStringLiteral("new3"));
+		eq(two.size(), 2, "still two");
+		eq(two[0].props.value(QStringLiteral("radius")).toDouble(), 0.8, "the first took it");
+		ok(!two[1].props.contains(QStringLiteral("radius")), "and the second did not");
+	}
+
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
 }

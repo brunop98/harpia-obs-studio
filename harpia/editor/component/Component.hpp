@@ -305,6 +305,47 @@ const PropDef *defFor(const ComponentType &type, const QString &key);
 // toDouble() on it would write black and look like the key did not take.
 double propKeyValue(const PropDef &def, const QVariant &v);
 
+// Paste a copied component onto a clip's component list.
+//
+// Two cases, and the difference is what the user means by "paste":
+//
+//   the clip has no such component   append it -- a copy of everything, under
+//                                    `newId` so two instances are never the
+//                                    same object to the rest of the editor
+//   it already has one               overwrite THAT one's values, keys, ramp
+//                                    and enabled state, leaving it where it is
+//                                    in the stack
+//
+// Overwriting rather than adding a second is the whole point: "paste the values
+// into the Blur this clip already has" is the common case, and stage order
+// means a pasted duplicate would not even be visibly a duplicate -- it would
+// just apply twice. Duplicate is a separate action for when two IS the intent.
+//
+// Returns true if the list changed. Pure, so the rule can be tested without a
+// window, a clip or a registry.
+inline bool pasteComponentInto(QVector<ComponentInstance> &list, const ComponentInstance &src,
+			       const QString &newId)
+{
+	for (ComponentInstance &ci : list) {
+		if (ci.typeId != src.typeId)
+			continue;
+		// Its identity stays its own: the instance id is what keyframes, undo
+		// and the Inspector's rows are keyed on, and a paste is an edit to this
+		// component, not a replacement of it.
+		ci.props = src.props;
+		ci.keys = src.keys;
+		ci.enabled = src.enabled;
+		ci.inMs = src.inMs;
+		ci.outMs = src.outMs;
+		ci.unknown = src.unknown;
+		return true;
+	}
+	ComponentInstance add = src;
+	add.instanceId = newId;
+	list.append(add);
+	return true;
+}
+
 // One property's keyframe track, resolved at `tMs`. Public because the keyframe
 // editor draws a component property's curve with it -- the shape it draws has
 // to be the shape the renderer produces, easing, held Bools, per-channel colour

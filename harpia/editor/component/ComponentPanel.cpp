@@ -596,6 +596,13 @@ void ComponentPanel::setAllowedKinds(unsigned kinds)
 	allowedKinds_ = kinds ? kinds : unsigned(ClipKindAll);
 }
 
+void ComponentPanel::setClipboard(const QString &typeId, const QString &label, unsigned kinds)
+{
+	clipTypeId_ = typeId;
+	clipLabel_ = label;
+	clipKinds_ = kinds ? kinds : unsigned(ClipKindAll);
+}
+
 void ComponentPanel::setPreviewing(bool on)
 {
 	if (previewing_ == on)
@@ -707,7 +714,7 @@ void ComponentPanel::componentMenu(const QString &typeId, int ordinal)
 				    : QString();
 	QAction *reset = menu.addAction(QStringLiteral("Reset to defaults") + all);
 	menu.addSeparator();
-	QAction *copy = menu.addAction(QStringLiteral("Copy values"));
+	QAction *copy = menu.addAction(QStringLiteral("Copy component"));
 	QAction *paste = menu.addAction(QStringLiteral("Paste values") + all);
 	QAction *dup = menu.addAction(QStringLiteral("Duplicate") + all);
 	connect(reset, &QAction::triggered, this,
@@ -724,6 +731,20 @@ void ComponentPanel::componentMenu(const QString &typeId, int ordinal)
 void ComponentPanel::addComponentMenu()
 {
 	QMenu menu(this);
+	// Paste first, and only when there is something to paste that fits these
+	// clips. This is the menu you open to put something ON a clip, so it is
+	// where a copied component belongs -- previously Paste lived only inside an
+	// existing component's own menu, which meant you could paste values into a
+	// Blur you already had and had no way at all to paste one onto a clip that
+	// did not have it yet.
+	if (!clipTypeId_.isEmpty() && (allowedKinds_ & ~clipKinds_) == 0u) {
+		QAction *p = menu.addAction(QStringLiteral("Paste %1").arg(clipLabel_));
+		p->setToolTip(QStringLiteral(
+			"Add it, or update the one this clip already has."));
+		connect(p, &QAction::triggered, this, [this] { emit componentPasteRequested(); });
+		menu.addSeparator();
+	}
+	menu.setToolTipsVisible(true);
 	QString lastCategory;
 	QMenu *sub = nullptr;
 	for (const ComponentType &t : reg_.all()) {

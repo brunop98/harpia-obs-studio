@@ -4529,6 +4529,21 @@ void VideoEditorWindow::syncComponentPanel()
 {
 	if (!componentPanel_ || !timelineView_)
 		return;
+	// What kinds of clip are selected, so the Add menu can offer only what
+	// applies to all of them.
+	unsigned kinds = 0;
+	const TimelineModel &m = timelineView_->model();
+	for (const auto &p : timelineView_->selectedPairs())
+		if (p.first >= 0 && p.first < m.tracks.size() && p.second >= 0 &&
+		    p.second < m.tracks[p.first].clips.size())
+			switch (m.tracks[p.first].clips[p.second].type) {
+			case TlClip::Type::Text: kinds |= ClipKindText; break;
+			case TlClip::Type::Image: kinds |= ClipKindImage; break;
+			case TlClip::Type::Effect: kinds |= ClipKindEffect; break;
+			default: kinds |= ClipKindVideo; break;
+			}
+	componentPanel_->setAllowedKinds(kinds);
+
 	const ComponentPanel::View v = buildComponentView();
 	componentPanel_->setVisible(v.clipCount > 0);
 	componentPanel_->setView(v);

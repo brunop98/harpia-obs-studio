@@ -466,7 +466,13 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 			qint64 srcMs = c.srcAtOutput(outMs);
 			ClipState cstate;
 			if (hasComponents) {
-				cstate = stack->evaluatePose(ectx, c.transformAt(outMs));
+				// The caption goes in so a Source-stage component can rewrite
+				// it. What comes back is what gets drawn; the clip's own text
+				// is never touched.
+				const QString caption = c.text.text;
+				cstate = stack->evaluatePose(
+					ectx, c.transformAt(outMs),
+					c.type == TlClip::Type::Text ? &caption : nullptr);
 				if (std::abs(cstate.timeScale - 1.0) > 1e-9) {
 					const qint64 off = std::clamp<qint64>(
 						outMs - c.outStartMs, 0, c.outDurationMs());
@@ -529,6 +535,17 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 			if (hasComponents && !frame.isNull())
 				stack->evaluatePixels(ectx, frame);
 
+			// A caption a component rewrote is drawn as the component left
+			// it. Copying the clip to change one string is cheap next to
+			// rendering it, and it keeps drawClip a pure function of what it
+			// is handed rather than something that has to know about stages.
+			if (c.type == TlClip::Type::Text && cstate.textValid &&
+			    (cstate.text != c.text.text || !cstate.caret.isEmpty())) {
+				TlClip shown = c;
+				shown.text.text = cstate.text + cstate.caret;
+				drawClip(into, shown, tf, canvas, frame);
+				return;
+			}
 			drawClip(into, c, tf, canvas, frame);
 		};
 

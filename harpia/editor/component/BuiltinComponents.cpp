@@ -1,5 +1,7 @@
 #include "BuiltinComponents.hpp"
 
+#include "TextTyping.hpp"
+
 #include "../timeline/EffectClip.hpp" // the effect table, and Effects::apply
 #include "../timeline/Spotlight.hpp" // blurInPlace -- one blur in the program, not two
 #include "ComponentRegistry.hpp"
@@ -285,6 +287,40 @@ QString effectComponentId(FxType t)
 	return fxComponentId(t);
 }
 
+// Typing: a caption arrives a piece at a time.
+//
+// A SOURCE-stage component, and the first of its kind here: it does not move
+// the clip or touch its pixels, it decides what the caption SAYS at this
+// instant. The compositor draws ClipState::text rather than the stored string,
+// so the words the user typed are never modified -- exactly as the Transform
+// stage seeds `xf` from the pose and leaves the clip's own fields alone.
+//
+// The arithmetic is in TextTyping.hpp, pure and tested; this is the wiring.
+class TextTypeComponent : public IComponent {
+public:
+	void evaluate(const EvalContext &ctx, ClipState &io) const override
+	{
+		if (!io.textValid || io.text.isEmpty())
+			return; // not a caption: nothing to type
+		// Fill the clip unless the user has taken the wheel. Keyframing
+		// Progress is what "off" is for, and it is the reason this is a switch
+		// rather than a magic value in Progress itself: a component cannot see
+		// whether a property is keyed, and guessing from its value would make
+		// "Progress 0" mean two different things.
+		const double u = ctx.b("fill", true) ? ctx.u() : ctx.f("progress", 0.0);
+		const auto unit = RevealUnit(std::clamp(int(std::lround(ctx.f("unit", 0.0))), 0,
+							kRevealUnitCount - 1));
+		io.text = revealedText(io.text, u, unit);
+
+		// The caret rides ON the string, so it lands wherever the last
+		// character did without this component knowing anything about fonts,
+		// line breaks or where the text was laid out.
+		if (ctx.b("caret", true) && u < 1.0 &&
+		    caretVisibleAt(ctx.tSec(), ctx.f("blink", 2.0)))
+			io.caret = QStringLiteral("|");
+	}
+};
+
 void registerBuiltinComponents(ComponentRegistry &reg)
 {
 	// Every effect, as a component. Inverse Selection is skipped: its settings
@@ -379,6 +415,40 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 			    10.0, 1.0, true,
 			    QStringLiteral("Above 1 is faster, below 1 is slower.")}};
 		t.make = [] { return std::unique_ptr<IComponent>(new SpeedComponent); };
+		reg.add(t);
+	}
+	{
+		ComponentType t;
+		t.id = QStringLiteral("harpia.textType");
+		t.displayName = QStringLiteral("Typing");
+		t.category = QStringLiteral("Text");
+		t.stage = Stage::Source;
+		// The first component that declares a clip kind. Everything else stays
+		// at ClipKindAll, so no existing menu changes.
+		t.clipKinds = ClipKindText;
+		t.help = QStringLiteral(
+			"Reveal the caption a piece at a time, like it is being typed. Fills the "
+			"clip by default; turn that off to drive it with Progress keyframes.");
+		t.props = {
+			{QStringLiteral("unit"), QStringLiteral("Reveal by"), PropType::Choice, 0.0,
+			 double(kRevealUnitCount - 1), 0.0, true,
+			 QStringLiteral("Word by word reads better than letter by letter for a "
+					"subtitle; lines suit lyrics."),
+			 {QStringLiteral("Characters"), QStringLiteral("Words"),
+			  QStringLiteral("Lines")}},
+			{QStringLiteral("fill"), QStringLiteral("Fill the clip"), PropType::Bool, 0.0,
+			 1.0, 1.0, true,
+			 QStringLiteral("Type across the whole clip. Off means Progress decides.")},
+			{QStringLiteral("progress"), QStringLiteral("Progress"), PropType::Float, 0.0,
+			 1.0, 0.0, true,
+			 QStringLiteral("How much is revealed, 0 to 1. Keyframe it to pause "
+					"mid-sentence.")},
+			{QStringLiteral("caret"), QStringLiteral("Cursor"), PropType::Bool, 0.0, 1.0,
+			 1.0, true, QStringLiteral("Draw a caret after the last character typed.")},
+			{QStringLiteral("blink"), QStringLiteral("Blink / second"), PropType::Float,
+			 0.0, 8.0, 2.0, true,
+			 QStringLiteral("0 keeps the caret steady instead of blinking.")}};
+		t.make = [] { return std::unique_ptr<IComponent>(new TextTypeComponent); };
 		reg.add(t);
 	}
 	{

@@ -121,6 +121,12 @@ signals:
 	void actionInvoked(const QString &typeId, int ordinal, const QString &actionId);
 
 public:
+	// Which clip kinds the selection is made of (a bitmask of ClipKind). The
+	// Add Component menu offers only what applies to them -- a Typing effect is
+	// meaningless on a video, and finding that out by adding it and watching
+	// nothing happen is not a discovery worth making.
+	void setAllowedKinds(unsigned kinds);
+
 	// Show values as a READ-ONLY look at another instant -- the frame under the
 	// pointer while the timeline is hovered -- rather than as the clip's own
 	// editable state.
@@ -138,6 +144,7 @@ private:
 	struct Row;
 	void applyPreviewStyle();
 	bool previewing_ = false;
+	unsigned allowedKinds_ = ClipKindAll;
 
 	void rebuild();
 	void pushValues();

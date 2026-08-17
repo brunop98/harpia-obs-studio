@@ -109,11 +109,16 @@ void ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io) co
 	}
 }
 
-ClipState ComponentStack::evaluatePose(const EvalContext &base, const TlTransform &seed) const
+ClipState ComponentStack::evaluatePose(const EvalContext &base, const TlTransform &seed,
+				       const QString *text) const
 {
 	ClipState st;
 	st.xf = seed;
 	st.frame = nullptr; // pixels do not exist yet, and the type says so
+	if (text) {
+		st.text = *text;
+		st.textValid = true;
+	}
 	run(Stage::Time, base, st);
 	run(Stage::Source, base, st);
 	run(Stage::Transform, base, st);

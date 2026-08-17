@@ -41,6 +41,13 @@ QVariant coerce(const PropDef &d, double v)
 	// in a double, so nothing is lost, and it means one PropKey type covers
 	// every property rather than a variant per kind.
 	case PropType::Color: return QColor::fromRgba(QRgb(quint32(std::llround(v))));
+	// A choice is its index, clamped to the options that exist: a project
+	// written by a build with four options, opened by one with three, must land
+	// on a real option rather than on nothing.
+	case PropType::Choice: {
+		const int last = std::max(0, int(d.choices.size()) - 1);
+		return std::clamp(int(std::lround(v)), 0, last);
+	}
 	case PropType::Float: break;
 	}
 	return v;
@@ -97,9 +104,11 @@ QVariant valueFromKeys(const PropDef &d, const QVector<PropKey> &keys, qint64 tM
 		return coerce(d, d.def);
 	const Span s = spanAt(keys, tMs);
 
-	if (d.type == PropType::Bool) {
-		// The key at or before now, held. u is ignored entirely.
-		return keys[s.i].v >= 0.5;
+	if (d.type == PropType::Bool || d.type == PropType::Choice) {
+		// The key at or before now, HELD -- u is ignored entirely. Through
+		// coerce so a Choice comes back as its clamped index rather than as the
+		// boolean a Bool wants.
+		return coerce(d, keys[s.i].v);
 	}
 	if (d.type == PropType::Color) {
 		const QColor a = QColor::fromRgba(QRgb(quint32(std::llround(keys[s.i].v))));

@@ -6,6 +6,7 @@
 #include "ComponentRegistry.hpp"
 
 #include <QCheckBox>
+#include <QComboBox>
 #include "ui/ColorField.hpp"
 
 #include <QColorDialog>
@@ -34,6 +35,7 @@ struct ComponentPanel::Row {
 	QVector<ParamSlider *> sliders; // null for a non-float property
 	QVector<QCheckBox *> checks;    // null for a non-bool property
 	QVector<QPushButton *> swatches; // null for a non-colour property
+	QVector<QComboBox *> combos;     // null for a non-choice property
 	QVector<QPushButton *> keyBtns;
 	QVector<QLabel *> labels;
 	QSpinBox *inMs = nullptr;  // ramp-in time; null on pinned rows
@@ -305,6 +307,7 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 			QWidget *control = nullptr;
 			ParamSlider *slider = nullptr;
 			QCheckBox *check = nullptr;
+			QComboBox *combo = nullptr;
 			QPushButton *swatch = nullptr;
 
 			if (d.type == PropType::Color) {
@@ -358,6 +361,35 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 						emit propertyEdited(typeId, ordinal, key, on);
 					});
 				control = check;
+			} else if (d.type == PropType::Choice) {
+				// A dropdown of the option NAMES. The value stored is the
+				// index, but an index is not something the user should ever
+				// have to know -- a spin box reading "1" for "Words" is a
+				// setting you have to guess at.
+				combo = new QComboBox(row->box);
+				combo->addItems(d.choices);
+				if (m.mixed) {
+					// A selection that disagrees shows a dash it can be moved
+					// off, not one member's answer presented as everyone's.
+					combo->insertItem(0, QStringLiteral("—"));
+					combo->setCurrentIndex(0);
+				} else {
+					combo->setCurrentIndex(
+						std::clamp(m.value.toInt(), 0, int(d.choices.size()) - 1));
+				}
+				connect(combo, &QComboBox::activated, this,
+					[this, typeId, ordinal, key = d.key, mixed = m.mixed,
+					 combo](int idx) {
+						if (syncing_)
+							return;
+						// Past the dash, when there was one.
+						const int v = mixed ? idx - 1 : idx;
+						if (v < 0)
+							return;
+						combo->removeItem(0); // it stops being mixed now
+						emit propertyEdited(typeId, ordinal, key, v);
+					});
+				control = combo;
 			} else {
 				// An Int is a count or a choice; three decimals on one reads
 				// as a broken float control.
@@ -382,6 +414,7 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 			row->sliders.append(slider);
 			row->checks.append(check);
 			row->swatches.append(swatch);
+			row->combos.append(combo);
 			if (!d.help.isEmpty())
 				control->setToolTip(d.help);
 
@@ -558,6 +591,11 @@ void ComponentPanel::rebuild()
 	applyPreviewStyle(); // a rebuild makes new widgets; the state outlives them
 }
 
+void ComponentPanel::setAllowedKinds(unsigned kinds)
+{
+	allowedKinds_ = kinds ? kinds : unsigned(ClipKindAll);
+}
+
 void ComponentPanel::setPreviewing(bool on)
 {
 	if (previewing_ == on)
@@ -585,6 +623,9 @@ void ComponentPanel::applyPreviewStyle()
 		for (QPushButton *b : r->swatches)
 			if (b)
 				b->setEnabled(!previewing_);
+		for (QComboBox *c : r->combos)
+			if (c)
+				c->setEnabled(!previewing_);
 		// The keyframe diamond writes AT THE PLAYHEAD, which is not the frame
 		// being shown -- so while previewing it would key the wrong instant.
 		for (QPushButton *b : r->keyBtns)
@@ -633,6 +674,16 @@ void ComponentPanel::pushValues()
 			}
 			if (r->swatches[i])
 				setSwatchColor(r->swatches[i], m);
+			if (r->combos[i] && !m.mixed) {
+				// Past the "—" entry a mixed row is still showing, if it has
+				// one: the index in the model is not the index in the list.
+				const int off = r->combos[i]->count() > 0 &&
+							r->combos[i]->itemText(0) == QStringLiteral("—")
+						? 1
+						: 0;
+				r->combos[i]->setCurrentIndex(
+					std::clamp(m.value.toInt() + off, 0, r->combos[i]->count() - 1));
+			}
 		}
 	};
 	int n = 0;
@@ -678,6 +729,14 @@ void ComponentPanel::addComponentMenu()
 	for (const ComponentType &t : reg_.all()) {
 		if (!t.addable)
 			continue; // every clip already has one
+		// Only what applies to EVERY selected clip: allowedKinds_ is the OR of
+		// the kinds in the selection, so what is offered has to cover all of
+		// them. A Typing effect on a video is not a mistake the user should
+		// have to discover by adding it and watching nothing happen -- and with
+		// a caption and a video both selected, offering it would mean adding a
+		// component to one of them and not the other.
+		if ((allowedKinds_ & ~t.clipKinds) != 0u)
+			continue;
 		if (t.category != lastCategory) {
 			lastCategory = t.category;
 			sub = menu.addMenu(t.category.isEmpty() ? QStringLiteral("Other") : t.category);

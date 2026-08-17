@@ -470,6 +470,20 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/projectpaths_test.cpp" -o "$WORK/projectpaths_test" $LF
 
+# The typewriter reveal: where the cut lands for characters / words / lines, the
+# caret's blink, the component through the stack, and a Choice holding between
+# keyframes like a Bool does.
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
+	"$HERE/texttyping_test.cpp" "$H/editor/component/Component.cpp" \
+	"$H/editor/component/ComponentRegistry.cpp" "$H/editor/component/ComponentStack.cpp" \
+	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ShaderComponent.cpp" \
+	"$H/editor/component/ScriptComponent.cpp" \
+	"$H/editor/component/TransformScriptComponent.cpp" \
+	"$H/editor/shader/ShaderRenderer.cpp" "$H/editor/script/TransformScript.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	-o "$WORK/texttyping_test" $LF
+
 # Does the Display dropdown point at the monitor the recording area lives on?
 # Two independent lists (OBS's and Qt's) name the same displays.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -544,6 +558,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/timelinekeys_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keyframetabs_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/hoverinspect_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/projectpaths_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/texttyping_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/splitseam_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinepan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineperf_test" || rc=1

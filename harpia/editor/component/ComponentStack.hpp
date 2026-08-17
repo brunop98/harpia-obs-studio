@@ -48,7 +48,13 @@ public:
 	// Time + Transform, evaluated in resolved order. `seed` carries the clip's
 	// own pose so a component that offsets rather than overwrites composes with
 	// hand-set values.
-	ClipState evaluatePose(const EvalContext &base, const TlTransform &seed) const;
+	// `text` is the clip's caption, for a Text clip and only then: the Source
+	// stage may rewrite it (a typing effect reveals a prefix) and the result
+	// comes back on the returned ClipState. Null everywhere else, which is what
+	// leaves ClipState::textValid false and makes a text component a no-op on a
+	// clip that has no words.
+	ClipState evaluatePose(const EvalContext &base, const TlTransform &seed,
+			       const QString *text = nullptr) const;
 
 	// The Pixel stage, over a frame that now exists.
 	void evaluatePixels(const EvalContext &base, QImage &frame) const;

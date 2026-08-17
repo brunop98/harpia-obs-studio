@@ -57,7 +57,11 @@ enum class Stage {
 inline constexpr int kStageCount = 6;
 const char *stageName(Stage s);
 
-enum class PropType { Float, Int, Bool, Color };
+// Choice is a fixed list of named options -- "reveal by Characters / Words /
+// Lines". Stored as its index, like everything else, so persistence, keyframes
+// and scripts need no new case; it HOLDS between keys exactly as a Bool does,
+// because there is no half-way between two options.
+enum class PropType { Float, Int, Bool, Color, Choice };
 
 // One editable property. This single declaration drives the Inspector row, the
 // keyframe track, the serialised key and the script binding — the same trick
@@ -70,6 +74,10 @@ struct PropDef {
 	double min = 0.0, max = 1.0, def = 0.0;
 	bool keyframeable = true;
 	QString help; // tooltip
+	// PropType::Choice only: the option names, in index order. The Inspector
+	// draws a dropdown from these, so the number stored is never something the
+	// user has to know.
+	QStringList choices;
 
 	bool operator==(const PropDef &o) const
 	{
@@ -169,6 +177,19 @@ struct ClipState {
 
 	// Pixel stage. Null in the stages that run before pixels exist.
 	QImage *frame = nullptr;
+
+	// Source stage, text clips only. Seeded from the clip's own caption; a
+	// component may rewrite it -- a typing effect hands back a prefix -- and
+	// the compositor draws THIS rather than the stored string. `caret`, if any,
+	// is drawn immediately after it.
+	//
+	// The clip's own text is never touched: what is stored is what the user
+	// typed, and what is drawn is what the components made of it. That is the
+	// same contract the transform has, where `xf` is seeded from the pose and
+	// the clip's own fields stay put.
+	QString text;
+	QString caret;
+	bool textValid = false; // false on every clip that is not a caption
 };
 
 // The behaviour itself. Stateless: everything it needs arrives in EvalContext,
@@ -205,6 +226,17 @@ struct ComponentAction {
 
 // The registration record: everything the editor knows about a kind of
 // component without having one.
+// Which kinds of clip a component can be put on. A bitmask rather than the
+// timeline's own enum, because this header is included BY the timeline model
+// and cannot include it back.
+enum ClipKind : unsigned {
+	ClipKindVideo = 1u,
+	ClipKindText = 2u,
+	ClipKindImage = 4u,
+	ClipKindEffect = 8u,
+	ClipKindAll = ClipKindVideo | ClipKindText | ClipKindImage | ClipKindEffect,
+};
+
 struct ComponentType {
 	QString id;
 	QString displayName;
@@ -226,6 +258,11 @@ struct ComponentType {
 	// the Add Component menu. Unity's own Transform works this way: you cannot
 	// add a second one and you cannot remove the one you have.
 	bool addable = true;
+
+	// Everything applies everywhere unless it says otherwise, so no existing
+	// component changes behaviour. A typing effect is meaningless on a video
+	// clip and simply does not appear in its Add Component menu.
+	unsigned clipKinds = ClipKindAll;
 
 	// True when an output pixel depends only on the INPUT PIXEL AT THE SAME
 	// POSITION -- a brightness curve, a colour matrix, a hue rotation. Such a

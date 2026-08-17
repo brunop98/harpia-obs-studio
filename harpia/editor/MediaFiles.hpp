@@ -86,4 +86,34 @@ inline bool isMediaFile(const QString &path)
 	return isVideoFile(path) || isImageFile(path) || isAudioFile(path);
 }
 
+// WHICH READER a file needs. One answer, in one place, because the three ways
+// of opening a source are not interchangeable and getting it wrong is silent:
+//
+//   Video   FrameSeeker, which needs a video stream
+//   Image   a single decoded QImage
+//   Audio   decoded to a session WAV; FrameSeeker CANNOT open these at all,
+//           because an audio-only file has no video stream to find
+//
+// Reopening a project used to ask this question inline and get it wrong for
+// audio -- everything that was not an image went to the video reader -- so a
+// project with a voiceover or an imported track could never load its audio
+// back, and relinking it failed too. The order matters and is the same order
+// every other caller uses: video first, because a GIF is deliberately in both
+// the video and image lists.
+enum class SourceKind { Video, Image, Audio };
+
+inline SourceKind sourceKindFor(const QString &path)
+{
+	if (isVideoFile(path))
+		return SourceKind::Video;
+	if (isImageFile(path))
+		return SourceKind::Image;
+	if (isAudioFile(path))
+		return SourceKind::Audio;
+	// Unknown extension: hand it to the video reader, which is what happened
+	// before this function existed. It will fail with a real error rather than
+	// this guessing on the user's behalf.
+	return SourceKind::Video;
+}
+
 } // namespace harpia

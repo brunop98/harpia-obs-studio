@@ -2303,7 +2303,13 @@ int VideoEditorWindow::addImageSource(const QString &path)
 		// The reason, not just the fact. "Could not read that image." left the
 		// user with nowhere to go -- most often it was a WebP and a Qt build
 		// with no WebP plugin, which is not something anyone could guess.
-		QMessageBox::warning(this, QStringLiteral("Add image"), why);
+		//
+		// Collected rather than shown while a project is loading, like the
+		// other two: the reason still reaches the user, once, at the end.
+		if (loadingProject_)
+			loadFailures_ << QStringLiteral("%1 — %2").arg(QFileInfo(path).fileName(), why);
+		else
+			QMessageBox::warning(this, QStringLiteral("Add image"), why);
 		return -1;
 	}
 	img = img.convertToFormat(QImage::Format_RGBA8888);
@@ -2522,13 +2528,21 @@ int VideoEditorWindow::addAudioSource(const QString &path)
 	QGuiApplication::restoreOverrideCursor();
 	if (!ok) {
 		--nextSourceId_;
-		QMessageBox::warning(this, QStringLiteral("Add audio"),
-				     QStringLiteral("Could not read any audio from that file."));
+		// Same rule as addSource: while a project is being applied this is
+		// collected and reported once at the end, not put up as a modal in the
+		// middle of a half-rebuilt editor.
+		if (loadingProject_)
+			loadFailures_ << QFileInfo(path).fileName();
+		else
+			QMessageBox::warning(
+				this, QStringLiteral("Add audio"),
+				QStringLiteral("Could not read any audio from that file."));
 		return -1;
 	}
 	EditorSource s;
 	s.id = id;
 	s.path = wav; // the decoded proxy IS the source (export decodes it again)
+	s.origPath = path; // ...but the project remembers the file you chose
 	s.name = QFileInfo(path).fileName();
 	s.durationMs = VoiceoverTrack::wavDurationMs(wav);
 	s.width = s.height = 0; // audio-only: no seeker, no filmstrip
@@ -7221,7 +7235,11 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 	for (const EditorSource &es : sources_) {
 		QJsonObject so;
 		so[QStringLiteral("id")] = es.id;
-		so[QStringLiteral("path")] = QDir::toNativeSeparators(es.path);
+		// The original for an audio source, whose `path` is a session decode in
+		// a temp folder: saving that meant saving a file that would not exist
+		// the next time the project was opened.
+		so[QStringLiteral("path")] = QDir::toNativeSeparators(
+			es.origPath.isEmpty() ? es.path : es.origPath);
 		so[QStringLiteral("name")] = es.name;
 		so[QStringLiteral("durationMs")] = double(es.durationMs);
 		so[QStringLiteral("width")] = es.width;
@@ -7428,12 +7446,32 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	QHash<int, int> srcMap; // project source id -> editor source id
 	int defaultSrcId = sources_.empty() ? 0 : sources_.front().id;
 	if (ver >= 2 && root.value(QStringLiteral("sources")).isArray()) {
+		// Which sources anything actually USES. A project can list a source no
+		// clip refers to -- delete the last clip that used a file and the entry
+		// stays -- and stopping the whole load to hunt for a file nothing needs
+		// is how a perfectly good project fails to open. The reported one did
+		// exactly that: an imported voiceover, long since deleted from a temp
+		// folder, on an audio track with no clips on it.
+		QSet<int> used;
+		for (const QJsonValue &tv : root.value(QStringLiteral("tracks")).toArray())
+			for (const QJsonValue &cv : tv.toObject().value(QStringLiteral("clips")).toArray()) {
+				const QJsonObject co = cv.toObject();
+				const QString cty = co.value(QStringLiteral("type")).toString();
+				// A caption carries a source id it never reads.
+				if (cty != QLatin1String("text"))
+					used.insert(co.value(QStringLiteral("source")).toInt());
+			}
+		for (const QJsonValue &sv : root.value(QStringLiteral("segments")).toArray())
+			used.insert(sv.toObject().value(QStringLiteral("source")).toInt());
+
 		bool first = true;
 		for (const QJsonValue &jv : root.value(QStringLiteral("sources")).toArray()) {
 			const QJsonObject so = jv.toObject();
 			const int pid = so.value(QStringLiteral("id")).toInt();
 			QString spath = so.value(QStringLiteral("path")).toString();
 			const QString sname = so.value(QStringLiteral("name")).toString();
+			if (!used.contains(pid) && !QFileInfo::exists(spath))
+				continue; // nothing needs it and it is not there: let it go
 			const EditorSource *known = sourceByPath(spath);
 			int eid = known ? known->id : -1;
 			if (eid < 0) {
@@ -7450,8 +7488,9 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 						// filter on an image source made the file you
 						// needed unselectable, which reads as the
 						// relink being broken.
-						isImageFile(spath)
-							? imageOpenFilter()
+						isImageFile(spath) ? imageOpenFilter()
+						: isAudioFile(spath)
+							? audioOpenFilter()
 							: QStringLiteral(
 								  "Video files (*.mp4 *.mov *.mkv *.webm "
 								  "*.avi *.m4v *.gif *.wmv *.flv "
@@ -7469,8 +7508,18 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 				// isVideoFile FIRST, as everywhere else that asks: a GIF is
 				// in both lists on purpose, and the video reader is what
 				// people mean by one (MediaFiles.hpp says so at length).
-				eid = (!isVideoFile(spath) && isImageFile(spath)) ? addImageSource(spath)
-										 : addSource(spath);
+				// By KIND -- see sourceKindFor. Audio is the one that was
+				// missing: everything that was not an image went to the video
+				// reader, which cannot open an audio-only file at all, so a
+				// project with a voiceover or an imported track could never
+				// load its audio back. Relinking failed the same way: you found
+				// the file you were asked for and were told it could not be
+				// opened.
+				switch (sourceKindFor(spath)) {
+				case SourceKind::Image: eid = addImageSource(spath); break;
+				case SourceKind::Audio: eid = addAudioSource(spath); break;
+				case SourceKind::Video: eid = addSource(spath); break;
+				}
 			}
 			if (eid >= 0) {
 				srcMap.insert(pid, eid);

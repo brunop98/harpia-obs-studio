@@ -109,6 +109,14 @@ class AudioPreview;
 struct EditorSource {
 	int id = 0; // stable, monotonic
 	QString path;
+	// The file the USER picked, when `path` is not it.
+	//
+	// An audio-only source is decoded to a session WAV and that decode becomes
+	// `path` -- everything downstream reads one uniform format. But the session
+	// WAV lives in a temp folder that is gone by the next run, so a project
+	// that saved it saved a path that can never be found again. This is what
+	// gets written to the project and reopened from it.
+	QString origPath;
 	QString name;
 	qint64 durationMs = 0;
 	int width = 0;

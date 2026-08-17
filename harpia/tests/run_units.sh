@@ -484,6 +484,12 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/texttyping_test" $LF
 
+# Which reader a source file needs. Audio used to go to the video reader, which
+# cannot open a file with no video stream -- so a project could create an audio
+# source and never load it back.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/sourcekind_test.cpp" -o "$WORK/sourcekind_test" $LF
+
 # Does the Display dropdown point at the monitor the recording area lives on?
 # Two independent lists (OBS's and Qt's) name the same displays.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -558,6 +564,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/timelinekeys_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keyframetabs_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/hoverinspect_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/projectpaths_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/sourcekind_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/texttyping_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/splitseam_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinepan_test" || rc=1

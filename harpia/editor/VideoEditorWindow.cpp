@@ -961,6 +961,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 
 	QVBoxLayout *projLayout = mkTab(QStringLiteral("Project"));
 	QVBoxLayout *insLayout = mkTab(QStringLiteral("Clip"));
+	// A third tab for the clip's SOURCE range -- where in the file it comes
+	// from, how fast it plays, how long it ends up. Read-only facts, and a
+	// different question from the editable properties beside them: "what part
+	// of the file is this" rather than "what does it look like". Together in
+	// one tab they were a block of numbers you scrolled past to reach the
+	// controls, in every mode, whether or not you were trimming.
+	QVBoxLayout *srcLayout = mkTab(QStringLiteral("Source"));
 	// The tab stays there with nothing selected rather than disappearing: a tab
 	// strip that changes shape as you work is a strip you cannot aim at.
 	clipEmpty_ = new QLabel(QStringLiteral("Select a clip to see its properties."), this);
@@ -1029,15 +1036,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		reloadComponentsFromDisk();
 	});
 
-	// ---- Clip properties -------------------------------------------------
-	auto *clipHdr = new QLabel(QStringLiteral("Clip"), this);
-	clipHdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed; margin-top:6px;"));
-	insLayout->addWidget(clipHdr);
+	// ---- Source range (its own tab) --------------------------------------
 	inspTitle_ = new QLabel(QString(), this);
 	inspTitle_->setStyleSheet(QStringLiteral("color:#c8ccd4;"));
 	inspTitle_->setWordWrap(true);
-	insLayout->addWidget(inspTitle_);
-	auto *insForm = new QFormLayout;
+	srcLayout->addWidget(inspTitle_);
+	srcForm_ = new QWidget(this);
+	auto *insForm = new QFormLayout(srcForm_);
 	insForm->setLabelAlignment(Qt::AlignLeft);
 	insForm->setContentsMargins(0, 4, 0, 0);
 	insForm->setHorizontalSpacing(10);
@@ -1063,11 +1068,18 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	insForm->addRow(mkKey(QStringLiteral("Source length")), inspSrcLen_);
 	insForm->addRow(mkKey(QStringLiteral("Speed")), inspSpeed_);
 	insForm->addRow(mkKey(QStringLiteral("Output length")), inspOutLen_);
-	insLayout->addLayout(insForm);
+	srcLayout->addWidget(srcForm_);
 	inspHint_ = new QLabel(QString(), this);
 	inspHint_->setWordWrap(true);
 	inspHint_->setStyleSheet(QStringLiteral("color:#7f858e;"));
-	insLayout->addWidget(inspHint_);
+	srcLayout->addWidget(inspHint_);
+	// Nothing selected is a state this tab has to say out loud too: five dashes
+	// under a heading look like a clip whose numbers failed to load.
+	srcEmpty_ = new QLabel(QStringLiteral("Select a clip to see where it comes from."), this);
+	srcEmpty_->setWordWrap(true);
+	srcEmpty_->setStyleSheet(QStringLiteral("color:#7f858e; padding:10px 2px;"));
+	srcLayout->addWidget(srcEmpty_);
+	srcLayout->addStretch(1);
 
 	// Full-editing: per-clip zoom/position/keyframes and text styling.
 	buildClipInspector(insLayout);
@@ -5256,15 +5268,35 @@ void VideoEditorWindow::refreshKeyframeEditor()
 		return;
 	const int t = timelineView_->selectedTrack();
 	const auto &tracks = timelineView_->model().tracks;
-	const QString label =
-		(t >= 0 && t < tracks.size())
-			? QStringLiteral("%1 · %2").arg(tracks[t].name).arg(
-				  sel->type == TlClip::Type::Text
-					  ? sel->text.text.split(QLatin1Char('\n')).value(0)
-					  : QStringLiteral("#%1").arg(sel->sourceId))
-			: QString();
+	const QString label = (t >= 0 && t < tracks.size())
+				      ? QStringLiteral("%1 · %2").arg(tracks[t].name, clipLabel(*sel))
+				      : clipLabel(*sel);
 	keyEditor_->setClip(*sel, label);
 	keyEditor_->setPlayheadOut(timelinePlayheadMs());
+}
+
+// What to call a clip in a panel's heading: its file, its words, or what the
+// effect does. Shared by the Source tab and the keyframe editor's title bar,
+// which were building the same string two different ways.
+QString VideoEditorWindow::clipLabel(const TlClip &c) const
+{
+	switch (c.type) {
+	case TlClip::Type::Text:
+		// The first line only: a caption can be a paragraph, and a heading that
+		// grows to five lines pushes the panel around.
+		return tlDisplayText(c.text).split(QLatin1Char('\n')).value(0);
+	case TlClip::Type::Effect:
+		return c.effectLabel([](const QString &id) {
+			const ComponentType *t = ComponentRegistry::instance().find(id);
+			return t ? t->displayName : id;
+		});
+	default:
+		break;
+	}
+	for (const EditorSource &s : sources_)
+		if (s.id == c.sourceId)
+			return s.name.isEmpty() ? QFileInfo(s.path).fileName() : s.name;
+	return QStringLiteral("#%1").arg(c.sourceId);
 }
 
 // A script that defines a channel computes that channel's final value, so the
@@ -6679,6 +6711,40 @@ void VideoEditorWindow::updateInspector()
 			inspHint_->setText(QStringLiteral(
 				"Click a cut on the Output track to see and edit its properties."));
 		}
+	} else if (fullEdit()) {
+		// Full editing: the SELECTED CLIP's own range. This branch did not
+		// exist -- full editing fell through to the Trim timeline's start and
+		// end below, which belong to a different mode's widget and describe a
+		// different thing, so these five rows were reporting numbers that had
+		// nothing to do with the clip on screen.
+		const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+		if (!c) {
+			inspTitle_->clear();
+			inspHint_->clear();
+		} else if (c->freeDuration()) {
+			// A caption, a still or an effect has no source timeline: its
+			// length is whatever it was dragged to. Dashes rather than zeroes,
+			// which would read as "starts at 0, ends at 0".
+			inspTitle_->setText(clipLabel(*c));
+			inspInMs_->setText(QStringLiteral("—"));
+			inspOutMs_->setText(QStringLiteral("—"));
+			inspSrcLen_->setText(QStringLiteral("—"));
+			inspSpeed_->setText(QStringLiteral("—"));
+			inspOutLen_->setText(
+				QStringLiteral("%1s").arg(c->outDurationMs() / 1000.0, 0, 'f', 2));
+			inspHint_->setText(
+				QStringLiteral("No source file — its length is whatever you drag it to."));
+		} else {
+			inspTitle_->setText(clipLabel(*c));
+			setRange(c->srcStartMs, c->srcEndMs, c->speed, c->outDurationMs());
+			inspHint_->clear();
+		}
+		const bool have = c != nullptr;
+		if (srcForm_)
+			srcForm_->setVisible(have);
+		if (srcEmpty_)
+			srcEmpty_->setVisible(!have);
+		return;
 	} else {
 		// Simple Trim: the single kept range at the global speed.
 		const qint64 in = timeline_->start();
@@ -6688,6 +6754,15 @@ void VideoEditorWindow::updateInspector()
 		inspTitle_->setText(QStringLiteral("Trim range"));
 		setRange(in, out, speed_, outLen);
 		inspHint_->clear();
+	}
+	// Multi-Cut with nothing selected is the other empty case; Simple Trim
+	// always has a range, because the range IS the edit.
+	{
+		const bool have = !multiCut() || (tracks_ && tracks_->selectedIndex() >= 0);
+		if (srcForm_)
+			srcForm_->setVisible(have);
+		if (srcEmpty_)
+			srcEmpty_->setVisible(!have);
 	}
 }
 

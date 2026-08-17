@@ -532,6 +532,7 @@ private:
 	void layOutEmptyPanel();
 	void updateEmptyState();
 	bool projectIsEmpty() const;
+	QString clipLabel(const TlClip &c) const;
 	EditorSource *sourceById(int id);
 	// The source already open for this file, or nullptr. Two callers were
 	// writing this loop themselves and both rebuilt a QFileInfo for the SEARCH
@@ -575,8 +576,11 @@ private:
 	// clip you had just clicked sat below a screenful of project metadata.
 	QTabWidget *insTabs_ = nullptr;
 	QLabel *clipEmpty_ = nullptr; // "select a clip", shown when nothing is
+	QLabel *srcEmpty_ = nullptr;  // the same, on the Source tab
+	QWidget *srcForm_ = nullptr;  // the five range rows, hidden wholesale
 	static constexpr int kInsTabProject = 0;
 	static constexpr int kInsTabClip = 1;
+	static constexpr int kInsTabSource = 2;
 	QPushButton *inspectorBtn_ = nullptr; // toolbar toggle (show/hide the panel)
 	QLabel *inspTitle_ = nullptr;
 	QLabel *inspInMs_ = nullptr;

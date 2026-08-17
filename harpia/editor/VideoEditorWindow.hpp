@@ -532,6 +532,11 @@ private:
 	void layOutEmptyPanel();
 	void updateEmptyState();
 	bool projectIsEmpty() const;
+	// True only while applyProjectJson is rebuilding the editor. Suppresses the
+	// per-file error box, which would otherwise run a nested event loop in the
+	// middle of a half-applied project, once per missing file.
+	bool loadingProject_ = false;
+	QStringList loadFailures_; // files a load could not read, reported together
 	QString clipLabel(const TlClip &c) const;
 	EditorSource *sourceById(int id);
 	// The source already open for this file, or nullptr. Two callers were

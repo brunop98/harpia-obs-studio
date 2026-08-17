@@ -1694,6 +1694,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	buildEmptyPanel();
 	if (inPath_.isEmpty()) {
 		valid_ = true;
+	loadingProject_ = false;
 		history_.clear();
 		history_.push_back(snapshot());
 		histIndex_ = 0;
@@ -1872,8 +1873,18 @@ int VideoEditorWindow::addSource(const QString &path)
 {
 	auto seeker = std::make_unique<FrameSeeker>();
 	if (!seeker->open(path)) {
-		QMessageBox::warning(this, QStringLiteral("Add video"),
-				     QStringLiteral("Could not open %1").arg(QFileInfo(path).fileName()));
+		// While a project is being applied this is COLLECTED, not shown. A
+		// message box runs a nested event loop, and doing that half-way through
+		// rebuilding the editor -- once per missing file, so five missing files
+		// meant five nested loops interleaved with the load -- is how a failed
+		// load turns into something worse than a failed load. The caller
+		// reports them together when the editor is whole again.
+		if (loadingProject_)
+			loadFailures_ << QFileInfo(path).fileName();
+		else
+			QMessageBox::warning(
+				this, QStringLiteral("Add video"),
+				QStringLiteral("Could not open %1").arg(QFileInfo(path).fileName()));
 		return -1;
 	}
 	EditorSource src;
@@ -2171,8 +2182,18 @@ void VideoEditorWindow::onRemoveSource()
 		}
 	}
 	refreshSourceList(); // rebuild the sidebar without the removed row
-	if (activeSourceId_ == id) // removed the active source — fall back to another
-		setActiveSource(sources_.front().id);
+	if (activeSourceId_ == id) {
+		// Fall back to another source -- if there IS one. front() on an empty
+		// vector is undefined behaviour, and removing the LAST source is not an
+		// exotic case: it is what you do the moment a project comes back with
+		// its media missing.
+		if (!sources_.empty()) {
+			setActiveSource(sources_.front().id);
+		} else {
+			activeSourceId_ = 0;
+			updateEmptyState(); // back to "Nothing loaded yet", correctly this time
+		}
+	}
 }
 
 void VideoEditorWindow::refreshLibrary()
@@ -7387,6 +7408,17 @@ QHash<QString, QVector<float>> VideoEditorWindow::decodePeaks(const QStringList 
 
 void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString &path, bool quiet)
 {
+	// Playback owns the preview, the per-track decoders and its own idea of
+	// where it is; this is about to replace all three. Stopping first is the
+	// difference between a load and a load racing a timer.
+	if (playing_)
+		stopPlayback();
+
+	// Everything below runs with the editor half-rebuilt. The flag keeps the
+	// per-file error boxes out of that window -- see addSource.
+	loadingProject_ = true;
+	loadFailures_.clear();
+
 	const int ver = root.value(QStringLiteral("harpiaProject")).toInt(1);
 
 	// v2 projects carry their own list of sources — open (or relink) each and
@@ -7698,9 +7730,25 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	updateInspector();
 	if (fullEdit())
 		showTimelineFrame(timelinePlayheadMs());
-	if (!quiet)
-		QMessageBox::information(this, QStringLiteral("Open project"),
-					 QStringLiteral("Project loaded."));
+	if (!quiet) {
+		// One message, whatever went wrong, and only once the editor is whole
+		// again. A project whose media has moved still OPENS -- its timeline,
+		// its captions and its edits are all there -- so this says what is
+		// missing rather than pretending the load failed.
+		if (loadFailures_.isEmpty()) {
+			QMessageBox::information(this, QStringLiteral("Open project"),
+						 QStringLiteral("Project loaded."));
+		} else {
+			QMessageBox::warning(
+				this, QStringLiteral("Open project"),
+				QStringLiteral("The project opened, but %1 of its files could not "
+					       "be read:\n\n%2\n\nIts clips are still on the "
+					       "timeline. Use Add video to relink them.")
+					.arg(loadFailures_.size())
+					.arg(loadFailures_.join(QStringLiteral("\n"))));
+		}
+	}
+	loadFailures_.clear();
 }
 
 void VideoEditorWindow::joinExport()
@@ -8811,11 +8859,15 @@ void VideoEditorWindow::onSave()
 	o.effort = dlg.effort();
 	o.chroma444 = dlg.chroma444();
 	o.keepAudio = dlg.keepAudio();
-	if (cuts) {
+	if (cuts && !sources_.empty()) {
 		// Multi-cut assembly: the cut list replaces trim range + global speed.
 		// inputs[0] is always the primary (canvas) source; other used sources
 		// follow. When only the primary is used, inputs stays empty so the
 		// single-input export path runs unchanged.
+		//
+		// Guarded on the media pool: a project can now have clips and no
+		// sources at all (a caption, a still, an effect), and front() on an
+		// empty vector is undefined behaviour rather than an empty answer.
 		const int primaryId = sources_.front().id;
 		std::vector<int> order{primaryId}; // source ids; index 0 = canvas source
 		auto indexOf = [&](int sid) -> int {

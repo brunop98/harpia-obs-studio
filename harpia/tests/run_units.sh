@@ -465,6 +465,11 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK"/moc_hi_*.cpp \
 	-o "$WORK/hoverinspect_test" $LF
 
+# Where a project is saved when the user has not said: the base folder, the name
+# it gets, and that a suggestion never lands on a file that already exists.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/projectpaths_test.cpp" -o "$WORK/projectpaths_test" $LF
+
 # Does the Display dropdown point at the monitor the recording area lives on?
 # Two independent lists (OBS's and Qt's) name the same displays.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -538,6 +543,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/gutterspill_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinekeys_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keyframetabs_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/hoverinspect_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/projectpaths_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/splitseam_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinepan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineperf_test" || rc=1

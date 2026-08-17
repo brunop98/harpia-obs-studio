@@ -23,6 +23,8 @@
 #include <QMessageBox>
 #include <QPalette>
 #include <QSettings>
+#include "editor/ProjectPaths.hpp"
+
 #include <QStandardPaths>
 #include <QStyleFactory>
 #include <string>
@@ -260,6 +262,11 @@ int main(int argc, char *argv[])
 		base = QDir::homePath();
 	const QString outputFolder = QDir(base).filePath(QStringLiteral("Harpia"));
 	QDir().mkpath(outputFolder);
+	// ...and one for saved editing projects beside it, so there is a place to
+	// look for the thing you were working on last week. Made at startup rather
+	// than on the first save: an empty folder in the file manager is how the
+	// user learns it exists. See editor/ProjectPaths.hpp.
+	QDir().mkpath(harpia::defaultProjectsFolder());
 
 	harpia::PresetStore presets;
 	presets.load(outputFolder.toStdString());

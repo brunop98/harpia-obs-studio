@@ -22,6 +22,7 @@
 #include "ExportOptionsDialog.hpp"
 #include "FrameSeeker.hpp"
 #include "PreviewDecoder.hpp"
+#include "ProjectPaths.hpp"
 #include "ProxyMedia.hpp"
 #include "LevelMeter.hpp"
 #include "SceneDetector.hpp"
@@ -7123,11 +7124,21 @@ void VideoEditorWindow::onSaveProjectAs()
 {
 	if (!valid_)
 		return;
-	const QString suggested =
-		projectPath_.isEmpty()
-			? QFileInfo(inPath_).absolutePath() + QLatin1Char('/') +
-				  QFileInfo(inPath_).completeBaseName() + QStringLiteral("_edit.harpiaproj")
-			: projectPath_;
+	// A project that has never been saved goes to the projects folder under a
+	// name taken from its media, not next to whichever file it happened to
+	// start from -- see ProjectPaths.hpp. Already-saved projects stay where
+	// they are, which is where the user put them.
+	QString suggested = projectPath_;
+	if (suggested.isEmpty()) {
+		const QString dir = ensureProjectsFolder();
+		suggested = dir.isEmpty()
+				    // No projects folder could be made: the old behaviour, so
+				    // Save As still opens somewhere sensible.
+				    ? QFileInfo(inPath_).absolutePath() + QLatin1Char('/') +
+					      suggestedProjectStem(inPath_) +
+					      QStringLiteral(".harpiaproj")
+				    : uniqueProjectPath(dir, suggestedProjectStem(inPath_));
+	}
 	QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Save project as"), suggested,
 						    QStringLiteral("Harpia project (*.harpiaproj)"));
 	if (path.isEmpty())
@@ -7274,8 +7285,12 @@ void VideoEditorWindow::onOpenProject()
 {
 	if (!valid_)
 		return;
+	// Where projects are kept, not where the current media happens to live.
+	const QString startIn = QDir(defaultProjectsFolder()).exists()
+					? defaultProjectsFolder()
+					: QFileInfo(inPath_).absolutePath();
 	const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Open project"),
-							  QFileInfo(inPath_).absolutePath(),
+							  startIn,
 							  QStringLiteral("Harpia project (*.harpiaproj)"));
 	if (path.isEmpty())
 		return;

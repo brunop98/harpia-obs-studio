@@ -720,7 +720,7 @@ private:
 
 	QWidget *videoClipBox_ = nullptr;
 	QWidget *audioClipBox_ = nullptr;
-	QDoubleSpinBox *clipVolSpin_ = nullptr;
+	ParamSlider *clipVolSlider_ = nullptr;
 	QSpinBox *clipFadeInSpin_ = nullptr;
 	QSpinBox *clipFadeOutSpin_ = nullptr;
 	QComboBox *clipFadeInCurve_ = nullptr;

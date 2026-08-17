@@ -5073,14 +5073,15 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	aForm->setHorizontalSpacing(10);
 	aForm->setVerticalSpacing(4);
 
-	clipVolSpin_ = new QDoubleSpinBox(audioClipBox_);
-	clipVolSpin_->setRange(0.0, 2.0);
-	clipVolSpin_->setDecimals(2);
-	clipVolSpin_->setSingleStep(0.05);
-	clipVolSpin_->setKeyboardTracking(false);
-	clipVolSpin_->setToolTip(QStringLiteral("Level for this clip. 1.00 leaves it as recorded."));
-	aForm->addRow(QStringLiteral("Volume"), clipVolSpin_);
-	connect(clipVolSpin_, &QDoubleSpinBox::valueChanged, this, [this](double val) {
+	// A slider, like every other bounded value in this Inspector. A level is
+	// something you sweep while listening, not a number you guess and re-guess
+	// -- and ParamSlider keeps the spin box beside it, so "exactly 1.00" is
+	// still one keystroke away.
+	clipVolSlider_ = new ParamSlider(0.0, 2.0, 2, audioClipBox_);
+	clipVolSlider_->setToolTip(
+		QStringLiteral("Level for this clip. 1.00 leaves it as recorded."));
+	aForm->addRow(QStringLiteral("Volume"), clipVolSlider_);
+	connect(clipVolSlider_, &ParamSlider::valueChanged, this, [this](double val) {
 		if (syncingClip_)
 			return;
 		editSelectedClip([val](TlClip &c) { c.volume = val; });
@@ -5465,7 +5466,7 @@ void VideoEditorWindow::syncClipInspector()
 	if (audioClipBox_) {
 		audioClipBox_->setVisible(onAudioTrack);
 		if (onAudioTrack) {
-			clipVolSpin_->setValue(c->volume);
+			clipVolSlider_->setValue(c->volume);
 			// Set the ceiling before the values, or a fade longer than the
 			// last clip's would be silently truncated on the way in.
 			// A fade may run the whole clip; overlapping fades multiply,
@@ -8074,6 +8075,21 @@ void VideoEditorWindow::invalidateAudioMix()
 	audioMixValid_ = false;
 	if (audioPreview_)
 		audioPreview_->clear();
+
+	// ...and if the sound was PLAYING, it has just stopped. The buffer it was
+	// reading is the old mix and no longer describes the timeline, so clearing
+	// it is right -- but nothing used to bring it back, and playback carried on
+	// in silence until you stopped and pressed play again.
+	//
+	// That is what made the clip Volume control look broken: you drag it while
+	// listening, which is the only way to set a level, and the sound simply
+	// goes away. Same for moving or trimming a clip mid-playback.
+	//
+	// Re-mixing is safe to ask for on every edit: startPreviewAudio coalesces.
+	// A mix already running for an older timeline is cancelled and restarted
+	// once it unwinds, so a slider being dragged queues one re-mix, not thirty.
+	if (playing_ && fullEdit())
+		startPreviewAudio(timelinePlayheadMs());
 }
 
 void VideoEditorWindow::startPreviewAudio(qint64 fromMs)

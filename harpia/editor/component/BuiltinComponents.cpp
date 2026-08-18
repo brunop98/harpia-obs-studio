@@ -1,5 +1,6 @@
 #include "BuiltinComponents.hpp"
 
+#include "TextBullets.hpp"
 #include "TextTyping.hpp"
 
 #include "../timeline/EffectClip.hpp" // the effect table, and Effects::apply
@@ -321,6 +322,31 @@ public:
 	}
 };
 
+// Bullets: a list that arrives a point at a time.
+//
+// Typing's sibling, and deliberately not a mode inside it: Typing reveals ONE
+// thought gradually, Bullets shows SEVERAL in turn, and the second needs a time
+// per bullet rather than one progress across the clip. Those times live in the
+// caption itself -- "[3.5] Setting the exposure" -- so cutting a line takes its
+// cue with it, and re-ordering two bullets does not mean re-timing them.
+//
+// A caption with no cues is left exactly alone. That matters more than it
+// looks: this component sits in the Text menu next to Typing, and a component
+// that blanks the clip until you learn its syntax is one nobody adds twice.
+//
+// The parsing is in TextBullets.hpp, pure and tested; this is the wiring.
+class TextBulletsComponent : public IComponent {
+public:
+	void evaluate(const EvalContext &ctx, ClipState &io) const override
+	{
+		if (!io.textValid || io.text.isEmpty())
+			return;
+		if (!captionHasBulletCues(io.text))
+			return; // an ordinary caption: not ours to touch
+		io.text = bulletsAt(io.text, ctx.tMs, ctx.f("mode", 0.0) < 0.5);
+	}
+};
+
 void registerBuiltinComponents(ComponentRegistry &reg)
 {
 	// Every effect, as a component. Inverse Selection is skipped: its settings
@@ -449,6 +475,26 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 			 0.0, 8.0, 2.0, true,
 			 QStringLiteral("0 keeps the caret steady instead of blinking.")}};
 		t.make = [] { return std::unique_ptr<IComponent>(new TextTypeComponent); };
+		reg.add(t);
+	}
+	{
+		ComponentType t;
+		t.id = QStringLiteral("harpia.textBullets");
+		t.displayName = QStringLiteral("Bullets");
+		t.category = QStringLiteral("Text");
+		t.stage = Stage::Source;
+		t.clipKinds = ClipKindText;
+		t.help = QStringLiteral(
+			"Show the lines of the caption on cue. Put the time in seconds at the "
+			"start of a line:\n\n    [0]   Framing the shot\n    [3.5] Setting the "
+			"exposure\n    [7]   Rolling\n\nThe marker is removed before the caption "
+			"is drawn. A line with no marker appears with the one above it.");
+		t.props = {{QStringLiteral("mode"), QStringLiteral("Then"), PropType::Choice, 0.0, 1.0,
+			    0.0, true,
+			    QStringLiteral("Build up leaves the earlier points on screen; one at a "
+					   "time replaces them."),
+			    {QStringLiteral("Build up"), QStringLiteral("One at a time")}}};
+		t.make = [] { return std::unique_ptr<IComponent>(new TextBulletsComponent); };
 		reg.add(t);
 	}
 	{

@@ -507,6 +507,20 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/texttyping_test" $LF
 
+# Bullets on cue: the "[3.5] " marker, build-up versus one-at-a-time, and -- the
+# one that decides whether the component is safe to add -- that a caption which
+# does not use the syntax comes back exactly as it was typed.
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
+	"$HERE/bullets_test.cpp" "$H/editor/component/Component.cpp" \
+	"$H/editor/component/ComponentRegistry.cpp" "$H/editor/component/ComponentStack.cpp" \
+	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ShaderComponent.cpp" \
+	"$H/editor/component/ScriptComponent.cpp" \
+	"$H/editor/component/TransformScriptComponent.cpp" \
+	"$H/editor/shader/ShaderRenderer.cpp" "$H/editor/script/TransformScript.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	-o "$WORK/bullets_test" $LF
+
 # Which reader a source file needs. Audio used to go to the video reader, which
 # cannot open a file with no video stream -- so a project could create an audio
 # source and never load it back.
@@ -591,6 +605,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/hoverinspect_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/projectpaths_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/sourcekind_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/texttyping_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/bullets_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/splitseam_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinepan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineperf_test" || rc=1

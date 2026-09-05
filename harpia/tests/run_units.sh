@@ -248,6 +248,18 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
 	-o "$WORK/clipvolume_test" $LF
 
+# The track list: a typed name survives renumbering, an effect lane can be
+# hidden but not muted, only self-made lanes vanish when emptied, and a locked
+# lane takes no clip from a menu action either.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/tracks_test.cpp" "$H/editor/timeline/TimelineView.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
+	-o "$WORK/tracks_test" $LF
+
 # The timeline must not rescale itself while a clip is being dragged: every
 # pixel comes from the project's total span, and dragging past the end grows it.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -600,6 +612,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/gutterspill_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinekeys_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinedragspan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/clipvolume_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/tracks_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keyframetabs_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/hoverinspect_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/projectpaths_test" || rc=1

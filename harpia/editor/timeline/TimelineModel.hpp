@@ -724,8 +724,9 @@ struct TlTrack {
 	enum class Kind { Video, Audio, Effect };
 	Kind kind = Kind::Video;
 	QString name;
-	// Per-track switches. `hidden` only applies to video (keeps the audio), and
-	// `muted` silences the track's audio (a video track has both). `locked`
+	// Per-track switches. `hidden` takes a picture lane out of the composite
+	// (video keeps its audio; an effect lane stops grading), and `muted`
+	// silences the track's audio (a video track has both). `locked`
 	// blocks every edit but still previews/renders. `ripple` closes the gap when
 	// a clip is deleted from this track.
 	bool muted = false;
@@ -734,6 +735,44 @@ struct TlTrack {
 	bool ripple = false;
 	QColor color = QColor(0x3a, 0x6e, 0xa5); // clip tint (random pastel when created)
 	QVector<TlClip> clips; // unordered; painting/compositing sorts by outStartMs
+
+	// This lane appeared on its own -- a drop between two lanes, or a clip
+	// added when there was no lane of its kind -- rather than being asked for.
+	// Only such a lane is tidied away again when its last clip leaves it: one
+	// the user created, renamed or coloured is theirs to keep, empty or not.
+	// Deliberately NOT saved and NOT part of equality: after a reload every
+	// lane is treated as the user's, which is the safe way round, and the flag
+	// must not make two otherwise identical timelines compare unequal.
+	bool autoLane = false;
+
+	// "V2", "A1", "FX3": the names the timeline hands out itself. Renumbering
+	// after a lane is added or removed only touches these, so a name the user
+	// typed survives every later edit to the track list.
+	static bool isAutoName(const QString &n)
+	{
+		if (n.isEmpty())
+			return true;
+		int i = 0;
+		if (n.startsWith(QLatin1String("FX")))
+			i = 2;
+		else if (n.at(0) == QLatin1Char('V') || n.at(0) == QLatin1Char('A'))
+			i = 1;
+		else
+			return false;
+		if (i >= n.size())
+			return false;
+		for (; i < n.size(); ++i)
+			if (!n.at(i).isDigit())
+				return false;
+		return true;
+	}
+
+	// Which switches make sense for a kind. Hide is about the picture, so any
+	// picture lane has it -- an effect lane included, which is how you A/B a
+	// grade without deleting it. Mute is about sound, which an effect lane
+	// does not carry.
+	static bool kindCanHide(Kind k) { return k != Kind::Audio; }
+	static bool kindCanMute(Kind k) { return k != Kind::Effect; }
 
 	// The clip covering an output-time position (topmost = last added wins on
 	// overlap). Returns -1 when none.

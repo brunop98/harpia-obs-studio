@@ -178,6 +178,10 @@ public:
 	// Track operations (also available from the header's right-click menu).
 	void addTrack(TlTrack::Kind kind, int atIndex = -1); // -1 = top of that kind's group
 	void deleteTrack(int index);
+	// Give a lane a name of your own. It survives every later add/remove of
+	// other lanes; an empty name (or an automatic one like "A2") hands the lane
+	// back to the automatic numbering.
+	void renameTrack(int index, const QString &name);
 
 	// ---- Whole-track copy / paste -------------------------------------------
 	//

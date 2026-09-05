@@ -166,10 +166,19 @@ int main(int argc, char **argv)
 
 		// THE CONTROL. Without it, "the clip did not move" is also what a
 		// timeline that ignores every drag would report.
-		const QPoint body(r.center().x(), r.bottom() - 4);
+		//
+		// Below the line's grab range, but ABOVE the lane's bottom edge: the
+		// last 7 px of a lane are the drop band that means "make a new lane
+		// here", and a press in it would move the clip onto a fresh lane rather
+		// than along this one. (It did, once: the emptied lane used to be
+		// tidied away, so the indices happened to line up. Now a lane you were
+		// given stays when emptied, and the control has to mean what it says.)
+		const QPoint body(r.center().x(), r.bottom() - 9);
 		press(&v, body);
 		moveTo(&v, body + QPoint(80, 0), Qt::ShiftModifier);
 		release(&v, body + QPoint(80, 0));
+		ok(v.model().tracks.size() == 2 && v.model().tracks[kAudio].clips.size() == 1,
+		   "the clip stayed on its own lane");
 		ok(v.model().tracks[kAudio].clips[0].outStartMs != startedAt,
 		   "while the same gesture lower down DOES move the clip");
 	}

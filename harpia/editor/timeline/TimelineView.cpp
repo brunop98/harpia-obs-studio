@@ -191,22 +191,31 @@ void TimelineView::renumberTracks()
 	// Video lanes are numbered bottom-up (V1 is the bottom/background layer,
 	// matching the convention that a higher lane renders in front); audio
 	// top-down.
+	//
+	// Only the automatic names are rewritten. This runs after every change to
+	// the track list, and it used to rewrite every name -- so "Narration"
+	// became "A2" again the moment any other lane was added or removed. A name
+	// the user typed is theirs; the counters still advance past it so that the
+	// automatic names around it stay in order.
 	const int nv = model_.videoTrackCount();
 	int a = 0, e = 0, v = 0;
 	for (int i = 0; i < model_.tracks.size(); ++i) {
 		TlTrack &t = model_.tracks[i];
+		QString auto_;
 		switch (t.kind) {
 		case TlTrack::Kind::Video:
 			// Numbered bottom-up, so V1 is the lowest picture track.
-			t.name = QStringLiteral("V%1").arg(nv - v++);
+			auto_ = QStringLiteral("V%1").arg(nv - v++);
 			break;
 		case TlTrack::Kind::Effect:
-			t.name = QStringLiteral("FX%1").arg(++e);
+			auto_ = QStringLiteral("FX%1").arg(++e);
 			break;
 		case TlTrack::Kind::Audio:
-			t.name = QStringLiteral("A%1").arg(++a);
+			auto_ = QStringLiteral("A%1").arg(++a);
 			break;
 		}
+		if (TlTrack::isAutoName(t.name))
+			t.name = auto_;
 	}
 }
 
@@ -229,6 +238,21 @@ void TimelineView::addTrack(TlTrack::Kind kind, int atIndex)
 		++selTrack_;
 	renumberTracks();
 	updateGeometry();
+	update();
+	commitEdit();
+}
+
+void TimelineView::renameTrack(int index, const QString &name)
+{
+	if (index < 0 || index >= model_.tracks.size())
+		return;
+	TlTrack &t = model_.tracks[index];
+	t.autoLane = false; // named, so it is the user's lane now
+	// An empty name would leave the header blank with no way back, so it
+	// falls back to the automatic V1/A1 numbering -- as does typing one of
+	// those names yourself, which renumbering will then keep in step.
+	t.name = name.trimmed();
+	renumberTracks();
 	update();
 	commitEdit();
 }
@@ -271,17 +295,23 @@ void TimelineView::zoomToFit()
 
 void TimelineView::addClip(TlTrack::Kind kind, const TlClip &clip)
 {
+	// The last UNLOCKED lane of the kind. Locked means "nothing changes on this
+	// lane", and a clip landing on it from a menu action is a change.
 	int idx = -1;
 	for (int i = model_.tracks.size() - 1; i >= 0; --i)
-		if (model_.tracks[i].kind == kind) {
+		if (model_.tracks[i].kind == kind && !model_.tracks[i].locked) {
 			idx = i;
 			break;
 		}
 	if (idx < 0) {
+		// No lane, or every lane of the kind is locked: a new one at the bottom
+		// of the kind's group. Marked automatic, so it tidies itself away again
+		// if the clip is later moved off it.
 		const int np = model_.pictureTrackCount();
 		TlTrack t;
 		t.kind = kind;
 		t.color = randomPastel();
+		t.autoLane = true;
 		idx = TimelineModel::isPictureKind(kind) ? np : model_.tracks.size();
 		model_.tracks.insert(idx, t);
 		renumberTracks();
@@ -306,6 +336,7 @@ int TimelineView::addClipAt(TlTrack::Kind kind, const TlClip &clip, int track, i
 		TlTrack t;
 		t.kind = kind;
 		t.color = randomPastel();
+		t.autoLane = true; // made by the drop, unmade when the clip leaves
 		target = std::clamp(newTrackAt, 0, int(model_.tracks.size()));
 		model_.tracks.insert(target, t);
 		renumberTracks();
@@ -747,7 +778,8 @@ QRect TimelineView::headerToggleRect(int track, HeaderHit which) const
 		slot = 1;
 		break;
 	case HeaderHit::Mute:
-		slot = (model_.tracks[track].kind == TlTrack::Kind::Video) ? 2 : 1;
+		// After Hide when the lane has one, else in its place.
+		slot = TlTrack::kindCanHide(model_.tracks[track].kind) ? 2 : 1;
 		break;
 	default:
 		return QRect();
@@ -759,12 +791,12 @@ TimelineView::HeaderHit TimelineView::headerHitAt(int track, const QPoint &p) co
 {
 	if (track < 0 || track >= model_.tracks.size())
 		return HeaderHit::None;
-	const bool video = model_.tracks[track].kind == TlTrack::Kind::Video;
+	const TlTrack::Kind k = model_.tracks[track].kind;
 	if (headerToggleRect(track, HeaderHit::Lock).contains(p))
 		return HeaderHit::Lock;
-	if (video && headerToggleRect(track, HeaderHit::Hide).contains(p))
+	if (TlTrack::kindCanHide(k) && headerToggleRect(track, HeaderHit::Hide).contains(p))
 		return HeaderHit::Hide;
-	if (headerToggleRect(track, HeaderHit::Mute).contains(p))
+	if (TlTrack::kindCanMute(k) && headerToggleRect(track, HeaderHit::Mute).contains(p))
 		return HeaderHit::Mute;
 	return HeaderHit::None;
 }
@@ -774,7 +806,8 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 	if (track < 0 || track >= model_.tracks.size())
 		return;
 	TlTrack &t = model_.tracks[track];
-	const bool video = t.kind == TlTrack::Kind::Video;
+	const bool canHide = TlTrack::kindCanHide(t.kind);
+	const bool canMute = TlTrack::kindCanMute(t.kind);
 
 	QMenu menu(this);
 	// An effect track's whole purpose is to carry effects, so putting one on it
@@ -797,11 +830,12 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 	}
 	QAction *lock = menu.addAction(t.locked ? QStringLiteral("Unlock track")
 						: QStringLiteral("Lock track"));
-	QAction *hide = video ? menu.addAction(t.hidden ? QStringLiteral("Show track")
-							: QStringLiteral("Hide track"))
-			      : nullptr;
-	QAction *mute = menu.addAction(t.muted ? QStringLiteral("Unmute track")
-					       : QStringLiteral("Mute track"));
+	QAction *hide = canHide ? menu.addAction(t.hidden ? QStringLiteral("Show track")
+							  : QStringLiteral("Hide track"))
+				: nullptr;
+	QAction *mute = canMute ? menu.addAction(t.muted ? QStringLiteral("Unmute track")
+							 : QStringLiteral("Mute track"))
+				: nullptr;
 	QAction *ripple = menu.addAction(QStringLiteral("Auto ripple on delete"));
 	ripple->setCheckable(true);
 	ripple->setChecked(t.ripple);
@@ -826,11 +860,15 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 		addEffectClipAt(track, atOutMs, FxType(it.value()));
 		return;
 	}
+	// Anything set on a lane from here makes it the user's: a lane you have
+	// locked, hidden, named or coloured is not one to be tidied away because
+	// its last clip moved.
+	t.autoLane = false;
 	if (chosen == lock) {
 		t.locked = !t.locked;
 	} else if (hide && chosen == hide) {
 		t.hidden = !t.hidden;
-	} else if (chosen == mute) {
+	} else if (mute && chosen == mute) {
 		t.muted = !t.muted;
 	} else if (chosen == ripple) {
 		t.ripple = !t.ripple;
@@ -842,15 +880,8 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 					  .trimmed();
 		if (!ok)
 			return;
-		// An empty name would leave the header blank with no way back, so it
-		// falls back to the automatic V1/A1 numbering.
-		t.name = n;
-		if (t.name.isEmpty()) {
-			renumberTracks();
-			update();
-			commitEdit();
-			return;
-		}
+		renameTrack(track, n);
+		return;
 	} else if (chosen == colour) {
 		// Live, and by index rather than through `t`: the reference points into
 		// the track vector, and repainting between every movement is the point.
@@ -1849,9 +1880,10 @@ void TimelineView::paintEvent(QPaintEvent *)
 				p.drawText(r, Qt::AlignCenter, glyph);
 			};
 			drawToggle(HeaderHit::Lock, QStringLiteral("L"), t.locked);
-			if (t.kind == TlTrack::Kind::Video)
+			if (TlTrack::kindCanHide(t.kind))
 				drawToggle(HeaderHit::Hide, QStringLiteral("H"), t.hidden);
-			drawToggle(HeaderHit::Mute, QStringLiteral("M"), t.muted);
+			if (TlTrack::kindCanMute(t.kind))
+				drawToggle(HeaderHit::Mute, QStringLiteral("M"), t.muted);
 		}
 
 		// Clips are painted after the header, and a clip that starts before the
@@ -2070,12 +2102,15 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 		TlTrack &ht = model_.tracks[hTrack];
 		switch (headerHitAt(hTrack, pos)) {
 		case HeaderHit::Lock:
+			ht.autoLane = false; // touched: it is the user's lane now
 			ht.locked = !ht.locked;
 			break;
 		case HeaderHit::Hide:
+			ht.autoLane = false;
 			ht.hidden = !ht.hidden;
 			break;
 		case HeaderHit::Mute:
+			ht.autoLane = false;
 			ht.muted = !ht.muted;
 			break;
 		case HeaderHit::None:
@@ -2694,6 +2729,7 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 				TlTrack nt;
 				nt.kind = kind;
 				nt.color = randomPastel();
+				nt.autoLane = true;
 				model_.tracks.insert(at, nt);
 				if (dragTrack_ >= at)
 					++dragTrack_; // the source lane shifted down
@@ -2709,8 +2745,14 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 				selTrack_ = target;
 				selClip_ = model_.tracks[target].clips.size() - 1;
 				// Tidy up: if moving the clip emptied its old lane, drop that
-				// lane — unless it's the last one of its kind.
-				if (model_.tracks[dragTrack_].clips.isEmpty()) {
+				// lane — unless it's the last one of its kind, or a lane the
+				// user made. Only a lane that appeared by itself (a drop
+				// between two lanes) disappears by itself; one that was asked
+				// for, named, locked or coloured stays, empty or not. Dragging
+				// the one clip off a lane you set up as a parking space used to
+				// delete the parking space.
+				if (model_.tracks[dragTrack_].clips.isEmpty() &&
+				    model_.tracks[dragTrack_].autoLane) {
 					int ofKind = 0;
 					for (const TlTrack &tr : model_.tracks)
 						if (tr.kind == kind)

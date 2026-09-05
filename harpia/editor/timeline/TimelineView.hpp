@@ -182,6 +182,13 @@ public:
 	// other lanes; an empty name (or an automatic one like "A2") hands the lane
 	// back to the automatic numbering.
 	void renameTrack(int index, const QString &name);
+	// The lane's level, 0..2, multiplied with every clip's own volume. Clamped;
+	// ignored on a lane with no sound. Also the target of Ctrl+wheel over the
+	// lane's header (5% a notch, 1% with Shift).
+	void setTrackGain(int index, double gain);
+	void setTrackSolo(int index, bool on);
+	// Percent, for the readout, the dialog and the wheel: one rounding rule.
+	static int gainPercent(double g) { return int(std::lround(g * 100.0)); }
 
 	// ---- Whole-track copy / paste -------------------------------------------
 	//
@@ -205,15 +212,20 @@ public:
 	// and a test that recomputed the margins itself would drift from the layout
 	// it is meant to be checking.
 	QRect contentRectForTest() const { return contentRect(); }
-	// Slot 0/1/2 = lock/hide/mute. For tests: the invariant being checked is
-	// "this rect is inside the gutter", and a test computing the rect itself
-	// would be checking its own arithmetic.
+	// Slot 0/1/2/3 = lock/hide/mute/solo (logical slots: where a kind lacks one
+	// the later ones move up). For tests: the invariant being checked is "this
+	// rect is inside the gutter", and a test computing the rect itself would be
+	// checking its own arithmetic.
 	QRect headerToggleRectForTest(int track, int slot) const
 	{
-		const HeaderHit h = slot == 0 ? HeaderHit::Lock
-					      : (slot == 1 ? HeaderHit::Hide : HeaderHit::Mute);
+		const HeaderHit h = slot == 0   ? HeaderHit::Lock
+				    : slot == 1 ? HeaderHit::Hide
+				    : slot == 2 ? HeaderHit::Mute
+						: HeaderHit::Solo;
 		return headerToggleRect(track, h);
 	}
+	// Where the gain readout is painted, for the same reason.
+	QRect headerGainRectForTest(int track) const { return headerGainRect(track); }
 
 	// The volume line's position and what is under a point. For tests: the
 	// line's height IS the value, so a test that computed the mapping itself
@@ -521,9 +533,12 @@ private:
 	bool fileDrag_ = false;
 
 	// Header widgets: the small lock / hide / mute toggles in the gutter.
-	enum class HeaderHit { None, Lock, Hide, Mute };
+	enum class HeaderHit { None, Lock, Hide, Mute, Solo };
 	QRect headerToggleRect(int track, HeaderHit which) const;
 	HeaderHit headerHitAt(int track, const QPoint &p) const;
+	// The "80%" readout in a sound lane's header; empty on a lane with no sound.
+	QRect headerGainRect(int track) const;
+	void promptTrackGain(int track);
 	// `atOutMs` is where the new-effect entries place their clip.
 	void showTrackMenu(int track, const QPoint &globalPos, qint64 atOutMs);
 	void renumberTracks(); // V1..Vn bottom-up, A1..An top-down

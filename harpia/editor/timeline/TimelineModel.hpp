@@ -733,6 +733,14 @@ struct TlTrack {
 	bool hidden = false;
 	bool locked = false;
 	bool ripple = false;
+	// Solo: while ANY sound-carrying lane is soloed, only soloed lanes play.
+	// Independent of `muted` -- a lane that is both is silent, as on a desk --
+	// and see TimelineModel::trackAudible for the one place that combines them.
+	bool solo = false;
+	// Level for the whole lane, 0..2 like a clip's volume, and multiplied with
+	// it: the balance between narration and music is one number per lane, not
+	// a slider on every clip.
+	double gain = 1.0;
 	QColor color = QColor(0x3a, 0x6e, 0xa5); // clip tint (random pastel when created)
 	QVector<TlClip> clips; // unordered; painting/compositing sorts by outStartMs
 
@@ -773,6 +781,8 @@ struct TlTrack {
 	// does not carry.
 	static bool kindCanHide(Kind k) { return k != Kind::Audio; }
 	static bool kindCanMute(Kind k) { return k != Kind::Effect; }
+	// Solo and gain go wherever Mute goes: they are all about the sound.
+	static bool kindHasSound(Kind k) { return kindCanMute(k); }
 
 	// The clip covering an output-time position (topmost = last added wins on
 	// overlap). Returns -1 when none.
@@ -934,7 +944,8 @@ struct TlTrack {
 	bool operator==(const TlTrack &o) const
 	{
 		return kind == o.kind && name == o.name && muted == o.muted && hidden == o.hidden &&
-		       locked == o.locked && ripple == o.ripple && color == o.color && clips == o.clips;
+		       locked == o.locked && ripple == o.ripple && solo == o.solo &&
+		       qAbs(gain - o.gain) < 1e-9 && color == o.color && clips == o.clips;
 	}
 };
 
@@ -984,6 +995,27 @@ struct TimelineModel {
 			if (isPictureKind(t.kind))
 				++n;
 		return n;
+	}
+
+	// Is any lane that carries sound soloed? While one is, the others go quiet.
+	// An effect lane cannot be soloed, so it never counts here even if a stale
+	// flag is set on it.
+	bool anySolo() const
+	{
+		for (const TlTrack &t : tracks)
+			if (t.solo && TlTrack::kindHasSound(t.kind))
+				return true;
+		return false;
+	}
+
+	// Does this lane contribute to the mix? The ONE place Mute and Solo are
+	// combined, so the preview, the exporter and the cache key cannot disagree:
+	// not muted, carries sound, and -- while anything is soloed -- soloed too.
+	bool trackAudible(const TlTrack &t) const
+	{
+		if (t.muted || !TlTrack::kindHasSound(t.kind))
+			return false;
+		return t.solo || !anySolo();
 	}
 
 	qint64 durationMs() const

@@ -576,7 +576,7 @@ int TimelineView::minGutterWidth()
 	constexpr int kPad = 8;    // headerToggleRect's left inset
 	constexpr int kSize = 16;  // a toggle
 	constexpr int kGap = 4;    // between them
-	constexpr int kSlots = 3;  // lock, hide, mute -- the widest case (video)
+	constexpr int kSlots = 4;  // lock, hide, mute, solo -- the widest case (video)
 	return kPad + kSlots * (kSize + kGap) - kGap + kPad;
 }
 
@@ -781,10 +781,25 @@ QRect TimelineView::headerToggleRect(int track, HeaderHit which) const
 		// After Hide when the lane has one, else in its place.
 		slot = TlTrack::kindCanHide(model_.tracks[track].kind) ? 2 : 1;
 		break;
+	case HeaderHit::Solo:
+		slot = TlTrack::kindCanHide(model_.tracks[track].kind) ? 3 : 2;
+		break;
 	default:
 		return QRect();
 	}
 	return QRect(h.x() + 8 + slot * (sz + 4), y, sz, sz);
+}
+
+QRect TimelineView::headerGainRect(int track) const
+{
+	if (track < 0 || track >= model_.tracks.size() ||
+	    !TlTrack::kindHasSound(model_.tracks[track].kind))
+		return QRect();
+	// Top right of the header, beside the name: the row the toggles are on is
+	// full, and the name is left-aligned, so this corner is the free one.
+	const QRect h = trackHeaderRect(track);
+	const int w = 34, ht = 14;
+	return QRect(h.right() - w - 4, h.y() + 2, w, ht);
 }
 
 TimelineView::HeaderHit TimelineView::headerHitAt(int track, const QPoint &p) const
@@ -798,7 +813,50 @@ TimelineView::HeaderHit TimelineView::headerHitAt(int track, const QPoint &p) co
 		return HeaderHit::Hide;
 	if (TlTrack::kindCanMute(k) && headerToggleRect(track, HeaderHit::Mute).contains(p))
 		return HeaderHit::Mute;
+	if (TlTrack::kindHasSound(k) && headerToggleRect(track, HeaderHit::Solo).contains(p))
+		return HeaderHit::Solo;
 	return HeaderHit::None;
+}
+
+void TimelineView::setTrackGain(int index, double gain)
+{
+	if (index < 0 || index >= model_.tracks.size())
+		return;
+	TlTrack &t = model_.tracks[index];
+	if (!TlTrack::kindHasSound(t.kind))
+		return;
+	gain = std::clamp(gain, 0.0, 2.0);
+	if (qAbs(gain - t.gain) < 1e-9)
+		return;
+	t.autoLane = false; // a lane you have set a level on is yours
+	t.gain = gain;
+	update();
+	commitEdit(); // rebuilds the mix, records the undo step
+}
+
+void TimelineView::setTrackSolo(int index, bool on)
+{
+	if (index < 0 || index >= model_.tracks.size())
+		return;
+	TlTrack &t = model_.tracks[index];
+	if (!TlTrack::kindHasSound(t.kind) || t.solo == on)
+		return;
+	t.autoLane = false;
+	t.solo = on;
+	update();
+	commitEdit();
+}
+
+void TimelineView::promptTrackGain(int track)
+{
+	if (track < 0 || track >= model_.tracks.size())
+		return;
+	bool ok = false;
+	const int pct = QInputDialog::getInt(this, QStringLiteral("Track gain"),
+					     QStringLiteral("Level for the whole track (100% = as recorded):"),
+					     gainPercent(model_.tracks[track].gain), 0, 200, 5, &ok);
+	if (ok)
+		setTrackGain(track, pct / 100.0);
 }
 
 void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOutMs)
@@ -836,6 +894,15 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 	QAction *mute = canMute ? menu.addAction(t.muted ? QStringLiteral("Unmute track")
 							 : QStringLiteral("Mute track"))
 				: nullptr;
+	// Solo and gain sit with Mute: the three sound controls, in the order the
+	// header chips have them.
+	const bool hasSound = TlTrack::kindHasSound(t.kind);
+	QAction *solo = hasSound ? menu.addAction(t.solo ? QStringLiteral("Unsolo track")
+							 : QStringLiteral("Solo track"))
+				 : nullptr;
+	QAction *gainAct = hasSound ? menu.addAction(QStringLiteral("Track gain… (%1%)")
+							     .arg(gainPercent(t.gain)))
+				    : nullptr;
 	QAction *ripple = menu.addAction(QStringLiteral("Auto ripple on delete"));
 	ripple->setCheckable(true);
 	ripple->setChecked(t.ripple);
@@ -870,6 +937,12 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 		t.hidden = !t.hidden;
 	} else if (mute && chosen == mute) {
 		t.muted = !t.muted;
+	} else if (solo && chosen == solo) {
+		setTrackSolo(track, !t.solo);
+		return;
+	} else if (gainAct && chosen == gainAct) {
+		promptTrackGain(track); // commits on its own, or not at all
+		return;
 	} else if (chosen == ripple) {
 		t.ripple = !t.ripple;
 	} else if (chosen == rename) {
@@ -1276,7 +1349,11 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 		fill = QColor::fromHsv(fill.hue(), fill.saturation(), fill.value()).darker(105);
 	if (sel)
 		fill = fill.lighter(145);
-	if (t.hidden || t.muted)
+	// A lane that is out of the picture or out of the mix -- muted, or soloed
+	// out by another lane -- paints dim. (An effect lane has no sound, and
+	// trackAudible says so; only its `hidden` counts there.)
+	const bool silent = TlTrack::kindHasSound(t.kind) && !model_.trackAudible(t);
+	if (t.hidden || silent)
 		fill = fill.darker(160);
 	p.setBrush(fill);
 
@@ -1850,9 +1927,19 @@ void TimelineView::paintEvent(QPaintEvent *)
 			p.setPen(Qt::NoPen);
 		}
 
-		p.setPen((t.hidden || t.muted) ? cl_.caption : QColor(0xe8, 0xea, 0xed));
+		const bool silent = TlTrack::kindHasSound(t.kind) && !model_.trackAudible(t);
+		p.setPen((t.hidden || silent) ? cl_.caption : QColor(0xe8, 0xea, 0xed));
 		p.setFont(hdrFont_);
 		p.drawText(hdr.adjusted(10, 2, -4, 0), Qt::AlignTop | Qt::AlignLeft, t.name);
+		// The lane's level, only when it is not unity: at 100% there is nothing
+		// to say, and a header that always read "100%" would teach you to stop
+		// looking at the corner where the one that matters appears.
+		if (const QRect gr = headerGainRect(i); !gr.isEmpty() && gainPercent(t.gain) != 100) {
+			p.setFont(toggleFont_);
+			p.setPen(silent ? cl_.caption : cl_.accent);
+			p.drawText(gr, Qt::AlignRight | Qt::AlignVCenter,
+				   QStringLiteral("%1%").arg(gainPercent(t.gain)));
+		}
 		// An effect track acts DOWNWARDS, on the tracks under it. That is easy
 		// to state and hard to remember, especially since index 0 is the top
 		// lane — so the header says which way it points instead.
@@ -1884,6 +1971,8 @@ void TimelineView::paintEvent(QPaintEvent *)
 				drawToggle(HeaderHit::Hide, QStringLiteral("H"), t.hidden);
 			if (TlTrack::kindCanMute(t.kind))
 				drawToggle(HeaderHit::Mute, QStringLiteral("M"), t.muted);
+			if (TlTrack::kindHasSound(t.kind))
+				drawToggle(HeaderHit::Solo, QStringLiteral("S"), t.solo);
 		}
 
 		// Clips are painted after the header, and a clip that starts before the
@@ -2112,6 +2201,10 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 		case HeaderHit::Mute:
 			ht.autoLane = false;
 			ht.muted = !ht.muted;
+			break;
+		case HeaderHit::Solo:
+			ht.autoLane = false;
+			ht.solo = !ht.solo;
 			break;
 		case HeaderHit::None:
 			// The header itself, away from the toggles: select the TRACK. That
@@ -2791,11 +2884,25 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 void TimelineView::wheelEvent(QWheelEvent *e)
 {
 	const QPoint pos = e->position().toPoint();
+	const QPoint ad = e->angleDelta();
+	// Ctrl+wheel over a sound lane's header is its gain. Ctrl only: a plain
+	// wheel over the gutter has to keep scrolling the view like anywhere else,
+	// or the gutter becomes a strip you cannot scroll across.
+	if (pos.x() < contentRect().x() && pos.y() >= lp_.margin + lp_.rulerH &&
+	    (e->modifiers() & Qt::ControlModifier)) {
+		const int track = laneAtY(pos.y());
+		if (track >= 0 && TlTrack::kindHasSound(model_.tracks[track].kind) && ad.y() != 0) {
+			const int step = (e->modifiers() & Qt::ShiftModifier) ? 1 : 5; // percent a notch
+			const int notches = ad.y() > 0 ? 1 : -1;
+			setTrackGain(track, (gainPercent(model_.tracks[track].gain) + notches * step) / 100.0);
+			e->accept();
+			return;
+		}
+	}
 	if (!contentRect().contains(pos) && !(pos.y() < lp_.margin + lp_.rulerH)) {
 		e->ignore();
 		return;
 	}
-	const QPoint ad = e->angleDelta();
 	const bool pan = (e->modifiers() & Qt::ShiftModifier) || qAbs(ad.x()) > qAbs(ad.y());
 	const int delta = pan ? (ad.x() != 0 ? ad.x() : ad.y()) : ad.y();
 	if (delta == 0)

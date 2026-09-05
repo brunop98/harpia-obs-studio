@@ -250,7 +250,8 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # The track list: a typed name survives renumbering, an effect lane can be
 # hidden but not muted, only self-made lanes vanish when emptied, and a locked
-# lane takes no clip from a menu action either.
+# lane takes no clip from a menu action either. Plus the two sound controls:
+# Solo (a set, not a radio button; mute still wins) and a per-lane gain.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/tracks_test.cpp" "$H/editor/timeline/TimelineView.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \

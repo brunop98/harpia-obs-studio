@@ -10,12 +10,19 @@
 //     had just made and named as somewhere to park things.
 //   - a locked lane still took a clip from a menu action; only a drop checked.
 //
+// And the two sound controls a lane was missing: Solo (while any lane is
+// soloed, only soloed lanes play; mute still wins) and a per-lane gain that
+// multiplies every clip's volume, set from the menu or Ctrl+wheel over the
+// header. TimelineModel::trackAudible is the one place mute and solo combine,
+// and it is what buildTakes and the mix cache key both read.
+//
 // Each is pinned with its control: the thing that SHOULD still happen next to
 // the thing that should not.
 #include "editor/timeline/TimelineView.hpp"
 
 #include <QApplication>
 #include <QMouseEvent>
+#include <QWheelEvent>
 
 #include <cstdio>
 
@@ -233,6 +240,109 @@ int main(int argc, char **argv)
 		   "unlocked, below the locked ones, with the clip on it");
 		ok(v.model().tracks[0].clips.size() == 2 && v.model().tracks[1].clips.size() == 1,
 		   "and the locked lanes are untouched");
+	}
+
+	std::printf("\n-- solo: one lane alone, the rest go quiet --\n");
+	{
+		TimelineModel m = threeLanes();
+		TlTrack a2 = track(TlTrack::Kind::Audio, "A2");
+		a2.clips.append(clipAt(0, 8));
+		m.tracks.insert(2, a2); // V2, V1, A2, A1
+		v.setModel(m);
+		QApplication::processEvents();
+		const TimelineModel &mm = v.model();
+		ok(!mm.anySolo() && mm.trackAudible(mm.tracks[0]) && mm.trackAudible(mm.tracks[3]),
+		   "with nothing soloed every sound lane is heard");
+
+		int changes = 0;
+		QObject::connect(&v, &TimelineView::clipsChanged, [&changes]() { ++changes; });
+
+		// Slot 3 on a video lane is S, after L H M; slot 3 on an audio lane too,
+		// since the logical slots do not move even when the physical ones do.
+		const QRect s = v.headerToggleRectForTest(3, 3);
+		ok(!s.isEmpty() && s.right() < v.contentRectForTest().x(), "the S switch sits in the gutter");
+		click(&v, s.center());
+		ok(mm.tracks[3].solo, "clicking it soloes the lane");
+		ok(mm.trackAudible(mm.tracks[3]), "which is still heard");
+		ok(!mm.trackAudible(mm.tracks[2]) && !mm.trackAudible(mm.tracks[0]) &&
+			   !mm.trackAudible(mm.tracks[1]),
+		   "and every other sound lane -- video lanes included -- is not");
+		ok(!mm.tracks[2].muted, "without anything being MARKED muted");
+		ok(changes >= 1, "and the mix is told, so the preview follows");
+
+		// Two soloed lanes are both heard: solo is a set, not a radio button.
+		click(&v, v.headerToggleRectForTest(2, 3).center());
+		ok(mm.trackAudible(mm.tracks[2]) && mm.trackAudible(mm.tracks[3]) &&
+			   !mm.trackAudible(mm.tracks[0]),
+		   "a second solo joins the first rather than replacing it");
+
+		// Mute still wins on a soloed lane, as on a desk.
+		click(&v, v.headerToggleRectForTest(3, 2).center());
+		ok(mm.tracks[3].solo && mm.tracks[3].muted && !mm.trackAudible(mm.tracks[3]),
+		   "a lane both soloed and muted is silent");
+
+		// Unsolo everything and the rest comes back.
+		click(&v, v.headerToggleRectForTest(2, 3).center());
+		click(&v, v.headerToggleRectForTest(3, 3).center());
+		ok(!mm.anySolo() && mm.trackAudible(mm.tracks[0]) && mm.trackAudible(mm.tracks[2]),
+		   "with the last solo off, the others are heard again");
+
+		// An effect lane has no S, and a stale solo flag on it counts for nothing.
+		TimelineModel fxm = threeLanes();
+		TlTrack fx = track(TlTrack::Kind::Effect, "FX1");
+		fx.solo = true; // as a hand-edited project could say
+		fxm.tracks.insert(0, fx);
+		v.setModel(fxm);
+		QApplication::processEvents();
+		ok(!v.model().anySolo() && v.model().trackAudible(v.model().tracks[3]),
+		   "a soloed effect lane soloes nothing: it has no sound to solo");
+		v.setTrackSolo(0, true);
+		click(&v, v.headerToggleRectForTest(0, 3).center());
+		ok(!v.model().anySolo(), "and neither the setter nor a click can solo it");
+		ok(v.headerToggleRectForTest(1, 3).right() < v.contentRectForTest().x(),
+		   "the fourth chip on a video lane still fits inside the gutter");
+	}
+
+	std::printf("\n-- gain: one level for the whole lane --\n");
+	{
+		v.setModel(threeLanes());
+		QApplication::processEvents();
+		int changes = 0;
+		QObject::connect(&v, &TimelineView::clipsChanged, [&changes]() { ++changes; });
+
+		v.setTrackGain(2, 0.6);
+		ok(qAbs(v.model().tracks[2].gain - 0.6) < 1e-9, "the setter sets it");
+		ok(changes >= 1, "and the mix is told");
+		v.setTrackGain(2, 7.0);
+		ok(qAbs(v.model().tracks[2].gain - 2.0) < 1e-9, "clamped to 2.0 at the top");
+		v.setTrackGain(2, -1.0);
+		ok(qAbs(v.model().tracks[2].gain) < 1e-9, "and to silence at the bottom");
+		const QRect gr = v.headerGainRectForTest(2);
+		ok(!gr.isEmpty() && gr.right() < v.contentRectForTest().x(), "the readout is inside the gutter");
+		ok(v.headerGainRectForTest(0).isEmpty() == false, "a video lane has one too (it carries sound)");
+
+		// Ctrl+wheel over the header: 5% a notch, 1% with Shift, nothing without Ctrl.
+		v.setTrackGain(2, 1.0);
+		const QPoint hp(gr.center().x(), v.headerToggleRectForTest(2, 0).center().y());
+		auto wheel = [&](int dy, Qt::KeyboardModifiers mods) {
+			QWheelEvent e(QPointF(hp), QPointF(v.mapToGlobal(hp)), QPoint(), QPoint(0, dy),
+				      Qt::NoButton, mods, Qt::NoScrollPhase, false);
+			QApplication::sendEvent(&v, &e);
+		};
+		wheel(120, Qt::ControlModifier);
+		ok(TimelineView::gainPercent(v.model().tracks[2].gain) == 105, "Ctrl+wheel up is +5%");
+		wheel(-120, Qt::ControlModifier | Qt::ShiftModifier);
+		ok(TimelineView::gainPercent(v.model().tracks[2].gain) == 104, "with Shift, 1% a notch");
+		wheel(120, Qt::NoModifier);
+		ok(TimelineView::gainPercent(v.model().tracks[2].gain) == 104,
+		   "a plain wheel over the gutter leaves the gain alone (it scrolls)");
+
+		TimelineModel fxm = threeLanes();
+		fxm.tracks.insert(0, track(TlTrack::Kind::Effect, "FX1"));
+		v.setModel(fxm);
+		v.setTrackGain(0, 0.5);
+		ok(qAbs(v.model().tracks[0].gain - 1.0) < 1e-9 && v.headerGainRectForTest(0).isEmpty(),
+		   "an effect lane has no gain and no readout");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

@@ -8118,10 +8118,12 @@ QString VideoEditorWindow::audioMixKey() const
 	if (!timelineView_)
 		return QString();
 	QString k;
-	for (const TlTrack &t : timelineView_->model().tracks) {
-		if (t.muted)
+	const TimelineModel &m = timelineView_->model();
+	for (const TlTrack &t : m.tracks) {
+		if (!m.trackAudible(t)) // the same test buildTakes applies: mute AND solo
 			continue;
 		k += (t.kind == TlTrack::Kind::Audio) ? QLatin1Char('A') : QLatin1Char('V');
+		k += QStringLiteral("g%1").arg(t.gain, 0, 'f', 4);
 		for (const TlClip &c : t.clips) {
 			if (c.type == TlClip::Type::Text || c.type == TlClip::Type::Image)
 				continue;

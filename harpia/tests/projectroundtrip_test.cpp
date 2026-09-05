@@ -174,9 +174,19 @@ int main(int argc, char **argv)
 		t.hidden = true;
 		t.locked = true;
 		t.ripple = true;
+		t.solo = true;
+		t.gain = 0.65;
 		t.color = QColor(0x12, 0x34, 0x56);
 		t.clips.append(c);
 		ok(trackFromJson(trackToJson(t)) == t, "a track keeps its switches, colour and clips");
+		// A project from before lanes had a gain must come back at unity, not
+		// at zero: it was mixed at unity.
+		QJsonObject old = trackToJson(t);
+		old.remove(QStringLiteral("gain"));
+		old.remove(QStringLiteral("solo"));
+		const TlTrack back = trackFromJson(old);
+		ok(qAbs(back.gain - 1.0) < 1e-9 && !back.solo,
+		   "an older project with no gain or solo opens at unity, nothing soloed");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

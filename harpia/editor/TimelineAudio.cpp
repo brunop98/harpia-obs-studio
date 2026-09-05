@@ -117,8 +117,8 @@ std::vector<VoiceoverMixer::Take> TimelineAudio::buildTakes(const TimelineModel 
 	int nextWav = 0;
 
 	for (const TlTrack &t : m.tracks) {
-		if (t.muted || t.kind == TlTrack::Kind::Effect)
-			continue; // an effect track carries no sound
+		if (!m.trackAudible(t))
+			continue; // muted, soloed out, or an effect track (no sound)
 		for (const TlClip &c : t.clips) {
 			if (c.type == TlClip::Type::Text || c.type == TlClip::Type::Image ||
 			    c.type == TlClip::Type::Effect)
@@ -156,8 +156,9 @@ std::vector<VoiceoverMixer::Take> TimelineAudio::buildTakes(const TimelineModel 
 			tk.srcStartMs = qint64(std::llround(c.srcStartMs / speed));
 			tk.playMs = c.outDurationMs();
 			// A video track carries its footage's sound at unity; per-clip volume
-			// is an audio-track control.
-			tk.volume = (t.kind == TlTrack::Kind::Audio) ? c.volume : 1.0;
+			// is an audio-track control. The lane's own gain sits on top of
+			// either, so a whole music bed comes down with one number.
+			tk.volume = ((t.kind == TlTrack::Kind::Audio) ? c.volume : 1.0) * t.gain;
 			// Clamped here rather than trusted: a clip trimmed shorter than
 			// its fade would otherwise never reach full volume.
 			const int dur = int(std::min<qint64>(c.outDurationMs(), 1 << 30));

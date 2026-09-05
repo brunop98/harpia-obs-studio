@@ -5489,17 +5489,24 @@ void VideoEditorWindow::syncClipInspector()
 	rebuildScriptParams();
 
 
-	// Which half of the panel applies. A clip on an audio track has no picture,
-	// so showing it zoom/rotation controls that do nothing would be a lie.
+	// Which halves of the panel apply. A clip on an audio track has no picture,
+	// so showing it zoom/rotation controls that do nothing would be a lie. The
+	// Audio section goes with any MEDIA clip on a lane that carries sound: a
+	// video clip's footage has a level and fades like a music clip's, and the
+	// mix has always applied them -- there was simply no control for them on
+	// a video lane.
 	const int selTrack = timelineView_->selectedTrack();
 	const auto &tracks = timelineView_->model().tracks;
 	const bool onAudioTrack = selTrack >= 0 && selTrack < tracks.size() &&
 				  tracks[selTrack].kind == TlTrack::Kind::Audio;
+	const bool hasSound = selTrack >= 0 && selTrack < tracks.size() &&
+			      TlTrack::kindHasSound(tracks[selTrack].kind) &&
+			      c->type == TlClip::Type::Video; // a media clip, not a still or caption
 	if (videoClipBox_)
 		videoClipBox_->setVisible(!onAudioTrack);
 	if (audioClipBox_) {
-		audioClipBox_->setVisible(onAudioTrack);
-		if (onAudioTrack) {
+		audioClipBox_->setVisible(hasSound);
+		if (hasSound) {
 			clipVolSlider_->setValue(c->volume);
 			// Set the ceiling before the values, or a fade longer than the
 			// last clip's would be silently truncated on the way in.

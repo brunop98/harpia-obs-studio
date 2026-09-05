@@ -19,6 +19,7 @@
 // Each is pinned with its control: the thing that SHOULD still happen next to
 // the thing that should not.
 #include "editor/timeline/TimelineView.hpp"
+#include "editor/TimelineAudio.hpp" // takeVolume: header-only, so no decoder needed
 
 #include <QApplication>
 #include <QMouseEvent>
@@ -343,6 +344,44 @@ int main(int argc, char **argv)
 		v.setTrackGain(0, 0.5);
 		ok(qAbs(v.model().tracks[0].gain - 1.0) < 1e-9 && v.headerGainRectForTest(0).isEmpty(),
 		   "an effect lane has no gain and no readout");
+	}
+
+	std::printf("\n-- a duplicated lane keeps its name, numbered --\n");
+	{
+		v.setModel(threeLanes());
+		v.renameTrack(2, QStringLiteral("Narration"));
+		TimelineModel m = v.model();
+		// The copy goes ABOVE the original (a smaller index), so the original
+		// moves down one.
+		v.pasteTrack(m.tracks[2], 2);
+		eqs(v.model().tracks[2].name, "Narration 2", "the copy of Narration is Narration 2");
+		eqs(v.model().tracks[3].name, "Narration", "and the original keeps its name");
+		v.pasteTrack(v.model().tracks[2], 2);
+		eqs(v.model().tracks[2].name, "Narration 3",
+		    "a copy of Narration 2 is Narration 3, not Narration 2 2");
+		ok(v.model().tracks[2].clips.size() == 1, "with the clips along");
+
+		// An automatic name still renumbers: two lanes both called V1 is the
+		// thing this must never produce.
+		v.pasteTrack(v.model().tracks[1], 1); // V1
+		eqs(v.model().tracks[1].name, "V2", "a copy of V1 takes the next automatic name");
+		eqs(v.model().tracks[0].name, "V3", "and the lane above it renumbers to match");
+	}
+
+	std::printf("\n-- a clip's volume counts on a video lane too --\n");
+	{
+		TlTrack vt = track(TlTrack::Kind::Video, "V1");
+		TlTrack at = track(TlTrack::Kind::Audio, "A1");
+		TlClip c = clipAt(0);
+		c.volume = 0.5;
+		ok(qAbs(TimelineAudio::takeVolume(at, c) - 0.5) < 1e-9, "on an audio lane, as before");
+		ok(qAbs(TimelineAudio::takeVolume(vt, c) - 0.5) < 1e-9,
+		   "and on a video lane, where it used to be pinned to unity");
+		vt.gain = 0.5;
+		ok(qAbs(TimelineAudio::takeVolume(vt, c) - 0.25) < 1e-9, "times the lane's gain");
+		c.volume = 9.0;
+		ok(qAbs(TimelineAudio::takeVolume(at, c) - 2.0) < 1e-9,
+		   "a volume from a hand-edited project is clamped to 2.0 first");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

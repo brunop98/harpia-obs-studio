@@ -200,7 +200,8 @@ public:
 	// The selected track, clips and all, or false when no header is selected.
 	bool copySelectedTrack(TlTrack *out) const;
 	// Insert a copy directly ABOVE `above`, clips at their original times -- a
-	// duplicate, not a re-timing. Returns the index it landed at, or -1.
+	// duplicate, not a re-timing. Returns the index it landed at, or -1. A typed
+	// name comes through numbered ("Narration 2"); an automatic one renumbers.
 	// Clamped into the kind's own group: a video track cannot land among the
 	// audio lanes, which is the ordering the compositor relies on.
 	int pasteTrack(const TlTrack &t, int above);
@@ -538,6 +539,8 @@ private:
 	HeaderHit headerHitAt(int track, const QPoint &p) const;
 	// The "80%" readout in a sound lane's header; empty on a lane with no sound.
 	QRect headerGainRect(int track) const;
+	// "Narration" -> "Narration 2" (or 3, 4...): the first not in use.
+	QString uniqueTrackName(const QString &name) const;
 	void promptTrackGain(int track);
 	// `atOutMs` is where the new-effect entries place their clip.
 	void showTrackMenu(int track, const QPoint &globalPos, qint64 atOutMs);

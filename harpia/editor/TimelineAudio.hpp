@@ -37,6 +37,16 @@ public:
 							    const SourceLookup &pathFor,
 							    const QString &workDir);
 
+	// The gain a clip's take is mixed at: the clip's own volume times its
+	// lane's. The clip's volume counts on a VIDEO lane too. It used to be pinned
+	// to unity there, which left footage the one kind of sound you could not
+	// turn down -- and the Inspector now shows the same Audio section for it.
+	// Header-only so the rule can be checked without a decoder.
+	static double takeVolume(const TlTrack &t, const TlClip &c)
+	{
+		return std::clamp(c.volume, 0.0, 2.0) * std::clamp(t.gain, 0.0, 2.0);
+	}
+
 	// The whole timeline as one interleaved stereo 48 kHz float buffer, ready to
 	// play. Empty when the timeline has no audio. Honors *cancel.
 	static std::vector<float> mixToBuffer(const TimelineModel &m, const SourceLookup &pathFor,

@@ -370,14 +370,43 @@ bool TimelineView::copySelectedTrack(TlTrack *out) const
 	return true;
 }
 
+// `name` with the smallest trailing number that no lane is using: "Narration"
+// -> "Narration 2", and a copy of "Narration 2" -> "Narration 3" rather than
+// "Narration 2 2", since a trailing number is read as the count and replaced.
+QString TimelineView::uniqueTrackName(const QString &name) const
+{
+	QString base = name.trimmed();
+	// Strip " <digits>" off the end, if that is how the name ends.
+	int i = base.size();
+	while (i > 0 && base.at(i - 1).isDigit())
+		--i;
+	if (i > 0 && i < base.size() && base.at(i - 1) == QLatin1Char(' '))
+		base = base.left(i - 1);
+	const auto taken = [this](const QString &n) {
+		for (const TlTrack &t : model_.tracks)
+			if (t.name == n)
+				return true;
+		return false;
+	};
+	for (int n = 2;; ++n) {
+		const QString cand = QStringLiteral("%1 %2").arg(base).arg(n);
+		if (!taken(cand))
+			return cand;
+	}
+}
+
 int TimelineView::pasteTrack(const TlTrack &t, int above)
 {
 	TlTrack copy = t;
 	// A fresh colour, so the duplicate is telling apart from its original at a
-	// glance. The NAME is left to renumberTracks below for the same reason: two
-	// lanes both called V1 is how you lose track of which one you just made.
+	// glance. An automatic NAME is left to renumberTracks below for the same
+	// reason: two lanes both called V1 is how you lose track of which one you
+	// just made. A typed name is kept, with a number -- "Narration 2" -- since a
+	// copy of a lane you named is still that lane, and a duplicate that came
+	// back as "A3" would have lost the one thing that said what was on it.
 	copy.color = randomPastel();
-	copy.name.clear();
+	copy.name = TlTrack::isAutoName(copy.name) ? QString() : uniqueTrackName(copy.name);
+	copy.autoLane = false;
 
 	// Clamp into the kind's own group. Picture tracks occupy [0, np) and audio
 	// [np, n): dropping a video lane in among the audio ones would break the

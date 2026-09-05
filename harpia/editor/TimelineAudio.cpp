@@ -155,10 +155,9 @@ std::vector<VoiceoverMixer::Take> TimelineAudio::buildTakes(const TimelineModel 
 			// offsets scale by the same factor.
 			tk.srcStartMs = qint64(std::llround(c.srcStartMs / speed));
 			tk.playMs = c.outDurationMs();
-			// A video track carries its footage's sound at unity; per-clip volume
-			// is an audio-track control. The lane's own gain sits on top of
-			// either, so a whole music bed comes down with one number.
-			tk.volume = ((t.kind == TlTrack::Kind::Audio) ? c.volume : 1.0) * t.gain;
+			// The clip's own level times the lane's, on video and audio lanes
+			// alike: see takeVolume.
+			tk.volume = takeVolume(t, c);
 			// Clamped here rather than trusted: a clip trimmed shorter than
 			// its fade would otherwise never reach full volume.
 			const int dur = int(std::min<qint64>(c.outDurationMs(), 1 << 30));

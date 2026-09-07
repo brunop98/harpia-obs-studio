@@ -52,6 +52,7 @@ class QDragEnterEvent;
 class QDropEvent;
 class QEvent;
 class QShowEvent;
+class QKeyEvent;
 class QResizeEvent;
 class QJsonObject;
 
@@ -191,16 +192,22 @@ public:
 	QString saveProjectTo(const QString &path, bool quiet);
 	bool openProjectAt(const QString &path);
 
-	// Called for every close path (title-bar X, Close button, Esc). When there
-	// are unsaved edits, asks: Cancel (keep editing) or Close window (discard).
+	// Called for every close path (title-bar X, Close button, Esc when not full
+	// screen). When there are unsaved edits, asks: Cancel (keep editing) or
+	// Close window (discard).
 	void reject() override;
+
+	// The editor opens full screen. F11 toggles; leaving lands on a maximised
+	// window rather than the small restore size.
+	void setFullScreen(bool on);
 
 protected:
 	// Drag-and-drop video files onto the editor to add them as sources.
 	void dragEnterEvent(QDragEnterEvent *e) override;
 	void dropEvent(QDropEvent *e) override;
-	void showEvent(QShowEvent *e) override;              // first-show: place Sources panel
+	void showEvent(QShowEvent *e) override;              // first show: go full screen for real
 	void resizeEvent(QResizeEvent *e) override;          // first real size: fix the split
+	void keyPressEvent(QKeyEvent *e) override;           // Esc leaves full screen before it closes
 	bool eventFilter(QObject *watched, QEvent *e) override; // sync toggle when panel closed
 
 signals:
@@ -482,6 +489,7 @@ private:
 	KeyframeLayoutParams keyframeLayout_ = DevPanel::loadKeyframe();
 	// applyModeSplit() has run against the window's real (maximised) size.
 	bool modeSplitSized_ = false;
+	bool shownOnce_ = false; // showEvent's one-time full-screen re-assert
 	// "Zoom here" from the preview's right-click menu: write a push-in to the
 	// clicked point onto the selected clip, as ordinary Transform keyframes.
 	void addZoomAtPreviewPoint(double canvasXNorm, double canvasYNorm);

@@ -107,6 +107,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QEvent>
+#include <QKeyEvent>
 #include <QIcon>
 #include <QListWidget>
 #include <QMimeData>
@@ -181,15 +182,18 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	setWindowFlags(Qt::Window | Qt::WindowTitleHint | Qt::WindowSystemMenuHint |
 		       Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint);
 	setSizeGripEnabled(true);
-	// The size it RESTORES to when un-maximised; the editor itself opens
-	// maximised (below), because every part of it wants the room -- the preview,
-	// the track stack and the Inspector are all things you immediately drag
-	// bigger otherwise.
+	// The size it RESTORES to when taken out of full screen twice (F11 to a
+	// maximised window, then the title bar's restore button); the editor itself
+	// opens FULL SCREEN (below), because every part of it wants the room -- the
+	// preview, the track stack and the Inspector are all things you immediately
+	// drag bigger otherwise.
 	resize(1040, 680);
-	// Maximised rather than true full-screen: full-screen takes the title bar
-	// with it, and this is a window you close, move to another monitor, and put
-	// beside the thing you are recording.
-	setWindowState(windowState() | Qt::WindowMaximized);
+	// Full screen, not merely maximised: the whole monitor, no title bar or
+	// taskbar. F11 drops to a maximised window when you want the editor beside
+	// something else, and Escape leaves full screen rather than closing the
+	// editor (see keyPressEvent). Set again in showEvent, since a state set
+	// before the native window exists is not honoured on every platform.
+	setWindowState(windowState() | Qt::WindowFullScreen);
 	setAcceptDrops(true); // drop video files to add them as sources
 
 	auto *root = new QVBoxLayout(this);
@@ -1556,6 +1560,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	    {QKeySequence(Qt::CTRL | Qt::Key_Slash)}, [this]() { openShortcutPanel(); });
 	cmd("view.inspector", "Show inspector", "View", {QKeySequence(Qt::CTRL | Qt::Key_I)},
 	    [this]() { revealInspector(); });
+	cmd("view.fullscreen", "Full screen", "View", {QKeySequence(Qt::Key_F11)},
+	    [this]() { setFullScreen(!isFullScreen()); });
 
 	tlCmd("timeline.split", "Split clip at playhead", "Timeline",
 	      {QKeySequence(Qt::Key_S), QKeySequence(Qt::CTRL | Qt::Key_K)},
@@ -5926,8 +5932,50 @@ void VideoEditorWindow::showEvent(QShowEvent *e)
 	// The Sources panel stays closed until the user opens it with the toolbar
 	// "Sources" button — it never opens on its own.
 
+	// The editor opens full screen. The constructor asks for it, but QDialog's
+	// own show path can re-place the window over its parent and, on some
+	// platforms, drop a state set before the native window existed -- which is
+	// how "opens maximised" was true in the code and not on the screen. Asking
+	// again here, once the window is real, is what makes it stick. Only on the
+	// first show: a later show (after a modal child, say) must not yank a window
+	// the user has taken out of full screen back into it.
+	if (!shownOnce_) {
+		shownOnce_ = true;
+		QTimer::singleShot(0, this, [this]() {
+			if (!isFullScreen())
+				setFullScreen(true);
+		});
+	}
+
 	// First real geometry: now the split can be sized to the starting mode.
 	QTimer::singleShot(0, this, [this]() { applyModeSplit(); });
+}
+
+void VideoEditorWindow::setFullScreen(bool on)
+{
+	if (on) {
+		setWindowState((windowState() & ~Qt::WindowMaximized) | Qt::WindowFullScreen);
+	} else {
+		// Out of full screen lands on MAXIMISED, not the 1040x680 restore size:
+		// the point of leaving is to get the title bar and taskbar back, not
+		// to shrink the editor to a quarter of the monitor.
+		setWindowState((windowState() & ~Qt::WindowFullScreen) | Qt::WindowMaximized);
+	}
+}
+
+void VideoEditorWindow::keyPressEvent(QKeyEvent *e)
+{
+	// Escape in a full-screen window means "give me my desktop back", the way
+	// it does in every player and browser. QDialog's default would call
+	// reject() -- closing the editor, with a discard prompt if there are edits
+	// -- which is a severe thing to hang on the key everyone presses to get
+	// out of full screen. Once out, Escape closes as before.
+	if (e->key() == Qt::Key_Escape && isFullScreen() && e->modifiers() == Qt::NoModifier) {
+		setFullScreen(false);
+		e->accept();
+		return;
+	}
+	QDialog::keyPressEvent(e);
 }
 
 void VideoEditorWindow::resizeEvent(QResizeEvent *e)

@@ -123,6 +123,13 @@ int main(int argc, char **argv)
 	v.show();
 	QApplication::processEvents();
 
+	// One counter for the whole run, connected once. A block-local counter
+	// captured by reference outlives its block through the connection, and
+	// every later clipsChanged then writes through a dangling reference into
+	// whatever the stack slot holds next -- which at -O1 was a loop index.
+	int changes = 0;
+	QObject::connect(&v, &TimelineView::clipsChanged, [&changes]() { ++changes; });
+
 	std::printf("\n-- a name you typed stays typed --\n");
 	{
 		v.setModel(threeLanes());
@@ -255,8 +262,7 @@ int main(int argc, char **argv)
 		ok(!mm.anySolo() && mm.trackAudible(mm.tracks[0]) && mm.trackAudible(mm.tracks[3]),
 		   "with nothing soloed every sound lane is heard");
 
-		int changes = 0;
-		QObject::connect(&v, &TimelineView::clipsChanged, [&changes]() { ++changes; });
+		changes = 0;
 
 		// Slot 3 on a video lane is S, after L H M; slot 3 on an audio lane too,
 		// since the logical slots do not move even when the physical ones do.
@@ -308,8 +314,7 @@ int main(int argc, char **argv)
 	{
 		v.setModel(threeLanes());
 		QApplication::processEvents();
-		int changes = 0;
-		QObject::connect(&v, &TimelineView::clipsChanged, [&changes]() { ++changes; });
+		changes = 0;
 
 		v.setTrackGain(2, 0.6);
 		ok(qAbs(v.model().tracks[2].gain - 0.6) < 1e-9, "the setter sets it");
@@ -382,6 +387,103 @@ int main(int argc, char **argv)
 		c.volume = 9.0;
 		ok(qAbs(TimelineAudio::takeVolume(at, c) - 2.0) < 1e-9,
 		   "a volume from a hand-edited project is clamped to 2.0 first");
+	}
+
+	std::printf("\n-- reordering lanes --\n");
+	{
+		// V3(src 1), V2(src 2), V1(src 3), A1(src 4), A2(src 5)
+		TimelineModel m;
+		const char *vn[] = {"V3", "V2", "V1"};
+		for (int i = 0; i < 3; ++i) {
+			TlTrack t = track(TlTrack::Kind::Video, vn[i]);
+			t.clips.append(clipAt(0, i + 1));
+			m.tracks.append(t);
+		}
+		const char *an[] = {"A1", "A2"};
+		for (int i = 0; i < 2; ++i) {
+			TlTrack t = track(TlTrack::Kind::Audio, an[i]);
+			t.clips.append(clipAt(0, i + 4));
+			m.tracks.append(t);
+		}
+		v.setModel(m);
+		QApplication::processEvents();
+		const auto src = [&v](int i) { return v.model().tracks[i].clips[0].sourceId; };
+
+		changes = 0;
+
+		// moveTrack(from, to): `to` is "before lane `to`" in the current list.
+		ok(v.moveTrack(0, 3) == 2, "moving the top video lane below the others lands at index 2");
+		ok(src(0) == 2 && src(1) == 3 && src(2) == 1, "and the order is what was asked for");
+		eqs(v.model().tracks[2].name, "V1", "the lane that is now at the bottom is V1");
+		eqs(v.model().tracks[0].name, "V3", "and the one now on top is V3: names follow slots");
+		ok(changes >= 1, "the composite is told (the stacking order changed)");
+
+		// No-ops: before itself and after itself.
+		ok(v.moveTrack(1, 1) == -1 && v.moveTrack(1, 2) == -1, "dropping a lane where it is does nothing");
+		ok(src(0) == 2 && src(1) == 3 && src(2) == 1, "and leaves the order alone");
+
+		// Clamped into the kind's group: a video lane cannot go among the audio.
+		ok(v.moveTrack(0, 5) == 2, "a video lane pushed past the audio stops at the bottom of the picture group");
+		ok(v.model().tracks[3].kind == TlTrack::Kind::Audio && src(3) == 4,
+		   "with the audio lanes untouched");
+		ok(v.moveTrack(4, 0) == 3, "and an audio lane pulled up stops at the top of the audio group");
+		ok(src(3) == 5 && src(4) == 4, "having swapped the two audio lanes");
+		eqs(v.model().tracks[3].name, "A1", "and A1 is whichever is now on top");
+	}
+
+	std::printf("\n-- dragging a header reorders --\n");
+	{
+		TimelineModel m;
+		const char *vn[] = {"V3", "V2", "V1"};
+		for (int i = 0; i < 3; ++i) {
+			TlTrack t = track(TlTrack::Kind::Video, vn[i]);
+			t.clips.append(clipAt(0, i + 1));
+			m.tracks.append(t);
+		}
+		TlTrack a = track(TlTrack::Kind::Audio, "A1");
+		a.clips.append(clipAt(0, 9));
+		m.tracks.append(a);
+		v.setModel(m);
+		QApplication::processEvents();
+		const auto src = [&v](int i) { return v.model().tracks[i].clips[0].sourceId; };
+		// A point on a header away from its toggles: the top-right corner area.
+		const auto headerGrab = [&v](int track) {
+			const QRect l = v.headerToggleRectForTest(track, 0);
+			return QPoint(v.contentRectForTest().x() - 6, l.top() - 12);
+		};
+
+		// Select the middle lane's clip first: the selection must follow the LANE.
+		const QRect cr = v.clipRectForTest(1, 0);
+		click(&v, QPoint(cr.center()));
+		ok(v.selectedTrack() == 1, "the clip on lane 1 is selected");
+
+		// Drag the top header down to the bottom of the video group.
+		const QPoint from = headerGrab(0);
+		const QPoint to(from.x(), v.clipRectForTest(2, 0).bottom() + 2);
+		press(&v, from);
+		ok(v.selectedHeaderTrack() == 0, "pressing a header selects the track");
+		ok(v.selectedTrack() == -1, "and lets go of the clip selection");
+		moveTo(&v, from + QPoint(0, 2));
+		release(&v, from + QPoint(0, 2));
+		ok(src(0) == 1 && src(1) == 2 && src(2) == 3, "a two-pixel wobble is a click, not a move");
+
+		press(&v, from);
+		moveTo(&v, from + QPoint(0, 10));
+		moveTo(&v, to);
+		release(&v, to);
+		QApplication::processEvents();
+		ok(src(0) == 2 && src(1) == 3 && src(2) == 1, "dragging the top header past the others moves the lane to the bottom");
+		ok(v.selectedHeaderTrack() == 2, "and the header selection followed it");
+		ok(src(3) == 9, "the audio lane did not move");
+
+		// Past the audio lane: still clamped to the picture group.
+		const QPoint far(from.x(), v.clipRectForTest(3, 0).bottom() + 2);
+		press(&v, headerGrab(0));
+		moveTo(&v, headerGrab(0) + QPoint(0, 10));
+		moveTo(&v, far);
+		release(&v, far);
+		ok(v.model().tracks[3].kind == TlTrack::Kind::Audio && src(2) == 2,
+		   "a header dragged below the audio stops at the bottom of the picture group");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

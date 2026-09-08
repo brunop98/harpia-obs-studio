@@ -187,6 +187,16 @@ public:
 	// lane's header (5% a notch, 1% with Shift).
 	void setTrackGain(int index, double gain);
 	void setTrackSolo(int index, bool on);
+	// Reorder: move lane `from` so that it sits where slot `to` is now -- `to`
+	// is an insertion index in the CURRENT list ("before lane `to`"; the list's
+	// size means "after the last"). Clamped into the lane's own kind group: a
+	// picture lane stays among the picture lanes, an audio lane among the audio
+	// ones, which is the ordering the compositor and the mixer both read. For a
+	// video lane the order IS the stacking (higher lane in front); for an
+	// effect lane it is what the effect grades (everything below it). Returns
+	// the lane's new index, or -1 when nothing moved. Also what dragging a
+	// header up or down does, and the header menu's Move up / Move down.
+	int moveTrack(int from, int to);
 	// Percent, for the readout, the dialog and the wheel: one rounding rule.
 	static int gainPercent(double g) { return int(std::lround(g * 100.0)); }
 
@@ -597,8 +607,15 @@ private:
 	// Pan drags the VIEW under a still timeline, the opposite of Scrub, which
 	// drags the playhead across a still view. Both are "navigating", and mixing
 	// them up is why it needs its own mode rather than a flag on Scrub.
-	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan, KeyDrag, Volume };
+	// TrackDrag is a header being dragged up or down to reorder the lanes.
+	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan, KeyDrag, Volume, TrackDrag };
 	Mode mode_ = Mode::None;
+	// The lane whose header is being dragged, and the slot (an insertion index,
+	// "before lane N", clamped into the lane's own kind group) it would land in
+	// if released now. -1 = none yet.
+	int trackDragFrom_ = -1;
+	int trackDropAt_ = -1;
+	int trackInsertAtY(int from, int y) const;
 	QPoint pressPos_;
 	bool dragMoved_ = false;
 	// captured at press

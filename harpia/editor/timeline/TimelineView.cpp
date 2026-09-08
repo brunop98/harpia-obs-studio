@@ -257,6 +257,71 @@ void TimelineView::renameTrack(int index, const QString &name)
 	commitEdit();
 }
 
+int TimelineView::moveTrack(int from, int to)
+{
+	const int n = model_.tracks.size();
+	if (from < 0 || from >= n)
+		return -1;
+	const bool picture = TimelineModel::isPictureKind(model_.tracks[from].kind);
+	const int np = model_.pictureTrackCount();
+	const int lo = picture ? 0 : np;
+	const int hi = picture ? np : n;
+	to = std::clamp(to, lo, hi);
+	// "Before itself" and "after itself" are both where it already is.
+	if (to == from || to == from + 1)
+		return -1;
+	const int ni = to > from ? to - 1 : to; // its index once `from` is gone
+
+	// Every index the view holds onto shifts with the lanes between the two
+	// positions, so the selection follows the lane rather than the slot.
+	const auto remap = [from, to, ni](int i) {
+		if (i < 0)
+			return i;
+		if (i == from)
+			return ni;
+		if (from < i && i < to)
+			return i - 1;
+		if (to <= i && i < from)
+			return i + 1;
+		return i;
+	};
+	TlTrack t = model_.tracks[from];
+	t.autoLane = false; // placed by hand: the user's lane now
+	model_.tracks.remove(from);
+	model_.tracks.insert(ni, t);
+
+	selTrack_ = remap(selTrack_);
+	selHeaderTrack_ = remap(selHeaderTrack_);
+	QSet<QPair<int, int>> extra;
+	for (const auto &pr : extraSel_)
+		extra.insert({remap(pr.first), pr.second});
+	extraSel_ = extra;
+	hoverTrTrack_ = hoverTrClip_ = -1;
+	hoverSeamTrack_ = -1;
+
+	renumberTracks(); // V1 is still the bottom video lane, whichever one that now is
+	update();
+	commitEdit(); // the composite and the mix both read the order
+	return ni;
+}
+
+int TimelineView::trackInsertAtY(int from, int y) const
+{
+	const int n = model_.tracks.size();
+	if (from < 0 || from >= n)
+		return -1;
+	const bool picture = TimelineModel::isPictureKind(model_.tracks[from].kind);
+	const int np = model_.pictureTrackCount();
+	const int lo = picture ? 0 : np;
+	const int hi = picture ? np : n;
+	// The slot before the first lane of the group whose middle is below the
+	// pointer; past them all, the slot after the group's last lane.
+	for (int i = lo; i < hi; ++i)
+		if (y < laneRect(i).center().y())
+			return i;
+	return hi;
+}
+
 void TimelineView::deleteTrack(int index)
 {
 	if (index < 0 || index >= model_.tracks.size())
@@ -939,6 +1004,21 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 	QAction *rename = menu.addAction(QStringLiteral("Rename track…"));
 	QAction *colour = menu.addAction(QStringLiteral("Track colour…"));
 	QAction *reroll = menu.addAction(QStringLiteral("Random colour"));
+	QAction *moveUp = nullptr, *moveDown = nullptr;
+	menu.addSeparator();
+	// Move up / down, for the keyboard-and-menu route to what dragging the
+	// header does. Greyed at the edge of the lane's own group rather than
+	// hidden, so the edge is visible as an edge.
+	{
+		const bool picture = TimelineModel::isPictureKind(t.kind);
+		const int np = model_.pictureTrackCount();
+		const int lo = picture ? 0 : np;
+		const int hi = picture ? np : int(model_.tracks.size());
+		moveUp = menu.addAction(QStringLiteral("Move track up"));
+		moveUp->setEnabled(track > lo);
+		moveDown = menu.addAction(QStringLiteral("Move track down"));
+		moveDown->setEnabled(track < hi - 1);
+	}
 	menu.addSeparator();
 	QAction *addAbove = menu.addAction(QStringLiteral("Add track above"));
 	QAction *addBelow = menu.addAction(QStringLiteral("Add track below"));
@@ -998,6 +1078,12 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 			      });
 	} else if (chosen == reroll) {
 		t.color = randomPastel();
+	} else if (chosen == moveUp) {
+		moveTrack(track, track - 1); // before the lane above
+		return;
+	} else if (chosen == moveDown) {
+		moveTrack(track, track + 2); // after the lane below
+		return;
 	} else if (chosen == addAbove) {
 		addTrack(t.kind, track);
 		return;
@@ -2045,6 +2131,19 @@ void TimelineView::paintEvent(QPaintEvent *)
 		p.restore();
 	}
 
+	// "The lane will land here" indicator for a header being dragged: a line
+	// across gutter AND lanes at the slot, so it reads as a place in the stack
+	// and not as something happening to a clip. Nothing is drawn when the slot
+	// is where the lane already is; the drop would be a no-op and the line
+	// would promise a move that is not going to happen.
+	if (mode_ == Mode::TrackDrag && dragMoved_ && trackDropAt_ >= 0 &&
+	    trackDropAt_ != trackDragFrom_ && trackDropAt_ != trackDragFrom_ + 1) {
+		const int y = insertYFor(trackDropAt_);
+		p.setPen(QPen(cl_.accent, 3));
+		p.drawLine(lp_.margin, y, contentRect().right(), y);
+		p.setPen(Qt::NoPen);
+	}
+
 	// "Release here to make a new track" indicator.
 	if (dragging && drop_.newTrackAt >= 0) {
 		const QRect c = contentRect();
@@ -2246,6 +2345,14 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 			selTransition_ = false;
 			extraSel_.clear();
 			emit selectionChanged(-1, -1);
+			// ...and arm a reorder: if the pointer now travels up or down with
+			// the button held, the lane goes with it. A plain click stays a
+			// plain click (see mouseMoveEvent's threshold).
+			mode_ = Mode::TrackDrag;
+			trackDragFrom_ = hTrack;
+			trackDropAt_ = -1;
+			pressPos_ = pos;
+			dragMoved_ = false;
 			update();
 			return;
 		}
@@ -2480,6 +2587,20 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 		playheadMs_ = xToMs(pos.x());
 		emitScrubAt(playheadMs_);
 		update();
+		return;
+	}
+
+	if (mode_ == Mode::TrackDrag && (e->buttons() & Qt::LeftButton)) {
+		// A few pixels of slack, so selecting a header with a slightly unsteady
+		// hand does not start moving the lane.
+		if (!dragMoved_ && qAbs(pos.y() - pressPos_.y()) > 4) {
+			dragMoved_ = true;
+			setCursor(Qt::ClosedHandCursor);
+		}
+		if (dragMoved_) {
+			trackDropAt_ = trackInsertAtY(trackDragFrom_, pos.y());
+			update();
+		}
 		return;
 	}
 
@@ -2782,6 +2903,20 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 	if (mode_ == Mode::Scrub) {
 		mode_ = Mode::None;
 		releaseSpan();
+		return;
+	}
+	if (mode_ == Mode::TrackDrag) {
+		const int from = trackDragFrom_;
+		const int to = trackDropAt_;
+		const bool moved = dragMoved_ && to >= 0;
+		mode_ = Mode::None;
+		trackDragFrom_ = trackDropAt_ = -1;
+		dragMoved_ = false;
+		unsetCursor();
+		releaseSpan();
+		update();
+		if (moved)
+			moveTrack(from, to); // commits on its own; a no-op when dropped where it was
 		return;
 	}
 	if (mode_ == Mode::KeyDrag) {

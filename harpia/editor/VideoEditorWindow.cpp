@@ -1552,6 +1552,30 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	    {QKeySequence::Redo, QKeySequence(Qt::CTRL | Qt::Key_Y)}, [this]() { redo(); });
 	cmd("playback.playPause", "Play / Pause", "Playback", {QKeySequence(Qt::Key_Space)},
 	    [this]() { onPlayPause(); });
+	// Up / Down on the selected cuts in Multi-Cut: faster / slower by the Dev
+	// panel's step (0.2 by default), Shift for five steps at once. Live ONLY in
+	// Multi-Cut (`when`): a window-level shortcut eats its key even when the
+	// handler does nothing, and Up / Down belong to the lists and spin boxes
+	// everywhere else. setEditMode() refreshes the gate.
+	auto cutCmd = [this](const char *id, const char *label, QKeySequence key,
+			     std::function<void()> fn) {
+		ShortcutCommand c;
+		c.id = QLatin1String(id);
+		c.label = QLatin1String(label);
+		c.category = QStringLiteral("Speed");
+		c.defaults = {key};
+		c.run = std::move(fn);
+		c.when = [this]() { return multiCut(); };
+		shortcuts_->addCommand(c);
+	};
+	cutCmd("speed.up", "Speed up selected cuts", QKeySequence(Qt::Key_Up),
+	       [this]() { stepSelectedSpeed(+speedStep_); });
+	cutCmd("speed.down", "Slow down selected cuts", QKeySequence(Qt::Key_Down),
+	       [this]() { stepSelectedSpeed(-speedStep_); });
+	cutCmd("speed.upBig", "Speed up selected cuts (large step)", QKeySequence(Qt::SHIFT | Qt::Key_Up),
+	       [this]() { stepSelectedSpeed(+5.0 * speedStep_); });
+	cutCmd("speed.downBig", "Slow down selected cuts (large step)",
+	       QKeySequence(Qt::SHIFT | Qt::Key_Down), [this]() { stepSelectedSpeed(-5.0 * speedStep_); });
 	cmd("project.save", "Save project", "Project", {QKeySequence::Save},
 	    [this]() { onSaveProject(); });
 	cmd("project.export", "Export…", "Export", {QKeySequence(Qt::CTRL | Qt::Key_E)},
@@ -1801,6 +1825,7 @@ void VideoEditorWindow::applyChrome(const EditorChromeParams &p)
 	powerSaveEnabled_ = p.powerSaveOnBlur;
 	if (!powerSaveEnabled_ && powerSaving_)
 		setPowerSaving(false); // turned off while already saving: come back now
+	speedStep_ = (p.speedStep > 0.0) ? p.speedStep : 0.2;
 
 	if (p.buttonH > 0)
 		for (QPushButton *b : uiButtons_)
@@ -6653,6 +6678,8 @@ void VideoEditorWindow::setEditMode(EditMode m)
 	cutModeBtn_->setChecked(m == EditMode::MultiCut);
 	fullModeBtn_->setChecked(m == EditMode::Full);
 	stack_->setCurrentIndex(int(m));
+	if (shortcuts_)
+		shortcuts_->refreshEnabled(); // mode-gated commands (Up / Down in Multi-Cut)
 	// Nothing to send FROM Full editing -- it is the destination.
 	if (sendToFullBtn_)
 		sendToFullBtn_->setVisible(m != EditMode::Full);
@@ -8553,6 +8580,53 @@ void VideoEditorWindow::applySpeed(double value)
 	updateInspector();
 	updateVoiceoverAxis();
 	scheduleSnapshot();
+}
+
+void VideoEditorWindow::stepSelectedSpeed(double delta)
+{
+	if (!multiCut() || !tracks_ || delta == 0.0)
+		return;
+	const QList<int> sel = tracks_->selectedIndices();
+	if (sel.isEmpty())
+		return;
+	const QVector<CutSegment> &segs = tracks_->segments();
+	// Each cut steps from ITS OWN speed. Rounded to the step's grid so a run
+	// of presses lands on 1.2, 1.4, 1.6 rather than accumulating 1.2000001s,
+	// and because a cut that was hand-set to 1.37 is more useful at 1.4 than
+	// at 1.57 -- the keys are for round numbers, the spin box for exact ones.
+	const double grid = std::abs(delta) > 0.0 ? std::abs(delta) : 0.2;
+	double primary = -1.0;
+	for (int idx : sel) {
+		if (idx < 0 || idx >= segs.size())
+			continue;
+		double sp = segs[idx].speed + delta;
+		sp = std::round(sp / grid) * grid;
+		sp = std::clamp(sp, kMinSpeed, kMaxSpeed);
+		tracks_->setSegmentSpeed(idx, sp);
+		if (idx == tracks_->selectedIndex())
+			primary = sp;
+	}
+	if (primary < 0.0 && !sel.isEmpty() && sel.front() < segs.size())
+		primary = tracks_->segments()[sel.front()].speed;
+	// The slider and the spin box show the primary cut, like after a click.
+	if (primary > 0.0)
+		syncSpeedControls(primary);
+	speedLabel_->setText(sel.size() > 1 ? QStringLiteral("(%1 cuts)").arg(sel.size())
+					    : QString());
+	if (playing_) {
+		// Output durations shifted -- re-anchor and re-map on the next tick,
+		// exactly as the slider does.
+		playAnchorMs_ = std::min(playAnchorMs_ + playClock_.elapsed(),
+					 std::max<qint64>(0, tracks_->totalOutputMs() - 1));
+		playClock_.restart();
+		playSeg_ = -1;
+	}
+	updateInfoLabel();
+	updateInspector();
+	updateVoiceoverAxis();
+	// A key press is a discrete edit: one undo step each, rather than a run of
+	// presses coalescing into one the way a slider drag does.
+	commitSnapshot();
 }
 
 // ---- The shaders folder --------------------------------------------------

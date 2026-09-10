@@ -158,6 +158,7 @@ void ShortcutRegistry::rebuild()
 	for (QShortcut *s : live_)
 		delete s;
 	live_.clear();
+	liveCmd_.clear();
 	if (!host_)
 		return;
 	// At most one live shortcut per key. Two QShortcuts on the same key in the
@@ -166,7 +167,8 @@ void ShortcutRegistry::rebuild()
 	// panel refuses to create one, but an imported profile or a hand-edited
 	// settings file can, and this is the one place every route passes through.
 	QSet<QKeySequence> taken;
-	for (const ShortcutCommand &c : cmds_) {
+	for (int ci = 0; ci < cmds_.size(); ++ci) {
+		const ShortcutCommand &c = cmds_[ci];
 		if (c.mouseOnly || !c.run)
 			continue;
 		for (const QKeySequence &k : binds_.value(c.id)) {
@@ -178,7 +180,17 @@ void ShortcutRegistry::rebuild()
 			const std::function<void()> fn = c.run;
 			QObject::connect(s, &QShortcut::activated, host_, [fn]() { fn(); });
 			live_.append(s);
+			liveCmd_.append(ci);
 		}
+	}
+	refreshEnabled();
+}
+
+void ShortcutRegistry::refreshEnabled()
+{
+	for (int i = 0; i < live_.size(); ++i) {
+		const ShortcutCommand &c = cmds_[liveCmd_[i]];
+		live_[i]->setEnabled(!c.when || c.when());
 	}
 }
 

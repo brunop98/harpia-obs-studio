@@ -62,6 +62,9 @@ EditorChromeParams DevPanel::loadChrome()
 	p.inspectorFontPx = s.value(QStringLiteral("win/insFont"), d.inspectorFontPx).toInt();
 	p.speedSliderMinW = s.value(QStringLiteral("win/speedW"), d.speedSliderMinW).toInt();
 	p.speedSpinW = s.value(QStringLiteral("win/spinW"), d.speedSpinW).toInt();
+	p.speedStep = s.value(QStringLiteral("win/speedStep"), d.speedStep).toDouble();
+	if (!(p.speedStep >= 0.01 && p.speedStep <= 5.0))
+		p.speedStep = d.speedStep; // a hand-edited setting cannot leave the keys dead
 	p.powerSaveOnBlur =
 		s.value(QStringLiteral("win/powerSave"), d.powerSaveOnBlur).toBool();
 	s.endGroup();
@@ -122,6 +125,7 @@ void DevPanel::saveChrome(const EditorChromeParams &p)
 	s.setValue(QStringLiteral("win/insFont"), p.inspectorFontPx);
 	s.setValue(QStringLiteral("win/speedW"), p.speedSliderMinW);
 	s.setValue(QStringLiteral("win/spinW"), p.speedSpinW);
+	s.setValue(QStringLiteral("win/speedStep"), p.speedStep);
 	s.setValue(QStringLiteral("win/powerSave"), p.powerSaveOnBlur);
 	s.endGroup();
 }
@@ -471,6 +475,13 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 			winSpeedW_ = spin(60, 600, ch.speedSliderMinW, &DevPanel::applyChrome));
 	winForm->addRow(QStringLiteral("Speed value box width"),
 			winSpinW_ = spin(48, 160, ch.speedSpinW, &DevPanel::applyChrome));
+	winForm->addRow(QStringLiteral("Speed step for Up / Down (Multi-Cut)"),
+			winSpeedStep_ = dspin(0.05, 5.0, ch.speedStep, &DevPanel::applyChrome));
+	winSpeedStep_->setDecimals(2);
+	winSpeedStep_->setSingleStep(0.05);
+	winSpeedStep_->setToolTip(QStringLiteral(
+		"With cuts selected in Multi-Cut, Up speeds them up by this much and Down slows "
+		"them down. Shift steps by five times as much."));
 	winPowerSave_ = new QCheckBox(QStringLiteral("Pause playback when the app is in the background"),
 				      this);
 	winPowerSave_->setChecked(ch.powerSaveOnBlur);
@@ -848,6 +859,7 @@ void DevPanel::applyChrome()
 	p.inspectorFontPx = winInsFont_->value();
 	p.speedSliderMinW = winSpeedW_->value();
 	p.speedSpinW = winSpinW_->value();
+	p.speedStep = winSpeedStep_->value();
 	p.powerSaveOnBlur = winPowerSave_->isChecked();
 	saveChrome(p);
 	emit chromeChanged(p);
@@ -870,6 +882,7 @@ void DevPanel::resetWindowTab()
 	winInsFont_->setValue(d.inspectorFontPx);
 	winSpeedW_->setValue(d.speedSliderMinW);
 	winSpinW_->setValue(d.speedSpinW);
+	winSpeedStep_->setValue(d.speedStep);
 	winPowerSave_->setChecked(d.powerSaveOnBlur);
 	loading_ = false;
 	applyChrome();

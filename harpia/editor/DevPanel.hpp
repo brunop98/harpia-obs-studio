@@ -32,6 +32,9 @@ struct EditorChromeParams {
 	int speedSliderMinW = 96; // speed slider minimum width (drives the toolbar's
 				  // own minimum, so it caps how narrow the window can get)
 	int speedSpinW = 72;       // editable speed-value box width
+	// How much Up / Down (Multi-Cut, with cuts selected) changes a cut's speed
+	// per press. Shift+Up / Shift+Down step by five of these.
+	double speedStep = 0.2;
 	// Pause preview playback while the app is in the background. Playback is the
 	// only thing in the editor that runs continuously on its own, so this is
 	// what "idle in the background" costs.
@@ -170,6 +173,7 @@ private:
 	QSpinBox *winInsFont_ = nullptr;
 	QSpinBox *winSpeedW_ = nullptr;
 	QSpinBox *winSpinW_ = nullptr;
+	QDoubleSpinBox *winSpeedStep_ = nullptr;
 	QCheckBox *winPowerSave_ = nullptr;
 	QSpinBox *insMinW_ = nullptr;
 	QSpinBox *insOpenW_ = nullptr;

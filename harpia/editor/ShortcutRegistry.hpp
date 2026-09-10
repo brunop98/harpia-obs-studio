@@ -37,6 +37,14 @@ struct ShortcutCommand {
 	QString category; // "Timeline", "Playback", …
 	QVector<QKeySequence> defaults;
 	std::function<void()> run;
+	// When the command applies at all. A window-level shortcut CONSUMES its key
+	// even if `run` then does nothing, so a command that only makes sense in one
+	// mode -- Up / Down on Multi-Cut's cuts -- would otherwise steal the arrows
+	// from every list and spin box in the other modes. With `when` set, the live
+	// shortcut is disabled while it returns false and the key goes where it
+	// would have gone anyway. Re-evaluated by refreshEnabled(); the host calls
+	// that whenever what the predicate reads has changed (a mode switch).
+	std::function<bool()> when;
 	// A gesture the mouse owns (Ctrl+Wheel). Listed for reference, not editable.
 	bool mouseOnly = false;
 	QString mouseText; // "Ctrl + Mouse wheel"
@@ -85,6 +93,10 @@ public:
 	void load(); // from QSettings
 	void save() const;
 
+	// Re-ask every command's `when` and enable/disable its live shortcuts to
+	// match. Cheap; call it after anything a predicate depends on changes.
+	void refreshEnabled();
+
 signals:
 	// Any binding changed: menus, tooltips and the panel refresh from this.
 	void bindingsChanged();
@@ -99,6 +111,7 @@ private:
 	QHash<QString, int> index_;                    // id -> position in cmds_
 	QHash<QString, QVector<QKeySequence>> binds_;  // id -> current keys
 	QVector<QShortcut *> live_;                    // owned by host_, cleared on rebuild
+	QVector<int> liveCmd_;                         // live_[i] belongs to cmds_[liveCmd_[i]]
 };
 
 } // namespace harpia

@@ -277,6 +277,10 @@ private:
 	// the count label. Callers keep the slider + spin box in sync.
 	void applySpeed(double value);
 	void syncSpeedControls(double value); // set slider + spin without re-applying
+	// Multi-Cut, Up / Down: add `delta` to EVERY selected cut's own speed (so a
+	// 1.0x and a 2.0x cut selected together become 1.2x and 2.2x, not both the
+	// same), clamped to the slider's range. Nothing happens with no selection.
+	void stepSelectedSpeed(double delta);
 
 	// Every keyboard shortcut, registered rather than hard-wired, so the panel
 	// can list and rebind them live.
@@ -923,6 +927,7 @@ private:
 	bool powerSaving_ = false;
 	bool resumeOnFocus_ = false;
 	bool powerSaveEnabled_ = true; // Dev panel: "Pause playback in the background"
+	double speedStep_ = 0.2;       // Dev panel: what Up / Down add to a cut's speed
 
 	// ---- Preview audio (Full editing) ----
 	// The timeline is pre-mixed to one PCM buffer on a worker thread and played

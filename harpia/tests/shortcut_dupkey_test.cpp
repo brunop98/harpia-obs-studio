@@ -6,6 +6,7 @@
 #include <QApplication>
 #include <QTest>
 #include <QSettings>
+#include <QSpinBox>
 #include <QWidget>
 #include <cstdio>
 using namespace harpia;
@@ -73,6 +74,40 @@ int main(int argc, char **argv) {
                 qPrintable(reg.displayText("cmd.a")), qPrintable(reg.displayText("cmd.b")));
     ok(reg.conflict(QKeySequence("J"), "cmd.a").isEmpty(),
        "no command other than A still claims J");
+
+    // A command with a `when` gate. While the gate is closed its key must not
+    // merely do nothing -- it must not be TAKEN, so a spin box that has focus
+    // still gets its Up. That is the whole point of the gate: Multi-Cut's
+    // Up / Down would otherwise steal the arrows from every other mode.
+    std::printf("\n-- a gated command lets its key through while the gate is closed --\n");
+    bool gate = false;
+    int firedUp = 0;
+    ShortcutCommand up; up.id="cmd.up"; up.label="Up"; up.category="T";
+    up.defaults = {QKeySequence(Qt::Key_Up)};
+    up.run = [&]{ ++firedUp; };
+    up.when = [&]{ return gate; };
+    reg.addCommand(up);
+    reg.load(); // rebuilds the live shortcuts (setBindings would no-op on defaults)
+    QApplication::processEvents();
+
+    QSpinBox spin(&host);
+    spin.setRange(0, 100);
+    spin.setValue(10);
+    spin.show();
+    spin.setFocus();
+    QApplication::processEvents();
+    QTest::keyClick(&spin, Qt::Key_Up); QApplication::processEvents();
+    std::printf("     gate closed: fired=%d spin=%d\n", firedUp, spin.value());
+    ok(firedUp == 0, "the gated command does not run while its gate is closed");
+    ok(spin.value() == 11, "and the spin box still got its Up");
+
+    gate = true;
+    reg.refreshEnabled();
+    spin.setFocus();
+    QTest::keyClick(&spin, Qt::Key_Up); QApplication::processEvents();
+    std::printf("     gate open: fired=%d spin=%d\n", firedUp, spin.value());
+    ok(firedUp == 1, "with the gate open the command runs");
+    ok(spin.value() == 11, "and the key no longer reaches the spin box");
 
     std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
     return failures ? 1 : 0;

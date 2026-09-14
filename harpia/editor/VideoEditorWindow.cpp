@@ -54,6 +54,7 @@
 #include "../Version.hpp"
 
 #include <QCheckBox>
+#include <QRadioButton>
 #include <QAbstractSpinBox>
 #include <QComboBox>
 #include <QDesktopServices>
@@ -872,6 +873,15 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			timelineView_->zoomToFit();
 	});
 	controls->addWidget(fitBtn_);
+	// Randomise the clip order: many versions of one edit, each a Ctrl+Z from
+	// the last, to find the sequence that plays best.
+	randomBtn_ = new QPushButton(QStringLiteral("Randomize"), this);
+	randomBtn_->setToolTip(QStringLiteral(
+		"Shuffle the order of the clips (Ctrl+R). Opens the options; Ctrl+Z brings the "
+		"previous order back, so try as many as you like."));
+	randomBtn_->setVisible(false); // Full editing only
+	connect(randomBtn_, &QPushButton::clicked, this, &VideoEditorWindow::openRandomizePanel);
+	controls->addWidget(randomBtn_);
 	// View > Keyboard Shortcuts, always available (not just in Full editing):
 	// the panel is the reference for every mode.
 	auto *keysBtn = new QPushButton(this);
@@ -1618,6 +1628,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	});
 	tlCmd("timeline.fit", "Zoom to fit", "View", {QKeySequence(Qt::Key_F)},
 	      [this]() { timelineView_->zoomToFit(); });
+	// The fast loop: Ctrl+R, look, Ctrl+Z, Ctrl+R. No panel needed once the
+	// options are set; they are remembered.
+	tlCmd("timeline.randomize", "Randomize clip order", "Timeline",
+	      {QKeySequence(Qt::CTRL | Qt::Key_R)}, [this]() { randomizeClips(); });
 
 	// Arrows nudge a selection, or step the playhead when nothing is selected —
 	// the same key doing the obvious thing for what you have in hand.
@@ -6764,6 +6778,10 @@ void VideoEditorWindow::setEditMode(EditMode m)
 		snapBtn_->setVisible(full);
 	if (fitBtn_)
 		fitBtn_->setVisible(full);
+	if (randomBtn_)
+		randomBtn_->setVisible(full);
+	if (!full && randomPanel_)
+		randomPanel_->hide(); // its target is the timeline, which just went away
 	if (muteBtn_)
 		muteBtn_->setVisible(full); // only Full editing has a timeline to mix
 	if (!full && audioPreview_)
@@ -8580,6 +8598,174 @@ void VideoEditorWindow::applySpeed(double value)
 	updateInspector();
 	updateVoiceoverAxis();
 	scheduleSnapshot();
+}
+
+// ---- Randomise clip order --------------------------------------------------
+//
+// A tool window rather than a dialog: it stays open beside the timeline while
+// you press its button, watch, undo, press again. Nothing in it applies until
+// that button (or Ctrl+R) is pressed, and every press is one undo step through
+// the editor's ordinary history -- there is no second undo stack to learn.
+
+namespace {
+const QString kRandKeep = QStringLiteral("editor/randomize/keep");
+const QString kRandSelOnly = QStringLiteral("editor/randomize/selectedOnly");
+const QString kRandAvoid = QStringLiteral("editor/randomize/avoidSame");
+const QString kRandStrength = QStringLiteral("editor/randomize/strength");
+} // namespace
+
+ShuffleOptions VideoEditorWindow::randomizeOptions() const
+{
+	ShuffleOptions o;
+	if (randomPanel_) {
+		o.keep = ShuffleOptions::Keep(std::clamp(randomKeep_->checkedId(), 0, 3));
+		o.selectedOnly = randomSelectedOnly_->isChecked();
+		o.avoidSameOrder = randomAvoidSame_->isChecked();
+		o.strength = ShuffleOptions::Strength(std::clamp(randomStrength_->currentIndex(), 0, 2));
+		return o;
+	}
+	// Ctrl+R before the panel has ever been opened this session: the options
+	// it would show, which are the ones saved last time.
+	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	o.keep = ShuffleOptions::Keep(std::clamp(st.value(kRandKeep, 0).toInt(), 0, 3));
+	o.selectedOnly = st.value(kRandSelOnly, false).toBool();
+	o.avoidSameOrder = st.value(kRandAvoid, true).toBool();
+	o.strength = ShuffleOptions::Strength(std::clamp(st.value(kRandStrength, 2).toInt(), 0, 2));
+	return o;
+}
+
+void VideoEditorWindow::openRandomizePanel()
+{
+	if (!fullEdit() || !timelineView_)
+		return;
+	if (!randomPanel_) {
+		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		auto *p = new QWidget(this, Qt::Tool | Qt::WindowTitleHint | Qt::WindowCloseButtonHint);
+		p->setWindowTitle(QStringLiteral("Randomize clips"));
+		auto *lay = new QVBoxLayout(p);
+		lay->setContentsMargins(12, 10, 12, 10);
+		lay->setSpacing(6);
+
+		auto *what = new QLabel(QStringLiteral("Shuffle the order of the clips. Nothing about a clip "
+							"changes but where it sits; the edit stays exactly as long."),
+					p);
+		what->setWordWrap(true);
+		what->setStyleSheet(QStringLiteral("color:#9aa0a6;"));
+		lay->addWidget(what);
+
+		auto *keepLbl = new QLabel(QStringLiteral("Keep in place"), p);
+		keepLbl->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
+		lay->addWidget(keepLbl);
+		randomKeep_ = new QButtonGroup(p);
+		const char *keepNames[] = {"Nothing: fully random", "The first clip (the intro)",
+					   "The last clip (the ending)", "The first and the last"};
+		const int keepSaved = std::clamp(st.value(kRandKeep, 0).toInt(), 0, 3);
+		for (int i = 0; i < 4; ++i) {
+			auto *rb = new QRadioButton(QString::fromLatin1(keepNames[i]), p);
+			rb->setChecked(i == keepSaved);
+			randomKeep_->addButton(rb, i);
+			lay->addWidget(rb);
+		}
+
+		randomSelectedOnly_ = new QCheckBox(QStringLiteral("Only the selected clips"), p);
+		randomSelectedOnly_->setToolTip(QStringLiteral(
+			"Shuffle just the clips you have selected, among their own slots. Everything "
+			"else stays where it is. Ctrl+click adds clips to the selection."));
+		randomSelectedOnly_->setChecked(st.value(kRandSelOnly, false).toBool());
+		lay->addWidget(randomSelectedOnly_);
+
+		randomAvoidSame_ = new QCheckBox(QStringLiteral("Avoid the same order as now"), p);
+		randomAvoidSame_->setToolTip(QStringLiteral(
+			"Retry until the result is meaningfully different from the current order. "
+			"Otherwise a shuffle of a few clips will sometimes hand the same order back."));
+		randomAvoidSame_->setChecked(st.value(kRandAvoid, true).toBool());
+		lay->addWidget(randomAvoidSame_);
+
+		auto *form = new QFormLayout;
+		form->setContentsMargins(0, 2, 0, 0);
+		form->setHorizontalSpacing(10);
+		randomStrength_ = new QComboBox(p);
+		randomStrength_->addItem(QStringLiteral("Low: a few neighbours trade places"));
+		randomStrength_->addItem(QStringLiteral("Medium: about half the clips move"));
+		randomStrength_->addItem(QStringLiteral("High: a completely different order"));
+		randomStrength_->setCurrentIndex(std::clamp(st.value(kRandStrength, 2).toInt(), 0, 2));
+		form->addRow(QStringLiteral("Strength"), randomStrength_);
+		lay->addLayout(form);
+
+		auto *scope = new QLabel(QStringLiteral(
+			"Which lanes: the one holding the selected clip or header; with nothing selected, "
+			"every video lane, each on its own. Locked lanes are never touched."), p);
+		scope->setWordWrap(true);
+		scope->setStyleSheet(QStringLiteral("color:#9aa0a6;"));
+		lay->addWidget(scope);
+
+		auto *go = new QPushButton(QStringLiteral("Randomize  (Ctrl+R)"), p);
+		go->setDefault(true);
+		go->setMinimumHeight(32);
+		connect(go, &QPushButton::clicked, this, &VideoEditorWindow::randomizeClips);
+		lay->addWidget(go);
+
+		randomStatus_ = new QLabel(QStringLiteral("Ctrl+Z brings the previous order back."), p);
+		randomStatus_->setStyleSheet(QStringLiteral("color:#9aa0a6;"));
+		randomStatus_->setWordWrap(true);
+		lay->addWidget(randomStatus_);
+
+		// Every option is remembered the moment it changes, so Ctrl+R with the
+		// panel closed -- or next session -- does what the panel last said.
+		auto persist = [this]() {
+			QSettings s(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+			s.setValue(kRandKeep, randomKeep_->checkedId());
+			s.setValue(kRandSelOnly, randomSelectedOnly_->isChecked());
+			s.setValue(kRandAvoid, randomAvoidSame_->isChecked());
+			s.setValue(kRandStrength, randomStrength_->currentIndex());
+		};
+		connect(randomKeep_, &QButtonGroup::idClicked, this, [persist](int) { persist(); });
+		connect(randomSelectedOnly_, &QCheckBox::toggled, this, [persist](bool) { persist(); });
+		connect(randomAvoidSame_, &QCheckBox::toggled, this, [persist](bool) { persist(); });
+		connect(randomStrength_, &QComboBox::currentIndexChanged, this, [persist](int) { persist(); });
+
+		p->adjustSize();
+		p->setFixedWidth(std::max(320, p->sizeHint().width()));
+		randomPanel_ = p;
+	}
+	// Beside the button that opened it, not over the timeline it acts on.
+	if (!randomPanel_->isVisible() && randomBtn_) {
+		const QPoint below = randomBtn_->mapToGlobal(QPoint(0, randomBtn_->height() + 6));
+		randomPanel_->move(below);
+	}
+	randomPanel_->show();
+	randomPanel_->raise();
+	randomPanel_->activateWindow();
+}
+
+void VideoEditorWindow::randomizeClips()
+{
+	if (!fullEdit() || !timelineView_)
+		return;
+	const ShuffleOptions o = randomizeOptions();
+	int total = 0;
+	for (const TlTrack &t : timelineView_->model().tracks)
+		if (t.kind == TlTrack::Kind::Video)
+			total += t.clips.size();
+	// One call, one editCommitted, one undo step -- the timeline's own signal
+	// is what the history listens to, so Ctrl+Z here is the same Ctrl+Z as
+	// everywhere else in Full editing. A press that changed nothing records
+	// nothing, and says so.
+	const int moved = timelineView_->shuffleClips(o);
+	if (randomStatus_) {
+		if (moved == 0)
+			randomStatus_->setText(o.selectedOnly
+						       ? QStringLiteral("Nothing moved: select two or more clips first.")
+						       : QStringLiteral("Nothing moved: no lane with two clips to shuffle "
+									"(a locked lane is left alone)."));
+		else
+			randomStatus_->setText(QStringLiteral("Moved %1 of %2 clips. Ctrl+Z brings the previous "
+							      "order back; Ctrl+R shuffles again.")
+						       .arg(moved)
+						       .arg(total));
+	}
+	if (moved > 0)
+		showTimelineFrame(timelinePlayheadMs()); // the frame under the playhead is a different clip now
 }
 
 void VideoEditorWindow::stepSelectedSpeed(double delta)

@@ -28,6 +28,7 @@
 #include <thread>
 #include <vector>
 
+class QButtonGroup;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -652,6 +653,19 @@ private:
 	QPushButton *addTextBtn_ = nullptr; // bottom controls row, Full mode only
 	QPushButton *snapBtn_ = nullptr;    // magnet toggle, Full mode only
 	QPushButton *fitBtn_ = nullptr;     // zoom-to-fit, Full mode only
+	// Randomise clip order (Full editing): the button opens a small tool
+	// window with the options; the window's own button, or Ctrl+R with it
+	// closed, does a shuffle with whatever the options say. Options persist.
+	QPushButton *randomBtn_ = nullptr;
+	QWidget *randomPanel_ = nullptr;
+	QButtonGroup *randomKeep_ = nullptr;      // Keep::None/First/Last/FirstAndLast
+	QCheckBox *randomSelectedOnly_ = nullptr;
+	QCheckBox *randomAvoidSame_ = nullptr;
+	QComboBox *randomStrength_ = nullptr;
+	QLabel *randomStatus_ = nullptr;          // "Moved 7 of 9 clips"
+	void openRandomizePanel();
+	ShuffleOptions randomizeOptions() const;  // from the panel, or the saved settings
+	void randomizeClips();                    // one shuffle, one undo step
 	bool syncingClip_ = false;          // guard while pushing values into the UI
 
 	// ---- Project inspector (metadata for the whole edit, not one clip) ----

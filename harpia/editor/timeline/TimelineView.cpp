@@ -3119,6 +3119,92 @@ void TimelineView::leaveEvent(QEvent *)
 }
 
 // Every selected clip, primary included, as (track, clip).
+int TimelineView::shuffleClips(const ShuffleOptions &opt, quint64 seed)
+{
+	// Which lanes take part.
+	const QVector<QPair<int, int>> sel = selectedPairs();
+	QVector<int> lanes;
+	if (opt.selectedOnly) {
+		for (const auto &p : sel)
+			if (!lanes.contains(p.first))
+				lanes.append(p.first);
+	} else if (selTrack_ >= 0 && selTrack_ < model_.tracks.size()) {
+		lanes.append(selTrack_);
+	} else if (selHeaderTrack_ >= 0 && selHeaderTrack_ < model_.tracks.size()) {
+		lanes.append(selHeaderTrack_);
+	} else {
+		for (int i = 0; i < model_.tracks.size(); ++i)
+			if (model_.tracks[i].kind == TlTrack::Kind::Video)
+				lanes.append(i);
+	}
+
+	// A 64-bit Mersenne twister seeded from the system source: std::shuffle
+	// over it is uniform over the permutations, which QRandomGenerator's
+	// bounded() in a hand-rolled loop would not guarantee, and a fresh seed
+	// per call is what makes two presses two different edits.
+	std::mt19937_64 rng(seed ? seed : QRandomGenerator::system()->generate64());
+
+	int moved = 0;
+	bool selectionMoved = false;
+	for (int ti : lanes) {
+		TlTrack &t = model_.tracks[ti];
+		if (t.locked || t.clips.size() < 2)
+			continue;
+		// Slots: the clips by start time. `pos[i]` is clip i's slot.
+		const int n = t.clips.size();
+		QVector<int> bySlot(n);
+		std::iota(bySlot.begin(), bySlot.end(), 0);
+		std::stable_sort(bySlot.begin(), bySlot.end(), [&t](int a, int b) {
+			return t.clips[a].outStartMs < t.clips[b].outStartMs;
+		});
+		QVector<int> pos(n);
+		for (int k = 0; k < n; ++k)
+			pos[bySlot[k]] = k;
+		QVector<bool> selectedSlot(n, false);
+		for (const auto &p : sel)
+			if (p.first == ti)
+				selectedSlot[pos[p.second]] = true;
+
+		const QVector<int> order =
+			shuffledOrder(movableSlots(n, opt, selectedSlot), opt, rng);
+		const int d = displacedSlots(order);
+		if (d == 0)
+			continue;
+		moved += d;
+
+		QVector<TlClip> sorted(n);
+		for (int k = 0; k < n; ++k)
+			sorted[k] = t.clips[bySlot[k]];
+		t.clips = applyOrder(sorted, order);
+		// The clip that was at index i is now at the slot k with order[k] ==
+		// pos[i]; the clips vector IS the slot order after applyOrder.
+		QVector<int> newIndex(n, -1);
+		for (int k = 0; k < n; ++k)
+			newIndex[bySlot[order[k]]] = k;
+		if (selTrack_ == ti && selClip_ >= 0 && selClip_ < n) {
+			selClip_ = newIndex[selClip_];
+			selectionMoved = true;
+		}
+		QSet<QPair<int, int>> extra;
+		for (const auto &p : extraSel_) {
+			if (p.first == ti && p.second >= 0 && p.second < n) {
+				extra.insert({ti, newIndex[p.second]});
+				selectionMoved = true;
+			} else {
+				extra.insert(p);
+			}
+		}
+		extraSel_ = extra;
+	}
+	if (moved == 0)
+		return 0;
+	update();
+	if (selectionMoved)
+		emit selectionChanged(selTrack_, selClip_);
+	commitEdit(); // one undo step for the whole shuffle
+	return moved;
+}
+
 void TimelineView::applyToSelection(const std::function<void(TlClip &)> &fn)
 {
 	const QVector<QPair<int, int>> sel = selectedPairs();

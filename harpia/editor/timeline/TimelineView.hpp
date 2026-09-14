@@ -2,6 +2,7 @@
 
 #include "TimelineModel.hpp"
 #include "TimelineSlice.hpp" // TlSpan (what "the selected portion" is)
+#include "ClipShuffle.hpp"   // ShuffleOptions
 #include "../EditorColors.hpp"
 
 #include <QFont>
@@ -197,6 +198,15 @@ public:
 	// the lane's new index, or -1 when nothing moved. Also what dragging a
 	// header up or down does, and the header menu's Move up / Move down.
 	int moveTrack(int from, int to);
+
+	// Randomise the ORDER of clips, nothing else about them (see ClipShuffle.hpp
+	// for the rules). Which lanes: with `selectedOnly`, every lane holding a
+	// selected clip; otherwise the lane of the selected clip or header, or --
+	// with nothing selected -- every video lane. A locked lane never moves.
+	// Returns how many clips changed slot. One undo step when that is not zero,
+	// none when it is (a shuffle that changed nothing would make Ctrl+Z appear
+	// to do nothing). The selection follows its clips. `seed` 0 = fresh random.
+	int shuffleClips(const ShuffleOptions &opt, quint64 seed = 0);
 	// Percent, for the readout, the dialog and the wheel: one rounding rule.
 	static int gainPercent(double g) { return int(std::lround(g * 100.0)); }
 

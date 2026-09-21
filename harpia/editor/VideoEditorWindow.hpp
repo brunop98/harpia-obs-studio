@@ -666,6 +666,26 @@ private:
 	void openRandomizePanel();
 	ShuffleOptions randomizeOptions() const;  // from the panel, or the saved settings
 	void randomizeClips(bool selectedOnly = false); // one shuffle, one undo step
+
+	// The editing console (Full editing): a line of JavaScript against the
+	// timeline -- see EditConsole.hpp for the object model. A tool window with
+	// the output above and the line below; Up/Down walk the history. Each
+	// line runs against a copy of the model and is swapped in as ONE undo
+	// step; a line that fails changes nothing. Templates are *.js files in
+	// the templates folder, run with run("name") or from the Templates menu.
+	QPushButton *consoleBtn_ = nullptr;
+	QWidget *consolePanel_ = nullptr;
+	QPlainTextEdit *consoleOut_ = nullptr;
+	QLineEdit *consoleIn_ = nullptr;
+	QStringList consoleHistory_;
+	int consoleHistIdx_ = -1; // -1 = past the newest entry (typing fresh)
+	QString consoleDraft_;    // what was being typed before walking the history
+	void openConsole();
+	void runConsoleLine(const QString &line);
+	void consolePrint(const QString &text, bool isError = false);
+	QString consoleTemplatesDir() const;
+	QStringList consoleTemplateNames() const;
+	void saveConsoleTemplate();
 	bool syncingClip_ = false;          // guard while pushing values into the UI
 
 	// ---- Project inspector (metadata for the whole edit, not one clip) ----

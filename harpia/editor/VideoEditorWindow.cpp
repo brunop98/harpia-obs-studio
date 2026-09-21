@@ -44,6 +44,7 @@
 #include "timeline/TimelineCompositor.hpp"
 #include "ShortcutPanel.hpp"
 #include "ShortcutRegistry.hpp"
+#include "EditConsole.hpp"
 #include "timeline/KeyframeEditor.hpp"
 #include "CanvasFit.hpp"
 #include "DeleteRouting.hpp"
@@ -73,6 +74,8 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFontDatabase>
+#include <QScrollBar>
 #include <QFileSystemWatcher>
 #include <QFormLayout>
 #include <QLineEdit>
@@ -551,6 +554,24 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		syncPreviewTransformTarget();
 		updateInspector();
 		refreshKeyframeEditor(); // it follows the selection
+		// With the console open, a click on a clip tells you what to call it:
+		// the clip becomes `clip`, and its V1[3] name is how a template would
+		// reach it without a mouse.
+		if (consolePanel_ && consolePanel_->isVisible() && track >= 0 && clip >= 0) {
+			const TimelineModel &m = timelineView_->model();
+			QString name;
+			if (track < m.tracks.size() && clip < m.tracks[track].clips.size()) {
+				const TlClip &c = m.tracks[track].clips[clip];
+				for (const EditorSource &s : sources_)
+					if (s.id == c.sourceId)
+						name = s.name;
+				if (c.type == TlClip::Type::Text)
+					name = c.text.text.left(40);
+			}
+			consolePrint(QStringLiteral("// clip -> %1  %2   (also tracks.%3)")
+					     .arg(EditConsole::refName(m, track, clip), name,
+						  EditConsole::refName(m, track, clip)));
+		}
 		// Clicking a clip is a statement that you want to work on it, so the
 		// panel follows. Only on SELECT: switching back on a deselect would
 		// yank the tab away every time you clicked empty timeline, and going
@@ -884,6 +905,15 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	randomBtn_->setVisible(false); // Full editing only
 	connect(randomBtn_, &QPushButton::clicked, this, &VideoEditorWindow::openRandomizePanel);
 	controls->addWidget(randomBtn_);
+	// The editing console: exact numbers and whole-timeline edits by typing,
+	// and the same lines saved as templates for the next project.
+	consoleBtn_ = new QPushButton(QStringLiteral("Console"), this);
+	consoleBtn_->setToolTip(QStringLiteral(
+		"A line of JavaScript against the timeline (Ctrl+`): clip.position = [500, 300], "
+		"clips.forEach(c => c.scale = 1.1), run(\"template\"). Each line is one undo step."));
+	consoleBtn_->setVisible(false); // Full editing only, and only with an engine
+	connect(consoleBtn_, &QPushButton::clicked, this, &VideoEditorWindow::openConsole);
+	controls->addWidget(consoleBtn_);
 	// View > Keyboard Shortcuts, always available (not just in Full editing):
 	// the panel is the reference for every mode.
 	auto *keysBtn = new QPushButton(this);
@@ -1634,6 +1664,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// options are set; they are remembered.
 	tlCmd("timeline.randomize", "Randomize clip order", "Timeline",
 	      {QKeySequence(Qt::CTRL | Qt::Key_R)}, [this]() { randomizeClips(); });
+	tlCmd("view.console", "Editing console", "View", {QKeySequence(Qt::CTRL | Qt::Key_QuoteLeft)},
+	      [this]() { openConsole(); });
 
 	// Arrows nudge a selection, or step the playhead when nothing is selected —
 	// the same key doing the obvious thing for what you have in hand.
@@ -6083,7 +6115,246 @@ bool VideoEditorWindow::eventFilter(QObject *watched, QEvent *e)
 		st.setValue(QStringLiteral("editor/sourcesGeom"), sourcesPanel_->saveGeometry());
 		st.setValue(QStringLiteral("editor/sourcesShown"), false);
 	}
+	// Up / Down in the console's line walk its history, like any shell. An
+	// event filter rather than a subclass: the line is one widget with one
+	// extra behaviour, and the window already filters events for its panels.
+	if (consoleIn_ && watched == consoleIn_ && e->type() == QEvent::KeyPress) {
+		auto *ke = static_cast<QKeyEvent *>(e);
+		if (ke->key() == Qt::Key_Up || ke->key() == Qt::Key_Down) {
+			if (consoleHistory_.isEmpty())
+				return true;
+			if (consoleHistIdx_ < 0)
+				consoleDraft_ = consoleIn_->text();
+			int idx = consoleHistIdx_ < 0 ? consoleHistory_.size() : consoleHistIdx_;
+			idx += (ke->key() == Qt::Key_Up) ? -1 : 1;
+			if (idx < 0)
+				idx = 0;
+			if (idx >= consoleHistory_.size()) {
+				consoleHistIdx_ = -1;
+				consoleIn_->setText(consoleDraft_);
+			} else {
+				consoleHistIdx_ = idx;
+				consoleIn_->setText(consoleHistory_[idx]);
+			}
+			consoleIn_->end(false);
+			return true;
+		}
+	}
 	return QDialog::eventFilter(watched, e);
+}
+
+// ---- The editing console -----------------------------------------------------
+
+QString VideoEditorWindow::consoleTemplatesDir() const
+{
+	const QString base = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+	const QString dir = base + QStringLiteral("/harpia/templates");
+	QDir().mkpath(dir);
+	return dir;
+}
+
+QStringList VideoEditorWindow::consoleTemplateNames() const
+{
+	QStringList names;
+	for (const QFileInfo &fi : QDir(consoleTemplatesDir()).entryInfoList({QStringLiteral("*.js")}, QDir::Files, QDir::Name))
+		names << fi.completeBaseName();
+	return names;
+}
+
+void VideoEditorWindow::consolePrint(const QString &text, bool isError)
+{
+	if (!consoleOut_)
+		return;
+	// Errors in the accent red, everything else as typed. appendHtml so the
+	// colour is per line; the text itself is escaped, never interpreted.
+	if (isError)
+		consoleOut_->appendHtml(QStringLiteral("<span style=\"color:#ff6b6b;\">%1</span>")
+						.arg(text.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>"))));
+	else
+		consoleOut_->appendPlainText(text);
+	consoleOut_->verticalScrollBar()->setValue(consoleOut_->verticalScrollBar()->maximum());
+}
+
+void VideoEditorWindow::openConsole()
+{
+	if (!fullEdit() || !timelineView_ || !EditConsole::available())
+		return;
+	if (!consolePanel_) {
+		auto *p = new QWidget(this, Qt::Tool | Qt::WindowTitleHint | Qt::WindowCloseButtonHint);
+		p->setWindowTitle(QStringLiteral("Console"));
+		auto *lay = new QVBoxLayout(p);
+		lay->setContentsMargins(8, 8, 8, 8);
+		lay->setSpacing(6);
+
+		consoleOut_ = new QPlainTextEdit(p);
+		consoleOut_->setReadOnly(true);
+		consoleOut_->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+		consoleOut_->setMaximumBlockCount(2000);
+		QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+		mono.setPixelSize(std::max(11, uiReadoutPx() - 1));
+		consoleOut_->setFont(mono);
+		consoleOut_->setStyleSheet(QStringLiteral("QPlainTextEdit{background:#15171a;color:#e8eaed;border:1px solid #2b2f36;}"));
+		consoleOut_->setMinimumHeight(180);
+		lay->addWidget(consoleOut_, 1);
+
+		auto *row = new QHBoxLayout;
+		row->setSpacing(6);
+		auto *prompt = new QLabel(QStringLiteral(">"), p);
+		prompt->setFont(mono);
+		row->addWidget(prompt);
+		consoleIn_ = new QLineEdit(p);
+		consoleIn_->setFont(mono);
+		consoleIn_->setPlaceholderText(QStringLiteral("clip.position = [500, 300]      help() for the list"));
+		consoleIn_->setClearButtonEnabled(true);
+		consoleIn_->installEventFilter(this);
+		connect(consoleIn_, &QLineEdit::returnPressed, this, [this]() {
+			const QString line = consoleIn_->text();
+			consoleIn_->clear();
+			runConsoleLine(line);
+		});
+		row->addWidget(consoleIn_, 1);
+		lay->addLayout(row);
+
+		auto *btns = new QHBoxLayout;
+		btns->setSpacing(6);
+		auto *runBtn = new QPushButton(QStringLiteral("Run"), p);
+		runBtn->setToolTip(QStringLiteral("Run the line (Enter does too). One undo step."));
+		connect(runBtn, &QPushButton::clicked, this, [this]() {
+			const QString line = consoleIn_->text();
+			consoleIn_->clear();
+			runConsoleLine(line);
+		});
+		btns->addWidget(runBtn);
+		auto *tplBtn = new QPushButton(QStringLiteral("Templates ▾"), p);
+		tplBtn->setToolTip(QStringLiteral(
+			"Saved *.js files. Pick one to run it; \"Save last line as template…\" keeps the "
+			"line you just ran under a name, for run(\"name\") on any project."));
+		connect(tplBtn, &QPushButton::clicked, this, [this, tplBtn]() {
+			QMenu menu(this);
+			const QStringList names = consoleTemplateNames();
+			QHash<QAction *, QString> runActs;
+			for (const QString &n : names)
+				runActs.insert(menu.addAction(QStringLiteral("Run \"%1\"").arg(n)), n);
+			if (names.isEmpty()) {
+				QAction *none = menu.addAction(QStringLiteral("(no templates yet)"));
+				none->setEnabled(false);
+			}
+			menu.addSeparator();
+			QAction *save = menu.addAction(QStringLiteral("Save last line as template…"));
+			save->setEnabled(!consoleHistory_.isEmpty());
+			QAction *folder = menu.addAction(QStringLiteral("Open templates folder"));
+			QAction *chosen = menu.exec(tplBtn->mapToGlobal(QPoint(0, tplBtn->height())));
+			if (!chosen)
+				return;
+			if (const auto it = runActs.constFind(chosen); it != runActs.constEnd()) {
+				runConsoleLine(QStringLiteral("run(\"%1\")").arg(it.value()));
+			} else if (chosen == save) {
+				saveConsoleTemplate();
+			} else if (chosen == folder) {
+				QDesktopServices::openUrl(QUrl::fromLocalFile(consoleTemplatesDir()));
+			}
+		});
+		btns->addWidget(tplBtn);
+		auto *helpBtn = new QPushButton(QStringLiteral("Help"), p);
+		connect(helpBtn, &QPushButton::clicked, this, [this]() { runConsoleLine(QStringLiteral("help()")); });
+		btns->addWidget(helpBtn);
+		btns->addStretch(1);
+		auto *clearBtn = new QPushButton(QStringLiteral("Clear"), p);
+		connect(clearBtn, &QPushButton::clicked, this, [this]() { consoleOut_->clear(); });
+		btns->addWidget(clearBtn);
+		lay->addLayout(btns);
+
+		p->resize(560, 340);
+		consolePanel_ = p;
+		consolePrint(QStringLiteral("// Editing console. Click a clip to see its name; help() lists what you can set."));
+		consolePrint(QStringLiteral("// Units: pixels for position, ms for time. Every line is one undo step (Ctrl+Z)."));
+	}
+	if (!consolePanel_->isVisible() && consoleBtn_)
+		consolePanel_->move(consoleBtn_->mapToGlobal(QPoint(0, consoleBtn_->height() + 6)));
+	consolePanel_->show();
+	consolePanel_->raise();
+	consolePanel_->activateWindow();
+	consoleIn_->setFocus();
+}
+
+void VideoEditorWindow::runConsoleLine(const QString &lineIn)
+{
+	const QString line = lineIn.trimmed();
+	if (line.isEmpty() || !timelineView_)
+		return;
+	if (consoleHistory_.isEmpty() || consoleHistory_.last() != line)
+		consoleHistory_.append(line);
+	consoleHistIdx_ = -1;
+	consolePrint(QStringLiteral("> ") + line);
+
+	EditConsole::Input in;
+	in.model = timelineView_->model();
+	in.selection = timelineView_->selectedPairs();
+	in.canvas = timelineCanvasSize();
+	in.playheadMs = timelinePlayheadMs();
+	in.sourceName = [this](int id) {
+		for (const EditorSource &s : sources_)
+			if (s.id == id)
+				return s.name;
+		return QString();
+	};
+	in.loadTemplate = [this](const QString &name) {
+		// A name, never a path: the templates folder is the only place.
+		const QString safe = QFileInfo(name).fileName();
+		QFile f(consoleTemplatesDir() + QLatin1Char('/') + safe +
+			(safe.endsWith(QLatin1String(".js")) ? QString() : QStringLiteral(".js")));
+		if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+			return QString();
+		return QString::fromUtf8(f.readAll());
+	};
+
+	const EditConsole::Result r = EditConsole::run(line, in);
+	if (!r.output.isEmpty())
+		consolePrint(r.output);
+	if (!r.ok) {
+		consolePrint(r.error, /*isError=*/true);
+		return; // nothing changed, by construction
+	}
+	if (!r.changed)
+		return;
+	// One undo step: the edited copy replaces the model, the selection is put
+	// back (setModel clears it), and the snapshot is closed now rather than
+	// waiting out the coalescing timer -- a second line must not merge into
+	// the first's undo entry.
+	const QVector<QPair<int, int>> sel = in.selection;
+	timelineView_->setModel(r.model);
+	for (int i = 0; i < sel.size(); ++i) {
+		if (i == 0)
+			timelineView_->selectClip(sel[i].first, sel[i].second);
+		else
+			timelineView_->addToSelection(sel[i].first, sel[i].second);
+	}
+	syncPreviewTransformTarget();
+	showTimelineFrame(timelinePlayheadMs());
+	syncComponentPanel();
+	updateInspector();
+	commitSnapshot();
+}
+
+void VideoEditorWindow::saveConsoleTemplate()
+{
+	if (consoleHistory_.isEmpty())
+		return;
+	bool ok = false;
+	const QString name = QInputDialog::getText(this, QStringLiteral("Save template"),
+						   QStringLiteral("Name (used as run(\"name\")):"),
+						   QLineEdit::Normal, QString(), &ok)
+				     .trimmed();
+	if (!ok || name.isEmpty())
+		return;
+	const QString safe = QFileInfo(name).fileName();
+	QFile f(consoleTemplatesDir() + QLatin1Char('/') + safe + QStringLiteral(".js"));
+	if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+		consolePrint(QStringLiteral("could not write %1").arg(f.fileName()), true);
+		return;
+	}
+	f.write(QStringLiteral("// Harpia template \"%1\"\n%2\n").arg(safe, consoleHistory_.last()).toUtf8());
+	consolePrint(QStringLiteral("// saved as template \"%1\": run(\"%1\")").arg(safe));
 }
 
 VideoEditorWindow::EditMode VideoEditorWindow::mode() const
@@ -6784,6 +7055,10 @@ void VideoEditorWindow::setEditMode(EditMode m)
 		randomBtn_->setVisible(full);
 	if (!full && randomPanel_)
 		randomPanel_->hide(); // its target is the timeline, which just went away
+	if (consoleBtn_)
+		consoleBtn_->setVisible(full && EditConsole::available());
+	if (!full && consolePanel_)
+		consolePanel_->hide();
 	if (muteBtn_)
 		muteBtn_->setVisible(full); // only Full editing has a timeline to mix
 	if (!full && audioPreview_)

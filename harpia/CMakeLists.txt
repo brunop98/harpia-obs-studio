@@ -251,6 +251,8 @@ target_sources(
     editor/component/ComponentPanel.cpp
     editor/component/ComponentPanel.hpp
     editor/component/ScriptComponent.cpp
+    editor/EditConsole.cpp
+    editor/EditConsole.hpp
     editor/component/ShaderComponent.cpp
     editor/timeline/ZoomKeyframes.cpp
     editor/timeline/ZoomKeyframes.hpp

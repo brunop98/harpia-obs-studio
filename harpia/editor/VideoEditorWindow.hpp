@@ -665,7 +665,7 @@ private:
 	QLabel *randomStatus_ = nullptr;          // "Moved 7 of 9 clips"
 	void openRandomizePanel();
 	ShuffleOptions randomizeOptions() const;  // from the panel, or the saved settings
-	void randomizeClips();                    // one shuffle, one undo step
+	void randomizeClips(bool selectedOnly = false); // one shuffle, one undo step
 	bool syncingClip_ = false;          // guard while pushing values into the UI
 
 	// ---- Project inspector (metadata for the whole edit, not one clip) ----

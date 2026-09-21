@@ -561,6 +561,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// "Show in inspector" from a clip's right-click menu (any mode).
 	connect(timelineView_, &TimelineView::filesDropped, this,
 		&VideoEditorWindow::onFilesDroppedOnTimeline);
+	connect(timelineView_, &TimelineView::randomizeSelectionRequested, this,
+		[this]() { randomizeClips(/*selectedOnly=*/true); });
 	connect(timelineView_, &TimelineView::inspectClipRequested, this,
 		&VideoEditorWindow::revealInspector);
 	connect(timelineView_, &TimelineView::keyframeEditorRequested, this,
@@ -8702,7 +8704,7 @@ void VideoEditorWindow::openRandomizePanel()
 		auto *go = new QPushButton(QStringLiteral("Randomize  (Ctrl+R)"), p);
 		go->setDefault(true);
 		go->setMinimumHeight(32);
-		connect(go, &QPushButton::clicked, this, &VideoEditorWindow::randomizeClips);
+		connect(go, &QPushButton::clicked, this, [this]() { randomizeClips(); });
 		lay->addWidget(go);
 
 		randomStatus_ = new QLabel(QStringLiteral("Ctrl+Z brings the previous order back."), p);
@@ -8738,11 +8740,14 @@ void VideoEditorWindow::openRandomizePanel()
 	randomPanel_->activateWindow();
 }
 
-void VideoEditorWindow::randomizeClips()
+void VideoEditorWindow::randomizeClips(bool selectedOnly)
 {
 	if (!fullEdit() || !timelineView_)
 		return;
-	const ShuffleOptions o = randomizeOptions();
+	ShuffleOptions o = randomizeOptions();
+	// From the clip menu: the right-clicked selection is the target whatever
+	// the panel's checkbox says.
+	o.selectedOnly = o.selectedOnly || selectedOnly;
 	int total = 0;
 	for (const TlTrack &t : timelineView_->model().tracks)
 		if (t.kind == TlTrack::Kind::Video)

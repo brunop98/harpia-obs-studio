@@ -327,6 +327,9 @@ signals:
 	void hoverScrubEnded();
 	void inspectClipRequested();   // "Show in inspector" from a clip's menu
 	void keyframeEditorRequested();// "Keyframes…" from a clip's menu
+	// "Randomize order of selected clips" from a clip's menu. The window owns
+	// the Randomize options, so it runs the shuffle (selected clips only).
+	void randomizeSelectionRequested();
 	// "Export this clip…" / "Export selection…". The window owns the export
 	// dialog and the media pool, so the view only says which slice of output
 	// time was asked for.

@@ -3694,6 +3694,19 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	exportSel->setToolTip(QStringLiteral(
 		"Opens the usual Export window for just this stretch of the timeline — every "
 		"track inside it, so the excerpt looks like what you were watching."));
+	// Two or more clips selected, and this is one of them: offer to shuffle
+	// just those. The window runs it with the Randomize panel's other options
+	// (keep, strength, avoid-same) and "only the selected clips" forced on, so
+	// the menu is the fast route to the panel's most common setting.
+	QAction *randomSel = nullptr;
+	if (inSel && sel.size() > 1) {
+		randomSel = menu.addAction(
+			QStringLiteral("Randomize order of selected clips  (%1)").arg(sel.size()));
+		randomSel->setToolTip(QStringLiteral(
+			"Shuffle these clips among their own slots. Everything else stays put; "
+			"Ctrl+Z brings the previous order back."));
+		randomSel->setEnabled(!locked);
+	}
 	// An effect clip animates its own parameters, not a transform, so the
 	// transform keyframe editor would be empty and misleading.
 	keys->setEnabled(!locked && !isFx);
@@ -3735,6 +3748,10 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	QAction *del = menu.addAction(QStringLiteral("Delete clip"));
 	del->setEnabled(!locked);
 	QAction *chosen = menu.exec(globalPos);
+	if (randomSel && chosen == randomSel) {
+		emit randomizeSelectionRequested();
+		return;
+	}
 	if (chosen == inspect) {
 		emit inspectClipRequested();
 		return;

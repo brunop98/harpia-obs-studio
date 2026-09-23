@@ -187,6 +187,25 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/console_test" "$QJSLIB/libqjs.a" $LF
 
+# Subtitles from speech: API JSON -> words -> captions -> clips aligned to the
+# media clip; the Subtitle component; the audio downmix; the request body.
+"$MOC" -I"$H" "$H/editor/subtitles/OpenAiTranscriber.hpp" -o "$WORK/moc_OpenAiTranscriber.cpp"
+"$MOC" -I"$H" "$H/editor/subtitles/SubtitleDialog.hpp" -o "$WORK/moc_SubtitleDialog.cpp"
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF $AVCF \
+	"$HERE/subtitles_test.cpp" \
+	"$H/editor/subtitles/OpenAiTranscriber.cpp" "$WORK/moc_OpenAiTranscriber.cpp" \
+	"$H/editor/subtitles/SubtitleDialog.cpp" "$WORK/moc_SubtitleDialog.cpp" \
+	"$H/editor/subtitles/SecretStore.cpp" "$H/editor/subtitles/AudioForSpeech.cpp" \
+	"$H/editor/VoiceoverMixer.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/component/ShaderComponent.cpp" "$H/editor/component/ScriptComponent.cpp" \
+	"$H/editor/component/TransformScriptComponent.cpp" \
+	"$H/editor/shader/ShaderRenderer.cpp" "$H/editor/script/TransformScript.cpp" \
+	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	-o "$WORK/subtitles_test" "$QJSLIB/libqjs.a" $LF $AVLF
+
 # Components through the REAL compositor -- the path the preview and the
 # exporter share. Determinism here is what "preview equals export" means.
 g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
@@ -629,6 +648,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/zoomkeyframes_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/component_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/scriptcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/console_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/subtitles_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/componentrender_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/assetcomponent_test" || rc=1

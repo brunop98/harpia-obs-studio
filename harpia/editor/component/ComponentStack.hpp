@@ -54,7 +54,8 @@ public:
 	// leaves ClipState::textValid false and makes a text component a no-op on a
 	// clip that has no words.
 	ClipState evaluatePose(const EvalContext &base, const TlTransform &seed,
-			       const QString *text = nullptr) const;
+			       const QString *text = nullptr,
+			       const QVector<ClipWordTime> *words = nullptr) const;
 
 	// The Pixel stage, over a frame that now exists.
 	void evaluatePixels(const EvalContext &base, QImage &frame) const;

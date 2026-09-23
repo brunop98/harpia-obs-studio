@@ -264,6 +264,9 @@ struct TlClip {
 
 	// Text clips only.
 	TlText text;
+	// A generated subtitle's words with the times they are spoken, relative to
+	// the clip's start (see TextSubtitle.hpp). Empty on a hand-typed caption.
+	QVector<ClipWordTime> words;
 
 	// Transform scripts, applied in order. Each one starts from what the previous
 	// left behind, so a script that only defines scale() composes with one that
@@ -522,7 +525,7 @@ struct TlClip {
 		       srcEndMs == o.srcEndMs && speed == o.speed && outStartMs == o.outStartMs &&
 		       posX == o.posX && posY == o.posY && scale == o.scale &&
 		       rotation == o.rotation && opacity == o.opacity &&
-		       crop == o.crop && keys == o.keys && text == o.text &&
+		       crop == o.crop && keys == o.keys && text == o.text && words == o.words &&
 		       scripts == o.scripts && fx == o.fx && components == o.components &&
 		       transition == o.transition &&
 		       volume == o.volume && fadeInMs == o.fadeInMs &&

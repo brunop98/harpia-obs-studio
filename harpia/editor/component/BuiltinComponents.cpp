@@ -1,6 +1,7 @@
 #include "BuiltinComponents.hpp"
 
 #include "TextBullets.hpp"
+#include "TextSubtitle.hpp"
 #include "TextTyping.hpp"
 
 #include "../timeline/EffectClip.hpp" // the effect table, and Effects::apply
@@ -333,6 +334,19 @@ public:
 // A caption with no cues is left exactly alone. That matters more than it
 // looks: this component sits in the Text menu next to Typing, and a component
 // that blanks the clip until you learn its syntax is one nobody adds twice.
+// A generated subtitle, shown the way the speaker said it. The word timing
+// comes in on ClipState::words; TextSubtitle.hpp decides what is on screen.
+class TextSubtitleComponent : public IComponent {
+public:
+	void evaluate(const EvalContext &ctx, ClipState &io) const override
+	{
+		if (!io.textValid || io.text.isEmpty())
+			return;
+		const int mode = std::clamp(int(std::lround(ctx.f("mode", 0.0))), 0, kSubtitleModeCount - 1);
+		io.text = subtitleTextAt(io.text, io.words, ctx.tMs, SubtitleMode(mode), ctx.durMs);
+	}
+};
+
 //
 // The parsing is in TextBullets.hpp, pure and tested; this is the wiring.
 class TextBulletsComponent : public IComponent {
@@ -495,6 +509,27 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 					   "time replaces them."),
 			    {QStringLiteral("Build up"), QStringLiteral("One at a time")}}};
 		t.make = [] { return std::unique_ptr<IComponent>(new TextBulletsComponent); };
+		reg.add(t);
+	}
+	{
+		ComponentType t;
+		t.id = QStringLiteral("harpia.subtitle");
+		t.displayName = QStringLiteral("Subtitle");
+		t.category = QStringLiteral("Text");
+		t.stage = Stage::Source;
+		t.clipKinds = ClipKindText;
+		t.help = QStringLiteral(
+			"How a generated subtitle appears: the whole phrase at once, one word at a "
+			"time as it is spoken, or the phrase building up word by word. Uses the "
+			"spoken times the transcription gave each word. Fix a typo in the caption "
+			"and the timing is kept; rewrite it and the words are paced evenly.");
+		t.props = {{QStringLiteral("mode"), QStringLiteral("Show"), PropType::Choice, 0.0,
+			    double(kSubtitleModeCount - 1), 0.0, true,
+			    QStringLiteral("One word at a time reads like the speaker; building up "
+					   "keeps the phrase for re-reading."),
+			    {QStringLiteral("Whole phrase"), QStringLiteral("One word at a time"),
+			     QStringLiteral("Build up word by word")}}};
+		t.make = [] { return std::unique_ptr<IComponent>(new TextSubtitleComponent); };
 		reg.add(t);
 	}
 	{

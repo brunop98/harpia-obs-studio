@@ -103,6 +103,20 @@ struct PropKey {
 // Values resolved for one instant. Keyed by PropDef::key.
 using PropBag = QMap<QString, QVariant>;
 
+// One word of a caption with the time it is spoken, relative to the clip's
+// start. Filled by the subtitle generator; read by the Subtitle component to
+// show the caption a word at a time. Lives here rather than in the timeline
+// model because ClipState carries a copy and this header cannot see the model.
+struct ClipWordTime {
+	QString text;
+	qint64 startMs = 0;
+	qint64 endMs = 0;
+	bool operator==(const ClipWordTime &o) const
+	{
+		return text == o.text && startMs == o.startMs && endMs == o.endMs;
+	}
+};
+
 // One component attached to one clip: which type, and its settings.
 struct ComponentInstance {
 	QString typeId;     // "harpia.blur", "acme.glitch" — namespaced, stable
@@ -190,6 +204,10 @@ struct ClipState {
 	QString text;
 	QString caret;
 	bool textValid = false; // false on every clip that is not a caption
+	// The caption's words with their spoken times, when the clip has them (a
+	// generated subtitle). Empty otherwise. Read-only to components: what they
+	// change is `text`.
+	QVector<ClipWordTime> words;
 };
 
 // The behaviour itself. Stateless: everything it needs arrives in EvalContext,

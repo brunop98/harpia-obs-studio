@@ -472,7 +472,8 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 				const QString caption = c.text.text;
 				cstate = stack->evaluatePose(
 					ectx, c.transformAt(outMs),
-					c.type == TlClip::Type::Text ? &caption : nullptr);
+					c.type == TlClip::Type::Text ? &caption : nullptr,
+					c.type == TlClip::Type::Text ? &c.words : nullptr);
 				if (std::abs(cstate.timeScale - 1.0) > 1e-9) {
 					const qint64 off = std::clamp<qint64>(
 						outMs - c.outStartMs, 0, c.outDurationMs());

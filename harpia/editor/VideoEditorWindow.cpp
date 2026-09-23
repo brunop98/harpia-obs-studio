@@ -45,6 +45,7 @@
 #include "ShortcutPanel.hpp"
 #include "ShortcutRegistry.hpp"
 #include "EditConsole.hpp"
+#include "subtitles/SubtitleDialog.hpp"
 #include "timeline/KeyframeEditor.hpp"
 #include "CanvasFit.hpp"
 #include "DeleteRouting.hpp"
@@ -822,6 +823,14 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	addTextBtn_->setVisible(false); // shown only in Full editing
 	connect(addTextBtn_, &QPushButton::clicked, this, &VideoEditorWindow::addTextClip);
 	controls->addWidget(addTextBtn_);
+	// Speech to captions, aligned to the clips it came from.
+	subtitleBtn_ = new QPushButton(QStringLiteral("Subtitles…"), this);
+	subtitleBtn_->setToolTip(QStringLiteral(
+		"Transcribe the selected clips' speech (OpenAI) and put caption clips on a "
+		"Subtitles lane, lined up with the audio. Edit the text in the Inspector afterwards."));
+	subtitleBtn_->setVisible(false); // Full editing only
+	connect(subtitleBtn_, &QPushButton::clicked, this, &VideoEditorWindow::openSubtitles);
+	controls->addWidget(subtitleBtn_);
 	addAudioBtn_ = new QPushButton(QStringLiteral("Add audio"), this);
 	addAudioBtn_->setToolTip(QStringLiteral(
 		"Put audio on its own timeline track — a source's own audio, an imported file, "
@@ -5694,6 +5703,71 @@ void VideoEditorWindow::stepKeyframe(int dir)
 	syncClipInspector();
 }
 
+void VideoEditorWindow::openSubtitles()
+{
+	if (!timelineView_)
+		return;
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	if (!subtitleDialog_) {
+		subtitleDialog_ = new SubtitleDialog(this);
+		connect(subtitleDialog_, &SubtitleDialog::captionsReady, this,
+			&VideoEditorWindow::addSubtitleClips);
+	}
+	// The selected media clips (video or audio lane) with the file each one
+	// plays. Captions, stills and effects have no speech.
+	QVector<SubtitleDialog::Target> targets;
+	const TimelineModel &m = timelineView_->model();
+	for (const auto &p : timelineView_->selectedPairs()) {
+		const TlClip &c = m.tracks[p.first].clips[p.second];
+		if (c.type != TlClip::Type::Video)
+			continue;
+		const EditorSource *s = sourceById(c.sourceId);
+		if (!s || s->path.isEmpty())
+			continue;
+		SubtitleDialog::Target t;
+		t.media = c;
+		t.path = s->path;
+		t.name = s->name.isEmpty() ? QFileInfo(s->path).fileName() : s->name;
+		targets.append(t);
+	}
+	subtitleDialog_->setTargets(targets);
+	subtitleDialog_->show();
+	subtitleDialog_->raise();
+	subtitleDialog_->activateWindow();
+}
+
+void VideoEditorWindow::addSubtitleClips(const QVector<TlClip> &clips, const QString &summary)
+{
+	if (!timelineView_ || clips.isEmpty())
+		return;
+	// One "Subtitles" lane, reused across runs, at the top of the picture
+	// stack so the captions draw over everything. Made on a copy and swapped
+	// in, so the lane and every caption are ONE undo step.
+	TimelineModel m = timelineView_->model();
+	int lane = -1;
+	for (int i = 0; i < m.tracks.size(); ++i)
+		if (m.tracks[i].kind == TlTrack::Kind::Video && m.tracks[i].name == QStringLiteral("Subtitles"))
+			lane = i;
+	if (lane < 0) {
+		TlTrack t;
+		t.kind = TlTrack::Kind::Video;
+		t.name = QStringLiteral("Subtitles");
+		t.color = QColor(0xe0, 0xb3, 0x4a);
+		m.tracks.insert(0, t);
+		lane = 0;
+	}
+	for (const TlClip &c : clips)
+		m.tracks[lane].clips.append(c);
+	timelineView_->setModel(m);
+	timelineView_->selectClip(lane, m.tracks[lane].clips.size() - clips.size());
+	syncPreviewTransformTarget();
+	syncClipInspector();
+	showTimelineFrame(timelinePlayheadMs());
+	commitSnapshot();
+	Q_UNUSED(summary); // the dialog shows it; the lane shows the result
+}
+
 void VideoEditorWindow::addTextClip()
 {
 	if (!timelineView_)
@@ -7039,6 +7113,8 @@ void VideoEditorWindow::setEditMode(EditMode m)
 	}
 	if (addTextBtn_)
 		addTextBtn_->setVisible(full);
+	if (subtitleBtn_)
+		subtitleBtn_->setVisible(full);
 	if (addAudioBtn_)
 		addAudioBtn_->setVisible(full);
 	if (addImageBtn_)

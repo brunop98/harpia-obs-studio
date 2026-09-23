@@ -253,6 +253,16 @@ target_sources(
     editor/component/ScriptComponent.cpp
     editor/EditConsole.cpp
     editor/EditConsole.hpp
+    editor/component/TextSubtitle.hpp
+    editor/subtitles/Transcript.hpp
+    editor/subtitles/AudioForSpeech.cpp
+    editor/subtitles/AudioForSpeech.hpp
+    editor/subtitles/OpenAiTranscriber.cpp
+    editor/subtitles/OpenAiTranscriber.hpp
+    editor/subtitles/SecretStore.cpp
+    editor/subtitles/SecretStore.hpp
+    editor/subtitles/SubtitleDialog.cpp
+    editor/subtitles/SubtitleDialog.hpp
     editor/component/ShaderComponent.cpp
     editor/timeline/ZoomKeyframes.cpp
     editor/timeline/ZoomKeyframes.hpp
@@ -303,6 +313,8 @@ if(OS_WINDOWS)
     platform/win/WinCameraAccess.cpp
     # Compiled into the .exe as the application icon (Explorer/taskbar).
     resources/harpia.rc)
+  # DPAPI (CryptProtectData) seals the transcription API key -- SecretStore.cpp.
+  target_link_libraries(harpia-recorder PRIVATE crypt32)
 elseif(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
   target_sources(harpia-recorder PRIVATE
     platform/nix/NixIdleMonitor.cpp

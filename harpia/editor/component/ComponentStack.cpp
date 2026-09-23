@@ -110,7 +110,7 @@ void ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io) co
 }
 
 ClipState ComponentStack::evaluatePose(const EvalContext &base, const TlTransform &seed,
-				       const QString *text) const
+				       const QString *text, const QVector<ClipWordTime> *words) const
 {
 	ClipState st;
 	st.xf = seed;
@@ -118,6 +118,8 @@ ClipState ComponentStack::evaluatePose(const EvalContext &base, const TlTransfor
 	if (text) {
 		st.text = *text;
 		st.textValid = true;
+		if (words)
+			st.words = *words;
 	}
 	run(Stage::Time, base, st);
 	run(Stage::Source, base, st);

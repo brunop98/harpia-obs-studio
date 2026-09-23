@@ -253,6 +253,17 @@ inline QJsonObject clipToJson(const TlClip &c)
 	if (c.type == TlClip::Type::Text) {
 		QJsonObject tx = textStyleToJson(c.text);
 		tx[QStringLiteral("text")] = c.text.text; // the words travel with the clip
+		if (!c.words.isEmpty()) {
+			QJsonArray wa;
+			for (const ClipWordTime &w : c.words) {
+				QJsonObject wo;
+				wo[QStringLiteral("w")] = w.text;
+				wo[QStringLiteral("s")] = w.startMs;
+				wo[QStringLiteral("e")] = w.endMs;
+				wa.append(wo);
+			}
+			tx[QStringLiteral("words")] = wa; // spoken times, for the Subtitle component
+		}
 		co[QStringLiteral("textStyle")] = tx;
 	} else {
 		co[QStringLiteral("volume")] = c.volume;
@@ -442,6 +453,14 @@ inline TlClip clipFromJson(const QJsonObject &co)
 		const QJsonObject tx = co.value(QStringLiteral("textStyle")).toObject();
 		applyTextStyleFromJson(tx, c.text);
 		c.text.text = tx.value(QStringLiteral("text")).toString();
+		for (const QJsonValue &wv : tx.value(QStringLiteral("words")).toArray()) {
+			const QJsonObject wo = wv.toObject();
+			ClipWordTime w;
+			w.text = wo.value(QStringLiteral("w")).toString();
+			w.startMs = qint64(wo.value(QStringLiteral("s")).toDouble());
+			w.endMs = qint64(wo.value(QStringLiteral("e")).toDouble());
+			c.words.append(w);
+		}
 	} else {
 		c.volume = co.value(QStringLiteral("volume")).toDouble(1.0);
 		c.fadeInMs = co.value(QStringLiteral("fadeIn")).toInt(15);

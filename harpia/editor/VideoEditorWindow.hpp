@@ -54,6 +54,9 @@ class QDropEvent;
 class QEvent;
 class QShowEvent;
 class QKeyEvent;
+namespace harpia {
+class SubtitleDialog;
+}
 class QResizeEvent;
 class QJsonObject;
 
@@ -651,6 +654,13 @@ private:
 	QSpinBox *boxRadiusSpin_ = nullptr;
 	QDoubleSpinBox *boxOpacitySpin_ = nullptr;
 	QPushButton *addTextBtn_ = nullptr; // bottom controls row, Full mode only
+	// Subtitles from speech (Full editing): the dialog does the work and hands
+	// back aligned caption clips; the window puts them on a "Subtitles" lane as
+	// one undo step.
+	QPushButton *subtitleBtn_ = nullptr;
+	SubtitleDialog *subtitleDialog_ = nullptr;
+	void openSubtitles();
+	void addSubtitleClips(const QVector<TlClip> &clips, const QString &summary);
 	QPushButton *snapBtn_ = nullptr;    // magnet toggle, Full mode only
 	QPushButton *fitBtn_ = nullptr;     // zoom-to-fit, Full mode only
 	// Randomise clip order (Full editing): the button opens a small tool

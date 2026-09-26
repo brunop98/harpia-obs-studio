@@ -6,6 +6,7 @@
 #include "SpotlightPreview.hpp"
 #include "ZoomPreview.hpp"
 #include "ColorField.hpp"
+#include "../editor/ytdlp/YtDlpSettingsWidget.hpp"
 #include "core/CaptureManager.hpp"
 #include "core/EncoderFactory.hpp"
 #include "core/WebcamRecorder.hpp"
@@ -1103,6 +1104,17 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	syncBitrate();
 	v->addStretch(1);
 	addPage(QStringLiteral("Advanced"), advancedPage);
+
+	// ===== Downloads (yt-dlp) =====
+	// Not a preset setting -- it is about the machine, not the recording -- but
+	// this is where people look for settings, and a page that saves as you
+	// type needs no OK. The widget owns the whole thing.
+	{
+		QWidget *dlPage = makePage(v);
+		v->addWidget(new YtDlpSettingsWidget(dlPage));
+		v->addStretch(1);
+		addPage(QStringLiteral("Downloads"), dlPage);
+	}
 
 	// ---- Which pages this preset actually has ---------------------------
 	const auto pageApplies = [this](const QString &title) {

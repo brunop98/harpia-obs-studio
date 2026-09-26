@@ -46,6 +46,8 @@
 #include "ShortcutRegistry.hpp"
 #include "EditConsole.hpp"
 #include "subtitles/SubtitleDialog.hpp"
+#include "ytdlp/UrlDownloadDialog.hpp"
+#include "ytdlp/YtDlp.hpp"
 #include "../ui/UrlDragList.hpp"
 #include "timeline/KeyframeEditor.hpp"
 #include "CanvasFit.hpp"
@@ -847,6 +849,15 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	addImageAct_->setToolTip(
 		QStringLiteral("Place a still image (logo, arrow, callout) on the timeline"));
 	connect(addImageAct_, &QAction::triggered, this, &VideoEditorWindow::addImageClip);
+	// Only when yt-dlp was found at startup: an entry that can only fail is
+	// worse than none. Settings has a Downloads page to point at a copy.
+	if (YtDlp::available()) {
+		addUrlAct_ = addMenu->addAction(QStringLiteral("Video from URL\u2026"));
+		addUrlAct_->setToolTip(QStringLiteral(
+			"Paste a link, check what it is, pick a quality, and yt-dlp downloads it onto the "
+			"timeline at the playhead."));
+		connect(addUrlAct_, &QAction::triggered, this, &VideoEditorWindow::openUrlDownload);
+	}
 	// Ctrl+V does this too, but a screenshot pasted straight onto the timeline is
 	// not something anyone tries unprompted -- so it gets an entry, greyed out
 	// when there is nothing on the clipboard to place.
@@ -5782,6 +5793,28 @@ void VideoEditorWindow::openSubtitles()
 	subtitleDialog_->show();
 	subtitleDialog_->raise();
 	subtitleDialog_->activateWindow();
+}
+
+void VideoEditorWindow::openUrlDownload()
+{
+	if (!timelineView_)
+		return;
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	if (!urlDialog_) {
+		urlDialog_ = new UrlDownloadDialog(this);
+		// The finished file goes through the same path as a file dropped on
+		// the timeline: a source is made (or reused), the clip lands on the
+		// last video lane at the playhead, and it is one undo step.
+		connect(urlDialog_, &UrlDownloadDialog::downloaded, this,
+			[this](const QString &path, const YtVideoInfo &) {
+				onFilesDroppedOnTimeline({path}, -1, -1, timelinePlayheadMs());
+				commitSnapshot();
+			});
+	}
+	urlDialog_->show();
+	urlDialog_->raise();
+	urlDialog_->activateWindow();
 }
 
 void VideoEditorWindow::addSubtitleClips(const QVector<TlClip> &clips, const QString &summary)

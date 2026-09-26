@@ -57,6 +57,7 @@ class QShowEvent;
 class QKeyEvent;
 namespace harpia {
 class SubtitleDialog;
+class UrlDownloadDialog;
 }
 class QResizeEvent;
 class QJsonObject;
@@ -474,6 +475,9 @@ private:
 	QAction *addImageAct_ = nullptr;
 	QAction *pasteImageAct_ = nullptr;  // greyed when the clipboard has no picture
 	QAction *addFxClipAct_ = nullptr;   // "Effect clip" -> an effect CLIP
+	QAction *addUrlAct_ = nullptr;      // "Video from URL…", only when yt-dlp was found
+	UrlDownloadDialog *urlDialog_ = nullptr;
+	void openUrlDownload();
 	QString sessionAudioDir(); // per-session temp dir for decoded proxies
 
 	// ---- Direct manipulation of the selected clip in the preview ----

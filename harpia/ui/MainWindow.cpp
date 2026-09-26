@@ -1,6 +1,7 @@
 #include "MainWindow.hpp"
 
 #include "core/Logger.hpp"
+#include "../editor/ytdlp/YtDlp.hpp"
 
 #include "UiIcons.hpp"
 #include "UiText.hpp"
@@ -135,6 +136,18 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	setWindowTitle(QStringLiteral("Harpia Recorder  v%1").arg(QString::fromUtf8(appVersion())));
 
 	ownPid_ = (uint64_t)QCoreApplication::applicationPid();
+
+	// Is yt-dlp on this machine? Asked once, here, so the editor's Add menu can
+	// offer "Video from URL…" or not without a process per menu open. The
+	// answer is in the log either way.
+	if (YtDlp::probe())
+		Logger::instance().log(LogLevel::Info,
+				       QStringLiteral("yt-dlp found: %1 (version %2)")
+					       .arg(YtDlp::foundPath(), YtDlp::version())
+					       .toStdString());
+	else
+		Logger::instance().log(LogLevel::Info,
+				       "yt-dlp not found; Video from URL is off (Settings > Downloads)");
 
 	// Saved capture regions (global; shared across presets).
 	regionStore_ = std::make_unique<RegionStore>(presets_.configDir());

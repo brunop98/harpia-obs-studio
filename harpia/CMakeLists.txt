@@ -268,6 +268,12 @@ target_sources(
     editor/subtitles/SecretStore.hpp
     editor/subtitles/SubtitleDialog.cpp
     editor/subtitles/SubtitleDialog.hpp
+    editor/ytdlp/YtDlp.cpp
+    editor/ytdlp/YtDlp.hpp
+    editor/ytdlp/YtDlpSettingsWidget.cpp
+    editor/ytdlp/YtDlpSettingsWidget.hpp
+    editor/ytdlp/UrlDownloadDialog.cpp
+    editor/ytdlp/UrlDownloadDialog.hpp
     editor/component/ShaderComponent.cpp
     editor/timeline/ZoomKeyframes.cpp
     editor/timeline/ZoomKeyframes.hpp

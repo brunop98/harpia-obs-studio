@@ -1425,7 +1425,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// ---- Sources: a floating, toggleable panel with two tabs ----------------
 	sourcesPanel_ = new QWidget(this, Qt::Tool | Qt::WindowTitleHint | Qt::WindowCloseButtonHint);
 	sourcesPanel_->setWindowTitle(QStringLiteral("Sources"));
-	sourcesPanel_->resize(240, 460);
+	// Wide enough that a library name like "DarkIsland_DFI Daily Video
+	// (2)_0108_clip.mp4" reads whole beside its thumbnail; the narrow default
+	// it had cut every one of them off. The floor keeps a dragged-down panel
+	// from going back there.
+	sourcesPanel_->resize(560, 620);
+	sourcesPanel_->setMinimumWidth(440);
 	auto *sideLayout = new QVBoxLayout(sourcesPanel_);
 	sideLayout->setContentsMargins(8, 8, 8, 8);
 	sideLayout->setSpacing(6);
@@ -1437,7 +1442,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	usedLayout->setContentsMargins(0, 6, 0, 0);
 	usedLayout->setSpacing(6);
 	sourceList_ = new QListWidget(usedTab);
-	sourceList_->setIconSize(QSize(96, 54));
+	sourceList_->setIconSize(QSize(128, 72));
 	sourceList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	sourceList_->setToolTip(QStringLiteral(
 		"Videos you can cut from. Click one to cut from it; double-click to add its "
@@ -1463,7 +1468,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	libLayout->setContentsMargins(0, 6, 0, 0);
 	libLayout->setSpacing(6);
 	libraryList_ = new QListWidget(libTab);
-	libraryList_->setIconSize(QSize(96, 54));
+	libraryList_->setIconSize(QSize(128, 72));
 	libraryList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	libraryList_->setToolTip(
 		QStringLiteral("Recordings from your library — double-click to add one as a source."));
@@ -2309,7 +2314,7 @@ void VideoEditorWindow::refreshLibrary()
 	if (!libraryList_)
 		return;
 	libraryList_->clear();
-	const QSize thumbSz(96, 54);
+	const QSize thumbSz(128, 72); // matches the list's icon size
 	const QVector<ClipInfo> clips = ClipLibrary::scan(libraryFolders_);
 	for (const ClipInfo &c : clips) {
 		auto *item = new QListWidgetItem(QStringLiteral("%1\n%2").arg(c.fileName, c.relativeAge()));
@@ -2328,7 +2333,7 @@ void VideoEditorWindow::onThumbReady(const QString &path)
 {
 	if (!libraryList_ || !thumbCache_)
 		return;
-	const QImage img = thumbCache_->cached(path, QSize(96, 54));
+	const QImage img = thumbCache_->cached(path, QSize(128, 72));
 	if (img.isNull())
 		return;
 	const QIcon icon(QPixmap::fromImage(img));
@@ -6067,6 +6072,10 @@ void VideoEditorWindow::showSourcesPanel()
 			sourcesPanel_->restoreGeometry(geom);
 		else
 			sourcesPanel_->move(geometry().left() + 16, geometry().top() + 76);
+		// A geometry saved by an older build is the old narrow one; open it
+		// at the new width once rather than carrying the cramp forward.
+		if (sourcesPanel_->width() < 480)
+			sourcesPanel_->resize(560, std::max(sourcesPanel_->height(), 620));
 		sourcesPlaced_ = true;
 	}
 	sourcesPanel_->show();

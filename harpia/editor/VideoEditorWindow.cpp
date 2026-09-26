@@ -77,6 +77,7 @@
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QScrollBar>
+#include <QScreen>
 #include <QFileSystemWatcher>
 #include <QFormLayout>
 #include <QLineEdit>
@@ -948,7 +949,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	auto *cancelBtn = new QPushButton(QStringLiteral("Close"), this);
 	controls->addWidget(saveBtn);
 	controls->addWidget(cancelBtn);
-	bottomLayout->addLayout(controls);
+	// ABOVE the timeline, not below it. At the bottom of the pane this row was
+	// the first thing to go when the window was taller than the screen -- and
+	// a full-screen dialog owned by the main window is exactly the case where
+	// Windows keeps the taskbar on top, so Export, Close and every Full-editing
+	// button sat under it, unreachable. Under the transport bar nothing can push
+	// it off; the timeline gives up its bottom edge instead.
+	bottomLayout->insertLayout(0, controls);
 
 	splitter->addWidget(bottomPane);
 	splitter->setStretchFactor(0, 3); // preview grows more than the editing area
@@ -3002,6 +3009,10 @@ void VideoEditorWindow::onTimelineScrub(qint64 outMs)
 	// move of a scrub, and the panel's refresh is a handful of setValue calls
 	// where a full sync rebuilds the effect controls.
 	syncComponentPanel();
+	// The preview's transform box outlines the clip AT THE PLAYHEAD, so a jump
+	// to a keyframe (the list, Prev/Next, a ruler click) has to move it too, or
+	// the grips stay on the old pose while the picture shows the new one.
+	syncPreviewTransformTarget();
 	requestPreview(-1, outMs); // -1 = "composite the timeline"
 }
 
@@ -6111,6 +6122,14 @@ void VideoEditorWindow::setFullScreen(bool on)
 {
 	if (on) {
 		setWindowState((windowState() & ~Qt::WindowMaximized) | Qt::WindowFullScreen);
+		// Windows only drops the taskbar behind a full-screen window that is
+		// the ACTIVE window and covers the whole monitor. An owned dialog that
+		// went full screen without being activated kept the taskbar over its
+		// bottom edge. Ask for both explicitly rather than hoping.
+		if (QScreen *s = screen())
+			setGeometry(s->geometry());
+		raise();
+		activateWindow();
 	} else {
 		// Out of full screen lands on MAXIMISED, not the 1040x680 restore size:
 		// the point of leaving is to get the title bar and taskbar back, not
@@ -6263,8 +6282,12 @@ void VideoEditorWindow::openConsole()
 	if (!fullEdit() || !timelineView_ || !EditConsole::available())
 		return;
 	if (!consolePanel_) {
-		auto *p = new QWidget(this, Qt::Tool | Qt::WindowTitleHint | Qt::WindowCloseButtonHint);
-		p->setWindowTitle(QStringLiteral("Console"));
+		// A window of its own, not a tool palette: it shows in the taskbar, can
+		// be moved to another monitor and alt-tabbed to, and sits beside a
+		// full-screen editor rather than being a strip glued to it.
+		auto *p = new QWidget(this, Qt::Window | Qt::WindowTitleHint | Qt::WindowMinMaxButtonsHint |
+						Qt::WindowCloseButtonHint);
+		p->setWindowTitle(QStringLiteral("Harpia Console"));
 		auto *lay = new QVBoxLayout(p);
 		lay->setContentsMargins(8, 8, 8, 8);
 		lay->setSpacing(6);
@@ -6347,7 +6370,7 @@ void VideoEditorWindow::openConsole()
 		btns->addWidget(clearBtn);
 		lay->addLayout(btns);
 
-		p->resize(560, 340);
+		p->resize(640, 420);
 		consolePanel_ = p;
 		consolePrint(QStringLiteral("// Editing console. Click a clip to see its name; help() lists what you can set."));
 		consolePrint(QStringLiteral("// Units: pixels for position, ms for time. Every line is one undo step (Ctrl+Z)."));

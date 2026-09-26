@@ -171,6 +171,7 @@ target_sources(
 	ui/FuzzyMatch.hpp
 	ui/SearchPicker.cpp
 	ui/SearchPicker.hpp
+	ui/UrlDragList.hpp
 	ui/UiIcons.hpp
 	ui/UiText.cpp
 	ui/UiText.hpp
@@ -204,6 +205,7 @@ target_sources(
     editor/GifEncoder.hpp
     editor/EditorWidgets.cpp
     editor/EditorWidgets.hpp
+    editor/GripCursor.hpp
     editor/TrackEditor.cpp
     editor/TrackEditor.hpp
     editor/ShortcutRegistry.cpp

@@ -2,6 +2,7 @@
 
 #include "timeline/Spotlight.hpp"
 
+#include <QCursor>
 #include <QImage>
 #include <QPointF>
 #include <QPixmap>
@@ -178,6 +179,8 @@ private:
 	enum class XfZone { None, Move, TL, T, TR, L, R, BL, B, BR, Rotate };
 	QVector<QPointF> transformHandlePoints() const; // widget px, already turned
 	XfZone transformZoneAt(const QPoint &p) const;
+	// See GripCursor.hpp; the zone ordinal is the shared MaskZone/XfZone layout.
+	QCursor gripCursor(int zoneOrdinal, double rotationDeg) const;
 	QRectF transformWidgetRect() const; // the unrotated box, in widget px
 
 	// ---- Mask component editing ----

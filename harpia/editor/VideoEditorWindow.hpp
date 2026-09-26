@@ -52,6 +52,7 @@ class QLineEdit;
 class QDragEnterEvent;
 class QDropEvent;
 class QEvent;
+class QAction;
 class QShowEvent;
 class QKeyEvent;
 namespace harpia {
@@ -464,10 +465,15 @@ private:
 
 	void addAudioClipFromSource(int sourceId); // put a source's audio on an audio lane
 	void onAddAudioClicked();                  // "Add audio ▾" menu
-	QPushButton *addAudioBtn_ = nullptr;
-	QPushButton *addImageBtn_ = nullptr;
-	QPushButton *pasteImageBtn_ = nullptr;
-	QPushButton *addFxClipBtn_ = nullptr; // "Add effect" -> an effect CLIP
+	// The Add menu (Full editing): one button, everything that puts something
+	// new on the timeline as its entries.
+	QPushButton *addMenuBtn_ = nullptr;
+	QAction *addTextAct_ = nullptr;
+	QAction *subtitleAct_ = nullptr;
+	QAction *addAudioAct_ = nullptr;
+	QAction *addImageAct_ = nullptr;
+	QAction *pasteImageAct_ = nullptr;  // greyed when the clipboard has no picture
+	QAction *addFxClipAct_ = nullptr;   // "Effect clip" -> an effect CLIP
 	QString sessionAudioDir(); // per-session temp dir for decoded proxies
 
 	// ---- Direct manipulation of the selected clip in the preview ----
@@ -563,6 +569,7 @@ private:
 	QStringList loadFailures_; // files a load could not read, reported together
 	QString clipLabel(const TlClip &c) const;
 	EditorSource *sourceById(int id);
+	QListWidgetItem *sourceRowForId(int id) const; // the Sources list row for a source
 	// The source already open for this file, or nullptr. Two callers were
 	// writing this loop themselves and both rebuilt a QFileInfo for the SEARCH
 	// path on every iteration; here it is built once.
@@ -653,11 +660,9 @@ private:
 	QSpinBox *boxPadYSpin_ = nullptr;
 	QSpinBox *boxRadiusSpin_ = nullptr;
 	QDoubleSpinBox *boxOpacitySpin_ = nullptr;
-	QPushButton *addTextBtn_ = nullptr; // bottom controls row, Full mode only
 	// Subtitles from speech (Full editing): the dialog does the work and hands
 	// back aligned caption clips; the window puts them on a "Subtitles" lane as
 	// one undo step.
-	QPushButton *subtitleBtn_ = nullptr;
 	SubtitleDialog *subtitleDialog_ = nullptr;
 	void openSubtitles();
 	void addSubtitleClips(const QVector<TlClip> &clips, const QString &summary);

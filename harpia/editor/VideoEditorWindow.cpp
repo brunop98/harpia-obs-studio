@@ -46,6 +46,7 @@
 #include "ShortcutRegistry.hpp"
 #include "EditConsole.hpp"
 #include "subtitles/SubtitleDialog.hpp"
+#include "../ui/UrlDragList.hpp"
 #include "timeline/KeyframeEditor.hpp"
 #include "CanvasFit.hpp"
 #include "DeleteRouting.hpp"
@@ -816,58 +817,58 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	auto *resetCrop = new QPushButton(QStringLiteral("Reset crop"), this);
 	resetCropBtn_ = resetCrop;
 	controls->addWidget(resetCrop);
-	// Full editing: drop a styled text/caption clip on the timeline.
-	addTextBtn_ = new QPushButton(QStringLiteral("Add text"), this);
-	addTextBtn_->setToolTip(
+	// Everything that puts something NEW on the timeline, in one menu. Six
+	// buttons in a row read as six unrelated things; one "Add" reads as the
+	// place to go when you want more on the timeline, and leaves the row room
+	// for the controls you use while editing what is already there.
+	addMenuBtn_ = new QPushButton(QStringLiteral("Add  \u25BE"), this);
+	addMenuBtn_->setToolTip(QStringLiteral("Put something new on the timeline: text, subtitles, "
+						"audio, an image, an effect clip"));
+	addMenuBtn_->setVisible(false); // Full editing only
+	auto *addMenu = new QMenu(addMenuBtn_);
+	addMenu->setToolTipsVisible(true);
+	addTextAct_ = addMenu->addAction(QStringLiteral("Text"));
+	addTextAct_->setToolTip(
 		QStringLiteral("Add a text clip at the playhead (font, colour, outline and background "
 			       "box are set in the Inspector)"));
-	addTextBtn_->setVisible(false); // shown only in Full editing
-	connect(addTextBtn_, &QPushButton::clicked, this, &VideoEditorWindow::addTextClip);
-	controls->addWidget(addTextBtn_);
-	// Speech to captions, aligned to the clips it came from.
-	subtitleBtn_ = new QPushButton(QStringLiteral("Subtitles…"), this);
-	subtitleBtn_->setToolTip(QStringLiteral(
+	connect(addTextAct_, &QAction::triggered, this, &VideoEditorWindow::addTextClip);
+	subtitleAct_ = addMenu->addAction(QStringLiteral("Subtitles from speech\u2026"));
+	subtitleAct_->setToolTip(QStringLiteral(
 		"Transcribe the selected clips' speech (OpenAI) and put caption clips on a "
 		"Subtitles lane, lined up with the audio. Edit the text in the Inspector afterwards."));
-	subtitleBtn_->setVisible(false); // Full editing only
-	connect(subtitleBtn_, &QPushButton::clicked, this, &VideoEditorWindow::openSubtitles);
-	controls->addWidget(subtitleBtn_);
-	addAudioBtn_ = new QPushButton(QStringLiteral("Add audio"), this);
-	addAudioBtn_->setToolTip(QStringLiteral(
-		"Put audio on its own timeline track — a source's own audio, an imported file, "
+	connect(subtitleAct_, &QAction::triggered, this, &VideoEditorWindow::openSubtitles);
+	addMenu->addSeparator();
+	addAudioAct_ = addMenu->addAction(QStringLiteral("Audio\u2026"));
+	addAudioAct_->setToolTip(QStringLiteral(
+		"Put audio on its own timeline track \u2014 a source's own audio, an imported file, "
 		"or an empty track"));
-	addAudioBtn_->setVisible(false); // Full editing only
-	connect(addAudioBtn_, &QPushButton::clicked, this, &VideoEditorWindow::onAddAudioClicked);
-	controls->addWidget(addAudioBtn_);
-	addImageBtn_ = new QPushButton(QStringLiteral("Add image"), this);
-	addImageBtn_->setToolTip(
+	connect(addAudioAct_, &QAction::triggered, this, &VideoEditorWindow::onAddAudioClicked);
+	addImageAct_ = addMenu->addAction(QStringLiteral("Image\u2026"));
+	addImageAct_->setToolTip(
 		QStringLiteral("Place a still image (logo, arrow, callout) on the timeline"));
-	addImageBtn_->setVisible(false); // Full editing only
-	connect(addImageBtn_, &QPushButton::clicked, this, &VideoEditorWindow::addImageClip);
-	controls->addWidget(addImageBtn_);
+	connect(addImageAct_, &QAction::triggered, this, &VideoEditorWindow::addImageClip);
 	// Ctrl+V does this too, but a screenshot pasted straight onto the timeline is
-	// not something anyone tries unprompted -- so it gets a button, greyed out
+	// not something anyone tries unprompted -- so it gets an entry, greyed out
 	// when there is nothing on the clipboard to place.
-	pasteImageBtn_ = new QPushButton(QStringLiteral("Paste image"), this);
-	pasteImageBtn_->setToolTip(QStringLiteral(
+	pasteImageAct_ = addMenu->addAction(QStringLiteral("Paste image"));
+	pasteImageAct_->setToolTip(QStringLiteral(
 		"Place the image on the clipboard \u2014 a screenshot, or a picture copied "
 		"from a browser \u2014 on the timeline (Ctrl+V)"));
-	pasteImageBtn_->setVisible(false); // Full editing only
-	connect(pasteImageBtn_, &QPushButton::clicked, this,
+	connect(pasteImageAct_, &QAction::triggered, this,
 		[this]() { pasteImageFromClipboard(timelinePlayheadMs()); });
 	connect(QApplication::clipboard(), &QClipboard::dataChanged, this, [this]() {
-		if (pasteImageBtn_)
-			pasteImageBtn_->setEnabled(systemClipboardHasMedia());
+		if (pasteImageAct_)
+			pasteImageAct_->setEnabled(systemClipboardHasMedia());
 	});
-	pasteImageBtn_->setEnabled(systemClipboardHasMedia());
-	controls->addWidget(pasteImageBtn_);
-	addFxClipBtn_ = new QPushButton(QStringLiteral("Add effect clip"), this);
-	addFxClipBtn_->setToolTip(
+	pasteImageAct_->setEnabled(systemClipboardHasMedia());
+	addMenu->addSeparator();
+	addFxClipAct_ = addMenu->addAction(QStringLiteral("Effect clip"));
+	addFxClipAct_->setToolTip(
 		QStringLiteral("Drop an effect clip on its own track. It grades every track "
 			       "below it, for as long as the clip lasts."));
-	addFxClipBtn_->setVisible(false); // Full editing only
-	connect(addFxClipBtn_, &QPushButton::clicked, this, &VideoEditorWindow::addEffectClip);
-	controls->addWidget(addFxClipBtn_);
+	connect(addFxClipAct_, &QAction::triggered, this, &VideoEditorWindow::addEffectClip);
+	addMenuBtn_->setMenu(addMenu);
+	controls->addWidget(addMenuBtn_);
 	// Magnet: snap dragged clips to the playhead, 0 and other clips' edges.
 	// A sticky toggle — whichever way you leave it is how the next session opens.
 	snapBtn_ = new QPushButton(QStringLiteral("Snap"), this);
@@ -1448,12 +1449,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	auto *usedLayout = new QVBoxLayout(usedTab);
 	usedLayout->setContentsMargins(0, 6, 0, 0);
 	usedLayout->setSpacing(6);
-	sourceList_ = new QListWidget(usedTab);
+	sourceList_ = new UrlDragList(usedTab); // rows drag out as files, onto the timeline
 	sourceList_->setIconSize(QSize(128, 72));
 	sourceList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	sourceList_->setToolTip(QStringLiteral(
 		"Videos you can cut from. Click one to cut from it; double-click to add its "
-		"whole clip to the output."));
+		"whole clip at the playhead, or drag it onto the lane you want."));
 	usedLayout->addWidget(sourceList_, 1);
 	auto *addSrcBtn = new QPushButton(QStringLiteral("Add video…"), usedTab);
 	addSrcBtn->setToolTip(QStringLiteral("Add another video as a source (or drag files onto the window)"));
@@ -1474,11 +1475,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	auto *libLayout = new QVBoxLayout(libTab);
 	libLayout->setContentsMargins(0, 6, 0, 0);
 	libLayout->setSpacing(6);
-	libraryList_ = new QListWidget(libTab);
+	libraryList_ = new UrlDragList(libTab);
 	libraryList_->setIconSize(QSize(128, 72));
 	libraryList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-	libraryList_->setToolTip(
-		QStringLiteral("Recordings from your library — double-click to add one as a source."));
+	libraryList_->setToolTip(QStringLiteral(
+		"Recordings from your library. Double-click to add one as a source (and, in Full "
+		"editing, onto the timeline at the playhead); or drag it straight onto a lane."));
 	libLayout->addWidget(libraryList_, 1);
 	auto *refreshLibBtn = new QPushButton(QStringLiteral("Refresh"), libTab);
 	connect(refreshLibBtn, &QPushButton::clicked, this, &VideoEditorWindow::refreshLibrary);
@@ -1489,7 +1491,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 
 	sideLayout->addWidget(srcTabs, 1);
 	auto *srcHint = new QLabel(
-		QStringLiteral("Drag videos onto the editor · double-click a clip to add it."),
+		QStringLiteral("Drag a clip onto a timeline lane, or double-click it to add it at the playhead."),
 		sourcesPanel_);
 	srcHint->setWordWrap(true);
 	srcHint->setStyleSheet(QStringLiteral("color:#7f858e;"));
@@ -2135,6 +2137,7 @@ void VideoEditorWindow::refreshSourceList()
 				.arg(s.width)
 				.arg(s.height));
 		item->setData(Qt::UserRole, s.id);
+		item->setData(UrlDragList::PathRole, s.path); // what a drag of this row carries
 		if (!s.thumbCache.isEmpty() && !s.thumbCache.front().isNull())
 			item->setIcon(QIcon(QPixmap::fromImage(s.thumbCache.front())));
 		item->setToolTip(QStringLiteral("%1  ·  %2×%3  ·  %4s")
@@ -2326,6 +2329,7 @@ void VideoEditorWindow::refreshLibrary()
 	for (const ClipInfo &c : clips) {
 		auto *item = new QListWidgetItem(QStringLiteral("%1\n%2").arg(c.fileName, c.relativeAge()));
 		item->setData(Qt::UserRole, c.filePath);
+		item->setData(UrlDragList::PathRole, c.filePath);
 		item->setToolTip(c.filePath);
 		const QImage img = thumbCache_ ? thumbCache_->cached(c.filePath, thumbSz) : QImage();
 		if (!img.isNull())
@@ -2358,14 +2362,30 @@ void VideoEditorWindow::onLibraryDoubleClicked(QListWidgetItem *item)
 	const QString path = item->data(Qt::UserRole).toString();
 	if (path.isEmpty())
 		return;
-	// Already loaded as a source? Just make it active. Otherwise add it.
-	if (const EditorSource *es = sourceByPath(path)) {
-		setActiveSource(es->id);
+	// Already loaded as a source? Just make it active. Otherwise add it. In
+	// Full editing it also goes onto the timeline at the playhead, which is
+	// what double-clicking a clip in a bin means in every editor.
+	const EditorSource *es = sourceByPath(path);
+	int id = es ? es->id : -1;
+	if (id < 0)
+		id = isImageFile(path) && !isVideoFile(path) ? addImageSource(path) : addSource(path);
+	if (id < 0)
 		return;
+	setActiveSource(id);
+	if (fullEdit() && timelineView_) {
+		if (QListWidgetItem *row = sourceRowForId(id))
+			onSourceDoubleClicked(row);
 	}
-	const int id = addSource(path);
-	if (id >= 0)
-		setActiveSource(id);
+}
+
+QListWidgetItem *VideoEditorWindow::sourceRowForId(int id) const
+{
+	if (!sourceList_)
+		return nullptr;
+	for (int i = 0; i < sourceList_->count(); ++i)
+		if (sourceList_->item(i)->data(Qt::UserRole).toInt() == id)
+			return sourceList_->item(i);
+	return nullptr;
 }
 
 void VideoEditorWindow::onSourceDoubleClicked(QListWidgetItem *item)
@@ -2376,16 +2396,21 @@ void VideoEditorWindow::onSourceDoubleClicked(QListWidgetItem *item)
 	EditorSource *s = sourceById(id);
 	if (!s || s->durationMs <= 0)
 		return;
-	// In Full editing, append the whole clip to the end of the timeline's video
-	// track; otherwise drop it onto the Multi-Cut Output track as one cut.
+	// In Full editing, put the whole clip on the timeline AT THE PLAYHEAD. It
+	// used to go after the last clip, which on any real edit is off the right
+	// edge of the view -- the clip arrived and nothing visibly happened, which
+	// reads as "double-click does nothing". Otherwise drop it onto the
+	// Multi-Cut Output track as one cut.
 	if (fullEdit()) {
 		TlClip c;
+		c.type = stillImages_.contains(id) ? TlClip::Type::Image : TlClip::Type::Video;
 		c.sourceId = id;
 		c.srcStartMs = 0;
 		c.srcEndMs = s->durationMs;
-		c.outStartMs = timelineView_->durationMs();
+		c.outStartMs = timelinePlayheadMs();
 		timelineView_->addClip(TlTrack::Kind::Video, c);
 		updateInfoLabel();
+		showTimelineFrame(timelinePlayheadMs());
 		return;
 	}
 	if (!multiCut())
@@ -2522,7 +2547,10 @@ void VideoEditorWindow::onFilesDroppedOnTimeline(const QStringList &paths, int t
 			// so this decodes it to a session WAV and registers THAT. Before
 			// this it fell through to the image branch and produced "could not
 			// be decoded", which was true of the still reader and useless.
-			const int id = addAudioSource(f);
+			// A row dragged from the Sources panel is a file already loaded:
+			// reuse it rather than decode a second copy.
+			const EditorSource *have = sourceByPath(f);
+			const int id = have ? have->id : addAudioSource(f);
 			if (id < 0)
 				continue; // addAudioSource already said why
 			const EditorSource *src = sourceById(id);
@@ -2549,7 +2577,8 @@ void VideoEditorWindow::onFilesDroppedOnTimeline(const QStringList &paths, int t
 			continue;
 		}
 		if (isVideoFile(f)) {
-			const int id = addSource(f);
+			const EditorSource *have = sourceByPath(f);
+			const int id = have ? have->id : addSource(f);
 			if (id < 0)
 				continue; // addSource already said why
 			const EditorSource *src = sourceById(id);
@@ -2558,7 +2587,8 @@ void VideoEditorWindow::onFilesDroppedOnTimeline(const QStringList &paths, int t
 			c.srcStartMs = 0;
 			c.srcEndMs = src ? src->durationMs : 0;
 		} else {
-			const int id = addImageSource(f);
+			const EditorSource *have = sourceByPath(f);
+			const int id = have ? have->id : addImageSource(f);
 			if (id < 0)
 				continue;
 			c.type = TlClip::Type::Image;
@@ -2751,7 +2781,8 @@ void VideoEditorWindow::onAddAudioClicked()
 	menu.addSeparator();
 	QAction *empty = menu.addAction(QStringLiteral("Add empty audio track"));
 
-	QAction *chosen = menu.exec(addAudioBtn_->mapToGlobal(QPoint(0, addAudioBtn_->height())));
+	QAction *chosen = menu.exec(addMenuBtn_ ? addMenuBtn_->mapToGlobal(QPoint(0, addMenuBtn_->height()))
+						: QCursor::pos());
 	if (chosen == imp) {
 		const QString f = QFileDialog::getOpenFileName(
 			this, QStringLiteral("Import audio"), QFileInfo(inPath_).absolutePath(),
@@ -7143,18 +7174,8 @@ void VideoEditorWindow::setEditMode(EditMode m)
 			canvas_->setCropEnabled(false);
 		}
 	}
-	if (addTextBtn_)
-		addTextBtn_->setVisible(full);
-	if (subtitleBtn_)
-		subtitleBtn_->setVisible(full);
-	if (addAudioBtn_)
-		addAudioBtn_->setVisible(full);
-	if (addImageBtn_)
-		addImageBtn_->setVisible(full);
-	if (pasteImageBtn_)
-		pasteImageBtn_->setVisible(full);
-	if (addFxClipBtn_)
-		addFxClipBtn_->setVisible(full);
+	if (addMenuBtn_)
+		addMenuBtn_->setVisible(full); // the Add menu: text, subtitles, audio, image, effect clip
 	if (snapBtn_)
 		snapBtn_->setVisible(full);
 	if (fitBtn_)

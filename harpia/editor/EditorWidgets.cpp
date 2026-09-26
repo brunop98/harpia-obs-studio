@@ -2,6 +2,7 @@
 
 #include "CanvasFit.hpp"
 #include "Filmstrip.hpp"
+#include "GripCursor.hpp"
 #include "TimeText.hpp"
 
 #include <QMouseEvent>
@@ -761,7 +762,10 @@ void PreviewCanvas::mousePressEvent(QMouseEvent *e)
 				const QPointF v = QPointF(e->pos()) - c;
 				maskStartAngle_ = std::atan2(v.y(), v.x()) * 180.0 / M_PI;
 			}
-			setCursor(z == MaskZone::Move ? Qt::ClosedHandCursor : Qt::CrossCursor);
+			// The cursor keeps the shape it had on hover, so a press does not
+			// swap it for something else under the finger.
+			setCursor(z == MaskZone::Move ? QCursor(Qt::ClosedHandCursor)
+						      : gripCursor(int(z), transformRotation_ + mask_.rotation));
 			return;
 		}
 	}
@@ -784,7 +788,7 @@ void PreviewCanvas::mousePressEvent(QMouseEvent *e)
 		xfPressLocal_ = QPointF(v.x() * std::cos(a) - v.y() * std::sin(a),
 					v.x() * std::sin(a) + v.y() * std::cos(a));
 		transformDragging_ = z == XfZone::Move;
-		setCursor(z == XfZone::Move ? Qt::ClosedHandCursor : Qt::CrossCursor);
+		setCursor(z == XfZone::Move ? QCursor(Qt::ClosedHandCursor) : gripCursor(int(z), transformRotation_));
 		return;
 	}
 	if (!cropEnabled_ || e->button() != Qt::LeftButton)
@@ -792,6 +796,22 @@ void PreviewCanvas::mousePressEvent(QMouseEvent *e)
 	drag_ = zoneAt(e->pos());
 	dragStart_ = e->pos();
 	dragStartCrop_ = widgetCropRect();
+}
+
+// The cursor for a zone of a grip box (the mask's and the clip's share one
+// layout: None, Move, then the eight grips TL..BR, then Rotate) on a box
+// turned by `rotationDeg`. The pointer says what a press will do: a hand on
+// the body, a resize arrow along the grip's own axis, a rotate arrow on the
+// knob, nothing special elsewhere.
+QCursor PreviewCanvas::gripCursor(int zoneOrdinal, double rotationDeg) const
+{
+	if (zoneOrdinal <= 0)
+		return QCursor(Qt::ArrowCursor);
+	if (zoneOrdinal == 1)
+		return QCursor(Qt::OpenHandCursor);
+	if (zoneOrdinal >= 10)
+		return rotateCursor();
+	return QCursor(resizeCursorForAxis(gripAxisDeg(GripIndex(zoneOrdinal - 2), rotationDeg)));
 }
 
 void PreviewCanvas::mouseMoveEvent(QMouseEvent *e)
@@ -932,6 +952,41 @@ void PreviewCanvas::mouseMoveEvent(QMouseEvent *e)
 		spotMasks_[spotDragMask_].pose = po;
 		emit spotlightPoseChanged(spotDragMask_, po);
 		update();
+		return;
+	}
+	// Nothing being dragged: the pointer says what a press here would do. It
+	// used to be one open hand over the whole picture in transform mode, which
+	// made finding a grip a matter of guessing where its 8 px were.
+	if (!(e->buttons() & Qt::LeftButton) && maskDrag_ == MaskZone::None &&
+	    xfDrag_ == XfZone::None && drag_ == Zone::None) {
+		if (cropEnabled_) {
+			// The crop box is never turned; its zones have their own order.
+			switch (zoneAt(e->pos())) {
+			case Zone::Move: setCursor(Qt::SizeAllCursor); break;
+			case Zone::L:
+			case Zone::R: setCursor(Qt::SizeHorCursor); break;
+			case Zone::T:
+			case Zone::B: setCursor(Qt::SizeVerCursor); break;
+			case Zone::TL:
+			case Zone::BR: setCursor(Qt::SizeFDiagCursor); break;
+			case Zone::TR:
+			case Zone::BL: setCursor(Qt::SizeBDiagCursor); break;
+			case Zone::None: setCursor(Qt::ArrowCursor); break;
+			}
+			return;
+		}
+		// The mask's grips sit on top of the clip's, as in the press handler.
+		if (mask_.on) {
+			const MaskZone mz = maskZoneAt(e->pos());
+			if (mz != MaskZone::None) {
+				setCursor(gripCursor(int(mz), transformRotation_ + mask_.rotation));
+				return;
+			}
+		}
+		if (transformMode_) {
+			setCursor(gripCursor(int(transformZoneAt(e->pos())), transformRotation_));
+			return;
+		}
 		return;
 	}
 	if (maskDrag_ != MaskZone::None && (e->buttons() & Qt::LeftButton)) {

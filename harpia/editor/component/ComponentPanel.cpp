@@ -1,5 +1,6 @@
 #include "ComponentPanel.hpp"
 
+#include "../../ui/SearchPicker.hpp"
 #include "../../ui/UiIcons.hpp"
 #include "../../ui/UiText.hpp"
 #include "../ParamSlider.hpp"
@@ -730,23 +731,19 @@ void ComponentPanel::componentMenu(const QString &typeId, int ordinal)
 
 void ComponentPanel::addComponentMenu()
 {
-	QMenu menu(this);
-	// Paste first, and only when there is something to paste that fits these
-	// clips. This is the menu you open to put something ON a clip, so it is
-	// where a copied component belongs -- previously Paste lived only inside an
-	// existing component's own menu, which meant you could paste values into a
-	// Blur you already had and had no way at all to paste one onto a clip that
-	// did not have it yet.
+	// A searchable list in the shape of Unity's Add Component: folders by
+	// category until you type, then everything that matches, best first.
+	// Every registered type that fits the selection is in it -- built-ins,
+	// scripts, shaders -- one list, one search. Paste, when it applies, is
+	// pinned above the folders: it is the "do this now" entry.
+	QVector<PickItem> items;
 	if (!clipTypeId_.isEmpty() && (allowedKinds_ & ~clipKinds_) == 0u) {
-		QAction *p = menu.addAction(QStringLiteral("Paste %1").arg(clipLabel_));
-		p->setToolTip(QStringLiteral(
-			"Add it, or update the one this clip already has."));
-		connect(p, &QAction::triggered, this, [this] { emit componentPasteRequested(); });
-		menu.addSeparator();
+		PickItem paste;
+		paste.id = QStringLiteral("paste:");
+		paste.name = QStringLiteral("Paste %1").arg(clipLabel_);
+		paste.pinned = true;
+		items.append(paste);
 	}
-	menu.setToolTipsVisible(true);
-	QString lastCategory;
-	QMenu *sub = nullptr;
 	for (const ComponentType &t : reg_.all()) {
 		if (!t.addable)
 			continue; // every clip already has one
@@ -758,18 +755,25 @@ void ComponentPanel::addComponentMenu()
 		// component to one of them and not the other.
 		if ((allowedKinds_ & ~t.clipKinds) != 0u)
 			continue;
-		if (t.category != lastCategory) {
-			lastCategory = t.category;
-			sub = menu.addMenu(t.category.isEmpty() ? QStringLiteral("Other") : t.category);
-		}
-		QAction *a = (sub ? sub : &menu)->addAction(t.displayName);
-		a->setToolTip(t.help);
-		const QString id = t.id;
-		connect(a, &QAction::triggered, this, [this, id] { emit componentAdded(id); });
+		PickItem pi;
+		pi.id = t.id;
+		pi.name = t.displayName;
+		pi.category = t.category;
+		items.append(pi);
 	}
-	if (menu.isEmpty())
+	if (items.isEmpty()) {
+		QMenu menu(this);
 		menu.addAction(QStringLiteral("No components registered"))->setEnabled(false);
-	menu.exec(QCursor::pos());
+		menu.exec(QCursor::pos());
+		return;
+	}
+	const QString chosen = SearchPicker::pick(items, QCursor::pos(), this);
+	if (chosen.isEmpty())
+		return;
+	if (chosen == QStringLiteral("paste:"))
+		emit componentPasteRequested();
+	else
+		emit componentAdded(chosen);
 }
 
 } // namespace harpia

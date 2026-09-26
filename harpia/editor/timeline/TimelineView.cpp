@@ -7,6 +7,7 @@
 #include "../component/BuiltinComponents.hpp"
 #include "../component/ComponentRegistry.hpp"
 
+#include "../../ui/SearchPicker.hpp"
 #include "../../ui/UiIcons.hpp"
 #include "../../ui/ColorField.hpp"
 #include "../TimeText.hpp"
@@ -963,21 +964,13 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 
 	QMenu menu(this);
 	// An effect track's whole purpose is to carry effects, so putting one on it
-	// is the first thing its menu should offer. The submenu lists the types
-	// directly: choosing one is otherwise "add a Brightness, then change it".
-	QMenu *addFxMenu = nullptr;
-	QHash<QAction *, int> addFxActions;
+	// is the first thing its menu should offer. The entry opens the same
+	// searchable picker as the Inspector's Add Component: type a few letters,
+	// Enter. (It opens after this menu closes; a popup inside a popup is a
+	// fight over the mouse.)
+	QAction *addFxClip = nullptr;
 	if (t.kind == TlTrack::Kind::Effect && !t.locked) {
-		addFxMenu = menu.addMenu(QStringLiteral("Add effect"));
-		for (int i = 0; i < kFxTypeCount; ++i) {
-			const FxType ft = FxType(i);
-			// Inverse Selection is configured in the Spotlight panel, not by
-			// dropping a clip, so offering it here would lead nowhere.
-			if (ft == FxType::InverseSelection)
-				continue;
-			addFxActions.insert(addFxMenu->addAction(QString::fromLatin1(fxTypeName(ft))),
-					    i);
-		}
+		addFxClip = menu.addAction(QStringLiteral("Add effect…"));
 		menu.addSeparator();
 	}
 	QAction *lock = menu.addAction(t.locked ? QStringLiteral("Unlock track")
@@ -1032,8 +1025,23 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 	QAction *chosen = menu.exec(globalPos);
 	if (!chosen)
 		return;
-	if (const auto it = addFxActions.constFind(chosen); it != addFxActions.constEnd()) {
-		addEffectClipAt(track, atOutMs, FxType(it.value()));
+	if (addFxClip && chosen == addFxClip) {
+		QVector<PickItem> items;
+		for (int i = 0; i < kFxTypeCount; ++i) {
+			const FxType ft = FxType(i);
+			// Inverse Selection is configured in the Spotlight panel, not by
+			// dropping a clip, so offering it here would lead nowhere.
+			if (ft == FxType::InverseSelection)
+				continue;
+			PickItem pi;
+			pi.id = QString::number(i);
+			pi.name = QString::fromLatin1(fxTypeName(ft));
+			pi.category = QStringLiteral("Effect");
+			items.append(pi);
+		}
+		const QString picked = SearchPicker::pick(items, globalPos, this);
+		if (!picked.isEmpty())
+			addEffectClipAt(track, atOutMs, FxType(picked.toInt()));
 		return;
 	}
 	// Anything set on a lane from here makes it the user's: a lane you have

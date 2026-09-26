@@ -206,6 +206,12 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF $AVCF
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/subtitles_test" "$QJSLIB/libqjs.a" $LF $AVLF
 
+# The searchable picker behind Add Component / Add effect: fuzzy ranking,
+# folders until you type, keys, and that every close reports once.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/searchpicker_test.cpp" "$H/ui/SearchPicker.cpp" \
+	-o "$WORK/searchpicker_test" $LF
+
 # Components through the REAL compositor -- the path the preview and the
 # exporter share. Determinism here is what "preview equals export" means.
 g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
@@ -649,6 +655,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/component_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/scriptcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/console_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/subtitles_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/searchpicker_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/componentrender_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/assetcomponent_test" || rc=1

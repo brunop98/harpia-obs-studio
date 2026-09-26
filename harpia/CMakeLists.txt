@@ -168,6 +168,9 @@ target_sources(
     ui/ErrorLogsPanel.hpp
     ui/MainDevPanel.cpp
 	ui/UiIcons.cpp
+	ui/FuzzyMatch.hpp
+	ui/SearchPicker.cpp
+	ui/SearchPicker.hpp
 	ui/UiIcons.hpp
 	ui/UiText.cpp
 	ui/UiText.hpp

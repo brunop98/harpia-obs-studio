@@ -1,16 +1,16 @@
-<#
+﻿<#
 .SYNOPSIS
     One-command build for the Harpia recorder on Windows.
 
 .DESCRIPTION
-    Configures and builds just the `harpia-recorder` target using the OBS
-    `windows-x64` CMake preset. The configure step automatically downloads the
-    prebuilt dependencies (Qt6, CEF, obs-deps) declared in buildspec.json, so no
+    Configures and builds the Harpia recorder with an installed Visual Studio C++ toolchain.
+    The configure step automatically downloads the
+    prebuilt dependencies (Qt6 and obs-deps) declared in CMakePresets.json, so no
     manual dependency setup is required.
 
     Prerequisites (install once):
-      * Visual Studio 2022 with the "Desktop development with C++" workload
-      * CMake >= 3.28  (winget install Kitware.CMake) — then reopen the terminal
+      * Visual Studio 2022 or 2026 with the "Desktop development with C++" workload
+      * CMake >= 3.28 (>= 4.2 for VS 2026) (winget install Kitware.CMake) — then reopen the terminal
       * Git
 
 .PARAMETER Configuration
@@ -18,10 +18,10 @@
 
 .PARAMETER Target
     CMake target to build. Default: harpia-recorder. Pass an empty string or
-    "all" to build the whole solution (stock OBS + Harpia).
+    "all" to build the whole solution.
 
 .PARAMETER Reconfigure
-    Force a fresh CMake configure even if build_x64/CMakeCache.txt already exists.
+    Run CMake configure again even if build_x64/CMakeCache.txt already exists.
 
 .EXAMPLE
     .\harpia\scripts\Build-Harpia.ps1
@@ -36,10 +36,9 @@ param(
     [string] $Configuration = 'RelWithDebInfo',
     [string] $Target = 'harpia-recorder',
     [switch] $Reconfigure,
-    # CMake generator for a FRESH configure (e.g. "Visual Studio 17 2022").
-    # Empty = let CMake auto-detect the installed Visual Studio. Ignored on
-    # reconfigure (the existing cache's generator is reused).
+    # Empty = reuse a compatible cached generator, otherwise detect VS 2026/2022.
     [string] $Generator = '',
+    [switch] $Run,
     # After building, assemble a self-contained distributable folder
     # (build_x64/dist/Harpia) with the exe, all runtime DLLs, the OBS plugins +
     # data, and the Microsoft Visual C++ runtime, so it runs on a clean machine.
@@ -60,91 +59,80 @@ function Assert-Cmake {
         Write-Host 'Install it, then open a NEW terminal so PATH refreshes:'
         Write-Host '    winget install Kitware.CMake'
         Write-Host ''
-        Write-Host 'You also need Visual Studio 2022 with the'
+        Write-Host 'You also need Visual Studio 2022 or 2026 with the'
         Write-Host '"Desktop development with C++" workload.'
         Write-Host ''
         exit 1
     }
 }
 
-# Is there a Visual Studio C++ toolset for CMake to generate for?
-#
-# Without one, CMake picks "Visual Studio 17 2022" as its default generator and
-# fails with "could not find any instance of Visual Studio" -- a message that
-# names a product the user never asked for and does not say what to do about
-# it, or that building is not required in the first place.
-function Assert-VisualStudio {
-    # vswhere ships with every VS installer at this fixed path. Guard the env
-    # var: Join-Path on a null root throws, and ErrorActionPreference is Stop,
-    # so a missing variable would abort with a worse message than the one this
-    # function exists to replace.
-    $pf86 = ${env:ProgramFiles(x86)}
-    $vswhere = if ($pf86) {
-        Join-Path $pf86 'Microsoft Visual Studio/Installer/vswhere.exe'
-    } else { $null }
-    $found = $false
-    if ($vswhere -and (Test-Path $vswhere)) {
-        # -products * so the standalone Build Tools count, not just the IDE.
-        $installs = & $vswhere -latest -products * `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-            -property installationPath 2>$null
-        $found = [bool]$installs
+# Intersect installed C++ toolchains with generators supported by this CMake.
+function Select-VisualStudioGenerator([string] $Requested, [string] $Cached) {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+    if (-not (Test-Path -LiteralPath $vswhere)) {
+        throw 'Visual Studio Installer was not found. Install Desktop development with C++.'
     }
-    if ($found) { return }
-
-    Write-Host ''
-    Write-Host 'ERROR: no Visual Studio C++ toolset was found on this machine.' -ForegroundColor Red
-    Write-Host ''
-    Write-Host 'CMake needs one to generate a build. Without it you get its own'
-    Write-Host 'message instead, which is where "Visual Studio 17 2022" comes from:'
-    Write-Host '    Generator ... could not find any instance of Visual Studio.' -ForegroundColor DarkGray
-    Write-Host ''
-    Write-Host 'If you only want to RUN Harpia on this PC, you do not need any of' -ForegroundColor Yellow
-    Write-Host 'this -- do not build here. On a PC that can build, run:' -ForegroundColor Yellow
-    Write-Host '    .\harpia\scripts\Build-Harpia.ps1 -Package'
-    Write-Host 'then copy the whole build_x64\dist\Harpia folder across and run'
-    Write-Host 'bin\64bit\harpia.exe from it. That folder is self-contained.'
-    Write-Host ''
-    Write-Host 'If you DO want to build here, install one of these (either works):'
-    Write-Host '    winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"'
-    Write-Host '    winget install Microsoft.VisualStudio.2022.Community  (tick "Desktop development with C++")'
-    Write-Host 'Then open a NEW terminal and run this script again.'
-    Write-Host ''
-    exit 1
+    # Assign the JSON array directly: Windows PowerShell 5.1 otherwise nests it.
+    $installs = & $vswhere -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -format json | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw 'Visual Studio detection failed.' }
+    $capabilities = & cmake -E capabilities | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw 'CMake generator detection failed.' }
+    $supported = @($capabilities.generators | ForEach-Object { $_.name })
+    $available = @(foreach ($candidate in @(
+        @{ Major = 18; Name = 'Visual Studio 18 2026' },
+        @{ Major = 17; Name = 'Visual Studio 17 2022' }
+    )) {
+        $matching = @($installs | Where-Object {
+            $_.isComplete -and ([version]$_.installationVersion).Major -eq $candidate.Major
+        })
+        if ($matching.Count -gt 0 -and $supported -contains $candidate.Name) { $candidate.Name }
+    })
+    if ($Requested) {
+        if ($available -notcontains $Requested) {
+            throw "Requested generator '$Requested' requires a complete matching Visual Studio C++ installation and compatible CMake. This Windows project requires a Visual Studio generator."
+        }
+        return $Requested
+    }
+    if ($Cached -and $available -contains $Cached) { return $Cached }
+    if ($available.Count -gt 0) { return $available[0] }
+    throw 'No compatible VS 2022/2026 C++ installation found. Finish Visual Studio setup with Desktop development with C++ and a Windows SDK. VS 2026 requires CMake 4.2 or newer.'
 }
 
 Assert-Cmake
 
 Push-Location $RepoRoot
 try {
-    $cacheExists = Test-Path (Join-Path $BuildDir 'CMakeCache.txt')
+    $cachePath = Join-Path $BuildDir 'CMakeCache.txt'
+    $cacheExists = Test-Path -LiteralPath $cachePath
+    $cachedGenerator = ''
+    if ($cacheExists) {
+        $match = Select-String -LiteralPath $cachePath -Pattern '^CMAKE_GENERATOR:INTERNAL=(.*)$'
+        if ($match) { $cachedGenerator = $match.Matches[0].Groups[1].Value }
+    }
+    $selectedGenerator = Select-VisualStudioGenerator $Generator $cachedGenerator
+    Write-Host "==> Using $selectedGenerator (x64)" -ForegroundColor Cyan
+
+    if ($cacheExists -and $cachedGenerator -ne $selectedGenerator) {
+        # CMake cannot switch generators in place. Preserve all previous output.
+        $resolvedBuild = [IO.Path]::GetFullPath($BuildDir)
+        $expectedBuild = [IO.Path]::GetFullPath((Join-Path $RepoRoot 'build_x64'))
+        if ($resolvedBuild -ne $expectedBuild -or
+            ((Get-Item -LiteralPath $BuildDir).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "Refusing to move unexpected build directory: $BuildDir"
+        }
+        $backup = "$BuildDir.before-generator-change-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')"
+        Move-Item -LiteralPath $resolvedBuild -Destination $backup
+        Write-Host "==> Preserved previous build folder: $backup"
+        $cacheExists = $false
+    }
 
     if ($Reconfigure -or -not $cacheExists) {
         Write-Host '==> Configuring (downloads Qt6/obs-deps on first run)...' -ForegroundColor Cyan
-        # NOTE: we deliberately do NOT use `--preset windows-x64` for configure —
-        # that preset pins a specific Visual Studio generator + Windows SDK version
-        # that may not be installed. Instead we configure build_x64 directly so the
-        # generator matches whatever VS you have.
-        #   - The tree is slimmed (no OBS UI/scripting), and obs-ffmpeg drops its
-        #     SRT/RIST (mpegts) path; ENABLE_BROWSER=OFF skips the CEF download.
-        $cfgArgs = @('-S', '.', '-B', $BuildDir,
+        $cfgArgs = @('-S', $RepoRoot, '-B', $BuildDir,
                      '-DENABLE_NEW_MPEGTS_OUTPUT=OFF', '-DENABLE_BROWSER=OFF')
         if (-not $cacheExists) {
-            # Fresh tree: target x64 and let CMake auto-detect the installed Visual
-            # Studio (override with -Generator "Visual Studio 17 2022" if needed).
-            #
-            # Checked here rather than at the top of the script: a -Reconfigure of
-            # an existing cache reuses its generator, and an explicitly requested
-            # non-VS generator (Ninja) does not need the IDE's toolset located
-            # this way. Only a fresh VS-generator configure does.
-            if (-not $Generator -or $Generator -like 'Visual Studio*') {
-                Assert-VisualStudio
-            }
-            $cfgArgs += @('-A', 'x64')
-            if ($Generator) { $cfgArgs += @('-G', $Generator) }
+            $cfgArgs += @('-G', $selectedGenerator, '-A', 'x64')
         }
-        # else (reconfigure): omit -G/-A so CMake reuses the existing cache's
-        # generator — this is what makes -Reconfigure work regardless of the preset.
         & cmake @cfgArgs
         if ($LASTEXITCODE -ne 0) { throw "CMake configure failed ($LASTEXITCODE)" }
     }
@@ -172,6 +160,11 @@ try {
         Write-Host "    Look for harpia.exe under: $(Join-Path $BuildDir "rundir/$Configuration/bin/64bit")"
     }
     Write-Host '    (Run from that folder so the OBS plugins next to it are found.)'
+
+    if ($Run) {
+        if (-not (Test-Path -LiteralPath $exe)) { throw "Executable not found: $exe" }
+        Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe)
+    }
 
     if ($Package) {
         Write-Host ''

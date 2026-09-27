@@ -1,6 +1,7 @@
 #include "TrackEditor.hpp"
 
 #include "Filmstrip.hpp"
+#include "timeline/ClipShuffle.hpp" // the same shuffle rules the Full-editing timeline uses
 #include "TimeText.hpp"
 
 #include <QKeyEvent>
@@ -9,7 +10,10 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QTimer>
+#include <QRandomGenerator>
 #include <QWheelEvent>
+
+#include <random>
 
 #include <utility>
 
@@ -458,6 +462,47 @@ void TrackEditor::removeSegment(int index)
 	multiSel_.clear();
 	emit segmentsChanged();
 	emit selectionChanged(-1);
+	update();
+}
+
+int TrackEditor::shuffleSelected(quint64 seed)
+{
+	if (multiSel_.size() < 2)
+		return 0;
+	// The selected cuts trade places among their OWN positions; every other
+	// cut stays where it is. The Output track is a sequence, so re-timing is
+	// what happens on its own: everything after a moved cut shifts to fit.
+	QVector<bool> movable(segs_.size(), false);
+	for (int i : multiSel_)
+		if (i >= 0 && i < segs_.size())
+			movable[i] = true;
+	std::mt19937_64 rng(seed ? seed : QRandomGenerator::system()->generate64());
+	ShuffleOptions opt; // High strength, avoid the same order
+	const QVector<int> order = shuffledOrder(movable, opt, rng);
+	const int moved = displacedSlots(order);
+	if (moved == 0)
+		return 0;
+	QVector<CutSegment> out(segs_.size());
+	for (int k = 0; k < order.size(); ++k)
+		out[k] = segs_[order[k]];
+	segs_ = out;
+	++segsRev_;
+	// The selection is a set of POSITIONS, and those positions still hold
+	// the same set of cuts, so it stands.
+	emit segmentsChanged(); // the window records the undo step from this
+	update();
+	return moved;
+}
+
+void TrackEditor::selectForTest(const QList<int> &positions)
+{
+	multiSel_.clear();
+	selected_ = -1;
+	for (int i : positions)
+		if (i >= 0 && i < segs_.size()) {
+			multiSel_.insert(i);
+			selected_ = i;
+		}
 	update();
 }
 
@@ -1250,7 +1295,22 @@ void TrackEditor::showSegmentMenu(int index, const QPoint &globalPos, const QPoi
 	QAction *dup = menu.addAction(QStringLiteral("Duplicate"));
 	QAction *reset = menu.addAction(group ? QStringLiteral("Reset speed to 1× (%1 cuts)").arg(n)
 					      : QStringLiteral("Reset speed to 1×"));
+	// Two or more selected: shuffle them among their own places. The same
+	// entry Full editing's clip menu has, for the same reason -- many
+	// versions of one edit, fast, each a Ctrl+Z from the last.
+	QAction *shuffle = nullptr;
+	if (group) {
+		menu.addSeparator();
+		shuffle = menu.addAction(QStringLiteral("Randomize order of selected cuts  (%1)").arg(n));
+		shuffle->setToolTip(QStringLiteral(
+			"The selected cuts trade places among their own positions; the rest stay put. "
+			"Ctrl+Z brings the previous order back."));
+	}
 	QAction *chosen = menu.exec(globalPos);
+	if (shuffle && chosen == shuffle) {
+		shuffleSelected();
+		return;
+	}
 	if (chosen == inspect) {
 		emit inspectRequested();
 	} else if (chosen == split) {

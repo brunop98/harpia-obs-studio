@@ -21,6 +21,16 @@ LF="$(pkg-config --libs Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/ytdlp_test.cpp" "$H/editor/ytdlp/YtDlp.cpp" -o "$WORK/ytdlp_test" $LF
 
+# Multi-Cut: "Randomize order of selected cuts" among their own positions.
+"$MOC" -I"$H" "$H/editor/TrackEditor.hpp" -o "$WORK/moc_TrackEditor_mc.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/multicutshuffle_test.cpp" "$H/editor/TrackEditor.cpp" "$WORK/moc_TrackEditor_mc.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/ui/UiText.cpp" -o "$WORK/multicutshuffle_test" $LF
+
 # Two commands must never end up sharing a key: Qt fires neither.
 "$MOC" -I"$H" "$H/editor/ShortcutRegistry.hpp" -o "$WORK/moc_ShortcutRegistry.cpp"
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -633,6 +643,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/ytdlp_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/multicutshuffle_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/paramslider_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1

@@ -100,6 +100,13 @@ public:
 	void addSegments(const QVector<CutSegment> &segs); // append (auto-cut populate)
 	void removeSegment(int index);
 	void removeSelected();
+	// Shuffle the selected cuts (two or more) among their own positions; the
+	// others stay. Always a different order. The sequence re-times itself.
+	// Returns how many cuts changed place (0 = nothing to do, no undo step).
+	// `seed` 0 = fresh random.
+	int shuffleSelected(quint64 seed = 0);
+	// For tests: select these positions (the primary is the last one).
+	void selectForTest(const QList<int> &positions);
 
 	qint64 totalOutputMs() const;
 	// Move the visible window of the lane the overview is currently showing.

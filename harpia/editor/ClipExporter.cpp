@@ -1464,6 +1464,15 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 		std::map<std::pair<int, int>, std::unique_ptr<FrameSeeker>> seekers;
 		std::map<int, QImage> stills; // image clips: same picture at every time
 		int w = 0, h = 0;
+		QSize sourceSize(int sourceId) override
+		{
+			if (const auto sit = stills.find(sourceId); sit != stills.end())
+				return sit->second.size();
+			for (const auto &kv : seekers)
+				if (kv.first.first == sourceId && kv.second && kv.second->width() > 0)
+					return QSize(kv.second->width(), kv.second->height());
+			return QSize();
+		}
 		QImage frameFor(int sourceId, qint64 srcMs) override
 		{
 			if (const auto sit = stills.find(sourceId); sit != stills.end())

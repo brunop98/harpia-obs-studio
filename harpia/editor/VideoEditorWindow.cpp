@@ -3834,6 +3834,14 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 	struct Provider : TimelineCompositor::FrameProvider {
 		VideoEditorWindow *w = nullptr;
 		int decodeW = 1920, decodeH = 1080;
+		QSize sourceSize(int sourceId) override
+		{
+			if (const auto it = w->stillImages_.constFind(sourceId); it != w->stillImages_.constEnd())
+				return it.value().size();
+			if (const EditorSource *s = w->sourceById(sourceId); s && s->width > 0 && s->height > 0)
+				return QSize(s->width, s->height);
+			return QSize();
+		}
 		QImage frameFor(int sourceId, qint64 srcMs) override
 		{
 			// A still serves the same picture at every timestamp.

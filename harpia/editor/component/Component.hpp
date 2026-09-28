@@ -159,6 +159,11 @@ struct EvalContext {
 	qint64 durMs = 1; // the clip's length
 	double fps = 30.0;
 	QSize canvas;
+	// The clip's natural pixel size -- its (cropped) source, or the measured
+	// caption -- before the fit-to-canvas and scale. Empty when not known
+	// (a component that needs it must have a fallback). A pose component
+	// cannot see the decoded frame, which does not exist yet at that stage.
+	QSize srcSize;
 	PropBag p; // this component's properties, already resolved at tMs
 
 	double tSec() const { return double(tMs) / 1000.0; }

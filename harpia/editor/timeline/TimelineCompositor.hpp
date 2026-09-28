@@ -28,6 +28,10 @@ public:
 		virtual ~FrameProvider() = default;
 		// RGB(A) frame for a source at a source-time, or a null QImage.
 		virtual QImage frameFor(int sourceId, qint64 srcMs) = 0;
+		// The source's pixel size when known without decoding, else empty.
+		// Lets a pose component (Slide to Position) know how big the clip is
+		// before its frame exists.
+		virtual QSize sourceSize(int sourceId) { Q_UNUSED(sourceId); return QSize(); }
 
 		// The track the clip being decoded lives on, set by compose() before
 		// every frameFor() call. A random-access provider can ignore it; a

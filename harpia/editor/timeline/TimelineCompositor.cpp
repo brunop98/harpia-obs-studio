@@ -492,6 +492,12 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 				// The project's size, not the render size: a half-resolution
 				// preview must not change what a component computes.
 				ectx.canvas = logicalCanvas;
+				if (c.type == TlClip::Type::Text)
+					ectx.srcSize = textNaturalSize(c.text, logicalCanvas);
+				else if (c.crop.isValid() && !c.crop.isEmpty())
+					ectx.srcSize = c.crop.size();
+				else if (c.type == TlClip::Type::Video || c.type == TlClip::Type::Image)
+					ectx.srcSize = fp.sourceSize(c.sourceId);
 			}
 
 			// Time stage FIRST, because which source instant to decode is its

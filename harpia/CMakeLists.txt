@@ -301,6 +301,7 @@ target_sources(
     editor/timeline/TimelineView.cpp
     editor/timeline/SoundRules.cpp
     editor/timeline/SoundRules.hpp
+    editor/component/SlideMotion.hpp
     editor/timeline/TimelineView.hpp
     editor/timeline/Ease.hpp
     editor/timeline/Transitions.cpp

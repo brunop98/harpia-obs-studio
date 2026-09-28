@@ -3,6 +3,7 @@
 #include "TextBullets.hpp"
 #include "TextSubtitle.hpp"
 #include "TextTyping.hpp"
+#include "SlideMotion.hpp"
 
 #include "../timeline/EffectClip.hpp" // the effect table, and Effects::apply
 #include "../timeline/Spotlight.hpp" // blurInPlace -- one blur in the program, not two
@@ -77,6 +78,26 @@ public:
 		// tlEaseAt clamps u itself, so a clip evaluated past its end holds at
 		// the final size rather than sailing on past it.
 		io.xf.scale *= 1.0 + (endScale - 1.0) * tlEaseAt(ease, ctx.u());
+	}
+};
+
+// ---- Slide to Position -------------------------------------------------------
+// Arrive from outside the picture and settle where the clip already is; with
+// Slide out, leave again at the end. The destination is the pose the stack
+// has built so far, so the clip's own position (and its keyframes) decide
+// where it lands. The maths is in SlideMotion.hpp.
+class SlideToPositionComponent : public IComponent {
+public:
+	void evaluate(const EvalContext &ctx, ClipState &io) const override
+	{
+		SlideSettings s;
+		s.from = SlideEdge(std::clamp(int(std::lround(ctx.f("from", 0.0))), 0, kSlideEdgeCount - 1));
+		s.durationMs = qint64(std::llround(std::max(0.0, ctx.f("durationMs", 500.0))));
+		s.curve = SlideCurve(std::clamp(int(std::lround(ctx.f("curve", 2.0))), 0, kSlideCurveCount - 1));
+		s.slideOut = ctx.b("slideOut", false);
+		// 0 = back the way it came; 1.. = the edges, in slideEdgeNames order.
+		s.outEdge = int(std::lround(ctx.f("outTo", 0.0))) - 1;
+		io.xf = slidePoseAt(s, io.xf, ctx.tMs, ctx.durMs, ctx.canvas, ctx.srcSize);
 	}
 };
 
@@ -593,6 +614,42 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 					"out, 3 ease in-out.")},
 		};
 		t.make = [] { return std::unique_ptr<IComponent>(new AlwaysGrowComponent); };
+		reg.add(t);
+	}
+	{
+		ComponentType t;
+		t.id = QStringLiteral("harpia.slide");
+		t.displayName = QStringLiteral("Slide to Position");
+		t.category = QStringLiteral("Motion");
+		t.stage = Stage::Transform;
+		t.help = QStringLiteral("Slide in from an edge of the picture and settle at the clip's own "
+					"position. Turn on Slide out to leave through an edge at the end.");
+		QStringList outChoices{QStringLiteral("Back the way it came")};
+		outChoices << slideEdgeNames();
+		t.props = {
+			{QStringLiteral("from"), QStringLiteral("Slide in from"), PropType::Choice, 0.0,
+			 double(kSlideEdgeCount - 1), 0.0, false,
+			 QStringLiteral("The edge it starts beyond. It starts fully outside the picture, "
+					"however big the clip is."),
+			 slideEdgeNames()},
+			{QStringLiteral("durationMs"), QStringLiteral("Duration (ms)"), PropType::Int, 0.0,
+			 10000.0, 500.0, false,
+			 QStringLiteral("How long the slide takes. Slide out takes the same time, ending on "
+					"the clip's last frame. On a clip too short for both, each gets half.")},
+			{QStringLiteral("curve"), QStringLiteral("Curve"), PropType::Choice, 0.0,
+			 double(kSlideCurveCount - 1), 2.0, false,
+			 QStringLiteral("How it moves. Ease out settles gently; Back overshoots and comes "
+					"back; Bounce lands and bounces; Elastic springs."),
+			 slideCurveNames()},
+			{QStringLiteral("slideOut"), QStringLiteral("Slide out"), PropType::Bool, 0.0, 1.0,
+			 0.0, false,
+			 QStringLiteral("Leave the picture at the end, on the same curve played backwards.")},
+			{QStringLiteral("outTo"), QStringLiteral("Slide out to"), PropType::Choice, 0.0,
+			 double(kSlideEdgeCount), 0.0, false,
+			 QStringLiteral("The edge it leaves by. Only used with Slide out on."), outChoices},
+		};
+		t.clipKinds = ClipKindVideo | ClipKindText | ClipKindImage;
+		t.make = [] { return std::unique_ptr<IComponent>(new SlideToPositionComponent); };
 		reg.add(t);
 	}
 	{

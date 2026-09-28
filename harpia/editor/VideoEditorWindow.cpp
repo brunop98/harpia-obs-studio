@@ -784,34 +784,19 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	voTrack_ = new VoiceoverTrack(this);
 	audioLayout->addWidget(voTrack_);
 
+	// Recording itself lives in the voiceover panel, the same one Full editing
+	// opens, so the two modes record the same way with the same settings.
 	auto *voRow = new QHBoxLayout;
-	voRecordBtn_ = new QPushButton(QStringLiteral("Record voiceover"), this);
-	voRecordBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
-	voRecordBtn_->setToolTip(QStringLiteral("Record narration from your microphone onto the Voiceover track"));
-	voRow->addWidget(voRecordBtn_);
+	voOpenBtn_ = new QPushButton(QStringLiteral("Record voiceover…"), this);
+	voOpenBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
+	voOpenBtn_->setToolTip(QStringLiteral("Open the voiceover panel: microphone, countdown, and Record"));
+	voRow->addWidget(voOpenBtn_);
 	voImportBtn_ = new QPushButton(QStringLiteral("Import audio…"), this);
 	voImportBtn_->setToolTip(QStringLiteral("Add an existing audio file (mp3/wav/m4a/…) to the Voiceover track"));
 	voRow->addWidget(voImportBtn_);
-	voMeter_ = new LevelMeter(this);
-	voRow->addWidget(voMeter_, 1);
-	voStatus_ = new QLabel(QString(), this);
-	voStatus_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
-	voRow->addWidget(voStatus_);
-	voRow->addSpacing(8);
-	voDevice_ = new QComboBox(this);
-	voDevice_->setToolTip(QStringLiteral("Microphone to record from"));
-	voDevice_->setMinimumWidth(160);
-	for (const AudioInputDevice &d : AudioRecorder::inputDevices())
-		voDevice_->addItem(d.name, d.id);
-	voRow->addWidget(voDevice_);
-	voTalkAlong_ = new QCheckBox(QStringLiteral("Play while recording"), this);
-	voTalkAlong_->setChecked(true);
-	voTalkAlong_->setToolTip(QStringLiteral("Play the video (silently) from the start while you narrate"));
-	voRow->addWidget(voTalkAlong_);
-	voCountdown_ = new QCheckBox(QStringLiteral("Countdown"), this);
-	voCountdown_->setToolTip(QStringLiteral("Count 3-2-1 before capture starts"));
-	voRow->addWidget(voCountdown_);
+	voRow->addStretch(1);
 	audioLayout->addLayout(voRow);
+	buildVoiceoverPanel();
 
 	// Mixing controls (applied at export): original-audio level + auto-duck.
 	auto *voMixRow = new QHBoxLayout;
@@ -857,8 +842,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	}
 
 	voRecorder_ = new AudioRecorder(this);
-	connect(voRecorder_, &AudioRecorder::level, this,
-		[this](qreal rms, qreal peak) { voMeter_->setLevel(rms, peak); });
+	connect(voRecorder_, &AudioRecorder::level, this, [this](qreal rms, qreal peak) {
+		voMeter_->setLevel(rms, peak);
+		if (voRecording_)
+			voStatus_->setText(QStringLiteral("\u25CF Recording  %1").arg(timeTextTenths(voRecorder_->capturedMs())));
+	});
 	connect(voRecorder_, &AudioRecorder::error, this, [this](const QString &msg) {
 		QMessageBox::warning(this, QStringLiteral("Microphone"), msg);
 	});
@@ -874,6 +862,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	});
 	connect(voRecordBtn_, &QPushButton::clicked, this,
 		&VideoEditorWindow::onVoiceoverRecordClicked);
+	connect(voOpenBtn_, &QPushButton::clicked, this, &VideoEditorWindow::openVoiceoverPanel);
 	connect(voImportBtn_, &QPushButton::clicked, this, &VideoEditorWindow::onImportAudioClicked);
 	connect(voTrack_, &VoiceoverTrack::clipsChanged, this, [this]() {
 		updateInfoLabel();
@@ -960,6 +949,14 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			setEditMode(EditMode::Full);
 		if (timelineView_)
 			timelineView_->addTrack(TlTrack::Kind::Audio);
+	});
+	QAction *recVo = addMenu->addAction(QStringLiteral("Record voiceover…"));
+	recVo->setToolTip(QStringLiteral("Record narration from your microphone onto a free audio lane, "
+					 "with a countdown and play-along."));
+	connect(recVo, &QAction::triggered, this, [this]() {
+		if (!fullEdit())
+			setEditMode(EditMode::Full);
+		openVoiceoverPanel();
 	});
 	QAction *soundRules = addMenu->addAction(QStringLiteral("Sounds for events…"));
 	soundRules->setToolTip(QStringLiteral(
@@ -1954,9 +1951,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		cropToggle_->setEnabled(false);
 		trimModeBtn_->setEnabled(false);
 		cutModeBtn_->setEnabled(false);
-		voRecordBtn_->setEnabled(false);
+		voOpenBtn_->setEnabled(false);
 		voImportBtn_->setEnabled(false);
-		voDevice_->setEnabled(false);
 	}
 
 	// Collect every button now (the Developer Panel is created lazily, so its
@@ -2357,8 +2353,7 @@ void VideoEditorWindow::updateEmptyState()
 	for (QWidget *w : {static_cast<QWidget *>(playBtn_), static_cast<QWidget *>(speedSlider_),
 			   static_cast<QWidget *>(speedSpin_), static_cast<QWidget *>(cropToggle_),
 			   static_cast<QWidget *>(trimModeBtn_), static_cast<QWidget *>(cutModeBtn_),
-			   static_cast<QWidget *>(voRecordBtn_), static_cast<QWidget *>(voImportBtn_),
-			   static_cast<QWidget *>(voDevice_)})
+			   static_cast<QWidget *>(voOpenBtn_), static_cast<QWidget *>(voImportBtn_)})
 		if (w)
 			w->setEnabled(!empty);
 	if (empty && infoLabel_)
@@ -8902,9 +8897,10 @@ void VideoEditorWindow::onVoiceoverRecordClicked()
 	// A running countdown: cancel it.
 	if (voCountdownTimer_->isActive()) {
 		voCountdownTimer_->stop();
-		voStatus_->clear();
-		voRecordBtn_->setText(QStringLiteral("Record voiceover"));
-	voRecordBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
+		voStatus_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+		voStatus_->setText(QStringLiteral("Cancelled."));
+		voRecordBtn_->setText(QStringLiteral("Record"));
+		voRecordBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
 		return;
 	}
 	if (voRecording_) {
@@ -8913,38 +8909,77 @@ void VideoEditorWindow::onVoiceoverRecordClicked()
 	}
 	if (!valid_)
 		return;
-	if (voCountdown_->isChecked()) {
-		voCountdownLeft_ = 3;
+	saveVoiceoverSettings();
+	const int secs = voCountdownSec_ ? voCountdownSec_->value() : 0;
+	if (secs > 0) {
+		voCountdownLeft_ = secs;
+		voStatus_->setStyleSheet(QStringLiteral("color:#f2c94c; font-size:18px; font-weight:bold;"));
 		voStatus_->setText(QStringLiteral("Starting in %1…").arg(voCountdownLeft_));
 		voRecordBtn_->setText(QStringLiteral("Cancel"));
+		voRecordBtn_->setIcon(QIcon());
 		voCountdownTimer_->start();
 	} else {
 		startVoiceoverCapture();
 	}
 }
 
+qint64 VideoEditorWindow::voiceoverStartMs() const
+{
+	if (voStartAt_ && voStartAt_->currentIndex() == 1)
+		return 0; // "Start of the timeline"
+	// The playhead where it sits NOW, not where playback is: recording stops
+	// playback first, and the old code read the playing position after that,
+	// which is 0 -- so every take landed at the very start.
+	if (fullEdit() && timelineView_) {
+		const qint64 total = timelineView_->durationMs();
+		const qint64 ph = std::max<qint64>(0, timelineView_->playhead());
+		return (total > 0 && ph >= total) ? total : ph;
+	}
+	if (multiCut() && tracks_)
+		return std::max<qint64>(0, tracks_->playhead());
+	return 0;
+}
+
 void VideoEditorWindow::startVoiceoverCapture()
 {
 	stopPlayback();
 	voRecorder_->setDeviceId(voDevice_->currentData().toString());
+	voRecorder_->setChannelCount(voChannels_ && voChannels_->currentIndex() == 1 ? 2 : 1);
+	voRecorder_->setSampleRate(voRate_ ? voRate_->currentData().toInt() : 48000);
+	const qint64 startMs = voiceoverStartMs();
 	if (!voRecorder_->start(voiceoverTempDir())) {
 		voStatus_->clear();
-		voRecordBtn_->setText(QStringLiteral("Record voiceover"));
-	voRecordBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
+		voRecordBtn_->setText(QStringLiteral("Record"));
+		voRecordBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
 		return;
 	}
 	voRecording_ = true;
-	// Anchor the take at the output-time under the playhead (0 when idle).
-	voClipStartMs_ = currentOutputMs();
+	voClipStartMs_ = startMs;
 	voRecordBtn_->setText(QStringLiteral("Stop"));
 	voRecordBtn_->setIcon(uiIcon(Glyph::Stop, 12));
-	voStatus_->setStyleSheet(QStringLiteral("color:#e5484d;"));
-	voStatus_->setText(QStringLiteral("Recording"));
-	voTrack_->setPlayhead(voClipStartMs_);
-	// Talk-along: play the video (silently — the editor preview has no audio)
-	// so you can narrate to what you see.
-	if (voTalkAlong_->isChecked())
+	voStatus_->setStyleSheet(QStringLiteral("color:#e5484d; font-weight:bold;"));
+	voStatus_->setText(QStringLiteral("● Recording"));
+	if (voTrack_ && !fullEdit())
+		voTrack_->setPlayhead(voClipStartMs_);
+	// Talk-along: play from where the take starts, so what you see is what
+	// the narration will sit under.
+	voPlayedAlong_ = false;
+	voMutedPreview_ = false;
+	if (voTalkAlong_->isChecked()) {
+		if (fullEdit() && timelineView_)
+			timelineView_->setPlayhead(startMs);
+		else if (multiCut() && tracks_)
+			tracks_->setPlayhead(startMs);
+		// The timeline's own sound would be picked up by the microphone
+		// unless you wear headphones, so it is off unless asked for.
+		if (audioPreview_ && !(voTimelineSound_ && voTimelineSound_->isChecked()) &&
+		    !audioPreview_->isMuted()) {
+			audioPreview_->setMuted(true);
+			voMutedPreview_ = true;
+		}
 		startPlayback();
+		voPlayedAlong_ = playing_;
+	}
 }
 
 void VideoEditorWindow::finishVoiceover()
@@ -8955,15 +8990,22 @@ void VideoEditorWindow::finishVoiceover()
 	const QString path = voRecorder_->stop();
 	const qint64 durMs = voRecorder_->capturedMs();
 	stopPlayback();
+	if (voMutedPreview_ && audioPreview_)
+		audioPreview_->setMuted(false);
+	voMutedPreview_ = false;
+	voPlayedAlong_ = false;
 	voMeter_->reset();
-	voStatus_->clear();
 	voStatus_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
-	voRecordBtn_->setText(QStringLiteral("Record voiceover"));
+	voRecordBtn_->setText(QStringLiteral("Record"));
 	voRecordBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
-	if (path.isEmpty())
-		return; // nothing captured
-	// In Full editing the voiceover track is hidden — narration belongs on its
-	// own timeline audio lane instead.
+	if (path.isEmpty() || durMs <= 0) {
+		voStatus_->setText(QStringLiteral("Nothing was captured. Check the microphone above."));
+		return;
+	}
+	voStatus_->setText(QStringLiteral("Take added: %1 at %2.")
+				   .arg(timeTextTenths(durMs), timeTextTenths(voClipStartMs_)));
+	// In Full editing narration goes on a timeline audio lane: a free one, so
+	// it never lands on top of music or an earlier take.
 	if (fullEdit() && timelineView_) {
 		const int id = addAudioSource(path);
 		if (id >= 0) {
@@ -8973,7 +9015,7 @@ void VideoEditorWindow::finishVoiceover()
 			c.srcEndMs = durMs;
 			c.outStartMs = voClipStartMs_;
 			c.peaks = VoiceoverTrack::loadPeaks(path, 600);
-			timelineView_->addClip(TlTrack::Kind::Audio, c);
+			timelineView_->addClipOnFreeLane(TlTrack::Kind::Audio, c);
 			updateInfoLabel();
 		}
 		return;
@@ -8984,6 +9026,179 @@ void VideoEditorWindow::finishVoiceover()
 	clip.durationMs = durMs;
 	clip.srcTotalMs = durMs;
 	voTrack_->addClip(clip);
+}
+
+void VideoEditorWindow::refreshVoiceoverDevices()
+{
+	if (!voDevice_)
+		return;
+	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	const QString want = voDevice_->count() ? voDevice_->currentData().toString()
+						: st.value(QStringLiteral("editor/vo/device")).toString();
+	QSignalBlocker b(voDevice_);
+	voDevice_->clear();
+	int def = 0;
+	for (const AudioInputDevice &d : AudioRecorder::inputDevices()) {
+		voDevice_->addItem(d.isDefault ? QStringLiteral("%1  (default)").arg(d.name) : d.name, d.id);
+		if (d.isDefault)
+			def = voDevice_->count() - 1;
+	}
+	if (voDevice_->count() == 0) {
+		voDevice_->addItem(QStringLiteral("No microphone found"), QString());
+		voDevice_->setEnabled(false);
+		return;
+	}
+	voDevice_->setEnabled(true);
+	const int i = voDevice_->findData(want);
+	voDevice_->setCurrentIndex(i >= 0 ? i : def);
+}
+
+void VideoEditorWindow::saveVoiceoverSettings()
+{
+	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	if (voDevice_)
+		st.setValue(QStringLiteral("editor/vo/device"), voDevice_->currentData().toString());
+	if (voCountdownSec_)
+		st.setValue(QStringLiteral("editor/vo/countdown"), voCountdownSec_->value());
+	if (voStartAt_)
+		st.setValue(QStringLiteral("editor/vo/startAt"), voStartAt_->currentIndex());
+	if (voChannels_)
+		st.setValue(QStringLiteral("editor/vo/channels"), voChannels_->currentIndex());
+	if (voRate_)
+		st.setValue(QStringLiteral("editor/vo/rate"), voRate_->currentData().toInt());
+	if (voTalkAlong_)
+		st.setValue(QStringLiteral("editor/vo/playAlong"), voTalkAlong_->isChecked());
+	if (voTimelineSound_)
+		st.setValue(QStringLiteral("editor/vo/timelineSound"), voTimelineSound_->isChecked());
+	if (voStopAtEnd_)
+		st.setValue(QStringLiteral("editor/vo/stopAtEnd"), voStopAtEnd_->isChecked());
+}
+
+void VideoEditorWindow::buildVoiceoverPanel()
+{
+	voPanel_ = new QDialog(this, Qt::Tool);
+	voPanel_->setWindowTitle(QStringLiteral("Voiceover"));
+	voPanel_->setModal(false);
+	auto *v = new QVBoxLayout(voPanel_);
+	v->setContentsMargins(14, 12, 14, 12);
+	v->setSpacing(8);
+	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+
+	auto *form = new QFormLayout;
+	form->setHorizontalSpacing(10);
+	form->setVerticalSpacing(6);
+
+	auto *devRow = new QHBoxLayout;
+	voDevice_ = new QComboBox(voPanel_);
+	voDevice_->setMinimumWidth(220);
+	voDevice_->setToolTip(QStringLiteral("The microphone to record from."));
+	devRow->addWidget(voDevice_, 1);
+	auto *refresh = new QPushButton(QStringLiteral("↻"), voPanel_);
+	refresh->setFixedWidth(28);
+	refresh->setToolTip(QStringLiteral("Look for microphones again (after plugging one in)."));
+	connect(refresh, &QPushButton::clicked, this, &VideoEditorWindow::refreshVoiceoverDevices);
+	devRow->addWidget(refresh);
+	form->addRow(QStringLiteral("Microphone"), devRow);
+	refreshVoiceoverDevices();
+
+	voCountdownSec_ = new QSpinBox(voPanel_);
+	voCountdownSec_->setRange(0, 10);
+	voCountdownSec_->setSuffix(QStringLiteral(" s"));
+	voCountdownSec_->setSpecialValueText(QStringLiteral("None: start at once"));
+	voCountdownSec_->setValue(st.value(QStringLiteral("editor/vo/countdown"), 3).toInt());
+	voCountdownSec_->setToolTip(QStringLiteral("Seconds to count down before capture starts. 0 starts at once."));
+	form->addRow(QStringLiteral("Countdown"), voCountdownSec_);
+
+	voStartAt_ = new QComboBox(voPanel_);
+	voStartAt_->addItem(QStringLiteral("At the playhead"));
+	voStartAt_->addItem(QStringLiteral("At the start of the timeline"));
+	voStartAt_->setCurrentIndex(std::clamp(st.value(QStringLiteral("editor/vo/startAt"), 0).toInt(), 0, 1));
+	voStartAt_->setToolTip(QStringLiteral("Where the take is placed, and where play-along starts."));
+	form->addRow(QStringLiteral("Place take"), voStartAt_);
+
+	voChannels_ = new QComboBox(voPanel_);
+	voChannels_->addItem(QStringLiteral("Mono (voice)"));
+	voChannels_->addItem(QStringLiteral("Stereo"));
+	voChannels_->setCurrentIndex(std::clamp(st.value(QStringLiteral("editor/vo/channels"), 0).toInt(), 0, 1));
+	voChannels_->setToolTip(QStringLiteral("Mono suits a single voice and a single microphone."));
+	form->addRow(QStringLiteral("Channels"), voChannels_);
+
+	voRate_ = new QComboBox(voPanel_);
+	voRate_->addItem(QStringLiteral("48 kHz (video standard)"), 48000);
+	voRate_->addItem(QStringLiteral("44.1 kHz"), 44100);
+	{
+		const int i = voRate_->findData(st.value(QStringLiteral("editor/vo/rate"), 48000).toInt());
+		voRate_->setCurrentIndex(i < 0 ? 0 : i);
+	}
+	form->addRow(QStringLiteral("Sample rate"), voRate_);
+	v->addLayout(form);
+
+	voTalkAlong_ = new QCheckBox(QStringLiteral("Play the video while recording"), voPanel_);
+	voTalkAlong_->setChecked(st.value(QStringLiteral("editor/vo/playAlong"), true).toBool());
+	voTalkAlong_->setToolTip(QStringLiteral("Narrate to what you see: playback runs from where the take starts."));
+	v->addWidget(voTalkAlong_);
+	voTimelineSound_ = new QCheckBox(QStringLiteral("Hear the timeline's sound too (use headphones)"), voPanel_);
+	voTimelineSound_->setChecked(st.value(QStringLiteral("editor/vo/timelineSound"), false).toBool());
+	voTimelineSound_->setToolTip(QStringLiteral(
+		"Off keeps the timeline silent while you record, so the microphone does not pick up "
+		"music or the original audio from your speakers."));
+	v->addWidget(voTimelineSound_);
+	voStopAtEnd_ = new QCheckBox(QStringLiteral("Stop recording when playback reaches the end"), voPanel_);
+	voStopAtEnd_->setChecked(st.value(QStringLiteral("editor/vo/stopAtEnd"), true).toBool());
+	v->addWidget(voStopAtEnd_);
+	auto syncDeps = [this]() {
+		voTimelineSound_->setEnabled(voTalkAlong_->isChecked());
+		voStopAtEnd_->setEnabled(voTalkAlong_->isChecked());
+	};
+	connect(voTalkAlong_, &QCheckBox::toggled, this, syncDeps);
+	syncDeps();
+
+	voMeter_ = new LevelMeter(voPanel_);
+	voMeter_->setMinimumHeight(14);
+	v->addWidget(voMeter_);
+	voStatus_ = new QLabel(QStringLiteral("Ready."), voPanel_);
+	voStatus_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+	voStatus_->setWordWrap(true);
+	v->addWidget(voStatus_);
+
+	auto *btns = new QHBoxLayout;
+	voRecordBtn_ = new QPushButton(QStringLiteral("Record"), voPanel_);
+	voRecordBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
+	voRecordBtn_->setMinimumHeight(32);
+	voRecordBtn_->setDefault(true);
+	voRecordBtn_->setToolTip(QStringLiteral("Start recording (after the countdown). Press again to stop."));
+	btns->addWidget(voRecordBtn_, 1);
+	auto *close = new QPushButton(QStringLiteral("Close"), voPanel_);
+	connect(close, &QPushButton::clicked, voPanel_, &QDialog::close);
+	btns->addWidget(close);
+	v->addLayout(btns);
+
+	for (QComboBox *cb : {voDevice_, voStartAt_, voChannels_, voRate_})
+		connect(cb, &QComboBox::currentIndexChanged, this, [this](int) { saveVoiceoverSettings(); });
+	for (QCheckBox *cb : {voTalkAlong_, voTimelineSound_, voStopAtEnd_})
+		connect(cb, &QCheckBox::toggled, this, [this](bool) { saveVoiceoverSettings(); });
+	connect(voCountdownSec_, &QSpinBox::valueChanged, this, [this](int) { saveVoiceoverSettings(); });
+	// Closing the panel mid-take would leave the microphone running with no
+	// way to stop it: finish the take instead.
+	connect(voPanel_, &QDialog::finished, this, [this](int) {
+		if (voCountdownTimer_ && voCountdownTimer_->isActive())
+			onVoiceoverRecordClicked(); // cancels
+		if (voRecording_)
+			finishVoiceover();
+	});
+}
+
+void VideoEditorWindow::openVoiceoverPanel()
+{
+	if (!voPanel_)
+		return;
+	if (!voRecording_)
+		refreshVoiceoverDevices();
+	voPanel_->show();
+	voPanel_->raise();
+	voPanel_->activateWindow();
+	if (voRecordBtn_)
+		voRecordBtn_->setFocus();
 }
 
 void VideoEditorWindow::onImportAudioClicked()
@@ -10287,6 +10502,13 @@ void VideoEditorWindow::stopPlayback()
 		audioPreview_->stop();
 	if (voTrack_ && !voRecording_)
 		voTrack_->clearPlayhead();
+	// Playback ran out (or was stopped) during a play-along take: with "stop
+	// at the end" on, that is the end of the take. Deferred, since
+	// finishVoiceover itself calls back in here.
+	if (voRecording_ && voPlayedAlong_ && voStopAtEnd_ && voStopAtEnd_->isChecked()) {
+		voPlayedAlong_ = false;
+		QTimer::singleShot(0, this, [this]() { finishVoiceover(); });
+	}
 	// A proxy that landed mid-playback is safe to install now.
 	flushPendingPlaybackProxies();
 	// The extra per-track decoders exist only for playback. Each holds an open

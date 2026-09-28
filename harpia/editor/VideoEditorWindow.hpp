@@ -1121,7 +1121,23 @@ private:
 	QPushButton *voImportBtn_ = nullptr;
 	LevelMeter *voMeter_ = nullptr;
 	QCheckBox *voTalkAlong_ = nullptr; // play the video while capturing
-	QCheckBox *voCountdown_ = nullptr; // 3-2-1 before capture
+	// The voiceover panel: one small tool window for both Multi-Cut and Full
+	// editing, holding every recording setting (remembered across launches).
+	QDialog *voPanel_ = nullptr;
+	QPushButton *voOpenBtn_ = nullptr;     // Multi-Cut row: opens the panel
+	QSpinBox *voCountdownSec_ = nullptr;   // 0 = start at once
+	QComboBox *voStartAt_ = nullptr;       // playhead / start of the timeline
+	QComboBox *voChannels_ = nullptr;      // mono / stereo
+	QComboBox *voRate_ = nullptr;          // 48000 / 44100
+	QCheckBox *voTimelineSound_ = nullptr; // hear the timeline while recording (headphones)
+	QCheckBox *voStopAtEnd_ = nullptr;     // the take ends when playback reaches the end
+	bool voPlayedAlong_ = false;           // this take started playback
+	bool voMutedPreview_ = false;          // ...and muted the preview sound for it
+	void buildVoiceoverPanel();
+	void openVoiceoverPanel();
+	void refreshVoiceoverDevices();
+	void saveVoiceoverSettings();
+	qint64 voiceoverStartMs() const;      // where a take starting now lands
 	QSlider *voOrigVol_ = nullptr;     // original-audio level at export
 	QLabel *voOrigVolLabel_ = nullptr;
 	QCheckBox *voDuck_ = nullptr;      // auto-duck original under narration

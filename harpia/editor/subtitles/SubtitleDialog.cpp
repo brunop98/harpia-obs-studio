@@ -2,6 +2,7 @@
 
 #include "OpenAiTranscriber.hpp"
 #include "SecretStore.hpp"
+#include "../../ui/InfoHint.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -93,9 +94,8 @@ void SubtitleDialog::buildUi()
 		"Turns the speech in the selected clips into caption clips on a Subtitles lane, "
 		"lined up with the audio. Edit any caption's text in the Inspector afterwards; "
 		"Ctrl+Z removes the whole batch."), this);
-	intro->setWordWrap(true);
-	intro->setStyleSheet(QStringLiteral("color:#9aa0a6;"));
-	lay->addWidget(intro);
+	lay->addWidget(infoHint(intro->text(), this), 0, Qt::AlignLeft);
+	intro->deleteLater();
 
 	// ---- Service ----
 	auto *svc = new QGroupBox(QStringLiteral("Speech to text (OpenAI)"), this);

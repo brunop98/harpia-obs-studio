@@ -1,4 +1,5 @@
 #include "DevPanel.hpp"
+#include "../ui/InfoHint.hpp"
 
 #include "EditorWidgets.hpp"
 #include "TrackEditor.hpp"
@@ -438,12 +439,8 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		auto *pv = new QVBoxLayout(page);
 		pv->setContentsMargins(12, 10, 12, 10);
 		pv->setSpacing(8);
-		if (!blurb.isEmpty()) {
-			auto *lb = new QLabel(blurb, page);
-			lb->setWordWrap(true);
-			lb->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
-			pv->addWidget(lb);
-		}
+		if (!blurb.isEmpty())
+			pv->addWidget(infoHint(blurb, page), 0, Qt::AlignLeft);
 		auto *form = new QFormLayout;
 		form->setLabelAlignment(Qt::AlignLeft);
 		form->setHorizontalSpacing(12);

@@ -172,6 +172,7 @@ target_sources(
 	ui/SearchPicker.cpp
 	ui/SearchPicker.hpp
 	ui/UrlDragList.hpp
+	ui/InfoHint.hpp
 	ui/UiIcons.hpp
 	ui/UiText.cpp
 	ui/UiText.hpp

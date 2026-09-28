@@ -6,6 +6,7 @@
 #include "SpotlightPreview.hpp"
 #include "ZoomPreview.hpp"
 #include "ColorField.hpp"
+#include "InfoHint.hpp"
 #include "../editor/ytdlp/YtDlpSettingsWidget.hpp"
 #include "core/CaptureManager.hpp"
 #include "core/EncoderFactory.hpp"
@@ -109,14 +110,19 @@ QWidget *addField(QVBoxLayout *v, const QString &title, const QString &desc, QWi
 	auto *rv = new QVBoxLayout(row);
 	rv->setContentsMargins(0, 0, 0, 12);
 	rv->setSpacing(4);
+	// The title with, when there is one, a small info mark whose tooltip is
+	// the description that used to sit as a paragraph under it.
+	auto *th = new QHBoxLayout;
+	th->setContentsMargins(0, 0, 0, 0);
+	th->setSpacing(2);
 	auto *t = new QLabel(QStringLiteral("<b>%1</b>").arg(title));
-	rv->addWidget(t);
+	th->addWidget(t);
 	if (!desc.isEmpty()) {
-		auto *d = new QLabel(desc);
-		d->setWordWrap(true);
-		d->setStyleSheet(QStringLiteral("color:#8a8f98;"));
-		rv->addWidget(d);
+		th->addWidget(infoHint(desc));
+		control->setToolTip(control->toolTip().isEmpty() ? desc : control->toolTip());
 	}
+	th->addStretch(1);
+	rv->addLayout(th);
 	rv->addWidget(control);
 	v->addWidget(row);
 	return row;
@@ -172,13 +178,17 @@ QWidget *addCheck(QVBoxLayout *v, QCheckBox *check, const QString &desc)
 	auto *rv = new QVBoxLayout(row);
 	rv->setContentsMargins(0, 0, 0, 12);
 	rv->setSpacing(4);
-	rv->addWidget(check);
+	auto *ch = new QHBoxLayout;
+	ch->setContentsMargins(0, 0, 0, 0);
+	ch->setSpacing(2);
+	ch->addWidget(check);
 	if (!desc.isEmpty()) {
-		auto *d = new QLabel(desc);
-		d->setWordWrap(true);
-		d->setStyleSheet(QStringLiteral("color:#8a8f98; margin-left:22px;"));
-		rv->addWidget(d);
+		ch->addWidget(infoHint(desc));
+		if (check->toolTip().isEmpty())
+			check->setToolTip(desc);
 	}
+	ch->addStretch(1);
+	rv->addLayout(ch);
 	v->addWidget(row);
 	return row;
 }
@@ -263,9 +273,9 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	QWidget *recordingPage = makePage(v);
 	// The display to record is chosen on the main window (next to Capture),
 	// not per preset.
-	auto *resNote = new QLabel(
+	auto *resNote = infoHint(
 		QStringLiteral("The whole display, or the chosen region, at native resolution."), this);
-	resNote->setWordWrap(true);
+	resNote->setWordWrap(false);
 	resNote->setStyleSheet(QStringLiteral("color:#8a8f98;"));
 	addField(v, QStringLiteral("Resolution"), QString(), resNote);
 
@@ -1014,7 +1024,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 		auto *banner = new QLabel(QStringLiteral("These keys belong to the app, not to this "
 							 "preset — changing them changes them everywhere."),
 					  this);
-		banner->setWordWrap(true);
+		banner->setWordWrap(true); // a warning about scope, not an explanation: stays visible
 		banner->setStyleSheet(QStringLiteral("color:#d29922; border:1px solid #4a3f1e; "
 						     "background:#2b2415; border-radius:4px; padding:6px;"));
 		v->addWidget(banner);

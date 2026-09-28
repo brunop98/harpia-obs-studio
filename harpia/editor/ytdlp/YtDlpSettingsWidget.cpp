@@ -1,4 +1,5 @@
 #include "YtDlpSettingsWidget.hpp"
+#include "../../ui/InfoHint.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -21,9 +22,8 @@ YtDlpSettingsWidget::YtDlpSettingsWidget(QWidget *parent) : QWidget(parent)
 	auto *intro = new QLabel(QStringLiteral(
 		"yt-dlp is your own copy, found on the PATH. The editor's Add menu offers "
 		"\"Video from URL…\" only when it is found. Nothing here is required for anything else."), this);
-	intro->setWordWrap(true);
-	intro->setStyleSheet(QStringLiteral("color:#9aa0a6;"));
-	lay->addWidget(intro);
+	lay->addWidget(infoHint(intro->text(), this), 0, Qt::AlignLeft);
+	intro->deleteLater();
 
 	auto *form = new QFormLayout;
 	form->setHorizontalSpacing(10);

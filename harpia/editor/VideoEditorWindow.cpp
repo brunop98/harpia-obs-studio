@@ -9,6 +9,7 @@
 #include "component/ComponentRegistry.hpp"
 #include "component/ScriptComponent.hpp"
 #include "../ui/UiText.hpp"
+#include "../ui/InfoHint.hpp"
 #include "KeyList.hpp"
 #include "Parallel.hpp"
 #include "ParamSlider.hpp"
@@ -1501,12 +1502,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	srcTabs->addTab(libTab, QStringLiteral("Library"));
 
 	sideLayout->addWidget(srcTabs, 1);
-	auto *srcHint = new QLabel(
-		QStringLiteral("Drag a clip onto a timeline lane, or double-click it to add it at the playhead."),
-		sourcesPanel_);
-	srcHint->setWordWrap(true);
-	srcHint->setStyleSheet(QStringLiteral("color:#7f858e;"));
-	sideLayout->addWidget(srcHint);
+	sideLayout->addWidget(
+		infoHint(QStringLiteral("Drag a clip onto a timeline lane, or double-click it to add it at the playhead."),
+			 sourcesPanel_),
+		0, Qt::AlignLeft);
 
 	thumbCache_ = new ThumbnailCache(this);
 	connect(thumbCache_, &ThumbnailCache::ready, this, &VideoEditorWindow::onThumbReady);
@@ -4212,13 +4211,10 @@ void VideoEditorWindow::buildSpotlightInspector(QVBoxLayout *into)
 	spotHdr_ = new QLabel(QStringLiteral("Inverse Selection"), spotBox_);
 	spotHdr_->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
 	v->addWidget(spotHdr_);
-	auto *hint = new QLabel(
-		QStringLiteral("Dim everything except the chosen areas — the tutorial "
-			       "spotlight. Renders identically in the export."),
-		spotBox_);
-	hint->setWordWrap(true);
-	hint->setStyleSheet(QStringLiteral("color:#7f858e;"));
-	v->addWidget(hint);
+	v->addWidget(infoHint(QStringLiteral("Dim everything except the chosen areas — the tutorial "
+					     "spotlight. Renders identically in the export."),
+			      spotBox_),
+		     0, Qt::AlignLeft);
 	spotScopeHint_ = new QLabel(spotBox_);
 	spotScopeHint_->setWordWrap(true);
 	spotScopeHint_->setStyleSheet(QStringLiteral("color:#7f858e;"));
@@ -4942,11 +4938,8 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	hdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
 	v->addWidget(hdr);
 
-	auto *hint = new QLabel(
-		QStringLiteral("Scroll on the preview to zoom, drag to reposition."), clipBox_);
-	hint->setWordWrap(true);
-	hint->setStyleSheet(QStringLiteral("color:#7f858e;"));
-	v->addWidget(hint);
+	v->addWidget(infoHint(QStringLiteral("Scroll on the preview to zoom, drag to reposition."), clipBox_), 0,
+		     Qt::AlignLeft);
 
 	// Zoom, Position, Rotation, Opacity and Speed all used to live here in a
 	// form of their own. They are the pinned Transform and Speed rows of the
@@ -5319,9 +5312,8 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 			       "precise drag). Fades are applied to the mix, so the "
 			       "preview plays what the export will render."),
 		audioClipBox_);
-	aHint->setWordWrap(true);
-	aHint->setStyleSheet(QStringLiteral("color:#7f858e;"));
-	av->addWidget(aHint);
+	av->addWidget(infoHint(aHint->text(), audioClipBox_), 0, Qt::AlignLeft);
+	aHint->deleteLater();
 
 	into->addWidget(clipBox_);
 }
@@ -7773,8 +7765,8 @@ void VideoEditorWindow::onAutoCut()
 		QStringLiteral("Detect visual scene changes and add a cut at each one.\n"
 			       "Lower threshold = more cuts, higher = fewer."),
 		&dlg);
-	info->setWordWrap(true);
-	v->addWidget(info);
+	v->addWidget(infoHint(info->text(), &dlg), 0, Qt::AlignLeft);
+	info->deleteLater();
 	auto *row = new QHBoxLayout;
 	row->addWidget(new QLabel(QStringLiteral("Threshold"), &dlg));
 	auto *sl = new QSlider(Qt::Horizontal, &dlg);
@@ -9256,9 +9248,8 @@ void VideoEditorWindow::openRandomizePanel()
 		auto *what = new QLabel(QStringLiteral("Shuffle the order of the clips. Nothing about a clip "
 							"changes but where it sits; the edit stays exactly as long."),
 					p);
-		what->setWordWrap(true);
-		what->setStyleSheet(QStringLiteral("color:#9aa0a6;"));
-		lay->addWidget(what);
+		lay->addWidget(infoHint(what->text(), p), 0, Qt::AlignLeft);
+		what->deleteLater();
 
 		auto *keepLbl = new QLabel(QStringLiteral("Keep in place"), p);
 		keepLbl->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
@@ -9302,9 +9293,8 @@ void VideoEditorWindow::openRandomizePanel()
 		auto *scope = new QLabel(QStringLiteral(
 			"Which lanes: the one holding the selected clip or header; with nothing selected, "
 			"every video lane, each on its own. Locked lanes are never touched."), p);
-		scope->setWordWrap(true);
-		scope->setStyleSheet(QStringLiteral("color:#9aa0a6;"));
-		lay->addWidget(scope);
+		lay->addWidget(infoHint(scope->text(), p), 0, Qt::AlignLeft);
+		scope->deleteLater();
 
 		auto *go = new QPushButton(QStringLiteral("Randomize  (Ctrl+R)"), p);
 		go->setDefault(true);

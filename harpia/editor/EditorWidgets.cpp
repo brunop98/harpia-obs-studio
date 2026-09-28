@@ -1,4 +1,5 @@
 #include "EditorWidgets.hpp"
+#include "timeline/MotionPath.hpp"
 
 #include "CanvasFit.hpp"
 #include "Filmstrip.hpp"
@@ -238,6 +239,9 @@ void PreviewCanvas::paintEvent(QPaintEvent *)
 
 	if (spotMode_)
 		drawSpotlight(p);
+
+	if (pathActive())
+		drawMotionPath(p);
 
 	if (!cropEnabled_)
 		return;
@@ -723,6 +727,32 @@ void PreviewCanvas::mousePressEvent(QMouseEvent *e)
 	// looks at the event: none of the drag modes below use the right button, and
 	// a menu that only appears when no tool happens to be armed is a menu people
 	// conclude does not exist.
+	// The motion path's key dots sit on top of everything else drawn here, so
+	// they are asked first: a dot is small, and a press on one that went to the
+	// clip's body underneath would feel like the dot cannot be grabbed.
+	if (pathActive() && (e->button() == Qt::LeftButton || e->button() == Qt::RightButton)) {
+		const QVector<QPointF> px = pathKeysPx();
+		const int k = motionPathKeyAt(px, QPointF(e->pos()), 9.0);
+		if (k >= 0 && e->button() == Qt::RightButton) {
+			emit pathKeyMenuRequested(path_.keyIds[k], e->globalPosition().toPoint());
+			return;
+		}
+		if (k >= 0) {
+			pathDrag_ = k;
+			pathPressPx_ = e->position();
+			pathStartNorm_ = path_.keys[k];
+			pathMoved_ = false;
+			setCursor(Qt::ClosedHandCursor);
+			emit pathKeyPressed(path_.keyIds[k]);
+			return;
+		}
+		if (e->button() == Qt::LeftButton && (e->modifiers() & Qt::AltModifier) &&
+		    motionPathHit(px, QPointF(e->pos()), 6.0)) {
+			const QPointF n = widgetToCanvasF(QPointF(e->pos()));
+			emit pathAddRequested(n.x(), n.y());
+			return;
+		}
+	}
 	if (e->button() == Qt::RightButton) {
 		const QRect d = displayRect();
 		if (d.width() > 0 && d.height() > 0 && d.contains(e->pos())) {
@@ -824,6 +854,28 @@ QCursor PreviewCanvas::gripCursor(int zoneOrdinal, double rotationDeg) const
 
 void PreviewCanvas::mouseMoveEvent(QMouseEvent *e)
 {
+	if (pathDrag_ >= 0) {
+		const QRect d = displayRect();
+		if (d.width() <= 0 || d.height() <= 0)
+			return;
+		const QPointF delta = e->position() - pathPressPx_;
+		if (!pathMoved_ && std::abs(delta.x()) + std::abs(delta.y()) < 3.0)
+			return; // a click, not a drag: the key stays exactly where it was
+		pathMoved_ = true;
+		const double nx = pathStartNorm_.x() + delta.x() / d.width();
+		const double ny = pathStartNorm_.y() + delta.y() / d.height();
+		path_.keys[pathDrag_] = QPointF(nx, ny); // drawn there now, before the model answers
+		update();
+		emit pathKeyDragged(path_.keyIds[pathDrag_], nx, ny);
+		return;
+	}
+	if (pathActive() && !(e->buttons() & Qt::LeftButton)) {
+		// Hover: a hand over a key dot, so it reads as something to grab.
+		if (motionPathKeyAt(pathKeysPx(), e->position(), 9.0) >= 0) {
+			setCursor(Qt::OpenHandCursor);
+			return;
+		}
+	}
 	if (spotMode_ && !cropEnabled_) {
 		if (spotDrag_ == SpotZone::None) {
 			// Not dragging: just tell the cursor what it is over.
@@ -1165,6 +1217,14 @@ void PreviewCanvas::mouseMoveEvent(QMouseEvent *e)
 
 void PreviewCanvas::mouseReleaseEvent(QMouseEvent *)
 {
+	if (pathDrag_ >= 0) {
+		pathDrag_ = -1;
+		setCursor(Qt::OpenHandCursor);
+		if (pathMoved_)
+			emit pathKeyDragFinished();
+		pathMoved_ = false;
+		return;
+	}
 	if (spotDrag_ != SpotZone::None) {
 		spotDrag_ = SpotZone::None;
 		spotDragMask_ = -1;
@@ -1186,6 +1246,89 @@ void PreviewCanvas::mouseReleaseEvent(QMouseEvent *)
 		setCursor(transformMode_ ? Qt::OpenHandCursor : Qt::ArrowCursor);
 		emit transformEditFinished();
 	}
+}
+
+void PreviewCanvas::mouseDoubleClickEvent(QMouseEvent *e)
+{
+	// Double-click on the path, away from its dots: a new key there.
+	if (pathActive() && e->button() == Qt::LeftButton) {
+		const QVector<QPointF> px = pathKeysPx();
+		if (motionPathKeyAt(px, e->position(), 9.0) < 0 && motionPathHit(px, e->position(), 6.0)) {
+			const QPointF n = widgetToCanvasF(e->position());
+			emit pathAddRequested(n.x(), n.y());
+			return;
+		}
+	}
+	QWidget::mouseDoubleClickEvent(e);
+}
+
+void PreviewCanvas::setMotionPath(const PathDraw &path)
+{
+	// Mid-drag the canvas already draws the dot under the pointer; a model
+	// refresh arriving then must not yank it back a frame behind.
+	if (pathDrag_ >= 0 && path.keys.size() == path_.keys.size()) {
+		const QPointF held = path_.keys[pathDrag_];
+		path_ = path;
+		path_.keys[pathDrag_] = held;
+	} else {
+		if (path.keys.size() != path_.keys.size())
+			pathDrag_ = -1;
+		path_ = path;
+	}
+	update();
+}
+
+QSizeF PreviewCanvas::displaySize() const
+{
+	return QSizeF(displayRect().size());
+}
+
+QVector<QPointF> PreviewCanvas::pathKeysPx() const
+{
+	QVector<QPointF> out;
+	out.reserve(path_.keys.size());
+	for (const QPointF &k : path_.keys)
+		out.append(canvasToWidgetF(k.x(), k.y()));
+	return out;
+}
+
+void PreviewCanvas::drawMotionPath(QPainter &p) const
+{
+	const QVector<QPointF> px = pathKeysPx();
+	if (px.size() < 2)
+		return;
+	const QColor line(0xff, 0x8a, 0x3d);  // orange: not the clip's blue or the mask's amber
+	p.save();
+	p.setRenderHint(QPainter::Antialiasing, true);
+	// A dark underlay keeps the line readable over a bright picture.
+	p.setPen(QPen(QColor(0, 0, 0, 110), 3.0));
+	p.drawPolyline(px.constData(), int(px.size()));
+	QColor faint = line;
+	faint.setAlpha(150);
+	p.setPen(QPen(faint, 1.2));
+	p.drawPolyline(px.constData(), int(px.size()));
+	// A dot per frame: spacing is speed. A dark rim keeps each one separate
+	// where they bunch up, which is exactly where the clip is slow.
+	p.setPen(QPen(QColor(0, 0, 0, 170), 0.8));
+	p.setBrush(QColor(0xff, 0xff, 0xff, 230));
+	for (const QPointF &f : path_.frames)
+		p.drawEllipse(canvasToWidgetF(f.x(), f.y()), 1.9, 1.9);
+	// The keys: diamonds, the one at the playhead filled.
+	for (int i = 0; i < px.size(); ++i) {
+		const bool cur = i == path_.current || i == pathDrag_;
+		const double r = cur ? 6.5 : 5.5;
+		QPolygonF dia;
+		dia << px[i] + QPointF(0, -r) << px[i] + QPointF(r, 0) << px[i] + QPointF(0, r) << px[i] + QPointF(-r, 0);
+		p.setPen(QPen(QColor(0, 0, 0, 200), 1.5));
+		p.setBrush(cur ? line : QColor(0x1a, 0x1c, 0x20));
+		p.drawPolygon(dia);
+		if (!cur) {
+			p.setPen(QPen(line, 1.4));
+			p.setBrush(Qt::NoBrush);
+			p.drawPolygon(dia);
+		}
+	}
+	p.restore();
 }
 
 void PreviewCanvas::applyWidgetCrop(const QRect &widgetRect)

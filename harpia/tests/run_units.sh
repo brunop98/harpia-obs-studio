@@ -540,6 +540,15 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$WORK/moc_EditorWidgets.cpp" "$WORK/moc_ParamSlider2.cpp" \
 	-o "$WORK/previewaspect_test" $LF
 
+# The motion path: position keys only, speed dots, a click back to a time;
+# pick, drag, add and right-click on the preview; Delete takes the picked key.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/motionpath_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/ParamSlider.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
+	"$WORK/moc_EditorWidgets.cpp" "$WORK/moc_ParamSlider2.cpp" \
+	-o "$WORK/motionpath_test" $LF
+
 # The pointer over a grip says what a press will do: resize cursors that follow
 # a turned box's own axes, a hand over the body, a rotate cursor on the knob.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -740,6 +749,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/startupsplash_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/monitormatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/canvasfit_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewaspect_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/motionpath_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/playheadrepaint_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/gripcursor_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineoverview_test" || rc=1

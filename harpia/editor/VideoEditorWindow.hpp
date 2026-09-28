@@ -515,6 +515,12 @@ private:
 	void onPreviewTransformZoom(double factor, double cursorXNorm, double cursorYNorm);
 	void applySelectedClipTransform(const TlTransform &tf);
 	void syncPreviewTransformTarget(); // arm/disarm + refresh the outline
+	// The selected clip's position keys drawn on the preview, to click, drag,
+	// add to and delete from. Refreshed with the outline above.
+	void refreshMotionPath();
+	void motionPathKeyMenu(int keyId, const QPoint &globalPos);
+	void deleteMotionPathKey(int keyId);
+	int pathKeyPicked_ = -1; // the key last clicked on the path (TlClip::keys index), -1 = none
 	// A clip's own pixel size (text measured, image, or the cropped source).
 	// Every canvas-geometry question goes through this one answer.
 	// Not const: sourceById() is not, and adding a const overload of the media

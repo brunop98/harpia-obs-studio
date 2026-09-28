@@ -53,6 +53,7 @@
 #include <QRegularExpression>
 #include "../ui/MenuHints.hpp"
 #include "subtitles/SubtitleDialog.hpp"
+#include "timeline/MotionPath.hpp"
 #include "ytdlp/UrlDownloadDialog.hpp"
 #include "ytdlp/YtDlp.hpp"
 #include "../ui/UrlDragList.hpp"
@@ -595,6 +596,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(timelineView_, &TimelineView::editCommitted, this,
 		&VideoEditorWindow::commitSnapshot);
 	connect(timelineView_, &TimelineView::selectionChanged, this, [this](int track, int clip) {
+		pathKeyPicked_ = -1; // a new selection: Delete means the selection again
 		syncPreviewTransformTarget();
 		updateInspector();
 		refreshKeyframeEditor(); // it follows the selection
@@ -771,6 +773,57 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		});
 	// One undo entry per gesture, like the clip grips and the spotlight masks.
 	connect(canvas_, &PreviewCanvas::maskEditFinished, this, [this]() { commitSnapshot(); });
+	// The motion path: pick a key (the playhead goes there), drag it, add one
+	// where the path runs, or right-click it. See MotionPath.hpp.
+	connect(canvas_, &PreviewCanvas::pathKeyPressed, this, [this](int keyId) {
+		const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+		if (!c || keyId < 0 || keyId >= c->keys.size())
+			return;
+		if (playing_)
+			stopPlayback();
+		pathKeyPicked_ = keyId;
+		onTimelineScrub(c->outStartMs + c->keys[keyId].tMs);
+		syncClipInspector();
+		refreshKeyframeEditor();
+	});
+	connect(canvas_, &PreviewCanvas::pathKeyDragged, this, [this](int keyId, double nx, double ny) {
+		if (playing_)
+			stopPlayback();
+		pathKeyPicked_ = keyId;
+		editSelectedClip([keyId, nx, ny](TlClip &c) {
+			if (keyId < 0 || keyId >= c.keys.size())
+				return;
+			c.keys[keyId].tf.posX = nx;
+			c.keys[keyId].tf.posY = ny;
+		});
+	});
+	connect(canvas_, &PreviewCanvas::pathKeyDragFinished, this, [this]() {
+		commitSnapshot();
+		refreshKeyframeEditor();
+	});
+	connect(canvas_, &PreviewCanvas::pathAddRequested, this, [this](double nx, double ny) {
+		const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+		if (!c)
+			return;
+		const qint64 t = motionPathTimeAt(*c, QPointF(nx, ny), canvas_->displaySize(), 12.0);
+		if (t < 0)
+			return;
+		if (playing_)
+			stopPlayback();
+		const qint64 at = c->outStartMs + t;
+		// Position only, at the pose the clip already has there: the path
+		// does not move, it just gains a point you can now drag.
+		editSelectedClip([at](TlClip &cl) {
+			cl.setKeyframeAt(at, cl.transformAt(at), TlEase::EaseInOut, 1 << TlLanePos);
+		});
+		commitSnapshot();
+		if (const TlClip *now = timelineView_->selectedClipPtr())
+			pathKeyPicked_ = now->keyframeIndexAt(at, 1);
+		onTimelineScrub(at);
+		syncClipInspector();
+		refreshKeyframeEditor();
+	});
+	connect(canvas_, &PreviewCanvas::pathKeyMenuRequested, this, &VideoEditorWindow::motionPathKeyMenu);
 	connect(canvas_, &PreviewCanvas::transformEditFinished, this, [this]() {
 		xfGestureActive_ = false;
 		// The guides say "the drag you are doing is snapped"; with the drag over
@@ -7791,6 +7844,7 @@ void VideoEditorWindow::syncPreviewTransformTarget()
 	if (!c) {
 		canvas_->setTransformBox(QRectF(), 0.0);
 		canvas_->setMaskEdit(PreviewCanvas::MaskEdit{});
+		refreshMotionPath();
 		return;
 	}
 	// Outline the clip where it currently sits on the canvas.
@@ -7836,6 +7890,105 @@ void VideoEditorWindow::syncPreviewTransformTarget()
 		}
 	}
 	canvas_->setMaskEdit(me);
+	refreshMotionPath();
+}
+
+void VideoEditorWindow::refreshMotionPath()
+{
+	if (!canvas_)
+		return;
+	const TlClip *c = (fullEdit() && timelineView_) ? timelineView_->selectedClipPtr() : nullptr;
+	PreviewCanvas::PathDraw pd;
+	if (c) {
+		const MotionPath mp = buildMotionPath(*c, timelineFps());
+		if (mp.drawable()) {
+			pd.on = true;
+			const qint64 at = timelineEditMs() - c->outStartMs;
+			for (int i = 0; i < mp.keys.size(); ++i) {
+				pd.keys.append(mp.keys[i].pos);
+				pd.keyIds.append(mp.keys[i].keyIndex);
+				if (std::llabs(mp.keys[i].tMs - at) <= 40)
+					pd.current = i;
+			}
+			pd.frames = mp.frames;
+		}
+	}
+	// A picked key stays picked (for Delete) only while the playhead is on it:
+	// scrubbing away, selecting something else or removing it lets go.
+	if (pathKeyPicked_ >= 0 && (!pd.on || pd.current < 0 || pd.keyIds[pd.current] != pathKeyPicked_))
+		pathKeyPicked_ = -1;
+	canvas_->setMotionPath(pd);
+}
+
+void VideoEditorWindow::deleteMotionPathKey(int keyId)
+{
+	const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!c || keyId < 0 || keyId >= c->keys.size())
+		return;
+	if (playing_)
+		stopPlayback();
+	// Only the position part of the key: a key that also pins scale or
+	// rotation keeps doing that. clearKeyLane drops the key once it pins
+	// nothing at all.
+	editSelectedClip([keyId](TlClip &cl) {
+		if (keyId < 0 || keyId >= cl.keys.size())
+			return;
+		cl.clearKeyLane(keyId, TlLanePos);
+		if (cl.keys.size() == 1) { // a single key is just a static pose
+			cl.setBaseTransform(cl.keys.front().tf);
+			cl.keys.clear();
+		}
+	});
+	pathKeyPicked_ = -1;
+	commitSnapshot();
+}
+
+void VideoEditorWindow::motionPathKeyMenu(int keyId, const QPoint &globalPos)
+{
+	const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!c || keyId < 0 || keyId >= c->keys.size())
+		return;
+	const qint64 at = c->outStartMs + c->keys[keyId].tMs;
+	const TlEase cur = c->keys[keyId].channel(TlLanePos).ease;
+	QMenu menu(this);
+	menu.addSection(QStringLiteral("Position key at %1").arg(timeTextCentis(c->keys[keyId].tMs)));
+	QAction *go = menu.addAction(QStringLiteral("Go to this keyframe"));
+	QMenu *easeMenu = menu.addMenu(QStringLiteral("Easing to the next key"));
+	easeMenu->setToolTip(QStringLiteral("How the clip speeds up and slows down between this key and the next. "
+					    "The path stays straight; the dots show the speed."));
+	QVector<QAction *> easeActs;
+	for (int i = 0; i < kTlEaseCount; ++i) {
+		const TlEase e = TlEase(i);
+		if (e == TlEase::Bezier && cur != TlEase::Bezier)
+			continue; // custom curves are made in the keyframe editor
+		QAction *a = easeMenu->addAction(QString::fromLatin1(tlEaseName(e)));
+		a->setCheckable(true);
+		a->setChecked(e == cur);
+		a->setData(i);
+		easeActs.append(a);
+	}
+	menu.addSeparator();
+	QAction *del = menu.addAction(QStringLiteral("Delete keyframe"));
+	del->setShortcut(QKeySequence(Qt::Key_Delete));
+	QAction *chosen = menu.exec(globalPos);
+	if (!chosen)
+		return;
+	if (chosen == go) {
+		if (playing_)
+			stopPlayback();
+		pathKeyPicked_ = keyId;
+		onTimelineScrub(at);
+		syncClipInspector();
+	} else if (chosen == del) {
+		deleteMotionPathKey(keyId);
+	} else if (easeActs.contains(chosen)) {
+		const TlEase e = TlEase(chosen->data().toInt());
+		editSelectedClip([keyId, e](TlClip &cl) {
+			if (keyId >= 0 && keyId < cl.keys.size())
+				cl.keys[keyId].channel(TlLanePos).ease = e;
+		});
+		commitSnapshot();
+	}
 }
 
 // Snap the selected clip's rect to the canvas. `how` is the Align menu's
@@ -12092,6 +12245,7 @@ void VideoEditorWindow::deleteSelection()
 			  qobject_cast<const QTextEdit *>(f) || qobject_cast<const QComboBox *>(f);
 	ctx.voiceoverFocused = voTrack_ && f == voTrack_;
 	ctx.voiceoverHasSel = voTrack_ && voTrack_->selectedIndex() >= 0;
+	ctx.pathKeyPicked = pathKeyPicked_ >= 0;
 	ctx.fullEdit = fullEdit();
 	ctx.timelineHasSel = timelineView_ && timelineView_->hasSelection();
 	ctx.multiCut = multiCut();
@@ -12100,6 +12254,9 @@ void VideoEditorWindow::deleteSelection()
 	switch (deleteTargetFor(ctx)) {
 	case DeleteTarget::VoiceoverTake:
 		voTrack_->removeSelected();
+		break;
+	case DeleteTarget::PathKeyframe:
+		deleteMotionPathKey(pathKeyPicked_);
 		break;
 	case DeleteTarget::TimelineClips:
 		timelineView_->deleteSelected();

@@ -100,7 +100,31 @@ public:
 	// be checking its own arithmetic rather than the widget's.
 	QVector<QPointF> handlePointsForTest() const { return transformHandlePoints(); }
 
+	// ---- Motion path (the selected clip's position keys) ------------------
+	// The polyline through the keys that pin position, a dot per frame along
+	// it, and a grabbable dot per key. Everything in canvas fractions; `keyIds`
+	// are indices into the clip's keys, handed back in the signals below.
+	struct PathDraw {
+		bool on = false;
+		QVector<QPointF> keys;   // position of each key
+		QVector<int> keyIds;     // TlClip::keys index of each
+		QVector<QPointF> frames; // the clip's centre on each frame
+		int current = -1;        // index into keys: the key at the playhead
+	};
+	void setMotionPath(const PathDraw &path);
+	// The picture's size on screen, px: what "near the path" is measured in.
+	QSizeF displaySize() const;
+
 signals:
+	// A key dot was pressed (select it: the window moves the playhead there).
+	void pathKeyPressed(int keyId);
+	// Live while dragging a key dot: its new position, canvas fractions.
+	void pathKeyDragged(int keyId, double nx, double ny);
+	void pathKeyDragFinished(); // one undo step per drag
+	// Double-click (or Alt+click) on the path: add a key where it passes.
+	void pathAddRequested(double nx, double ny);
+	// Right-click on a key dot.
+	void pathKeyMenuRequested(int keyId, const QPoint &globalPos);
 	void cropChanged(const QRect &videoRect);
 	// Incremental move, as a fraction of the canvas (add to posX/posY).
 	void transformDragged(double dxNorm, double dyNorm);
@@ -136,9 +160,18 @@ protected:
 	void mousePressEvent(QMouseEvent *) override;
 	void mouseMoveEvent(QMouseEvent *) override;
 	void mouseReleaseEvent(QMouseEvent *) override;
+	void mouseDoubleClickEvent(QMouseEvent *) override;
 	void wheelEvent(QWheelEvent *) override;
 
 private:
+	PathDraw path_;
+	int pathDrag_ = -1;          // index into path_.keys being dragged, or -1
+	QPointF pathPressPx_;        // where the drag started, widget px
+	QPointF pathStartNorm_;      // the key's position at the press
+	bool pathMoved_ = false;
+	QVector<QPointF> pathKeysPx() const;
+	bool pathActive() const { return path_.on && !cropEnabled_ && !spotMode_ && path_.keys.size() >= 2; }
+	void drawMotionPath(QPainter &p) const;
 	enum class Zone { None, Move, L, R, T, B, TL, TR, BL, BR };
 	QRect displayRect() const;
 	// Where the frame is painted inside displayRect(): the same thing whenever

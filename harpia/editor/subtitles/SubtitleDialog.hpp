@@ -88,6 +88,10 @@ private:
 	void updatePreview();
 	void refreshProvider(); // key hint, link and saved-key line for the picked service
 	QString currentKey() const;
+	// Save what is typed in the key box as `p`'s key, and empty the box when it
+	// saved. Runs on Save key, on leaving the box, on switching service and on
+	// Generate -- a key typed once is a key kept.
+	bool storeTypedKey(SpeechProvider p);
 
 	QVector<Target> targets_;
 	SpeechTranscriber *transcriber_ = nullptr;
@@ -103,6 +107,7 @@ private:
 
 	// Controls.
 	QComboBox *provider_ = nullptr;
+	SpeechProvider keyFor_ = SpeechProvider::OpenAI; // the service the key box is showing
 	QGroupBox *service_ = nullptr;
 	QLabel *about_ = nullptr;
 	QLabel *getKey_ = nullptr;

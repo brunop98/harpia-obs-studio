@@ -13,19 +13,28 @@
 
 #include "SpeechProviders.hpp"
 
+#include <QByteArray>
+#include <QSettings>
 #include <QString>
 
 namespace harpia {
 
 class SecretStore {
 public:
-	static void saveApiKey(SpeechProvider p, const QString &key); // empty removes it
+	// Empty removes it. True when the key can be read back afterwards (or was
+	// removed); false when Windows refused to protect it, so nothing was kept.
+	// Either way the outcome goes into the error log -- never the key itself.
+	static bool saveApiKey(SpeechProvider p, const QString &key);
 	static QString loadApiKey(SpeechProvider p);
 	static bool hasApiKey(SpeechProvider p) { return !loadApiKey(p).isEmpty(); }
 	// Where each key lives in the settings. Exposed for the test.
 	static QString settingsName(SpeechProvider p);
+
 	// "sk-…abcd": enough to recognise, not enough to use.
 	static QString maskedKey(const QString &key);
+
+private:
+	static bool storeSealed(QSettings &s, const QString &kKey, const QString &kKind, const QByteArray &plain);
 };
 
 } // namespace harpia

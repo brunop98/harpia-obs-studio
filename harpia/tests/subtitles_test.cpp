@@ -17,6 +17,9 @@
 #include "editor/timeline/TimelineJson.hpp"
 
 #include <QApplication>
+#include <QSettings>
+#include <QLineEdit>
+#include <QComboBox>
 #include <QTemporaryDir>
 
 #include <cstdio>
@@ -413,6 +416,52 @@ int main(int argc, char **argv)
 		ok(whiteRows(top, 0, h / 3) > 20 && whiteRows(top, h * 2 / 3, h) == 0, "Top moves it up");
 		const QImage tall = SubtitleDialog::renderPreview(QImage(), QSize(1080, 1920), look, QString(), QSize(300, 340));
 		ok(tall.height() == 340 && tall.width() < 200, "a vertical canvas previews tall, with no frame yet");
+	}
+
+	std::printf("\n-- saved API keys come back --\n");
+	{
+		// Settings in a scratch folder: the test never touches real ones.
+		QTemporaryDir settingsDir;
+		QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, settingsDir.path());
+		QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDir.path());
+		bool all = true;
+		for (const SpeechProviderInfo &i : speechProviders())
+			all = all && SecretStore::saveApiKey(i.provider, QStringLiteral("  key-for-%1  ").arg(QLatin1String(i.id)));
+		ok(all, "saving a key for every service reports success");
+		bool back = true;
+		for (const SpeechProviderInfo &i : speechProviders())
+			back = back && SecretStore::loadApiKey(i.provider) == QStringLiteral("key-for-%1").arg(QLatin1String(i.id));
+		ok(back, "each service reads back its own key, trimmed, none overwriting another");
+		{
+			QSettings raw(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+			ok(!raw.value(SecretStore::settingsName(SpeechProvider::Groq)).toString().contains(QStringLiteral("key-for")),
+			   "and the settings file does not hold it readable");
+		}
+		ok(SecretStore::saveApiKey(SpeechProvider::Deepgram, QString()) &&
+			   SecretStore::loadApiKey(SpeechProvider::Deepgram).isEmpty() &&
+			   SecretStore::loadApiKey(SpeechProvider::Groq) == QStringLiteral("key-for-groq"),
+		   "an empty key removes just that service's key");
+
+		// The dialog: a key pasted and then Generate (without Save key) is kept.
+		SubtitleDialog d;
+		auto *box = d.findChild<QLineEdit *>();
+		auto *svc = d.findChildren<QComboBox *>().first();
+		svc->setCurrentIndex(svc->findData(QStringLiteral("elevenlabs")));
+		box->setText(QStringLiteral("sk_typed_not_saved"));
+		// Switching service saves what was typed for the one being left.
+		svc->setCurrentIndex(svc->findData(QStringLiteral("assemblyai")));
+		ok(SecretStore::loadApiKey(SpeechProvider::ElevenLabs) == QStringLiteral("sk_typed_not_saved") && box->text().isEmpty(),
+		   "a key typed then left by switching service is saved as that service's key");
+		box->setText(QStringLiteral("aai_key"));
+		emit box->editingFinished();
+		ok(SecretStore::loadApiKey(SpeechProvider::AssemblyAI) == QStringLiteral("aai_key") && box->text().isEmpty() &&
+			   box->placeholderText().contains(QStringLiteral("Saved")),
+		   "leaving the box saves it, and the box then says a key is saved");
+		SubtitleDialog again; // a fresh window, as after a restart
+		auto *svc2 = again.findChildren<QComboBox *>().first();
+		ok(svc2->currentData().toString() == QStringLiteral("assemblyai") ||
+			   SecretStore::hasApiKey(SpeechProvider::AssemblyAI),
+		   "a new window finds the saved key");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

@@ -1,5 +1,7 @@
 #include "SecretStore.hpp"
 
+#include "../../ui/EditorLog.hpp"
+
 #include <QByteArray>
 #include <QSettings>
 #include <QSysInfo>
@@ -40,17 +42,47 @@ QString SecretStore::settingsName(SpeechProvider p)
 	return QStringLiteral("subtitles/apiKey_%1").arg(QString::fromLatin1(speechProviderInfo(p).id));
 }
 
-void SecretStore::saveApiKey(SpeechProvider p, const QString &key)
+bool SecretStore::saveApiKey(SpeechProvider p, const QString &key)
 {
 	const QString kKey = settingsName(p);
 	const QString kKind = kKey + QStringLiteral("Kind"); // "dpapi" | "scrambled"
-	QSettings s = settings();
-	if (key.trimmed().isEmpty()) {
-		s.remove(kKey);
-		s.remove(kKind);
-		return;
+	const QString name = speechProviderName(p);
+	bool stored = false;
+	{
+		QSettings s = settings();
+		if (key.trimmed().isEmpty()) {
+			s.remove(kKey);
+			s.remove(kKind);
+			editorLog(EditorLogLevel::Info, QStringLiteral("Subtitles"),
+				  QStringLiteral("%1 API key removed").arg(name));
+			return true;
+		}
+		stored = storeSealed(s, kKey, kKind, key.trimmed().toUtf8());
+		s.sync(); // written now, not whenever the settings object gets round to it
+		if (s.status() != QSettings::NoError) {
+			editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
+				  QStringLiteral("%1 API key: the settings could not be written (%2)")
+					  .arg(name)
+					  .arg(s.fileName()));
+			return false;
+		}
 	}
-	const QByteArray plain = key.trimmed().toUtf8();
+	// Read it back the way the next launch will: a key that cannot be
+	// recovered was not saved, whatever the write said.
+	const bool readable = stored && loadApiKey(p) == key.trimmed();
+	if (readable)
+		editorLog(EditorLogLevel::Info, QStringLiteral("Subtitles"),
+			  QStringLiteral("%1 API key saved (%2)").arg(name, maskedKey(key)));
+	else
+		editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
+			  QStringLiteral("%1 API key could not be saved: %2")
+				  .arg(name, stored ? QStringLiteral("it did not read back the same")
+						    : QStringLiteral("Windows refused to protect it (DPAPI)")));
+	return readable;
+}
+
+bool SecretStore::storeSealed(QSettings &s, const QString &kKey, const QString &kKind, const QByteArray &plain)
+{
 #ifdef Q_OS_WIN
 	DATA_BLOB in;
 	in.pbData = reinterpret_cast<BYTE *>(const_cast<char *>(plain.constData()));
@@ -58,17 +90,22 @@ void SecretStore::saveApiKey(SpeechProvider p, const QString &key)
 	DATA_BLOB out{};
 	if (CryptProtectData(&in, L"Harpia transcription key", nullptr, nullptr, nullptr,
 			     CRYPTPROTECT_UI_FORBIDDEN, &out)) {
-		s.setValue(kKey, QByteArray(reinterpret_cast<const char *>(out.pbData), int(out.cbData)).toBase64());
+		// Plain base64 text, not a QByteArray: the registry keeps a string as a
+		// string, where a byte array goes through Qt's @ByteArray() wrapping.
+		s.setValue(kKey, QString::fromLatin1(
+					 QByteArray(reinterpret_cast<const char *>(out.pbData), int(out.cbData)).toBase64()));
 		s.setValue(kKind, QStringLiteral("dpapi"));
 		LocalFree(out.pbData);
-		return;
+		return true;
 	}
 	// DPAPI refused (rare): keep nothing rather than keep it in the clear.
 	s.remove(kKey);
 	s.remove(kKind);
+	return false;
 #else
-	s.setValue(kKey, scramble(plain).toBase64());
+	s.setValue(kKey, QString::fromLatin1(scramble(plain).toBase64()));
 	s.setValue(kKind, QStringLiteral("scrambled"));
+	return true;
 #endif
 }
 
@@ -87,8 +124,14 @@ QString SecretStore::loadApiKey(SpeechProvider p)
 		in.pbData = reinterpret_cast<BYTE *>(const_cast<char *>(stored.constData()));
 		in.cbData = DWORD(stored.size());
 		DATA_BLOB out{};
-		if (!CryptUnprotectData(&in, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out))
+		if (!CryptUnprotectData(&in, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out)) {
+			editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
+				  QStringLiteral("the saved %1 API key could not be unsealed (Windows error %2); "
+						 "it was saved by another Windows user or machine. Save it again.")
+					  .arg(speechProviderName(p))
+					  .arg(qulonglong(GetLastError())));
 			return QString();
+		}
 		const QString key = QString::fromUtf8(reinterpret_cast<const char *>(out.pbData), int(out.cbData));
 		LocalFree(out.pbData);
 		return key;

@@ -157,11 +157,10 @@ void SubtitleDialog::buildUi()
 	apiKey_->setEchoMode(QLineEdit::Password);
 	keyRow->addWidget(apiKey_, 1);
 	auto *saveKey = new QPushButton(QStringLiteral("Save key"), svc);
-	connect(saveKey, &QPushButton::clicked, this, [this]() {
-		SecretStore::saveApiKey(provider(), apiKey_->text());
-		apiKey_->clear();
-		refreshProvider();
-	});
+	connect(saveKey, &QPushButton::clicked, this, [this]() { storeTypedKey(provider()); });
+	// Pasting a key and moving on (or pressing Enter) saves it too: pressing
+	// Save key was easy to miss, and a key only typed lasted one run.
+	connect(apiKey_, &QLineEdit::editingFinished, this, [this]() { storeTypedKey(keyFor_); });
 	keyRow->addWidget(saveKey);
 	sf->addRow(QStringLiteral("API key"), keyRow);
 	// Where to get one, a click away; follows the picked service.
@@ -184,7 +183,10 @@ void SubtitleDialog::buildUi()
 	allKeys->setToolTip(QStringLiteral("Each link opens that service's API key page in your browser."));
 	sf->addRow(QStringLiteral("All key pages"), allKeys);
 	connect(provider_, &QComboBox::currentIndexChanged, this, [this]() {
-		apiKey_->clear(); // a key typed for one service is not another's
+		// A key typed for the service being left is saved as ITS key before the
+		// box empties for the next one.
+		storeTypedKey(keyFor_);
+		apiKey_->clear();
 		refreshProvider();
 	});
 	lay->addWidget(svc);
@@ -429,10 +431,19 @@ void SubtitleDialog::refreshProvider()
 				 .arg(url, name.section(QLatin1Char(' '), 0, 0).toHtmlEscaped(),
 				      QString::fromUtf8(i.keySteps).toHtmlEscaped()));
 	getKey_->setToolTip(QStringLiteral("Opens %1 in your browser.").arg(QUrl(url).host()));
+	keyFor_ = provider();
 	const QString k = SecretStore::loadApiKey(provider());
-	keyState_->setText(k.isEmpty() ? QStringLiteral("No %1 key saved yet. Paste one and press Save key.")
-						 .arg(name.section(QLatin1Char(' '), 0, 0))
-				       : QStringLiteral("Key saved: %1").arg(SecretStore::maskedKey(k)));
+	const QString shortName = name.section(QLatin1Char(' '), 0, 0);
+	keyState_->setText(k.isEmpty() ? QStringLiteral("No %1 key saved yet. Paste one: it is saved as soon as you "
+							"leave the box, or press Save key.")
+						 .arg(shortName)
+				       : QStringLiteral("\u2713 %1 key saved on this computer: %2. It is used "
+							"automatically; paste a new one only to replace it.")
+						 .arg(shortName, SecretStore::maskedKey(k)));
+	// The box itself says a key is there, so an empty-looking field is not
+	// read as "the key was lost".
+	if (!k.isEmpty())
+		apiKey_->setPlaceholderText(QStringLiteral("Saved: %1  (paste to replace)").arg(SecretStore::maskedKey(k)));
 	// The wrapped lines above change height with the service: let the form
 	// and the window grow to fit instead of clipping them.
 	for (QLabel *l : {about_, getKey_, keyState_})
@@ -443,6 +454,29 @@ void SubtitleDialog::refreshProvider()
 	}
 	if (isVisible())
 		resize(width(), std::max(height(), sizeHint().height()));
+}
+
+bool SubtitleDialog::storeTypedKey(SpeechProvider p)
+{
+	const QString typed = apiKey_->text().trimmed();
+	if (typed.isEmpty())
+		return false;
+	if (typed == SecretStore::loadApiKey(p)) {
+		apiKey_->clear();
+		return true;
+	}
+	const bool saved = SecretStore::saveApiKey(p, typed);
+	if (saved) {
+		apiKey_->clear();
+		if (p == provider())
+			refreshProvider();
+	} else if (status_) {
+		// Kept in the box, so this run still works; the log says why.
+		status_->setText(QStringLiteral("The %1 key could not be saved on this computer, so it will only be "
+						"used until the window closes. Help > Error logs says why.")
+					 .arg(speechProviderName(p)));
+	}
+	return saved;
 }
 
 QString SubtitleDialog::currentKey() const
@@ -521,6 +555,7 @@ void SubtitleDialog::startJob()
 {
 	if (targets_.isEmpty())
 		return;
+	storeTypedKey(provider());
 	if (currentKey().isEmpty()) {
 		status_->setText(QStringLiteral("Paste your %1 API key first.").arg(speechProviderName(provider())));
 		apiKey_->setFocus();

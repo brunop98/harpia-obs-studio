@@ -62,6 +62,12 @@ private:
 	QNetworkAccessManager nam_;
 	QString printPathFile_;
 	QString lastError_;
+	// This link was read without cookies because the browser's could not be
+	// read (Chrome open, or encrypted). Downloads then skip them too unless
+	// the user fixes the cookie source.
+	bool skipCookies_ = false;
+	bool triedWithoutCookies_ = false;
+	YtDlpSettings effectiveSettings() const; // settings_, minus cookies when skipping
 	QByteArray fetchOut_;
 
 	QLineEdit *url_ = nullptr;

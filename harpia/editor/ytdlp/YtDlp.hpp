@@ -72,6 +72,12 @@ bool closeBrowser(const QString &id);
 // and the cookie setting in force. "" when there is nothing to add.
 QString downloadErrorHint(const QString &error, const QString &cookiesBrowser, bool haveCookiesFile);
 
+// True when yt-dlp failed because it could not READ the cookies at all (a
+// locked or undecryptable browser database, or no database), as opposed to
+// the site refusing the login. Retrying without cookies is then worth it:
+// a public video needs none.
+bool isCookieReadError(const QString &error);
+
 // One quality on offer, one row of the dropdown.
 struct YtQuality {
 	QString label;    // "1080p60", "720p", "Best available"

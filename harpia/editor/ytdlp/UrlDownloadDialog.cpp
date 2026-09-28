@@ -173,6 +173,7 @@ void UrlDownloadDialog::buildUi()
 		}
 		// A browser, the stored cookies.txt (no browser = the file goes),
 		// or None, which also forgets the file: None must mean none.
+		skipCookies_ = false; // a new cookie source: try it
 		settings_.cookiesBrowser = pick == QLatin1String(kUseFile) ? QString() : pick;
 		if (pick.isEmpty())
 			settings_.cookiesFile.clear();
@@ -291,11 +292,14 @@ void UrlDownloadDialog::fetchInfo()
 		proc_ = nullptr;
 	}
 	setStage(Stage::Fetching);
-	status_->setText(QStringLiteral("Asking yt-dlp about this link…"));
+	if (!triedWithoutCookies_) {
+		skipCookies_ = false; // a fresh Check tries the chosen cookies again
+		status_->setText(QStringLiteral("Asking yt-dlp about this link…"));
+	}
 	fetchOut_.clear();
 	proc_ = new QProcess(this);
 	proc_->setProgram(exe);
-	proc_->setArguments(YtDlp::infoArgs(url, settings_));
+	proc_->setArguments(YtDlp::infoArgs(url, effectiveSettings()));
 	connect(proc_, &QProcess::readyReadStandardOutput, this, [this]() { fetchOut_ += proc_->readAllStandardOutput(); });
 	connect(proc_, &QProcess::finished, this, [this](int code, QProcess::ExitStatus st) {
 		const QString errText = QString::fromUtf8(proc_->readAllStandardError()).trimmed();
@@ -311,11 +315,40 @@ void UrlDownloadDialog::fetchInfo()
 					why = l.mid(6).trimmed();
 			if (why.isEmpty())
 				why = errText.isEmpty() ? QStringLiteral("yt-dlp gave no information") : errText;
+			// The browser's cookies could not be read at all (Chrome open, or
+			// encrypted): ask again without them. A public video needs none,
+			// and this is the step that used to leave no way forward, since
+			// the Cookies setting only shows after a successful Check.
+			const bool usedCookies = !settings_.cookiesBrowser.isEmpty() || !settings_.cookiesFile.isEmpty();
+			if (usedCookies && !skipCookies_ && isCookieReadError(why)) {
+				skipCookies_ = true;
+				triedWithoutCookies_ = true;
+				status_->setText(QStringLiteral("%1's cookies could not be read; checking without them…")
+							 .arg(settings_.cookiesBrowser.isEmpty() ? QStringLiteral("The browser")
+												 : browserLabel(settings_.cookiesBrowser)));
+				fetchInfo();
+				return;
+			}
+			triedWithoutCookies_ = false;
 			setStage(Stage::Idle);
-			status_->setText(QStringLiteral("Could not read that link: %1").arg(why));
+			QString msg = QStringLiteral("Could not read that link: %1").arg(why);
+			const QString hint = downloadErrorHint(why, settings_.cookiesBrowser, !settings_.cookiesFile.isEmpty());
+			if (!hint.isEmpty())
+				msg += QLatin1Char('\n') + hint;
+			if (skipCookies_)
+				msg += QStringLiteral("\n(Tried without cookies too, since the browser's could not be read.)");
+			status_->setText(msg);
 			return;
 		}
+		triedWithoutCookies_ = false;
 		showInfo(v);
+		if (skipCookies_)
+			status_->setText(QStringLiteral(
+				"Read without cookies: %1's could not be read (it is open, or encrypts them). "
+				"Public videos download fine like this. For a sign-in video, close %1 or pick "
+				"\u201ccookies.txt file\u2026\u201d under Cookies, then Check again.")
+						 .arg(settings_.cookiesBrowser.isEmpty() ? QStringLiteral("the browser")
+											 : browserLabel(settings_.cookiesBrowser)));
 	});
 	connect(proc_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
 		if (stage_ == Stage::Fetching) {
@@ -422,7 +455,7 @@ void UrlDownloadDialog::startDownload()
 	status_->setText(QStringLiteral("Starting…"));
 	proc_ = new QProcess(this);
 	proc_->setProgram(exe);
-	proc_->setArguments(YtDlp::downloadArgs(url_->text().trimmed(), settings_, o));
+	proc_->setArguments(YtDlp::downloadArgs(url_->text().trimmed(), effectiveSettings(), o));
 	proc_->setProcessChannelMode(QProcess::MergedChannels);
 	connect(proc_, &QProcess::readyRead, this, [this]() {
 		while (proc_ && proc_->canReadLine())
@@ -522,7 +555,7 @@ void UrlDownloadDialog::fillCookiesCombo()
 bool UrlDownloadDialog::cookiesPreflight()
 {
 	const QString id = settings_.cookiesBrowser;
-	if (id.isEmpty() || !browserLocksCookies(id) || !browserRunning(id))
+	if (skipCookies_ || id.isEmpty() || !browserLocksCookies(id) || !browserRunning(id))
 		return true;
 	// The browser is open and holds its cookie file: yt-dlp would fail with
 	// "Could not copy ... cookie database". Ask now, with the ways out.
@@ -541,6 +574,8 @@ bool UrlDownloadDialog::cookiesPreflight()
 				       .arg(label));
 	QPushButton *close = box.addButton(QStringLiteral("Close %1 and download").arg(label), QMessageBox::AcceptRole);
 	QPushButton *file = box.addButton(QStringLiteral("Use a cookies.txt file\u2026"), QMessageBox::ActionRole);
+	QPushButton *without = box.addButton(QStringLiteral("Download without cookies"), QMessageBox::ActionRole);
+	without->setToolTip(QStringLiteral("Fine for a public video: no login is sent."));
 	QPushButton *anyway = box.addButton(QStringLiteral("Try anyway"), QMessageBox::ActionRole);
 	box.addButton(QMessageBox::Cancel);
 	box.setDefaultButton(close);
@@ -562,7 +597,21 @@ bool UrlDownloadDialog::cookiesPreflight()
 		// Downloads once the file is in place; the user presses the button again.
 		return !settings_.cookiesFile.isEmpty() && settings_.cookiesBrowser.isEmpty();
 	}
+	if (box.clickedButton() == without) {
+		skipCookies_ = true;
+		return true;
+	}
 	return box.clickedButton() == anyway;
+}
+
+YtDlpSettings UrlDownloadDialog::effectiveSettings() const
+{
+	YtDlpSettings s = settings_;
+	if (skipCookies_) {
+		s.cookiesBrowser.clear();
+		s.cookiesFile.clear();
+	}
+	return s;
 }
 
 } // namespace harpia

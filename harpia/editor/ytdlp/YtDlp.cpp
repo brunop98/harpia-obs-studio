@@ -272,6 +272,17 @@ bool closeBrowser(const QString &id)
 	return false;
 }
 
+bool isCookieReadError(const QString &error)
+{
+	const bool cookie = error.contains(QLatin1String("cookie"), Qt::CaseInsensitive);
+	return (cookie && error.contains(QLatin1String("Could not copy"), Qt::CaseInsensitive)) ||
+	       (cookie && error.contains(QLatin1String("could not find"), Qt::CaseInsensitive)) ||
+	       error.contains(QLatin1String("Failed to decrypt"), Qt::CaseInsensitive) ||
+	       error.contains(QLatin1String("DPAPI"), Qt::CaseInsensitive) ||
+	       error.contains(QLatin1String("app-bound"), Qt::CaseInsensitive) ||
+	       error.contains(QLatin1String("app_bound"), Qt::CaseInsensitive);
+}
+
 QString downloadErrorHint(const QString &error, const QString &cookiesBrowser, bool haveCookiesFile)
 {
 	const QString label = cookiesBrowser.isEmpty() ? QString() : browserLabel(cookiesBrowser);

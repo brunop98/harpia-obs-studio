@@ -220,6 +220,10 @@ int main(int argc, char **argv)
 		ok(h.contains(QLatin1String("Export the cookies.txt again")), "a 403 with a file: re-export it");
 		ok(downloadErrorHint(QStringLiteral("No space left on device"), QStringLiteral("chrome"), false).isEmpty(),
 		   "an unrelated error gets no cookie advice");
+		ok(isCookieReadError(locked), "a locked cookie database is a cookie READ error (retry without)");
+		ok(isCookieReadError(QStringLiteral("Failed to decrypt with DPAPI")), "so is an undecryptable one");
+		ok(!isCookieReadError(QStringLiteral("HTTP Error 403: Forbidden")), "a 403 is not: the site refused");
+		ok(!isCookieReadError(QStringLiteral("Sign in to confirm your age")), "nor a sign-in wall");
 	}
 
 	std::printf("\n-- progress lines --\n");

@@ -193,16 +193,18 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	setSizeGripEnabled(true);
 	// The size it RESTORES to when taken out of full screen twice (F11 to a
 	// maximised window, then the title bar's restore button); the editor itself
-	// opens FULL SCREEN (below), because every part of it wants the room -- the
+	// opens MAXIMISED (below), because every part of it wants the room -- the
 	// preview, the track stack and the Inspector are all things you immediately
 	// drag bigger otherwise.
 	resize(1040, 680);
-	// Full screen, not merely maximised: the whole monitor, no title bar or
-	// taskbar. F11 drops to a maximised window when you want the editor beside
-	// something else, and Escape leaves full screen rather than closing the
-	// editor (see keyPressEvent). Set again in showEvent, since a state set
-	// before the native window exists is not honoured on every platform.
-	setWindowState(windowState() | Qt::WindowFullScreen);
+	// Maximised, with the title bar and the taskbar. Full screen was tried
+	// (v0.1.311) and on Windows an owned dialog handed a screen-sized geometry
+	// came up as a plain window LARGER than the screen -- its frame past every
+	// edge and its maximise button out of reach. Maximised is what the window
+	// manager does right on its own. F11 still goes full screen, Escape comes
+	// back. Set again in showEvent, since a state set before the native window
+	// exists is not honoured on every platform.
+	setWindowState(windowState() | Qt::WindowMaximized);
 	setAcceptDrops(true); // drop video files to add them as sources
 
 	auto *root = new QVBoxLayout(this);
@@ -6163,18 +6165,18 @@ void VideoEditorWindow::showEvent(QShowEvent *e)
 	// The Sources panel stays closed until the user opens it with the toolbar
 	// "Sources" button — it never opens on its own.
 
-	// The editor opens full screen. The constructor asks for it, but QDialog's
+	// The editor opens maximised. The constructor asks for it, but QDialog's
 	// own show path can re-place the window over its parent and, on some
 	// platforms, drop a state set before the native window existed -- which is
 	// how "opens maximised" was true in the code and not on the screen. Asking
 	// again here, once the window is real, is what makes it stick. Only on the
 	// first show: a later show (after a modal child, say) must not yank a window
-	// the user has taken out of full screen back into it.
+	// the user has resized back to maximised.
 	if (!shownOnce_) {
 		shownOnce_ = true;
 		QTimer::singleShot(0, this, [this]() {
-			if (!isFullScreen())
-				setFullScreen(true);
+			if (!isMaximized() && !isFullScreen())
+				showMaximized();
 		});
 	}
 
@@ -6185,20 +6187,18 @@ void VideoEditorWindow::showEvent(QShowEvent *e)
 void VideoEditorWindow::setFullScreen(bool on)
 {
 	if (on) {
-		setWindowState((windowState() & ~Qt::WindowMaximized) | Qt::WindowFullScreen);
-		// Windows only drops the taskbar behind a full-screen window that is
-		// the ACTIVE window and covers the whole monitor. An owned dialog that
-		// went full screen without being activated kept the taskbar over its
-		// bottom edge. Ask for both explicitly rather than hoping.
-		if (QScreen *s = screen())
-			setGeometry(s->geometry());
+		// showFullScreen, not a bare window-state flag plus a screen-sized
+		// setGeometry: the latter is what produced a decorated window larger
+		// than the screen on Windows. Activated, so Windows drops the taskbar
+		// behind it.
+		showFullScreen();
 		raise();
 		activateWindow();
 	} else {
 		// Out of full screen lands on MAXIMISED, not the 1040x680 restore size:
 		// the point of leaving is to get the title bar and taskbar back, not
 		// to shrink the editor to a quarter of the monitor.
-		setWindowState((windowState() & ~Qt::WindowFullScreen) | Qt::WindowMaximized);
+		showMaximized();
 	}
 }
 

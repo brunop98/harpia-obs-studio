@@ -6,6 +6,7 @@
 
 #include <QKeyEvent>
 #include <QMenu>
+#include "../ui/MenuHints.hpp"
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -1291,7 +1292,11 @@ void TrackEditor::showSegmentMenu(int index, const QPoint &globalPos, const QPoi
 	QAction *del = menu.addAction(group ? QStringLiteral("Delete %1 cuts").arg(n)
 					    : QStringLiteral("Delete cut"));
 	QAction *split = menu.addAction(QStringLiteral("Split here"));
-	split->setEnabled(canSplit);
+	disableBecause(split, canSplit,
+		       QStringLiteral("The split lands where you right-clicked, and that is too close "
+				      "to the cut's edge (each half needs at least %1 ms). Right-click "
+				      "further inside the cut.")
+			       .arg(kMinCutMs));
 	QAction *dup = menu.addAction(QStringLiteral("Duplicate"));
 	QAction *reset = menu.addAction(group ? QStringLiteral("Reset speed to 1× (%1 cuts)").arg(n)
 					      : QStringLiteral("Reset speed to 1×"));
@@ -1306,6 +1311,7 @@ void TrackEditor::showSegmentMenu(int index, const QPoint &globalPos, const QPoi
 			"The selected cuts trade places among their own positions; the rest stay put. "
 			"Ctrl+Z brings the previous order back."));
 	}
+	explainDisabled(&menu);
 	QAction *chosen = menu.exec(globalPos);
 	if (shuffle && chosen == shuffle) {
 		shuffleSelected();

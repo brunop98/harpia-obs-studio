@@ -531,8 +531,78 @@ int main(int argc, char **argv)
 		only.tracks = {t2};
 		v.setModel(only);
 		changes = 0;
-		ok(!v.fitClipToTimeline(0, 0) && changes == 0 && v.mediaEndMs() == 0,
-		   "with no media on the timeline there is nothing to fit to, and no undo step");
+		ok(!v.fitClipToTimeline(0, 0) && changes == 0 && v.mediaEndMs(0, 0) == 0,
+		   "the only clip on the timeline has nothing to fit to, and no undo step");
+
+		// Stills and captions only: "the whole timeline" is where the last of
+		// them ends. A slideshow can still have a title over all of it.
+		TlClip still = clipAt(3000, 0);
+		still.type = TlClip::Type::Image;
+		still.srcEndMs = 6000;
+		only.tracks[0].clips.append(still);
+		v.setModel(only);
+		ok(v.mediaEndMs(0, 0) == 9000, "without media, the last clip of any kind is the end (9 s)");
+		ok(v.fitClipToTimeline(0, 0) && v.model().tracks[0].clips[0].outEndMs() == 9000,
+		   "and the caption fits to it");
+	}
+
+	// ---- A caption never lands on an existing clip ----
+	{
+		TimelineModel m;
+		TlTrack v1 = track(TlTrack::Kind::Video, "V1");
+		v1.clips.append(clipAt(0));      // 0..4 s
+		v1.clips.append(clipAt(6000));   // 6..10 s
+		TlTrack a1 = track(TlTrack::Kind::Audio, "A1");
+		m.tracks = {v1, a1};
+		v.setModel(m);
+		changes = 0;
+
+		TlClip cap;
+		cap.type = TlClip::Type::Text;
+		cap.srcStartMs = 0;
+		cap.srcEndMs = 4000;
+		cap.text.text = QStringLiteral("Title");
+		TlClip t = cap;                  // a 4 s caption
+		t.outStartMs = 4000;             // 4..8 s: over the second clip
+		int at = v.addClipOnFreeLane(TlTrack::Kind::Video, t);
+		ok(at == 0 && v.trackCount() == 3 && v.model().tracks[0].kind == TlTrack::Kind::Video,
+		   "over a busy lane the caption gets a new picture lane at the top");
+		ok(v.model().tracks[0].autoLane && v.model().tracks[0].clips.size() == 1,
+		   "the new lane is automatic and holds just the caption");
+		ok(v.model().tracks[1].clips.size() == 2, "the footage lane is untouched");
+		ok(changes == 1, "one undo step");
+
+		// A gap that fits: the caption joins the existing lane instead.
+		TlClip t2 = cap;
+		t2.outStartMs = 10000;           // 10..14 s: after everything on V1
+		at = v.addClipOnFreeLane(TlTrack::Kind::Video, t2);
+		ok(at == 0 && v.trackCount() == 3, "a free stretch on the top lane is used, no new lane");
+		ok(v.model().tracks[0].clips.size() == 2, "the top lane now has both captions");
+
+		// Touching is not overlapping: a caption may start exactly where one ends.
+		TlClip t3 = cap;
+		t3.outStartMs = 8000;            // 8..12 s: 8 s is where the first caption ends...
+		at = v.addClipOnFreeLane(TlTrack::Kind::Video, t3);
+		// ...but it covers the 10..14 s one on the top lane and the 6..10 s
+		// one on V1, so nothing is free: another new lane at the top.
+		ok(at == 0 && v.trackCount() == 4 && v.model().tracks[0].clips.size() == 1,
+		   "with no free stretch anywhere, a second new lane at the top");
+		TlClip t5 = cap;
+		t5.outStartMs = 14000;           // 14..18 s: free on the 4..8/10..14 lane (now index 1)
+		at = v.addClipOnFreeLane(TlTrack::Kind::Video, t5);
+		ok(at == 0 && v.trackCount() == 4,
+		   "touching is not covering: 14 s is free on the topmost lane (which ends at 12 s)");
+
+		// A locked lane is never used, even when it has room.
+		TimelineModel lm;
+		TlTrack lk = track(TlTrack::Kind::Video, "V1");
+		lk.locked = true;
+		lm.tracks = {lk};
+		v.setModel(lm);
+		TlClip t4 = cap;
+		at = v.addClipOnFreeLane(TlTrack::Kind::Video, t4);
+		ok(at == 0 && v.trackCount() == 2 && v.model().tracks[1].locked && v.model().tracks[1].clips.isEmpty(),
+		   "a locked lane keeps its emptiness; the caption gets a new lane above it");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

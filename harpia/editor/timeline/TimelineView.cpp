@@ -10,6 +10,7 @@
 #include "../../ui/SearchPicker.hpp"
 #include "../../ui/UiIcons.hpp"
 #include "../../ui/ColorField.hpp"
+#include "../../ui/MenuHints.hpp"
 #include "../TimeText.hpp"
 
 #include <QColorDialog>
@@ -260,16 +261,20 @@ void TimelineView::renameTrack(int index, const QString &name)
 
 qint64 TimelineView::mediaEndMs(int exceptTrack, int exceptClip) const
 {
-	qint64 end = 0;
+	// Media first: a video or audio clip with a source behind it. When the
+	// timeline has none (a slideshow of stills and captions), the last clip of
+	// any kind is the end -- "the whole timeline" still means something.
+	qint64 media = 0, any = 0;
 	for (int t = 0; t < model_.tracks.size(); ++t)
 		for (int c = 0; c < model_.tracks[t].clips.size(); ++c) {
 			if (t == exceptTrack && c == exceptClip)
 				continue;
 			const TlClip &k = model_.tracks[t].clips[c];
+			any = std::max(any, k.outEndMs());
 			if (k.type == TlClip::Type::Video && k.sourceId > 0)
-				end = std::max(end, k.outEndMs());
+				media = std::max(media, k.outEndMs());
 		}
-	return end;
+	return media > 0 ? media : any;
 }
 
 bool TimelineView::fitClipToTimeline(int track, int clip)
@@ -435,6 +440,49 @@ void TimelineView::addClip(TlTrack::Kind kind, const TlClip &clip)
 	update();
 	commitEdit();
 	emit selectionChanged(selTrack_, selClip_);
+}
+
+// A caption or still added at the playhead must never cover a clip that is
+// already there. Lanes of the kind are tried from the TOP down (a caption
+// belongs above the footage it labels); the first unlocked one with nothing
+// under the new clip's span takes it. When every lane is busy there, a new
+// lane appears at the top of the group -- automatic, so it tidies itself
+// away again if the clip is later moved off it.
+int TimelineView::addClipOnFreeLane(TlTrack::Kind kind, const TlClip &clip)
+{
+	const qint64 a = clip.outStartMs;
+	const qint64 b = clip.outEndMs();
+	int firstOfKind = -1;
+	for (int i = 0; i < model_.tracks.size(); ++i) {
+		const TlTrack &t = model_.tracks[i];
+		if (t.kind != kind)
+			continue;
+		if (firstOfKind < 0)
+			firstOfKind = i;
+		if (t.locked)
+			continue;
+		bool busy = false;
+		for (const TlClip &k : t.clips)
+			if (k.outStartMs < b && k.outEndMs() > a) {
+				busy = true;
+				break;
+			}
+		if (!busy) {
+			model_.tracks[i].clips.append(clip);
+			selTrack_ = i;
+			selClip_ = model_.tracks[i].clips.size() - 1;
+			clampView();
+			updateGeometry();
+			update();
+			commitEdit();
+			emit selectionChanged(selTrack_, selClip_);
+			return i;
+		}
+	}
+	int at = firstOfKind;
+	if (at < 0)
+		at = TimelineModel::isPictureKind(kind) ? 0 : model_.tracks.size();
+	return addClipAt(kind, clip, -1, at);
 }
 
 // addClip() appends to the LAST lane of a kind, which is fine for a menu action
@@ -1053,9 +1101,13 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 		const int lo = picture ? 0 : np;
 		const int hi = picture ? np : int(model_.tracks.size());
 		moveUp = menu.addAction(QStringLiteral("Move track up"));
-		moveUp->setEnabled(track > lo);
+		disableBecause(moveUp, track > lo,
+			       QStringLiteral("This lane is already the top one of its group. Picture "
+					      "lanes stay above audio lanes."));
 		moveDown = menu.addAction(QStringLiteral("Move track down"));
-		moveDown->setEnabled(track < hi - 1);
+		disableBecause(moveDown, track < hi - 1,
+			       QStringLiteral("This lane is already the bottom one of its group. Picture "
+					      "lanes stay above audio lanes."));
 	}
 	menu.addSeparator();
 	QAction *addAbove = menu.addAction(QStringLiteral("Add track above"));
@@ -1066,6 +1118,7 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 				 ? menu.addAction(QStringLiteral("Add effect track above"))
 				 : nullptr;
 	QAction *del = menu.addAction(QStringLiteral("Delete track"));
+	explainDisabled(&menu);
 
 	QAction *chosen = menu.exec(globalPos);
 	if (!chosen)
@@ -3697,12 +3750,14 @@ void TimelineView::showKeyMenu(const KeyHit &hit, const QPoint &globalPos)
 	QMenu menu(this);
 	QAction *goTo = menu.addAction(QStringLiteral("Go to this keyframe"));
 	QAction *del = menu.addAction(QStringLiteral("Delete keyframe"));
-	del->setEnabled(!locked);
 	// One pip can stand for several channels keyed at the same instant, and
 	// deleting "the keyframe" then takes all of them. Say so rather than
 	// letting it be a surprise.
 	del->setToolTip(QStringLiteral("Removes every channel keyed at this moment."));
-	menu.setToolTipsVisible(true);
+	disableBecause(del, !locked,
+		       QStringLiteral("This lane is locked. Right-click the lane header and choose "
+				      "Unlock track to edit its keyframes."));
+	explainDisabled(&menu);
 
 	const QAction *chosen = menu.exec(globalPos);
 	if (chosen == goTo) {
@@ -3720,6 +3775,10 @@ void TimelineView::showKeyMenu(const KeyHit &hit, const QPoint &globalPos)
 void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qint64 atOutMs)
 {
 	const bool locked = model_.tracks[track].locked;
+	// The one reason most greyed entries share: the lane is locked.
+	const QString lockedWhy = QStringLiteral(
+		"This lane is locked, so its clips cannot change. Right-click the lane header "
+		"(or the lock icon) and choose Unlock track.");
 	QMenu menu(this);
 	const TlClip &menuClip = model_.tracks[track].clips[clip];
 	const bool isFx = menuClip.type == TlClip::Type::Effect;
@@ -3758,20 +3817,21 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		randomSel->setToolTip(QStringLiteral(
 			"Shuffle these clips among their own slots. Everything else stays put; "
 			"Ctrl+Z brings the previous order back."));
-		randomSel->setEnabled(!locked);
+		disableBecause(randomSel, !locked, lockedWhy);
 	}
 	// An effect clip animates its own parameters, not a transform, so the
 	// transform keyframe editor would be empty and misleading.
-	keys->setEnabled(!locked && !isFx);
+	disableBecause(keys, !locked && !isFx,
+		       locked ? lockedWhy
+			      : QStringLiteral("An effect clip has no position or scale to key. Its own "
+					       "settings are animated from the Inspector."));
 	QAction *fxToggle = isFx ? menu.addAction(menuClip.fx.enabled
 							  ? QStringLiteral("Disable effect")
 							  : QStringLiteral("Enable effect"))
 				 : nullptr;
 	QAction *fxRename = isFx ? menu.addAction(QStringLiteral("Rename effect…")) : nullptr;
-	if (fxToggle)
-		fxToggle->setEnabled(!locked);
-	if (fxRename)
-		fxRename->setEnabled(!locked);
+	disableBecause(fxToggle, !locked, lockedWhy);
+	disableBecause(fxRename, !locked, lockedWhy);
 	menu.addSeparator();
 	// "Stay on for the whole video": start at 0, end where the last media
 	// clip ends. Greyed when there is no media to measure against.
@@ -3779,13 +3839,24 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	fitAll->setToolTip(QStringLiteral(
 		"Start at 0 and end where the last video or audio clip ends, so this is on screen for "
 		"the whole video. A media clip is re-timed (its speed changes) to fit."));
-	fitAll->setEnabled(!locked && mediaEndMs(track, clip) > 0);
+	disableBecause(fitAll, !locked && mediaEndMs(track, clip) > 0,
+		       locked ? lockedWhy
+			      : QStringLiteral("This is the only clip on the timeline, so there is nothing "
+					       "to measure it against. Add a video, audio or other clip "
+					       "first; this one then stretches from 0 to where the last "
+					       "one ends."));
 	QAction *split = menu.addAction(QStringLiteral("Split here"));
 	const TlClip &c = model_.tracks[track].clips[clip];
-	split->setEnabled(!locked && atOutMs > c.outStartMs + kMinClipMs &&
-			  atOutMs < c.outEndMs() - kMinClipMs);
+	disableBecause(split,
+		       !locked && atOutMs > c.outStartMs + kMinClipMs &&
+			       atOutMs < c.outEndMs() - kMinClipMs,
+		       locked ? lockedWhy
+			      : QStringLiteral("The split lands where you right-clicked, and that is too "
+					       "close to the clip's edge (each half needs at least %1 ms). "
+					       "Right-click further inside the clip.")
+					.arg(kMinClipMs));
 	QAction *dup = menu.addAction(QStringLiteral("Duplicate"));
-	dup->setEnabled(!locked);
+	disableBecause(dup, !locked, lockedWhy);
 	// Transitions are made by OVERLAPPING two clips -- there is no transition
 	// object to create. That is a good model (moving a clip retimes the
 	// transition for free) but an invisible one: with no button anywhere, the
@@ -3797,16 +3868,24 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		const bool already = overlapWith(track, clip, nextClip) > 0;
 		mkTr = menu.addAction(already ? QStringLiteral("Transition already here")
 					      : QStringLiteral("Make transition with next clip"));
-		mkTr->setEnabled(!locked && nextClip >= 0 && !already);
 		mkTr->setToolTip(QStringLiteral(
 			"Slides the next clip back so the two overlap. The overlap IS the "
 			"transition — drag either clip to change its length."));
+		disableBecause(mkTr, !locked && nextClip >= 0 && !already,
+			       locked ? lockedWhy
+			       : already ? QStringLiteral("The next clip already overlaps this one; that "
+							  "overlap is the transition. Drag either clip to "
+							  "change its length.")
+					: QStringLiteral("There is no clip after this one on its lane. Put "
+							 "the next clip on the same lane, then make the "
+							 "transition."));
 	}
 	QAction *mute = menu.addAction(model_.tracks[track].muted ? QStringLiteral("Unmute track")
 								 : QStringLiteral("Mute track"));
 	menu.addSeparator();
 	QAction *del = menu.addAction(QStringLiteral("Delete clip"));
-	del->setEnabled(!locked);
+	disableBecause(del, !locked, lockedWhy);
+	explainDisabled(&menu);
 	QAction *chosen = menu.exec(globalPos);
 	if (randomSel && chosen == randomSel) {
 		emit randomizeSelectionRequested();

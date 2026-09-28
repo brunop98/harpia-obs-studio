@@ -717,7 +717,14 @@ private:
 	QString consoleDraft_;    // what was being typed before walking the history
 	void openConsole();
 	void runConsoleLine(const QString &line);
-	void consolePrint(const QString &text, bool isError = false);
+	// The console's line colours: what you typed, what came back, why it
+	// failed, what got applied, and the help table.
+	enum class ConsoleTone { Plain, Command, Comment, Error, Success, Help };
+	void consolePrint(const QString &text, ConsoleTone tone = ConsoleTone::Plain);
+	void consolePrint(const QString &text, bool isError)
+	{
+		consolePrint(text, isError ? ConsoleTone::Error : ConsoleTone::Plain);
+	}
 	QString consoleTemplatesDir() const;
 	QStringList consoleTemplateNames() const;
 	void saveConsoleTemplate();

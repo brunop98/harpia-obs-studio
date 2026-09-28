@@ -46,6 +46,8 @@
 #include "ShortcutPanel.hpp"
 #include "ShortcutRegistry.hpp"
 #include "EditConsole.hpp"
+#include <QRegularExpression>
+#include "../ui/MenuHints.hpp"
 #include "subtitles/SubtitleDialog.hpp"
 #include "ytdlp/UrlDownloadDialog.hpp"
 #include "ytdlp/YtDlp.hpp"
@@ -581,7 +583,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			}
 			consolePrint(QStringLiteral("// clip -> %1  %2   (also tracks.%3)")
 					     .arg(EditConsole::refName(m, track, clip), name,
-						  EditConsole::refName(m, track, clip)));
+						  EditConsole::refName(m, track, clip)),
+				     ConsoleTone::Comment);
 		}
 		// Clicking a clip is a statement that you want to work on it, so the
 		// panel follows. Only on SELECT: switching back on a deselect would
@@ -2521,7 +2524,7 @@ void VideoEditorWindow::addImageClip()
 	c.srcStartMs = 0;
 	c.srcEndMs = 5000; // freely stretchable, like a caption
 	c.outStartMs = timelinePlayheadMs();
-	timelineView_->addClip(TlTrack::Kind::Video, c);
+	timelineView_->addClipOnFreeLane(TlTrack::Kind::Video, c);
 	updateInfoLabel();
 	showTimelineFrame(timelinePlayheadMs());
 }
@@ -5846,6 +5849,9 @@ void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
 	};
 	auto fullOnly = [this](QAction *a) {
 		fullOnlyActs_.append(a);
+		a->setProperty(kWhyDisabledProp,
+			       QStringLiteral("Only in Full editing. Press the Full editing button "
+					      "at the top of the editor and this entry wakes up."));
 		return a;
 	};
 	auto run = [this](const char *cmdId) {
@@ -5943,6 +5949,10 @@ void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
 	refreshMenuLabels();
 	for (QAction *a : fullOnlyActs_)
 		a->setEnabled(fullEdit());
+	// A greyed entry answers a click with why it is greyed.
+	for (QAction *top : menuBar_->actions())
+		if (QMenu *m = top->menu())
+			explainDisabled(m);
 }
 
 void VideoEditorWindow::refreshMenuLabels()
@@ -6050,7 +6060,8 @@ void VideoEditorWindow::addTextClip()
 	c.srcEndMs = 4000; // a 4s caption by default
 	c.outStartMs = timelinePlayheadMs();
 	c.text.text = QStringLiteral("Your text");
-	timelineView_->addClip(TlTrack::Kind::Video, c);
+	// Never over a clip that is already there: a free lane, or a new one.
+	timelineView_->addClipOnFreeLane(TlTrack::Kind::Video, c);
 	syncPreviewTransformTarget();
 	syncClipInspector();
 	showTimelineFrame(timelinePlayheadMs());
@@ -6515,17 +6526,72 @@ QStringList VideoEditorWindow::consoleTemplateNames() const
 	return names;
 }
 
-void VideoEditorWindow::consolePrint(const QString &text, bool isError)
+void VideoEditorWindow::consolePrint(const QString &text, ConsoleTone tone)
 {
 	if (!consoleOut_)
 		return;
-	// Errors in the accent red, everything else as typed. appendHtml so the
-	// colour is per line; the text itself is escaped, never interpreted.
-	if (isError)
-		consoleOut_->appendHtml(QStringLiteral("<span style=\"color:#ff6b6b;\">%1</span>")
-						.arg(text.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>"))));
-	else
-		consoleOut_->appendPlainText(text);
+	// One colour per kind of line, so a glance tells what you typed from what
+	// came back, and a red line from a green one. appendHtml so the colour is
+	// per line; the text itself is escaped, never interpreted.
+	auto esc = [](const QString &t) {
+		return t.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>"));
+	};
+	auto span = [&esc](const char *color, const QString &t) {
+		return QStringLiteral("<span style=\"color:%1;\">%2</span>").arg(QLatin1String(color), esc(t));
+	};
+	QString html;
+	switch (tone) {
+	case ConsoleTone::Command:
+		// The prompt dim, the code itself in the input blue.
+		if (text.startsWith(QLatin1String("> ")))
+			html = span("#6c7380", QStringLiteral("> ")) + span("#8ec5ff", text.mid(2));
+		else
+			html = span("#8ec5ff", text);
+		break;
+	case ConsoleTone::Comment:
+		html = span("#8a919e", text);
+		break;
+	case ConsoleTone::Error:
+		html = span("#ff6b6b", text);
+		break;
+	case ConsoleTone::Success:
+		html = span("#7ee787", text);
+		break;
+	case ConsoleTone::Help: {
+		// The help table: the name in amber, its explanation in the plain
+		// colour, section headings ("On a clip ...:") in the comment grey.
+		QStringList out;
+		for (const QString &ln : text.split(QLatin1Char('\n'))) {
+			if (ln.trimmed().isEmpty()) {
+				out << QString();
+			} else if (ln.endsWith(QLatin1Char(':'))) {
+				out << span("#8a919e", ln);
+			} else {
+				// Every "name   meaning" pair on the line: a name is a run of
+				// non-spaces followed by two or more spaces.
+				static const QRegularExpression rx(QStringLiteral("(^|\\s{2,})(\\S[^ ]*(?: \\S[^ ]*)?)(?=\\s{2,}|$)"));
+				QString h;
+				int pos = 0;
+				auto it = rx.globalMatch(ln);
+				while (it.hasNext()) {
+					const QRegularExpressionMatch m = it.next();
+					h += esc(ln.mid(pos, m.capturedStart(2) - pos));
+					h += span("#f2c46d", m.captured(2));
+					pos = m.capturedEnd(2);
+				}
+				h += esc(ln.mid(pos));
+				out << h;
+			}
+		}
+		html = out.join(QStringLiteral("<br>"));
+		break;
+	}
+	case ConsoleTone::Plain:
+	default:
+		html = span("#e8eaed", text);
+		break;
+	}
+	consoleOut_->appendHtml(html);
 	consoleOut_->verticalScrollBar()->setValue(consoleOut_->verticalScrollBar()->maximum());
 }
 
@@ -6624,8 +6690,13 @@ void VideoEditorWindow::openConsole()
 
 		p->resize(640, 420);
 		consolePanel_ = p;
-		consolePrint(QStringLiteral("// Editing console. Click a clip to see its name; help() lists what you can set."));
-		consolePrint(QStringLiteral("// Units: pixels for position, ms for time. Every line is one undo step (Ctrl+Z)."));
+		consolePrint(QStringLiteral("// Editing console. Click a clip to see its name; help() lists what you can set."),
+			     ConsoleTone::Comment);
+		consolePrint(QStringLiteral("// Units: pixels for position, ms for time. Every line is one undo step (Ctrl+Z)."),
+			     ConsoleTone::Comment);
+		consolePrint(QStringLiteral("// Colours: blue = what you typed, white = what came back, amber = names in help(), "
+					    "green = applied, red = error."),
+			     ConsoleTone::Comment);
 	}
 	if (!consolePanel_->isVisible() && consoleBtn_)
 		consolePanel_->move(consoleBtn_->mapToGlobal(QPoint(0, consoleBtn_->height() + 6)));
@@ -6643,7 +6714,7 @@ void VideoEditorWindow::runConsoleLine(const QString &lineIn)
 	if (consoleHistory_.isEmpty() || consoleHistory_.last() != line)
 		consoleHistory_.append(line);
 	consoleHistIdx_ = -1;
-	consolePrint(QStringLiteral("> ") + line);
+	consolePrint(QStringLiteral("> ") + line, ConsoleTone::Command);
 
 	EditConsole::Input in;
 	in.model = timelineView_->model();
@@ -6668,13 +6739,17 @@ void VideoEditorWindow::runConsoleLine(const QString &lineIn)
 
 	const EditConsole::Result r = EditConsole::run(line, in);
 	if (!r.output.isEmpty())
-		consolePrint(r.output);
+		consolePrint(r.output, line.startsWith(QLatin1String("help")) ? ConsoleTone::Help
+									      : ConsoleTone::Plain);
 	if (!r.ok) {
-		consolePrint(r.error, /*isError=*/true);
+		consolePrint(r.error, ConsoleTone::Error);
 		return; // nothing changed, by construction
 	}
-	if (!r.changed)
+	if (!r.changed) {
+		consolePrint(QStringLiteral("// ok, nothing changed"), ConsoleTone::Comment);
 		return;
+	}
+	consolePrint(QStringLiteral("\u2713 applied \u2014 one undo step (Ctrl+Z)"), ConsoleTone::Success);
 	// One undo step: the edited copy replaces the model, the selection is put
 	// back (setModel clears it), and the snapshot is closed now rather than
 	// waiting out the coalescing timer -- a second line must not merge into
@@ -6708,11 +6783,11 @@ void VideoEditorWindow::saveConsoleTemplate()
 	const QString safe = QFileInfo(name).fileName();
 	QFile f(consoleTemplatesDir() + QLatin1Char('/') + safe + QStringLiteral(".js"));
 	if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
-		consolePrint(QStringLiteral("could not write %1").arg(f.fileName()), true);
+		consolePrint(QStringLiteral("could not write %1").arg(f.fileName()), ConsoleTone::Error);
 		return;
 	}
 	f.write(QStringLiteral("// Harpia template \"%1\"\n%2\n").arg(safe, consoleHistory_.last()).toUtf8());
-	consolePrint(QStringLiteral("// saved as template \"%1\": run(\"%1\")").arg(safe));
+	consolePrint(QStringLiteral("\u2713 saved as template \"%1\": run(\"%1\")").arg(safe), ConsoleTone::Success);
 }
 
 VideoEditorWindow::EditMode VideoEditorWindow::mode() const
@@ -7171,7 +7246,7 @@ bool VideoEditorWindow::pasteImageFromClipboard(qint64 atMs)
 	c.srcStartMs = 0;
 	c.srcEndMs = 5000; // a still has no length of its own, like Add image
 	c.outStartMs = std::max<qint64>(0, atMs);
-	timelineView_->addClip(TlTrack::Kind::Video, c);
+	timelineView_->addClipOnFreeLane(TlTrack::Kind::Video, c);
 	updateInfoLabel();
 	showTimelineFrame(timelinePlayheadMs());
 	return true;

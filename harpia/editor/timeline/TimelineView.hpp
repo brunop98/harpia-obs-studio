@@ -70,6 +70,11 @@ public:
 	// The drop handler needs this: addClip() appends to the LAST lane of a kind,
 	// which is not where the pointer was. Returns the track it landed on.
 	int addClipAt(TlTrack::Kind kind, const TlClip &clip, int track, int newTrackAt);
+	// Put a clip on the topmost unlocked lane of the kind that has nothing
+	// under its span, making a new lane at the top of the group when every
+	// lane is busy. Captions and stills use this: they never cover a clip.
+	// Returns the track it landed on.
+	int addClipOnFreeLane(TlTrack::Kind kind, const TlClip &clip);
 	int trackCount() const { return model_.tracks.size(); }
 
 	void setPlayhead(qint64 outMs);

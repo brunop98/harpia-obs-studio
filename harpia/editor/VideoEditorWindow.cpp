@@ -5097,8 +5097,15 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	auto *styleRow = new QHBoxLayout;
 	boldChk_ = new QCheckBox(QStringLiteral("Bold"), textBox_);
 	italicChk_ = new QCheckBox(QStringLiteral("Italic"), textBox_);
+	// Title case as a switch beside Bold and Italic: the Case dropdown below
+	// still has it, with the other cases; this is the one people reach for.
+	// The two are one setting, and stay in step.
+	titleCaseChk_ = new QCheckBox(QStringLiteral("Title Case"), textBox_);
+	titleCaseChk_->setToolTip(QStringLiteral(
+		"Draw Every Word With A Capital. A style, not a rewrite: your typed wording is kept."));
 	styleRow->addWidget(boldChk_);
 	styleRow->addWidget(italicChk_);
+	styleRow->addWidget(titleCaseChk_);
 	styleRow->addStretch(1);
 	tForm->addRow(QStringLiteral("Style"), [&] {
 		auto *w = new QWidget(textBox_);
@@ -5114,6 +5121,17 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		if (syncingClip_)
 			return;
 		editSelectedClip([on](TlClip &c) { c.text.italic = on; });
+	});
+	connect(titleCaseChk_, &QCheckBox::toggled, this, [this](bool on) {
+		if (syncingClip_)
+			return;
+		// On: Title Case. Off: back to As typed -- not to whichever other case
+		// was set, since a switch has two states and "off" has to mean one thing.
+		editSelectedClip([on](TlClip &c) { c.text.textCase = on ? TlCaseTitle : TlCaseAsTyped; });
+		if (caseCombo_) {
+			QSignalBlocker b(caseCombo_);
+			caseCombo_->setCurrentIndex(on ? TlCaseTitle : TlCaseAsTyped);
+		}
 	});
 
 	alignCombo_ = new QComboBox(textBox_);
@@ -5139,6 +5157,10 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		if (syncingClip_)
 			return;
 		editSelectedClip([i](TlClip &c) { c.text.textCase = i; });
+		if (titleCaseChk_) {
+			QSignalBlocker b(titleCaseChk_);
+			titleCaseChk_->setChecked(i == TlCaseTitle);
+		}
 	});
 
 	textColorBtn_ = new QPushButton(textBox_);
@@ -5692,6 +5714,7 @@ void VideoEditorWindow::syncClipInspector()
 		italicChk_->setChecked(c->text.italic);
 		alignCombo_->setCurrentIndex(std::clamp(c->text.align, 0, 2));
 		caseCombo_->setCurrentIndex(std::clamp(c->text.textCase, 0, kTlTextCaseCount - 1));
+		titleCaseChk_->setChecked(c->text.textCase == TlCaseTitle);
 		outlineWSpin_->setValue(c->text.outlineWidth);
 		boxChk_->setChecked(c->text.boxEnabled);
 		// setChecked only emits when the value CHANGES, so selecting a second

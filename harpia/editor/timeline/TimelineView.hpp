@@ -370,6 +370,9 @@ signals:
 	// "Sound rules…" from a rule-made clip, and "Convert to normal clips" on
 	// the Sounds lane. The window owns the Sounds tab and the media pool.
 	void soundRulesRequested();
+	// "Generate subtitles…" from a media clip or an audio lane: the view has
+	// set the selection to what should be transcribed.
+	void subtitlesRequested();
 	void freezeSoundsRequested();
 	// "Export this clip…" / "Export selection…". The window owns the export
 	// dialog and the media pool, so the view only says which slice of output

@@ -625,6 +625,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(timelineView_, &TimelineView::soundForTransitionRequested, this,
 		&VideoEditorWindow::onSoundForTransition);
 	connect(timelineView_, &TimelineView::soundRulesRequested, this, &VideoEditorWindow::showSoundsTab);
+	connect(timelineView_, &TimelineView::subtitlesRequested, this, &VideoEditorWindow::openSubtitles);
 	connect(timelineView_, &TimelineView::freezeSoundsRequested, this, &VideoEditorWindow::freezeSounds);
 	connect(timelineView_, &TimelineView::inspectClipRequested, this,
 		&VideoEditorWindow::revealInspector);

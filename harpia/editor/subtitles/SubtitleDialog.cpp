@@ -127,6 +127,18 @@ void SubtitleDialog::buildUi()
 	});
 	keyRow->addWidget(saveKey);
 	sf->addRow(QStringLiteral("API key"), keyRow);
+	// Where to get one, a click away.
+	auto *getKey = new QLabel(
+		QStringLiteral("<a href='https://platform.openai.com/api-keys' style='color:#6ea8fe;'>"
+			       "Get an API key \u2197</a>&nbsp;&nbsp;<span style='color:#7f858e;'>"
+			       "(OpenAI dashboard \u25B8 API keys \u25B8 Create new secret key)</span>"),
+		svc);
+	getKey->setTextFormat(Qt::RichText);
+	getKey->setOpenExternalLinks(true);
+	getKey->setTextInteractionFlags(Qt::TextBrowserInteraction);
+	getKey->setToolTip(QStringLiteral("Opens platform.openai.com/api-keys in your browser. "
+					  "Transcription needs billing set up on that account."));
+	sf->addRow(QString(), getKey);
 	keyState_ = new QLabel(svc);
 	keyState_->setStyleSheet(QStringLiteral("color:#9aa0a6;"));
 	sf->addRow(QString(), keyState_);

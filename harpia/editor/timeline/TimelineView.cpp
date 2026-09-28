@@ -1114,6 +1114,12 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 		addFxClip = menu.addAction(QStringLiteral("Add effect…"));
 		menu.addSeparator();
 	}
+	QAction *subsTrack = nullptr;
+	if (t.kind == TlTrack::Kind::Audio && !t.autoSounds && !t.clips.isEmpty()) {
+		subsTrack = menu.addAction(QStringLiteral("Generate subtitles for this track…"));
+		subsTrack->setToolTip(QStringLiteral("Transcribe every clip on this lane into caption clips."));
+		menu.addSeparator();
+	}
 	QAction *freezeSounds = nullptr;
 	if (t.autoSounds) {
 		freezeSounds = menu.addAction(QStringLiteral("Convert to normal clips"));
@@ -1206,6 +1212,19 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 	t.autoLane = false;
 	if (freezeSounds && chosen == freezeSounds) {
 		emit freezeSoundsRequested();
+		return;
+	}
+	if (subsTrack && chosen == subsTrack) {
+		// Select every clip on the lane, then transcribe the selection.
+		extraSel_.clear();
+		selTrack_ = track;
+		selClip_ = 0;
+		selTransition_ = false;
+		for (int i = 1; i < model_.tracks[track].clips.size(); ++i)
+			extraSel_.insert({track, i});
+		emit selectionChanged(selTrack_, selClip_);
+		update();
+		emit subtitlesRequested();
 		return;
 	}
 	if (chosen == lock) {
@@ -4054,11 +4073,34 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		}
 		snd->setToolTipsVisible(true);
 	}
+	// Subtitles from what this clip says: a media clip on any lane (captions,
+	// stills and effects have no speech). With a selection that includes it,
+	// every selected media clip is transcribed.
+	QAction *subs = nullptr;
+	if (menuClip.type == TlClip::Type::Video && menuClip.soundRule == 0 && menuClip.sourceId > 0) {
+		menu.addSeparator();
+		subs = menu.addAction(inSel && sel.size() > 1
+					      ? QStringLiteral("Generate subtitles for %1 clips…").arg(sel.size())
+					      : QStringLiteral("Generate subtitles…"));
+		subs->setToolTip(QStringLiteral("Transcribe what is said into caption clips above it."));
+	}
 	menu.addSeparator();
 	QAction *del = menu.addAction(QStringLiteral("Delete clip"));
 	disableBecause(del, !locked, lockedWhy);
 	explainDisabled(&menu);
 	QAction *chosen = menu.exec(globalPos);
+	if (subs && chosen == subs) {
+		if (!inSel) {
+			extraSel_.clear();
+			selTrack_ = track;
+			selClip_ = clip;
+			selTransition_ = false;
+			emit selectionChanged(selTrack_, selClip_);
+			update();
+		}
+		emit subtitlesRequested();
+		return;
+	}
 	if (chosen && tagMenu && (chosen == newTag || (chosen->isCheckable() && tagMenu->actions().contains(chosen)))) {
 		int id = chosen->data().toInt();
 		bool on = chosen->isChecked();

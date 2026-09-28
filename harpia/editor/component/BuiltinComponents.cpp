@@ -309,7 +309,17 @@ public:
 		// rather than a magic value in Progress itself: a component cannot see
 		// whether a property is keyed, and guessing from its value would make
 		// "Progress 0" mean two different things.
-		const double u = ctx.b("fill", true) ? ctx.u() : ctx.f("progress", 0.0);
+		// With "Type in" set, the typing is done that many seconds into the
+		// clip and the caption then holds, whole, for the rest of it -- a
+		// caption on screen for twenty seconds should not spend all twenty
+		// arriving. 0 spreads the typing across the whole clip, as before.
+		double u;
+		if (!ctx.b("fill", true)) {
+			u = ctx.f("progress", 0.0);
+		} else {
+			const double typeSec = ctx.f("typeSec", 0.0);
+			u = typeSec > 0.0 ? double(ctx.tMs) / (typeSec * 1000.0) : ctx.u();
+		}
 		const auto unit = RevealUnit(std::clamp(int(std::lround(ctx.f("unit", 0.0))), 0,
 							kRevealUnitCount - 1));
 		io.text = revealedText(io.text, u, unit);
@@ -467,8 +477,9 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 		// at ClipKindAll, so no existing menu changes.
 		t.clipKinds = ClipKindText;
 		t.help = QStringLiteral(
-			"Reveal the caption a piece at a time, like it is being typed. Fills the "
-			"clip by default; turn that off to drive it with Progress keyframes.");
+			"Reveal the caption a piece at a time, like it is being typed. Type in "
+			"says how many seconds the typing takes (0 = the whole clip); turn Fill "
+			"off to drive it with Progress keyframes instead.");
 		t.props = {
 			{QStringLiteral("unit"), QStringLiteral("Reveal by"), PropType::Choice, 0.0,
 			 double(kRevealUnitCount - 1), 0.0, true,
@@ -478,7 +489,11 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 			  QStringLiteral("Lines")}},
 			{QStringLiteral("fill"), QStringLiteral("Fill the clip"), PropType::Bool, 0.0,
 			 1.0, 1.0, true,
-			 QStringLiteral("Type across the whole clip. Off means Progress decides.")},
+			 QStringLiteral("Type automatically from the clip's start. Off means Progress decides.")},
+			{QStringLiteral("typeSec"), QStringLiteral("Type in (s)"), PropType::Float, 0.0,
+			 30.0, 0.0, true,
+			 QStringLiteral("Seconds the typing takes, from the clip's first frame; the "
+					"caption then stays whole. 0 spreads it across the whole clip.")},
 			{QStringLiteral("progress"), QStringLiteral("Progress"), PropType::Float, 0.0,
 			 1.0, 0.0, true,
 			 QStringLiteral("How much is revealed, 0 to 1. Keyframe it to pause "

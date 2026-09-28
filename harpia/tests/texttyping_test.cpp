@@ -149,6 +149,21 @@ int main(int argc, char **argv)
 		eqs(st.evaluatePose(ctx, TlTransform{}, &caption).text, caption,
 		    "and all of it at the end");
 
+		// "Type in": the typing takes that many seconds, not the whole clip.
+		// A caption held for 10 s that types in 1 s is whole after 1 s.
+		list[0].props.insert(QStringLiteral("typeSec"), 1.0);
+		ComponentStack quick(list, reg);
+		ctx.durMs = 10000;
+		ctx.tMs = 500;
+		eqs(quick.evaluatePose(ctx, TlTransform{}, &caption).text, QStringLiteral("ab"),
+		    "with Type in = 1 s, half the caption at 0.5 s of a 10 s clip");
+		ctx.tMs = 1000;
+		eqs(quick.evaluatePose(ctx, TlTransform{}, &caption).text, caption, "all of it at 1 s");
+		ctx.tMs = 9000;
+		eqs(quick.evaluatePose(ctx, TlTransform{}, &caption).text, caption,
+		    "and it holds whole for the rest of the clip");
+		ctx.durMs = 1000;
+
 		// The control: with no caption handed in, a text component must be a
 		// no-op rather than inventing one.
 		ctx.tMs = 500;

@@ -852,8 +852,27 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	voRecorder_ = new AudioRecorder(this);
 	connect(voRecorder_, &AudioRecorder::level, this, [this](qreal rms, qreal peak) {
 		voMeter_->setLevel(rms, peak);
-		if (voRecording_)
-			voStatus_->setText(QStringLiteral("\u25CF Recording  %1").arg(timeTextTenths(voRecorder_->capturedMs())));
+		if (!voRecording_)
+			return;
+		voStatus_->setText(QStringLiteral("\u25CF Recording  %1").arg(timeTextTenths(voRecorder_->capturedMs())));
+		// One waveform bucket per kLiveBucketMs of audio, holding the loudest
+		// moment in it -- the same measure the finished take's waveform uses.
+		voLiveMax_ = std::max(voLiveMax_, float(peak));
+		const qint64 cap = voRecorder_->capturedMs();
+		bool closed = false;
+		while (cap >= voLiveBucketEnd_ + kLiveBucketMs) {
+			voLivePeaks_.append(voLiveMax_);
+			voLiveBucketEnd_ += kLiveBucketMs;
+			closed = true;
+		}
+		// A finished bucket: the next one starts from what this chunk
+		// carried past the boundary, not from silence.
+		if (closed)
+			voLiveMax_ = cap > voLiveBucketEnd_ ? float(peak) : 0.f;
+		if (!voLiveTick_.isValid() || voLiveTick_.elapsed() >= 90) {
+			voLiveTick_.restart();
+			updateLiveTake();
+		}
 	});
 	connect(voRecorder_, &AudioRecorder::error, this, [this](const QString &msg) {
 		QMessageBox::warning(this, QStringLiteral("Microphone"), msg);
@@ -9338,6 +9357,89 @@ void VideoEditorWindow::onVoiceoverRecordClicked()
 	}
 }
 
+int VideoEditorWindow::liveTakeTrack(const TimelineModel &m) const
+{
+	if (voLiveTrackName_.isEmpty())
+		return -1;
+	for (int i = 0; i < m.tracks.size(); ++i)
+		if (m.tracks[i].kind == TlTrack::Kind::Audio && m.tracks[i].name == voLiveTrackName_)
+			return i;
+	return -1;
+}
+
+void VideoEditorWindow::beginLiveTake()
+{
+	voLivePeaks_.clear();
+	voLiveMax_ = 0.f;
+	voLiveBucketEnd_ = 0;
+	voLiveTick_.invalidate();
+	if (fullEdit() && timelineView_) {
+		// A new audio track for this take, at the bottom of the audio lanes
+		// (above the Sounds lane). Made quietly: the finished take commits the
+		// track and the clip together, so there is no half-made undo step.
+		TimelineModel m = timelineView_->model();
+		QString name = QStringLiteral("Voiceover");
+		for (int n = 2;; ++n) {
+			bool taken = false;
+			for (const TlTrack &t : m.tracks)
+				if (t.name == name)
+					taken = true;
+			if (!taken)
+				break;
+			name = QStringLiteral("Voiceover %1").arg(n);
+		}
+		TlTrack t;
+		t.kind = TlTrack::Kind::Audio;
+		t.name = name;
+		t.color = QColor(0xe5, 0x48, 0x4d);
+		TlClip live;
+		live.type = TlClip::Type::Video; // a media clip; the lane makes it audio
+		live.sourceId = 0;               // no file yet: this is the live preview
+		live.srcEndMs = 1;
+		live.outStartMs = voClipStartMs_;
+		live.transition.enabled = false;
+		t.clips.append(live);
+		const int at = m.soundsLane() >= 0 ? m.soundsLane() : m.tracks.size();
+		m.tracks.insert(at, t);
+		voLiveTrackName_ = name;
+		timelineView_->setModelQuiet(m);
+		return;
+	}
+	if (voTrack_) {
+		voClipsBefore_ = voTrack_->clips();
+		updateLiveTake();
+	}
+}
+
+void VideoEditorWindow::updateLiveTake()
+{
+	const qint64 dur = std::max<qint64>(1, voRecorder_ ? voRecorder_->capturedMs() : 1);
+	if (fullEdit() && timelineView_) {
+		TimelineModel m = timelineView_->model();
+		const int ti = liveTakeTrack(m);
+		if (ti < 0)
+			return;
+		for (TlClip &c : m.tracks[ti].clips)
+			if (c.sourceId == 0) {
+				c.srcEndMs = dur;
+				c.fadeInMs = c.fadeOutMs = 0;
+				c.peaks = voLivePeaks_;
+			}
+		timelineView_->setModelQuiet(m);
+		return;
+	}
+	if (voTrack_) {
+		QVector<VoiceoverClip> list = voClipsBefore_;
+		VoiceoverClip live;
+		live.outStartMs = voClipStartMs_;
+		live.durationMs = dur;
+		live.srcTotalMs = dur;
+		live.peaks = voLivePeaks_;
+		list.append(live);
+		voTrack_->setClips(list);
+	}
+}
+
 qint64 VideoEditorWindow::voiceoverStartMs() const
 {
 	if (voStartAt_ && voStartAt_->currentIndex() == 1)
@@ -9370,6 +9472,7 @@ void VideoEditorWindow::startVoiceoverCapture()
 	}
 	voRecording_ = true;
 	voClipStartMs_ = startMs;
+	beginLiveTake();
 	if (voOpenBtn_) {
 		voOpenBtn_->setText(QStringLiteral("Recording…"));
 		voOpenBtn_->setStyleSheet(QStringLiteral("QPushButton{background:#7a1f22;color:#ffffff;}"));
@@ -9423,26 +9526,59 @@ void VideoEditorWindow::finishVoiceover()
 	voRecordBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
 	if (path.isEmpty() || durMs <= 0) {
 		voStatus_->setText(QStringLiteral("Nothing was captured. Check the microphone above."));
+		if (fullEdit() && timelineView_) {
+			TimelineModel m = timelineView_->model();
+			const int ti = liveTakeTrack(m);
+			if (ti >= 0) {
+				m.tracks.remove(ti); // it held only the live clip
+				timelineView_->setModelQuiet(m);
+			}
+			voLiveTrackName_.clear();
+		} else if (voTrack_) {
+			voTrack_->setClips(voClipsBefore_);
+		}
 		return;
 	}
 	voStatus_->setText(QStringLiteral("Take added: %1 at %2.")
 				   .arg(timeTextTenths(durMs), timeTextTenths(voClipStartMs_)));
-	// In Full editing narration goes on a timeline audio lane: a free one, so
-	// it never lands on top of music or an earlier take.
+	// In Full editing the take goes on the track made for it when recording
+	// started, replacing the live clip: the track and the take arrive as one
+	// undo step.
 	if (fullEdit() && timelineView_) {
+		TimelineModel m = timelineView_->model();
+		const int ti = liveTakeTrack(m);
 		const int id = addAudioSource(path);
-		if (id >= 0) {
+		if (ti >= 0) {
+			TlTrack &t = m.tracks[ti];
+			for (int i = t.clips.size() - 1; i >= 0; --i)
+				if (t.clips[i].sourceId == 0)
+					t.clips.remove(i);
+			if (id >= 0) {
+				TlClip c;
+				c.sourceId = id;
+				c.srcStartMs = 0;
+				c.srcEndMs = durMs;
+				c.outStartMs = voClipStartMs_;
+				c.peaks = VoiceoverTrack::loadPeaks(path, 600);
+				t.clips.append(c);
+			} else if (t.clips.isEmpty()) {
+				m.tracks.remove(ti);
+			}
+			timelineView_->setModelAndCommit(m);
+		} else if (id >= 0) {
+			// The live track was deleted mid-take: a free lane, as before.
 			TlClip c;
 			c.sourceId = id;
-			c.srcStartMs = 0;
 			c.srcEndMs = durMs;
 			c.outStartMs = voClipStartMs_;
 			c.peaks = VoiceoverTrack::loadPeaks(path, 600);
 			timelineView_->addClipOnFreeLane(TlTrack::Kind::Audio, c);
-			updateInfoLabel();
 		}
+		voLiveTrackName_.clear();
+		updateInfoLabel();
 		return;
 	}
+	voTrack_->setClips(voClipsBefore_); // the live clip goes; the real one follows
 	VoiceoverClip clip;
 	clip.path = path;
 	clip.outStartMs = voClipStartMs_;

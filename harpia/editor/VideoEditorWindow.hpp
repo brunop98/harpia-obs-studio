@@ -1151,6 +1151,19 @@ private:
 	void refreshVoiceoverDevices();
 	void saveVoiceoverSettings();
 	qint64 voiceoverStartMs() const;      // where a take starting now lands
+	// The take being recorded, drawn live: a new "Voiceover" track (Full
+	// editing) or a clip on the voiceover track (the other modes) that grows
+	// as you speak, its waveform from the microphone's levels.
+	QVector<float> voLivePeaks_;
+	float voLiveMax_ = 0.f;
+	qint64 voLiveBucketEnd_ = 0;
+	QElapsedTimer voLiveTick_;
+	QString voLiveTrackName_;
+	QVector<VoiceoverClip> voClipsBefore_;
+	static constexpr qint64 kLiveBucketMs = 40;
+	void beginLiveTake();
+	void updateLiveTake();
+	int liveTakeTrack(const TimelineModel &m) const;
 	QSlider *voOrigVol_ = nullptr;     // original-audio level at export
 	QLabel *voOrigVolLabel_ = nullptr;
 	QCheckBox *voDuck_ = nullptr;      // auto-duck original under narration

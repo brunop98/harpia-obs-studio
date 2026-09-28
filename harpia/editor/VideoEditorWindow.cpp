@@ -7283,6 +7283,7 @@ void VideoEditorWindow::openSubtitles()
 		targets.append(t);
 	}
 	subtitleDialog_->setTargets(targets);
+	subtitleDialog_->setPreviewBackground(lastPreviewRaw_, timelineCanvasSize());
 	subtitleDialog_->show();
 	subtitleDialog_->raise();
 	subtitleDialog_->activateWindow();
@@ -11668,7 +11669,7 @@ QString VideoEditorWindow::shadersDirPath()
 	     {QStringLiteral("adjust"), QStringLiteral("crt"), QStringLiteral("grayscale"),
 	      QStringLiteral("vignette"), QStringLiteral("sharpen"), QStringLiteral("grain"),
 	      QStringLiteral("pixelate"), QStringLiteral("backdrop"), QStringLiteral("solid"),
-	      QStringLiteral("gradient")}) {
+	      QStringLiteral("gradient"), QStringLiteral("huecycle")}) {
 		const QString dst = shadersDir_ + QLatin1Char('/') + name + QStringLiteral(".frag");
 		if (QFile::exists(dst))
 			continue;

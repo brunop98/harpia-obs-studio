@@ -41,6 +41,18 @@ inline QString shaderComponentId(const QString &stem)
 	return QStringLiteral("harpia.shader.") + stem;
 }
 
+// The name the Add Component menu shows: the shader's `//@name` line when it
+// has one, else the file stem with its first letter capitalised.
+inline QString shaderDisplayName(const QString &glsl, const QString &stem)
+{
+	for (const QString &raw : glsl.split(QLatin1Char('\n'))) {
+		const QString line = raw.trimmed();
+		if (line.startsWith(QLatin1String("//@name ")) && !line.mid(8).trimmed().isEmpty())
+			return line.mid(8).trimmed();
+	}
+	return stem.left(1).toUpper() + stem.mid(1);
+}
+
 class ShaderComponents {
 public:
 	// Register every *.frag in `folder`. Returns how many registered; a file

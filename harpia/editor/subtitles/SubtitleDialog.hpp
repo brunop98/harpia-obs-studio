@@ -16,6 +16,7 @@
 #include "Transcript.hpp"
 
 #include <QDialog>
+#include <QImage>
 #include <QVector>
 
 class QCheckBox;
@@ -26,6 +27,7 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QSpinBox;
+class QTimer;
 
 namespace harpia {
 
@@ -45,6 +47,21 @@ public:
 	~SubtitleDialog() override;
 
 	void setTargets(const QVector<Target> &targets);
+
+	// The picture the preview draws captions over: the editor's current frame
+	// and the project's canvas size, so text size and position read true.
+	void setPreviewBackground(const QImage &frame, QSize canvas);
+
+	// One preview frame: `text` styled by `look`, drawn over `bg` with the same
+	// code the export uses, on a canvas of `canvas` shrunk to fit `box`.
+	// Exposed for the test.
+	static QImage renderPreview(const QImage &bg, QSize canvas, const SubtitleLook &look, const QString &text,
+				    QSize box);
+	// What the preview shows at animation step `step`: the sample sentence cut
+	// into captions by `rule`, then shown the way `mode` shows them (whole
+	// phrase, the current word, or the words so far). Exposed for the test.
+	static QString previewText(const QString &sentence, const GroupRule &rule, SubtitleMode mode, int step);
+	static QString sampleSentence(const QString &languageCode);
 
 	// What the controls say right now (also saved in settings on Generate).
 	GroupRule groupRule() const;
@@ -68,6 +85,7 @@ private:
 	void nextChunk();
 	void finishJob(const QString &error);
 	void setBusy(bool on);
+	void updatePreview();
 	void refreshProvider(); // key hint, link and saved-key line for the picked service
 	QString currentKey() const;
 
@@ -101,6 +119,11 @@ private:
 	QCheckBox *box_ = nullptr;
 	QComboBox *mode_ = nullptr;
 	QLabel *status_ = nullptr;
+	QLabel *preview_ = nullptr;
+	QTimer *previewTimer_ = nullptr;
+	int previewStep_ = 0;
+	QImage previewBg_;
+	QSize previewCanvas_ = QSize(1920, 1080);
 	QPushButton *go_ = nullptr;
 	QPushButton *cancel_ = nullptr;
 };

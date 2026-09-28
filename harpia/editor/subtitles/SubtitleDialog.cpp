@@ -5,6 +5,7 @@
 #include "SpeechTranscriber.hpp"
 #include "SecretStore.hpp"
 #include "../../ui/InfoHint.hpp"
+#include "../timeline/TimelineCompositor.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -17,9 +18,11 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPainter>
 #include <QPushButton>
 #include <QSettings>
 #include <QSpinBox>
+#include <QTimer>
 #include <QStandardPaths>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -32,6 +35,7 @@ QSettings settings()
 	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
 }
 const QString kGrp = QStringLiteral("subtitles/");
+const QSize kPreviewBox(300, 400); // the most the preview may take
 } // namespace
 
 QVector<QPair<QString, QString>> SubtitleDialog::languages()
@@ -89,16 +93,41 @@ SubtitleDialog::~SubtitleDialog()
 
 void SubtitleDialog::buildUi()
 {
-	auto *lay = new QVBoxLayout(this);
-	lay->setContentsMargins(14, 12, 14, 12);
+	// Preview on the left, settings on the right.
+	auto *outer = new QHBoxLayout(this);
+	outer->setContentsMargins(14, 12, 14, 12);
+	outer->setSpacing(14);
+	auto *left = new QVBoxLayout;
+	left->setSpacing(6);
+	auto *pvTitle = new QLabel(QStringLiteral("Preview"), this);
+	pvTitle->setStyleSheet(QStringLiteral("font-weight:600;"));
+	left->addWidget(pvTitle);
+	preview_ = new QLabel(this);
+	preview_->setAlignment(Qt::AlignCenter);
+	preview_->setFixedSize(previewCanvas_.scaled(kPreviewBox, Qt::KeepAspectRatio) + QSize(2, 2));
+	preview_->setStyleSheet(QStringLiteral("background:#101114; border:1px solid #2a2d33;"));
+	preview_->setToolTip(QStringLiteral(
+		"How the captions will look over the current frame, with the settings on the right. "
+		"The sample sentence plays in a loop so the word grouping and the Show mode can be seen."));
+	left->addWidget(preview_);
+	auto *pvNote = new QLabel(QStringLiteral("Sample text over the current frame. The real words "
+						 "come from the speech."), this);
+	pvNote->setWordWrap(true);
+	pvNote->setFixedWidth(kPreviewBox.width());
+	pvNote->setStyleSheet(QStringLiteral("color:#7f858e;"));
+	left->addWidget(pvNote);
+	left->addStretch(1);
+	outer->addLayout(left);
+	auto *lay = new QVBoxLayout;
 	lay->setSpacing(10);
+	outer->addLayout(lay, 1);
 
-	auto *intro = new QLabel(QStringLiteral(
-		"Turns the speech in the selected clips into caption clips on a Subtitles lane, "
-		"lined up with the audio. Edit any caption's text in the Inspector afterwards; "
-		"Ctrl+Z removes the whole batch."), this);
-	lay->addWidget(infoHint(intro->text(), this), 0, Qt::AlignLeft);
-	intro->deleteLater();
+	lay->addWidget(infoHint(QStringLiteral(
+				   "Turns the speech in the selected clips into caption clips on a Subtitles lane, "
+				   "lined up with the audio. Edit any caption's text in the Inspector afterwards; "
+				   "Ctrl+Z removes the whole batch."),
+			       this),
+		       0, Qt::AlignLeft);
 
 	// ---- Service ----
 	service_ = new QGroupBox(QStringLiteral("Speech to text"), this);
@@ -146,6 +175,14 @@ void SubtitleDialog::buildUi()
 	keyState_->setStyleSheet(QStringLiteral("color:#9aa0a6;"));
 	keyState_->setWordWrap(true);
 	sf->addRow(QString(), keyState_);
+	// Every service's key page at once, for signing up to more than one.
+	auto *allKeys = new QLabel(speechKeyLinksHtml(), svc);
+	allKeys->setTextFormat(Qt::RichText);
+	allKeys->setOpenExternalLinks(true);
+	allKeys->setTextInteractionFlags(Qt::TextBrowserInteraction);
+	allKeys->setWordWrap(true);
+	allKeys->setToolTip(QStringLiteral("Each link opens that service's API key page in your browser."));
+	sf->addRow(QStringLiteral("All key pages"), allKeys);
 	connect(provider_, &QComboBox::currentIndexChanged, this, [this]() {
 		apiKey_->clear(); // a key typed for one service is not another's
 		refreshProvider();
@@ -225,7 +262,127 @@ void SubtitleDialog::buildUi()
 	connect(go_, &QPushButton::clicked, this, &SubtitleDialog::startJob);
 	btns->addWidget(go_);
 	lay->addLayout(btns);
-	setMinimumWidth(460);
+	setMinimumWidth(460 + kPreviewBox.width() + 14);
+
+	// Any setting that changes the look redraws the preview; the timer steps
+	// through the sample so grouping and the word-by-word modes show moving.
+	const auto redraw = [this]() { updatePreview(); };
+	for (QSpinBox *sb : {maxWords_, pauseMs_, maxChars_, fontPx_})
+		connect(sb, &QSpinBox::valueChanged, this, redraw);
+	connect(maxSeconds_, &QDoubleSpinBox::valueChanged, this, redraw);
+	for (QComboBox *cb : {mode_, position_, language_})
+		connect(cb, &QComboBox::currentIndexChanged, this, redraw);
+	for (QCheckBox *ck : {bold_, box_})
+		connect(ck, &QCheckBox::toggled, this, redraw);
+	previewTimer_ = new QTimer(this);
+	previewTimer_->setInterval(450);
+	connect(previewTimer_, &QTimer::timeout, this, [this]() {
+		if (!isVisible())
+			return;
+		++previewStep_;
+		updatePreview();
+	});
+	previewTimer_->start();
+}
+
+QString SubtitleDialog::sampleSentence(const QString &languageCode)
+{
+	if (languageCode == QLatin1String("pt"))
+		return QStringLiteral("Assim as suas legendas vão aparecer no vídeo, palavra por palavra");
+	if (languageCode == QLatin1String("es"))
+		return QStringLiteral("Así es como se verán tus subtítulos en el vídeo, palabra por palabra");
+	return QStringLiteral("This is how your captions will look in the video, word by word");
+}
+
+QString SubtitleDialog::previewText(const QString &sentence, const GroupRule &rule, SubtitleMode mode, int step)
+{
+	// Evenly spoken words, no pauses: what the grouping rules then make of it.
+	const QStringList list = sentence.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+	if (list.isEmpty())
+		return QString();
+	QVector<ClipWordTime> words;
+	for (int i = 0; i < list.size(); ++i) {
+		ClipWordTime w;
+		w.text = list[i];
+		w.startMs = i * 350;
+		w.endMs = w.startMs + 330;
+		words.append(w);
+	}
+	const QVector<CaptionPiece> pieces = groupWords(words, rule);
+	int at = ((step % int(list.size())) + int(list.size())) % int(list.size());
+	for (const CaptionPiece &p : pieces) {
+		if (at >= p.words.size()) {
+			at -= p.words.size();
+			continue;
+		}
+		if (mode == SubtitleMode::Whole)
+			return p.text();
+		if (mode == SubtitleMode::OneWord)
+			return p.words[at].text;
+		QString t; // build up word by word
+		for (int i = 0; i <= at; ++i)
+			t += (i ? QStringLiteral(" ") : QString()) + p.words[i].text;
+		return t;
+	}
+	return QString();
+}
+
+QImage SubtitleDialog::renderPreview(const QImage &bg, QSize canvas, const SubtitleLook &look, const QString &text,
+				     QSize box)
+{
+	if (canvas.isEmpty())
+		canvas = QSize(1920, 1080);
+	const QSize out = canvas.scaled(box, Qt::KeepAspectRatio).expandedTo(QSize(16, 16));
+	QImage img(out, QImage::Format_ARGB32_Premultiplied);
+	img.fill(QColor(0x2b, 0x2f, 0x36));
+	QPainter p(&img);
+	if (!bg.isNull()) {
+		p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+		p.drawImage(QRect(QPoint(0, 0), out), bg);
+	} else {
+		QLinearGradient g(0, 0, 0, out.height());
+		g.setColorAt(0, QColor(0x3a, 0x44, 0x55));
+		g.setColorAt(1, QColor(0x1c, 0x1f, 0x26));
+		p.fillRect(img.rect(), g);
+	}
+	if (!text.isEmpty()) {
+		// Exactly the clip the dialog will make, drawn by the compositor: the
+		// font scales with the canvas, so a smaller canvas is a smaller copy.
+		TlClip c;
+		c.type = TlClip::Type::Text;
+		c.srcEndMs = 1000;
+		c.text = look.style;
+		c.text.text = text;
+		TlTransform tf;
+		tf.posX = look.posX;
+		tf.posY = subtitlePosY(look);
+		TimelineCompositor::drawClip(p, c, tf, out, QImage());
+	}
+	p.end();
+	return img;
+}
+
+void SubtitleDialog::setPreviewBackground(const QImage &frame, QSize canvas)
+{
+	previewBg_ = frame;
+	if (!canvas.isEmpty())
+		previewCanvas_ = canvas;
+	else if (!frame.isNull())
+		previewCanvas_ = frame.size();
+	// The box takes the canvas's shape: wide for 16:9, tall for 9:16.
+	if (preview_)
+		preview_->setFixedSize(previewCanvas_.scaled(kPreviewBox, Qt::KeepAspectRatio) + QSize(2, 2));
+	updatePreview();
+}
+
+void SubtitleDialog::updatePreview()
+{
+	if (!preview_ || !mode_)
+		return;
+	const QString text = previewText(sampleSentence(languageCode()), groupRule(), SubtitleMode(mode_->currentIndex()),
+					 previewStep_);
+	preview_->setPixmap(QPixmap::fromImage(renderPreview(previewBg_, previewCanvas_, look(), text,
+							    preview_->size() - QSize(2, 2))));
 }
 
 void SubtitleDialog::loadSettings()
@@ -248,6 +405,7 @@ void SubtitleDialog::loadSettings()
 		QString::fromLatin1(speechProviderInfo(speechProviderFromId(s.value(kGrp + QStringLiteral("provider")).toString())).id));
 	provider_->setCurrentIndex(std::max(0, pi));
 	refreshProvider();
+	updatePreview();
 }
 
 SpeechProvider SubtitleDialog::provider() const

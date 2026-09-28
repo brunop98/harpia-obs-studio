@@ -93,6 +93,18 @@ inline QString speechProviderName(SpeechProvider p)
 	return QString::fromUtf8(speechProviderInfo(p).name);
 }
 
+// One link per service to the page where its API key is made, as rich text:
+// "OpenAI · Groq · Deepgram · AssemblyAI · ElevenLabs".
+inline QString speechKeyLinksHtml()
+{
+	QStringList links;
+	for (const SpeechProviderInfo &i : speechProviders())
+		links << QStringLiteral("<a href='%1' style='color:#6ea8fe;'>%2</a>")
+				 .arg(QString::fromLatin1(i.keyUrl),
+				      QString::fromUtf8(i.name).section(QLatin1Char(' '), 0, 0).toHtmlEscaped());
+	return links.join(QStringLiteral(" &middot; "));
+}
+
 // ---- requests -------------------------------------------------------------
 
 struct SpeechJob {

@@ -211,6 +211,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF $AVCF
 	"$H/editor/subtitles/SpeechTranscriber.cpp" "$WORK/moc_SpeechTranscriber.cpp" \
 	"$H/editor/subtitles/SubtitleDialog.cpp" "$WORK/moc_SubtitleDialog.cpp" \
 	"$H/editor/subtitles/SecretStore.cpp" "$H/editor/subtitles/AudioForSpeech.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" \
 	"$H/editor/VoiceoverMixer.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \

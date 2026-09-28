@@ -16,7 +16,7 @@
 #include "editor/subtitles/Transcript.hpp"
 #include "editor/timeline/TimelineJson.hpp"
 
-#include <QCoreApplication>
+#include <QApplication>
 #include <QTemporaryDir>
 
 #include <cstdio>
@@ -50,7 +50,7 @@ static ClipWordTime W(const char *t, qint64 s, qint64 e)
 int main(int argc, char **argv)
 {
 	std::setvbuf(stdout, nullptr, _IONBF, 0);
-	QCoreApplication app(argc, argv);
+	QApplication app(argc, argv);
 
 	std::printf("\n-- the API's JSON becomes words in ms --\n");
 	{
@@ -362,6 +362,57 @@ int main(int argc, char **argv)
 		ok(parseSpeechReply(SpeechProvider::AssemblyAI, R"({"status":"completed","words":[{"text":"a","start":1,"end":2}]})").words.size() == 1 &&
 			   parseSpeechReply(SpeechProvider::Groq, R"({"words":[{"word":"a","start":0.001,"end":0.002}]})").words.size() == 1,
 		   "the final reply goes to each service's own parser");
+	}
+
+	std::printf("\n-- key links and the preview --\n");
+	{
+		const QString html = speechKeyLinksHtml();
+		bool every = true;
+		for (const SpeechProviderInfo &i : speechProviders())
+			every = every && html.contains(QString::fromLatin1(i.keyUrl));
+		ok(every && html.count(QStringLiteral("<a ")) == 5, "one link per service to its key page");
+
+		GroupRule r;
+		r.maxWords = 3;
+		r.maxChars = 100;
+		const QString sent = QStringLiteral("one two three four five");
+		ok(SubtitleDialog::previewText(sent, r, SubtitleMode::Whole, 0) == QStringLiteral("one two three") &&
+			   SubtitleDialog::previewText(sent, r, SubtitleMode::Whole, 2) == QStringLiteral("one two three") &&
+			   SubtitleDialog::previewText(sent, r, SubtitleMode::Whole, 3) == QStringLiteral("four five"),
+		   "whole phrase: the caption the current word belongs to, grouped by the rules");
+		ok(SubtitleDialog::previewText(sent, r, SubtitleMode::OneWord, 4) == QStringLiteral("five") &&
+			   SubtitleDialog::previewText(sent, r, SubtitleMode::BuildUp, 1) == QStringLiteral("one two") &&
+			   SubtitleDialog::previewText(sent, r, SubtitleMode::BuildUp, 3) == QStringLiteral("four"),
+		   "one word: that word; build up: the caption's words so far");
+		ok(SubtitleDialog::previewText(sent, r, SubtitleMode::Whole, 5) == QStringLiteral("one two three"),
+		   "and it loops");
+		ok(SubtitleDialog::sampleSentence(QStringLiteral("pt")).contains(QStringLiteral("legendas")) &&
+			   SubtitleDialog::sampleSentence(QString()).startsWith(QStringLiteral("This")),
+		   "the sample follows the language");
+
+		SubtitleLook look;
+		look.style.fontPx = 120;
+		look.style.color = Qt::white;
+		QImage bg(1920, 1080, QImage::Format_ARGB32);
+		bg.fill(Qt::black);
+		const QImage bottom = SubtitleDialog::renderPreview(bg, QSize(1920, 1080), look, QStringLiteral("HELLO"), QSize(300, 340));
+		ok(bottom.width() == 300 && std::abs(bottom.height() - 169) <= 1, "a 16:9 canvas previews at 16:9 inside the box");
+		const auto whiteRows = [](const QImage &im, int y0, int y1) {
+			int n = 0;
+			for (int y = y0; y < y1; ++y)
+				for (int x = 0; x < im.width(); ++x)
+					if (qGray(im.pixel(x, y)) > 200)
+						++n;
+			return n;
+		};
+		const int h = bottom.height();
+		ok(whiteRows(bottom, h * 2 / 3, h) > 20 && whiteRows(bottom, 0, h / 3) == 0,
+		   "Bottom draws the text in the lower third, nothing up top");
+		look.position = SubtitleLook::Position::Top;
+		const QImage top = SubtitleDialog::renderPreview(bg, QSize(1920, 1080), look, QStringLiteral("HELLO"), QSize(300, 340));
+		ok(whiteRows(top, 0, h / 3) > 20 && whiteRows(top, h * 2 / 3, h) == 0, "Top moves it up");
+		const QImage tall = SubtitleDialog::renderPreview(QImage(), QSize(1080, 1920), look, QString(), QSize(300, 340));
+		ok(tall.height() == 340 && tall.width() < 200, "a vertical canvas previews tall, with no frame yet");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

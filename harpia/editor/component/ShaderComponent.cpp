@@ -167,8 +167,9 @@ int ShaderComponents::loadFolder(const QString &folder, ComponentRegistry &reg,
 		ComponentType t;
 		t.id = id;
 		// The file stem is the name the user gave it; title-casing the first
-		// letter is as far as guessing should go.
-		t.displayName = stem.left(1).toUpper() + stem.mid(1);
+		// letter is as far as guessing should go. A `//@name Hue Cycle` line
+		// names it properly, since a file stem cannot comfortably hold spaces.
+		t.displayName = shaderDisplayName(glsl, stem);
 		t.category = QStringLiteral("Shader");
 		t.stage = Stage::Pixel;
 		t.help = QStringLiteral(

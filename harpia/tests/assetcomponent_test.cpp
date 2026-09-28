@@ -27,6 +27,7 @@
 #include <QJsonObject>
 #include <QTemporaryDir>
 
+#include <QFileInfo>
 #include <cstdio>
 
 using namespace harpia;
@@ -198,6 +199,32 @@ int main(int argc, char **argv)
 		std::printf("     after a save and reload: %d component(s)\n",
 			    int(again.components.size()));
 		ok(again.components.size() == 2, "a second open does not double them");
+	}
+
+	std::printf("\n-- the bundled Hue Cycle shader --\n");
+	{
+		// The real presets folder, as shipped: Hue Cycle registers under its
+		// //@name, with the sliders the file declares.
+		const QString presets = QFileInfo(QStringLiteral(__FILE__)).absolutePath() +
+					QStringLiteral("/../editor/shader/presets");
+		ComponentRegistry r2;
+		ShaderComponents::loadFolder(presets, r2);
+		const ComponentType *hc = r2.find(shaderComponentId(QStringLiteral("huecycle")));
+		ok(hc != nullptr, "huecycle.frag becomes a component");
+		if (hc) {
+			ok(hc->displayName == QStringLiteral("Hue Cycle") && hc->category == QStringLiteral("Shader"),
+			   "named Hue Cycle by its //@name line, in the Shader category");
+			QStringList keys;
+			for (const PropDef &d : hc->props)
+				keys << d.key;
+			ok(keys == QStringList({QStringLiteral("uSpeed"), QStringLiteral("uSaturation"),
+					       QStringLiteral("uOffset"), QStringLiteral("uAmount")}),
+			   "Speed, Saturation, Offset and Amount sliders, in that order");
+			ok(hc->props[0].def > 0.0 && hc->props[0].max >= 4.0 && hc->props[1].def > 1.0,
+			   "it cycles by default, and more vivid than the source");
+		}
+		const ComponentType *g = r2.find(shaderComponentId(QStringLiteral("grayscale")));
+		ok(g && g->displayName == QStringLiteral("Grayscale"), "a shader without //@name keeps its file-stem name");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

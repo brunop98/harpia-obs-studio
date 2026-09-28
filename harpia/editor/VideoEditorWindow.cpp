@@ -2503,6 +2503,8 @@ int VideoEditorWindow::addImageSource(const QString &path)
 
 void VideoEditorWindow::addImageClip()
 {
+	if (!fullEdit())
+		setEditMode(EditMode::Full); // an image goes on the timeline, which only Full editing has
 	const QString f = QFileDialog::getOpenFileName(
 		this, QStringLiteral("Add image"), QFileInfo(inPath_).absolutePath(),
 		imageOpenFilter());
@@ -2781,6 +2783,8 @@ void VideoEditorWindow::addAudioClipFromSource(int sourceId)
 
 void VideoEditorWindow::onAddAudioClicked()
 {
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
 	QMenu menu(this);
 	// The active clip's own audio, so it can be moved/faded on its own lane.
 	if (EditorSource *s = activeSource()) {
@@ -5870,7 +5874,10 @@ void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
 		QMenu *add = menuBar_->addMenu(QStringLiteral("&Add"));
 		for (QAction *a : addMenuBtn_->menu()->actions())
 			add->addAction(a); // shared QActions: one enabled state, one handler
-		fullOnly(add->menuAction());
+		// Not greyed outside Full editing: every entry switches to Full
+		// editing on its own, so from Trim or Multi-Cut "Add > Text" simply
+		// takes you there with the clip added. A greyed menu title read as
+		// broken.
 	}
 
 	// ---- View ----
@@ -7094,6 +7101,8 @@ bool VideoEditorWindow::systemClipboardHasMedia() const
 
 bool VideoEditorWindow::pasteImageFromClipboard(qint64 atMs)
 {
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
 	const QMimeData *mime = QApplication::clipboard()->mimeData();
 	if (!mime) {
 		if (infoLabel_)

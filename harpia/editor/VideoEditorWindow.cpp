@@ -566,7 +566,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		// so whether the project is empty is a question about the TIMELINE too,
 		// and it is only ever answered here for those.
 		updateEmptyState();
-		syncClipInspector();
+		// Only when it can be seen: this handler runs on every mouse move of a
+		// drag, and the Clip tab re-syncs itself when it is shown again.
+		if (insTabShowing(kInsTabClip))
+			syncClipInspector();
+		else
+			clipTabDirty_ = true;
 		// The composed picture depends on the clips, so a change to them has to
 		// re-render it. Dragging and trimming got away without this because the
 		// mouse is also scrubbing, which refreshes the preview as a side effect
@@ -1190,9 +1195,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
 		st.setValue(QStringLiteral("editor/inspectorTab"), i);
 		// The clip tab's panels are only synced when something asks; arriving on
-		// it by hand is one of those times.
-		if (i == kInsTabClip)
+		// it by hand is one of those times. The other tabs catch up the same way.
+		if (i == kInsTabClip) {
+			clipTabDirty_ = false;
 			syncClipInspector();
+		}
+		refreshShownInspectorTab();
 	});
 
 	// Project-level metadata + actions.
@@ -3008,13 +3016,19 @@ void VideoEditorWindow::applySoundRules()
 		// Sound component, or a stray derived clip (a hand-edited file), would
 		// need the full pass.
 		bool stray = false;
-		for (const TlTrack &t : cur.tracks)
-			for (const TlClip &c : t.clips) {
-				if (c.soundRule != 0)
+		for (int ti = 0; ti < cur.tracks.size() && !stray; ++ti)
+			for (const TlClip &c : cur.tracks[ti].clips) {
+				if (c.soundRule != 0) {
 					stray = true;
+					break;
+				}
 				for (const ComponentInstance &ci : c.components)
-					if (ci.typeId == QLatin1String(kSoundComponentId))
+					if (ci.typeId == QLatin1String(kSoundComponentId)) {
 						stray = true;
+						break;
+					}
+				if (stray)
+					break;
 			}
 		if (!stray)
 			return;
@@ -3680,34 +3694,44 @@ void VideoEditorWindow::fillTriggerCombo(QComboBox *cb, const TlSoundRule &r)
 		return QStringLiteral("%1|%2|%3|%4").arg(int(t)).arg(tt).arg(comp).arg(tag);
 	};
 	const TimelineModel *m = timelineView_ ? &timelineView_->model() : nullptr;
-	// Refilled every time: the tag list changes under it. The caller holds a
-	// signal blocker, so this is not an edit.
-	cb->clear();
-	auto put = [&](TlSoundRule::Trigger t, int tt = 0, const QString &comp = QString(), int tag = 0) {
-		cb->addItem(SoundRules::triggerLabel(t, tt, comp, m ? m->tagName(tag) : QString()),
-			    key(t, tt, comp, tag));
-	};
-	put(TlSoundRule::Trigger::AnyTransition);
-	for (int i = 0; i < kTransitionTypeCount; ++i)
-		put(TlSoundRule::Trigger::Transition, i);
-	put(TlSoundRule::Trigger::ImageAppears);
-	put(TlSoundRule::Trigger::TextAppears);
-	put(TlSoundRule::Trigger::Component, 0, QStringLiteral("harpia.textType"));
-	put(TlSoundRule::Trigger::VideoStarts);
-	put(TlSoundRule::Trigger::AnyClipStarts);
+	// The options depend only on the tag list, so they are refilled only when
+	// that changed -- not on every edit, which used to rebuild some twenty
+	// entries per rule per mouse move. The caller holds a signal blocker.
+	QString sig;
 	if (m)
 		for (const TlTag &t : m->tags)
-			put(TlSoundRule::Trigger::Tagged, 0, QString(), t.id);
+			sig += QString::number(t.id) + QLatin1Char(':') + t.name + QLatin1Char('|');
+	if (cb->count() == 0 || cb->property("harpiaSig").toString() != sig) {
+		cb->clear();
+		auto put = [&](TlSoundRule::Trigger t, int tt = 0, const QString &comp = QString(), int tag = 0) {
+			cb->addItem(SoundRules::triggerLabel(t, tt, comp, m ? m->tagName(tag) : QString()),
+				    key(t, tt, comp, tag));
+		};
+		put(TlSoundRule::Trigger::AnyTransition);
+		for (int i = 0; i < kTransitionTypeCount; ++i)
+			put(TlSoundRule::Trigger::Transition, i);
+		put(TlSoundRule::Trigger::ImageAppears);
+		put(TlSoundRule::Trigger::TextAppears);
+		put(TlSoundRule::Trigger::Component, 0, QStringLiteral("harpia.textType"));
+		put(TlSoundRule::Trigger::VideoStarts);
+		put(TlSoundRule::Trigger::AnyClipStarts);
+		if (m)
+			for (const TlTag &t : m->tags)
+				put(TlSoundRule::Trigger::Tagged, 0, QString(), t.id);
+		cb->setProperty("harpiaSig", sig);
+	}
 	const bool tagged = r.trigger == TlSoundRule::Trigger::Tagged;
 	const bool comp = r.trigger == TlSoundRule::Trigger::Component;
 	const bool trans = r.trigger == TlSoundRule::Trigger::Transition;
 	int i = cb->findData(key(r.trigger, trans ? r.transitionType : 0, comp ? r.componentId : QString(),
 				 tagged ? r.tagId : 0));
 	if (i < 0 && (comp || tagged)) {
-		// A component or tag the list does not know: shown as is.
+		// A component or tag the list does not know: shown as is, and the
+		// list refilled next time so the extra entry does not linger.
 		cb->addItem(SoundRules::triggerLabel(r, m),
 			    key(r.trigger, 0, comp ? r.componentId : QString(), tagged ? r.tagId : 0));
 		i = cb->count() - 1;
+		cb->setProperty("harpiaSig", QString());
 	}
 	cb->setCurrentIndex(i < 0 ? 0 : i);
 }
@@ -3716,6 +3740,11 @@ void VideoEditorWindow::rebuildSoundsTab()
 {
 	if (!soundsList_ || !timelineView_)
 		return;
+	if (!insTabShowing(kInsTabSounds)) {
+		soundsTabDirty_ = true; // caught up when the tab is shown
+		return;
+	}
+	soundsTabDirty_ = false;
 	const TimelineModel &m = timelineView_->model();
 	const QVector<TlSoundRule> &rules = m.soundRules;
 	bool same = rules.size() == soundRows_.size();
@@ -3857,6 +3886,10 @@ void VideoEditorWindow::rebuildSoundsTab()
 		}
 	}
 	// Values follow the model, silently.
+	QString laneSig;
+	for (int t = 0; t < m.tracks.size(); ++t)
+		if (TimelineModel::isPictureKind(m.tracks[t].kind))
+			laneSig += QString::number(t) + QLatin1Char(':') + m.tracks[t].name + QLatin1Char('|');
 	for (int i = 0; i < rules.size() && i < soundRows_.size(); ++i) {
 		const TlSoundRule &r = rules[i];
 		SoundRow &row = soundRows_[i];
@@ -3864,14 +3897,18 @@ void VideoEditorWindow::rebuildSoundsTab()
 			b6(row.maxLen);
 		row.on->setChecked(r.enabled);
 		fillTriggerCombo(row.trigger, r);
-		// Lanes: the picture lanes as they are now.
-		row.lane->clear();
-		row.lane->addItem(QStringLiteral("Any lane"), -1);
-		for (int t = 0; t < m.tracks.size(); ++t)
-			if (TimelineModel::isPictureKind(m.tracks[t].kind))
-				row.lane->addItem(m.tracks[t].name.isEmpty() ? QStringLiteral("Lane %1").arg(t + 1)
-									     : m.tracks[t].name,
-						  t);
+		// Lanes: the picture lanes as they are now, refilled only when the
+		// lane list changed.
+		if (row.lane->count() == 0 || row.lane->property("harpiaSig").toString() != laneSig) {
+			row.lane->clear();
+			row.lane->addItem(QStringLiteral("Any lane"), -1);
+			for (int t = 0; t < m.tracks.size(); ++t)
+				if (TimelineModel::isPictureKind(m.tracks[t].kind))
+					row.lane->addItem(m.tracks[t].name.isEmpty() ? QStringLiteral("Lane %1").arg(t + 1)
+										     : m.tracks[t].name,
+							  t);
+			row.lane->setProperty("harpiaSig", laneSig);
+		}
 		const int li = row.lane->findData(r.lane);
 		row.lane->setCurrentIndex(li < 0 ? 0 : li);
 		row.sound->setText(r.soundName.isEmpty() ? QStringLiteral("Choose sound…") : r.soundName);
@@ -3982,6 +4019,11 @@ void VideoEditorWindow::rebuildTagsSection()
 {
 	if (!tagsList_ || !timelineView_)
 		return;
+	if (!insTabShowing(kInsTabProject)) {
+		tagsDirty_ = true; // caught up when the Project tab is shown
+		return;
+	}
+	tagsDirty_ = false;
 	const TimelineModel &m = timelineView_->model();
 	QVector<int> ids;
 	for (const TlTag &t : m.tags)
@@ -4080,25 +4122,29 @@ void VideoEditorWindow::rebuildTagsSection()
 			ll->addWidget(row);
 		}
 	}
-	// Values, silently.
+	// Values, silently. Clips per tag in one pass over the timeline, not one
+	// pass per tag.
+	QHash<int, int> perTag;
+	for (const TlTrack &t : m.tracks)
+		for (const TlClip &c : t.clips)
+			for (int id : c.tags)
+				++perTag[id];
 	for (const TlTag &tg : m.tags) {
 		auto *row = tagsList_->findChild<QWidget *>(QStringLiteral("tag%1").arg(tg.id));
 		if (!row)
 			continue;
-		if (auto *col = row->findChild<QPushButton *>(QStringLiteral("color")))
-			col->setStyleSheet(QStringLiteral("QPushButton{background:%1;border:1px solid #111;border-radius:9px;}")
-						   .arg(tg.color.name()));
+		if (auto *col = row->findChild<QPushButton *>(QStringLiteral("color"))) {
+			// setStyleSheet re-styles the widget even for the same text.
+			const QString css = QStringLiteral("QPushButton{background:%1;border:1px solid #111;border-radius:9px;}")
+						    .arg(tg.color.name());
+			if (col->styleSheet() != css)
+				col->setStyleSheet(css);
+		}
 		if (auto *name = row->findChild<QLineEdit *>(QStringLiteral("name")); name && !name->hasFocus())
 			name->setText(tg.name);
-		int n = 0;
-		for (const TlTrack &t : m.tracks)
-			for (const TlClip &c : t.clips)
-				if (c.hasTag(tg.id))
-					++n;
 		if (auto *count = row->findChild<QLabel *>(QStringLiteral("count")))
-			count->setText(QString::number(n));
+			count->setText(QString::number(perTag.value(tg.id)));
 	}
-	syncClipTags();
 }
 
 void VideoEditorWindow::onAddAudioClicked()
@@ -6183,11 +6229,16 @@ void VideoEditorWindow::syncSpotlightInspector()
 	spotDim_->setValue(s.dimOpacity);
 	spotBlur_->setValue(s.blur);
 	spotColor_->setText(s.dimColor.name(QColor::HexRgb).toUpper());
-	spotColor_->setStyleSheet(
-		QStringLiteral("background:%1; color:%2; border:1px solid #444; padding:3px;")
-			.arg(s.dimColor.name(QColor::HexRgb),
-			     s.dimColor.lightness() > 140 ? QStringLiteral("#101214")
-							  : QStringLiteral("#f0f0f0")));
+	{
+		// Only when it changed: setStyleSheet re-styles the button even for the
+		// same text, and this runs on every selection change.
+		const QString css = QStringLiteral("background:%1; color:%2; border:1px solid #444; padding:3px;")
+					    .arg(s.dimColor.name(QColor::HexRgb),
+						 s.dimColor.lightness() > 140 ? QStringLiteral("#101214")
+									      : QStringLiteral("#f0f0f0"));
+		if (spotColor_->styleSheet() != css)
+			spotColor_->setStyleSheet(css);
+	}
 
 	// Rebuild the list only when it no longer matches: rebuilding on every sync
 	// would drop the selection mid-edit.
@@ -8931,11 +8982,30 @@ void VideoEditorWindow::applyModeSplit()
 		vsplit_->setSizes({total - wanted, wanted});
 }
 
+bool VideoEditorWindow::insTabShowing(int tab) const
+{
+	return insTabs_ && inspector_ && inspector_->isVisible() && insTabs_->currentIndex() == tab;
+}
+
+void VideoEditorWindow::refreshShownInspectorTab()
+{
+	if (clipTabDirty_ && insTabShowing(kInsTabClip)) {
+		clipTabDirty_ = false;
+		syncClipInspector();
+	}
+	if (soundsTabDirty_ && insTabShowing(kInsTabSounds))
+		rebuildSoundsTab();
+	if (tagsDirty_ && insTabShowing(kInsTabProject))
+		rebuildTagsSection();
+}
+
 void VideoEditorWindow::showInspector(bool on)
 {
 	if (!inspector_)
 		return;
 	inspector_->setVisible(on);
+	if (on)
+		refreshShownInspectorTab();
 	if (!on || !hsplit_)
 		return;
 	// A QSplitter hands a freshly-shown pane whatever its stretch factor implies,
@@ -11497,48 +11567,34 @@ void VideoEditorWindow::randomizeClips(bool selectedOnly)
 void VideoEditorWindow::randomizeCuts()
 {
 	// Multi-Cut: the output is the cuts played back to back, so a shuffle is a
-	// new order of the cut list. With two or more cuts selected only those
-	// trade places among their own slots; otherwise every cut takes part --
-	// the quick case is "I cut it up, now mix it".
-	const QVector<CutSegment> segs = tracks_->segments();
-	const int n = segs.size();
-	ShuffleOptions o = randomizeOptions();
-	const QList<int> sel = tracks_->selectedIndices();
-	QVector<bool> selected(n, false);
-	for (int i : sel)
-		if (i >= 0 && i < n)
-			selected[i] = true;
-	o.selectedOnly = sel.size() >= 2;
-	std::mt19937_64 rng(QRandomGenerator::system()->generate64());
-	const QVector<int> order = shuffledOrder(movableSlots(n, o, selected), o, rng);
-	const int moved = displacedSlots(order);
+	// new order of the cut list -- the selected cuts when two or more are
+	// selected, otherwise all of them. The track editor does it (the same
+	// method its right-click menu uses) and reports it through
+	// segmentsChanged, which refreshes the window; this closes the undo step.
+	const int n = tracks_->segments().size();
+	const bool selOnly = tracks_->selectedIndices().size() >= 2;
+	const int moved = tracks_->shuffle(randomizeOptions());
 	if (moved == 0) {
+		const QString why = n < 2 ? QStringLiteral("Nothing moved: make at least two cuts first.")
+					  : QStringLiteral("Nothing moved: the options keep every cut in place.");
 		if (randomStatus_)
-			randomStatus_->setText(n < 2 ? QStringLiteral("Nothing moved: make at least two cuts first.")
-						     : QStringLiteral("Nothing moved: the options keep every cut in place."));
-		if (infoLabel_ && n < 2)
-			infoLabel_->setText(QStringLiteral("Randomize needs at least two cuts."));
+			randomStatus_->setText(why);
+		if (infoLabel_)
+			infoLabel_->setText(why);
 		return;
 	}
-	stopPlayback();
-	tracks_->setSegments(permuted(segs, order));
-	playSeg_ = -1;
-	updateInfoLabel();
-	updateInspector();
-	updateVoiceoverAxis();
-	onSegmentSelected(tracks_->selectedIndex());
+	commitSnapshot(); // one undo step, now rather than after the coalescing delay
 	{
 		qint64 srcMs = 0;
 		const int seg = tracks_->sourceForOutput(std::max<qint64>(0, tracks_->playhead()), &srcMs);
 		if (seg >= 0)
 			showFrame(tracks_->segments()[seg].sourceId, srcMs);
 	}
-	commitSnapshot(); // one undo step
 	const QString msg = QStringLiteral("Shuffled %1 of %2 cuts%3. Ctrl+Z brings the previous order back; "
 					   "Ctrl+R shuffles again.")
 				    .arg(moved)
 				    .arg(n)
-				    .arg(o.selectedOnly ? QStringLiteral(" (the selected ones)") : QString());
+				    .arg(selOnly ? QStringLiteral(" (the selected ones)") : QString());
 	if (randomStatus_)
 		randomStatus_->setText(msg);
 	if (infoLabel_)

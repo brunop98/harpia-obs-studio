@@ -132,6 +132,11 @@ void TimelineView::notifyView()
 
 void TimelineView::setModelQuiet(const TimelineModel &m)
 {
+	// A relayout only when the lanes changed: the live voiceover take calls
+	// this ten times a second with nothing but a longer clip.
+	bool lanesChanged = m.tracks.size() != model_.tracks.size();
+	for (int i = 0; !lanesChanged && i < m.tracks.size(); ++i)
+		lanesChanged = m.tracks[i].kind != model_.tracks[i].kind;
 	model_ = m;
 	auto valid = [this](int t, int c) {
 		return t >= 0 && t < model_.tracks.size() && c >= 0 && c < model_.tracks[t].clips.size();
@@ -146,7 +151,8 @@ void TimelineView::setModelQuiet(const TimelineModel &m)
 		hoverTrTrack_ = hoverTrClip_ = -1;
 	clampView();
 	update();
-	updateGeometry();
+	if (lanesChanged)
+		updateGeometry();
 }
 
 void TimelineView::setModelAndCommit(const TimelineModel &m)

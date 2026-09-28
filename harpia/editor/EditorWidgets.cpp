@@ -1352,7 +1352,18 @@ void Timeline::setEnd(qint64 ms)
 
 void Timeline::setPlayhead(qint64 ms)
 {
+	// 30 times a second during playback: repaint the columns the marker moves
+	// between, not the whole bar and its filmstrip.
+	const qint64 old = playhead_;
 	playhead_ = std::clamp<qint64>(ms, 0, duration_);
+	if (playhead_ == old)
+		return;
+	const int x0 = msToX(old);
+	const int x1 = msToX(playhead_);
+	if (x0 >= -8 && x0 <= width() + 8 && x1 >= -8 && x1 <= width() + 8) {
+		update(QRect(std::min(x0, x1) - 3, 0, std::abs(x1 - x0) + 7, height()));
+		return;
+	}
 	update();
 }
 

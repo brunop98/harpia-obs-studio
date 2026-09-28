@@ -40,6 +40,9 @@ QVector<SoundEvent> SoundRules::events(const TimelineModel &m)
 		// A hidden lane is not on screen, so nothing on it "appears".
 		if (t.hidden)
 			continue;
+		// Every clip's incoming overlap in one sweep: asking overlapBefore()
+		// per clip is a scan per clip, and this runs on every edit.
+		const QVector<qint64> overlaps = t.overlapsBefore();
 		for (int ci = 0; ci < t.clips.size(); ++ci) {
 			const TlClip &c = t.clips[ci];
 			SoundEvent e;
@@ -51,7 +54,7 @@ QVector<SoundEvent> SoundRules::events(const TimelineModel &m)
 					e.components << comp.typeId;
 			e.tags = c.tags;
 			// The transition, when this clip arrives over the one before it.
-			if (c.transition.enabled && t.overlapBefore(ci) > 0) {
+			if (c.transition.enabled && ci < overlaps.size() && overlaps[ci] > 0) {
 				SoundEvent tr = e;
 				tr.kind = TlSoundRule::Trigger::Transition;
 				tr.atMs = c.outStartMs;
@@ -130,21 +133,18 @@ TlClip SoundRules::clipFor(const TlSoundRule &r, const SoundEvent &e, const Soun
 
 bool SoundRules::apply(TimelineModel &m, const SoundInfoLookup &info)
 {
-	// What is there now, to know whether anything changed at the end.
-	const TimelineModel before = m;
+	// This runs on every edit -- every mouse move of a drag -- so the common
+	// case, "the derived clips are already exactly right", is answered by
+	// reading, without copying or comparing the whole timeline. Everything
+	// here reads `m` through a const reference: iterating a shared copy
+	// non-const makes Qt deep-copy every clip.
+	const TimelineModel &cm = m;
 
-	// Out with every rule-made clip, wherever it is (a lane may have been
-	// converted, or the file hand-edited).
-	for (TlTrack &t : m.tracks)
-		t.clips.erase(std::remove_if(t.clips.begin(), t.clips.end(),
-					     [](const TlClip &c) { return c.soundRule != 0; }),
-			      t.clips.end());
-
-	// In with the current ones.
+	// What should be there.
 	QVector<TlClip> made;
-	if (!m.soundRules.isEmpty()) {
-		const QVector<SoundEvent> evs = events(m);
-		for (const TlSoundRule &r : m.soundRules) {
+	if (!cm.soundRules.isEmpty()) {
+		const QVector<SoundEvent> evs = events(cm);
+		for (const TlSoundRule &r : cm.soundRules) {
 			if (!r.enabled || r.sourceId <= 0)
 				continue;
 			SoundInfo si;
@@ -164,11 +164,11 @@ bool SoundRules::apply(TimelineModel &m, const SoundInfoLookup &info)
 	}
 	// Sound components: every enabled one on any clip that is not itself a
 	// derived sound.
-	for (const TlTrack &t : m.tracks) {
+	for (const TlTrack &t : cm.tracks) {
 		if (t.autoSounds)
 			continue;
 		for (const TlClip &c : t.clips) {
-			if (c.soundRule != 0)
+			if (c.soundRule != 0 || c.components.isEmpty())
 				continue;
 			for (const ComponentInstance &ci : c.components) {
 				if (!ci.enabled || ci.typeId != QLatin1String(kSoundComponentId))
@@ -201,9 +201,63 @@ bool SoundRules::apply(TimelineModel &m, const SoundInfoLookup &info)
 		return a.outStartMs < b.outStartMs;
 	});
 
-	int lane = m.soundsLane();
-	if (!made.isEmpty()) {
+	// Is that already what is there? The derived clips sit at the end of the
+	// Sounds lane, in this order, and nowhere else; and the lane exists
+	// exactly when it has to. (Peaks compare by their shared data first, so
+	// an unchanged waveform costs nothing.)
+	const int lane = cm.soundsLane();
+	bool same = true;
+	for (int ti = 0; ti < cm.tracks.size() && same; ++ti) {
+		if (ti == lane)
+			continue;
+		for (const TlClip &c : cm.tracks[ti].clips)
+			if (c.soundRule != 0) {
+				same = false;
+				break;
+			}
+	}
+	if (same) {
 		if (lane < 0) {
+			same = made.isEmpty();
+		} else {
+			const QVector<TlClip> &lc = cm.tracks[lane].clips;
+			const int n = lc.size(), k = made.size();
+			int derived = 0;
+			for (const TlClip &c : lc)
+				if (c.soundRule != 0)
+					++derived;
+			same = derived == k;
+			for (int i = 0; same && i < k; ++i) {
+				const TlClip &c = lc[n - k + i];
+				same = c.soundRule != 0 && c == made[i] && c.peaks == made[i].peaks;
+			}
+			// An emptied, unrenamed Sounds lane is taken away.
+			if (same && n == 0 && cm.tracks[lane].name == QLatin1String("Sounds"))
+				same = false;
+		}
+	}
+	if (same)
+		return false;
+
+	// Rebuild. Only the lanes that hold a derived clip are touched, so the
+	// others keep sharing their clips with the caller's copy.
+	for (int ti = 0; ti < cm.tracks.size(); ++ti) {
+		bool has = false;
+		for (const TlClip &c : cm.tracks[ti].clips)
+			if (c.soundRule != 0) {
+				has = true;
+				break;
+			}
+		if (!has)
+			continue;
+		QVector<TlClip> &clips = m.tracks[ti].clips;
+		clips.erase(std::remove_if(clips.begin(), clips.end(),
+					   [](const TlClip &c) { return c.soundRule != 0; }),
+			    clips.end());
+	}
+	int at = cm.soundsLane();
+	if (!made.isEmpty()) {
+		if (at < 0) {
 			TlTrack t;
 			t.kind = TlTrack::Kind::Audio;
 			t.name = QStringLiteral("Sounds");
@@ -211,16 +265,16 @@ bool SoundRules::apply(TimelineModel &m, const SoundInfoLookup &info)
 			t.autoSounds = true;
 			t.color = QColor(0x8e, 0x6c, 0xb8);
 			m.tracks.append(t); // the bottom: no other lane's index moves
-			lane = m.tracks.size() - 1;
+			at = m.tracks.size() - 1;
 		}
-		m.tracks[lane].clips.append(made);
-	} else if (lane >= 0 && m.tracks[lane].clips.isEmpty()) {
+		m.tracks[at].clips.append(made);
+	} else if (at >= 0 && cm.tracks[at].clips.isEmpty()) {
 		// Nothing left to hold: the lane goes with it, unless it was
 		// renamed, which makes it the user's.
-		if (m.tracks[lane].name == QLatin1String("Sounds"))
-			m.tracks.remove(lane);
+		if (cm.tracks[at].name == QLatin1String("Sounds"))
+			m.tracks.remove(at);
 	}
-	return !(m == before);
+	return true;
 }
 
 void SoundRules::componentSoundTimes(const TlClip &c, const ComponentInstance &ci, qint64 *inAt, qint64 *outAt)

@@ -3,9 +3,11 @@
 // always different, the sequence re-times itself, and the window hears about
 // it once (one undo step).
 #include "editor/TrackEditor.hpp"
+#include "editor/timeline/ClipShuffle.hpp"
 
 #include <QApplication>
 
+#include <algorithm>
 #include <cstdio>
 
 using namespace harpia;
@@ -95,6 +97,45 @@ int main(int argc, char **argv)
 		t.shuffleSelected(99);
 		ok(sources(t)[0] == before[1] && sources(t)[1] == before[0] && sources(t)[2] == before[2],
 		   "two selected: they swap, the third stays");
+	}
+
+	std::printf("\n-- the Randomize command: nothing selected means every cut --\n");
+	{
+		TrackEditor u;
+		u.resize(800, 200);
+		u.setDuration(60000);
+		u.setSegments({cut(1, 1000), cut(2, 2000), cut(3, 3000), cut(4, 4000), cut(5, 5000), cut(6, 6000)});
+		int announced = 0;
+		QObject::connect(&u, &TrackEditor::segmentsChanged, [&announced]() { ++announced; });
+		const QVector<int> before = sources(u);
+		const int moved = u.shuffle(ShuffleOptions(), 5);
+		QVector<int> after = sources(u);
+		ok(moved >= 4, "with nothing selected, most cuts move (High strength)");
+		ok(after != before, "the order changed");
+		QVector<int> sortedAfter = after;
+		std::sort(sortedAfter.begin(), sortedAfter.end());
+		ok(sortedAfter == before, "every cut is still there once");
+		ok(announced == 1, "and the window hears about it once (one undo step)");
+
+		// Keep the first and the last: only the middle moves.
+		u.setSegments({cut(1, 1000), cut(2, 2000), cut(3, 3000), cut(4, 4000), cut(5, 5000), cut(6, 6000)});
+		ShuffleOptions keep;
+		keep.keep = ShuffleOptions::Keep::FirstAndLast;
+		u.shuffle(keep, 9);
+		after = sources(u);
+		ok(after.first() == 1 && after.last() == 6, "keep first and last is honoured");
+
+		// Two selected: the selection wins over "all".
+		u.setSegments({cut(1, 1000), cut(2, 2000), cut(3, 3000), cut(4, 4000), cut(5, 5000), cut(6, 6000)});
+		u.selectForTest({0, 5});
+		u.shuffle(ShuffleOptions(), 3);
+		after = sources(u);
+		ok(after[0] == 6 && after[5] == 1 && after[1] == 2 && after[4] == 5,
+		   "with two selected, only those two trade places");
+
+		TrackEditor one;
+		one.setSegments({cut(1, 1000)});
+		ok(one.shuffle(ShuffleOptions()) == 0, "a single cut has nothing to shuffle");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

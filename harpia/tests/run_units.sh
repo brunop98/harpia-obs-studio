@@ -504,6 +504,19 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/canvasfit_test.cpp" -o "$WORK/canvasfit_test" $LF
 
+# A playback tick repaints only the band the playhead moves across -- in the
+# Multi-Cut track editor, the voiceover track and the Simple Trim bar -- not
+# the whole widget 30 times a second.
+for h in editor/EditorWidgets editor/TrackEditor editor/VoiceoverTrack editor/ParamSlider; do
+	"$MOC" -I"$H" "$H/$h.hpp" -o "$WORK/moc_ph_$(basename "$h").cpp"
+done
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/playheadrepaint_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/TrackEditor.cpp" \
+	"$H/editor/VoiceoverTrack.cpp" "$H/editor/ParamSlider.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK"/moc_ph_*.cpp \
+	-o "$WORK/playheadrepaint_test" $LF
+
 # Changing the project resolution must not stretch the picture. Renders the real
 # PreviewCanvas, so it links the widget and what it draws with.
 "$MOC" -I"$H" "$H/editor/EditorWidgets.hpp" -o "$WORK/moc_EditorWidgets.cpp"
@@ -715,6 +728,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/startupsplash_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/monitormatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/canvasfit_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewaspect_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/playheadrepaint_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/gripcursor_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineoverview_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/filmstrip_test" || rc=1

@@ -184,7 +184,18 @@ void VoiceoverTrack::clearAll()
 
 void VoiceoverTrack::setPlayhead(qint64 outMs)
 {
+	// 30 times a second during playback: only the columns the line moves
+	// between are repainted, not every clip and waveform.
+	const qint64 old = playheadMs_;
 	playheadMs_ = outMs;
+	if (old >= 0 && outMs >= 0 && outputMs_ > 0) {
+		const int x0 = msToX(old);
+		const int x1 = msToX(outMs);
+		if (x0 >= -8 && x0 <= width() + 8 && x1 >= -8 && x1 <= width() + 8) {
+			update(QRect(std::min(x0, x1) - 3, 0, std::abs(x1 - x0) + 7, height()));
+			return;
+		}
+	}
 	update();
 }
 

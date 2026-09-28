@@ -644,6 +644,14 @@ private:
 	static constexpr int kInsTabClip = 1;
 	static constexpr int kInsTabSource = 2;
 	static constexpr int kInsTabSounds = 3;
+	// The inspector tabs are refreshed when they are on screen; an edit made
+	// while one is hidden (every mouse move of a drag) only marks it, and it
+	// catches up when shown.
+	bool insTabShowing(int tab) const;
+	void refreshShownInspectorTab();
+	bool clipTabDirty_ = false;
+	bool soundsTabDirty_ = false;
+	bool tagsDirty_ = false;
 
 	// Sounds for events (timeline/SoundRules.hpp): the Sounds tab lists the
 	// project's rules; every timeline change rebuilds the clips they make.

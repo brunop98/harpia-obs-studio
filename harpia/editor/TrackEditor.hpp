@@ -105,6 +105,11 @@ public:
 	// Returns how many cuts changed place (0 = nothing to do, no undo step).
 	// `seed` 0 = fresh random.
 	int shuffleSelected(quint64 seed = 0);
+	// The Randomize command: with two or more cuts selected, those trade
+	// places among their own positions; otherwise every cut takes part. The
+	// options' keep-first/last, strength and "avoid the same order" apply
+	// (their selectedOnly is decided here). Same return and signal as above.
+	int shuffle(const struct ShuffleOptions &opt, quint64 seed = 0);
 	// For tests: select these positions (the primary is the last one).
 	void selectForTest(const QList<int> &positions);
 

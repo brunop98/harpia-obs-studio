@@ -470,26 +470,33 @@ int TrackEditor::shuffleSelected(quint64 seed)
 {
 	if (multiSel_.size() < 2)
 		return 0;
-	// The selected cuts trade places among their OWN positions; every other
-	// cut stays where it is. The Output track is a sequence, so re-timing is
-	// what happens on its own: everything after a moved cut shifts to fit.
-	QVector<bool> movable(segs_.size(), false);
+	return shuffle(ShuffleOptions(), seed); // High strength, avoid the same order
+}
+
+int TrackEditor::shuffle(const ShuffleOptions &base, quint64 seed)
+{
+	const int n = segs_.size();
+	if (n < 2)
+		return 0;
+	// The selected cuts (two or more) trade places among their OWN positions
+	// and every other cut stays; with fewer selected, the whole list is the
+	// shuffle. The Output track is a sequence, so re-timing is what happens on
+	// its own: everything after a moved cut shifts to fit.
+	ShuffleOptions opt = base;
+	opt.selectedOnly = multiSel_.size() >= 2;
+	QVector<bool> selected(n, false);
 	for (int i : multiSel_)
-		if (i >= 0 && i < segs_.size())
-			movable[i] = true;
+		if (i >= 0 && i < n)
+			selected[i] = true;
 	std::mt19937_64 rng(seed ? seed : QRandomGenerator::system()->generate64());
-	ShuffleOptions opt; // High strength, avoid the same order
-	const QVector<int> order = shuffledOrder(movable, opt, rng);
+	const QVector<int> order = shuffledOrder(movableSlots(n, opt, selected), opt, rng);
 	const int moved = displacedSlots(order);
 	if (moved == 0)
 		return 0;
-	QVector<CutSegment> out(segs_.size());
-	for (int k = 0; k < order.size(); ++k)
-		out[k] = segs_[order[k]];
-	segs_ = out;
+	segs_ = permuted(segs_, order);
 	++segsRev_;
-	// The selection is a set of POSITIONS, and those positions still hold
-	// the same set of cuts, so it stands.
+	// The selection is a set of POSITIONS; a selected-only shuffle leaves
+	// those positions holding the same set of cuts, so it stands.
 	emit segmentsChanged(); // the window records the undo step from this
 	update();
 	return moved;
@@ -565,7 +572,19 @@ int TrackEditor::sourceForOutput(qint64 outMs, qint64 *srcMs) const
 
 void TrackEditor::setPlayhead(qint64 outMs)
 {
+	// Called 30 times a second during playback. Repaint only the band the
+	// 2 px line leaves and the one it enters -- not both tracks, every
+	// filmstrip tile and every segment label -- unless it left the view.
+	const qint64 old = playheadOutMs_;
 	playheadOutMs_ = outMs;
+	if (old >= 0 && outMs >= 0 && !segs_.isEmpty()) {
+		const int x0 = outMsToX(old);
+		const int x1 = outMsToX(outMs);
+		if (x0 >= -8 && x0 <= width() + 8 && x1 >= -8 && x1 <= width() + 8) {
+			update(QRect(std::min(x0, x1) - 3, 0, std::abs(x1 - x0) + 7, height()));
+			return;
+		}
+	}
 	update();
 }
 
@@ -1303,18 +1322,28 @@ void TrackEditor::showSegmentMenu(int index, const QPoint &globalPos, const QPoi
 	// Two or more selected: shuffle them among their own places. The same
 	// entry Full editing's clip menu has, for the same reason -- many
 	// versions of one edit, fast, each a Ctrl+Z from the last.
-	QAction *shuffle = nullptr;
+	QAction *shuffleSel = nullptr;
+	QAction *shuffleAll = nullptr;
 	if (group) {
 		menu.addSeparator();
-		shuffle = menu.addAction(QStringLiteral("Randomize order of selected cuts  (%1)").arg(n));
-		shuffle->setToolTip(QStringLiteral(
+		shuffleSel = menu.addAction(QStringLiteral("Randomize order of selected cuts  (%1)").arg(n));
+		shuffleSel->setToolTip(QStringLiteral(
 			"The selected cuts trade places among their own positions; the rest stay put. "
 			"Ctrl+Z brings the previous order back."));
+	} else if (segs_.size() >= 2) {
+		menu.addSeparator();
+		shuffleAll = menu.addAction(QStringLiteral("Randomize order of all cuts  (%1)").arg(segs_.size()));
+		shuffleAll->setToolTip(QStringLiteral("Every cut takes a new place. Ctrl+Z brings the previous "
+						      "order back; select two or more to shuffle only those."));
 	}
 	explainDisabled(&menu);
 	QAction *chosen = menu.exec(globalPos);
-	if (shuffle && chosen == shuffle) {
+	if (shuffleSel && chosen == shuffleSel) {
 		shuffleSelected();
+		return;
+	}
+	if (shuffleAll && chosen == shuffleAll) {
+		shuffle(ShuffleOptions());
 		return;
 	}
 	if (chosen == inspect) {

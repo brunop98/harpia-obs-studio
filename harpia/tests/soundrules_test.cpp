@@ -212,8 +212,14 @@ int main(int argc, char **argv)
 		}
 		eqi(w.tracks[2].clips.size(), 1, "the user's music is untouched");
 
-		// Again: nothing changes, nothing doubles.
+		// Again: nothing changes, nothing doubles -- and nothing is copied:
+		// this runs on every mouse move of a drag.
+		const TimelineModel shared = w;
 		ok(!SoundRules::apply(w, lookup), "a second apply is a no-op");
+		ok(w.tracks.constData() == shared.tracks.constData(),
+		   "and it copies nothing: the timeline's data is still shared");
+		ok(w.tracks[1].clips.constData() == shared.tracks[1].clips.constData(),
+		   "not even one lane's clips");
 		eqi(w.tracks[w.soundsLane()].clips.size(), 2, "still two");
 
 		// Move the still: the click follows.

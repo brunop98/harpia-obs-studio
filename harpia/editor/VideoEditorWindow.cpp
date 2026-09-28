@@ -1,4 +1,6 @@
 #include "VideoEditorWindow.hpp"
+#include "timeline/SoundLibrary.hpp"
+#include "timeline/SoundPresets.hpp"
 
 #include <QUuid>
 
@@ -66,6 +68,7 @@
 #include <QRadioButton>
 #include <QAbstractSpinBox>
 #include <QComboBox>
+#include <QGridLayout>
 #include <QStringListModel>
 #include <QCompleter>
 #include <QDesktopServices>
@@ -2950,53 +2953,80 @@ SoundInfo VideoEditorWindow::soundInfoFor(int sourceId)
 	return si;
 }
 
-int VideoEditorWindow::builtinSoundSource(const QString &name)
+int VideoEditorWindow::librarySoundSource(const QString &slot)
 {
-	if (const auto it = builtinSoundIds_.constFind(name); it != builtinSoundIds_.constEnd())
-		if (sourceById(it.value()))
-			return it.value();
-	// Made once, into the app's data folder, so a saved project points at a
-	// file that is still there next time (and is remade here if it is not).
-	const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
-			    QStringLiteral("/sounds");
-	QDir().mkpath(dir);
-	QString file = name.toLower();
-	file.replace(QLatin1Char(' '), QLatin1Char('_'));
-	const QString wav = dir + QLatin1Char('/') + file + QStringLiteral(".wav");
-	if (!QFileInfo::exists(wav) && !SoundRules::writeBuiltin(name, wav))
+	for (const EditorSource &es : sources_)
+		if (es.librarySlot.compare(slot, Qt::CaseInsensitive) == 0)
+			return es.id;
+	const QVector<SoundSlot> lib = SoundLibrary::load();
+	const QString file = SoundLibrary::resolve(lib, slot, SoundLibrary::defaultCacheDir());
+	if (file.isEmpty())
 		return -1;
-	if (const EditorSource *es = sourceByPath(wav)) {
-		builtinSoundIds_.insert(name, es->id);
-		return es->id;
-	}
-	const int id = addAudioSource(wav);
-	if (id >= 0) {
-		if (EditorSource *es = sourceById(id))
-			es->name = name; // "Whoosh", not "whoosh.wav"
-		builtinSoundIds_.insert(name, id);
-	}
+	const int id = addAudioSource(file);
+	if (id >= 0)
+		if (EditorSource *es = sourceById(id)) {
+			const SoundSlot *ss = SoundLibrary::find(lib, slot);
+			es->librarySlot = ss ? ss->name : slot;
+			es->name = es->librarySlot; // "Whoosh", not "whoosh.wav"
+		}
 	return id;
+}
+
+void VideoEditorWindow::refreshLibrarySources()
+{
+	const QVector<SoundSlot> lib = SoundLibrary::load();
+	bool changed = false;
+	for (EditorSource &es : sources_) {
+		if (es.librarySlot.isEmpty())
+			continue;
+		const QString file = SoundLibrary::resolve(lib, es.librarySlot, SoundLibrary::defaultCacheDir());
+		if (file.isEmpty() || QFileInfo(file).absoluteFilePath() == QFileInfo(es.origPath).absoluteFilePath())
+			continue;
+		const QString dir = sessionAudioDir();
+		if (dir.isEmpty())
+			continue;
+		static int serial = 0;
+		const QString wav = dir + QStringLiteral("/lib_%1_%2.wav").arg(es.id).arg(++serial);
+		if (!VoiceoverMixer::decodeToWav(file, wav))
+			continue;
+		es.path = wav;
+		es.origPath = file;
+		es.durationMs = VoiceoverTrack::wavDurationMs(wav);
+		audioProxy_.insert(es.id, wav);
+		soundPeaks_.remove(es.id);
+		changed = true;
+	}
+	if (!changed)
+		return;
+	// Every derived clip is rebuilt from the new lengths and waveforms, and
+	// the mix follows. The source ids did not change, so every rule and every
+	// Sound component already points at the new sound.
+	applySoundRules();
+	invalidateAudioMix();
+	refreshSourceList();
+	rebuildSoundsTab();
+	if (fullEdit())
+		requestPreview(-1, timelinePlayheadMs());
 }
 
 int VideoEditorWindow::pickSound(const QPoint &at, QString *name)
 {
 	QMenu menu(this);
 	menu.setToolTipsVisible(true);
-	// The built-in ones first: nothing to find, nothing to download.
-	for (const QString &b : SoundRules::builtinSounds()) {
-		QAction *a = menu.addAction(b);
-		a->setData(QStringLiteral("b:") + b);
+	// The library first: your files where you set them, the built-ins where not.
+	const QVector<SoundSlot> lib = SoundLibrary::load();
+	for (const SoundSlot &ss : lib) {
+		const bool mine = !ss.file.isEmpty() && QFileInfo(ss.file).isFile();
+		if (!ss.builtin && !mine)
+			continue; // a custom slot with nothing to play
+		QAction *a = menu.addAction(mine && ss.builtin ? QStringLiteral("%1  ★").arg(ss.name) : ss.name);
+		a->setToolTip(mine ? QDir::toNativeSeparators(ss.file) : QStringLiteral("Built-in sound"));
+		a->setData(QStringLiteral("l:") + ss.name);
 	}
-	// Then every sound already in the project (audio-only sources).
+	// Then any other sound already in the project.
 	bool sep = false;
 	for (const EditorSource &es : sources_) {
-		if (es.width != 0 || es.height != 0 || es.durationMs <= 0)
-			continue;
-		bool builtin = false;
-		for (auto it = builtinSoundIds_.constBegin(); it != builtinSoundIds_.constEnd(); ++it)
-			if (it.value() == es.id)
-				builtin = true;
-		if (builtin)
+		if (es.width != 0 || es.height != 0 || es.durationMs <= 0 || !es.librarySlot.isEmpty())
 			continue;
 		if (!sep) {
 			menu.addSeparator();
@@ -3008,9 +3038,15 @@ int VideoEditorWindow::pickSound(const QPoint &at, QString *name)
 	menu.addSeparator();
 	QAction *file = menu.addAction(QStringLiteral("Audio file…"));
 	file->setToolTip(QStringLiteral("Any mp3, wav, ogg, m4a or flac on this computer."));
+	QAction *edit = menu.addAction(QStringLiteral("Edit sound library…"));
+	edit->setToolTip(QStringLiteral("Put your own files behind Whoosh, Pop, Click… or add sounds of your own."));
 	QAction *chosen = menu.exec(at);
 	if (!chosen)
 		return -1;
+	if (chosen == edit) {
+		openSoundLibrary();
+		return -1;
+	}
 	if (chosen == file) {
 		const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("Choose a sound"),
 							       QFileInfo(inPath_).absolutePath(), audioOpenFilter());
@@ -3022,11 +3058,11 @@ int VideoEditorWindow::pickSound(const QPoint &at, QString *name)
 		return id;
 	}
 	const QString d = chosen->data().toString();
-	if (d.startsWith(QLatin1String("b:"))) {
+	if (d.startsWith(QLatin1String("l:"))) {
 		const QString n = d.mid(2);
 		if (name)
 			*name = n;
-		return builtinSoundSource(n);
+		return librarySoundSource(n);
 	}
 	if (d.startsWith(QLatin1String("s:"))) {
 		const int id = d.mid(2).toInt();
@@ -3036,6 +3072,208 @@ int VideoEditorWindow::pickSound(const QPoint &at, QString *name)
 		return id;
 	}
 	return -1;
+}
+
+void VideoEditorWindow::openSoundLibrary()
+{
+	QDialog dlg(this);
+	dlg.setWindowTitle(QStringLiteral("Sound library"));
+	dlg.setMinimumWidth(560);
+	auto *v = new QVBoxLayout(&dlg);
+	auto *intro = new QLabel(
+		QStringLiteral("The sounds every rule and Sound component picks from. Point a slot at a file "
+			       "of your own and it changes everywhere that slot is used, in every project. "
+			       "Reset goes back to the built-in sound."),
+		&dlg);
+	intro->setWordWrap(true);
+	intro->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+	v->addWidget(intro);
+	auto *list = new QWidget(&dlg);
+	auto *grid = new QGridLayout(list);
+	grid->setContentsMargins(0, 6, 0, 6);
+	grid->setHorizontalSpacing(8);
+	grid->setVerticalSpacing(4);
+	grid->setColumnStretch(1, 1);
+	v->addWidget(list);
+
+	QVector<SoundSlot> lib = SoundLibrary::load();
+	std::function<void()> rebuild;
+	auto commit = [&]() {
+		SoundLibrary::save(lib);
+		rebuild();
+	};
+	rebuild = [&]() {
+		while (QLayoutItem *it = grid->takeAt(0)) {
+			if (QWidget *w = it->widget())
+				w->deleteLater();
+			delete it;
+		}
+		for (int i = 0; i < lib.size(); ++i) {
+			const SoundSlot ss = lib[i];
+			auto *nm = new QLabel(ss.name, list);
+			nm->setStyleSheet(QStringLiteral("color:#e8eaed; font-weight:bold;"));
+			grid->addWidget(nm, i, 0);
+			const bool mine = !ss.file.isEmpty();
+			const bool gone = mine && !QFileInfo(ss.file).isFile();
+			auto *fl = new QLabel(list);
+			fl->setText(!mine ? (ss.builtin ? QStringLiteral("Built-in sound") : QStringLiteral("No file"))
+					  : gone ? QStringLiteral("Missing: %1").arg(QFileInfo(ss.file).fileName())
+						 : QFileInfo(ss.file).fileName());
+			fl->setToolTip(mine ? QDir::toNativeSeparators(ss.file) : QString());
+			fl->setStyleSheet(gone ? QStringLiteral("color:#e5484d;")
+					       : mine ? QStringLiteral("color:#c8ccd4;") : QStringLiteral("color:#7f858e;"));
+			grid->addWidget(fl, i, 1);
+			auto *play = new QPushButton(QStringLiteral("▶"), list);
+			play->setFixedWidth(28);
+			play->setToolTip(QStringLiteral("Hear it"));
+			connect(play, &QPushButton::clicked, &dlg, [this, name = ss.name]() {
+				const QString f = SoundLibrary::resolve(SoundLibrary::load(), name, SoundLibrary::defaultCacheDir());
+				if (f.isEmpty())
+					return;
+				QString wav = f;
+				if (!f.endsWith(QLatin1String(".wav"), Qt::CaseInsensitive)) {
+					wav = sessionAudioDir() + QStringLiteral("/libpreview.wav");
+					QFile::remove(wav);
+					if (!VoiceoverMixer::decodeToWav(f, wav))
+						return;
+				}
+				previewWav(wav);
+			});
+			grid->addWidget(play, i, 2);
+			auto *choose = new QPushButton(QStringLiteral("Choose file…"), list);
+			connect(choose, &QPushButton::clicked, &dlg, [&, i]() {
+				const QString start = lib[i].file.isEmpty() ? QString() : QFileInfo(lib[i].file).absolutePath();
+				const QString f = QFileDialog::getOpenFileName(&dlg, QStringLiteral("Sound for %1").arg(lib[i].name),
+									       start, audioOpenFilter());
+				if (f.isEmpty())
+					return;
+				lib[i].file = f;
+				commit();
+			});
+			grid->addWidget(choose, i, 3);
+			auto *reset = new QPushButton(ss.builtin ? QStringLiteral("Reset") : QStringLiteral("Remove"), list);
+			reset->setEnabled(!ss.builtin || mine);
+			reset->setToolTip(ss.builtin ? QStringLiteral("Back to the built-in sound.")
+						     : QStringLiteral("Remove this slot. Projects already using it keep "
+								      "the sound they have."));
+			connect(reset, &QPushButton::clicked, &dlg, [&, i]() {
+				if (lib[i].builtin)
+					lib[i].file.clear();
+				else
+					lib.remove(i);
+				commit();
+			});
+			grid->addWidget(reset, i, 4);
+		}
+	};
+	rebuild();
+
+	auto *btns = new QHBoxLayout;
+	auto *add = new QPushButton(QStringLiteral("Add sound…"), &dlg);
+	add->setToolTip(QStringLiteral("A new named slot with a file of yours, e.g. Riser or Notification."));
+	connect(add, &QPushButton::clicked, &dlg, [&]() {
+		const QString f = QFileDialog::getOpenFileName(&dlg, QStringLiteral("Add a sound"), QString(), audioOpenFilter());
+		if (f.isEmpty())
+			return;
+		bool okName = false;
+		QString n = QInputDialog::getText(&dlg, QStringLiteral("Add a sound"), QStringLiteral("Name:"),
+						  QLineEdit::Normal, QFileInfo(f).completeBaseName(), &okName)
+				    .trimmed();
+		if (!okName || n.isEmpty())
+			return;
+		if (SoundSlot *ex = const_cast<SoundSlot *>(SoundLibrary::find(lib, n))) {
+			ex->file = f; // same name: that slot gets the file
+		} else {
+			SoundSlot ss;
+			ss.name = n;
+			ss.file = f;
+			lib.append(ss);
+		}
+		commit();
+	});
+	btns->addWidget(add);
+	btns->addStretch(1);
+	auto *close = new QPushButton(QStringLiteral("Close"), &dlg);
+	close->setDefault(true);
+	connect(close, &QPushButton::clicked, &dlg, &QDialog::accept);
+	btns->addWidget(close);
+	v->addLayout(btns);
+	dlg.exec();
+	refreshLibrarySources();
+}
+
+void VideoEditorWindow::savePreset()
+{
+	if (!timelineView_)
+		return;
+	const TimelineModel &m = timelineView_->model();
+	if (m.tags.isEmpty() && m.soundRules.isEmpty()) {
+		QMessageBox::information(this, QStringLiteral("Save preset"),
+					 QStringLiteral("This project has no tags or sound rules to save yet."));
+		return;
+	}
+	bool okName = false;
+	const QString name = QInputDialog::getText(this, QStringLiteral("Save preset"),
+						   QStringLiteral("Save this project's %1 tag(s) and %2 sound rule(s) as:")
+							   .arg(m.tags.size())
+							   .arg(m.soundRules.size()),
+						   QLineEdit::Normal, QString(), &okName)
+				     .trimmed();
+	if (!okName || name.isEmpty())
+		return;
+	if (SoundPresets::names().contains(name) &&
+	    QMessageBox::question(this, QStringLiteral("Save preset"),
+				  QStringLiteral("Replace the preset “%1”?").arg(name)) != QMessageBox::Yes)
+		return;
+	const QJsonObject p = SoundPresets::toJson(m, name, [this](int id) {
+		SoundRef r;
+		if (const EditorSource *es = sourceById(id)) {
+			if (!es->librarySlot.isEmpty())
+				r.slot = es->librarySlot;
+			else
+				r.file = es->origPath.isEmpty() ? es->path : es->origPath;
+		}
+		return r;
+	});
+	if (!SoundPresets::save(name, p))
+		QMessageBox::warning(this, QStringLiteral("Save preset"), QStringLiteral("Could not write the preset."));
+	else if (infoLabel_)
+		infoLabel_->setText(QStringLiteral("Preset “%1” saved.").arg(name));
+}
+
+void VideoEditorWindow::loadPreset(const QString &name)
+{
+	if (!timelineView_)
+		return;
+	const QJsonObject p = SoundPresets::load(name);
+	if (p.isEmpty())
+		return;
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	PresetMergeResult res;
+	auto sourceFor = [this](const SoundRef &r) -> int {
+		if (!r.slot.isEmpty())
+			return librarySoundSource(r.slot);
+		if (r.file.isEmpty())
+			return -1;
+		const QString want = QFileInfo(r.file).absoluteFilePath();
+		for (const EditorSource &es : sources_)
+			if (QFileInfo(es.origPath).absoluteFilePath() == want || QFileInfo(es.path).absoluteFilePath() == want)
+				return es.id;
+		return QFileInfo(r.file).isFile() ? addAudioSource(r.file) : -1;
+	};
+	timelineView_->editModel([&](TimelineModel &m) { res = SoundPresets::merge(m, p, sourceFor); });
+	QString msg = QStringLiteral("Preset “%1”: %2 tag(s) and %3 rule(s) added")
+			      .arg(name)
+			      .arg(res.tagsAdded)
+			      .arg(res.rulesAdded);
+	if (res.rulesSkipped)
+		msg += QStringLiteral(", %1 already here").arg(res.rulesSkipped);
+	if (res.soundsMissing)
+		msg += QStringLiteral(", %1 skipped because their sound file was not found").arg(res.soundsMissing);
+	if (infoLabel_)
+		infoLabel_->setText(msg + QLatin1Char('.'));
+	showSoundsTab();
 }
 
 void VideoEditorWindow::addSoundRule(TlSoundRule r, int sourceId, const QString &name)
@@ -3139,6 +3377,12 @@ void VideoEditorWindow::onSoundForTransition(int track, int clip, bool thisTypeO
 void VideoEditorWindow::previewSound(int sourceId)
 {
 	const QString wav = audioProxyFor(sourceId);
+	if (!wav.isEmpty())
+		previewWav(wav);
+}
+
+void VideoEditorWindow::previewWav(const QString &wav)
+{
 	if (wav.isEmpty())
 		return;
 	// Through the same decoder and output path as timeline playback (a float
@@ -3214,6 +3458,52 @@ void VideoEditorWindow::buildSoundsTab(QVBoxLayout *into)
 	intro->setWordWrap(true);
 	intro->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 	into->addWidget(intro);
+
+	auto *top = new QHBoxLayout;
+	auto *libBtn = new QPushButton(QStringLiteral("Sound library…"), this);
+	libBtn->setToolTip(QStringLiteral("Put your own files behind Whoosh, Pop, Click… or add sounds of your own."));
+	connect(libBtn, &QPushButton::clicked, this, &VideoEditorWindow::openSoundLibrary);
+	top->addWidget(libBtn);
+	auto *presetBtn = new QPushButton(QStringLiteral("Presets  \u25BE"), this);
+	presetBtn->setToolTip(QStringLiteral("Save this project's tags and rules, or load them into this one."));
+	connect(presetBtn, &QPushButton::clicked, this, [this, presetBtn]() {
+		QMenu menu(this);
+		QAction *save = menu.addAction(QStringLiteral("Save as preset…"));
+		QMenu *load = menu.addMenu(QStringLiteral("Load preset"));
+		QMenu *del = menu.addMenu(QStringLiteral("Delete preset"));
+		const QStringList names = SoundPresets::names();
+		for (const QString &n : names) {
+			load->addAction(n)->setData(QStringLiteral("load:") + n);
+			del->addAction(n)->setData(QStringLiteral("del:") + n);
+		}
+		load->setEnabled(!names.isEmpty());
+		del->setEnabled(!names.isEmpty());
+		menu.addSeparator();
+		QAction *folder = menu.addAction(QStringLiteral("Open presets folder"));
+		QAction *chosen = menu.exec(presetBtn->mapToGlobal(QPoint(0, presetBtn->height())));
+		if (!chosen)
+			return;
+		if (chosen == save) {
+			savePreset();
+			return;
+		}
+		if (chosen == folder) {
+			QDir().mkpath(SoundPresets::dir());
+			QDesktopServices::openUrl(QUrl::fromLocalFile(SoundPresets::dir()));
+			return;
+		}
+		const QString d = chosen->data().toString();
+		if (d.startsWith(QLatin1String("load:")))
+			loadPreset(d.mid(5));
+		else if (d.startsWith(QLatin1String("del:")) &&
+			 QMessageBox::question(this, QStringLiteral("Delete preset"),
+					       QStringLiteral("Delete the preset \u201c%1\u201d?").arg(d.mid(4))) ==
+				 QMessageBox::Yes)
+			SoundPresets::remove(d.mid(4));
+	});
+	top->addWidget(presetBtn);
+	top->addStretch(1);
+	into->addLayout(top);
 
 	soundsList_ = new QWidget(this);
 	auto *ll = new QVBoxLayout(soundsList_);
@@ -9491,6 +9781,8 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 		so[QStringLiteral("path")] = QDir::toNativeSeparators(
 			es.origPath.isEmpty() ? es.path : es.origPath);
 		so[QStringLiteral("name")] = es.name;
+		if (!es.librarySlot.isEmpty())
+			so[QStringLiteral("librarySlot")] = es.librarySlot;
 		so[QStringLiteral("durationMs")] = double(es.durationMs);
 		so[QStringLiteral("width")] = es.width;
 		so[QStringLiteral("height")] = es.height;
@@ -9737,6 +10029,15 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 			const int pid = so.value(QStringLiteral("id")).toInt();
 			QString spath = so.value(QStringLiteral("path")).toString();
 			const QString sname = so.value(QStringLiteral("name")).toString();
+			// A library slot plays whatever file the slot has NOW, on this
+			// machine: that is how swapping a slot reaches old projects.
+			if (const QString slot = so.value(QStringLiteral("librarySlot")).toString(); !slot.isEmpty()) {
+				const int sid = librarySoundSource(slot);
+				if (sid >= 0) {
+					srcMap.insert(pid, sid);
+					continue;
+				}
+			}
 			if (!used.contains(pid) && !QFileInfo::exists(spath))
 				continue; // nothing needs it and it is not there: let it go
 			const EditorSource *known = sourceByPath(spath);

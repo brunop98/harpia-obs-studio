@@ -324,6 +324,18 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	-o "$WORK/soundrules_test" $LF
 
+# Sound Library and presets: the built-ins always present, your file wins,
+# a missing file falls back; presets carry tags and rules by name and slot,
+# and merging maps tags, skips duplicates and counts missing sounds.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/soundlibrary_test.cpp" "$H/editor/timeline/SoundLibrary.cpp" \
+	"$H/editor/timeline/SoundPresets.cpp" "$H/editor/timeline/SoundRules.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
+	-o "$WORK/soundlibrary_test" $LF
+
 # Randomising clip order: permutations, pins, strengths, "avoid the same
 # order", the re-layout, and one undo step per press in the timeline.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -727,6 +739,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/timelinedragspan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/clipvolume_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/tracks_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/soundrules_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/soundlibrary_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/clipshuffle_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keyframetabs_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/hoverinspect_test" || rc=1

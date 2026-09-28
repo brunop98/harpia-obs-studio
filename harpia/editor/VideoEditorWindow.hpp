@@ -127,6 +127,10 @@ struct EditorSource {
 	// that saved it saved a path that can never be found again. This is what
 	// gets written to the project and reopened from it.
 	QString origPath;
+	// A Sound Library slot ("Whoosh") when the source IS that slot: saved in
+	// the project, and on open, or when the library changes, the source is
+	// re-pointed at whatever file the slot plays now.
+	QString librarySlot;
 	QString name;
 	qint64 durationMs = 0;
 	int width = 0;
@@ -658,7 +662,7 @@ private:
 	QPushButton *soundsFreezeBtn_ = nullptr;
 	QVector<SoundRow> soundRows_;
 	QHash<int, QVector<float>> soundPeaks_;  // per sound source: its waveform
-	QHash<QString, int> builtinSoundIds_;    // built-in name -> source id, once made
+
 	AudioPreview *soundPreview_ = nullptr;   // the ▶ on a row: the same output path as playback
 	void buildSoundsTab(QVBoxLayout *into);
 	void rebuildSoundsTab();                 // rows follow the model's rules
@@ -668,7 +672,12 @@ private:
 	// A menu at `at`: the built-in sounds, the sounds already in the project,
 	// and "Audio file…". Returns the source id, or -1 for cancel.
 	int pickSound(const QPoint &at, QString *name);
-	int builtinSoundSource(const QString &name);
+	int librarySoundSource(const QString &slot); // the project's source for a library slot, made on demand
+	void refreshLibrarySources();                // re-point slot sources after the library changed
+	void openSoundLibrary();
+	void previewWav(const QString &wav);
+	void savePreset();
+	void loadPreset(const QString &name);
 	void onSoundForClip(int track, int clip, bool everyKind);
 	void onSoundForTransition(int track, int clip, bool thisTypeOnly);
 	void addSoundRule(TlSoundRule r, int sourceId, const QString &name);

@@ -1,5 +1,7 @@
 #include "SubtitleDialog.hpp"
 
+#include "../../ui/EditorLog.hpp"
+
 #include "OpenAiTranscriber.hpp"
 #include "SecretStore.hpp"
 #include "../../ui/InfoHint.hpp"
@@ -356,8 +358,18 @@ void SubtitleDialog::nextChunk()
 		const Target &t = targets_[targetIdx_];
 		status_->setText(QStringLiteral("Preparing the audio of %1…").arg(t.name));
 		QString err;
+		editorLog(EditorLogLevel::Info, QStringLiteral("Subtitles"),
+			  QStringLiteral("clip %1 of %2: %3 (%4, source %5-%6 ms), language %7")
+				  .arg(targetIdx_ + 1)
+				  .arg(targets_.size())
+				  .arg(t.name, QDir::toNativeSeparators(t.path))
+				  .arg(t.media.srcStartMs)
+				  .arg(t.media.srcEndMs)
+				  .arg(languageCode().isEmpty() ? QStringLiteral("detect") : languageCode()));
 		chunks_ = AudioForSpeech::prepare(t.path, t.media.srcStartMs, t.media.srcEndMs, workDir_, &err);
 		if (chunks_.isEmpty()) {
+			editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
+				  QStringLiteral("could not prepare the audio of %1: %2").arg(t.name, err));
 			finishJob(QStringLiteral("%1: %2").arg(t.name, err));
 			return;
 		}
@@ -385,6 +397,12 @@ void SubtitleDialog::finishJob(const QString &error)
 	setBusy(false);
 	if (!error.isEmpty()) {
 		status_->setText(QStringLiteral("Stopped: %1").arg(error));
+		editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
+			  QStringLiteral("stopped at clip %1 of %2, part %3: %4 (see the line above for what came back)")
+				  .arg(std::max(1, targetIdx_ + 1))
+				  .arg(targets_.size())
+				  .arg(chunkIdx_ + 1)
+				  .arg(error));
 		return;
 	}
 	if (out_.isEmpty()) {
@@ -392,6 +410,7 @@ void SubtitleDialog::finishJob(const QString &error)
 		return;
 	}
 	const QString summary = QStringLiteral("%1 captions from %2 words").arg(out_.size()).arg(wordsTotal_);
+	editorLog(EditorLogLevel::Info, QStringLiteral("Subtitles"), QStringLiteral("done: %1").arg(summary));
 	status_->setText(QStringLiteral("Done: %1. They are on the Subtitles lane; Ctrl+Z removes them.").arg(summary));
 	emit captionsReady(out_, summary);
 }

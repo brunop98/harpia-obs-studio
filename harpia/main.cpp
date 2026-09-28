@@ -1,4 +1,5 @@
 #include "Version.hpp"
+#include "ui/EditorLog.hpp"
 #include "core/CrashGuard.hpp"
 #include "core/Logger.hpp"
 #include "core/ObsContext.hpp"
@@ -181,6 +182,13 @@ int main(int argc, char *argv[])
 	// captured to disk (flushed per line).
 	harpia::Logger::instance().init(resolveLogDir());
 	qInstallMessageHandler(qtMessageToLogger);
+	// Editor problems (dialogs, console, subtitles, downloads) into the same log.
+	harpia::editorLogSink() = [](harpia::EditorLogLevel lvl, const QString &line) {
+		harpia::Logger::instance().log(lvl == harpia::EditorLogLevel::Error     ? harpia::LogLevel::Error
+					       : lvl == harpia::EditorLogLevel::Warning ? harpia::LogLevel::Warning
+											: harpia::LogLevel::Info,
+					       line.toStdString());
+	};
 	harpia::Logger::instance().log(harpia::LogLevel::Info,
 				       std::string("Harpia Recorder v") + HARPIA_VERSION_STRING + " starting");
 

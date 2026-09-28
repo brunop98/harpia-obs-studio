@@ -14,6 +14,7 @@
 #include <QDateTime>
 #include <QDialog>
 #include <QElapsedTimer>
+#include <QPointer>
 #include <QImage>
 #include <QList>
 #include <QRect>
@@ -748,6 +749,7 @@ private:
 	// back aligned caption clips; the window puts them on a "Subtitles" lane as
 	// one undo step.
 	SubtitleDialog *subtitleDialog_ = nullptr;
+	QPointer<class ErrorLogsPanel> errorLogs_; // Help > Error logs
 	void openSubtitles();
 	void addSubtitleClips(const QVector<TlClip> &clips, const QString &summary);
 	QPushButton *snapBtn_ = nullptr;    // magnet toggle, Full mode only

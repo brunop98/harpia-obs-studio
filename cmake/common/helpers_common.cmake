@@ -235,6 +235,12 @@ function(find_qt_plugins)
     iconengines
   )
   list(APPEND qt_plugins_Gui platforminputcontexts)
+  # Harpia: HTTPS (subtitles, yt-dlp thumbnails) needs a TLS backend plugin, and
+  # audio playback / microphone capture need the multimedia backend. Without
+  # these folders next to the exe, every HTTPS request fails at once with an
+  # empty reply and QtMultimedia finds no usable backend.
+  list(APPEND qt_plugins_Network tls networkinformation)
+  list(APPEND qt_plugins_Multimedia multimedia)
   list(APPEND qt_plugins_Sql sqldrivers)
   list(APPEND qt_plugins_3dRender sceneparsers geometryloaders)
   list(APPEND qt_plugins_3dQuickRender renderplugins)

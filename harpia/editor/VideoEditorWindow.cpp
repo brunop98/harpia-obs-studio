@@ -1,4 +1,5 @@
 #include "VideoEditorWindow.hpp"
+#include "../ui/EditorLog.hpp"
 #include "timeline/SoundLibrary.hpp"
 #include "timeline/SoundPresets.hpp"
 
@@ -63,6 +64,7 @@
 
 #include "../Version.hpp"
 #include "../core/Logger.hpp"
+#include "../ui/ErrorLogsPanel.hpp"
 
 #include <QCheckBox>
 #include <QRadioButton>
@@ -876,7 +878,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		}
 	});
 	connect(voRecorder_, &AudioRecorder::error, this, [this](const QString &msg) {
-		QMessageBox::warning(this, QStringLiteral("Microphone"), msg);
+		warnAndLog(this, QStringLiteral("Microphone"), msg);
 	});
 	voCountdownTimer_ = new QTimer(this);
 	voCountdownTimer_->setInterval(1000);
@@ -2223,7 +2225,7 @@ int VideoEditorWindow::addSource(const QString &path)
 		if (loadingProject_)
 			loadFailures_ << QFileInfo(path).fileName();
 		else
-			QMessageBox::warning(
+			warnAndLog(
 				this, QStringLiteral("Add video"),
 				QStringLiteral("Could not open %1").arg(QFileInfo(path).fileName()));
 		return -1;
@@ -2494,7 +2496,7 @@ void VideoEditorWindow::onRemoveSource()
 		return;
 	}
 	if (sourceInUse(id)) {
-		QMessageBox::warning(
+		warnAndLog(
 			this, QStringLiteral("Remove source"),
 			QStringLiteral("Some cuts still use this video. Delete those cuts first."));
 		return;
@@ -2672,7 +2674,7 @@ int VideoEditorWindow::addImageSource(const QString &path)
 		if (loadingProject_)
 			loadFailures_ << QStringLiteral("%1 — %2").arg(QFileInfo(path).fileName(), why);
 		else
-			QMessageBox::warning(this, QStringLiteral("Add image"), why);
+			warnAndLog(this, QStringLiteral("Add image"), why);
 		return -1;
 	}
 	img = img.convertToFormat(QImage::Format_RGBA8888);
@@ -2904,7 +2906,7 @@ int VideoEditorWindow::addAudioSource(const QString &path)
 		if (loadingProject_)
 			loadFailures_ << QFileInfo(path).fileName();
 		else
-			QMessageBox::warning(
+			warnAndLog(
 				this, QStringLiteral("Add audio"),
 				QStringLiteral("Could not read any audio from that file."));
 		return -1;
@@ -3315,7 +3317,7 @@ void VideoEditorWindow::savePreset()
 		return r;
 	});
 	if (!SoundPresets::save(name, p))
-		QMessageBox::warning(this, QStringLiteral("Save preset"), QStringLiteral("Could not write the preset."));
+		warnAndLog(this, QStringLiteral("Save preset"), QStringLiteral("Could not write the preset."));
 	else if (infoLabel_)
 		infoLabel_->setText(QStringLiteral("Preset “%1” saved.").arg(name));
 }
@@ -7353,6 +7355,22 @@ void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
 
 	// ---- Help ----
 	QMenu *help = menuBar_->addMenu(QStringLiteral("&Help"));
+	QAction *logs = help->addAction(QStringLiteral("Error logs…"));
+	logs->setToolTip(QStringLiteral("This session's log: recorder and editor errors, warnings and info."));
+	connect(logs, &QAction::triggered, this, [this]() {
+		// A child window of the editor: the editor runs modally, so a
+		// separate top-level window would be blocked behind it.
+		if (!errorLogs_) {
+			errorLogs_ = new ErrorLogsPanel(this);
+			errorLogs_->setWindowFlags(Qt::Window);
+			errorLogs_->setAttribute(Qt::WA_DeleteOnClose);
+		}
+		errorLogs_->show();
+		errorLogs_->raise();
+		errorLogs_->activateWindow();
+		errorLogs_->refresh();
+	});
+	help->addSeparator();
 	connect(help->addAction(QStringLiteral("About Harpia…")), &QAction::triggered, this, &VideoEditorWindow::showAbout);
 
 	refreshMenuLabels();
@@ -8075,6 +8093,9 @@ QStringList VideoEditorWindow::consoleTemplateNames() const
 
 void VideoEditorWindow::consolePrint(const QString &text, ConsoleTone tone)
 {
+	// A console error is an editor error too: into the log with it.
+	if (tone == ConsoleTone::Error)
+		editorLog(EditorLogLevel::Error, QStringLiteral("Console"), text.simplified());
 	if (!consoleOut_)
 		return;
 	// One colour per kind of line, so a glance tells what you typed from what
@@ -8813,7 +8834,7 @@ bool VideoEditorWindow::pasteImageFromClipboard(qint64 atMs)
 	QString why;
 	const QString path = writePastedImage(img, &why);
 	if (path.isEmpty()) {
-		QMessageBox::warning(this, QStringLiteral("Paste image"), why);
+		warnAndLog(this, QStringLiteral("Paste image"), why);
 		return false;
 	}
 	const int id = addImageSource(path);
@@ -9774,7 +9795,7 @@ void VideoEditorWindow::onImportAudioClicked()
 	const QString base = voiceoverTempDir() + QStringLiteral("/import_") +
 			     QFileInfo(in).completeBaseName() + QStringLiteral(".wav");
 	if (!VoiceoverMixer::decodeToWav(in, base)) {
-		QMessageBox::warning(this, QStringLiteral("Import audio"),
+		warnAndLog(this, QStringLiteral("Import audio"),
 				     QStringLiteral("Could not read that audio file."));
 		return;
 	}
@@ -9870,7 +9891,7 @@ void VideoEditorWindow::onSceneDetected(const QVector<qint64> &cutMs, const QStr
 	if (sceneCancel_.load())
 		return;
 	if (!err.isEmpty()) {
-		QMessageBox::warning(this, QStringLiteral("Auto-cut"), err);
+		warnAndLog(this, QStringLiteral("Auto-cut"), err);
 		return;
 	}
 
@@ -9920,7 +9941,7 @@ void VideoEditorWindow::onSaveProject()
 	}
 	const QString err = saveProjectTo(projectPath_, /*quiet=*/false);
 	if (!err.isEmpty())
-		QMessageBox::warning(this, QStringLiteral("Save project"), err);
+		warnAndLog(this, QStringLiteral("Save project"), err);
 	refreshProjectInspector();
 }
 
@@ -9951,7 +9972,7 @@ void VideoEditorWindow::onSaveProjectAs()
 		path += QStringLiteral(".harpiaproj");
 	const QString err = saveProjectTo(path, /*quiet=*/false);
 	if (!err.isEmpty())
-		QMessageBox::warning(this, QStringLiteral("Save project"), err);
+		warnAndLog(this, QStringLiteral("Save project"), err);
 	refreshProjectInspector();
 }
 
@@ -10125,7 +10146,7 @@ void VideoEditorWindow::onOpenProject()
 		return;
 	QFile f(path);
 	if (!f.open(QIODevice::ReadOnly)) {
-		QMessageBox::warning(this, QStringLiteral("Open project"),
+		warnAndLog(this, QStringLiteral("Open project"),
 				     QStringLiteral("Could not read the project file."));
 		return;
 	}
@@ -10134,7 +10155,7 @@ void VideoEditorWindow::onOpenProject()
 	f.close();
 	if (perr.error != QJsonParseError::NoError || !doc.isObject() ||
 	    !doc.object().contains(QStringLiteral("harpiaProject"))) {
-		QMessageBox::warning(this, QStringLiteral("Open project"),
+		warnAndLog(this, QStringLiteral("Open project"),
 				     QStringLiteral("This is not a valid Harpia project file."));
 		return;
 	}
@@ -10586,7 +10607,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 			QMessageBox::information(this, QStringLiteral("Open project"),
 						 QStringLiteral("Project loaded."));
 		} else {
-			QMessageBox::warning(
+			warnAndLog(
 				this, QStringLiteral("Open project"),
 				QStringLiteral("The project opened, but %1 of its files could not "
 					       "be read:\n\n%2\n\nIts clips are still on the "
@@ -12083,7 +12104,7 @@ void VideoEditorWindow::onExportFinished(bool ok, bool canceled, const QString &
 	if (canceled || !ok) {
 		QFile::remove(outPath_); // never leave a partial file
 		if (!canceled)
-			QMessageBox::warning(this, QStringLiteral("Export failed"),
+			warnAndLog(this, QStringLiteral("Export failed"),
 					     err.isEmpty() ? QStringLiteral("Could not export the clip.") : err);
 		return;
 	}

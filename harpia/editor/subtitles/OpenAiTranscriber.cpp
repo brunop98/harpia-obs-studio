@@ -1,5 +1,9 @@
 #include "OpenAiTranscriber.hpp"
 
+#include "../../ui/EditorLog.hpp"
+
+#include <QSslSocket>
+
 #include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
@@ -45,6 +49,15 @@ void OpenAiTranscriber::transcribe(const Job &job)
 		emit failed(QStringLiteral("no API key: add one in the Subtitles window"));
 		return;
 	}
+	// No TLS backend means no HTTPS at all: say so before uploading anything.
+	if (QSslSocket::availableBackends().isEmpty() || !QSslSocket::supportsSsl()) {
+		const QString why = QStringLiteral(
+			"secure connection (HTTPS) unavailable: no Qt TLS backend was found. The Qt TLS "
+			"plugin (plugins/tls next to harpia.exe) is missing from this build.");
+		editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"), why);
+		emit failed(why);
+		return;
+	}
 	QFile f(job.wavPath);
 	if (!f.open(QIODevice::ReadOnly)) {
 		emit failed(QStringLiteral("could not read %1").arg(QFileInfo(job.wavPath).fileName()));
@@ -86,21 +99,50 @@ void OpenAiTranscriber::transcribe(const Job &job)
 		}
 		QString err;
 		const Transcript t = parseOpenAiVerboseJson(data, &err);
-		if (r->error() != QNetworkReply::NoError || http >= 400) {
-			// The API's own message when it gave one (wrong key, quota, format),
-			// else Qt's. Never the key.
-			QString why = err.isEmpty() ? r->errorString() : err;
-			if (http == 401)
+		// What came back, for the log: the status, Qt's network error, and the
+		// start of the body. Never the key (it is only in the request header).
+		const QString bodyStart = QString::fromUtf8(data.left(400)).simplified();
+		const QString detail = QStringLiteral("HTTP %1, network error %2 (%3), %4 bytes back: %5")
+					       .arg(http)
+					       .arg(int(r->error()))
+					       .arg(r->errorString())
+					       .arg(data.size())
+					       .arg(bodyStart.isEmpty() ? QStringLiteral("(empty)") : bodyStart);
+		const bool notJson = err.startsWith(QLatin1String("not JSON"));
+		if (r->error() != QNetworkReply::NoError || http >= 400 || notJson) {
+			// The API's own message when it gave one (wrong key, quota, format).
+			// A reply that is not JSON at all is not the API talking -- an
+			// empty body from a failed connection, or a proxy's HTML page --
+			// so the network error is what is shown then, not the parser's.
+			QString why = (err.isEmpty() || notJson) ? r->errorString() : err;
+			if (http == 0 && data.isEmpty())
+				why = QStringLiteral("could not reach OpenAI: %1").arg(r->errorString());
+			if (r->errorString().contains(QLatin1String("TLS"), Qt::CaseInsensitive) ||
+			    r->errorString().contains(QLatin1String("SSL"), Qt::CaseInsensitive))
+				why = QStringLiteral("secure connection (HTTPS) unavailable: %1. The Qt TLS plugin "
+						     "(plugins/tls next to harpia.exe) may be missing from this build.")
+					      .arg(r->errorString());
+			else if (http == 401)
 				why = QStringLiteral("the API key was rejected (401). Check it in the Subtitles window.");
 			else if (http == 429)
 				why = QStringLiteral("rate limited or out of credit (429): %1").arg(err);
+			else if (notJson && http >= 200 && http < 300)
+				why = QStringLiteral("OpenAI answered, but not with a transcript (HTTP %1). See the error "
+						     "log for what came back.")
+					      .arg(http);
+			editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
+				  QStringLiteral("transcription failed: %1 | %2").arg(why, detail));
 			emit failed(why);
 			return;
 		}
 		if (t.words.isEmpty()) {
+			editorLog(EditorLogLevel::Warning, QStringLiteral("Subtitles"),
+				  QStringLiteral("no words in the reply (%1) | %2").arg(err, detail));
 			emit failed(err.isEmpty() ? QStringLiteral("no words came back") : err);
 			return;
 		}
+		editorLog(EditorLogLevel::Info, QStringLiteral("Subtitles"),
+			  QStringLiteral("transcribed %1 words, language %2").arg(t.words.size()).arg(t.language));
 		emit finished(t);
 	});
 }

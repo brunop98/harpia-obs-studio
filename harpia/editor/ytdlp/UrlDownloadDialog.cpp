@@ -1,6 +1,7 @@
 #include "UrlDownloadDialog.hpp"
 
 #include "YtDlpSettingsWidget.hpp"
+#include "../../ui/EditorLog.hpp"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -338,6 +339,9 @@ void UrlDownloadDialog::fetchInfo()
 			if (skipCookies_)
 				msg += QStringLiteral("\n(Tried without cookies too, since the browser's could not be read.)");
 			status_->setText(msg);
+			editorLog(EditorLogLevel::Error, QStringLiteral("Video from URL"),
+				  QStringLiteral("check failed for %1: %2 | yt-dlp said: %3")
+					  .arg(url_->text().trimmed(), why, errText.simplified().left(600)));
 			return;
 		}
 		triedWithoutCookies_ = false;
@@ -517,6 +521,11 @@ void UrlDownloadDialog::finishDownload(int exitCode)
 			if (!hint.isEmpty())
 				msg += QLatin1Char('\n') + hint;
 			status_->setText(msg);
+			editorLog(EditorLogLevel::Error, QStringLiteral("Video from URL"),
+				  QStringLiteral("download failed for %1 (exit %2): %3")
+					  .arg(url_->text().trimmed())
+					  .arg(exitCode)
+					  .arg(lastError_.isEmpty() ? QStringLiteral("no error line") : lastError_));
 		}
 		return;
 	}

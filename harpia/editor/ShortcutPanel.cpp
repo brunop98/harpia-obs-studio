@@ -1,4 +1,5 @@
 #include "ShortcutPanel.hpp"
+#include "../ui/EditorLog.hpp"
 
 #include "ui/ShortcutConflictDialog.hpp"
 
@@ -169,13 +170,13 @@ ShortcutPanel::ShortcutPanel(ShortcutRegistry *reg, QWidget *parent) : QDialog(p
 			return;
 		QFile file(f);
 		if (!file.open(QIODevice::ReadOnly)) {
-			QMessageBox::warning(this, QStringLiteral("Import shortcuts"),
+			warnAndLog(this, QStringLiteral("Import shortcuts"),
 					     QStringLiteral("Could not read that file."));
 			return;
 		}
 		QString err;
 		if (!reg_->importProfile(file.readAll(), &err))
-			QMessageBox::warning(this, QStringLiteral("Import shortcuts"), err);
+			warnAndLog(this, QStringLiteral("Import shortcuts"), err);
 	});
 	row->addWidget(importBtn);
 	auto *exportBtn = new QPushButton(QStringLiteral("Export…"), this);
@@ -189,7 +190,7 @@ ShortcutPanel::ShortcutPanel(ShortcutRegistry *reg, QWidget *parent) : QDialog(p
 			f += QStringLiteral(".json");
 		QFile file(f);
 		if (!file.open(QIODevice::WriteOnly)) {
-			QMessageBox::warning(this, QStringLiteral("Export shortcuts"),
+			warnAndLog(this, QStringLiteral("Export shortcuts"),
 					     QStringLiteral("Could not write that file."));
 			return;
 		}

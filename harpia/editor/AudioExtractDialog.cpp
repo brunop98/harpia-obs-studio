@@ -1,4 +1,5 @@
 #include "AudioExtractDialog.hpp"
+#include "../ui/EditorLog.hpp"
 
 #include "AudioPreview.hpp"
 #include "EditorColors.hpp"
@@ -489,7 +490,7 @@ void AudioExtractDialog::onExport()
 	QApplication::restoreOverrideCursor();
 
 	if (!ok) {
-		QMessageBox::warning(this, windowTitle(),
+		warnAndLog(this, windowTitle(),
 				     err.isEmpty() ? QStringLiteral("The export failed.") : err);
 		return;
 	}

@@ -31,7 +31,6 @@
 
 class QButtonGroup;
 class QCheckBox;
-class QSoundEffect;
 class QComboBox;
 class QDoubleSpinBox;
 class QFormLayout;
@@ -659,7 +658,7 @@ private:
 	QVector<SoundRow> soundRows_;
 	QHash<int, QVector<float>> soundPeaks_;  // per sound source: its waveform
 	QHash<QString, int> builtinSoundIds_;    // built-in name -> source id, once made
-	QSoundEffect *soundPreview_ = nullptr;   // the ▶ on a row
+	AudioPreview *soundPreview_ = nullptr;   // the ▶ on a row: the same output path as playback
 	void buildSoundsTab(QVBoxLayout *into);
 	void rebuildSoundsTab();                 // rows follow the model's rules
 	void fillTriggerCombo(QComboBox *cb, const TlSoundRule &r);

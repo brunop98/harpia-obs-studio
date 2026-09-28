@@ -105,7 +105,6 @@
 #include <QPlainTextEdit>
 #include <QTextEdit>
 #include <QProcess>
-#include <QSoundEffect>
 #include <QSpinBox>
 #include <QProgressDialog>
 #include <QPushButton>
@@ -3106,12 +3105,34 @@ void VideoEditorWindow::previewSound(int sourceId)
 	const QString wav = audioProxyFor(sourceId);
 	if (wav.isEmpty())
 		return;
+	// Through the same decoder and output path as timeline playback (a float
+	// stereo 48 kHz sink), not QSoundEffect: that played nothing on Windows,
+	// where its backend never opened the decoded WAV. renderTakes is what the
+	// preview mix already trusts, and a sound is short enough to decode here.
+	VoiceoverMixer::Take tk;
+	tk.path = wav;
+	tk.fadeInMs = SoundRules::kFadeInMs;
+	tk.fadeOutMs = SoundRules::kFadeOutMs;
+	std::vector<float> pcm = VoiceoverMixer::renderTakes({tk});
+	if (pcm.empty()) {
+		if (infoLabel_)
+			infoLabel_->setText(QStringLiteral("That sound could not be decoded."));
+		return;
+	}
 	if (!soundPreview_)
-		soundPreview_ = new QSoundEffect(this);
-	soundPreview_->stop();
-	soundPreview_->setSource(QUrl::fromLocalFile(wav));
-	soundPreview_->setVolume(0.8f);
-	soundPreview_->play();
+		soundPreview_ = new AudioPreview(this);
+	if (!AudioPreview::available()) {
+		if (infoLabel_)
+			infoLabel_->setText(QStringLiteral("No audio output device to play it on."));
+		return;
+	}
+	// Timeline playback and the sound preview share the speakers, not the
+	// buffer: stop the one so the other is heard on its own.
+	if (audioPreview_ && audioPreview_->isPlaying())
+		audioPreview_->stop();
+	soundPreview_->setBuffer(std::move(pcm));
+	soundPreview_->setVolume(0.9);
+	soundPreview_->start(0);
 }
 
 void VideoEditorWindow::freezeSounds()

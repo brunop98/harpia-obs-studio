@@ -1,6 +1,7 @@
 #include "VideoEditorWindow.hpp"
 #include "../ui/EditorLog.hpp"
 #include "timeline/SoundLibrary.hpp"
+#include "timeline/ClipShuffle.hpp"
 #include "timeline/SoundPresets.hpp"
 
 #include <QUuid>
@@ -70,6 +71,8 @@
 #include <QRadioButton>
 #include <QAbstractSpinBox>
 #include <QComboBox>
+#include <random>
+#include <QRandomGenerator>
 #include <QGridLayout>
 #include <QStringListModel>
 #include <QCompleter>
@@ -1050,7 +1053,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	randomBtn_->setToolTip(QStringLiteral(
 		"Shuffle the order of the clips (Ctrl+R). Opens the options; Ctrl+Z brings the "
 		"previous order back, so try as many as you like."));
-	randomBtn_->setVisible(false); // Full editing only
+	randomBtn_->setVisible(false); // Multi-Cut and Full editing
 	connect(randomBtn_, &QPushButton::clicked, this, &VideoEditorWindow::openRandomizePanel);
 	controls->addWidget(randomBtn_);
 	// The editing console: exact numbers and whole-timeline edits by typing,
@@ -1851,8 +1854,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	      [this]() { timelineView_->zoomToFit(); });
 	// The fast loop: Ctrl+R, look, Ctrl+Z, Ctrl+R. No panel needed once the
 	// options are set; they are remembered.
-	tlCmd("timeline.randomize", "Randomize clip order", "Timeline",
-	      {QKeySequence(Qt::CTRL | Qt::Key_R)}, [this]() { randomizeClips(); });
+	// Multi-Cut shuffles its cut list; Full editing its lanes.
+	cmd("timeline.randomize", "Randomize clip order", "Timeline", {QKeySequence(Qt::CTRL | Qt::Key_R)},
+	    [this]() {
+		    if (multiCut() || fullEdit())
+			    randomizeClips();
+	    });
 	tlCmd("view.console", "Editing console", "View", {QKeySequence(Qt::CTRL | Qt::Key_QuoteLeft)},
 	      [this]() { openConsole(); });
 
@@ -7304,8 +7311,12 @@ void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
 	edit->addSeparator();
 	connect(keyed(fullOnly(edit->addAction(QStringLiteral("Split clip at playhead"))), "timeline.split"),
 		&QAction::triggered, this, run("timeline.split"));
-	connect(keyed(fullOnly(edit->addAction(QStringLiteral("Randomize clips…"))), "timeline.randomize"),
-		&QAction::triggered, this, &VideoEditorWindow::openRandomizePanel);
+	randomizeAct_ = edit->addAction(QStringLiteral("Randomize clips…"));
+	randomizeAct_->setProperty(kWhyDisabledProp,
+				   QStringLiteral("Only in Multi-Cut or Full editing: there is nothing to reorder "
+						  "in Simple Trim. Press Multi-Cut or Full editing at the top."));
+	connect(keyed(randomizeAct_, "timeline.randomize"), &QAction::triggered, this,
+		&VideoEditorWindow::openRandomizePanel);
 	connect(keyed(fullOnly(edit->addAction(QStringLiteral("Console"))), "view.console"), &QAction::triggered, this,
 		&VideoEditorWindow::openConsole);
 
@@ -7376,6 +7387,8 @@ void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
 	refreshMenuLabels();
 	for (QAction *a : fullOnlyActs_)
 		a->setEnabled(fullEdit());
+	if (randomizeAct_)
+		randomizeAct_->setEnabled(fullEdit() || multiCut());
 	// A greyed entry answers a click with why it is greyed.
 	for (QAction *top : menuBar_->actions())
 		if (QMenu *m = top->menu())
@@ -9079,14 +9092,17 @@ void VideoEditorWindow::setEditMode(EditMode m)
 		addMenuBtn_->setVisible(full); // the Add menu: text, subtitles, audio, image, effect clip
 	for (QAction *a : fullOnlyActs_)
 		a->setEnabled(full); // greyed, not hidden: the menus keep their shape
+	const bool canShuffle = full || m == EditMode::MultiCut;
+	if (randomizeAct_)
+		randomizeAct_->setEnabled(canShuffle);
 	if (snapBtn_)
 		snapBtn_->setVisible(full);
 	if (fitBtn_)
 		fitBtn_->setVisible(full);
 	if (randomBtn_)
-		randomBtn_->setVisible(full);
-	if (!full && randomPanel_)
-		randomPanel_->hide(); // its target is the timeline, which just went away
+		randomBtn_->setVisible(canShuffle);
+	if (!canShuffle && randomPanel_)
+		randomPanel_->hide(); // its target just went away
 	if (consoleBtn_)
 		consoleBtn_->setVisible(full && EditConsole::available());
 	if (!full && consolePanel_)
@@ -11341,7 +11357,7 @@ ShuffleOptions VideoEditorWindow::randomizeOptions() const
 
 void VideoEditorWindow::openRandomizePanel()
 {
-	if (!fullEdit() || !timelineView_)
+	if (!(fullEdit() && timelineView_) && !(multiCut() && tracks_))
 		return;
 	if (!randomPanel_) {
 		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
@@ -11443,6 +11459,10 @@ void VideoEditorWindow::openRandomizePanel()
 
 void VideoEditorWindow::randomizeClips(bool selectedOnly)
 {
+	if (multiCut() && tracks_) {
+		randomizeCuts();
+		return;
+	}
 	if (!fullEdit() || !timelineView_)
 		return;
 	ShuffleOptions o = randomizeOptions();
@@ -11472,6 +11492,57 @@ void VideoEditorWindow::randomizeClips(bool selectedOnly)
 	}
 	if (moved > 0)
 		showTimelineFrame(timelinePlayheadMs()); // the frame under the playhead is a different clip now
+}
+
+void VideoEditorWindow::randomizeCuts()
+{
+	// Multi-Cut: the output is the cuts played back to back, so a shuffle is a
+	// new order of the cut list. With two or more cuts selected only those
+	// trade places among their own slots; otherwise every cut takes part --
+	// the quick case is "I cut it up, now mix it".
+	const QVector<CutSegment> segs = tracks_->segments();
+	const int n = segs.size();
+	ShuffleOptions o = randomizeOptions();
+	const QList<int> sel = tracks_->selectedIndices();
+	QVector<bool> selected(n, false);
+	for (int i : sel)
+		if (i >= 0 && i < n)
+			selected[i] = true;
+	o.selectedOnly = sel.size() >= 2;
+	std::mt19937_64 rng(QRandomGenerator::system()->generate64());
+	const QVector<int> order = shuffledOrder(movableSlots(n, o, selected), o, rng);
+	const int moved = displacedSlots(order);
+	if (moved == 0) {
+		if (randomStatus_)
+			randomStatus_->setText(n < 2 ? QStringLiteral("Nothing moved: make at least two cuts first.")
+						     : QStringLiteral("Nothing moved: the options keep every cut in place."));
+		if (infoLabel_ && n < 2)
+			infoLabel_->setText(QStringLiteral("Randomize needs at least two cuts."));
+		return;
+	}
+	stopPlayback();
+	tracks_->setSegments(permuted(segs, order));
+	playSeg_ = -1;
+	updateInfoLabel();
+	updateInspector();
+	updateVoiceoverAxis();
+	onSegmentSelected(tracks_->selectedIndex());
+	{
+		qint64 srcMs = 0;
+		const int seg = tracks_->sourceForOutput(std::max<qint64>(0, tracks_->playhead()), &srcMs);
+		if (seg >= 0)
+			showFrame(tracks_->segments()[seg].sourceId, srcMs);
+	}
+	commitSnapshot(); // one undo step
+	const QString msg = QStringLiteral("Shuffled %1 of %2 cuts%3. Ctrl+Z brings the previous order back; "
+					   "Ctrl+R shuffles again.")
+				    .arg(moved)
+				    .arg(n)
+				    .arg(o.selectedOnly ? QStringLiteral(" (the selected ones)") : QString());
+	if (randomStatus_)
+		randomStatus_->setText(msg);
+	if (infoLabel_)
+		infoLabel_->setText(msg);
 }
 
 void VideoEditorWindow::stepSelectedSpeed(double delta)

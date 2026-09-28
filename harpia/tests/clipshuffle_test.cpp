@@ -295,6 +295,36 @@ int main(int argc, char **argv)
 		}
 	}
 
+	std::printf("\n-- Multi-Cut: shuffling a cut list --\n");
+	{
+		// A cut list is its own order: reordering it is the whole shuffle.
+		QVector<int> cuts{10, 11, 12, 13, 14};
+		ok(permuted(cuts, QVector<int>{4, 3, 2, 1, 0}) == (QVector<int>{14, 13, 12, 11, 10}),
+		   "permuted puts each item where the order says");
+		ok(permuted(cuts, QVector<int>{0, 1}) == cuts, "an order of the wrong length changes nothing");
+		ok(permuted(cuts, QVector<int>{0, 1, 2, 3, 9}) == cuts, "nor one pointing outside the list");
+
+		// Nothing selected: every cut may move, and High moves most of them.
+		ShuffleOptions all;
+		std::mt19937_64 rng(7);
+		const QVector<int> o = shuffledOrder(movableSlots(5, all, {}), all, rng);
+		const QVector<int> mixed = permuted(cuts, o);
+		QVector<int> sortedBack = mixed;
+		std::sort(sortedBack.begin(), sortedBack.end());
+		ok(sortedBack == cuts, "every cut is still there once, only the order changed");
+		ok(displacedSlots(o) >= minDisplacedFor(ShuffleOptions::Strength::High, 5),
+		   "with nothing selected the whole list is shuffled");
+
+		// Two selected: only those two trade places.
+		ShuffleOptions some;
+		some.selectedOnly = true;
+		const QVector<bool> sel{false, true, false, true, false};
+		const QVector<int> o2 = shuffledOrder(movableSlots(5, some, sel), some, rng);
+		const QVector<int> two = permuted(cuts, o2);
+		ok(two[0] == 10 && two[2] == 12 && two[4] == 14, "unselected cuts keep their slots");
+		ok(two[1] == 13 && two[3] == 11, "the two selected cuts swap");
+	}
+
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
 }

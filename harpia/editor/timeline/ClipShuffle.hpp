@@ -204,4 +204,24 @@ inline QVector<TlClip> applyOrder(const QVector<TlClip> &sorted, const QVector<i
 	return out;
 }
 
+// Any list in `order` (order[k] = the index of the item that now sits in slot
+// k). For lists whose position IS their timing, like Multi-Cut's cut list,
+// where the output is the cuts played back to back: reordering the list is
+// the whole shuffle. Returns `v` unchanged when `order` does not fit it.
+template<class T>
+QVector<T> permuted(const QVector<T> &v, const QVector<int> &order)
+{
+	if (order.size() != v.size())
+		return v;
+	QVector<T> out;
+	out.reserve(v.size());
+	for (int k = 0; k < order.size(); ++k) {
+		const int i = order[k];
+		if (i < 0 || i >= v.size())
+			return v;
+		out.append(v[i]);
+	}
+	return out;
+}
+
 } // namespace harpia

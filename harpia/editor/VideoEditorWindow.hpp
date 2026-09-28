@@ -767,6 +767,8 @@ private:
 	void openRandomizePanel();
 	ShuffleOptions randomizeOptions() const;  // from the panel, or the saved settings
 	void randomizeClips(bool selectedOnly = false); // one shuffle, one undo step
+	void randomizeCuts();                           // the Multi-Cut version: the cut list
+	QAction *randomizeAct_ = nullptr;               // Edit > Randomize clips…
 
 	// The editing console (Full editing): a line of JavaScript against the
 	// timeline -- see EditConsole.hpp for the object model. A tool window with

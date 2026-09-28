@@ -5,6 +5,10 @@
 
 target_link_libraries(harpia-recorder PRIVATE user32)
 
+# The editor window's translation unit has grown past the 65k COFF section
+# limit (C1128); /bigobj lifts it. Harmless for the smaller files.
+target_compile_options(harpia-recorder PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/bigobj>)
+
 # Build a GUI app (no console window) on Windows.
 set_target_properties(
   harpia-recorder

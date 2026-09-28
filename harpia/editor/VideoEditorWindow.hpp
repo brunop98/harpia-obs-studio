@@ -9,6 +9,7 @@
 #include "DevPanel.hpp"                 // EditorChromeParams / EditorInspectorParams
 #include "component/ComponentPanel.hpp"  // ComponentPanel::View (Inspector model)
 #include "timeline/TimelineView.hpp"    // ClipboardEntry (timeline copy/paste)
+#include "timeline/SoundRules.hpp"      // SoundInfo (sounds for events)
 
 #include <QDateTime>
 #include <QDialog>
@@ -30,6 +31,7 @@
 
 class QButtonGroup;
 class QCheckBox;
+class QSoundEffect;
 class QComboBox;
 class QDoubleSpinBox;
 class QFormLayout;
@@ -636,6 +638,44 @@ private:
 	static constexpr int kInsTabProject = 0;
 	static constexpr int kInsTabClip = 1;
 	static constexpr int kInsTabSource = 2;
+	static constexpr int kInsTabSounds = 3;
+
+	// Sounds for events (timeline/SoundRules.hpp): the Sounds tab lists the
+	// project's rules; every timeline change rebuilds the clips they make.
+	struct SoundRow {
+		int id = 0;
+		QCheckBox *on = nullptr;
+		QComboBox *trigger = nullptr;
+		QComboBox *lane = nullptr;
+		QPushButton *sound = nullptr;
+		QSpinBox *volume = nullptr;
+		QSpinBox *offset = nullptr;
+		QSpinBox *maxLen = nullptr;
+	};
+	QVBoxLayout *soundsLayout_ = nullptr; // the tab
+	QWidget *soundsList_ = nullptr;       // the rows, rebuilt when the rule set changes
+	QLabel *soundsEmpty_ = nullptr;
+	QPushButton *soundsFreezeBtn_ = nullptr;
+	QVector<SoundRow> soundRows_;
+	QHash<int, QVector<float>> soundPeaks_;  // per sound source: its waveform
+	QHash<QString, int> builtinSoundIds_;    // built-in name -> source id, once made
+	QSoundEffect *soundPreview_ = nullptr;   // the ▶ on a row
+	void buildSoundsTab(QVBoxLayout *into);
+	void rebuildSoundsTab();                 // rows follow the model's rules
+	void fillTriggerCombo(QComboBox *cb, const TlSoundRule &r);
+	void applySoundRules();                  // regenerate the derived clips (no signal)
+	SoundInfo soundInfoFor(int sourceId);
+	// A menu at `at`: the built-in sounds, the sounds already in the project,
+	// and "Audio file…". Returns the source id, or -1 for cancel.
+	int pickSound(const QPoint &at, QString *name);
+	int builtinSoundSource(const QString &name);
+	void onSoundForClip(int track, int clip, bool everyKind);
+	void onSoundForTransition(int track, int clip, bool thisTypeOnly);
+	void addSoundRule(TlSoundRule r, int sourceId, const QString &name);
+	void editSoundRule(int id, const std::function<void(TlSoundRule &)> &fn);
+	void previewSound(int sourceId);
+	void freezeSounds();
+	void showSoundsTab();
 	QPushButton *inspectorBtn_ = nullptr; // toolbar toggle (show/hide the panel)
 	QLabel *inspTitle_ = nullptr;
 	QLabel *inspInMs_ = nullptr;

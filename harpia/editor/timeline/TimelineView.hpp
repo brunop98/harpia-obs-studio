@@ -168,6 +168,18 @@ public:
 	int selectedClip() const { return selClip_; }
 	const TlClip *selectedClipPtr() const;
 	void updateSelectedClip(const TlClip &c); // Inspector edits push back here
+
+	// Sounds for events (SoundRules). The rules live in the model, so the
+	// window edits them here: one commitEdit, one undo step.
+	void editSoundRules(const std::function<void(QVector<TlSoundRule> &)> &fn);
+	// Replace the model WITHOUT a signal and keep the selection where it still
+	// points at something. For the derived clips SoundRules::apply rebuilds
+	// inside the window's clipsChanged handler: a setModel() there would drop
+	// the selection under the user's pointer, and a commitEdit() would be a
+	// second undo step for the same edit.
+	void setModelQuiet(const TimelineModel &m);
+	// setModelQuiet, then a finished edit: one clipsChanged, one undo step.
+	void setModelAndCommit(const TimelineModel &m);
 	// Every selected clip as (track, clip), primary first, in timeline order.
 	QVector<QPair<int, int>> selectedPairs() const;
 	// Edit EVERY selected clip in one go, emitting clipsChanged once at the end.
@@ -344,6 +356,16 @@ signals:
 	// "Randomize order of selected clips" from a clip's menu. The window owns
 	// the Randomize options, so it runs the shuffle (selected clips only).
 	void randomizeSelectionRequested();
+	// "Sound when this appears…" on a clip. `everyKind` = make a rule for
+	// every clip of this kind; false = one sound for this clip only.
+	void soundForClipRequested(int track, int clip, bool everyKind);
+	// The same on a transition (`clip` is the incoming one). `thisTypeOnly` =
+	// a rule for transitions of this type; false = for every transition.
+	void soundForTransitionRequested(int track, int clip, bool thisTypeOnly);
+	// "Sound rules…" from a rule-made clip, and "Convert to normal clips" on
+	// the Sounds lane. The window owns the Sounds tab and the media pool.
+	void soundRulesRequested();
+	void freezeSoundsRequested();
 	// "Export this clip…" / "Export selection…". The window owns the export
 	// dialog and the media pool, so the view only says which slice of output
 	// time was asked for.

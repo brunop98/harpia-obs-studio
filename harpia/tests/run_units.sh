@@ -278,7 +278,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 # panel can set, and nothing paints over them.
 "$MOC" -I"$H" "$H/editor/timeline/TimelineView.hpp" -o "$WORK/moc_TimelineView.cpp"
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
-	"$HERE/gutterspill_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/ui/SearchPicker.cpp" \
+	"$HERE/gutterspill_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
@@ -290,7 +290,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # grab is the line and not the clip, and every step emits clipsChanged -- which
 # is what rebuilds the audio the preview plays.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
-	"$HERE/clipvolume_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/ui/SearchPicker.cpp" \
+	"$HERE/clipvolume_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
@@ -305,7 +305,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # duplicated lane keeps a typed name, numbered; a clip's volume counts on a
 # video lane too.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
-	"$HERE/tracks_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/ui/SearchPicker.cpp" \
+	"$HERE/tracks_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
@@ -313,10 +313,21 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
 	-o "$WORK/tracks_test" $LF
 
+# Sounds for events: a rule per kind of thing ("every crossfade plays this
+# whoosh"), its clips derived and rebuilt on every change on a locked Sounds
+# lane; freeze hands them over; the JSON round trip; the built-in sounds.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/soundrules_test.cpp" "$H/editor/timeline/SoundRules.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
+	-o "$WORK/soundrules_test" $LF
+
 # Randomising clip order: permutations, pins, strengths, "avoid the same
 # order", the re-layout, and one undo step per press in the timeline.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
-	"$HERE/clipshuffle_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/ui/SearchPicker.cpp" \
+	"$HERE/clipshuffle_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
@@ -327,7 +338,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # The timeline must not rescale itself while a clip is being dragged: every
 # pixel comes from the project's total span, and dragging past the end grows it.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
-	"$HERE/timelinedragspan_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/ui/SearchPicker.cpp" \
+	"$HERE/timelinedragspan_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
@@ -339,7 +350,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # and retimed without moving its clip, and the magnet knows about markers and
 # keys as well as clip edges.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
-	"$HERE/timelinekeys_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/ui/SearchPicker.cpp" \
+	"$HERE/timelinekeys_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
@@ -351,7 +362,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # rects still tile so the gap is not a dead strip, and only a REAL split -- one
 # whose halves would rejoin seamlessly -- gets the seam mark.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
-	"$HERE/splitseam_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/ui/SearchPicker.cpp" \
+	"$HERE/splitseam_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
@@ -362,7 +373,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # Grabbing the timeline and sliding it: the moment under the pointer stays put,
 # releasing ends it, and the gestures that already worked still do.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
-	"$HERE/timelinepan_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/ui/SearchPicker.cpp" \
+	"$HERE/timelinepan_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
@@ -373,7 +384,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # Hit-testing must not go quadratic again: every "where is this on screen"
 # question used to re-measure the project's whole duration.
 g++ -std=c++17 -O2 -fPIC -I"$H" -I"$ROOT" $CF \
-	"$HERE/timelineperf_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/ui/SearchPicker.cpp" \
+	"$HERE/timelineperf_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
@@ -435,7 +446,7 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
-	"$H/editor/timeline/TimelineView.cpp" "$H/ui/SearchPicker.cpp" "$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
+	"$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" "$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
 	"$WORK/moc_TimelineView.cpp" \
 	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/timelineslice_test" "$QJSLIB/libqjs.a" $LF
@@ -450,7 +461,7 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
-	"$H/editor/timeline/TimelineView.cpp" "$H/ui/SearchPicker.cpp" "$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
+	"$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" "$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
 	"$WORK/moc_TimelineView.cpp" \
 	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/playbacktracks_test" "$QJSLIB/libqjs.a" $LF
@@ -543,7 +554,7 @@ done
 g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF $AVCF \
 	"$HERE/devpanelreset_test.cpp" \
 	"$H/editor/DevPanel.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/TrackEditor.cpp" \
-	"$H/editor/VoiceoverTrack.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/ui/SearchPicker.cpp" \
+	"$H/editor/VoiceoverTrack.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/KeyframeEditor.cpp" "$H/editor/ParamSlider.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	"$H/editor/shader/ShaderRenderer.cpp" "$H/editor/script/TransformScript.cpp" \
@@ -703,6 +714,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/timelinekeys_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinedragspan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/clipvolume_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/tracks_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/soundrules_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/clipshuffle_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keyframetabs_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/hoverinspect_test" || rc=1

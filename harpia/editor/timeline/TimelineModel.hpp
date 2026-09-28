@@ -318,6 +318,12 @@ struct TlClip {
 	// to keep in sync with the clips' positions.
 	TlTransition transition;
 
+	// Non-zero on a clip a SOUND RULE placed (the id of the rule, see
+	// TlSoundRule). Such a clip is regenerated from the rule whenever the
+	// timeline changes, so it is not the user's to move: deleting the rule, or
+	// "Convert to normal clips" on the Sounds lane, is how it becomes theirs.
+	int soundRule = 0;
+
 	// Audio-only. The fades are non-destructive: nothing is written back to the
 	// media, they are evaluated as a gain at play/render time.
 	double volume = 1.0;
@@ -527,7 +533,7 @@ struct TlClip {
 		       rotation == o.rotation && opacity == o.opacity &&
 		       crop == o.crop && keys == o.keys && text == o.text && words == o.words &&
 		       scripts == o.scripts && fx == o.fx && components == o.components &&
-		       transition == o.transition &&
+		       transition == o.transition && soundRule == o.soundRule &&
 		       volume == o.volume && fadeInMs == o.fadeInMs &&
 		       fadeOutMs == o.fadeOutMs && fadeInCurve == o.fadeInCurve &&
 		       fadeOutCurve == o.fadeOutCurve;
@@ -747,6 +753,11 @@ struct TlTrack {
 	QColor color = QColor(0x3a, 0x6e, 0xa5); // clip tint (random pastel when created)
 	QVector<TlClip> clips; // unordered; painting/compositing sorts by outStartMs
 
+	// The Sounds lane: the audio lane the sound rules write their clips onto.
+	// Made (locked, at the bottom) the first time a rule produces a clip, and
+	// its rule-made clips are replaced wholesale on every change. At most one.
+	bool autoSounds = false;
+
 	// This lane appeared on its own -- a drop between two lanes, or a clip
 	// added when there was no lane of its kind -- rather than being asked for.
 	// Only such a lane is tidied away again when its last clip leaves it: one
@@ -948,8 +959,49 @@ struct TlTrack {
 	{
 		return kind == o.kind && name == o.name && muted == o.muted && hidden == o.hidden &&
 		       locked == o.locked && ripple == o.ripple && solo == o.solo &&
-		       qAbs(gain - o.gain) < 1e-9 && color == o.color && clips == o.clips;
+		       qAbs(gain - o.gain) < 1e-9 && color == o.color && clips == o.clips &&
+		       autoSounds == o.autoSounds;
 	}
+};
+
+// A sound that plays whenever a KIND of thing happens on the timeline: every
+// crossfade gets the same whoosh, every still that pops in the same click,
+// every typing caption the same clatter. The rule is the source of truth; the
+// clips it produces (TlClip::soundRule) are derived, rebuilt from the rules
+// and the timeline on every edit -- see SoundRules::apply -- and land on the
+// one lane marked TlTrack::autoSounds. A new caption added tomorrow gets its
+// sound without anyone remembering to add it.
+struct TlSoundRule {
+	enum class Trigger {
+		AnyTransition = 0, // every enabled transition, whatever its type
+		Transition,        // transitions of `transitionType` only
+		ImageAppears,      // a still starts
+		TextAppears,       // a caption starts
+		VideoStarts,       // a media clip starts on a picture lane
+		Component,         // a clip carrying the component `componentId` starts
+		AnyClipStarts,     // any clip on a picture lane starts
+		Count
+	};
+	int id = 0; // stable within the project; > 0
+	bool enabled = true;
+	Trigger trigger = Trigger::AnyTransition;
+	int transitionType = 0;  // TransitionType, for Trigger::Transition
+	QString componentId;     // "harpia.textType", for Trigger::Component
+	int lane = -1;           // -1 = any picture lane, else only that track index
+	int sourceId = 0;        // the sound, in the media pool (an audio source)
+	QString soundName;       // what to call it in the list ("Whoosh", "click.wav")
+	double volume = 1.0;     // 0..2, the clip's volume
+	int offsetMs = 0;        // start this much after (or, negative, before) the event
+	int maxMs = 0;           // cut the sound after this long; 0 = play it whole
+
+	bool operator==(const TlSoundRule &o) const
+	{
+		return id == o.id && enabled == o.enabled && trigger == o.trigger &&
+		       transitionType == o.transitionType && componentId == o.componentId &&
+		       lane == o.lane && sourceId == o.sourceId && soundName == o.soundName &&
+		       qAbs(volume - o.volume) < 1e-9 && offsetMs == o.offsetMs && maxMs == o.maxMs;
+	}
+	bool operator!=(const TlSoundRule &o) const { return !(*this == o); }
 };
 
 // The whole timeline. Video tracks come first, then audio tracks. Index order IS
@@ -968,6 +1020,24 @@ struct TimelineModel {
 	QVector<qint64> markers;
 
 	QVector<TlTrack> tracks;
+
+	// Sounds for events (see TlSoundRule). Saved with the project, part of
+	// equality so a rule change is an undo step.
+	QVector<TlSoundRule> soundRules;
+	int nextSoundRuleId() const
+	{
+		int n = 1;
+		for (const TlSoundRule &r : soundRules)
+			n = std::max(n, r.id + 1);
+		return n;
+	}
+	int soundsLane() const
+	{
+		for (int i = 0; i < tracks.size(); ++i)
+			if (tracks[i].autoSounds)
+				return i;
+		return -1;
+	}
 
 	int videoTrackCount() const
 	{
@@ -1040,7 +1110,7 @@ struct TimelineModel {
 
 	bool operator==(const TimelineModel &o) const
 	{
-		return tracks == o.tracks && markers == o.markers;
+		return tracks == o.tracks && markers == o.markers && soundRules == o.soundRules;
 	}
 	bool operator!=(const TimelineModel &o) const { return !(*this == o); }
 };

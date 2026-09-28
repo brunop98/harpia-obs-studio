@@ -272,6 +272,8 @@ inline QJsonObject clipToJson(const TlClip &c)
 		co[QStringLiteral("fadeInCurve")] = int(c.fadeInCurve);
 		co[QStringLiteral("fadeOutCurve")] = int(c.fadeOutCurve);
 	}
+	if (c.soundRule > 0)
+		co[QStringLiteral("soundRule")] = c.soundRule;
 	// `peaks` is deliberately absent: it is a waveform cache derived from the
 	// source, rebuilt on load rather than stored.
 	return co;
@@ -290,6 +292,7 @@ inline TlClip clipFromJson(const QJsonObject &co)
 	c.srcEndMs = qint64(co.value(QStringLiteral("srcEnd")).toDouble());
 	c.speed = co.value(QStringLiteral("speed")).toDouble(1.0);
 	c.outStartMs = qint64(co.value(QStringLiteral("outStart")).toDouble());
+	c.soundRule = co.value(QStringLiteral("soundRule")).toInt(0);
 	c.posX = co.value(QStringLiteral("posX")).toDouble(0.5);
 	c.posY = co.value(QStringLiteral("posY")).toDouble(0.5);
 	c.scale = co.value(QStringLiteral("scale")).toDouble(1.0);
@@ -487,6 +490,8 @@ inline QJsonObject trackToJson(const TlTrack &t)
 	to[QStringLiteral("solo")] = t.solo;
 	to[QStringLiteral("gain")] = t.gain;
 	to[QStringLiteral("color")] = t.color.name(QColor::HexRgb);
+	if (t.autoSounds)
+		to[QStringLiteral("autoSounds")] = true;
 	QJsonArray clipArr;
 	for (const TlClip &c : t.clips)
 		clipArr.append(clipToJson(c));
@@ -511,9 +516,49 @@ inline TlTrack trackFromJson(const QJsonObject &to)
 	t.gain = std::clamp(to.value(QStringLiteral("gain")).toDouble(1.0), 0.0, 2.0);
 	if (const QColor tc(to.value(QStringLiteral("color")).toString()); tc.isValid())
 		t.color = tc;
+	t.autoSounds = to.value(QStringLiteral("autoSounds")).toBool(false);
 	for (const QJsonValue &cv : to.value(QStringLiteral("clips")).toArray())
 		t.clips.append(clipFromJson(cv.toObject()));
 	return t;
+}
+
+// A sound rule (see TlSoundRule). `source` is a media-pool id, remapped on
+// load the same way a clip's is.
+inline QJsonObject soundRuleToJson(const TlSoundRule &r)
+{
+	QJsonObject o;
+	o[QStringLiteral("id")] = r.id;
+	o[QStringLiteral("enabled")] = r.enabled;
+	o[QStringLiteral("trigger")] = int(r.trigger);
+	o[QStringLiteral("transitionType")] = r.transitionType;
+	if (!r.componentId.isEmpty())
+		o[QStringLiteral("component")] = r.componentId;
+	o[QStringLiteral("lane")] = r.lane;
+	o[QStringLiteral("source")] = r.sourceId;
+	o[QStringLiteral("name")] = r.soundName;
+	o[QStringLiteral("volume")] = r.volume;
+	o[QStringLiteral("offsetMs")] = r.offsetMs;
+	o[QStringLiteral("maxMs")] = r.maxMs;
+	return o;
+}
+
+inline TlSoundRule soundRuleFromJson(const QJsonObject &o)
+{
+	TlSoundRule r;
+	r.id = o.value(QStringLiteral("id")).toInt(0);
+	r.enabled = o.value(QStringLiteral("enabled")).toBool(true);
+	const int tr = o.value(QStringLiteral("trigger")).toInt(0);
+	r.trigger = (tr >= 0 && tr < int(TlSoundRule::Trigger::Count)) ? TlSoundRule::Trigger(tr)
+									 : TlSoundRule::Trigger::AnyTransition;
+	r.transitionType = o.value(QStringLiteral("transitionType")).toInt(0);
+	r.componentId = o.value(QStringLiteral("component")).toString();
+	r.lane = o.value(QStringLiteral("lane")).toInt(-1);
+	r.sourceId = o.value(QStringLiteral("source")).toInt(0);
+	r.soundName = o.value(QStringLiteral("name")).toString();
+	r.volume = std::clamp(o.value(QStringLiteral("volume")).toDouble(1.0), 0.0, 2.0);
+	r.offsetMs = o.value(QStringLiteral("offsetMs")).toInt(0);
+	r.maxMs = std::max(0, o.value(QStringLiteral("maxMs")).toInt(0));
+	return r;
 }
 
 

@@ -1,5 +1,7 @@
 #include "TimelineView.hpp"
 
+#include "SoundRules.hpp"
+
 #include "editor/Filmstrip.hpp"
 
 #include "../MediaFiles.hpp"
@@ -123,6 +125,40 @@ void TimelineView::setViewStart(qint64 startMs)
 void TimelineView::notifyView()
 {
 	emit viewChanged(spanMs(), viewStart_, visibleMs(), playheadMs_);
+}
+
+void TimelineView::setModelQuiet(const TimelineModel &m)
+{
+	model_ = m;
+	auto valid = [this](int t, int c) {
+		return t >= 0 && t < model_.tracks.size() && c >= 0 && c < model_.tracks[t].clips.size();
+	};
+	if (!valid(selTrack_, selClip_)) {
+		selTrack_ = selClip_ = -1;
+		selTransition_ = false;
+	}
+	for (auto it = extraSel_.begin(); it != extraSel_.end();)
+		it = valid(it->first, it->second) ? std::next(it) : extraSel_.erase(it);
+	if (hoverTrTrack_ >= 0 && !valid(hoverTrTrack_, hoverTrClip_))
+		hoverTrTrack_ = hoverTrClip_ = -1;
+	clampView();
+	update();
+	updateGeometry();
+}
+
+void TimelineView::setModelAndCommit(const TimelineModel &m)
+{
+	setModelQuiet(m);
+	commitEdit();
+}
+
+void TimelineView::editSoundRules(const std::function<void(QVector<TlSoundRule> &)> &fn)
+{
+	if (!fn)
+		return;
+	fn(model_.soundRules);
+	update();
+	commitEdit();
 }
 
 void TimelineView::setModel(const TimelineModel &m)
@@ -1066,6 +1102,16 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 		addFxClip = menu.addAction(QStringLiteral("Add effect…"));
 		menu.addSeparator();
 	}
+	QAction *freezeSounds = nullptr;
+	if (t.autoSounds) {
+		freezeSounds = menu.addAction(QStringLiteral("Convert to normal clips"));
+		freezeSounds->setToolTip(QStringLiteral(
+			"This is the Sounds lane: its clips are made by the sound rules and remade on "
+			"every change, so they cannot be moved by hand. Converting hands them to you as "
+			"ordinary audio clips and removes the rules."));
+		menu.setToolTipsVisible(true);
+		menu.addSeparator();
+	}
 	QAction *lock = menu.addAction(t.locked ? QStringLiteral("Unlock track")
 						: QStringLiteral("Lock track"));
 	QAction *hide = canHide ? menu.addAction(t.hidden ? QStringLiteral("Show track")
@@ -1146,6 +1192,10 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 	// locked, hidden, named or coloured is not one to be tidied away because
 	// its last clip moved.
 	t.autoLane = false;
+	if (freezeSounds && chosen == freezeSounds) {
+		emit freezeSoundsRequested();
+		return;
+	}
 	if (chosen == lock) {
 		t.locked = !t.locked;
 	} else if (hide && chosen == hide) {
@@ -3882,11 +3932,59 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	}
 	QAction *mute = menu.addAction(model_.tracks[track].muted ? QStringLiteral("Unmute track")
 								 : QStringLiteral("Mute track"));
+	// Sounds for events. On a picture clip: a sound for this one, or a rule
+	// for every clip of its kind. Right-clicked inside an overlap, the
+	// transition gets the same pair. On a clip a rule made: the rules, since
+	// that clip is not the user's to edit.
+	QAction *sndThis = nullptr, *sndKind = nullptr, *sndTrThis = nullptr, *sndTrAll = nullptr;
+	QAction *sndRules = nullptr;
+	const bool onPicture = TimelineModel::isPictureKind(model_.tracks[track].kind);
+	if (menuClip.soundRule > 0) {
+		menu.addSeparator();
+		sndRules = menu.addAction(QStringLiteral("Sound rules…"));
+		sndRules->setToolTip(QStringLiteral(
+			"A sound rule placed this clip, and places it again whenever the timeline "
+			"changes. Edit the rule to change the sound, its volume or timing."));
+	} else if (onPicture && !isFx) {
+		menu.addSeparator();
+		QMenu *snd = menu.addMenu(QStringLiteral("Sound when this appears"));
+		const TlSoundRule natural = SoundRules::ruleForClip(menuClip, true);
+		sndThis = snd->addAction(QStringLiteral("For this clip only…"));
+		sndThis->setToolTip(QStringLiteral("One audio clip, placed at this clip's start. Yours to move."));
+		sndKind = snd->addAction(QStringLiteral("%1…").arg(SoundRules::triggerLabel(natural)));
+		sndKind->setToolTip(QStringLiteral(
+			"A rule: the sound is placed at every such clip, now and whenever one is added. "
+			"See the Sounds tab in the inspector."));
+		int outgoing = -1, incoming = -1;
+		if (model_.tracks[track].overlapAt(atOutMs, &outgoing, &incoming) && incoming >= 0 &&
+		    model_.tracks[track].clips[incoming].transition.enabled) {
+			const TlClip &in = model_.tracks[track].clips[incoming];
+			snd->addSeparator();
+			sndTrThis = snd->addAction(QStringLiteral("%1…").arg(
+				SoundRules::triggerLabel(SoundRules::ruleForTransition(in, true))));
+			sndTrAll = snd->addAction(QStringLiteral("Every transition…"));
+			sndTrThis->setData(incoming);
+			sndTrAll->setData(incoming);
+		}
+		snd->setToolTipsVisible(true);
+	}
 	menu.addSeparator();
 	QAction *del = menu.addAction(QStringLiteral("Delete clip"));
 	disableBecause(del, !locked, lockedWhy);
 	explainDisabled(&menu);
 	QAction *chosen = menu.exec(globalPos);
+	if (chosen && (chosen == sndThis || chosen == sndKind)) {
+		emit soundForClipRequested(track, clip, chosen == sndKind);
+		return;
+	}
+	if (chosen && (chosen == sndTrThis || chosen == sndTrAll)) {
+		emit soundForTransitionRequested(track, chosen->data().toInt(), chosen == sndTrThis);
+		return;
+	}
+	if (sndRules && chosen == sndRules) {
+		emit soundRulesRequested();
+		return;
+	}
 	if (randomSel && chosen == randomSel) {
 		emit randomizeSelectionRequested();
 		return;

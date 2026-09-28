@@ -87,6 +87,7 @@
 #include <QScreen>
 #include <QFileSystemWatcher>
 #include <QFormLayout>
+#include <QFrame>
 #include <QLineEdit>
 #include <QHBoxLayout>
 #include <QHash>
@@ -104,6 +105,7 @@
 #include <QPlainTextEdit>
 #include <QTextEdit>
 #include <QProcess>
+#include <QSoundEffect>
 #include <QSpinBox>
 #include <QProgressDialog>
 #include <QPushButton>
@@ -528,6 +530,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(timelineView_, &TimelineView::hoverScrubEnded, this,
 		&VideoEditorWindow::showPlayheadFrame);
 	connect(timelineView_, &TimelineView::clipsChanged, this, [this]() {
+		// Sounds for events first: the rules' clips are derived from the
+		// timeline, so they are rebuilt before anything below reads it (the
+		// mix, the preview, the undo snapshot).
+		applySoundRules();
 		// A fade drag rounds to the project frame, which only exists once a
 		// source is loaded — refresh it whenever the timeline changes.
 		timelineView_->setFrameRate(timelineFps());
@@ -556,6 +562,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		if (fullEdit())
 			requestPreview(-1, timelinePlayheadMs());
 		scheduleSnapshot();
+		rebuildSoundsTab();
 	});
 	// A finished timeline action closes its undo entry at once. Without this,
 	// two edits inside the 350ms coalescing window share one entry -- and a move
@@ -598,6 +605,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		&VideoEditorWindow::onFilesDroppedOnTimeline);
 	connect(timelineView_, &TimelineView::randomizeSelectionRequested, this,
 		[this]() { randomizeClips(/*selectedOnly=*/true); });
+	// Sounds for events, from the clip and lane menus.
+	connect(timelineView_, &TimelineView::soundForClipRequested, this,
+		&VideoEditorWindow::onSoundForClip);
+	connect(timelineView_, &TimelineView::soundForTransitionRequested, this,
+		&VideoEditorWindow::onSoundForTransition);
+	connect(timelineView_, &TimelineView::soundRulesRequested, this, &VideoEditorWindow::showSoundsTab);
+	connect(timelineView_, &TimelineView::freezeSoundsRequested, this, &VideoEditorWindow::freezeSounds);
 	connect(timelineView_, &TimelineView::inspectClipRequested, this,
 		&VideoEditorWindow::revealInspector);
 	connect(timelineView_, &TimelineView::keyframeEditorRequested, this,
@@ -945,6 +959,16 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		if (timelineView_)
 			timelineView_->addTrack(TlTrack::Kind::Audio);
 	});
+	QAction *soundRules = addMenu->addAction(QStringLiteral("Sounds for events…"));
+	soundRules->setToolTip(QStringLiteral(
+		"A sound that plays at every transition, every image or caption that appears, "
+		"every typing caption… Rules, not clips: add one and every such event on the "
+		"timeline gets the sound, now and later."));
+	connect(soundRules, &QAction::triggered, this, [this]() {
+		if (!fullEdit())
+			setEditMode(EditMode::Full);
+		showSoundsTab();
+	});
 	addMenu->addSeparator();
 	addFxClipAct_ = addMenu->addAction(QStringLiteral("Effect clip"));
 	addFxClipAct_->setToolTip(
@@ -1111,6 +1135,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// one tab they were a block of numbers you scrolled past to reach the
 	// controls, in every mode, whether or not you were trimming.
 	QVBoxLayout *srcLayout = mkTab(QStringLiteral("Source"));
+	// Sounds for events: a rule per kind of thing, not a clip per event.
+	QVBoxLayout *sndLayout = mkTab(QStringLiteral("Sounds"));
 	// The tab stays there with nothing selected rather than disappearing: a tab
 	// strip that changes shape as you work is a strip you cannot aim at.
 	clipEmpty_ = new QLabel(QStringLiteral("Select a clip to see its properties."), this);
@@ -1223,6 +1249,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	srcEmpty_->setStyleSheet(QStringLiteral("color:#7f858e; padding:10px 2px;"));
 	srcLayout->addWidget(srcEmpty_);
 	srcLayout->addStretch(1);
+	buildSoundsTab(sndLayout);
 
 	// Full-editing: per-clip zoom/position/keyframes and text styling.
 	buildClipInspector(insLayout);
@@ -2846,6 +2873,555 @@ void VideoEditorWindow::addAudioClipFromSource(int sourceId)
 		setEditMode(EditMode::Full);
 	updateInfoLabel();
 	showTimelineFrame(timelinePlayheadMs());
+}
+
+// ---- sounds for events ---------------------------------------------------------
+
+void VideoEditorWindow::applySoundRules()
+{
+	if (!timelineView_)
+		return;
+	const TimelineModel &cur = timelineView_->model();
+	if (cur.soundRules.isEmpty() && cur.soundsLane() < 0) {
+		// The common case, and the cheap one: no rules, no Sounds lane. Only a
+		// stray rule-made clip (a hand-edited file) would need the full pass.
+		bool stray = false;
+		for (const TlTrack &t : cur.tracks)
+			for (const TlClip &c : t.clips)
+				if (c.soundRule > 0)
+					stray = true;
+		if (!stray)
+			return;
+	}
+	TimelineModel m = cur;
+	if (SoundRules::apply(m, [this](int id) { return soundInfoFor(id); }))
+		timelineView_->setModelQuiet(m);
+}
+
+SoundInfo VideoEditorWindow::soundInfoFor(int sourceId)
+{
+	SoundInfo si;
+	EditorSource *s = sourceById(sourceId);
+	if (!s)
+		return si;
+	const QString wav = audioProxyFor(sourceId);
+	if (wav.isEmpty())
+		return si;
+	si.durationMs = s->durationMs > 0 ? s->durationMs : VoiceoverTrack::wavDurationMs(wav);
+	auto it = soundPeaks_.find(sourceId);
+	if (it == soundPeaks_.end())
+		it = soundPeaks_.insert(sourceId, VoiceoverTrack::loadPeaks(wav, 200));
+	si.peaks = it.value();
+	return si;
+}
+
+int VideoEditorWindow::builtinSoundSource(const QString &name)
+{
+	if (const auto it = builtinSoundIds_.constFind(name); it != builtinSoundIds_.constEnd())
+		if (sourceById(it.value()))
+			return it.value();
+	// Made once, into the app's data folder, so a saved project points at a
+	// file that is still there next time (and is remade here if it is not).
+	const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+			    QStringLiteral("/sounds");
+	QDir().mkpath(dir);
+	QString file = name.toLower();
+	file.replace(QLatin1Char(' '), QLatin1Char('_'));
+	const QString wav = dir + QLatin1Char('/') + file + QStringLiteral(".wav");
+	if (!QFileInfo::exists(wav) && !SoundRules::writeBuiltin(name, wav))
+		return -1;
+	if (const EditorSource *es = sourceByPath(wav)) {
+		builtinSoundIds_.insert(name, es->id);
+		return es->id;
+	}
+	const int id = addAudioSource(wav);
+	if (id >= 0) {
+		if (EditorSource *es = sourceById(id))
+			es->name = name; // "Whoosh", not "whoosh.wav"
+		builtinSoundIds_.insert(name, id);
+	}
+	return id;
+}
+
+int VideoEditorWindow::pickSound(const QPoint &at, QString *name)
+{
+	QMenu menu(this);
+	menu.setToolTipsVisible(true);
+	// The built-in ones first: nothing to find, nothing to download.
+	for (const QString &b : SoundRules::builtinSounds()) {
+		QAction *a = menu.addAction(b);
+		a->setData(QStringLiteral("b:") + b);
+	}
+	// Then every sound already in the project (audio-only sources).
+	bool sep = false;
+	for (const EditorSource &es : sources_) {
+		if (es.width != 0 || es.height != 0 || es.durationMs <= 0)
+			continue;
+		bool builtin = false;
+		for (auto it = builtinSoundIds_.constBegin(); it != builtinSoundIds_.constEnd(); ++it)
+			if (it.value() == es.id)
+				builtin = true;
+		if (builtin)
+			continue;
+		if (!sep) {
+			menu.addSeparator();
+			sep = true;
+		}
+		QAction *a = menu.addAction(es.name);
+		a->setData(QStringLiteral("s:%1").arg(es.id));
+	}
+	menu.addSeparator();
+	QAction *file = menu.addAction(QStringLiteral("Audio file…"));
+	file->setToolTip(QStringLiteral("Any mp3, wav, ogg, m4a or flac on this computer."));
+	QAction *chosen = menu.exec(at);
+	if (!chosen)
+		return -1;
+	if (chosen == file) {
+		const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("Choose a sound"),
+							       QFileInfo(inPath_).absolutePath(), audioOpenFilter());
+		if (f.isEmpty())
+			return -1;
+		const int id = addAudioSource(f);
+		if (id >= 0 && name)
+			*name = QFileInfo(f).fileName();
+		return id;
+	}
+	const QString d = chosen->data().toString();
+	if (d.startsWith(QLatin1String("b:"))) {
+		const QString n = d.mid(2);
+		if (name)
+			*name = n;
+		return builtinSoundSource(n);
+	}
+	if (d.startsWith(QLatin1String("s:"))) {
+		const int id = d.mid(2).toInt();
+		if (name)
+			if (const EditorSource *es = sourceById(id))
+				*name = es->name;
+		return id;
+	}
+	return -1;
+}
+
+void VideoEditorWindow::addSoundRule(TlSoundRule r, int sourceId, const QString &name)
+{
+	if (!timelineView_ || sourceId < 0)
+		return;
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	r.id = timelineView_->model().nextSoundRuleId();
+	r.sourceId = sourceId;
+	r.soundName = name;
+	r.enabled = true;
+	timelineView_->editSoundRules([r](QVector<TlSoundRule> &rules) { rules.append(r); });
+	showSoundsTab();
+	const TimelineModel &m = timelineView_->model();
+	int placed = 0;
+	if (const int lane = m.soundsLane(); lane >= 0)
+		for (const TlClip &c : m.tracks[lane].clips)
+			if (c.soundRule == r.id)
+				++placed;
+	consolePrint(QStringLiteral("// sound rule: %1 -> %2   (%3 placed now)")
+			     .arg(SoundRules::triggerLabel(r), name)
+			     .arg(placed),
+		     ConsoleTone::Comment);
+	if (infoLabel_)
+		infoLabel_->setText(placed == 0
+					    ? QStringLiteral("Rule added: %1. Nothing on the timeline matches it yet; "
+							     "the sound is placed as soon as something does.")
+						      .arg(SoundRules::triggerLabel(r))
+					    : QStringLiteral("Rule added: %1 — %2 placed on the Sounds lane.")
+						      .arg(SoundRules::triggerLabel(r))
+						      .arg(placed == 1 ? QStringLiteral("1 sound")
+								       : QStringLiteral("%1 sounds").arg(placed)));
+}
+
+void VideoEditorWindow::editSoundRule(int id, const std::function<void(TlSoundRule &)> &fn)
+{
+	if (!timelineView_ || !fn)
+		return;
+	timelineView_->editSoundRules([id, &fn](QVector<TlSoundRule> &rules) {
+		for (TlSoundRule &r : rules)
+			if (r.id == id)
+				fn(r);
+	});
+}
+
+void VideoEditorWindow::onSoundForClip(int track, int clip, bool everyKind)
+{
+	if (!timelineView_)
+		return;
+	const TimelineModel &m = timelineView_->model();
+	if (track < 0 || track >= m.tracks.size() || clip < 0 || clip >= m.tracks[track].clips.size())
+		return;
+	const TlClip target = m.tracks[track].clips[clip];
+	const bool picture = TimelineModel::isPictureKind(m.tracks[track].kind);
+	QString name;
+	const int src = pickSound(QCursor::pos(), &name);
+	if (src < 0)
+		return;
+	if (everyKind) {
+		addSoundRule(SoundRules::ruleForClip(target, picture), src, name);
+		return;
+	}
+	// This clip only: one ordinary audio clip at its start, on a free lane.
+	// Shaped like a rule's clip (short fades, no crossfade) but not marked as
+	// one, so it is the user's to move, trim and delete.
+	const SoundInfo si = soundInfoFor(src);
+	if (si.durationMs <= 0) {
+		QMessageBox::information(this, QStringLiteral("Sound"),
+					 QStringLiteral("That sound could not be read."));
+		return;
+	}
+	TlSoundRule once;
+	once.sourceId = src;
+	SoundEvent e;
+	e.atMs = target.outStartMs;
+	TlClip c = SoundRules::clipFor(once, e, si);
+	c.soundRule = 0;
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	timelineView_->addClipOnFreeLane(TlTrack::Kind::Audio, c);
+	if (infoLabel_)
+		infoLabel_->setText(QStringLiteral("%1 placed at %2.").arg(name, timeTextMs(target.outStartMs)));
+}
+
+void VideoEditorWindow::onSoundForTransition(int track, int clip, bool thisTypeOnly)
+{
+	if (!timelineView_)
+		return;
+	const TimelineModel &m = timelineView_->model();
+	if (track < 0 || track >= m.tracks.size() || clip < 0 || clip >= m.tracks[track].clips.size())
+		return;
+	const TlClip incoming = m.tracks[track].clips[clip];
+	QString name;
+	const int src = pickSound(QCursor::pos(), &name);
+	if (src < 0)
+		return;
+	addSoundRule(SoundRules::ruleForTransition(incoming, thisTypeOnly), src, name);
+}
+
+void VideoEditorWindow::previewSound(int sourceId)
+{
+	const QString wav = audioProxyFor(sourceId);
+	if (wav.isEmpty())
+		return;
+	if (!soundPreview_)
+		soundPreview_ = new QSoundEffect(this);
+	soundPreview_->stop();
+	soundPreview_->setSource(QUrl::fromLocalFile(wav));
+	soundPreview_->setVolume(0.8);
+	soundPreview_->play();
+}
+
+void VideoEditorWindow::freezeSounds()
+{
+	if (!timelineView_)
+		return;
+	const TimelineModel &m = timelineView_->model();
+	if (m.soundRules.isEmpty() && m.soundsLane() < 0)
+		return;
+	const auto answer = QMessageBox::question(
+		this, QStringLiteral("Convert to normal clips"),
+		QStringLiteral("The Sounds lane's clips become ordinary audio clips you can move, trim "
+			       "and delete, and the %1 rule(s) that made them are removed, so nothing is "
+			       "placed automatically from now on.\n\nConvert?")
+			.arg(m.soundRules.size()),
+		QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+	if (answer != QMessageBox::Yes)
+		return;
+	TimelineModel w = m;
+	SoundRules::freeze(w);
+	timelineView_->setModelAndCommit(w); // one undo step; the tab follows through clipsChanged
+}
+
+void VideoEditorWindow::showSoundsTab()
+{
+	revealInspector();
+	if (insTabs_ && kInsTabSounds < insTabs_->count())
+		insTabs_->setCurrentIndex(kInsTabSounds);
+	rebuildSoundsTab();
+}
+
+void VideoEditorWindow::buildSoundsTab(QVBoxLayout *into)
+{
+	soundsLayout_ = into;
+	auto *intro = new QLabel(
+		QStringLiteral("A sound that plays whenever a kind of thing happens: every transition, "
+			       "every image or caption that appears, every typing caption. Each rule "
+			       "places its clips on a locked Sounds lane and places them again whenever "
+			       "the timeline changes, so a caption added later gets its sound too.\n\n"
+			       "Right-click a clip, or inside a transition, for “Sound when this "
+			       "appears”."),
+		this);
+	intro->setWordWrap(true);
+	intro->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+	into->addWidget(intro);
+
+	soundsList_ = new QWidget(this);
+	auto *ll = new QVBoxLayout(soundsList_);
+	ll->setContentsMargins(0, 0, 0, 0);
+	ll->setSpacing(6);
+	into->addWidget(soundsList_);
+	soundsEmpty_ = new QLabel(QStringLiteral("No rules yet."), this);
+	soundsEmpty_->setStyleSheet(QStringLiteral("color:#7f858e; padding:6px 2px;"));
+	into->addWidget(soundsEmpty_);
+
+	auto *btns = new QHBoxLayout;
+	auto *add = new QPushButton(QStringLiteral("Add rule…"), this);
+	add->setToolTip(QStringLiteral("Pick what it fires on, then the sound."));
+	connect(add, &QPushButton::clicked, this, [this, add]() {
+		QMenu menu(this);
+		auto put = [&](QMenu *m, const TlSoundRule &r) {
+			QAction *a = m->addAction(SoundRules::triggerLabel(r));
+			a->setData(QVariant::fromValue(QStringList{QString::number(int(r.trigger)),
+								   QString::number(r.transitionType), r.componentId}));
+		};
+		TlSoundRule r;
+		r.trigger = TlSoundRule::Trigger::AnyTransition;
+		put(&menu, r);
+		QMenu *byType = menu.addMenu(QStringLiteral("One transition type"));
+		for (int i = 0; i < kTransitionTypeCount; ++i) {
+			r.trigger = TlSoundRule::Trigger::Transition;
+			r.transitionType = i;
+			put(byType, r);
+		}
+		r.transitionType = 0;
+		menu.addSeparator();
+		r.trigger = TlSoundRule::Trigger::ImageAppears;
+		put(&menu, r);
+		r.trigger = TlSoundRule::Trigger::TextAppears;
+		put(&menu, r);
+		r.trigger = TlSoundRule::Trigger::Component;
+		r.componentId = QStringLiteral("harpia.textType");
+		put(&menu, r);
+		r.componentId.clear();
+		r.trigger = TlSoundRule::Trigger::VideoStarts;
+		put(&menu, r);
+		r.trigger = TlSoundRule::Trigger::AnyClipStarts;
+		put(&menu, r);
+		QAction *chosen = menu.exec(add->mapToGlobal(QPoint(0, add->height())));
+		if (!chosen)
+			return;
+		const QStringList d = chosen->data().toStringList();
+		TlSoundRule nr;
+		nr.trigger = TlSoundRule::Trigger(d.value(0).toInt());
+		nr.transitionType = d.value(1).toInt();
+		nr.componentId = d.value(2);
+		QString name;
+		const int src = pickSound(add->mapToGlobal(QPoint(0, add->height())), &name);
+		if (src < 0)
+			return;
+		addSoundRule(nr, src, name);
+	});
+	btns->addWidget(add);
+	soundsFreezeBtn_ = new QPushButton(QStringLiteral("Convert to normal clips"), this);
+	soundsFreezeBtn_->setToolTip(QStringLiteral(
+		"Hand the Sounds lane's clips to you as ordinary audio clips and remove the rules."));
+	connect(soundsFreezeBtn_, &QPushButton::clicked, this, &VideoEditorWindow::freezeSounds);
+	btns->addWidget(soundsFreezeBtn_);
+	btns->addStretch(1);
+	into->addLayout(btns);
+	into->addStretch(1);
+	rebuildSoundsTab();
+}
+
+void VideoEditorWindow::fillTriggerCombo(QComboBox *cb, const TlSoundRule &r)
+{
+	auto key = [](TlSoundRule::Trigger t, int tt, const QString &comp) {
+		return QStringLiteral("%1|%2|%3").arg(int(t)).arg(tt).arg(comp);
+	};
+	if (cb->count() == 0) {
+		auto put = [&](TlSoundRule::Trigger t, int tt = 0, const QString &comp = QString()) {
+			cb->addItem(SoundRules::triggerLabel(t, tt, comp), key(t, tt, comp));
+		};
+		put(TlSoundRule::Trigger::AnyTransition);
+		for (int i = 0; i < kTransitionTypeCount; ++i)
+			put(TlSoundRule::Trigger::Transition, i);
+		put(TlSoundRule::Trigger::ImageAppears);
+		put(TlSoundRule::Trigger::TextAppears);
+		put(TlSoundRule::Trigger::Component, 0, QStringLiteral("harpia.textType"));
+		put(TlSoundRule::Trigger::VideoStarts);
+		put(TlSoundRule::Trigger::AnyClipStarts);
+	}
+	int i = cb->findData(key(r.trigger, r.transitionType, r.componentId));
+	if (i < 0 && r.trigger == TlSoundRule::Trigger::Component) {
+		// A component the list does not know: add it so the rule shows as is.
+		cb->addItem(SoundRules::triggerLabel(r), key(r.trigger, r.transitionType, r.componentId));
+		i = cb->count() - 1;
+	}
+	cb->setCurrentIndex(i < 0 ? 0 : i);
+}
+
+void VideoEditorWindow::rebuildSoundsTab()
+{
+	if (!soundsList_ || !timelineView_)
+		return;
+	const TimelineModel &m = timelineView_->model();
+	const QVector<TlSoundRule> &rules = m.soundRules;
+	bool same = rules.size() == soundRows_.size();
+	for (int i = 0; same && i < rules.size(); ++i)
+		if (rules[i].id != soundRows_[i].id)
+			same = false;
+	if (!same) {
+		// The set changed: build the rows afresh. (Values alone are synced
+		// below without touching the widgets, so a spin box being dragged is
+		// not pulled out from under the pointer.)
+		for (const SoundRow &row : soundRows_)
+			if (row.on)
+				row.on->parentWidget()->deleteLater();
+		soundRows_.clear();
+		auto *ll = qobject_cast<QVBoxLayout *>(soundsList_->layout());
+		for (const TlSoundRule &r : rules) {
+			const int id = r.id;
+			SoundRow row;
+			row.id = id;
+			auto *frame = new QFrame(soundsList_);
+			frame->setStyleSheet(QStringLiteral("QFrame{background:#26292d;border-radius:6px;}"));
+			auto *v = new QVBoxLayout(frame);
+			v->setContentsMargins(8, 6, 8, 6);
+			v->setSpacing(4);
+
+			auto *top = new QHBoxLayout;
+			row.on = new QCheckBox(frame);
+			row.on->setToolTip(QStringLiteral("Off keeps the rule but places nothing."));
+			connect(row.on, &QCheckBox::toggled, this,
+				[this, id](bool on) { editSoundRule(id, [on](TlSoundRule &r) { r.enabled = on; }); });
+			top->addWidget(row.on);
+			row.trigger = new QComboBox(frame);
+			row.trigger->setToolTip(QStringLiteral("What the sound plays on."));
+			connect(row.trigger, &QComboBox::currentIndexChanged, this, [this, id](int i) {
+				auto *cb = qobject_cast<QComboBox *>(sender());
+				if (!cb || i < 0)
+					return;
+				const QStringList k = cb->itemData(i).toString().split(QLatin1Char('|'));
+				if (k.size() != 3)
+					return;
+				editSoundRule(id, [k](TlSoundRule &r) {
+					r.trigger = TlSoundRule::Trigger(k[0].toInt());
+					r.transitionType = k[1].toInt();
+					r.componentId = k[2];
+				});
+			});
+			top->addWidget(row.trigger, 1);
+			auto *del = new QPushButton(QStringLiteral("✕"), frame);
+			del->setFlat(true);
+			del->setFixedWidth(24);
+			del->setToolTip(QStringLiteral("Remove this rule and the sounds it placed."));
+			connect(del, &QPushButton::clicked, this, [this, id]() {
+				timelineView_->editSoundRules([id](QVector<TlSoundRule> &rules) {
+					for (int i = 0; i < rules.size(); ++i)
+						if (rules[i].id == id) {
+							rules.remove(i);
+							return;
+						}
+				});
+			});
+			top->addWidget(del);
+			v->addLayout(top);
+
+			auto *mid = new QHBoxLayout;
+			row.sound = new QPushButton(frame);
+			row.sound->setToolTip(QStringLiteral("The sound. Click to pick another."));
+			connect(row.sound, &QPushButton::clicked, this, [this, id]() {
+				auto *b = qobject_cast<QPushButton *>(sender());
+				QString name;
+				const int src = pickSound(b ? b->mapToGlobal(QPoint(0, b->height())) : QCursor::pos(), &name);
+				if (src < 0)
+					return;
+				editSoundRule(id, [src, name](TlSoundRule &r) {
+					r.sourceId = src;
+					r.soundName = name;
+				});
+			});
+			mid->addWidget(row.sound, 1);
+			auto *play = new QPushButton(QStringLiteral("▶"), frame);
+			play->setFixedWidth(28);
+			play->setToolTip(QStringLiteral("Hear it."));
+			connect(play, &QPushButton::clicked, this, [this, id]() {
+				for (const TlSoundRule &r : timelineView_->model().soundRules)
+					if (r.id == id)
+						previewSound(r.sourceId);
+			});
+			mid->addWidget(play);
+			row.lane = new QComboBox(frame);
+			row.lane->setToolTip(QStringLiteral("Only events on this lane, or on any lane."));
+			connect(row.lane, &QComboBox::currentIndexChanged, this, [this, id](int i) {
+				auto *cb = qobject_cast<QComboBox *>(sender());
+				if (!cb || i < 0)
+					return;
+				const int lane = cb->itemData(i).toInt();
+				editSoundRule(id, [lane](TlSoundRule &r) { r.lane = lane; });
+			});
+			mid->addWidget(row.lane);
+			v->addLayout(mid);
+
+			auto *bottom = new QHBoxLayout;
+			auto mkSpin = [&](const QString &label, int lo, int hi, const QString &suffix,
+					  const QString &tip) {
+				auto *l = new QLabel(label, frame);
+				l->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+				bottom->addWidget(l);
+				auto *sp = new QSpinBox(frame);
+				sp->setRange(lo, hi);
+				sp->setSuffix(suffix);
+				sp->setToolTip(tip);
+				sp->setKeyboardTracking(false);
+				new WheelGuard(sp, this);
+				bottom->addWidget(sp);
+				return sp;
+			};
+			row.volume = mkSpin(QStringLiteral("Vol"), 0, 200, QStringLiteral(" %"),
+					    QStringLiteral("The clip's volume."));
+			connect(row.volume, &QSpinBox::valueChanged, this, [this, id](int v) {
+				editSoundRule(id, [v](TlSoundRule &r) { r.volume = v / 100.0; });
+			});
+			row.offset = mkSpin(QStringLiteral("Start"), -3000, 3000, QStringLiteral(" ms"),
+					    QStringLiteral("Shift the sound: negative starts it before the event, "
+							   "positive after."));
+			connect(row.offset, &QSpinBox::valueChanged, this, [this, id](int v) {
+				editSoundRule(id, [v](TlSoundRule &r) { r.offsetMs = v; });
+			});
+			row.maxLen = mkSpin(QStringLiteral("Cut at"), 0, 20000, QStringLiteral(" ms"),
+					    QStringLiteral("Stop the sound after this long. 0 plays it whole."));
+			row.maxLen->setSpecialValueText(QStringLiteral("whole"));
+			connect(row.maxLen, &QSpinBox::valueChanged, this, [this, id](int v) {
+				editSoundRule(id, [v](TlSoundRule &r) { r.maxMs = v; });
+			});
+			bottom->addStretch(1);
+			v->addLayout(bottom);
+
+			ll->addWidget(frame);
+			soundRows_.append(row);
+		}
+	}
+	// Values follow the model, silently.
+	for (int i = 0; i < rules.size() && i < soundRows_.size(); ++i) {
+		const TlSoundRule &r = rules[i];
+		SoundRow &row = soundRows_[i];
+		QSignalBlocker b1(row.on), b2(row.trigger), b3(row.lane), b4(row.volume), b5(row.offset),
+			b6(row.maxLen);
+		row.on->setChecked(r.enabled);
+		fillTriggerCombo(row.trigger, r);
+		// Lanes: the picture lanes as they are now.
+		row.lane->clear();
+		row.lane->addItem(QStringLiteral("Any lane"), -1);
+		for (int t = 0; t < m.tracks.size(); ++t)
+			if (TimelineModel::isPictureKind(m.tracks[t].kind))
+				row.lane->addItem(m.tracks[t].name.isEmpty() ? QStringLiteral("Lane %1").arg(t + 1)
+									     : m.tracks[t].name,
+						  t);
+		const int li = row.lane->findData(r.lane);
+		row.lane->setCurrentIndex(li < 0 ? 0 : li);
+		row.sound->setText(r.soundName.isEmpty() ? QStringLiteral("Choose sound…") : r.soundName);
+		row.volume->setValue(int(std::lround(r.volume * 100)));
+		row.offset->setValue(r.offsetMs);
+		row.maxLen->setValue(r.maxMs);
+	}
+	if (soundsEmpty_)
+		soundsEmpty_->setVisible(rules.isEmpty());
+	if (soundsFreezeBtn_)
+		soundsFreezeBtn_->setEnabled(!rules.isEmpty() || m.soundsLane() >= 0);
 }
 
 void VideoEditorWindow::onAddAudioClicked()
@@ -8380,6 +8956,13 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 				mk.append(double(m));
 			root[QStringLiteral("markers")] = mk;
 		}
+		// Sounds for events. Their sources are in `sources` like a clip's.
+		if (!s.timeline.soundRules.isEmpty()) {
+			QJsonArray sr;
+			for (const TlSoundRule &r : s.timeline.soundRules)
+				sr.append(soundRuleToJson(r));
+			root[QStringLiteral("soundRules")] = sr;
+		}
 		root[QStringLiteral("harpiaProject")] = 3; // timelines need a v3 reader
 	}
 
@@ -8534,6 +9117,8 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 			}
 		for (const QJsonValue &sv : root.value(QStringLiteral("segments")).toArray())
 			used.insert(sv.toObject().value(QStringLiteral("source")).toInt());
+		for (const QJsonValue &rv : root.value(QStringLiteral("soundRules")).toArray())
+			used.insert(rv.toObject().value(QStringLiteral("source")).toInt());
 
 		bool first = true;
 		for (const QJsonValue &jv : root.value(QStringLiteral("sources")).toArray()) {
@@ -8664,6 +9249,12 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 						      : srcMap.value(c.sourceId, defaultSrcId);
 
 		s.timeline.tracks.append(t);
+	}
+	for (const QJsonValue &rv : root.value(QStringLiteral("soundRules")).toArray()) {
+		TlSoundRule r = soundRuleFromJson(rv.toObject());
+		r.sourceId = srcMap.isEmpty() ? r.sourceId : srcMap.value(r.sourceId, 0);
+		if (r.id > 0)
+			s.timeline.soundRules.append(r);
 	}
 
 	// Waveforms are a derived cache, so they are not stored in the project — but
@@ -8847,6 +9438,10 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	// left "Nothing loaded yet" sitting over the caption it was rendering and
 	// every control switched off -- which reads exactly like Open Project
 	// having done nothing.
+	// The rules' clips were saved, but their sounds may have moved: rebuild
+	// them from what is actually here.
+	applySoundRules();
+	rebuildSoundsTab();
 	updateEmptyState();
 	updateInspector();
 	if (fullEdit())

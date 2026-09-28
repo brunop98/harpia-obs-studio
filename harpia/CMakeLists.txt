@@ -299,6 +299,8 @@ target_sources(
     # "Full editing" multi-track NLE timeline.
     editor/timeline/TimelineModel.hpp
     editor/timeline/TimelineView.cpp
+    editor/timeline/SoundRules.cpp
+    editor/timeline/SoundRules.hpp
     editor/timeline/TimelineView.hpp
     editor/timeline/Ease.hpp
     editor/timeline/Transitions.cpp

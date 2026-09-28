@@ -486,6 +486,55 @@ int main(int argc, char **argv)
 		   "a header dragged below the audio stops at the bottom of the picture group");
 	}
 
+	std::printf("\n-- fit to whole timeline --\n");
+	{
+		// V2: a caption at 5 s for 2 s. V1: media 0..10 s and 12..20 s. A1: audio to 25 s.
+		TimelineModel m;
+		TlTrack v2 = track(TlTrack::Kind::Video, "V2");
+		TlClip cap;
+		cap.type = TlClip::Type::Text;
+		cap.srcStartMs = 0;
+		cap.srcEndMs = 2000;
+		cap.outStartMs = 5000;
+		cap.text.text = QStringLiteral("Title");
+		v2.clips.append(cap);
+		TlTrack v1 = track(TlTrack::Kind::Video, "V1");
+		v1.clips.append(clipAt(0));
+		TlClip late = clipAt(12000);
+		late.srcEndMs = 8000;
+		v1.clips.append(late);
+		TlTrack a1 = track(TlTrack::Kind::Audio, "A1");
+		TlClip aud = clipAt(0, 9);
+		aud.srcEndMs = 25000;
+		a1.clips.append(aud);
+		m.tracks = {v2, v1, a1};
+		v.setModel(m);
+		changes = 0;
+		ok(v.mediaEndMs() == 25000, "the media ends where the audio clip ends, 25 s");
+		ok(v.fitClipToTimeline(0, 0), "the caption fits");
+		const TlClip &c = v.model().tracks[0].clips[0];
+		ok(c.outStartMs == 0 && c.outEndMs() == 25000, "from 0 to 25 s");
+		ok(c.text.text == QStringLiteral("Title") && c.type == TlClip::Type::Text, "still the same caption");
+		ok(changes == 1, "one undo step");
+
+		// A media clip is re-timed by speed, not stretched.
+		ok(v.fitClipToTimeline(1, 1), "the 8 s media clip at 12 s fits too");
+		const TlClip &mc = v.model().tracks[1].clips[1];
+		ok(mc.outStartMs == 0 && mc.srcLenMs() == 8000, "it keeps its source range and starts at 0");
+		ok(std::abs(mc.speed - 8000.0 / 25000.0) < 1e-9 && mc.outEndMs() == 25000,
+		   "and plays at the speed that makes it last the whole 25 s");
+
+		// Nothing to measure against: a timeline of captions only.
+		TimelineModel only;
+		TlTrack t2 = track(TlTrack::Kind::Video, "V1");
+		t2.clips.append(cap);
+		only.tracks = {t2};
+		v.setModel(only);
+		changes = 0;
+		ok(!v.fitClipToTimeline(0, 0) && changes == 0 && v.mediaEndMs() == 0,
+		   "with no media on the timeline there is nothing to fit to, and no undo step");
+	}
+
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
 }

@@ -258,6 +258,51 @@ void TimelineView::renameTrack(int index, const QString &name)
 	commitEdit();
 }
 
+qint64 TimelineView::mediaEndMs(int exceptTrack, int exceptClip) const
+{
+	qint64 end = 0;
+	for (int t = 0; t < model_.tracks.size(); ++t)
+		for (int c = 0; c < model_.tracks[t].clips.size(); ++c) {
+			if (t == exceptTrack && c == exceptClip)
+				continue;
+			const TlClip &k = model_.tracks[t].clips[c];
+			if (k.type == TlClip::Type::Video && k.sourceId > 0)
+				end = std::max(end, k.outEndMs());
+		}
+	return end;
+}
+
+bool TimelineView::fitClipToTimeline(int track, int clip)
+{
+	if (track < 0 || track >= model_.tracks.size())
+		return false;
+	TlTrack &t = model_.tracks[track];
+	if (t.locked || clip < 0 || clip >= t.clips.size())
+		return false;
+	const qint64 end = mediaEndMs(track, clip);
+	if (end <= 0)
+		return false;
+	TlClip &c = t.clips[clip];
+	c.outStartMs = 0;
+	if (c.freeDuration()) {
+		// A caption, still or effect has no clock of its own: its length IS
+		// its source range.
+		c.srcStartMs = 0;
+		c.srcEndMs = end;
+	} else {
+		// A media clip keeps its source range and is re-timed to fit: the
+		// speed that makes its footage last exactly the timeline. Clamped to
+		// what the speed control allows, so a ten-second clip is not asked
+		// to fill an hour at a crawl nobody meant.
+		const double srcLen = double(std::max<qint64>(1, c.srcLenMs()));
+		c.speed = std::clamp(srcLen / double(end), 0.1, 20.0);
+	}
+	c.clampFades();
+	update();
+	commitEdit();
+	return true;
+}
+
 int TimelineView::moveTrack(int from, int to)
 {
 	const int n = model_.tracks.size();
@@ -3728,6 +3773,13 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	if (fxRename)
 		fxRename->setEnabled(!locked);
 	menu.addSeparator();
+	// "Stay on for the whole video": start at 0, end where the last media
+	// clip ends. Greyed when there is no media to measure against.
+	QAction *fitAll = menu.addAction(QStringLiteral("Fit to whole timeline"));
+	fitAll->setToolTip(QStringLiteral(
+		"Start at 0 and end where the last video or audio clip ends, so this is on screen for "
+		"the whole video. A media clip is re-timed (its speed changes) to fit."));
+	fitAll->setEnabled(!locked && mediaEndMs(track, clip) > 0);
 	QAction *split = menu.addAction(QStringLiteral("Split here"));
 	const TlClip &c = model_.tracks[track].clips[clip];
 	split->setEnabled(!locked && atOutMs > c.outStartMs + kMinClipMs &&
@@ -3801,6 +3853,10 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		fc.fx.name = n;
 		update();
 		commitEdit();
+		return;
+	}
+	if (chosen == fitAll) {
+		fitClipToTimeline(track, clip);
 		return;
 	}
 	if (chosen == split) {

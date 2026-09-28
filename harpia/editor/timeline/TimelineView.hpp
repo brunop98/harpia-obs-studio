@@ -199,6 +199,15 @@ public:
 	// header up or down does, and the header menu's Move up / Move down.
 	int moveTrack(int from, int to);
 
+	// "Fit to whole timeline": start the clip at 0 and end it where the last
+	// media clip (video or audio, any lane, not this one) ends. A caption,
+	// still or effect is simply stretched; a media clip is re-timed by speed
+	// (clamped to the speed control's range). False, and no undo step, when
+	// there is no media to measure against or the lane is locked.
+	bool fitClipToTimeline(int track, int clip);
+	// Where the media ends, ignoring one clip. 0 when there is none.
+	qint64 mediaEndMs(int exceptTrack = -1, int exceptClip = -1) const;
+
 	// Randomise the ORDER of clips, nothing else about them (see ClipShuffle.hpp
 	// for the rules). Which lanes: with `selectedOnly`, every lane holding a
 	// selected clip; otherwise the lane of the selected clip or header, or --

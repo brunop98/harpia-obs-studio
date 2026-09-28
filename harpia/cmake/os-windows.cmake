@@ -21,9 +21,11 @@ add_custom_command(
   POST_BUILD
   COMMAND "${CMAKE_COMMAND}" -E copy_directory "$<TARGET_FILE_DIR:Qt6::Core>" "${_harpia_runtime_dir}"
   COMMAND "${CMAKE_COMMAND}" -E copy_directory "$<TARGET_FILE_DIR:FFmpeg::avcodec>" "${_harpia_runtime_dir}"
-  COMMAND
-    "${CMAKE_COMMAND}" -E copy_directory "$<TARGET_FILE_DIR:Qt6::Core>/../plugins/platforms"
-    "${_harpia_runtime_dir}/platforms"
+  # Every Qt plugin folder, not just platforms/: tls/ is what makes HTTPS work
+  # (subtitles, yt-dlp thumbnails -- without it every request fails at once),
+  # multimedia/ is the audio backend for playback and the microphone,
+  # imageformats/ reads JPEG/WebP stills, styles/ and iconengines/ the look.
+  COMMAND "${CMAKE_COMMAND}" -E copy_directory "$<TARGET_FILE_DIR:Qt6::Core>/../plugins" "${_harpia_runtime_dir}"
   VERBATIM
 )
 

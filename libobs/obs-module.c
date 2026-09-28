@@ -403,12 +403,56 @@ char *obs_module_get_config_path(obs_module_t *module, const char *file)
 	return output.array;
 }
 
+/* Harpia: two spellings of one folder -- libobs' own relative default
+ * ("../../obs-plugins/64bit") and the host's absolute path to the same place --
+ * made libobs load every module in it twice ("Source 'x' already exists!
+ * Duplicate library?"). Paths are compared resolved to absolute form. */
+static char *module_path_key(const char *path)
+{
+	char *abs = os_get_abs_path_ptr(path);
+	if (!abs)
+		return NULL;
+	for (char *c = abs; *c; c++) {
+		if (*c == '\\')
+			*c = '/';
+	}
+	size_t len = strlen(abs);
+	while (len > 1 && abs[len - 1] == '/')
+		abs[--len] = 0;
+	return abs;
+}
+
+static bool module_path_registered(const char *bin)
+{
+	char *key = module_path_key(bin);
+	if (!key)
+		return false;
+	bool found = false;
+	for (size_t i = 0; i < obs->module_paths.num && !found; i++) {
+		char *other = module_path_key(obs->module_paths.array[i].bin);
+		if (other) {
+#ifdef _WIN32
+			found = astrcmpi(key, other) == 0;
+#else
+			found = strcmp(key, other) == 0;
+#endif
+			bfree(other);
+		}
+	}
+	bfree(key);
+	return found;
+}
+
 void obs_add_module_path(const char *bin, const char *data)
 {
 	struct obs_module_path omp;
 
 	if (!obs || !bin || !data)
 		return;
+	if (module_path_registered(bin)) {
+		blog(LOG_DEBUG, "Module path '%s' is already registered; not adding it twice", bin);
+		return;
+	}
 
 	omp.bin = bstrdup(bin);
 	omp.data = bstrdup(data);

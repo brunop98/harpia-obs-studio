@@ -5999,7 +5999,10 @@ ComponentPanel::View VideoEditorWindow::buildComponentView() const
 						return es.name;
 				return QString();
 			};
-			const QString in = nameOf("inSound"), out = nameOf("outSound");
+			auto shortName = [](QString n) {
+				return n.size() > 22 ? n.left(20) + QStringLiteral("\u2026") : n;
+			};
+			const QString in = shortName(nameOf("inSound")), out = shortName(nameOf("outSound"));
 			sc.actionLabels.insert(QStringLiteral("pickIn"),
 					       in.isEmpty() ? QStringLiteral("Choose In sound\u2026")
 							    : QStringLiteral("In: %1").arg(in));

@@ -72,7 +72,10 @@ ParamSlider::ParamSlider(double lo, double hi, int decimals, QWidget *parent)
 	// 0 and then 0.5 — and on a value driving a render, that is a wasted frame
 	// and a visible flicker.
 	spin_->setKeyboardTracking(false);
-	spin_->setMinimumWidth(72);
+	spin_->setMinimumWidth(56);
+	// The slider gives way first when the panel is narrow, so the label
+	// beside it never has to be cut off.
+	slider_->setMinimumWidth(40);
 	spin_->setButtonSymbols(QAbstractSpinBox::NoButtons); // the slider is the nudger
 
 	h->addWidget(slider_, 1);

@@ -6,6 +6,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QScreen>
+#include <QCursor>
 #include <QVBoxLayout>
 
 namespace harpia {
@@ -39,7 +40,13 @@ SearchPicker::SearchPicker(const QVector<PickItem> &items, QWidget *parent)
 		"QLineEdit{background:#15171a;color:#e8eaed;border:1px solid #2b2f36;padding:4px 6px;}"
 		"QListWidget{background:#1e2126;color:#e8eaed;border:none;outline:0;}"
 		"QListWidget::item{padding:5px 8px;}"
-		"QListWidget::item:selected{background:#2f6fed;color:#ffffff;}"));
+		// Hover: the row under the mouse lights up, so it is clear what a
+		// click will pick. The keyboard's row stays blue.
+		"QListWidget::item:hover{background:#343a44;color:#ffffff;}"
+		"QListWidget::item:selected{background:#2f6fed;color:#ffffff;}"
+		"QListWidget::item:selected:hover{background:#4a82f5;color:#ffffff;}"));
+	list_->setMouseTracking(true);
+	list_->viewport()->setAttribute(Qt::WA_Hover, true);
 	setFixedWidth(kWidth);
 
 	connect(search_, &QLineEdit::textChanged, this, [this](const QString &) { rebuild(); });
@@ -63,18 +70,37 @@ QString SearchPicker::pick(const QVector<PickItem> &items, const QPoint &globalP
 
 void SearchPicker::showAt(const QPoint &globalPos)
 {
-	// Keep the whole popup on the screen it was opened on.
-	QPoint at = globalPos;
-	if (const QScreen *s = QGuiApplication::screenAt(globalPos)) {
-		const QRect avail = s->availableGeometry();
-		at.setX(std::min(at.x(), avail.right() - width()));
-		at.setY(std::min(at.y(), avail.bottom() - sizeHint().height()));
-		at.setX(std::max(at.x(), avail.left()));
-		at.setY(std::max(at.y(), avail.top()));
-	}
-	move(at);
+	anchor_ = globalPos;
+	placed_ = true;
+	rebuild(); // sizes the list for the screen it opens on, then places it
 	show();
 	search_->setFocus();
+}
+
+void SearchPicker::place()
+{
+	if (!placed_)
+		return;
+	const QScreen *s = QGuiApplication::screenAt(anchor_);
+	if (!s)
+		s = QGuiApplication::primaryScreen();
+	if (!s) {
+		move(anchor_);
+		return;
+	}
+	const QRect avail = s->availableGeometry();
+	const int h = sizeHint().height();
+	QPoint at = anchor_;
+	// Below the pointer when it fits; above it when it fits there instead;
+	// otherwise as high as the screen allows. Every option always visible.
+	if (at.y() + h > avail.bottom()) {
+		if (anchor_.y() - h >= avail.top())
+			at.setY(anchor_.y() - h);
+		else
+			at.setY(std::max(avail.top(), avail.bottom() - h));
+	}
+	at.setX(std::clamp(at.x(), avail.left(), std::max(avail.left(), avail.right() - width())));
+	move(at);
 }
 
 void SearchPicker::rebuild()
@@ -121,10 +147,18 @@ void SearchPicker::rebuild()
 			break;
 		}
 	}
-	const int rows = std::max(1, std::min(list_->count(), kMaxRows));
 	const int rowH = list_->sizeHintForRow(0) > 0 ? list_->sizeHintForRow(0) : 26;
+	// As many rows as the screen can show (up to every row in a category),
+	// so a long list like Shader is never cut off; past that it scrolls.
+	int maxRows = std::max(kMaxRows, list_->count());
+	if (const QScreen *s = QGuiApplication::screenAt(placed_ ? anchor_ : QCursor::pos())) {
+		const int room = s->availableGeometry().height() - search_->sizeHint().height() - 40;
+		maxRows = std::max(3, std::min(maxRows, room / rowH));
+	}
+	const int rows = std::max(1, std::min(list_->count(), maxRows));
 	list_->setFixedHeight(rows * rowH + 4);
 	adjustSize();
+	place();
 }
 
 QStringList SearchPicker::visibleNames() const

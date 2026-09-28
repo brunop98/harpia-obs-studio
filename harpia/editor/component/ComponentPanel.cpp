@@ -13,6 +13,7 @@
 #include <QColorDialog>
 #include <QSpinBox>
 #include <QFormLayout>
+#include <QFontMetrics>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -69,7 +70,8 @@ void setSwatchColor(QPushButton *b, const ComponentPanel::Mixed &m)
 // How wide a property's name may get before it wraps. Narrow on purpose: the
 // controls are what the eye needs to land on, and a component's own //@param
 // text can be arbitrarily long.
-constexpr int kPropLabelW = 116;
+constexpr int kPropLabelW = 116;  // no longer a cap: the width below which labels never wrap
+constexpr int kPropLabelMaxW = 170; // a label longer than this wraps onto more lines
 
 // A component's stage, shown small beside its name. Not decoration: the order
 // things run in is the question people ask first, and the answer is otherwise
@@ -289,6 +291,13 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 					QStringLiteral("Reset, copy, paste, duplicate…"), row->box);
 		connect(more, &QPushButton::clicked, this,
 			[this, typeId, ordinal] { componentMenu(typeId, ordinal); });
+		// Right-click on the name (or anywhere on the header) opens the same
+		// menu, at the pointer.
+		for (QWidget *w : {static_cast<QWidget *>(name), static_cast<QWidget *>(row->box)}) {
+			w->setContextMenuPolicy(Qt::CustomContextMenu);
+			connect(w, &QWidget::customContextMenuRequested, this,
+				[this, typeId, ordinal](const QPoint &) { componentMenu(typeId, ordinal); });
+		}
 		auto *del = iconButton(Glyph::Cross, QStringLiteral("Remove this component"), row->box);
 		connect(del, &QPushButton::clicked, this,
 			[this, typeId, ordinal] { emit componentRemoved(typeId, ordinal); });
@@ -302,6 +311,9 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 	if (type && !type->props.isEmpty()) {
 		auto *form = new QFormLayout;
 		form->setHorizontalSpacing(8);
+		form->setRowWrapPolicy(QFormLayout::DontWrapRows);
+		form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+		form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
 		form->setVerticalSpacing(3);
 		for (const PropDef &d : type->props) {
 			if (d.hidden)
@@ -464,8 +476,28 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 			// right)" -- which at body size pushed the label column wider than
 			// the controls it names. Wrapped to a narrow column instead of
 			// elided, so nothing is hidden behind a tooltip nobody hovers.
-			lbl->setWordWrap(true);
-			lbl->setMaximumWidth(kPropLabelW);
+			// Every label is shown in full. One that fits on a line gets
+			// exactly that width and never wraps -- a wrapped label in a
+			// form row was cut off at the row's height, so "In offset (ms)"
+			// read as "In / offset / (m". Only a long script label wraps,
+			// at a wider column, and is given the height its lines need.
+			{
+				QFont lf = lbl->font();
+				lf.setPixelSize(uiCaptionPx());
+				const QFontMetrics fm(lf);
+				const int natural = fm.horizontalAdvance(lbl->text()) + 6;
+				if (natural <= kPropLabelMaxW) {
+					lbl->setWordWrap(false);
+					lbl->setMinimumWidth(std::max(natural, std::min(kPropLabelW, natural)));
+				} else {
+					lbl->setWordWrap(true);
+					lbl->setFixedWidth(kPropLabelMaxW);
+					const QRect br = fm.boundingRect(QRect(0, 0, kPropLabelMaxW - 6, 10000),
+									 Qt::TextWordWrap, lbl->text());
+					lbl->setMinimumHeight(br.height() + 4);
+				}
+				lbl->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
+			}
 			lbl->setStyleSheet(
 				QStringLiteral("border:none; font-size:%1px; color:%2;")
 					.arg(uiCaptionPx())

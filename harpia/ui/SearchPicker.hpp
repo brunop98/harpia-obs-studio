@@ -55,6 +55,11 @@ protected:
 	void hideEvent(QHideEvent *e) override;
 
 private:
+	// Where it was asked to open, kept so every change of height (opening a
+	// category, typing) can place it again fully on screen.
+	QPoint anchor_;
+	bool placed_ = false;
+	void place();
 	enum class Row { Category, Item, Back };
 	void rebuild();
 	void activate(QListWidgetItem *it);

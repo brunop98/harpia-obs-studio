@@ -10,6 +10,7 @@
 #include "ui/SearchPicker.hpp"
 
 #include <QApplication>
+#include <QScreen>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QTest>
@@ -174,6 +175,33 @@ int main(int argc, char **argv)
 		QApplication::processEvents();
 		ok(r->visibleNames().value(0) == QStringLiteral("Paste Blur"), "and typing finds it like anything else");
 		r->hide();
+		QApplication::processEvents();
+	}
+
+	std::printf("\n-- always on screen, and a hover colour --\n");
+	{
+		// A long category (like Shader) opened near the bottom of the screen.
+		QVector<PickItem> many;
+		for (int i = 0; i < 40; ++i) {
+			PickItem pi;
+			pi.id = QStringLiteral("s%1").arg(i);
+			pi.name = QStringLiteral("Shader %1").arg(i);
+			pi.category = QStringLiteral("Shader");
+			many << pi;
+		}
+		const QRect avail = QGuiApplication::primaryScreen()->availableGeometry();
+		auto *p = new SearchPicker(many);
+		p->showAt(QPoint(avail.left() + 50, avail.bottom() - 30));
+		QApplication::processEvents();
+		QTest::keyClick(p->searchField(), Qt::Key_Return); // into the category
+		QApplication::processEvents();
+		std::printf("     screen %dx%d, picker at %d,%d %dx%d, %d rows\n", avail.width(), avail.height(),
+			    p->geometry().x(), p->geometry().y(), p->width(), p->height(), int(p->visibleNames().size()));
+		ok(p->visibleNames().size() == 41, "inside the category: back row plus all forty");
+		ok(avail.contains(p->frameGeometry().topLeft()) && avail.contains(p->frameGeometry().bottomRight()),
+		   "opened at the bottom of the screen, it still fits on it entirely");
+		ok(p->styleSheet().contains(QStringLiteral(":hover")), "rows have a hover colour");
+		p->hide();
 		QApplication::processEvents();
 	}
 

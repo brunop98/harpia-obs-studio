@@ -19,6 +19,9 @@
 #include <QApplication>
 #include <QPushButton>
 #include <QSettings>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTemporaryDir>
 #include <QTabWidget>
 
 #include <cstdio>
@@ -202,6 +205,47 @@ int main(int argc, char **argv)
 		if (savedBefore.isEmpty())
 			QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
 				.remove(QStringLiteral("devLayout/color/timelineBg"));
+	}
+
+	std::printf("\n-- Copy JSON / Paste JSON --\n");
+	{
+		// A scratch settings file: nothing here touches the real install.
+		QTemporaryDir tmp;
+		DevPanel::setSettingsFileForTesting(tmp.filePath(QStringLiteral("dev.ini")));
+		const QJsonObject all = QJsonDocument::fromJson(DevPanel::exportJson()).object();
+		const QJsonObject v = all.value(QStringLiteral("values")).toObject();
+		ok(all.value(QStringLiteral("harpiaDevLayout")).toInt() == 1, "the export is tagged");
+		ok(v.value(QStringLiteral("win/btnH")).toInt() == EditorChromeParams().buttonH,
+		   "untouched values are exported at their defaults");
+		ok(v.value(QStringLiteral("win/powerSave")).isBool(), "booleans stay booleans");
+		ok(v.value(QStringLiteral("ft/maxZoom")).isDouble(), "numbers stay numbers");
+		ok(v.contains(QStringLiteral("panel/consoleMinH")) && v.contains(QStringLiteral("ft/tagDot")) &&
+			   v.contains(QStringLiteral("ft/effectLaneH")),
+		   "the new Panels values and timeline values are in it");
+		ok(v.contains(QStringLiteral("color/timelineBg")), "colours too");
+		std::printf("     %d values exported\n", int(v.size()));
+		ok(v.size() > 80, "every page's values (more than 80)");
+		ok(!QSettings(tmp.filePath(QStringLiteral("dev.ini")), QSettings::IniFormat).contains(
+			   QStringLiteral("devLayout/win/btnH")),
+		   "exporting does not write the defaults into the settings");
+
+		// Paste back a changed value.
+		QString err;
+		const int n = DevPanel::importJson(
+			QByteArray(R"({"harpiaDevLayout":1,"values":{"win/btnH":40,"panel/consolePopupRows":12,"win/powerSave":false,"junk":1}})"),
+			&err);
+		ok(n == 3, "paste takes the three group/key values and skips the rest");
+		ok(DevPanel::loadChrome().buttonH == 40 && !DevPanel::loadChrome().powerSaveOnBlur,
+		   "and they are what loads now");
+		ok(DevPanel::loadPanel().consolePopupRows == 12, "including a Panels value");
+		ok(DevPanel::importJson(QByteArray(R"({"panel/textBoxH":90})")) == 1 &&
+			   DevPanel::loadPanel().textBoxH == 90,
+		   "a bare {key: value} object works too");
+		ok(DevPanel::importJson(QByteArray("not json"), &err) == 0 && !err.isEmpty(),
+		   "text that is not JSON pastes nothing and says why");
+		const QJsonObject again = QJsonDocument::fromJson(DevPanel::exportJson()).object().value(QStringLiteral("values")).toObject();
+		ok(again.value(QStringLiteral("win/btnH")).toInt() == 40, "a second export carries the pasted value");
+		DevPanel::setSettingsFileForTesting(QString());
 	}
 
 	QSettings().clear();

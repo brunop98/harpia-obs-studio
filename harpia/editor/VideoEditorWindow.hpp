@@ -1030,6 +1030,10 @@ private:
 	void applyChrome(const struct EditorChromeParams &p);
 	// Inspector sizing, live-tunable from the Dev panel.
 	void applyInspectorParams(const struct EditorInspectorParams &p);
+	void applyPanelParams(const struct EditorPanelParams &p);
+	int panelConsoleFontPx_ = 0, panelPopupRows_ = 8, panelCardPad_ = 8, panelCardRadius_ = 6,
+	    panelCardGap_ = 6, panelVoMargin_ = 14, panelVoSpacing_ = 8, panelVoBtnH_ = 32, panelChipGap_ = 3,
+	    panelConsoleMinH_ = 180;
 	EditorInspectorParams inspectorParams_;
 	QVBoxLayout *insContentLayout_ = nullptr;
 	QVector<EditorSnapshot> history_;

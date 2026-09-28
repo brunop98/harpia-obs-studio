@@ -45,6 +45,8 @@ struct TimelineViewParams {
 	int segFontPx = 10;
 	int dropBandPx = 7;   // edge band that means "make a new track here"
 	double maxZoom = 64.0;
+	int tagDot = 7;       // the coloured tag dots on a clip, diameter
+	int tagDotGap = 3;    // ...and the space between them
 };
 
 // The "Full editing" timeline: a vertically stacked set of video + audio tracks

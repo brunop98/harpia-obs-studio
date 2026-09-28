@@ -53,6 +53,24 @@ struct EditorInspectorParams {
 	int scriptListH = 112; // height of the transform-script stack list
 };
 
+// Sizes inside the editor's panels that used to be written into the code:
+// the console, the Sounds tab's rule cards, the voiceover window, a few fixed
+// heights. The editor reads these at startup and follows panelChanged() live.
+struct EditorPanelParams {
+	int consoleFontPx = 0;     // 0 = follow the app's readout size
+	int consoleMinH = 180;     // console output, minimum height
+	int consolePopupRows = 8;  // autocomplete rows before it scrolls
+	int soundCardPad = 8;      // Sounds tab: padding inside a rule card
+	int soundCardRadius = 6;   // ...its corner radius
+	int soundCardGap = 6;      // ...space between cards
+	int voPanelMargin = 14;    // voiceover window: margin
+	int voPanelSpacing = 8;    // ...space between rows
+	int voRecordBtnH = 32;     // ...the Record button's height
+	int textBoxH = 56;         // the caption text box on the Clip tab
+	int spotListH = 90;        // the spotlight area list
+	int tagChipGap = 3;        // Clip tab: spaces between tag chips
+};
+
 class PreviewCanvas;
 class Timeline;
 class TrackEditor;
@@ -106,10 +124,25 @@ public:
 	static EditorColors loadColors();
 	static void saveColors(const EditorColors &c);
 
+	static EditorPanelParams loadPanel();
+	static void savePanel(const EditorPanelParams &p);
+
+	// Every value on every page, the ones you have not touched included, as
+	// {"harpiaDevLayout": 1, "values": {"win/btnH": 28, ...}}. Sorted keys, so
+	// two exports diff cleanly.
+	static QByteArray exportJson();
+	// Write values from such a JSON (or a bare {"key": value} object) into the
+	// saved settings. Returns how many keys were taken; *err when it is not
+	// JSON of that shape.
+	static int importJson(const QByteArray &json, QString *err = nullptr);
+	// For the test: route the settings somewhere else. Empty = the normal place.
+	static void setSettingsFileForTesting(const QString &iniPath);
+
 signals:
 	void chromeChanged(const EditorChromeParams &p);
 	void inspectorChanged(const EditorInspectorParams &p);
 	void keyframeChanged(const KeyframeLayoutParams &p);
+	void panelChanged(const EditorPanelParams &p);
 
 private:
 	void applyTimeline();
@@ -120,6 +153,9 @@ private:
 	void applyFullTimeline();
 	void applyKeyframe();
 	void applyColors();
+	void applyPanel();
+	void copyJson();
+	void pasteJson();
 
 public:
 	// The live half of a colour pick, public so the behaviour is testable
@@ -140,15 +176,18 @@ private:
 	// is what the explicit "all tabs" button calls.
 	void resetDefaults();
 	void resetCurrentTab();
-	void resetWindowTab();
-	void resetTrimTab();
-	void resetPreviewTab();
-	void resetInspectorTab();
-	void resetMultiCutTab();
-	void resetKeyframeTab();
-	void resetFullEditTab();
-	void resetVoiceoverTab();
-	void resetColorsTab();
+	// saved = false: the shipped defaults (Reset). true: whatever is saved now
+	// (after a paste), through the same path.
+	void resetWindowTab(bool saved = false);
+	void resetTrimTab(bool saved = false);
+	void resetPreviewTab(bool saved = false);
+	void resetInspectorTab(bool saved = false);
+	void resetMultiCutTab(bool saved = false);
+	void resetKeyframeTab(bool saved = false);
+	void resetFullEditTab(bool saved = false);
+	void resetVoiceoverTab(bool saved = false);
+	void resetColorsTab(bool saved = false);
+	void resetPanelsTab(bool saved = false);
 
 	// One swatch button per palette entry, keyed by the same name used in
 	// QSettings, so adding a colour means touching one table and nothing else.
@@ -226,6 +265,24 @@ private:
 	QSpinBox *ftDropBandPx_ = nullptr;
 	QSpinBox *ftSegFontPx_ = nullptr;
 	QDoubleSpinBox *ftMaxZoom_ = nullptr;
+	QSpinBox *ftEffectLaneH_ = nullptr;
+	QSpinBox *ftTagDot_ = nullptr;
+	QSpinBox *ftTagDotGap_ = nullptr;
+
+	// Panels (EditorPanelParams).
+	QSpinBox *pnConsoleFont_ = nullptr;
+	QSpinBox *pnConsoleMinH_ = nullptr;
+	QSpinBox *pnPopupRows_ = nullptr;
+	QSpinBox *pnCardPad_ = nullptr;
+	QSpinBox *pnCardRadius_ = nullptr;
+	QSpinBox *pnCardGap_ = nullptr;
+	QSpinBox *pnVoMargin_ = nullptr;
+	QSpinBox *pnVoSpacing_ = nullptr;
+	QSpinBox *pnVoBtnH_ = nullptr;
+	QSpinBox *pnTextBoxH_ = nullptr;
+	QSpinBox *pnSpotListH_ = nullptr;
+	QSpinBox *pnChipGap_ = nullptr;
+	QLabel *jsonStatus_ = nullptr;
 
 	// Keyframe lanes.
 	QSpinBox *kfMargin_ = nullptr;

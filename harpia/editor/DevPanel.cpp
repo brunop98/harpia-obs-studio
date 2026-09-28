@@ -19,6 +19,12 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSettings>
+#include <cmath>
+#include <QTemporaryDir>
+#include <QJsonObject>
+#include <QJsonDocument>
+#include <QGuiApplication>
+#include <QClipboard>
 #include <QSpinBox>
 #include <QTabWidget>
 #include <QVBoxLayout>
@@ -26,8 +32,18 @@
 namespace harpia {
 
 namespace {
+QString &settingsFileOverride()
+{
+	static QString path;
+	return path;
+}
 QSettings devSettings()
 {
+	// Export writes every group's save function into a scratch file this
+	// way, so the values you never touched are exported without being
+	// pinned in your real settings.
+	if (!settingsFileOverride().isEmpty())
+		return QSettings(settingsFileOverride(), QSettings::IniFormat);
 	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
 }
 // The editor's timecode and inspector font sizes were fixed at 18 and 13; they
@@ -267,6 +283,9 @@ TimelineViewParams DevPanel::loadFullTimeline()
 	p.dropBandPx = s.value(QStringLiteral("ft/dropBandPx"), d.dropBandPx).toInt();
 	p.segFontPx = s.value(QStringLiteral("ft/segFontPx"), d.segFontPx).toInt();
 	p.maxZoom = s.value(QStringLiteral("ft/maxZoom"), d.maxZoom).toDouble();
+	p.effectLaneH = s.value(QStringLiteral("ft/effectLaneH"), d.effectLaneH).toInt();
+	p.tagDot = s.value(QStringLiteral("ft/tagDot"), d.tagDot).toInt();
+	p.tagDotGap = s.value(QStringLiteral("ft/tagDotGap"), d.tagDotGap).toInt();
 	s.endGroup();
 	return p;
 }
@@ -318,7 +337,158 @@ void DevPanel::saveFullTimeline(const TimelineViewParams &p)
 	s.setValue(QStringLiteral("ft/dropBandPx"), p.dropBandPx);
 	s.setValue(QStringLiteral("ft/segFontPx"), p.segFontPx);
 	s.setValue(QStringLiteral("ft/maxZoom"), p.maxZoom);
+	s.setValue(QStringLiteral("ft/effectLaneH"), p.effectLaneH);
+	s.setValue(QStringLiteral("ft/tagDot"), p.tagDot);
+	s.setValue(QStringLiteral("ft/tagDotGap"), p.tagDotGap);
 	s.endGroup();
+}
+
+EditorPanelParams DevPanel::loadPanel()
+{
+	EditorPanelParams p;
+	const EditorPanelParams d;
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout"));
+	p.consoleFontPx = s.value(QStringLiteral("panel/consoleFontPx"), d.consoleFontPx).toInt();
+	p.consoleMinH = s.value(QStringLiteral("panel/consoleMinH"), d.consoleMinH).toInt();
+	p.consolePopupRows = s.value(QStringLiteral("panel/consolePopupRows"), d.consolePopupRows).toInt();
+	p.soundCardPad = s.value(QStringLiteral("panel/soundCardPad"), d.soundCardPad).toInt();
+	p.soundCardRadius = s.value(QStringLiteral("panel/soundCardRadius"), d.soundCardRadius).toInt();
+	p.soundCardGap = s.value(QStringLiteral("panel/soundCardGap"), d.soundCardGap).toInt();
+	p.voPanelMargin = s.value(QStringLiteral("panel/voPanelMargin"), d.voPanelMargin).toInt();
+	p.voPanelSpacing = s.value(QStringLiteral("panel/voPanelSpacing"), d.voPanelSpacing).toInt();
+	p.voRecordBtnH = s.value(QStringLiteral("panel/voRecordBtnH"), d.voRecordBtnH).toInt();
+	p.textBoxH = s.value(QStringLiteral("panel/textBoxH"), d.textBoxH).toInt();
+	p.spotListH = s.value(QStringLiteral("panel/spotListH"), d.spotListH).toInt();
+	p.tagChipGap = s.value(QStringLiteral("panel/tagChipGap"), d.tagChipGap).toInt();
+	s.endGroup();
+	return p;
+}
+
+void DevPanel::savePanel(const EditorPanelParams &p)
+{
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout"));
+	s.setValue(QStringLiteral("panel/consoleFontPx"), p.consoleFontPx);
+	s.setValue(QStringLiteral("panel/consoleMinH"), p.consoleMinH);
+	s.setValue(QStringLiteral("panel/consolePopupRows"), p.consolePopupRows);
+	s.setValue(QStringLiteral("panel/soundCardPad"), p.soundCardPad);
+	s.setValue(QStringLiteral("panel/soundCardRadius"), p.soundCardRadius);
+	s.setValue(QStringLiteral("panel/soundCardGap"), p.soundCardGap);
+	s.setValue(QStringLiteral("panel/voPanelMargin"), p.voPanelMargin);
+	s.setValue(QStringLiteral("panel/voPanelSpacing"), p.voPanelSpacing);
+	s.setValue(QStringLiteral("panel/voRecordBtnH"), p.voRecordBtnH);
+	s.setValue(QStringLiteral("panel/textBoxH"), p.textBoxH);
+	s.setValue(QStringLiteral("panel/spotListH"), p.spotListH);
+	s.setValue(QStringLiteral("panel/tagChipGap"), p.tagChipGap);
+	s.endGroup();
+}
+
+void DevPanel::setSettingsFileForTesting(const QString &iniPath)
+{
+	settingsFileOverride() = iniPath;
+}
+
+QByteArray DevPanel::exportJson()
+{
+	// Load every group from the real settings (defaults filled in), then have
+	// each group's own save function write it into a scratch file. The save
+	// functions are the one list of keys, so nothing can be left out and a
+	// new value is exported the day it is added.
+	const QString prev = settingsFileOverride();
+	const EditorChromeParams ch = loadChrome();
+	const EditorInspectorParams ins = loadInspector();
+	const TimelineViewParams ft = loadFullTimeline();
+	const KeyframeLayoutParams kf = loadKeyframe();
+	const EditorColors col = loadColors();
+	const EditorPanelParams pn = loadPanel();
+	TimelineLayoutParams tl;
+	TrackLayoutParams tr;
+	VoiceoverLayoutParams vo;
+	PreviewLayoutParams pv;
+	loadInto(tl, tr, vo, pv);
+
+	QTemporaryDir dir;
+	const QString ini = dir.filePath(QStringLiteral("export.ini"));
+	settingsFileOverride() = ini;
+	saveChrome(ch);
+	saveInspector(ins);
+	saveFullTimeline(ft);
+	saveKeyframe(kf);
+	saveColors(col);
+	savePanel(pn);
+	saveFrom(tl, tr, vo, pv);
+	QJsonObject values;
+	{
+		QSettings s(ini, QSettings::IniFormat);
+		s.beginGroup(QStringLiteral("devLayout"));
+		QStringList keys = s.allKeys();
+		keys.sort();
+		for (const QString &k : keys) {
+			if (k == QLatin1String("tab") || k.startsWith(QLatin1String("win/fontsFollowScale")))
+				continue;
+			// An INI file keeps no types: numbers and booleans come back as
+			// text, so they are turned back into JSON numbers and booleans.
+			const QString v = s.value(k).toString();
+			bool okI = false, okD = false;
+			const int iv = v.toInt(&okI);
+			const double dv = v.toDouble(&okD);
+			if (v == QLatin1String("true") || v == QLatin1String("false"))
+				values[k] = (v == QLatin1String("true"));
+			else if (okI)
+				values[k] = iv;
+			else if (okD)
+				values[k] = dv;
+			else
+				values[k] = v;
+		}
+	}
+	settingsFileOverride() = prev;
+	QJsonObject root;
+	root[QStringLiteral("harpiaDevLayout")] = 1;
+	root[QStringLiteral("values")] = values;
+	return QJsonDocument(root).toJson(QJsonDocument::Indented);
+}
+
+int DevPanel::importJson(const QByteArray &json, QString *err)
+{
+	QJsonParseError pe;
+	const QJsonDocument doc = QJsonDocument::fromJson(json, &pe);
+	if (!doc.isObject()) {
+		if (err)
+			*err = pe.error != QJsonParseError::NoError ? pe.errorString()
+								    : QStringLiteral("not a JSON object");
+		return 0;
+	}
+	QJsonObject values = doc.object();
+	if (values.contains(QStringLiteral("values")) && values.value(QStringLiteral("values")).isObject())
+		values = values.value(QStringLiteral("values")).toObject();
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout"));
+	int n = 0;
+	for (auto it = values.constBegin(); it != values.constEnd(); ++it) {
+		// Only "group/key" names: anything else is not one of ours.
+		if (!it.key().contains(QLatin1Char('/')))
+			continue;
+		const QJsonValue v = it.value();
+		if (v.isBool())
+			s.setValue(it.key(), v.toBool());
+		else if (v.isDouble()) {
+			const double d = v.toDouble();
+			if (d == std::floor(d) && std::abs(d) < 1e9)
+				s.setValue(it.key(), int(d));
+			else
+				s.setValue(it.key(), d);
+		} else if (v.isString())
+			s.setValue(it.key(), v.toString());
+		else
+			continue;
+		++n;
+	}
+	s.endGroup();
+	if (n == 0 && err)
+		*err = QStringLiteral("no layout values in it");
+	return n;
 }
 
 void DevPanel::loadInto(TimelineLayoutParams &tl, TrackLayoutParams &tr, VoiceoverLayoutParams &vo,
@@ -637,6 +807,12 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 			       ftDropBandPx_ = spin(2, 30, ft.dropBandPx, &DevPanel::applyFullTimeline));
 		ftForm->addRow(QStringLiteral("Clip label font size"),
 			       ftSegFontPx_ = spin(6, 40, ft.segFontPx, &DevPanel::applyFullTimeline));
+		ftForm->addRow(QStringLiteral("Effect lane height"),
+			       ftEffectLaneH_ = spin(12, 160, ft.effectLaneH, &DevPanel::applyFullTimeline));
+		ftForm->addRow(QStringLiteral("Tag dot size"),
+			       ftTagDot_ = spin(2, 20, ft.tagDot, &DevPanel::applyFullTimeline));
+		ftForm->addRow(QStringLiteral("Tag dot gap"),
+			       ftTagDotGap_ = spin(0, 12, ft.tagDotGap, &DevPanel::applyFullTimeline));
 		ftForm->addRow(QStringLiteral("Max zoom"),
 			       ftMaxZoom_ = dspin(1.0, 512.0, ft.maxZoom, &DevPanel::applyFullTimeline));
 	}
@@ -653,6 +829,36 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 		       voMinClipW_ = spin(2, 60, vo.minClipW, &DevPanel::applyVoice));
 	voForm->addRow(QStringLiteral("Trim edge zone"),
 		       voEdgeZone_ = spin(2, 24, vo.edgeZone, &DevPanel::applyVoice));
+
+	// ---- Panels ----------------------------------------------------------
+	const EditorPanelParams pn = loadPanel();
+	QFormLayout *pnForm = addPage(QStringLiteral("panels"), QStringLiteral("Panels"),
+				      QStringLiteral("Sizes inside the editor's panels: the console, the Sounds "
+						     "tab, the voiceover window and a few fixed heights."));
+	pnForm->addRow(QStringLiteral("Console font size (0 = auto)"),
+		       pnConsoleFont_ = spin(0, 32, pn.consoleFontPx, &DevPanel::applyPanel));
+	pnForm->addRow(QStringLiteral("Console min height"),
+		       pnConsoleMinH_ = spin(60, 800, pn.consoleMinH, &DevPanel::applyPanel));
+	pnForm->addRow(QStringLiteral("Autocomplete rows"),
+		       pnPopupRows_ = spin(3, 20, pn.consolePopupRows, &DevPanel::applyPanel));
+	pnForm->addRow(QStringLiteral("Sound rule card padding"),
+		       pnCardPad_ = spin(0, 24, pn.soundCardPad, &DevPanel::applyPanel));
+	pnForm->addRow(QStringLiteral("Sound rule card radius"),
+		       pnCardRadius_ = spin(0, 20, pn.soundCardRadius, &DevPanel::applyPanel));
+	pnForm->addRow(QStringLiteral("Sound rule card gap"),
+		       pnCardGap_ = spin(0, 24, pn.soundCardGap, &DevPanel::applyPanel));
+	pnForm->addRow(QStringLiteral("Voiceover window margin"),
+		       pnVoMargin_ = spin(0, 40, pn.voPanelMargin, &DevPanel::applyPanel));
+	pnForm->addRow(QStringLiteral("Voiceover row spacing"),
+		       pnVoSpacing_ = spin(0, 30, pn.voPanelSpacing, &DevPanel::applyPanel));
+	pnForm->addRow(QStringLiteral("Record button height"),
+		       pnVoBtnH_ = spin(20, 80, pn.voRecordBtnH, &DevPanel::applyPanel));
+	pnForm->addRow(QStringLiteral("Caption text box height"),
+		       pnTextBoxH_ = spin(24, 300, pn.textBoxH, &DevPanel::applyPanel));
+	pnForm->addRow(QStringLiteral("Spotlight list height"),
+		       pnSpotListH_ = spin(40, 400, pn.spotListH, &DevPanel::applyPanel));
+	pnForm->addRow(QStringLiteral("Tag chip gap (spaces)"),
+		       pnChipGap_ = spin(1, 8, pn.tagChipGap, &DevPanel::applyPanel));
 
 	// ---- Colours -------------------------------------------------------
 	// One swatch per palette entry. The button IS the colour, so the page reads
@@ -745,6 +951,19 @@ DevPanel::DevPanel(Timeline *timeline, TrackEditor *tracks, VoiceoverTrack *voic
 	resetAllBtn->setToolTip(QStringLiteral("Restore the shipped values on every page."));
 	connect(resetAllBtn, &QPushButton::clicked, this, &DevPanel::resetDefaults);
 	btnRow->addWidget(resetAllBtn);
+	btnRow->addSpacing(12);
+	auto *copyBtn = new QPushButton(QStringLiteral("Copy JSON"), this);
+	copyBtn->setToolTip(QStringLiteral("Every value on every page, the untouched ones included, as JSON on "
+					   "the clipboard: paste it anywhere to keep or share a layout."));
+	connect(copyBtn, &QPushButton::clicked, this, &DevPanel::copyJson);
+	btnRow->addWidget(copyBtn);
+	auto *pasteBtn = new QPushButton(QStringLiteral("Paste JSON"), this);
+	pasteBtn->setToolTip(QStringLiteral("Apply values from JSON on the clipboard (as Copy JSON makes)."));
+	connect(pasteBtn, &QPushButton::clicked, this, &DevPanel::pasteJson);
+	btnRow->addWidget(pasteBtn);
+	jsonStatus_ = new QLabel(this);
+	jsonStatus_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+	btnRow->addWidget(jsonStatus_);
 	btnRow->addStretch(1);
 	auto *closeBtn = new QPushButton(QStringLiteral("Close"), this);
 	connect(closeBtn, &QPushButton::clicked, this, &QDialog::close);
@@ -810,6 +1029,9 @@ void DevPanel::applyFullTimeline()
 	p.dropBandPx = ftDropBandPx_->value();
 	p.segFontPx = ftSegFontPx_->value();
 	p.maxZoom = ftMaxZoom_->value();
+	p.effectLaneH = ftEffectLaneH_->value();
+	p.tagDot = ftTagDot_->value();
+	p.tagDotGap = ftTagDotGap_->value();
 	fullTimeline_->setLayoutParams(p);
 	saveFullTimeline(p); // auto-saved, like every other group
 }
@@ -870,9 +1092,38 @@ void DevPanel::applyChrome()
 // loading_ is held across the setValue calls so the apply fires once at the end
 // instead of once per box.
 
-void DevPanel::resetWindowTab()
+namespace {
+// The four groups loadInto() fills together, one at a time.
+template <typename T> T savedLayout();
+template <> TimelineLayoutParams savedLayout<TimelineLayoutParams>()
 {
-	const EditorChromeParams d;
+	TimelineLayoutParams tl; TrackLayoutParams tr; VoiceoverLayoutParams vo; PreviewLayoutParams pv;
+	DevPanel::loadInto(tl, tr, vo, pv);
+	return tl;
+}
+template <> TrackLayoutParams savedLayout<TrackLayoutParams>()
+{
+	TimelineLayoutParams tl; TrackLayoutParams tr; VoiceoverLayoutParams vo; PreviewLayoutParams pv;
+	DevPanel::loadInto(tl, tr, vo, pv);
+	return tr;
+}
+template <> VoiceoverLayoutParams savedLayout<VoiceoverLayoutParams>()
+{
+	TimelineLayoutParams tl; TrackLayoutParams tr; VoiceoverLayoutParams vo; PreviewLayoutParams pv;
+	DevPanel::loadInto(tl, tr, vo, pv);
+	return vo;
+}
+template <> PreviewLayoutParams savedLayout<PreviewLayoutParams>()
+{
+	TimelineLayoutParams tl; TrackLayoutParams tr; VoiceoverLayoutParams vo; PreviewLayoutParams pv;
+	DevPanel::loadInto(tl, tr, vo, pv);
+	return pv;
+}
+} // namespace
+
+void DevPanel::resetWindowTab(bool saved)
+{
+	const EditorChromeParams d = saved ? loadChrome() : EditorChromeParams();
 	loading_ = true;
 	winBtnH_->setValue(d.buttonH);
 	winTcFont_->setValue(d.timecodeFontPx);
@@ -885,9 +1136,9 @@ void DevPanel::resetWindowTab()
 	applyChrome();
 }
 
-void DevPanel::resetTrimTab()
+void DevPanel::resetTrimTab(bool saved)
 {
-	const TimelineLayoutParams d;
+	const TimelineLayoutParams d = saved ? savedLayout<TimelineLayoutParams>() : TimelineLayoutParams();
 	loading_ = true;
 	tlPad_->setValue(d.pad);
 	tlBarTop_->setValue(d.barTop);
@@ -900,9 +1151,9 @@ void DevPanel::resetTrimTab()
 	applyTimeline();
 }
 
-void DevPanel::resetPreviewTab()
+void DevPanel::resetPreviewTab(bool saved)
 {
-	const PreviewLayoutParams d;
+	const PreviewLayoutParams d = saved ? savedLayout<PreviewLayoutParams>() : PreviewLayoutParams();
 	loading_ = true;
 	pvW_->setValue(d.minW);
 	pvH_->setValue(d.minH);
@@ -910,9 +1161,9 @@ void DevPanel::resetPreviewTab()
 	applyPreview();
 }
 
-void DevPanel::resetInspectorTab()
+void DevPanel::resetInspectorTab(bool saved)
 {
-	const EditorInspectorParams d;
+	const EditorInspectorParams d = saved ? loadInspector() : EditorInspectorParams();
 	loading_ = true;
 	insMinW_->setValue(d.minWidth);
 	insOpenW_->setValue(d.openWidth);
@@ -925,9 +1176,9 @@ void DevPanel::resetInspectorTab()
 	applyInspector();
 }
 
-void DevPanel::resetMultiCutTab()
+void DevPanel::resetMultiCutTab(bool saved)
 {
-	const TrackLayoutParams d;
+	const TrackLayoutParams d = saved ? savedLayout<TrackLayoutParams>() : TrackLayoutParams();
 	loading_ = true;
 	trMargin_->setValue(d.margin);
 	trCaptionH_->setValue(d.captionH);
@@ -945,11 +1196,11 @@ void DevPanel::resetMultiCutTab()
 	applyTracks();
 }
 
-void DevPanel::resetKeyframeTab()
+void DevPanel::resetKeyframeTab(bool saved)
 {
 	if (!kfMargin_)
 		return; // the page only exists when the editor offers keyframes
-	const KeyframeLayoutParams d;
+	const KeyframeLayoutParams d = saved ? loadKeyframe() : KeyframeLayoutParams();
 	loading_ = true;
 	kfMargin_->setValue(d.margin);
 	kfRulerH_->setValue(d.rulerH);
@@ -961,11 +1212,11 @@ void DevPanel::resetKeyframeTab()
 	applyKeyframe();
 }
 
-void DevPanel::resetFullEditTab()
+void DevPanel::resetFullEditTab(bool saved)
 {
 	if (!ftGutterW_)
 		return; // no Full-editing timeline in this window
-	const TimelineViewParams d;
+	const TimelineViewParams d = saved ? loadFullTimeline() : TimelineViewParams();
 	loading_ = true;
 	ftGutterW_->setValue(d.gutterW);
 	ftRulerH_->setValue(d.rulerH);
@@ -978,13 +1229,20 @@ void DevPanel::resetFullEditTab()
 	ftDropBandPx_->setValue(d.dropBandPx);
 	ftSegFontPx_->setValue(d.segFontPx);
 	ftMaxZoom_->setValue(d.maxZoom);
+	// These three were never reset before: Reset left them where they were.
+	ftClipGap_->setValue(d.clipGap);
+	ftClipRadius_->setValue(d.clipRadius);
+	ftSplitSeamW_->setValue(d.splitSeamW);
+	ftEffectLaneH_->setValue(d.effectLaneH);
+	ftTagDot_->setValue(d.tagDot);
+	ftTagDotGap_->setValue(d.tagDotGap);
 	loading_ = false;
 	applyFullTimeline();
 }
 
-void DevPanel::resetVoiceoverTab()
+void DevPanel::resetVoiceoverTab(bool saved)
 {
-	const VoiceoverLayoutParams d;
+	const VoiceoverLayoutParams d = saved ? savedLayout<VoiceoverLayoutParams>() : VoiceoverLayoutParams();
 	loading_ = true;
 	voMargin_->setValue(d.margin);
 	voCaptionH_->setValue(d.captionH);
@@ -995,9 +1253,9 @@ void DevPanel::resetVoiceoverTab()
 	applyVoice();
 }
 
-void DevPanel::resetColorsTab()
+void DevPanel::resetColorsTab(bool saved)
 {
-	colors_ = EditorColors(); // the struct's defaults are the shipped palette
+	colors_ = saved ? loadColors() : EditorColors(); // the struct's defaults are the shipped palette
 	for (const ColorRow &r : colorRows_)
 		paintSwatch(r);
 	applyColors();
@@ -1030,6 +1288,8 @@ void DevPanel::resetCurrentTab()
 		resetVoiceoverTab();
 	else if (id == QLatin1String("colors"))
 		resetColorsTab();
+	else if (id == QLatin1String("panels"))
+		resetPanelsTab();
 }
 
 // Every page, for when that is genuinely what you want. Expressed as the sum of
@@ -1045,6 +1305,82 @@ void DevPanel::resetDefaults()
 	resetFullEditTab();
 	resetVoiceoverTab();
 	resetColorsTab();
+	resetPanelsTab();
+}
+
+void DevPanel::resetPanelsTab(bool saved)
+{
+	const EditorPanelParams d = saved ? loadPanel() : EditorPanelParams();
+	loading_ = true;
+	pnConsoleFont_->setValue(d.consoleFontPx);
+	pnConsoleMinH_->setValue(d.consoleMinH);
+	pnPopupRows_->setValue(d.consolePopupRows);
+	pnCardPad_->setValue(d.soundCardPad);
+	pnCardRadius_->setValue(d.soundCardRadius);
+	pnCardGap_->setValue(d.soundCardGap);
+	pnVoMargin_->setValue(d.voPanelMargin);
+	pnVoSpacing_->setValue(d.voPanelSpacing);
+	pnVoBtnH_->setValue(d.voRecordBtnH);
+	pnTextBoxH_->setValue(d.textBoxH);
+	pnSpotListH_->setValue(d.spotListH);
+	pnChipGap_->setValue(d.tagChipGap);
+	loading_ = false;
+	applyPanel();
+}
+
+void DevPanel::applyPanel()
+{
+	if (!pnConsoleFont_)
+		return;
+	EditorPanelParams p;
+	p.consoleFontPx = pnConsoleFont_->value();
+	p.consoleMinH = pnConsoleMinH_->value();
+	p.consolePopupRows = pnPopupRows_->value();
+	p.soundCardPad = pnCardPad_->value();
+	p.soundCardRadius = pnCardRadius_->value();
+	p.soundCardGap = pnCardGap_->value();
+	p.voPanelMargin = pnVoMargin_->value();
+	p.voPanelSpacing = pnVoSpacing_->value();
+	p.voRecordBtnH = pnVoBtnH_->value();
+	p.textBoxH = pnTextBoxH_->value();
+	p.spotListH = pnSpotListH_->value();
+	p.tagChipGap = pnChipGap_->value();
+	savePanel(p);
+	emit panelChanged(p);
+}
+
+void DevPanel::copyJson()
+{
+	const QByteArray json = exportJson();
+	QGuiApplication::clipboard()->setText(QString::fromUtf8(json));
+	const int n = QJsonDocument::fromJson(json).object().value(QStringLiteral("values")).toObject().size();
+	if (jsonStatus_)
+		jsonStatus_->setText(QStringLiteral("Copied %1 values as JSON.").arg(n));
+}
+
+void DevPanel::pasteJson()
+{
+	QString err;
+	const int n = importJson(QGuiApplication::clipboard()->text().toUtf8(), &err);
+	if (n == 0) {
+		if (jsonStatus_)
+			jsonStatus_->setText(QStringLiteral("Nothing pasted: %1.").arg(err));
+		return;
+	}
+	// Every page re-reads what is saved now, through the same path Reset
+	// takes, so each group is applied to the editor once.
+	resetWindowTab(true);
+	resetTrimTab(true);
+	resetPreviewTab(true);
+	resetInspectorTab(true);
+	resetMultiCutTab(true);
+	resetKeyframeTab(true);
+	resetFullEditTab(true);
+	resetVoiceoverTab(true);
+	resetColorsTab(true);
+	resetPanelsTab(true);
+	if (jsonStatus_)
+		jsonStatus_->setText(QStringLiteral("Pasted %1 values.").arg(n));
 }
 
 } // namespace harpia

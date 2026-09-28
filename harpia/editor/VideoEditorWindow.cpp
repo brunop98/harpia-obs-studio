@@ -483,6 +483,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 				&VideoEditorWindow::applyInspectorParams);
 			connect(devPanel_, &DevPanel::chromeChanged, this,
 				&VideoEditorWindow::applyChrome);
+			connect(devPanel_, &DevPanel::panelChanged, this,
+				&VideoEditorWindow::applyPanelParams);
 			connect(devPanel_, &DevPanel::keyframeChanged, this,
 				[this](const KeyframeLayoutParams &p) {
 					keyframeLayout_ = p;
@@ -1995,12 +1997,62 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	uiButtons_ = findChildren<QPushButton *>();
 	applyChrome(DevPanel::loadChrome());
 	applyInspectorParams(DevPanel::loadInspector());
+	applyPanelParams(DevPanel::loadPanel());
 
 	// Battery saving keys off the APPLICATION losing focus, not this window's.
 	// Window focus would also fire for the editor's own Sources panel and its
 	// dialogs, pausing playback every time one of them is clicked.
 	connect(qApp, &QGuiApplication::applicationStateChanged, this,
 		[this](Qt::ApplicationState st) { setPowerSaving(st != Qt::ApplicationActive); });
+}
+
+void VideoEditorWindow::applyPanelParams(const EditorPanelParams &p)
+{
+	panelConsoleFontPx_ = p.consoleFontPx;
+	panelConsoleMinH_ = p.consoleMinH;
+	panelPopupRows_ = p.consolePopupRows;
+	panelChipGap_ = p.tagChipGap;
+	const bool cardsChanged = panelCardPad_ != p.soundCardPad || panelCardRadius_ != p.soundCardRadius ||
+				  panelCardGap_ != p.soundCardGap;
+	panelCardPad_ = p.soundCardPad;
+	panelCardRadius_ = p.soundCardRadius;
+	panelCardGap_ = p.soundCardGap;
+	panelVoMargin_ = p.voPanelMargin;
+	panelVoSpacing_ = p.voPanelSpacing;
+	panelVoBtnH_ = p.voRecordBtnH;
+	if (consoleOut_) {
+		consoleOut_->setMinimumHeight(p.consoleMinH);
+		QFont f = consoleOut_->font();
+		f.setPixelSize(p.consoleFontPx > 0 ? p.consoleFontPx : std::max(11, uiReadoutPx() - 1));
+		consoleOut_->setFont(f);
+		if (consoleIn_)
+			consoleIn_->setFont(f);
+		if (consolePopup_)
+			consolePopup_->setFont(f);
+	}
+	if (textEdit_)
+		textEdit_->setFixedHeight(p.textBoxH);
+	if (spotList_)
+		spotList_->setFixedHeight(p.spotListH);
+	if (voPanel_) {
+		if (auto *l = voPanel_->layout()) {
+			l->setContentsMargins(p.voPanelMargin, p.voPanelMargin - 2, p.voPanelMargin, p.voPanelMargin - 2);
+			l->setSpacing(p.voPanelSpacing);
+		}
+		if (voRecordBtn_)
+			voRecordBtn_->setMinimumHeight(p.voRecordBtnH);
+	}
+	if (cardsChanged && soundsList_) {
+		if (auto *ll = soundsList_->layout())
+			ll->setSpacing(p.soundCardGap);
+		// Force the rule cards to be rebuilt with the new padding and radius.
+		for (const SoundRow &row : soundRows_)
+			if (row.on)
+				row.on->parentWidget()->deleteLater();
+		soundRows_.clear();
+		rebuildSoundsTab();
+	}
+	syncClipTags();
 }
 
 void VideoEditorWindow::applyInspectorParams(const EditorInspectorParams &p)
@@ -3508,7 +3560,7 @@ void VideoEditorWindow::buildSoundsTab(QVBoxLayout *into)
 	soundsList_ = new QWidget(this);
 	auto *ll = new QVBoxLayout(soundsList_);
 	ll->setContentsMargins(0, 0, 0, 0);
-	ll->setSpacing(6);
+	ll->setSpacing(panelCardGap_);
 	into->addWidget(soundsList_);
 	soundsEmpty_ = new QLabel(QStringLiteral("No rules yet."), this);
 	soundsEmpty_->setStyleSheet(QStringLiteral("color:#7f858e; padding:6px 2px;"));
@@ -3648,9 +3700,10 @@ void VideoEditorWindow::rebuildSoundsTab()
 			SoundRow row;
 			row.id = id;
 			auto *frame = new QFrame(soundsList_);
-			frame->setStyleSheet(QStringLiteral("QFrame{background:#26292d;border-radius:6px;}"));
+			frame->setStyleSheet(QStringLiteral("QFrame{background:#26292d;border-radius:%1px;}").arg(panelCardRadius_));
 			auto *v = new QVBoxLayout(frame);
-			v->setContentsMargins(8, 6, 8, 6);
+			v->setContentsMargins(panelCardPad_, std::max(0, panelCardPad_ - 2), panelCardPad_,
+					      std::max(0, panelCardPad_ - 2));
 			v->setSpacing(4);
 
 			auto *top = new QHBoxLayout;
@@ -3840,7 +3893,7 @@ void VideoEditorWindow::syncClipTags()
 				 .arg(t.id);
 	}
 	clipTagChips_->setText(chips.isEmpty() ? QStringLiteral("<span style='color:#7f858e;'>No tags.</span>")
-					       : chips.join(QStringLiteral("&nbsp;&nbsp;&nbsp;")));
+					       : chips.join(QStringLiteral("&nbsp;").repeated(std::max(1, panelChipGap_))));
 	if (tagNames_) {
 		QStringList names;
 		for (const TlTag &t : m.tags)
@@ -7934,7 +7987,7 @@ void VideoEditorWindow::refreshConsoleCompletions()
 	consolePopup_->addItems(items);
 	consolePopup_->setCurrentRow(0);
 	const int rowH = std::max(18, consolePopup_->sizeHintForRow(0));
-	const int rows = std::min(8, int(items.size()));
+	const int rows = std::min(std::max(3, panelPopupRows_), int(items.size()));
 	const int w = std::clamp(consoleIn_->width() / 2, 180, 360);
 	consolePopup_->resize(w, rows * rowH + 4);
 	// Under the caret, roughly: the line's left edge plus the width of what
@@ -8087,7 +8140,12 @@ void VideoEditorWindow::openConsole()
 		mono.setPixelSize(std::max(11, uiReadoutPx() - 1));
 		consoleOut_->setFont(mono);
 		consoleOut_->setStyleSheet(QStringLiteral("QPlainTextEdit{background:#15171a;color:#e8eaed;border:1px solid #2b2f36;}"));
-		consoleOut_->setMinimumHeight(180);
+		consoleOut_->setMinimumHeight(panelConsoleMinH_);
+		if (panelConsoleFontPx_ > 0) {
+			QFont f = consoleOut_->font();
+			f.setPixelSize(panelConsoleFontPx_);
+			consoleOut_->setFont(f);
+		}
 		lay->addWidget(consoleOut_, 1);
 
 		auto *row = new QHBoxLayout;

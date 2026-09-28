@@ -1814,7 +1814,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	// visible from the timeline. Only as many as fit; hovering names them.
 	if (!c.tags.isEmpty() && r.width() >= 24 && r.height() >= 14) {
 		AaOn aaDots(p);
-		const int d = 7;
+		const int d = std::max(2, lp_.tagDot);
 		int x = r.right() - 4 - d;
 		for (int id : c.tags) {
 			const TlTag *tg = model_.tag(id);
@@ -1825,7 +1825,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 			p.setPen(QPen(QColor(0, 0, 0, 160), 1));
 			p.setBrush(tg->color);
 			p.drawEllipse(QRect(x, r.y() + 4, d, d));
-			x -= d + 3;
+			x -= d + std::max(0, lp_.tagDotGap);
 		}
 	}
 	p.restore();

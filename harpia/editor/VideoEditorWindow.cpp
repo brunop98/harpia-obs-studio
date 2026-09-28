@@ -3110,7 +3110,7 @@ void VideoEditorWindow::previewSound(int sourceId)
 		soundPreview_ = new QSoundEffect(this);
 	soundPreview_->stop();
 	soundPreview_->setSource(QUrl::fromLocalFile(wav));
-	soundPreview_->setVolume(0.8);
+	soundPreview_->setVolume(0.8f);
 	soundPreview_->play();
 }
 

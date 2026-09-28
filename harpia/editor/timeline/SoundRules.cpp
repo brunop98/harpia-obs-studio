@@ -254,6 +254,7 @@ QStringList SoundRules::builtinSounds()
 }
 
 namespace {
+constexpr double kPi = 3.14159265358979323846; // kPi needs _USE_MATH_DEFINES on MSVC
 // Deterministic noise, so the same name always makes the same file.
 struct Noise {
 	quint32 s = 0x9e3779b9u;
@@ -312,7 +313,7 @@ std::vector<float> SoundRules::synthesize(const QString &name, int rate)
 		for (int i = 0; i < len; ++i) {
 			const double t = i * dt;
 			const double f = 900.0 * std::exp(-t * 35.0) + 120.0;
-			ph += 2 * M_PI * f * dt;
+			ph += 2 * kPi * f * dt;
 			pcm.push_back(float(std::sin(ph)) * envAD(t, 0.002, 0.11) * 0.8f);
 		}
 	} else if (n == QLatin1String("click")) {
@@ -328,8 +329,8 @@ std::vector<float> SoundRules::synthesize(const QString &name, int rate)
 		const int len = samples(1.2);
 		for (int i = 0; i < len; ++i) {
 			const double t = i * dt;
-			const float a = float(std::sin(2 * M_PI * 1568.0 * t)) * float(std::exp(-t * 3.0));
-			const float b = float(std::sin(2 * M_PI * 1568.0 * 2.76 * t)) * float(std::exp(-t * 9.0)) * 0.4f;
+			const float a = float(std::sin(2 * kPi * 1568.0 * t)) * float(std::exp(-t * 3.0));
+			const float b = float(std::sin(2 * kPi * 1568.0 * 2.76 * t)) * float(std::exp(-t * 9.0)) * 0.4f;
 			pcm.push_back((a + b) * envAD(t, 0.002, 1.2) * 0.6f);
 		}
 	} else if (n == QLatin1String("typing")) {
@@ -358,7 +359,7 @@ std::vector<float> SoundRules::synthesize(const QString &name, int rate)
 		for (int i = 0; i < len; ++i) {
 			const double t = i * dt;
 			const double f = 160.0 * std::exp(-t * 12.0) + 45.0;
-			ph += 2 * M_PI * f * dt;
+			ph += 2 * kPi * f * dt;
 			const float body = float(std::sin(ph)) * envAD(t, 0.003, 0.3);
 			const float knock = lp.run(nz.next(), 0.15f) * envAD(t, 0.001, 0.04) * 0.5f;
 			pcm.push_back((body + knock) * 0.85f);

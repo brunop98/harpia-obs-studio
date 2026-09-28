@@ -244,6 +244,26 @@ int main(int argc, char **argv)
 		ok(c.isEmpty(), "a name typed in full has nothing to add");
 	}
 
+	std::printf("\n-- tags --\n");
+	{
+		EditConsole::Result r = EditConsole::run(QStringLiteral("clip.tags = [\"intro\", \"callout\"]"), input(model()));
+		ok(r.ok && r.changed, "setting clip.tags runs and changes the model");
+		ok(r.model.tags.size() == 2, "the new names become tags");
+		const TlClip &c = r.model.tracks[1].clips[0];
+		ok(c.tags.size() == 2 && r.model.tagName(c.tags[0]) == QLatin1String("intro"), "the clip carries them, in order");
+		TimelineModel tagged = r.model;
+		r = EditConsole::run(QStringLiteral("clip.tags.includes(\"callout\")"), input(tagged));
+		ok(r.ok && !r.changed && r.output.contains(QStringLiteral("true")), "reading them back by name");
+		r = EditConsole::run(QStringLiteral("clip.tags = []"), input(tagged));
+		ok(r.ok && r.changed && r.model.tracks[1].clips[0].tags.isEmpty(), "an empty array untags");
+		ok(r.model.tags.size() == 2, "without deleting the tags themselves");
+		r = EditConsole::run(QStringLiteral("clips.filter(c => c.tags.includes(\"intro\")).length"), input(tagged));
+		ok(r.ok && r.output.contains(QStringLiteral("1")), "filtering clips by tag");
+		QString part;
+		ok(EditConsole::completions(QStringLiteral("clip.ta"), model(), &part).contains(QStringLiteral("tags")),
+		   "tags autocompletes");
+	}
+
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
 }

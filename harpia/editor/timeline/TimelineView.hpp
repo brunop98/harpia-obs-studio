@@ -172,6 +172,9 @@ public:
 	// Sounds for events (SoundRules). The rules live in the model, so the
 	// window edits them here: one commitEdit, one undo step.
 	void editSoundRules(const std::function<void(QVector<TlSoundRule> &)> &fn);
+	// Any other project-level edit (tags): fn on the model, one commitEdit.
+	// Locked lanes are the caller's to respect.
+	void editModel(const std::function<void(TimelineModel &)> &fn);
 	// Replace the model WITHOUT a signal and keep the selection where it still
 	// points at something. For the derived clips SoundRules::apply rebuilds
 	// inside the window's clipsChanged handler: a setModel() there would drop
@@ -604,7 +607,9 @@ private:
 	// `atOutMs` is where the new-effect entries place their clip.
 	void showTrackMenu(int track, const QPoint &globalPos, qint64 atOutMs);
 	void renumberTracks(); // V1..Vn bottom-up, A1..An top-down
-	static QColor randomPastel();
+public:
+	static QColor randomPastel(); // also the colour a new tag gets
+private:
 
 	// ---- data ----
 	TimelineModel model_;

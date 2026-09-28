@@ -30,7 +30,11 @@ struct SoundEvent {
 	qint64 atMs = 0;        // when, in output time
 	int transitionType = 0; // for transitions
 	QStringList components; // component type ids on the clip
+	QVector<int> tags;      // the clip's tags
 	TlClip::Type clipType = TlClip::Type::Video;
+	// A clip on an audio lane. Only a tag rule fires on one: "every clip
+	// starts" means the picture, but a tagged voice line is asked for by name.
+	bool audioLane = false;
 };
 
 struct SoundInfo {
@@ -66,10 +70,13 @@ public:
 	// and the rules that made them go, so the next apply makes nothing new.
 	static void freeze(TimelineModel &m);
 
-	// Names for the list. "Every crossfade", "Every image appears"...
-	static QString triggerLabel(const TlSoundRule &r);
+	// Names for the list. "Every crossfade", "Every image appears", "Every
+	// clip tagged intro"... The model is where a tag's name lives.
+	static QString triggerLabel(const TlSoundRule &r, const TimelineModel *m = nullptr);
 	static QString triggerLabel(TlSoundRule::Trigger t, int transitionType = 0,
-				    const QString &componentId = QString());
+				    const QString &componentId = QString(), const QString &tagName = QString());
+	// A rule for every clip carrying `tagId`.
+	static TlSoundRule ruleForTag(int tagId);
 
 	// The rule that would cover a given clip or transition, for "Sound for
 	// every ..." on a right-click: the trigger the clip most specifically is.

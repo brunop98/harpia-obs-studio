@@ -63,6 +63,7 @@ QString EditConsole::helpText()
 		"On a clip (read and write):\n"
 		"  position      [x, y] in canvas pixels     x, y      the same, one axis\n"
 		"  scale         1 = fits the canvas          opacity   0..1\n"
+		"  tags          [\"intro\", ...] by name; a new name makes the tag\n"
 		"On a clip (read only):\n"
 		"  name  track  index  start  duration  end (ms)  speed  type  ref\n"
 		"\n"
@@ -282,6 +283,13 @@ EditConsole::Result EditConsole::run(const QString &source, const Input &in)
 			else if (in.sourceName)
 				name = in.sourceName(c.sourceId);
 			setStr(ctx, o, "name", name);
+			// Tags, by name: clip.tags = ["intro"] tags it (a new name makes
+			// the tag), [] clears, and .includes("x") asks.
+			JSValue tagsArr = JS_NewArray(ctx);
+			for (int ti = 0; ti < c.tags.size(); ++ti)
+				JS_SetPropertyUint32(ctx, tagsArr, uint32_t(ti),
+						     JS_NewString(ctx, m.tagName(c.tags[ti]).toUtf8().constData()));
+			JS_SetPropertyStr(ctx, o, "tags", tagsArr);
 			// Bookkeeping the snippet cannot see (a Symbol would be cleaner; a
 			// double-underscore name is enough here and prints in JSON, which
 			// helps when debugging a template).
@@ -397,6 +405,30 @@ EditConsole::Result EditConsole::run(const QString &source, const Input &in)
 				c.setBaseTransform(tf); // the Inspector's semantics, see the header
 				r.changed = true;
 			}
+			// Tags back: an array of names. Unknown names become tags.
+			JSValue tagsV = JS_GetPropertyStr(ctx, o, "tags");
+			if (JS_IsArray(tagsV)) {
+				QVector<int> ids;
+				JSValue lenV = JS_GetPropertyStr(ctx, tagsV, "length");
+				int32_t len = 0;
+				JS_ToInt32(ctx, &len, lenV);
+				JS_FreeValue(ctx, lenV);
+				for (int32_t ti = 0; ti < len && ti < 256; ++ti) {
+					JSValue tv = JS_GetPropertyUint32(ctx, tagsV, uint32_t(ti));
+					if (const char *cs = JS_ToCString(ctx, tv)) {
+						const int id = m.ensureTag(QString::fromUtf8(cs));
+						if (id > 0 && !ids.contains(id))
+							ids.append(id);
+						JS_FreeCString(ctx, cs);
+					}
+					JS_FreeValue(ctx, tv);
+				}
+				if (ids != c.tags) {
+					c.tags = ids;
+					r.changed = true;
+				}
+			}
+			JS_FreeValue(ctx, tagsV);
 		}
 	}
 	r.output = st.output.join(QLatin1Char('\n'));
@@ -480,7 +512,7 @@ QStringList EditConsole::completions(const QString &lineBeforeCursor, const Time
 		    << QStringLiteral("scale") << QStringLiteral("opacity") << QStringLiteral("name")
 		    << QStringLiteral("track") << QStringLiteral("index") << QStringLiteral("start")
 		    << QStringLiteral("duration") << QStringLiteral("end") << QStringLiteral("speed")
-		    << QStringLiteral("type") << QStringLiteral("ref");
+		    << QStringLiteral("type") << QStringLiteral("ref") << QStringLiteral("tags");
 	} else if (path == QLatin1String("tracks")) {
 		for (const TlTrack &t : m.tracks)
 			if (!t.name.isEmpty())

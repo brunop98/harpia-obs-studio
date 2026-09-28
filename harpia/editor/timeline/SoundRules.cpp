@@ -16,8 +16,27 @@ QVector<SoundEvent> SoundRules::events(const TimelineModel &m)
 	QVector<SoundEvent> out;
 	for (int ti = 0; ti < m.tracks.size(); ++ti) {
 		const TlTrack &t = m.tracks[ti];
-		if (!TimelineModel::isPictureKind(t.kind))
+		if (!TimelineModel::isPictureKind(t.kind)) {
+			// Audio lanes: tagged clips only, and never the Sounds lane or a
+			// clip a rule made -- a rule firing on its own output would loop.
+			if (t.autoSounds)
+				continue;
+			for (int ci = 0; ci < t.clips.size(); ++ci) {
+				const TlClip &c = t.clips[ci];
+				if (c.tags.isEmpty() || c.soundRule > 0)
+					continue;
+				SoundEvent e;
+				e.kind = TlSoundRule::Trigger::AnyClipStarts;
+				e.track = ti;
+				e.clip = ci;
+				e.atMs = c.outStartMs;
+				e.clipType = c.type;
+				e.tags = c.tags;
+				e.audioLane = true;
+				out.append(e);
+			}
 			continue;
+		}
 		// A hidden lane is not on screen, so nothing on it "appears".
 		if (t.hidden)
 			continue;
@@ -30,6 +49,7 @@ QVector<SoundEvent> SoundRules::events(const TimelineModel &m)
 			for (const ComponentInstance &comp : c.components)
 				if (comp.enabled)
 					e.components << comp.typeId;
+			e.tags = c.tags;
 			// The transition, when this clip arrives over the one before it.
 			if (c.transition.enabled && t.overlapBefore(ci) > 0) {
 				SoundEvent tr = e;
@@ -58,6 +78,8 @@ bool SoundRules::matches(const TlSoundRule &r, const SoundEvent &e)
 		return false;
 	if (r.lane >= 0 && r.lane != e.track)
 		return false;
+	if (e.audioLane && r.trigger != TlSoundRule::Trigger::Tagged)
+		return false;
 	const bool isTransition = e.kind == TlSoundRule::Trigger::Transition;
 	switch (r.trigger) {
 	case TlSoundRule::Trigger::AnyTransition:
@@ -74,6 +96,8 @@ bool SoundRules::matches(const TlSoundRule &r, const SoundEvent &e)
 		return !isTransition && !r.componentId.isEmpty() && e.components.contains(r.componentId);
 	case TlSoundRule::Trigger::AnyClipStarts:
 		return !isTransition;
+	case TlSoundRule::Trigger::Tagged:
+		return !isTransition && r.tagId > 0 && e.tags.contains(r.tagId);
 	case TlSoundRule::Trigger::Count:
 		break;
 	}
@@ -179,12 +203,22 @@ void SoundRules::freeze(TimelineModel &m)
 
 // ---- names --------------------------------------------------------------------
 
-QString SoundRules::triggerLabel(const TlSoundRule &r)
+QString SoundRules::triggerLabel(const TlSoundRule &r, const TimelineModel *m)
 {
-	return triggerLabel(r.trigger, r.transitionType, r.componentId);
+	return triggerLabel(r.trigger, r.transitionType, r.componentId,
+			    m ? m->tagName(r.tagId) : QStringLiteral("#%1").arg(r.tagId));
 }
 
-QString SoundRules::triggerLabel(TlSoundRule::Trigger t, int transitionType, const QString &componentId)
+TlSoundRule SoundRules::ruleForTag(int tagId)
+{
+	TlSoundRule r;
+	r.trigger = TlSoundRule::Trigger::Tagged;
+	r.tagId = tagId;
+	return r;
+}
+
+QString SoundRules::triggerLabel(TlSoundRule::Trigger t, int transitionType, const QString &componentId,
+				 const QString &tagName)
 {
 	switch (t) {
 	case TlSoundRule::Trigger::AnyTransition:
@@ -208,6 +242,8 @@ QString SoundRules::triggerLabel(TlSoundRule::Trigger t, int transitionType, con
 	}
 	case TlSoundRule::Trigger::AnyClipStarts:
 		return QStringLiteral("Every clip starts");
+	case TlSoundRule::Trigger::Tagged:
+		return QStringLiteral("Every clip tagged %1").arg(tagName.isEmpty() ? QStringLiteral("(no tag)") : tagName);
 	case TlSoundRule::Trigger::Count:
 		break;
 	}

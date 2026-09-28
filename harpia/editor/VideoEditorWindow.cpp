@@ -66,6 +66,8 @@
 #include <QRadioButton>
 #include <QAbstractSpinBox>
 #include <QComboBox>
+#include <QStringListModel>
+#include <QCompleter>
 #include <QDesktopServices>
 #include <QDoubleSpinBox>
 #include <QButtonGroup>
@@ -562,6 +564,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			requestPreview(-1, timelinePlayheadMs());
 		scheduleSnapshot();
 		rebuildSoundsTab();
+		rebuildTagsSection();
 	});
 	// A finished timeline action closes its undo entry at once. Without this,
 	// two edits inside the 350ms coalescing window share one entry -- and a move
@@ -1164,6 +1167,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 
 	// Project-level metadata + actions.
 	buildProjectInspector(projLayout);
+	buildTagsSection(projLayout);
 	projLayout->addStretch(1);
 	// The project-level "Shader effects" panel used to live here. A shader is a
 	// component now ("Add Component -> Shader"), so it is added to a clip -- or to
@@ -3021,16 +3025,16 @@ void VideoEditorWindow::addSoundRule(TlSoundRule r, int sourceId, const QString 
 			if (c.soundRule == r.id)
 				++placed;
 	consolePrint(QStringLiteral("// sound rule: %1 -> %2   (%3 placed now)")
-			     .arg(SoundRules::triggerLabel(r), name)
+			     .arg(SoundRules::triggerLabel(r, &timelineView_->model()), name)
 			     .arg(placed),
 		     ConsoleTone::Comment);
 	if (infoLabel_)
 		infoLabel_->setText(placed == 0
 					    ? QStringLiteral("Rule added: %1. Nothing on the timeline matches it yet; "
 							     "the sound is placed as soon as something does.")
-						      .arg(SoundRules::triggerLabel(r))
+						      .arg(SoundRules::triggerLabel(r, &timelineView_->model()))
 					    : QStringLiteral("Rule added: %1 — %2 placed on the Sounds lane.")
-						      .arg(SoundRules::triggerLabel(r))
+						      .arg(SoundRules::triggerLabel(r, &timelineView_->model()))
 						      .arg(placed == 1 ? QStringLiteral("1 sound")
 								       : QStringLiteral("%1 sounds").arg(placed)));
 }
@@ -3194,9 +3198,10 @@ void VideoEditorWindow::buildSoundsTab(QVBoxLayout *into)
 	connect(add, &QPushButton::clicked, this, [this, add]() {
 		QMenu menu(this);
 		auto put = [&](QMenu *m, const TlSoundRule &r) {
-			QAction *a = m->addAction(SoundRules::triggerLabel(r));
+			QAction *a = m->addAction(SoundRules::triggerLabel(r, &timelineView_->model()));
 			a->setData(QVariant::fromValue(QStringList{QString::number(int(r.trigger)),
-								   QString::number(r.transitionType), r.componentId}));
+								   QString::number(r.transitionType), r.componentId,
+								   QString::number(r.tagId)}));
 		};
 		TlSoundRule r;
 		r.trigger = TlSoundRule::Trigger::AnyTransition;
@@ -3221,6 +3226,17 @@ void VideoEditorWindow::buildSoundsTab(QVBoxLayout *into)
 		put(&menu, r);
 		r.trigger = TlSoundRule::Trigger::AnyClipStarts;
 		put(&menu, r);
+		menu.addSeparator();
+		QMenu *byTag = menu.addMenu(QStringLiteral("Clips with a tag"));
+		for (const TlTag &t : timelineView_->model().tags)
+			put(byTag, SoundRules::ruleForTag(t.id));
+		if (timelineView_->model().tags.isEmpty()) {
+			QAction *none = byTag->addAction(QStringLiteral("No tags yet"));
+			none->setEnabled(false);
+			none->setToolTip(QStringLiteral("Tag a clip first: right-click it \u25B8 Tags, or type in the "
+							"Tags field on the Clip tab."));
+			byTag->setToolTipsVisible(true);
+		}
 		QAction *chosen = menu.exec(add->mapToGlobal(QPoint(0, add->height())));
 		if (!chosen)
 			return;
@@ -3229,6 +3245,7 @@ void VideoEditorWindow::buildSoundsTab(QVBoxLayout *into)
 		nr.trigger = TlSoundRule::Trigger(d.value(0).toInt());
 		nr.transitionType = d.value(1).toInt();
 		nr.componentId = d.value(2);
+		nr.tagId = d.value(3).toInt();
 		QString name;
 		const int src = pickSound(add->mapToGlobal(QPoint(0, add->height())), &name);
 		if (src < 0)
@@ -3249,26 +3266,37 @@ void VideoEditorWindow::buildSoundsTab(QVBoxLayout *into)
 
 void VideoEditorWindow::fillTriggerCombo(QComboBox *cb, const TlSoundRule &r)
 {
-	auto key = [](TlSoundRule::Trigger t, int tt, const QString &comp) {
-		return QStringLiteral("%1|%2|%3").arg(int(t)).arg(tt).arg(comp);
+	auto key = [](TlSoundRule::Trigger t, int tt, const QString &comp, int tag) {
+		return QStringLiteral("%1|%2|%3|%4").arg(int(t)).arg(tt).arg(comp).arg(tag);
 	};
-	if (cb->count() == 0) {
-		auto put = [&](TlSoundRule::Trigger t, int tt = 0, const QString &comp = QString()) {
-			cb->addItem(SoundRules::triggerLabel(t, tt, comp), key(t, tt, comp));
-		};
-		put(TlSoundRule::Trigger::AnyTransition);
-		for (int i = 0; i < kTransitionTypeCount; ++i)
-			put(TlSoundRule::Trigger::Transition, i);
-		put(TlSoundRule::Trigger::ImageAppears);
-		put(TlSoundRule::Trigger::TextAppears);
-		put(TlSoundRule::Trigger::Component, 0, QStringLiteral("harpia.textType"));
-		put(TlSoundRule::Trigger::VideoStarts);
-		put(TlSoundRule::Trigger::AnyClipStarts);
-	}
-	int i = cb->findData(key(r.trigger, r.transitionType, r.componentId));
-	if (i < 0 && r.trigger == TlSoundRule::Trigger::Component) {
-		// A component the list does not know: add it so the rule shows as is.
-		cb->addItem(SoundRules::triggerLabel(r), key(r.trigger, r.transitionType, r.componentId));
+	const TimelineModel *m = timelineView_ ? &timelineView_->model() : nullptr;
+	// Refilled every time: the tag list changes under it. The caller holds a
+	// signal blocker, so this is not an edit.
+	cb->clear();
+	auto put = [&](TlSoundRule::Trigger t, int tt = 0, const QString &comp = QString(), int tag = 0) {
+		cb->addItem(SoundRules::triggerLabel(t, tt, comp, m ? m->tagName(tag) : QString()),
+			    key(t, tt, comp, tag));
+	};
+	put(TlSoundRule::Trigger::AnyTransition);
+	for (int i = 0; i < kTransitionTypeCount; ++i)
+		put(TlSoundRule::Trigger::Transition, i);
+	put(TlSoundRule::Trigger::ImageAppears);
+	put(TlSoundRule::Trigger::TextAppears);
+	put(TlSoundRule::Trigger::Component, 0, QStringLiteral("harpia.textType"));
+	put(TlSoundRule::Trigger::VideoStarts);
+	put(TlSoundRule::Trigger::AnyClipStarts);
+	if (m)
+		for (const TlTag &t : m->tags)
+			put(TlSoundRule::Trigger::Tagged, 0, QString(), t.id);
+	const bool tagged = r.trigger == TlSoundRule::Trigger::Tagged;
+	const bool comp = r.trigger == TlSoundRule::Trigger::Component;
+	const bool trans = r.trigger == TlSoundRule::Trigger::Transition;
+	int i = cb->findData(key(r.trigger, trans ? r.transitionType : 0, comp ? r.componentId : QString(),
+				 tagged ? r.tagId : 0));
+	if (i < 0 && (comp || tagged)) {
+		// A component or tag the list does not know: shown as is.
+		cb->addItem(SoundRules::triggerLabel(r, m),
+			    key(r.trigger, 0, comp ? r.componentId : QString(), tagged ? r.tagId : 0));
 		i = cb->count() - 1;
 	}
 	cb->setCurrentIndex(i < 0 ? 0 : i);
@@ -3316,12 +3344,13 @@ void VideoEditorWindow::rebuildSoundsTab()
 				if (!cb || i < 0)
 					return;
 				const QStringList k = cb->itemData(i).toString().split(QLatin1Char('|'));
-				if (k.size() != 3)
+				if (k.size() != 4)
 					return;
 				editSoundRule(id, [k](TlSoundRule &r) {
 					r.trigger = TlSoundRule::Trigger(k[0].toInt());
 					r.transitionType = k[1].toInt();
 					r.componentId = k[2];
+					r.tagId = k[3].toInt();
 				});
 			});
 			top->addWidget(row.trigger, 1);
@@ -3443,6 +3472,222 @@ void VideoEditorWindow::rebuildSoundsTab()
 		soundsEmpty_->setVisible(rules.isEmpty());
 	if (soundsFreezeBtn_)
 		soundsFreezeBtn_->setEnabled(!rules.isEmpty() || m.soundsLane() >= 0);
+}
+
+// ---- tags -----------------------------------------------------------------------
+
+void VideoEditorWindow::tagSelection(int tagId, bool on)
+{
+	if (!timelineView_ || tagId <= 0)
+		return;
+	const auto sel = timelineView_->selectedPairs();
+	if (sel.isEmpty())
+		return;
+	timelineView_->editModel([&](TimelineModel &m) {
+		for (const auto &p : sel)
+			if (p.first >= 0 && p.first < m.tracks.size() && !m.tracks[p.first].locked &&
+			    p.second >= 0 && p.second < m.tracks[p.first].clips.size())
+				m.tracks[p.first].clips[p.second].setTag(tagId, on);
+	});
+}
+
+void VideoEditorWindow::syncClipTags()
+{
+	if (!clipTagChips_ || !timelineView_)
+		return;
+	const TimelineModel &m = timelineView_->model();
+	const auto sel = timelineView_->selectedPairs();
+	// A tag every selected clip carries is a bright chip; one only some carry
+	// is faded, so a mixed selection says so instead of pretending.
+	QMap<int, int> count;
+	for (const auto &p : sel)
+		if (p.first >= 0 && p.first < m.tracks.size() && p.second >= 0 &&
+		    p.second < m.tracks[p.first].clips.size())
+			for (int id : m.tracks[p.first].clips[p.second].tags)
+				++count[id];
+	QStringList chips;
+	for (const TlTag &t : m.tags) {
+		const int n = count.value(t.id);
+		if (n == 0)
+			continue;
+		const bool all = n == sel.size();
+		chips << QStringLiteral("<span style='color:%1;'>●</span>&nbsp;<span style='color:%2;'>%3</span>"
+					"&nbsp;<a href='rm:%4' style='color:#9a9fa8;text-decoration:none;'>✕</a>")
+				 .arg(t.color.name(), all ? QStringLiteral("#e8eaed") : QStringLiteral("#7f858e"),
+				      t.name.toHtmlEscaped())
+				 .arg(t.id);
+	}
+	clipTagChips_->setText(chips.isEmpty() ? QStringLiteral("<span style='color:#7f858e;'>No tags.</span>")
+					       : chips.join(QStringLiteral("&nbsp;&nbsp;&nbsp;")));
+	if (tagNames_) {
+		QStringList names;
+		for (const TlTag &t : m.tags)
+			names << t.name;
+		if (tagNames_->stringList() != names)
+			tagNames_->setStringList(names);
+	}
+	if (clipTagEdit_)
+		clipTagEdit_->setPlaceholderText(sel.size() > 1
+							 ? QStringLiteral("Tag all %1 selected clips: type, Enter").arg(sel.size())
+							 : QStringLiteral("Add a tag: type a name, Enter"));
+}
+
+void VideoEditorWindow::buildTagsSection(QVBoxLayout *into)
+{
+	QWidget *body = addSection(into, QStringLiteral("Tags"), true);
+	auto *v = qobject_cast<QVBoxLayout *>(body->layout());
+	auto *intro = new QLabel(
+		QStringLiteral("Labels for clips: “intro”, “callout”, “b-roll”. A "
+			       "sound rule can fire on a tag. Tag a clip from its right-click menu or the "
+			       "Clip tab."),
+		body);
+	intro->setWordWrap(true);
+	intro->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+	v->addWidget(intro);
+	tagsList_ = new QWidget(body);
+	auto *ll = new QVBoxLayout(tagsList_);
+	ll->setContentsMargins(0, 0, 0, 0);
+	ll->setSpacing(3);
+	v->addWidget(tagsList_);
+	newTagEdit_ = new QLineEdit(body);
+	newTagEdit_->setPlaceholderText(QStringLiteral("New tag: type a name, Enter"));
+	connect(newTagEdit_, &QLineEdit::returnPressed, this, [this]() {
+		const QString name = newTagEdit_->text().trimmed();
+		if (name.isEmpty() || !timelineView_)
+			return;
+		if (timelineView_->model().tagNamed(name)) {
+			newTagEdit_->selectAll();
+			return; // already there
+		}
+		timelineView_->editModel(
+			[&](TimelineModel &m) { m.ensureTag(name, TimelineView::randomPastel()); });
+		newTagEdit_->clear();
+	});
+	v->addWidget(newTagEdit_);
+	rebuildTagsSection();
+}
+
+void VideoEditorWindow::rebuildTagsSection()
+{
+	if (!tagsList_ || !timelineView_)
+		return;
+	const TimelineModel &m = timelineView_->model();
+	QVector<int> ids;
+	for (const TlTag &t : m.tags)
+		ids << t.id;
+	auto *ll = qobject_cast<QVBoxLayout *>(tagsList_->layout());
+	if (ids != tagRowIds_) {
+		while (QLayoutItem *it = ll->takeAt(0)) {
+			if (QWidget *w = it->widget())
+				w->deleteLater();
+			delete it;
+		}
+		tagRowIds_ = ids;
+		for (const TlTag &tg : m.tags) {
+			const int id = tg.id;
+			auto *row = new QWidget(tagsList_);
+			row->setObjectName(QStringLiteral("tag%1").arg(id));
+			auto *h = new QHBoxLayout(row);
+			h->setContentsMargins(0, 0, 0, 0);
+			h->setSpacing(4);
+			auto *col = new QPushButton(row);
+			col->setObjectName(QStringLiteral("color"));
+			col->setFixedSize(18, 18);
+			col->setToolTip(QStringLiteral("Colour"));
+			connect(col, &QPushButton::clicked, this, [this, id]() {
+				const TlTag *t = timelineView_->model().tag(id);
+				if (!t)
+					return;
+				const QColor c = QColorDialog::getColor(t->color, this, QStringLiteral("Tag colour"));
+				if (!c.isValid())
+					return;
+				timelineView_->editModel([id, c](TimelineModel &mm) {
+					for (TlTag &x : mm.tags)
+						if (x.id == id)
+							x.color = c;
+				});
+			});
+			h->addWidget(col);
+			auto *name = new QLineEdit(row);
+			name->setObjectName(QStringLiteral("name"));
+			name->setToolTip(QStringLiteral("Rename: every clip with this tag follows."));
+			connect(name, &QLineEdit::editingFinished, this, [this, id, name]() {
+				const QString n = name->text().trimmed();
+				const TlTag *t = timelineView_->model().tag(id);
+				if (!t)
+					return;
+				if (n.isEmpty() || n == t->name) {
+					name->setText(t->name);
+					return;
+				}
+				if (const TlTag *other = timelineView_->model().tagNamed(n); other && other->id != id) {
+					name->setText(t->name); // two tags cannot share a name
+					return;
+				}
+				timelineView_->editModel([id, n](TimelineModel &mm) {
+					for (TlTag &x : mm.tags)
+						if (x.id == id)
+							x.name = n;
+				});
+			});
+			h->addWidget(name, 1);
+			auto *count = new QLabel(row);
+			count->setObjectName(QStringLiteral("count"));
+			count->setStyleSheet(QStringLiteral("color:#7f858e;"));
+			count->setToolTip(QStringLiteral("Clips with this tag"));
+			h->addWidget(count);
+			auto *snd = new QPushButton(QStringLiteral("♪"), row);
+			snd->setFixedWidth(26);
+			snd->setToolTip(QStringLiteral("A sound for every clip with this tag (a sound rule)."));
+			connect(snd, &QPushButton::clicked, this, [this, id, snd]() {
+				QString nm;
+				const int src = pickSound(snd->mapToGlobal(QPoint(0, snd->height())), &nm);
+				if (src >= 0)
+					addSoundRule(SoundRules::ruleForTag(id), src, nm);
+			});
+			h->addWidget(snd);
+			auto *del = new QPushButton(QStringLiteral("✕"), row);
+			del->setFlat(true);
+			del->setFixedWidth(22);
+			del->setToolTip(QStringLiteral("Delete the tag: it comes off every clip, and its sound rules go."));
+			connect(del, &QPushButton::clicked, this, [this, id]() {
+				const TimelineModel &mm = timelineView_->model();
+				int rules = 0;
+				for (const TlSoundRule &r : mm.soundRules)
+					if (r.trigger == TlSoundRule::Trigger::Tagged && r.tagId == id)
+						++rules;
+				if (rules > 0 &&
+				    QMessageBox::question(this, QStringLiteral("Delete tag"),
+							  QStringLiteral("“%1” has %2 sound rule(s). Deleting the tag "
+									 "removes them too.")
+								  .arg(mm.tagName(id))
+								  .arg(rules)) != QMessageBox::Yes)
+					return;
+				timelineView_->editModel([id](TimelineModel &x) { x.removeTag(id); });
+			});
+			h->addWidget(del);
+			ll->addWidget(row);
+		}
+	}
+	// Values, silently.
+	for (const TlTag &tg : m.tags) {
+		auto *row = tagsList_->findChild<QWidget *>(QStringLiteral("tag%1").arg(tg.id));
+		if (!row)
+			continue;
+		if (auto *col = row->findChild<QPushButton *>(QStringLiteral("color")))
+			col->setStyleSheet(QStringLiteral("QPushButton{background:%1;border:1px solid #111;border-radius:9px;}")
+						   .arg(tg.color.name()));
+		if (auto *name = row->findChild<QLineEdit *>(QStringLiteral("name")); name && !name->hasFocus())
+			name->setText(tg.name);
+		int n = 0;
+		for (const TlTrack &t : m.tracks)
+			for (const TlClip &c : t.clips)
+				if (c.hasTag(tg.id))
+					++n;
+		if (auto *count = row->findChild<QLabel *>(QStringLiteral("count")))
+			count->setText(QString::number(n));
+	}
+	syncClipTags();
 }
 
 void VideoEditorWindow::onAddAudioClicked()
@@ -5593,6 +5838,62 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	clipOuter->setContentsMargins(0, 6, 0, 0);
 	clipOuter->setSpacing(5);
 
+	// Tags, for any clip -- picture, caption, effect or audio -- so they sit
+	// above the picture-only group rather than inside it.
+	clipTagsBox_ = new QWidget(clipBox_);
+	{
+		auto *tl = new QVBoxLayout(clipTagsBox_);
+		tl->setContentsMargins(0, 0, 0, 4);
+		tl->setSpacing(3);
+		auto *th = new QLabel(QStringLiteral("Tags"), clipTagsBox_);
+		th->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
+		tl->addWidget(th);
+		clipTagChips_ = new QLabel(clipTagsBox_);
+		clipTagChips_->setWordWrap(true);
+		clipTagChips_->setTextFormat(Qt::RichText);
+		clipTagChips_->setTextInteractionFlags(Qt::LinksAccessibleByMouse);
+		clipTagChips_->setToolTip(QStringLiteral("Click the \u2715 on a tag to take it off."));
+		connect(clipTagChips_, &QLabel::linkActivated, this, [this](const QString &link) {
+			if (link.startsWith(QLatin1String("rm:")))
+				tagSelection(link.mid(3).toInt(), false);
+		});
+		tl->addWidget(clipTagChips_);
+		clipTagEdit_ = new QLineEdit(clipTagsBox_);
+		clipTagEdit_->setPlaceholderText(QStringLiteral("Add a tag: type a name, Enter"));
+		clipTagEdit_->setToolTip(QStringLiteral(
+			"Tags every selected clip. A new name makes the tag. Sound rules can fire on a tag: "
+			"see the Sounds tab or the Tags section of the Project tab."));
+		tagNames_ = new QStringListModel(this);
+		auto *comp = new QCompleter(tagNames_, clipTagEdit_);
+		comp->setCaseSensitivity(Qt::CaseInsensitive);
+		comp->setFilterMode(Qt::MatchContains);
+		clipTagEdit_->setCompleter(comp);
+		connect(clipTagEdit_, &QLineEdit::returnPressed, this, [this]() {
+			const QString name = clipTagEdit_->text().trimmed();
+			if (name.isEmpty() || !timelineView_)
+				return;
+			int id = 0;
+			if (const TlTag *t = timelineView_->model().tagNamed(name))
+				id = t->id;
+			if (!id) {
+				// Made and applied in one edit, so it is one undo step.
+				const auto sel = timelineView_->selectedPairs();
+				timelineView_->editModel([&](TimelineModel &m) {
+					const int nid = m.ensureTag(name, TimelineView::randomPastel());
+					for (const auto &p : sel)
+						if (p.first >= 0 && p.first < m.tracks.size() && !m.tracks[p.first].locked &&
+						    p.second >= 0 && p.second < m.tracks[p.first].clips.size())
+							m.tracks[p.first].clips[p.second].setTag(nid, true);
+				});
+			} else {
+				tagSelection(id, true);
+			}
+			clipTagEdit_->clear();
+		});
+		tl->addWidget(clipTagEdit_);
+	}
+	clipOuter->addWidget(clipTagsBox_);
+
 	// Everything below applies to a picture: an audio clip has no transform,
 	// keyframes or scripts, so the whole group hides and the audio group below
 	// takes its place.
@@ -6281,6 +6582,7 @@ void VideoEditorWindow::syncClipInspector()
 				       (!componentPanel_ || componentPanel_->isHidden()));
 	if (!c)
 		return;
+	syncClipTags();
 
 	// Save/restore rather than clear: a live edit can reach here while an outer
 	// sync is already in progress, and clearing the flag would let the widgets
@@ -8966,7 +9268,9 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 
 	// "Full editing" multi-track timeline (project v3). Clip source ids are
 	// remapped through the same `sources` array as the Multi-Cut segments.
-	if (!s.timeline.isEmpty()) {
+	// Tags and sound rules count too: a project set up before any clip is on
+	// it keeps its tag list.
+	if (!s.timeline.isEmpty() || !s.timeline.tags.isEmpty() || !s.timeline.soundRules.isEmpty()) {
 		QJsonArray trackArr;
 		for (const TlTrack &t : s.timeline.tracks)
 			trackArr.append(trackToJson(t));
@@ -8983,6 +9287,12 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 			for (const TlSoundRule &r : s.timeline.soundRules)
 				sr.append(soundRuleToJson(r));
 			root[QStringLiteral("soundRules")] = sr;
+		}
+		if (!s.timeline.tags.isEmpty()) {
+			QJsonArray ta;
+			for (const TlTag &t : s.timeline.tags)
+				ta.append(tagToJson(t));
+			root[QStringLiteral("tags")] = ta;
 		}
 		root[QStringLiteral("harpiaProject")] = 3; // timelines need a v3 reader
 	}
@@ -9271,6 +9581,11 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 
 		s.timeline.tracks.append(t);
 	}
+	for (const QJsonValue &tv : root.value(QStringLiteral("tags")).toArray()) {
+		const TlTag t = tagFromJson(tv.toObject());
+		if (t.id > 0 && !t.name.isEmpty() && !s.timeline.tag(t.id))
+			s.timeline.tags.append(t);
+	}
 	for (const QJsonValue &rv : root.value(QStringLiteral("soundRules")).toArray()) {
 		TlSoundRule r = soundRuleFromJson(rv.toObject());
 		r.sourceId = srcMap.isEmpty() ? r.sourceId : srcMap.value(r.sourceId, 0);
@@ -9463,6 +9778,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	// them from what is actually here.
 	applySoundRules();
 	rebuildSoundsTab();
+	rebuildTagsSection();
 	updateEmptyState();
 	updateInspector();
 	if (fullEdit())

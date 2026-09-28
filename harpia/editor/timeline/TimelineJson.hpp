@@ -274,6 +274,12 @@ inline QJsonObject clipToJson(const TlClip &c)
 	}
 	if (c.soundRule > 0)
 		co[QStringLiteral("soundRule")] = c.soundRule;
+	if (!c.tags.isEmpty()) {
+		QJsonArray ta;
+		for (int id : c.tags)
+			ta.append(id);
+		co[QStringLiteral("tags")] = ta;
+	}
 	// `peaks` is deliberately absent: it is a waveform cache derived from the
 	// source, rebuilt on load rather than stored.
 	return co;
@@ -293,6 +299,9 @@ inline TlClip clipFromJson(const QJsonObject &co)
 	c.speed = co.value(QStringLiteral("speed")).toDouble(1.0);
 	c.outStartMs = qint64(co.value(QStringLiteral("outStart")).toDouble());
 	c.soundRule = co.value(QStringLiteral("soundRule")).toInt(0);
+	for (const QJsonValue &tv : co.value(QStringLiteral("tags")).toArray())
+		if (const int id = tv.toInt(0); id > 0 && !c.tags.contains(id))
+			c.tags.append(id);
 	c.posX = co.value(QStringLiteral("posX")).toDouble(0.5);
 	c.posY = co.value(QStringLiteral("posY")).toDouble(0.5);
 	c.scale = co.value(QStringLiteral("scale")).toDouble(1.0);
@@ -533,6 +542,8 @@ inline QJsonObject soundRuleToJson(const TlSoundRule &r)
 	o[QStringLiteral("transitionType")] = r.transitionType;
 	if (!r.componentId.isEmpty())
 		o[QStringLiteral("component")] = r.componentId;
+	if (r.tagId > 0)
+		o[QStringLiteral("tag")] = r.tagId;
 	o[QStringLiteral("lane")] = r.lane;
 	o[QStringLiteral("source")] = r.sourceId;
 	o[QStringLiteral("name")] = r.soundName;
@@ -552,6 +563,7 @@ inline TlSoundRule soundRuleFromJson(const QJsonObject &o)
 									 : TlSoundRule::Trigger::AnyTransition;
 	r.transitionType = o.value(QStringLiteral("transitionType")).toInt(0);
 	r.componentId = o.value(QStringLiteral("component")).toString();
+	r.tagId = o.value(QStringLiteral("tag")).toInt(0);
 	r.lane = o.value(QStringLiteral("lane")).toInt(-1);
 	r.sourceId = o.value(QStringLiteral("source")).toInt(0);
 	r.soundName = o.value(QStringLiteral("name")).toString();
@@ -561,5 +573,24 @@ inline TlSoundRule soundRuleFromJson(const QJsonObject &o)
 	return r;
 }
 
+
+inline QJsonObject tagToJson(const TlTag &t)
+{
+	QJsonObject o;
+	o[QStringLiteral("id")] = t.id;
+	o[QStringLiteral("name")] = t.name;
+	o[QStringLiteral("color")] = t.color.name(QColor::HexRgb);
+	return o;
+}
+
+inline TlTag tagFromJson(const QJsonObject &o)
+{
+	TlTag t;
+	t.id = o.value(QStringLiteral("id")).toInt(0);
+	t.name = o.value(QStringLiteral("name")).toString();
+	if (const QColor c(o.value(QStringLiteral("color")).toString()); c.isValid())
+		t.color = c;
+	return t;
+}
 
 } // namespace harpia

@@ -355,6 +355,91 @@ int main(int argc, char **argv)
 		   "or covers every transition");
 	}
 
+	std::printf("\n-- tags --\n");
+	{
+		TimelineModel w = m;
+		const int intro = w.ensureTag(QStringLiteral("intro"));
+		const int callout = w.ensureTag(QStringLiteral("Callout"), QColor(Qt::red));
+		eqi(intro, 1, "the first tag is 1");
+		eqi(w.ensureTag(QStringLiteral("  INTRO ")), intro, "the same name, any case, is the same tag");
+		eqi(w.ensureTag(QString()), 0, "an empty name makes no tag");
+		eqi(w.tags.size(), 2, "two tags");
+		ok(w.tag(callout) && w.tag(callout)->color == QColor(Qt::red), "a tag keeps its colour");
+		ok(w.tagName(intro) == QLatin1String("intro"), "and its name");
+
+		// Tag the still, a caption and the user's music.
+		w.tracks[1].clips[2].setTag(intro, true);
+		w.tracks[1].clips[2].setTag(intro, true);
+		eqi(w.tracks[1].clips[2].tags.size(), 1, "tagging twice is still one tag");
+		w.tracks[0].clips[0].setTag(intro, true);
+		w.tracks[2].clips[0].setTag(intro, true);
+		w.tracks[0].clips[1].setTag(callout, true);
+
+		TlSoundRule r = SoundRules::ruleForTag(intro);
+		r.id = 1;
+		r.sourceId = 50;
+		w.soundRules.append(r);
+		SoundRules::apply(w, lookup);
+		const int lane = w.soundsLane();
+		int n = 0;
+		QVector<qint64> at;
+		for (const TlClip &c : w.tracks[lane].clips)
+			if (c.soundRule == 1) {
+				++n;
+				at << c.outStartMs;
+			}
+		eqi(n, 3, "a tag rule sounds every tagged clip, audio lanes included");
+		ok(at.contains(9000) && at.contains(2000) && at.contains(0), "at each clip's start");
+
+		// Other rules still ignore audio lanes.
+		TlSoundRule any;
+		any.id = 2;
+		any.trigger = TlSoundRule::Trigger::AnyClipStarts;
+		any.sourceId = 50;
+		w.soundRules.append(any);
+		SoundRules::apply(w, lookup);
+		int anyN = 0;
+		for (const TlClip &c : w.tracks[w.soundsLane()].clips)
+			if (c.soundRule == 2)
+				++anyN;
+		eqi(anyN, 5, "\"every clip starts\" still means the picture lanes");
+		w.soundRules.removeLast();
+
+		// Untag: the sound goes.
+		w.tracks[1].clips[2].setTag(intro, false);
+		SoundRules::apply(w, lookup);
+		n = 0;
+		for (const TlClip &c : w.tracks[w.soundsLane()].clips)
+			if (c.soundRule == 1)
+				++n;
+		eqi(n, 2, "untagging a clip takes its sound away");
+
+		ok(SoundRules::triggerLabel(r, &w) == QLatin1String("Every clip tagged intro"),
+		   "the rule reads with the tag's name");
+
+		// Removing the tag removes it from clips and its rules.
+		w.removeTag(intro);
+		ok(!w.tag(intro) && w.soundRules.isEmpty(), "removing a tag removes its rules");
+		bool anyLeft = false;
+		for (const TlTrack &t : w.tracks)
+			for (const TlClip &c : t.clips)
+				if (c.hasTag(intro))
+					anyLeft = true;
+		ok(!anyLeft, "and it is gone from every clip");
+		ok(w.tracks[0].clips[1].hasTag(callout), "other tags stay");
+
+		// The file.
+		const TlTag tb = tagFromJson(tagToJson(*w.tag(callout)));
+		ok(tb == *w.tag(callout), "a tag survives the JSON round trip");
+		const TlClip cb = clipFromJson(clipToJson(w.tracks[0].clips[1]));
+		ok(cb.tags == QVector<int>{callout}, "a clip's tags are written and read");
+		ok(!clipToJson(w.tracks[1].clips[0]).contains(QStringLiteral("tags")), "an untagged clip writes none");
+		TlSoundRule tr = SoundRules::ruleForTag(callout);
+		tr.id = 9;
+		ok(soundRuleFromJson(soundRuleToJson(tr)) == tr, "a tag rule survives the trip");
+		ok(!(w == m), "tags are part of the model's equality");
+	}
+
 	std::printf("\n-- the built-in sounds --\n");
 	{
 		QTemporaryDir dir;

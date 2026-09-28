@@ -324,6 +324,19 @@ struct TlClip {
 	// "Convert to normal clips" on the Sounds lane, is how it becomes theirs.
 	int soundRule = 0;
 
+	// Tags (TlTag ids, see TimelineModel::tags): what this clip IS to you --
+	// "intro", "callout", "b-roll". A sound rule can fire on a tag, and
+	// later a tag will carry a component preset. Any number, unordered.
+	QVector<int> tags;
+	bool hasTag(int id) const { return tags.contains(id); }
+	void setTag(int id, bool on)
+	{
+		if (on && !tags.contains(id))
+			tags.append(id);
+		else if (!on)
+			tags.removeAll(id);
+	}
+
 	// Audio-only. The fades are non-destructive: nothing is written back to the
 	// media, they are evaluated as a gain at play/render time.
 	double volume = 1.0;
@@ -533,7 +546,7 @@ struct TlClip {
 		       rotation == o.rotation && opacity == o.opacity &&
 		       crop == o.crop && keys == o.keys && text == o.text && words == o.words &&
 		       scripts == o.scripts && fx == o.fx && components == o.components &&
-		       transition == o.transition && soundRule == o.soundRule &&
+		       transition == o.transition && soundRule == o.soundRule && tags == o.tags &&
 		       volume == o.volume && fadeInMs == o.fadeInMs &&
 		       fadeOutMs == o.fadeOutMs && fadeInCurve == o.fadeInCurve &&
 		       fadeOutCurve == o.fadeOutCurve;
@@ -971,6 +984,17 @@ struct TlTrack {
 // and the timeline on every edit -- see SoundRules::apply -- and land on the
 // one lane marked TlTrack::autoSounds. A new caption added tomorrow gets its
 // sound without anyone remembering to add it.
+// A named, coloured label the project hands out, for clips to carry (see
+// TlClip::tags). The tag is the thing rules and, later, component presets
+// hang off; a clip only refers to it by id, so renaming is one edit.
+struct TlTag {
+	int id = 0; // > 0, stable within the project
+	QString name;
+	QColor color = QColor(0x6c, 0x8e, 0xb8);
+	bool operator==(const TlTag &o) const { return id == o.id && name == o.name && color == o.color; }
+	bool operator!=(const TlTag &o) const { return !(*this == o); }
+};
+
 struct TlSoundRule {
 	enum class Trigger {
 		AnyTransition = 0, // every enabled transition, whatever its type
@@ -980,6 +1004,7 @@ struct TlSoundRule {
 		VideoStarts,       // a media clip starts on a picture lane
 		Component,         // a clip carrying the component `componentId` starts
 		AnyClipStarts,     // any clip on a picture lane starts
+		Tagged,            // a clip carrying the tag `tagId` starts
 		Count
 	};
 	int id = 0; // stable within the project; > 0
@@ -987,6 +1012,7 @@ struct TlSoundRule {
 	Trigger trigger = Trigger::AnyTransition;
 	int transitionType = 0;  // TransitionType, for Trigger::Transition
 	QString componentId;     // "harpia.textType", for Trigger::Component
+	int tagId = 0;           // for Trigger::Tagged
 	int lane = -1;           // -1 = any picture lane, else only that track index
 	int sourceId = 0;        // the sound, in the media pool (an audio source)
 	QString soundName;       // what to call it in the list ("Whoosh", "click.wav")
@@ -998,7 +1024,7 @@ struct TlSoundRule {
 	{
 		return id == o.id && enabled == o.enabled && trigger == o.trigger &&
 		       transitionType == o.transitionType && componentId == o.componentId &&
-		       lane == o.lane && sourceId == o.sourceId && soundName == o.soundName &&
+		       tagId == o.tagId && lane == o.lane && sourceId == o.sourceId && soundName == o.soundName &&
 		       qAbs(volume - o.volume) < 1e-9 && offsetMs == o.offsetMs && maxMs == o.maxMs;
 	}
 	bool operator!=(const TlSoundRule &o) const { return !(*this == o); }
@@ -1020,6 +1046,68 @@ struct TimelineModel {
 	QVector<qint64> markers;
 
 	QVector<TlTrack> tracks;
+
+	// The project's tags (see TlTag). Saved, part of equality.
+	QVector<TlTag> tags;
+	int nextTagId() const
+	{
+		int n = 1;
+		for (const TlTag &t : tags)
+			n = std::max(n, t.id + 1);
+		return n;
+	}
+	const TlTag *tag(int id) const
+	{
+		for (const TlTag &t : tags)
+			if (t.id == id)
+				return &t;
+		return nullptr;
+	}
+	QString tagName(int id) const
+	{
+		const TlTag *t = tag(id);
+		return t ? t->name : QString();
+	}
+	// By name, case-insensitively; nullptr when there is none.
+	const TlTag *tagNamed(const QString &name) const
+	{
+		for (const TlTag &t : tags)
+			if (t.name.compare(name.trimmed(), Qt::CaseInsensitive) == 0)
+				return &t;
+		return nullptr;
+	}
+	// Make a tag, or return the id of the one already so named. 0 for an
+	// empty name.
+	int ensureTag(const QString &name, const QColor &color = QColor())
+	{
+		const QString n = name.trimmed();
+		if (n.isEmpty())
+			return 0;
+		if (const TlTag *t = tagNamed(n))
+			return t->id;
+		TlTag t;
+		t.id = nextTagId();
+		t.name = n;
+		if (color.isValid())
+			t.color = color;
+		tags.append(t);
+		return t.id;
+	}
+	// Remove a tag everywhere: the list, every clip, every rule that fired on it.
+	void removeTag(int id)
+	{
+		for (int i = 0; i < tags.size(); ++i)
+			if (tags[i].id == id) {
+				tags.remove(i);
+				break;
+			}
+		for (TlTrack &t : tracks)
+			for (TlClip &c : t.clips)
+				c.tags.removeAll(id);
+		for (int i = soundRules.size() - 1; i >= 0; --i)
+			if (soundRules[i].trigger == TlSoundRule::Trigger::Tagged && soundRules[i].tagId == id)
+				soundRules.remove(i);
+	}
 
 	// Sounds for events (see TlSoundRule). Saved with the project, part of
 	// equality so a rule change is an undo step.
@@ -1110,7 +1198,7 @@ struct TimelineModel {
 
 	bool operator==(const TimelineModel &o) const
 	{
-		return tracks == o.tracks && markers == o.markers && soundRules == o.soundRules;
+		return tracks == o.tracks && markers == o.markers && soundRules == o.soundRules && tags == o.tags;
 	}
 	bool operator!=(const TimelineModel &o) const { return !(*this == o); }
 };

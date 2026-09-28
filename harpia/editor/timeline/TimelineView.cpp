@@ -25,6 +25,8 @@
 #include <QDragEnterEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPixmap>
+#include <QIcon>
 #include <QPainterPath>
 #include <QPolygonF>
 #include <QToolTip>
@@ -149,6 +151,15 @@ void TimelineView::setModelQuiet(const TimelineModel &m)
 void TimelineView::setModelAndCommit(const TimelineModel &m)
 {
 	setModelQuiet(m);
+	commitEdit();
+}
+
+void TimelineView::editModel(const std::function<void(TimelineModel &)> &fn)
+{
+	if (!fn)
+		return;
+	fn(model_);
+	update();
 	commitEdit();
 }
 
@@ -1798,6 +1809,24 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 		p.drawText(QRect(r.x() + 3, r.bottom() - 12, r.width() - 5, 13),
 			   Qt::AlignVCenter | Qt::AlignLeft,
 			   p.fontMetrics().elidedText(label, Qt::ElideRight, r.width() - 5));
+	}
+	// Tags: a coloured dot each along the top-right, so a tagged clip is
+	// visible from the timeline. Only as many as fit; hovering names them.
+	if (!c.tags.isEmpty() && r.width() >= 24 && r.height() >= 14) {
+		AaOn aaDots(p);
+		const int d = 7;
+		int x = r.right() - 4 - d;
+		for (int id : c.tags) {
+			const TlTag *tg = model_.tag(id);
+			if (!tg)
+				continue;
+			if (x < r.x() + 4)
+				break;
+			p.setPen(QPen(QColor(0, 0, 0, 160), 1));
+			p.setBrush(tg->color);
+			p.drawEllipse(QRect(x, r.y() + 4, d, d));
+			x -= d + 3;
+		}
 	}
 	p.restore();
 
@@ -3936,6 +3965,46 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	// for every clip of its kind. Right-clicked inside an overlap, the
 	// transition gets the same pair. On a clip a rule made: the rules, since
 	// that clip is not the user's to edit.
+	// Tags: tick on and off. With several clips selected (and this one among
+	// them) the tick applies to all of them; a partly-tagged selection shows
+	// the tag unticked, and ticking it tags the rest.
+	QVector<QPair<int, int>> tagTargets;
+	if (inSel && sel.size() > 1)
+		tagTargets = sel;
+	else
+		tagTargets = {{track, clip}};
+	QMenu *tagMenu = nullptr;
+	QAction *newTag = nullptr;
+	if (menuClip.soundRule == 0) {
+		menu.addSeparator();
+		tagMenu = menu.addMenu(tagTargets.size() > 1
+					       ? QStringLiteral("Tags (%1 clips)").arg(tagTargets.size())
+					       : QStringLiteral("Tags"));
+		for (const TlTag &tg : model_.tags) {
+			bool all = true;
+			for (const auto &p : tagTargets)
+				if (!model_.tracks[p.first].clips[p.second].hasTag(tg.id))
+					all = false;
+			QPixmap dot(12, 12);
+			dot.fill(Qt::transparent);
+			{
+				QPainter dp(&dot);
+				dp.setRenderHint(QPainter::Antialiasing);
+				dp.setPen(Qt::NoPen);
+				dp.setBrush(tg.color);
+				dp.drawEllipse(1, 1, 10, 10);
+			}
+			QAction *a = tagMenu->addAction(QIcon(dot), tg.name);
+			a->setCheckable(true);
+			a->setChecked(all);
+			a->setData(tg.id);
+		}
+		if (!model_.tags.isEmpty())
+			tagMenu->addSeparator();
+		newTag = tagMenu->addAction(QStringLiteral("New tag…"));
+		if (locked)
+			tagMenu->setEnabled(false);
+	}
 	QAction *sndThis = nullptr, *sndKind = nullptr, *sndTrThis = nullptr, *sndTrAll = nullptr;
 	QAction *sndRules = nullptr;
 	const bool onPicture = TimelineModel::isPictureKind(model_.tracks[track].kind);
@@ -3973,6 +4042,28 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	disableBecause(del, !locked, lockedWhy);
 	explainDisabled(&menu);
 	QAction *chosen = menu.exec(globalPos);
+	if (chosen && tagMenu && (chosen == newTag || (chosen->isCheckable() && tagMenu->actions().contains(chosen)))) {
+		int id = chosen->data().toInt();
+		bool on = chosen->isChecked();
+		if (chosen == newTag) {
+			bool okName = false;
+			const QString name = QInputDialog::getText(this, QStringLiteral("New tag"),
+								   QStringLiteral("Tag name:"), QLineEdit::Normal,
+								   QString(), &okName);
+			if (!okName || name.trimmed().isEmpty())
+				return;
+			id = model_.ensureTag(name, randomPastel());
+			on = true;
+		}
+		for (const auto &p : tagTargets) {
+			if (model_.tracks[p.first].locked)
+				continue;
+			model_.tracks[p.first].clips[p.second].setTag(id, on);
+		}
+		update();
+		commitEdit();
+		return;
+	}
 	if (chosen && (chosen == sndThis || chosen == sndKind)) {
 		emit soundForClipRequested(track, clip, chosen == sndKind);
 		return;

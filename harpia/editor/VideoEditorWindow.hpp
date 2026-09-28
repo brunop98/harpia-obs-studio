@@ -30,6 +30,7 @@
 #include <vector>
 
 class QButtonGroup;
+class QStringListModel;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -675,6 +676,21 @@ private:
 	void previewSound(int sourceId);
 	void freezeSounds();
 	void showSoundsTab();
+
+	// Tags (TlTag): a Tags section on the Project tab (name, colour, a sound
+	// for the tag, delete) and a tag field on the Clip tab that applies to
+	// every selected clip.
+	QWidget *tagsList_ = nullptr;      // project tab rows, rebuilt when the tag set changes
+	QLineEdit *newTagEdit_ = nullptr;
+	QVector<int> tagRowIds_;
+	QWidget *clipTagsBox_ = nullptr;   // clip tab
+	QLabel *clipTagChips_ = nullptr;   // the selected clips' tags, click x to remove
+	QLineEdit *clipTagEdit_ = nullptr; // type a name, Enter
+	QStringListModel *tagNames_ = nullptr; // completer source
+	void buildTagsSection(QVBoxLayout *into);
+	void rebuildTagsSection();
+	void syncClipTags();
+	void tagSelection(int tagId, bool on); // every selected clip on an unlocked lane
 	QPushButton *inspectorBtn_ = nullptr; // toolbar toggle (show/hide the panel)
 	QLabel *inspTitle_ = nullptr;
 	QLabel *inspInMs_ = nullptr;

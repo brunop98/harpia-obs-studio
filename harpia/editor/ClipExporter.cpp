@@ -1,4 +1,5 @@
 #include "ClipExporter.hpp"
+#include "StillWeight.hpp"
 
 #include "AudioRetimer.hpp"
 #include "FrameSeeker.hpp"
@@ -1463,11 +1464,12 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 	struct Provider : TimelineCompositor::FrameProvider {
 		std::map<std::pair<int, int>, std::unique_ptr<FrameSeeker>> seekers;
 		std::map<int, QImage> stills; // image clips: same picture at every time
+		std::map<int, QSize> stillSizes; // the original's size (crops are in its pixels)
 		int w = 0, h = 0;
 		QSize sourceSize(int sourceId) override
 		{
-			if (const auto sit = stills.find(sourceId); sit != stills.end())
-				return sit->second.size();
+			if (const auto sit = stillSizes.find(sourceId); sit != stillSizes.end())
+				return sit->second;
 			for (const auto &kv : seekers)
 				if (kv.first.first == sourceId && kv.second && kv.second->width() > 0)
 					return QSize(kv.second->width(), kv.second->height());
@@ -1501,9 +1503,28 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 				// the libav fallback previews fine and would otherwise
 				// encode as an empty frame, which nothing reports.
 				QImage img = readStillImage(path);
-				if (!img.isNull())
-					provider.stills[c.sourceId] =
-						img.convertToFormat(QImage::Format_RGBA8888);
+				if (!img.isNull()) {
+					// Scaled ONCE to what the video can show, rather than a
+					// 50 MP photo scaled down on every frame of the export.
+					// The headroom covers the deepest zoom any clip of this
+					// still asks for, and at least 2x, so a zoom stays sharp.
+					double zoom = 1.0;
+					for (const TlTrack &t2 : tl.tracks)
+						for (const TlClip &c2 : t2.clips) {
+							if (c2.sourceId != c.sourceId)
+								continue;
+							zoom = std::max(zoom, c2.scale);
+							for (const TlKeyframe &k : c2.keys)
+								zoom = std::max(zoom, k.tf.scale);
+						}
+					const double head = std::max(2.0, zoom + 0.5);
+					const QSize bound(int(std::ceil(cw * head)), int(std::ceil(ch * head)));
+					const QSize fit = stillFitSize(img.size(), bound);
+					provider.stillSizes[c.sourceId] = img.size();
+					if (fit != img.size())
+						img = img.scaled(fit, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+					provider.stills[c.sourceId] = img.convertToFormat(QImage::Format_RGBA8888);
+				}
 				continue;
 			}
 			if (c.type != TlClip::Type::Video ||

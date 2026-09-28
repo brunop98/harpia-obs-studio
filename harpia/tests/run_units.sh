@@ -240,6 +240,18 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/componentrender_test" "$QJSLIB/libqjs.a" $LF
 
+# Large stills: what is heavy, the working and preview copies, and a crop that
+# cuts the same part of a smaller copy through the real compositor.
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
+	"$HERE/stillweight_test.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/component/ScriptComponent.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
+	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
+	-o "$WORK/stillweight_test" "$QJSLIB/libqjs.a" $LF
+
 # Effects as components: every FxType registered, rendering pixel-for-pixel
 # what the old path did, and an unmigrated project opening with its grade.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -766,6 +778,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/console_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/subtitles_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/searchpicker_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/componentrender_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/stillweight_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/assetcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectarea_test" || rc=1

@@ -1,5 +1,7 @@
 #include "TimelineCompositor.hpp"
 
+#include "../StillWeight.hpp"
+
 #include "EffectClip.hpp"
 #include "Transitions.hpp"
 #include "../component/ComponentRegistry.hpp"
@@ -528,11 +530,24 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 			// size to work out where a point in the picture lands on the canvas,
 			// and that is only known once the frame (or the caption) exists.
 			QImage frame;
+			// The crop is in the SOURCE's pixels, but the frame may be a
+			// smaller copy (a still's preview copy, video decoded at preview
+			// size). Moved onto the frame so the same part is cut either way.
+			const TlClip *drawn = &c;
+			TlClip cropped;
 			if (c.type == TlClip::Type::Video || c.type == TlClip::Type::Image) {
 				// Which track is asking, so a sequential provider can keep
 				// one decoder per stack rather than one per source.
 				fp.setTrack(ti);
 				frame = fp.frameFor(c.sourceId, srcMs);
+				if (!frame.isNull() && !c.crop.isNull() && c.crop.width() > 1 && c.crop.height() > 1) {
+					const QSize original = fp.sourceSize(c.sourceId);
+					if (!original.isEmpty() && original != frame.size()) {
+						cropped = c;
+						cropped.crop = cropForFrame(c.crop, original, frame.size());
+						drawn = &cropped;
+					}
+				}
 			}
 
 			// Base pose / keyframes, then the Transform components, then the
@@ -549,9 +564,9 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 				QSize natural = frame.size();
 				if (c.type == TlClip::Type::Text)
 					natural = textNaturalSize(c.text, canvas);
-				if (!c.crop.isNull() && c.crop.width() > 1 && c.crop.height() > 1 &&
+				if (!drawn->crop.isNull() && drawn->crop.width() > 1 && drawn->crop.height() > 1 &&
 				    !frame.isNull())
-					natural = c.crop.intersected(QRect(QPoint(0, 0), frame.size()))
+					natural = drawn->crop.intersected(QRect(QPoint(0, 0), frame.size()))
 							  .size();
 				const double k =
 					double(logicalCanvas.width()) / std::max(1, canvas.width());
@@ -587,7 +602,7 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 				drawClip(into, shown, tf, canvas, frame);
 				return;
 			}
-			drawClip(into, c, tf, canvas, frame);
+			drawClip(into, *drawn, tf, canvas, frame);
 		};
 
 		// Two clips covering the same instant on one track IS a transition --

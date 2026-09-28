@@ -442,7 +442,13 @@ private:
 	int addImageSource(const QString &path);
 	// Built from what can actually be opened, so the dialog never offers a
 	// format the editor would then refuse.
-	QHash<int, QImage> stillImages_; // sourceId -> decoded still
+	QHash<int, QImage> stillImages_; // sourceId -> working copy (<= kStillWorkingMax, see StillWeight.hpp)
+	QHash<int, QSize> stillSizes_;   // sourceId -> the ORIGINAL's size, what geometry is measured in
+	QHash<int, QImage> stillPreview_; // sourceId -> copy sized for the current preview
+	QSize stillPreviewFor_;           // the render size stillPreview_ was made for
+	const QImage &stillForPreview(int sourceId, QSize render);
+	QSize stillSize(int sourceId) const; // original size, or empty when not a still
+	void warnHeavyStill(const QString &path, QSize px, qint64 bytes);
 	// Timeline playback: the last sequentially-decoded frame per source, so a
 	// source whose next frame is not due yet (timeline tick faster than its
 	// fps) is reused instead of forcing the seeker to over-advance.

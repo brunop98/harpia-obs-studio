@@ -52,6 +52,7 @@
 #include "EditConsole.hpp"
 #include <QRegularExpression>
 #include "../ui/MenuHints.hpp"
+#include "StillWeight.hpp"
 #include "subtitles/SubtitleDialog.hpp"
 #include "timeline/MotionPath.hpp"
 #include "ytdlp/UrlDownloadDialog.hpp"
@@ -2731,6 +2732,66 @@ QImage VideoEditorWindow::readStillImage(const QString &path, QString *why)
 	return harpia::readStillImage(path, why);
 }
 
+QSize VideoEditorWindow::stillSize(int sourceId) const
+{
+	if (const auto it = stillSizes_.constFind(sourceId); it != stillSizes_.constEnd())
+		return it.value();
+	if (const auto it = stillImages_.constFind(sourceId); it != stillImages_.constEnd())
+		return it.value().size();
+	return QSize();
+}
+
+const QImage &VideoEditorWindow::stillForPreview(int sourceId, QSize render)
+{
+	// One copy per still per preview size. A new size (quality change, window
+	// resize past a 64 px step) remakes them lazily, as each is next drawn.
+	if (render != stillPreviewFor_) {
+		stillPreview_.clear();
+		stillPreviewFor_ = render;
+	}
+	auto it = stillPreview_.find(sourceId);
+	if (it != stillPreview_.end())
+		return it.value();
+	const QImage &work = stillImages_[sourceId];
+	const QSize want = stillPreviewSize(work.size(), render);
+	QImage copy = want == work.size() ? work
+					  : work.scaled(want, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+	return stillPreview_.insert(sourceId, copy).value();
+}
+
+void VideoEditorWindow::warnHeavyStill(const QString &path, QSize px, qint64 bytes)
+{
+	const StillWeight w = stillWeight(px, bytes);
+	if (!w.heavy)
+		return;
+	const QString name = QFileInfo(path).fileName();
+	editorLog(EditorLogLevel::Warning, QStringLiteral("Add image"),
+		  QStringLiteral("%1 is a very large image: %2. The editor works on a smaller copy; "
+				 "the export still reads it whole.")
+			  .arg(name, w.why));
+	// Not while a project opens (a dialog per image, before the window is
+	// even usable), and not again once the user said so.
+	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	if (loadingProject_ || st.value(QStringLiteral("editor/quietLargeImages"), false).toBool())
+		return;
+	QMessageBox box(QMessageBox::Warning, QStringLiteral("Very large image"),
+			QStringLiteral("<b>%1</b> is %2.").arg(name.toHtmlEscaped(), w.why.toHtmlEscaped()),
+			QMessageBox::Ok, this);
+	box.setInformativeText(QStringLiteral(
+		"Images this big can make the preview lag and the export slow, and use a lot of memory. "
+		"The editor now previews a smaller copy (up to %1 px), so editing should stay smooth; "
+		"the export still uses the full image.\n\n"
+		"For the lightest project, resize it before adding it: 3840 x 2160 (4K) is plenty "
+		"for a 1080p or 4K video. If the preview is still slow, set the "
+		"\u201cPreview\u201d box in the top bar to \u00BD or \u00BC.")
+				       .arg(kStillWorkingMax));
+	auto *quiet = new QCheckBox(QStringLiteral("Don't warn me about large images again"), &box);
+	box.setCheckBox(quiet);
+	box.exec();
+	if (quiet->isChecked())
+		st.setValue(QStringLiteral("editor/quietLargeImages"), true);
+}
+
 int VideoEditorWindow::addImageSource(const QString &path)
 {
 	QString why;
@@ -2748,15 +2809,26 @@ int VideoEditorWindow::addImageSource(const QString &path)
 			warnAndLog(this, QStringLiteral("Add image"), why);
 		return -1;
 	}
+	// The original's size is what every piece of geometry is measured in; the
+	// pixels kept are a working copy capped at kStillWorkingMax (the export
+	// re-reads the file whole). See StillWeight.hpp.
+	const QSize fullSize = img.size();
+	const qint64 fileBytes = QFileInfo(path).size();
+	const QSize working = stillWorkingSize(fullSize);
+	if (working != fullSize)
+		img = img.scaled(working, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 	img = img.convertToFormat(QImage::Format_RGBA8888);
 	EditorSource s;
 	s.id = nextSourceId_++;
 	s.path = path;
 	s.name = QFileInfo(path).fileName();
 	s.durationMs = 5000; // a still has no length of its own; 5s is the default
-	s.width = img.width();
-	s.height = img.height();
+	s.width = fullSize.width();
+	s.height = fullSize.height();
 	stillImages_.insert(s.id, img);
+	stillSizes_.insert(s.id, fullSize);
+	stillPreview_.remove(s.id);
+	warnHeavyStill(path, fullSize, fileBytes);
 	// A still's filmstrip: one tile, at the same 128x72 bound the video strips
 	// use. That single tile is what lets the timeline draw an image clip with
 	// its own picture, the way a video clip is drawn with its frames -- an image
@@ -4349,18 +4421,18 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 		int decodeW = 1920, decodeH = 1080;
 		QSize sourceSize(int sourceId) override
 		{
-			if (const auto it = w->stillImages_.constFind(sourceId); it != w->stillImages_.constEnd())
-				return it.value().size();
+			if (const QSize s = w->stillSize(sourceId); !s.isEmpty())
+				return s;
 			if (const EditorSource *s = w->sourceById(sourceId); s && s->width > 0 && s->height > 0)
 				return QSize(s->width, s->height);
 			return QSize();
 		}
 		QImage frameFor(int sourceId, qint64 srcMs) override
 		{
-			// A still serves the same picture at every timestamp.
-			if (const auto it = w->stillImages_.constFind(sourceId);
-			    it != w->stillImages_.constEnd())
-				return it.value();
+			// A still serves the same picture at every timestamp: a copy
+			// sized for this preview, not the whole photo every frame.
+			if (w->stillImages_.contains(sourceId))
+				return w->stillForPreview(sourceId, QSize(decodeW, decodeH));
 
 			// PLAYBACK decodes sequentially, like Simple Trim and Multi-Cut
 			// always have. The async decoder below is a SCRUBBING cache --
@@ -7827,8 +7899,8 @@ QSize VideoEditorWindow::clipNaturalSize(const TlClip &c)
 	const QSize canvasSize = timelineCanvasSize();
 	if (c.type == TlClip::Type::Text)
 		return TimelineCompositor::textNaturalSize(c.text, canvasSize);
-	if (const auto it = stillImages_.constFind(c.sourceId); it != stillImages_.constEnd())
-		return it.value().size();
+	if (const QSize s = stillSize(c.sourceId); !s.isEmpty())
+		return (!c.crop.isNull() && c.crop.width() > 1) ? c.crop.size() : s;
 	if (EditorSource *s = sourceById(c.sourceId))
 		return (!c.crop.isNull() && c.crop.width() > 1) ? c.crop.size()
 							       : QSize(s->width, s->height);

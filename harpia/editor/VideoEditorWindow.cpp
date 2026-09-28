@@ -5070,7 +5070,20 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		if (syncingClip_)
 			return;
 		const QString t = textEdit_->toPlainText();
-		editSelectedClip([&t](TlClip &c) { c.text.text = t; });
+		const QSize canvas = timelineCanvasSize();
+		editSelectedClip([&t, canvas](TlClip &c) {
+			// A caption grows DOWNWARD as you type: when a line wraps (or
+			// Enter adds one) the top edge stays where it was and the new
+			// line appears below, instead of the whole block creeping up
+			// to stay centred. Only an un-keyed caption is moved -- a keyed
+			// one has its position on the keys, which are not this edit's.
+			const int oldH = TimelineCompositor::textNaturalSize(c.text, canvas).height();
+			c.text.text = t;
+			const int newH = TimelineCompositor::textNaturalSize(c.text, canvas).height();
+			if (newH != oldH && c.keys.isEmpty() && canvas.height() > 0 &&
+			    std::abs(c.rotation) < 0.001)
+				c.posY += double(newH - oldH) * std::max(0.001, c.scale) / 2.0 / canvas.height();
+		});
 	});
 
 	fontCombo_ = new QFontComboBox(textBox_);

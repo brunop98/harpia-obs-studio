@@ -416,6 +416,17 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/mask_test" "$QJSLIB/libqjs.a" $LF
 
+# A caption wider than the picture wraps at a space and carries on below;
+# typed line breaks are kept and a single long word is left whole.
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
+	"$HERE/textwrap_test.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
+	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	-o "$WORK/textwrap_test" "$QJSLIB/libqjs.a" $LF
+
 # "Export this clip": the sliced timeline has to RENDER what the project
 # rendered, which is a claim about pixels rather than about field arithmetic.
 g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
@@ -706,6 +717,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/singleinstance_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/propkeys_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/pixelbands_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/mask_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/textwrap_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineslice_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/playbacktracks_test" || rc=1
 exit $rc

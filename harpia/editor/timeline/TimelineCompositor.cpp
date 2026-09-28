@@ -53,19 +53,19 @@ QFont buildFont(const TlText &t, QSize canvas)
 // changes at human speed, so a handful of entries covers any real timeline.
 struct TextPathKey {
 	QString text, family;
-	int px = 0, align = 0, canvasH = 0;
+	int px = 0, align = 0, canvasH = 0, canvasW = 0;
 	bool bold = false, italic = false;
 
 	bool operator==(const TextPathKey &o) const
 	{
 		return text == o.text && family == o.family && px == o.px && align == o.align &&
-		       canvasH == o.canvasH && bold == o.bold && italic == o.italic;
+		       canvasH == o.canvasH && canvasW == o.canvasW && bold == o.bold && italic == o.italic;
 	}
 };
 
 size_t qHash(const TextPathKey &k, size_t seed = 0)
 {
-	return qHashMulti(seed, k.text, k.family, k.px, k.align, k.canvasH, k.bold, k.italic);
+	return qHashMulti(seed, k.text, k.family, k.px, k.align, k.canvasH, k.canvasW, k.bold, k.italic);
 }
 
 struct CachedText {
@@ -87,12 +87,45 @@ QStringList textLines(const TlText &t)
 	return lines;
 }
 
+// A caption wider than the picture is a caption you cannot read: the ends are
+// off screen. So a line that would be wider than this share of the canvas is
+// broken at a space and carries on below. Typed line breaks are kept; a single
+// word wider than the limit stays whole (breaking inside a word is worse than
+// a long line).
+constexpr double kWrapShare = 0.92;
+
+QStringList wrapLines(const QStringList &lines, const QFontMetricsF &fm, double maxW)
+{
+	if (maxW <= 0.0)
+		return lines;
+	QStringList out;
+	for (const QString &line : lines) {
+		if (fm.horizontalAdvance(line) <= maxW) {
+			out << line;
+			continue;
+		}
+		QString cur;
+		for (const QString &word : line.split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+			const QString tryLine = cur.isEmpty() ? word : cur + QLatin1Char(' ') + word;
+			if (!cur.isEmpty() && fm.horizontalAdvance(tryLine) > maxW) {
+				out << cur;
+				cur = word;
+			} else {
+				cur = tryLine;
+			}
+		}
+		out << cur; // the last piece; "" for a line that was only spaces
+	}
+	return out;
+}
+
 // Lay the (possibly multi-line) text out as a path centred on the origin, and
-// report the block's bounding box.
-QPainterPath buildTextPath(const TlText &t, const QFont &f, QRectF *blockOut)
+// report the block's bounding box. `wrapW` is the widest a line may be before
+// it is broken (0 = never).
+QPainterPath buildTextPath(const TlText &t, const QFont &f, double wrapW, QRectF *blockOut)
 {
 	const QFontMetricsF fm(f);
-	const QStringList lines = textLines(t);
+	const QStringList lines = wrapLines(textLines(t), fm, wrapW);
 	const double lineH = fm.height();
 	double maxW = 0.0;
 	for (const QString &l : lines)
@@ -130,6 +163,7 @@ CachedText &cachedText(const TlText &t, const QFont &f, QSize canvas)
 	k.px = f.pixelSize();
 	k.align = t.align;
 	k.canvasH = canvas.height();
+	k.canvasW = canvas.width();
 	k.bold = t.bold;
 	k.italic = t.italic;
 
@@ -138,7 +172,7 @@ CachedText &cachedText(const TlText &t, const QFont &f, QSize canvas)
 		if (cache.size() > 64)
 			cache.clear(); // bounded; captions change at human speed
 		CachedText ct;
-		ct.path = buildTextPath(t, f, &ct.block);
+		ct.path = buildTextPath(t, f, canvas.width() * kWrapShare, &ct.block);
 		it = cache.insert(k, ct);
 	}
 	return it.value();

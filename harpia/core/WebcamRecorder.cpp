@@ -134,6 +134,16 @@ bool WebcamRecorder::start(const Preset &preset, const std::string &deviceId, in
 	if (fps < 1)
 		fps = 30;
 
+	// No video engine (graphics failed to start): nothing to record from, and
+	// building an output on top of that crashes. See RecordingController::start.
+	{
+		struct obs_video_info probe;
+		if (!obs_get_video_info(&probe)) {
+			blog(LOG_ERROR, "[harpia] webcam recording refused: no video engine");
+			return false;
+		}
+	}
+
 	// 1. Camera source — reuse the shared (preview) one if provided, else open it.
 	if (sharedSource) {
 		camera_ = obs_source_get_ref(sharedSource);

@@ -86,6 +86,23 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 		return true;
 	}
 
+	// No video engine, no video recording. When libobs could not start its
+	// graphics (the log says "obs_reset_video failed"), the capture source has
+	// no textures and the encoders no frames, and starting an output on top of
+	// that crashed the app. Refuse, and say why.
+	{
+		struct obs_video_info probe;
+		if (!obs_get_video_info(&probe)) {
+			lastStopError_ =
+				"The video engine is not running, so nothing can be recorded. OBS could not start its "
+				"graphics: usually libobs-d3d11.dll is missing next to harpia.exe (for example, the "
+				"app was started while a build was still copying files) or the graphics driver "
+				"refused. Restart Harpia; if it happens again, rebuild or reinstall.";
+			blog(LOG_ERROR, "[harpia] recording refused: no video engine (obs_reset_video had failed)");
+			return false;
+		}
+	}
+
 	const std::string outputId = EncoderFactory::outputId(preset);
 	output_ = obs_output_create(outputId.c_str(), "harpia_file_output", nullptr, nullptr);
 	if (!output_) {

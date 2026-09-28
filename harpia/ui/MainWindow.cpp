@@ -1497,6 +1497,11 @@ void MainWindow::startRecording()
 		// keeps the failure visible (details are in the Error Logs).
 		statusBar()->showMessage(
 			QStringLiteral("Could not start the recording — see Error Logs for details"), 10000);
+		// A reason the controller can name is worth a dialog: "see the logs"
+		// for a missing video engine leaves you guessing.
+		if (!recorder_.lastStopError().empty())
+			QMessageBox::warning(this, QStringLiteral("Could not start the recording"),
+					     QString::fromStdString(recorder_.lastStopError()));
 		starting_ = false;
 		updateButtons();
 		return;

@@ -1,13 +1,17 @@
 #pragma once
 
 #include <QDialog>
+#include <QPair>
+#include <QVector>
 
+#include "MainLayoutParams.hpp"
+
+class QLabel;
 class QSpinBox;
 
 namespace harpia {
 
 class MainWindow;
-struct MainLayoutParams;
 
 // Developer Panel for the main recorder window: exposes every layout size
 // (margins, spacings, combo/label widths, button and preview sizes, recent-card
@@ -26,6 +30,13 @@ public:
 private:
 	void apply();
 	void resetDefaults();
+	void copyJson();
+	void pasteJson();
+	MainLayoutParams current() const;        // what the boxes say
+	void showValues(const MainLayoutParams &p); // put values in the boxes, then apply
+
+	QVector<QPair<QSpinBox *, int MainLayoutParams::*>> spins_;
+	QLabel *jsonStatus_ = nullptr;
 
 	MainWindow *win_ = nullptr;
 	bool loading_ = false; // guard: programmatic setValue must not re-apply

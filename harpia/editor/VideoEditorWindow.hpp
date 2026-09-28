@@ -202,6 +202,9 @@ public:
 	// behind, and the "nothing usable on the clipboard" message is a feature
 	// rather than a log line, so both have to be observable.
 	QString sourcePathForTest(int sourceId) const;
+	// The file the user chose for a source -- for audio, the original rather
+	// than the session's decoded copy -- i.e. what a saved project points at.
+	QString sourceFileForTest(int sourceId) const;
 	QString infoTextForTest() const;
 
 	QString saveProjectTo(const QString &path, bool quiet);
@@ -541,7 +544,10 @@ private:
 	void refreshMotionPath();
 	void motionPathKeyMenu(int keyId, const QPoint &globalPos);
 	void deleteMotionPathKey(int keyId);
-	int pathKeyPicked_ = -1; // the key last clicked on the path (TlClip::keys index), -1 = none
+	int pathKeyPicked_ = -1;
+	// The Trim/Multi-Cut crop was on when Full editing (which has no crop)
+	// switched it off: it is saved as on, and comes back on leaving Full.
+	bool trimCropWanted_ = false; // the key last clicked on the path (TlClip::keys index), -1 = none
 	// A clip's own pixel size (text measured, image, or the cropped source).
 	// Every canvas-geometry question goes through this one answer.
 	// Not const: sourceById() is not, and adding a const overload of the media

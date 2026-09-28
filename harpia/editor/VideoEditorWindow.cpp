@@ -9256,6 +9256,14 @@ QString VideoEditorWindow::sourcePathForTest(int sourceId) const
 	return {};
 }
 
+QString VideoEditorWindow::sourceFileForTest(int sourceId) const
+{
+	for (const EditorSource &s : sources_)
+		if (s.id == sourceId)
+			return s.origPath.isEmpty() ? s.path : s.origPath;
+	return {};
+}
+
 QString VideoEditorWindow::infoTextForTest() const
 {
 	return infoLabel_ ? infoLabel_->text() : QString();
@@ -9562,9 +9570,18 @@ void VideoEditorWindow::setEditMode(EditMode m)
 	if (cropToggle_) {
 		cropToggle_->setVisible(!full);
 		if (full && cropToggle_->isChecked()) {
+			// Off while in Full editing, but REMEMBERED: it used to be
+			// dropped here, so a project reopened in Full editing and saved
+			// lost its Trim crop for good.
+			trimCropWanted_ = true;
 			QSignalBlocker b(cropToggle_);
 			cropToggle_->setChecked(false);
 			canvas_->setCropEnabled(false);
+		} else if (!full && trimCropWanted_) {
+			trimCropWanted_ = false;
+			QSignalBlocker b(cropToggle_);
+			cropToggle_->setChecked(true);
+			canvas_->setCropEnabled(true);
 		}
 	}
 	if (addMenuBtn_)
@@ -10571,32 +10588,8 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 	// remapped through the same `sources` array as the Multi-Cut segments.
 	// Tags and sound rules count too: a project set up before any clip is on
 	// it keeps its tag list.
-	if (!s.timeline.isEmpty() || !s.timeline.tags.isEmpty() || !s.timeline.soundRules.isEmpty()) {
-		QJsonArray trackArr;
-		for (const TlTrack &t : s.timeline.tracks)
-			trackArr.append(trackToJson(t));
-		root[QStringLiteral("tracks")] = trackArr;
-		if (!s.timeline.markers.isEmpty()) {
-			QJsonArray mk;
-			for (const qint64 m : s.timeline.markers)
-				mk.append(double(m));
-			root[QStringLiteral("markers")] = mk;
-		}
-		// Sounds for events. Their sources are in `sources` like a clip's.
-		if (!s.timeline.soundRules.isEmpty()) {
-			QJsonArray sr;
-			for (const TlSoundRule &r : s.timeline.soundRules)
-				sr.append(soundRuleToJson(r));
-			root[QStringLiteral("soundRules")] = sr;
-		}
-		if (!s.timeline.tags.isEmpty()) {
-			QJsonArray ta;
-			for (const TlTag &t : s.timeline.tags)
-				ta.append(tagToJson(t));
-			root[QStringLiteral("tags")] = ta;
-		}
-		root[QStringLiteral("harpiaProject")] = 3; // timelines need a v3 reader
-	}
+	// Sound rules' sources are in `sources` like a clip's. See TimelineJson.hpp.
+	timelineToProject(s.timeline, root);
 
 	// No project-level "effects" array any more: a shader is a component, so it
 	// is written with the clip that carries it. The reader still understands the
@@ -10843,7 +10836,12 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 
 	EditorSnapshot s;
 	s.trimStart = qint64(root.value(QStringLiteral("trimStart")).toDouble(0));
-	s.trimEnd = qint64(root.value(QStringLiteral("trimEnd")).toDouble(double(seeker_->durationMs())));
+	// A blank editor (opened with no file -- "Load project" on the empty
+	// panel) has no seeker yet, and reading its duration here crashed the open
+	// before any of the project was applied. The fallback only matters for a
+	// project with no trimEnd at all.
+	s.trimEnd = qint64(root.value(QStringLiteral("trimEnd"))
+				   .toDouble(seeker_ ? double(seeker_->durationMs()) : 0.0));
 	s.speed = root.value(QStringLiteral("speed")).toDouble(1.0);
 	const QJsonObject crop = root.value(QStringLiteral("crop")).toObject();
 	s.cropEnabled = crop.value(QStringLiteral("enabled")).toBool(false);
@@ -10878,30 +10876,14 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 
 	// "Full editing" timeline (project v3). Absent in v1/v2 projects, which just
 	// restore an empty timeline.
-	for (const QJsonValue &mv : root.value(QStringLiteral("markers")).toArray())
-		s.timeline.markers.append(qint64(mv.toDouble()));
-	std::sort(s.timeline.markers.begin(), s.timeline.markers.end());
-	for (const QJsonValue &tv : root.value(QStringLiteral("tracks")).toArray()) {
-		TlTrack t = trackFromJson(tv.toObject());
-		// Source ids in the file index the project's own `sources` array; map
-		// them onto whatever those files became in this session's media pool.
+	s.timeline = timelineFromProject(root); // see TimelineJson.hpp
+	// Source ids in the file index the project's own `sources` array; map them
+	// onto whatever those files became in this session's media pool.
+	for (TlTrack &t : s.timeline.tracks)
 		for (TlClip &c : t.clips)
-			c.sourceId = srcMap.isEmpty() ? defaultSrcId
-						      : srcMap.value(c.sourceId, defaultSrcId);
-
-		s.timeline.tracks.append(t);
-	}
-	for (const QJsonValue &tv : root.value(QStringLiteral("tags")).toArray()) {
-		const TlTag t = tagFromJson(tv.toObject());
-		if (t.id > 0 && !t.name.isEmpty() && !s.timeline.tag(t.id))
-			s.timeline.tags.append(t);
-	}
-	for (const QJsonValue &rv : root.value(QStringLiteral("soundRules")).toArray()) {
-		TlSoundRule r = soundRuleFromJson(rv.toObject());
+			c.sourceId = srcMap.isEmpty() ? defaultSrcId : srcMap.value(c.sourceId, defaultSrcId);
+	for (TlSoundRule &r : s.timeline.soundRules)
 		r.sourceId = srcMap.isEmpty() ? r.sourceId : srcMap.value(r.sourceId, 0);
-		if (r.id > 0)
-			s.timeline.soundRules.append(r);
-	}
 
 	// Waveforms are a derived cache, so they are not stored in the project — but
 	// they DO have to be rebuilt, or an audio clip reopens as a blank bar. Every
@@ -11242,7 +11224,7 @@ EditorSnapshot VideoEditorWindow::snapshot() const
 	s.trimStart = timeline_->start();
 	s.trimEnd = timeline_->end();
 	s.speed = speed_;
-	s.cropEnabled = canvas_->cropEnabled();
+	s.cropEnabled = canvas_->cropEnabled() || (fullEdit() && trimCropWanted_);
 	s.cropRect = canvas_->cropRectVideo();
 	s.voiceClips = voTrack_->clips();
 	if (timelineView_)
@@ -11300,11 +11282,14 @@ void VideoEditorWindow::restoreSnapshot(const EditorSnapshot &s)
 
 	speed_ = s.speed;
 
+	// In Full editing the crop stays off on screen and is only remembered.
+	const bool cropNow = s.cropEnabled && !fullEdit();
+	trimCropWanted_ = s.cropEnabled && fullEdit();
 	{
 		QSignalBlocker b(cropToggle_);
-		cropToggle_->setChecked(s.cropEnabled);
+		cropToggle_->setChecked(cropNow);
 	}
-	canvas_->setCropEnabled(s.cropEnabled);
+	canvas_->setCropEnabled(cropNow);
 	canvas_->setCropRectVideo(s.cropRect);
 
 	voTrack_->setClips(s.voiceClips);

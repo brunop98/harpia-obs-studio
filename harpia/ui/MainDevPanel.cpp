@@ -2,7 +2,9 @@
 
 #include "MainWindow.hpp"
 
+#include <QClipboard>
 #include <QFormLayout>
+#include <QGuiApplication>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -25,32 +27,8 @@ void MainDevPanel::loadInto(MainLayoutParams &p)
 {
 	QSettings s = devSettings();
 	s.beginGroup(QStringLiteral("devLayout/main"));
-	auto i = [&](const QString &k, int def) { return s.value(k, def).toInt(); };
-	p.rootMarginH = i(QStringLiteral("rootMarginH"), p.rootMarginH);
-	p.rootMarginV = i(QStringLiteral("rootMarginV"), p.rootMarginV);
-	p.rootSpacing = i(QStringLiteral("rootSpacing"), p.rootSpacing);
-	p.row1Spacing = i(QStringLiteral("row1Spacing"), p.row1Spacing);
-	p.presetComboW = i(QStringLiteral("presetComboW"), p.presetComboW);
-	p.monitorComboMinW = i(QStringLiteral("monitorComboMinW"), p.monitorComboMinW);
-	p.monitorComboMaxW = i(QStringLiteral("monitorComboMaxW"), p.monitorComboMaxW);
-	p.behaviorComboW = i(QStringLiteral("behaviorComboW"), p.behaviorComboW);
-	p.behaviorLabelW = i(QStringLiteral("behaviorLabelW"), p.behaviorLabelW);
-	p.behaviorColSpacing = i(QStringLiteral("behaviorColSpacing"), p.behaviorColSpacing);
-	p.behaviorRowSpacing = i(QStringLiteral("behaviorRowSpacing"), p.behaviorRowSpacing);
-	p.middleSpacing = i(QStringLiteral("middleSpacing"), p.middleSpacing);
-	p.controlsSpacing = i(QStringLiteral("controlsSpacing"), p.controlsSpacing);
-	p.recordBtnW = i(QStringLiteral("recordBtnW"), p.recordBtnW);
-	p.recordBtnH = i(QStringLiteral("recordBtnH"), p.recordBtnH);
-	p.pauseBtnW = i(QStringLiteral("pauseBtnW"), p.pauseBtnW);
-	p.pauseBtnH = i(QStringLiteral("pauseBtnH"), p.pauseBtnH);
-	p.separatorH = i(QStringLiteral("separatorH"), p.separatorH);
-	p.webcamPreviewW = i(QStringLiteral("webcamPreviewW"), p.webcamPreviewW);
-	p.webcamPreviewH = i(QStringLiteral("webcamPreviewH"), p.webcamPreviewH);
-	p.stripThumbW = i(QStringLiteral("stripThumbW"), p.stripThumbW);
-	p.stripThumbH = i(QStringLiteral("stripThumbH"), p.stripThumbH);
-	p.stripCardExtraW = i(QStringLiteral("stripCardExtraW"), p.stripCardExtraW);
-	p.stripCardExtraH = i(QStringLiteral("stripCardExtraH"), p.stripCardExtraH);
-	p.stripSpacing = i(QStringLiteral("stripSpacing"), p.stripSpacing);
+	for (const MainLayoutField &f : mainLayoutFields())
+		p.*(f.member) = s.value(QString::fromLatin1(f.key), p.*(f.member)).toInt();
 	s.endGroup();
 }
 
@@ -58,31 +36,8 @@ void MainDevPanel::saveFrom(const MainLayoutParams &p)
 {
 	QSettings s = devSettings();
 	s.beginGroup(QStringLiteral("devLayout/main"));
-	s.setValue(QStringLiteral("rootMarginH"), p.rootMarginH);
-	s.setValue(QStringLiteral("rootMarginV"), p.rootMarginV);
-	s.setValue(QStringLiteral("rootSpacing"), p.rootSpacing);
-	s.setValue(QStringLiteral("row1Spacing"), p.row1Spacing);
-	s.setValue(QStringLiteral("presetComboW"), p.presetComboW);
-	s.setValue(QStringLiteral("monitorComboMinW"), p.monitorComboMinW);
-	s.setValue(QStringLiteral("monitorComboMaxW"), p.monitorComboMaxW);
-	s.setValue(QStringLiteral("behaviorComboW"), p.behaviorComboW);
-	s.setValue(QStringLiteral("behaviorLabelW"), p.behaviorLabelW);
-	s.setValue(QStringLiteral("behaviorColSpacing"), p.behaviorColSpacing);
-	s.setValue(QStringLiteral("behaviorRowSpacing"), p.behaviorRowSpacing);
-	s.setValue(QStringLiteral("middleSpacing"), p.middleSpacing);
-	s.setValue(QStringLiteral("controlsSpacing"), p.controlsSpacing);
-	s.setValue(QStringLiteral("recordBtnW"), p.recordBtnW);
-	s.setValue(QStringLiteral("recordBtnH"), p.recordBtnH);
-	s.setValue(QStringLiteral("pauseBtnW"), p.pauseBtnW);
-	s.setValue(QStringLiteral("pauseBtnH"), p.pauseBtnH);
-	s.setValue(QStringLiteral("separatorH"), p.separatorH);
-	s.setValue(QStringLiteral("webcamPreviewW"), p.webcamPreviewW);
-	s.setValue(QStringLiteral("webcamPreviewH"), p.webcamPreviewH);
-	s.setValue(QStringLiteral("stripThumbW"), p.stripThumbW);
-	s.setValue(QStringLiteral("stripThumbH"), p.stripThumbH);
-	s.setValue(QStringLiteral("stripCardExtraW"), p.stripCardExtraW);
-	s.setValue(QStringLiteral("stripCardExtraH"), p.stripCardExtraH);
-	s.setValue(QStringLiteral("stripSpacing"), p.stripSpacing);
+	for (const MainLayoutField &f : mainLayoutFields())
+		s.setValue(QString::fromLatin1(f.key), p.*(f.member));
 	s.endGroup();
 }
 
@@ -175,6 +130,25 @@ MainDevPanel::MainDevPanel(MainWindow *win, QWidget *parent) : QDialog(parent), 
 
 	root->addStretch(1);
 
+	// Which box edits which size -- what apply, Reset and Paste JSON walk.
+	spins_ = {{rootMarginH_, &MainLayoutParams::rootMarginH}, {rootMarginV_, &MainLayoutParams::rootMarginV},
+		  {rootSpacing_, &MainLayoutParams::rootSpacing}, {row1Spacing_, &MainLayoutParams::row1Spacing},
+		  {presetComboW_, &MainLayoutParams::presetComboW}, {monitorMinW_, &MainLayoutParams::monitorComboMinW},
+		  {monitorMaxW_, &MainLayoutParams::monitorComboMaxW},
+		  {behaviorComboW_, &MainLayoutParams::behaviorComboW},
+		  {behaviorLabelW_, &MainLayoutParams::behaviorLabelW},
+		  {behaviorColSpacing_, &MainLayoutParams::behaviorColSpacing},
+		  {behaviorRowSpacing_, &MainLayoutParams::behaviorRowSpacing},
+		  {middleSpacing_, &MainLayoutParams::middleSpacing},
+		  {controlsSpacing_, &MainLayoutParams::controlsSpacing}, {recordBtnW_, &MainLayoutParams::recordBtnW},
+		  {recordBtnH_, &MainLayoutParams::recordBtnH}, {pauseBtnW_, &MainLayoutParams::pauseBtnW},
+		  {pauseBtnH_, &MainLayoutParams::pauseBtnH}, {separatorH_, &MainLayoutParams::separatorH},
+		  {webcamPreviewW_, &MainLayoutParams::webcamPreviewW},
+		  {webcamPreviewH_, &MainLayoutParams::webcamPreviewH}, {stripThumbW_, &MainLayoutParams::stripThumbW},
+		  {stripThumbH_, &MainLayoutParams::stripThumbH}, {stripCardExtraW_, &MainLayoutParams::stripCardExtraW},
+		  {stripCardExtraH_, &MainLayoutParams::stripCardExtraH},
+		  {stripSpacing_, &MainLayoutParams::stripSpacing}};
+
 	// The panel can get tall — make it scroll rather than force a huge window.
 	auto *scroll = new QScrollArea(this);
 	scroll->setWidget(inner);
@@ -190,78 +164,74 @@ MainDevPanel::MainDevPanel(MainWindow *win, QWidget *parent) : QDialog(parent), 
 	auto *resetBtn = new QPushButton(QStringLiteral("Reset to defaults"), this);
 	connect(resetBtn, &QPushButton::clicked, this, &MainDevPanel::resetDefaults);
 	btnRow->addWidget(resetBtn);
+	// Copy / Paste JSON, like the editor's Developer Panel: send the values
+	// to have them made the shipped defaults, or bring a set back.
+	auto *copyBtn = new QPushButton(QStringLiteral("Copy JSON"), this);
+	copyBtn->setToolTip(QStringLiteral("Copy every size here as JSON, to paste into a message."));
+	connect(copyBtn, &QPushButton::clicked, this, &MainDevPanel::copyJson);
+	btnRow->addWidget(copyBtn);
+	auto *pasteBtn = new QPushButton(QStringLiteral("Paste JSON"), this);
+	pasteBtn->setToolTip(QStringLiteral("Apply sizes from JSON on the clipboard (as Copy JSON makes)."));
+	connect(pasteBtn, &QPushButton::clicked, this, &MainDevPanel::pasteJson);
+	btnRow->addWidget(pasteBtn);
 	btnRow->addStretch(1);
 	auto *closeBtn = new QPushButton(QStringLiteral("Close"), this);
 	connect(closeBtn, &QPushButton::clicked, this, &QDialog::close);
 	btnRow->addWidget(closeBtn);
 	outer->addLayout(btnRow);
+	jsonStatus_ = new QLabel(this);
+	jsonStatus_->setStyleSheet(QStringLiteral("color:#9a9fa8; padding:0 10px 6px 10px;"));
+	outer->addWidget(jsonStatus_);
 
-	resize(360, 560);
+	resize(420, 560);
+}
+
+MainLayoutParams MainDevPanel::current() const
+{
+	MainLayoutParams p;
+	for (const auto &sp : spins_)
+		p.*(sp.second) = sp.first->value();
+	return p;
+}
+
+void MainDevPanel::showValues(const MainLayoutParams &p)
+{
+	loading_ = true;
+	for (const auto &sp : spins_)
+		sp.first->setValue(p.*(sp.second));
+	loading_ = false;
+	apply();
 }
 
 void MainDevPanel::apply()
 {
-	MainLayoutParams p;
-	p.rootMarginH = rootMarginH_->value();
-	p.rootMarginV = rootMarginV_->value();
-	p.rootSpacing = rootSpacing_->value();
-	p.row1Spacing = row1Spacing_->value();
-	p.presetComboW = presetComboW_->value();
-	p.monitorComboMinW = monitorMinW_->value();
-	p.monitorComboMaxW = monitorMaxW_->value();
-	p.behaviorComboW = behaviorComboW_->value();
-	p.behaviorLabelW = behaviorLabelW_->value();
-	p.behaviorColSpacing = behaviorColSpacing_->value();
-	p.behaviorRowSpacing = behaviorRowSpacing_->value();
-	p.middleSpacing = middleSpacing_->value();
-	p.controlsSpacing = controlsSpacing_->value();
-	p.recordBtnW = recordBtnW_->value();
-	p.recordBtnH = recordBtnH_->value();
-	p.pauseBtnW = pauseBtnW_->value();
-	p.pauseBtnH = pauseBtnH_->value();
-	p.separatorH = separatorH_->value();
-	p.webcamPreviewW = webcamPreviewW_->value();
-	p.webcamPreviewH = webcamPreviewH_->value();
-	p.stripThumbW = stripThumbW_->value();
-	p.stripThumbH = stripThumbH_->value();
-	p.stripCardExtraW = stripCardExtraW_->value();
-	p.stripCardExtraH = stripCardExtraH_->value();
-	p.stripSpacing = stripSpacing_->value();
+	const MainLayoutParams p = current();
 	win_->setLayoutParams(p);
 	saveFrom(p);
 }
 
 void MainDevPanel::resetDefaults()
 {
-	const MainLayoutParams d; // struct defaults ARE the app defaults
-	loading_ = true;
-	rootMarginH_->setValue(d.rootMarginH);
-	rootMarginV_->setValue(d.rootMarginV);
-	rootSpacing_->setValue(d.rootSpacing);
-	row1Spacing_->setValue(d.row1Spacing);
-	presetComboW_->setValue(d.presetComboW);
-	monitorMinW_->setValue(d.monitorComboMinW);
-	monitorMaxW_->setValue(d.monitorComboMaxW);
-	behaviorComboW_->setValue(d.behaviorComboW);
-	behaviorLabelW_->setValue(d.behaviorLabelW);
-	behaviorColSpacing_->setValue(d.behaviorColSpacing);
-	behaviorRowSpacing_->setValue(d.behaviorRowSpacing);
-	middleSpacing_->setValue(d.middleSpacing);
-	controlsSpacing_->setValue(d.controlsSpacing);
-	recordBtnW_->setValue(d.recordBtnW);
-	recordBtnH_->setValue(d.recordBtnH);
-	pauseBtnW_->setValue(d.pauseBtnW);
-	pauseBtnH_->setValue(d.pauseBtnH);
-	separatorH_->setValue(d.separatorH);
-	webcamPreviewW_->setValue(d.webcamPreviewW);
-	webcamPreviewH_->setValue(d.webcamPreviewH);
-	stripThumbW_->setValue(d.stripThumbW);
-	stripThumbH_->setValue(d.stripThumbH);
-	stripCardExtraW_->setValue(d.stripCardExtraW);
-	stripCardExtraH_->setValue(d.stripCardExtraH);
-	stripSpacing_->setValue(d.stripSpacing);
-	loading_ = false;
-	apply();
+	showValues(MainLayoutParams()); // struct defaults ARE the app defaults
+}
+
+void MainDevPanel::copyJson()
+{
+	QGuiApplication::clipboard()->setText(QString::fromUtf8(mainLayoutToJson(current())));
+	jsonStatus_->setText(QStringLiteral("Copied %1 values as JSON.").arg(mainLayoutFields().size()));
+}
+
+void MainDevPanel::pasteJson()
+{
+	MainLayoutParams p = current();
+	QString err;
+	const int n = mainLayoutFromJson(QGuiApplication::clipboard()->text().toUtf8(), p, &err);
+	if (n == 0) {
+		jsonStatus_->setText(QStringLiteral("Nothing pasted: %1.").arg(err));
+		return;
+	}
+	showValues(p);
+	jsonStatus_->setText(QStringLiteral("Applied %1 values from the clipboard.").arg(n));
 }
 
 } // namespace harpia

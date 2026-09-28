@@ -92,10 +92,48 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TrackEditor.cpp" \
 	-o "$WORK/multicutplay_test" $LF
 
+# Save Project / Open Project through the REAL editor window: the whole editor
+# (everything but the recorder and libobs) is built into an archive once, and
+# a project saved from one editor is opened in a fresh one and compared.
+[ -f "$WORK/still.png" ] || ffmpeg -y -loglevel error -f lavfi -i "testsrc=s=400x300:d=1" -frames:v 1 "$WORK/still.png"
+[ -f "$WORK/tone.wav" ] || ffmpeg -y -loglevel error -f lavfi -i "sine=frequency=800:sample_rate=48000:duration=2" "$WORK/tone.wav"
+WPKGS="Qt6Widgets Qt6Gui Qt6Core Qt6OpenGL Qt6Network Qt6Multimedia Qt6Test libavcodec libavformat libavutil libswscale libswresample libavfilter"
+WCF="$(pkg-config --cflags $WPKGS)"
+WLF="$(pkg-config --libs $WPKGS)"
+QJS="$H/third_party/quickjs"
+QJSLIB="${TMPDIR:-/tmp}/harpia-qjs-units"
+mkdir -p "$QJSLIB"
+if [ ! -f "$QJSLIB/libqjs.a" ]; then # the same one-time build run_units.sh does
+	for f in dtoa libregexp libunicode quickjs; do
+		gcc -std=c11 -O1 -fPIC -D_GNU_SOURCE -I"$QJS" -c "$QJS/$f.c" -o "$QJSLIB/$f.o" &
+	done
+	wait
+	ar rcs "$QJSLIB/libqjs.a" "$QJSLIB"/*.o
+fi
+mkdir -p "$WORK/win/obj" "$WORK/win/moc"
+( cd "$H"
+  WSRCS=$(ls editor/*.cpp editor/*/*.cpp ui/*.cpp library/*.cpp core/ShareExporter.cpp tests/support/logger_stub.cpp | grep -v -E "ui/MainWindow.cpp|ui/WebcamPreview.cpp")
+  for h in $(grep -l Q_OBJECT editor/*.hpp editor/*/*.hpp ui/*.hpp library/*.hpp core/ShareExporter.hpp | grep -v -E "ui/MainWindow.hpp|ui/WebcamPreview.hpp"); do
+	"$MOC" -I"$H" "$h" -o "$WORK/win/moc/moc_$(echo "$h" | tr '/' '_' | sed 's/.hpp$//').cpp"
+  done
+  printf "%s\n" $WSRCS "$WORK"/win/moc/*.cpp | xargs -P "$(nproc)" -I{} sh -c \
+	'g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$0" -I"$0/third_party/quickjs" -I"$0/.." $1 -c "{}" -o "$2/win/obj/$(echo "{}" | tr "/" "_").o"' \
+	"$H" "$WCF" "$WORK" )
+rm -f "$WORK/win/libeditor.a"
+ar rcs "$WORK/win/libeditor.a" "$WORK"/win/obj/*.o
+g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
+	"$HERE/projectwindow_test.cpp" \
+	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
+	-o "$WORK/projectwindow_test" $WLF
+
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/avsync_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportpaths_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewdecoder_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/proxymedia_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/multicutplay_test" "$WORK" || rc=1
+# Settings go to a scratch home, so the test never touches real ones.
+mkdir -p "$WORK/home"
+HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
+	"$WORK/projectwindow_test" "$WORK" || rc=1
 exit $rc

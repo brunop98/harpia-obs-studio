@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 // The Full-editing timeline as JSON — the project file's "tracks" array.
 //
 // Lives apart from the window so it can be tested directly: a dropped field
@@ -406,6 +408,13 @@ inline TlClip clipFromJson(const QJsonObject &co)
 				PropKey pk;
 				pk.tMs = k.tMs;
 				pk.v = it.value();
+				// The key's easing too: both key types ease the stretch that
+				// LEAVES the key, so it carries over as it is. Dropping it
+				// turned every eased effect key of an older project into the
+				// default ease-in-out.
+				pk.ease = k.ease;
+				pk.bez1 = k.bez1;
+				pk.bez2 = k.bez2;
 				ci.keys[it.key()].append(pk);
 			}
 		for (auto it = ci.keys.begin(); it != ci.keys.end(); ++it)
@@ -591,6 +600,65 @@ inline TlTag tagFromJson(const QJsonObject &o)
 	if (const QColor c(o.value(QStringLiteral("color")).toString()); c.isValid())
 		t.color = c;
 	return t;
+}
+
+// The timeline's part of a project file: tracks, markers, sound rules and
+// tags, written into / read from the project's root object. Source ids are
+// left as they are in the file -- the window maps them onto its media pool
+// afterwards, because that depends on which files this machine has.
+//
+// Here rather than inline in the window so the exact code that saves and
+// opens projects is the code the round-trip test runs.
+inline void timelineToProject(const TimelineModel &m, QJsonObject &root)
+{
+	// Tags and sound rules count too: a project set up before any clip is on
+	// it keeps its tag list.
+	if (m.isEmpty() && m.tags.isEmpty() && m.soundRules.isEmpty() && m.markers.isEmpty())
+		return;
+	QJsonArray trackArr;
+	for (const TlTrack &t : m.tracks)
+		trackArr.append(trackToJson(t));
+	root[QStringLiteral("tracks")] = trackArr;
+	if (!m.markers.isEmpty()) {
+		QJsonArray mk;
+		for (const qint64 v : m.markers)
+			mk.append(double(v));
+		root[QStringLiteral("markers")] = mk;
+	}
+	if (!m.soundRules.isEmpty()) {
+		QJsonArray sr;
+		for (const TlSoundRule &r : m.soundRules)
+			sr.append(soundRuleToJson(r));
+		root[QStringLiteral("soundRules")] = sr;
+	}
+	if (!m.tags.isEmpty()) {
+		QJsonArray ta;
+		for (const TlTag &t : m.tags)
+			ta.append(tagToJson(t));
+		root[QStringLiteral("tags")] = ta;
+	}
+	root[QStringLiteral("harpiaProject")] = 3; // timelines need a v3 reader
+}
+
+inline TimelineModel timelineFromProject(const QJsonObject &root)
+{
+	TimelineModel m;
+	for (const QJsonValue &mv : root.value(QStringLiteral("markers")).toArray())
+		m.markers.append(qint64(mv.toDouble()));
+	std::sort(m.markers.begin(), m.markers.end());
+	for (const QJsonValue &tv : root.value(QStringLiteral("tracks")).toArray())
+		m.tracks.append(trackFromJson(tv.toObject()));
+	for (const QJsonValue &tv : root.value(QStringLiteral("tags")).toArray()) {
+		const TlTag t = tagFromJson(tv.toObject());
+		if (t.id > 0 && !t.name.isEmpty() && !m.tag(t.id))
+			m.tags.append(t);
+	}
+	for (const QJsonValue &rv : root.value(QStringLiteral("soundRules")).toArray()) {
+		const TlSoundRule r = soundRuleFromJson(rv.toObject());
+		if (r.id > 0)
+			m.soundRules.append(r);
+	}
+	return m;
 }
 
 } // namespace harpia

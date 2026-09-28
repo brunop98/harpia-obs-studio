@@ -209,6 +209,13 @@ std::vector<std::string> ObsContext::missingDependencies() const
 {
 	std::vector<std::string> missing;
 
+	// The video engine itself: without its graphics module (libobs-d3d11.dll
+	// on Windows) there is no capture, no filters and no recording, and every
+	// source fails quietly until Record crashes on the missing device.
+	if (!videoReady_)
+		missing.push_back(std::string("the video engine -- its graphics module (") + renderModule() +
+				  ") did not load");
+
 	// A screen-capture source for this platform (any of the accepted ids).
 #if defined(_WIN32)
 	const char *captureIds[] = {"monitor_capture"};

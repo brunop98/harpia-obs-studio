@@ -548,6 +548,20 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	-o "$WORK/projectroundtrip_test" $LF
 
+# Save and open a project with EVERY field of every kind set off its default,
+# through the functions Save and Open use and a real file, compared by name.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/projectfull_test.cpp" \
+	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	-o "$WORK/projectfull_test" $LF
+
+# The recorder window's Developer Panel Copy/Paste JSON: every size, both ways.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/mainlayoutjson_test.cpp" -o "$WORK/mainlayoutjson_test" $LF
+
 # Multi-Cut with mixed resolutions: adding a clip must not re-shape the project,
 # and an odd-shaped source previews letterboxed, the way it will be encoded.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -796,6 +810,8 @@ QT_QPA_PLATFORM=offscreen "$WORK/exportdone_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/diskspace_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/devpanelreset_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/projectroundtrip_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/projectfull_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/mainlayoutjson_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/zoomkeyframes_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/component_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/scriptcomponent_test" || rc=1

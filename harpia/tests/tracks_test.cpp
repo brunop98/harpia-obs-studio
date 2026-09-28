@@ -605,6 +605,45 @@ int main(int argc, char **argv)
 		   "a locked lane keeps its emptiness; the caption gets a new lane above it");
 	}
 
+	std::printf("\n-- S splits the selection, or everything --\n");
+	{
+		auto build = []() {
+			TimelineModel m;
+			for (int k = 0; k < 2; ++k) {
+				TlTrack t;
+				t.kind = TlTrack::Kind::Video;
+				TlClip c;
+				c.type = TlClip::Type::Image;
+				c.srcEndMs = 4000;
+				c.outStartMs = 0;
+				t.clips << c;
+				m.tracks << t;
+			}
+			return m;
+		};
+		TimelineView v;
+		v.resize(900, 300);
+		v.setModel(build());
+		v.setPlayhead(2000);
+		v.selectClip(1, 0);
+		v.splitAtPlayhead();
+		ok(v.model().tracks[1].clips.size() == 2, "the selected clip is split");
+		ok(v.model().tracks[0].clips.size() == 1, "the clip on the other lane is not");
+
+		v.setModel(build()); // clears the selection
+		v.setPlayhead(2000);
+		v.splitAtPlayhead();
+		ok(v.model().tracks[0].clips.size() == 2 && v.model().tracks[1].clips.size() == 2,
+		   "with nothing selected, every clip under the playhead is split");
+
+		v.setModel(build());
+		v.setPlayhead(2000);
+		v.selectAllClips();
+		v.splitAtPlayhead();
+		ok(v.model().tracks[0].clips.size() == 2 && v.model().tracks[1].clips.size() == 2,
+		   "two clips selected: both are split");
+	}
+
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
 }

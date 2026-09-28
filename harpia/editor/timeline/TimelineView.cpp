@@ -25,6 +25,7 @@
 #include <QDragEnterEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QSet>
 #include <QPixmap>
 #include <QIcon>
 #include <QPainterPath>
@@ -3613,6 +3614,13 @@ void TimelineView::splitAtPlayhead()
 {
 	if (playheadMs_ < 0)
 		return;
+	// With clips selected, only those are split: selecting one clip on a busy
+	// timeline and pressing S used to cut every lane under the playhead. With
+	// nothing selected, everything under the playhead is split, as before.
+	QSet<QPair<int, int>> only;
+	if (!selTransition_)
+		for (const auto &p : selectedPairs())
+			only.insert(p);
 	bool any = false;
 	for (int ti = 0; ti < model_.tracks.size(); ++ti) {
 		TlTrack &t = model_.tracks[ti];
@@ -3622,6 +3630,8 @@ void TimelineView::splitAtPlayhead()
 		// re-split by this same pass.
 		const int n = int(t.clips.size());
 		for (int ci = 0; ci < n; ++ci) {
+			if (!only.isEmpty() && !only.contains({ti, ci}))
+				continue;
 			TlClip &c = t.clips[ci];
 			if (!c.coversOutput(playheadMs_))
 				continue;

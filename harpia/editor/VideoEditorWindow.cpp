@@ -386,6 +386,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			startPreviewAudio(timelinePlayheadMs()); // catch up to the picture
 	});
 	bar->addWidget(muteBtn_);
+	// Voiceover: one button, in every mode, opening the voiceover window.
+	// It turns red while a take is recording, so a running mic is never
+	// hidden behind a closed window.
+	voOpenBtn_ = new QPushButton(QStringLiteral("Voiceover"), this);
+	voOpenBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
+	voOpenBtn_->setToolTip(QStringLiteral("Record narration over the video: microphone, countdown, play-along"));
+	bar->addWidget(voOpenBtn_);
 	bar->addSpacing(10);
 
 	// Speed: label · slider (stretches) · editable value · per-cut count.
@@ -792,10 +799,6 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// Recording itself lives in the voiceover panel, the same one Full editing
 	// opens, so the two modes record the same way with the same settings.
 	auto *voRow = new QHBoxLayout;
-	voOpenBtn_ = new QPushButton(QStringLiteral("Record voiceover…"), this);
-	voOpenBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
-	voOpenBtn_->setToolTip(QStringLiteral("Open the voiceover panel: microphone, countdown, and Record"));
-	voRow->addWidget(voOpenBtn_);
 	voImportBtn_ = new QPushButton(QStringLiteral("Import audio…"), this);
 	voImportBtn_->setToolTip(QStringLiteral("Add an existing audio file (mp3/wav/m4a/…) to the Voiceover track"));
 	voRow->addWidget(voImportBtn_);
@@ -833,7 +836,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		auto apply = [audioHeader, audioBody](bool on) {
 			audioBody->setVisible(on);
 			audioHeader->setText(
-				QStringLiteral("Audio — record voiceover over the video"));
+				QStringLiteral("Audio — voiceover track and mix"));
 			audioHeader->setIcon(
 				uiIcon(on ? Glyph::ChevronDown : Glyph::ChevronRight, 12));
 		};
@@ -1988,13 +1991,17 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		cropToggle_->setEnabled(false);
 		trimModeBtn_->setEnabled(false);
 		cutModeBtn_->setEnabled(false);
-		voOpenBtn_->setEnabled(false);
 		voImportBtn_->setEnabled(false);
 	}
 
 	// Collect every button now (the Developer Panel is created lazily, so its
 	// own buttons are excluded) and apply the saved Dev-tunable chrome.
 	uiButtons_ = findChildren<QPushButton *>();
+	// Only the editor window's own buttons: the voiceover window sizes its
+	// Record button itself (Dev panel > Panels).
+	uiButtons_.erase(std::remove_if(uiButtons_.begin(), uiButtons_.end(),
+					[this](QPushButton *b) { return b->window() != this; }),
+			 uiButtons_.end());
 	applyChrome(DevPanel::loadChrome());
 	applyInspectorParams(DevPanel::loadInspector());
 	applyPanelParams(DevPanel::loadPanel());
@@ -2440,7 +2447,7 @@ void VideoEditorWindow::updateEmptyState()
 	for (QWidget *w : {static_cast<QWidget *>(playBtn_), static_cast<QWidget *>(speedSlider_),
 			   static_cast<QWidget *>(speedSpin_), static_cast<QWidget *>(cropToggle_),
 			   static_cast<QWidget *>(trimModeBtn_), static_cast<QWidget *>(cutModeBtn_),
-			   static_cast<QWidget *>(voOpenBtn_), static_cast<QWidget *>(voImportBtn_)})
+			   static_cast<QWidget *>(voImportBtn_)})
 		if (w)
 			w->setEnabled(!empty);
 	if (empty && infoLabel_)
@@ -9363,6 +9370,10 @@ void VideoEditorWindow::startVoiceoverCapture()
 	}
 	voRecording_ = true;
 	voClipStartMs_ = startMs;
+	if (voOpenBtn_) {
+		voOpenBtn_->setText(QStringLiteral("Recording…"));
+		voOpenBtn_->setStyleSheet(QStringLiteral("QPushButton{background:#7a1f22;color:#ffffff;}"));
+	}
 	voRecordBtn_->setText(QStringLiteral("Stop"));
 	voRecordBtn_->setIcon(uiIcon(Glyph::Stop, 12));
 	voStatus_->setStyleSheet(QStringLiteral("color:#e5484d; font-weight:bold;"));
@@ -9395,6 +9406,10 @@ void VideoEditorWindow::finishVoiceover()
 	if (!voRecording_)
 		return;
 	voRecording_ = false;
+	if (voOpenBtn_) {
+		voOpenBtn_->setText(QStringLiteral("Voiceover"));
+		voOpenBtn_->setStyleSheet(QString());
+	}
 	const QString path = voRecorder_->stop();
 	const qint64 durMs = voRecorder_->capturedMs();
 	stopPlayback();

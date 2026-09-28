@@ -171,14 +171,58 @@ CachedText &cachedText(const TlText &t, const QFont &f, QSize canvas)
 
 	auto it = cache.find(k);
 	if (it == cache.end()) {
-		if (cache.size() > 64)
-			cache.clear(); // bounded; captions change at human speed
+		// Bounded, but generously: a subtitle lane is hundreds of captions,
+		// and at 64 a scrub back through them rebuilt every one. A path is a
+		// few KB; a thousand of them is nothing next to one decoded frame.
+		if (cache.size() > 2048)
+			cache.clear();
 		CachedText ct;
 		ct.path = buildTextPath(t, f, canvas.width() * kWrapShare, &ct.block);
 		it = cache.insert(k, ct);
 	}
 	return it.value();
 }
+
+// ---- Finished captions, as bitmaps -----------------------------------------
+//
+// The path cache above saves the SHAPING; what was left on every frame was the
+// rasterising -- antialiased fills of every glyph, its outline and the box,
+// ~94% of a frame with a caption on it. A caption that is not turning and not
+// fading looks the same on every frame it is on screen, so it is drawn once
+// into a transparent bitmap and copied after that.
+//
+// Exact rather than approximate: the bitmap is drawn with the caption's own
+// sub-pixel offset (to 1/16 px) and copied at a whole-pixel position, so no
+// resampling happens on the way out. Turning or fading captions take the
+// direct path as before -- a fade drawn from a bitmap would composite its
+// layers differently, and a turn would resample it.
+struct TextSpriteKey {
+	TlText t;
+	int canvasW = 0, canvasH = 0;
+	double scale = 1.0;
+	int phaseX = 0, phaseY = 0; // sub-pixel offset, in 1/16 px
+
+	bool operator==(const TextSpriteKey &o) const
+	{
+		return canvasW == o.canvasW && canvasH == o.canvasH && scale == o.scale && phaseX == o.phaseX &&
+		       phaseY == o.phaseY && t == o.t;
+	}
+};
+
+size_t qHash(const TextSpriteKey &k, size_t seed = 0)
+{
+	const TlText &t = k.t;
+	return qHashMulti(seed, t.text, t.fontFamily, t.fontPx, t.bold, t.italic, t.color.rgba(), t.outlineWidth,
+			  t.outlineColor.rgba(), t.boxEnabled, t.boxColor.rgba(), t.boxOpacity, t.boxPadX, t.boxPadY,
+			  t.boxRadius, t.align, t.textCase, k.canvasW, k.canvasH, k.scale, k.phaseX, k.phaseY);
+}
+
+struct TextSprite {
+	QImage img;      // premultiplied, transparent around the caption
+	QPoint origin;   // top-left relative to the caption's whole-pixel anchor
+};
+
+constexpr int kTextPhaseSteps = 256;
 
 } // namespace
 
@@ -251,6 +295,95 @@ void TimelineCompositor::drawTextClip(QPainter &p, const TlClip &c, const TlTran
 	const QPainterPath &path = ct.path;
 	const QRectF &block = ct.block;
 
+	// The outline, built once per caption and width (see CachedText).
+	const auto ensureStroke = [&]() {
+		if (t.outlineWidth > 0.01 && ct.strokeWidth != t.outlineWidth) {
+			QPainterPathStroker stroker;
+			stroker.setWidth(t.outlineWidth * 2.0); // straddles the glyph edge
+			stroker.setJoinStyle(Qt::RoundJoin);
+			stroker.setCapStyle(Qt::RoundCap);
+			ct.stroke = stroker.createStroke(path);
+			ct.strokeWidth = t.outlineWidth;
+		}
+	};
+	// The box, in the caption's own (unscaled) space.
+	const double k = textScale(canvas);
+	const QRectF box = block.adjusted(-t.boxPadX * k, -t.boxPadY * k, t.boxPadX * k, t.boxPadY * k);
+	const double boxR = std::min(t.boxRadius * k, std::min(box.width(), box.height()) / 2.0);
+	const auto paintCaption = [&](QPainter &q) {
+		if (t.boxEnabled) {
+			QColor fill = t.boxColor;
+			fill.setAlphaF(float(std::clamp(t.boxOpacity, 0.0, 1.0)));
+			q.setPen(Qt::NoPen);
+			q.setBrush(fill);
+			q.drawRoundedRect(box, boxR, boxR);
+		}
+		if (t.outlineWidth > 0.01) {
+			ensureStroke();
+			q.fillPath(ct.stroke, t.outlineColor);
+		}
+		q.fillPath(path, t.color);
+	};
+
+	// Not turning, not fading, and drawn by a painter with no transform of its
+	// own: copy the finished bitmap (see TextSprite above).
+	if (std::abs(tf.rotation) < 0.001 && tf.opacity >= 0.999 && p.transform().isIdentity()) {
+		static thread_local QHash<TextSpriteKey, TextSprite> sprites;
+		static thread_local qint64 spriteBytes = 0;
+		const double s = std::max(0.001, tf.scale);
+		const double cx = tf.posX * canvas.width(), cy = tf.posY * canvas.height();
+		const double ax = std::floor(cx), ay = std::floor(cy);
+		int phx = int(std::lround((cx - ax) * kTextPhaseSteps));
+		int phy = int(std::lround((cy - ay) * kTextPhaseSteps));
+		double axi = ax, ayi = ay;
+		if (phx == kTextPhaseSteps) { phx = 0; axi += 1.0; }
+		if (phy == kTextPhaseSteps) { phy = 0; ayi += 1.0; }
+		TextSpriteKey key;
+		key.t = t;
+		key.canvasW = canvas.width();
+		key.canvasH = canvas.height();
+		key.scale = s;
+		key.phaseX = phx;
+		key.phaseY = phy;
+		auto it = sprites.find(key);
+		if (it == sprites.end()) {
+			// Everything the caption can paint, in its own space: the glyphs,
+			// their outline (which reaches outlineWidth past them) and the box.
+			QRectF local = path.boundingRect().adjusted(-t.outlineWidth, -t.outlineWidth,
+								     t.outlineWidth, t.outlineWidth);
+			if (t.boxEnabled)
+				local = local.united(box);
+			const double px = double(phx) / kTextPhaseSteps, py = double(phy) / kTextPhaseSteps;
+			const int left = int(std::floor(px + local.left() * s)) - 2;
+			const int top = int(std::floor(py + local.top() * s)) - 2;
+			const int right = int(std::ceil(px + local.right() * s)) + 2;
+			const int bottom = int(std::ceil(py + local.bottom() * s)) + 2;
+			TextSprite sp;
+			sp.origin = QPoint(left, top);
+			sp.img = QImage(std::max(1, right - left), std::max(1, bottom - top),
+					QImage::Format_ARGB32_Premultiplied);
+			sp.img.fill(Qt::transparent);
+			{
+				QPainter q(&sp.img);
+				q.setRenderHint(QPainter::Antialiasing, true);
+				q.translate(px - left, py - top);
+				q.scale(s, s);
+				paintCaption(q);
+			}
+			// Bounded by memory: captions at many sizes (a zoom animation)
+			// would otherwise pile up one bitmap per frame.
+			const qint64 bytes = sp.img.sizeInBytes();
+			if (spriteBytes + bytes > (qint64(512) << 20) || sprites.size() > 4096) {
+				sprites.clear();
+				spriteBytes = 0;
+			}
+			spriteBytes += bytes;
+			it = sprites.insert(key, sp);
+		}
+		p.drawImage(QPoint(int(axi) + it->origin.x(), int(ayi) + it->origin.y()), it->img);
+		return;
+	}
+
 	p.save();
 	p.setOpacity(std::clamp(tf.opacity, 0.0, 1.0));
 	// Position, spin and zoom: the text transforms about its own centre, like a
@@ -260,39 +393,10 @@ void TimelineCompositor::drawTextClip(QPainter &p, const TlClip &c, const TlTran
 		p.rotate(tf.rotation);
 	p.scale(std::max(0.001, tf.scale), std::max(0.001, tf.scale));
 	p.setRenderHint(QPainter::Antialiasing, true);
-
-	if (t.boxEnabled) {
-		// `block` is the union box of every line, so a multi-line caption gets one
-		// continuous sticker rather than a bar per line. Padding and radius are
-		// scaled by the same factor as the font, so the shape keeps its
-		// proportions at any canvas size.
-		const double k = textScale(canvas);
-		const QRectF box =
-			block.adjusted(-t.boxPadX * k, -t.boxPadY * k, t.boxPadX * k, t.boxPadY * k);
-		// Past half the shorter side a rounded rect stops making sense; clamping
-		// there turns a big radius into a clean pill instead of an artefact.
-		const double r = std::min(t.boxRadius * k,
-					  std::min(box.width(), box.height()) / 2.0);
-		QColor fill = t.boxColor;
-		// Opacity is its own property: the colour picker sets the hue, this sets
-		// how much of the picture shows through, and neither clobbers the other.
-		fill.setAlphaF(float(std::clamp(t.boxOpacity, 0.0, 1.0)));
-		p.setPen(Qt::NoPen);
-		p.setBrush(fill);
-		p.drawRoundedRect(box, r, r);
-	}
-	if (t.outlineWidth > 0.01) {
-		if (ct.strokeWidth != t.outlineWidth) {
-			QPainterPathStroker stroker;
-			stroker.setWidth(t.outlineWidth * 2.0); // straddles the glyph edge
-			stroker.setJoinStyle(Qt::RoundJoin);
-			stroker.setCapStyle(Qt::RoundCap);
-			ct.stroke = stroker.createStroke(path);
-			ct.strokeWidth = t.outlineWidth;
-		}
-		p.fillPath(ct.stroke, t.outlineColor);
-	}
-	p.fillPath(path, t.color);
+	// `block` is the union box of every line, so a multi-line caption gets one
+	// continuous sticker rather than a bar per line; padding and radius scale
+	// with the font (see paintCaption above, shared with the bitmap path).
+	paintCaption(p);
 	p.restore();
 }
 

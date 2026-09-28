@@ -11,6 +11,7 @@
 #include "timeline/TimelineView.hpp"    // ClipboardEntry (timeline copy/paste)
 #include "timeline/SoundRules.hpp"      // SoundInfo (sounds for events)
 
+#include <QCache>
 #include <QDateTime>
 #include <QDialog>
 #include <QElapsedTimer>
@@ -442,6 +443,20 @@ private:
 	int addImageSource(const QString &path);
 	// Built from what can actually be opened, so the dialog never offers a
 	// format the editor would then refuse.
+	// ---- Finished preview frames -----------------------------------------
+	// Composited frames kept in RAM, keyed by everything that decides what a
+	// frame looks like (previewSignature): going back to a spot, stepping
+	// frames back and forth or hovering over the same place again costs a
+	// lookup instead of a decode and a composite. Self-checking -- a frame is
+	// only reused when every clip on screen at that instant is unchanged -- so
+	// no edit can show a stale picture. Only frames whose every source frame
+	// was exact are kept.
+	QCache<QByteArray, QImage> previewFrames_;
+	quint64 previewGen_ = 1;     // media, scripts, shaders: bumped when they change
+	bool frameCacheable_ = true; // cleared while composing if a frame was not exact
+	static constexpr int kPreviewCacheMB = 2048;
+	QByteArray previewSignature(qint64 outMs, QSize render, QSize logical) const;
+	void invalidatePreviewCache();
 	QHash<int, QImage> stillImages_; // sourceId -> working copy (<= kStillWorkingMax, see StillWeight.hpp)
 	QHash<int, QSize> stillSizes_;   // sourceId -> the ORIGINAL's size, what geometry is measured in
 	QHash<int, QImage> stillPreview_; // sourceId -> copy sized for the current preview

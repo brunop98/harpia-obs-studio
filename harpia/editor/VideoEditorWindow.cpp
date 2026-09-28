@@ -36,7 +36,7 @@
 #include "TimelineOverview.hpp"
 #include "TimelineThumbs.hpp"
 #include "timeline/TextStyleJson.hpp"
-#include "timeline/TimelineJson.hpp"
+#include "timeline/FrameSignature.hpp"
 #include "TrackEditor.hpp"
 #include "VoiceoverMixer.hpp"
 #include "VoiceoverTrack.hpp"
@@ -2593,6 +2593,7 @@ void VideoEditorWindow::onRemoveSource()
 					++pit;
 			}
 			sources_.erase(it);
+			invalidatePreviewCache();
 			break;
 		}
 	}
@@ -2827,6 +2828,7 @@ int VideoEditorWindow::addImageSource(const QString &path)
 	s.height = fullSize.height();
 	stillImages_.insert(s.id, img);
 	stillSizes_.insert(s.id, fullSize);
+	invalidatePreviewCache();
 	stillPreview_.remove(s.id);
 	warnHeavyStill(path, fullSize, fileBytes);
 	// A still's filmstrip: one tile, at the same 128x72 bound the video strips
@@ -4450,6 +4452,9 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 				// was answered with the other track's frame -- forever. The
 				// symptom is a lower track frozen while the top one plays.
 				const int lane = std::max(0, track());
+				// A playback frame may be a held or catching-up one: shown,
+				// never kept (see previewFrames_).
+				w->frameCacheable_ = false;
 				if (FrameSeeker *sk = w->playSeekerFor(sourceId, lane)) {
 					if (w->playFrameCacheSize_ != QSize(decodeW, decodeH)) {
 						w->playFrameCache_.clear();
@@ -4507,8 +4512,10 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 			bool exact = false;
 			const QImage img =
 				w->previewDecoder_->frame(sourceId, srcMs, decodeW, decodeH, &exact);
-			if (!exact)
+			if (!exact) {
 				w->shownExact_ = false;
+				w->frameCacheable_ = false;
+			}
 			return img;
 		}
 	} fp;
@@ -4540,9 +4547,34 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 	shownSource_ = -1;
 	shownMs_ = outMs;
 	shownExact_ = true;
+	// Seen before, with nothing on screen changed since: no decode, no composite.
+	if (previewFrames_.maxCost() != kPreviewCacheMB * 1024)
+		previewFrames_.setMaxCost(kPreviewCacheMB * 1024); // in KB
+	const QByteArray sig = previewSignature(outMs, renderSize, canvasSize);
+	if (const QImage *hit = previewFrames_.object(sig)) {
+		setPreviewFrame(*hit, outMs);
+		return;
+	}
+	frameCacheable_ = true;
 	const QImage composed = TimelineCompositor::compose(timelineView_->model(), outMs, renderSize,
 							    fp, scriptEval_.get(), fps, canvasSize);
+	if (frameCacheable_ && shownExact_ && !composed.isNull())
+		previewFrames_.insert(sig, new QImage(composed), int(std::max<qint64>(1, composed.sizeInBytes() / 1024)));
 	setPreviewFrame(composed, outMs);
+}
+
+// See FrameSignature.hpp; the shader generation joins the window's own, since
+// a hot-reloaded .frag changes pixels without touching the model.
+QByteArray VideoEditorWindow::previewSignature(qint64 outMs, QSize render, QSize logical) const
+{
+	const qint64 gen = qint64(previewGen_) * 1000003 + ShaderComponents::generation();
+	return timelineFrameSignature(timelineView_->model(), outMs, render, logical, gen);
+}
+
+void VideoEditorWindow::invalidatePreviewCache()
+{
+	++previewGen_;
+	previewFrames_.clear();
 }
 
 void VideoEditorWindow::onTimelineScrub(qint64 outMs)
@@ -4655,6 +4687,7 @@ void VideoEditorWindow::reloadComponentsFromDisk()
 	// rather than at startup is what makes their folders hot-reload on the same
 	// terms as the components folder: save a .frag and the next frame has it.
 	componentCount_ += ShaderComponents::loadFolder(shadersDirPath(), reg, &componentErrors_);
+	invalidatePreviewCache(); // a reloaded component may draw differently
 	componentCount_ +=
 		TransformScriptComponents::loadFolder(scriptsDirPath(), reg, &componentErrors_);
 	// Shown in the panel rather than written to the log: someone whose component
@@ -4837,6 +4870,7 @@ bool VideoEditorWindow::ensureScriptCompiled(const QString &name, QString *err)
 	const QString src = QString::fromUtf8(f.readAll());
 	f.close();
 	scriptParamDefs_.insert(name, parseShaderParams(src)); // same //@param format
+	invalidatePreviewCache(); // frames made before this script existed are not its frames
 	return scriptEval_->compile(name, src, err);
 }
 
@@ -12179,6 +12213,7 @@ void VideoEditorWindow::onProxyReady(int sourceId, const QString &proxyPath)
 	// stutters -- scrubbing was only half of it.
 	applyProxyToPlayback(sourceId, proxyPath);
 	proxyPending_.remove(sourceId);
+	invalidatePreviewCache(); // the pixels now come from the proxy
 	startFilmstrip(sourceId, proxyPath);
 	if (EditorSource *s = sourceById(sourceId))
 		qInfo("harpia: preview proxy ready for %s", qUtf8Printable(s->name));

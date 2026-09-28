@@ -104,6 +104,7 @@ void ShaderRenderer::release()
 	ctx_ = nullptr;
 	surface_ = nullptr;
 	tex_ = 0;
+	texW_ = texH_ = 0;
 	fboW_ = fboH_ = 0;
 	glReady_ = false;
 }
@@ -153,6 +154,7 @@ bool ShaderRenderer::ensureGl()
 
 	auto *f = ctx_->functions();
 	f->glGenTextures(1, &tex_);
+	texW_ = texH_ = 0;
 
 	ctx_->doneCurrent();
 	glReady_ = true;
@@ -215,9 +217,13 @@ bool ShaderRenderer::setChain(const QVector<ShaderLayerSource> &layers, QString 
 	for (int i = 0; i < layers.size(); ++i) {
 		auto *prog = new QOpenGLShaderProgram();
 		QString log;
-		if (!prog->addShaderFromSourceCode(QOpenGLShader::Vertex, kVert))
+		// Cacheable: Qt keeps the linked program binary on disk, keyed by the
+		// source, so the next launch (and every hot reload back to a version
+		// already seen) skips the driver's compile. Falls back to a normal
+		// compile wherever program binaries are not supported.
+		if (!prog->addCacheableShaderFromSourceCode(QOpenGLShader::Vertex, kVert))
 			log = prog->log();
-		else if (!prog->addShaderFromSourceCode(QOpenGLShader::Fragment, layers[i].wrapped))
+		else if (!prog->addCacheableShaderFromSourceCode(QOpenGLShader::Fragment, layers[i].wrapped))
 			log = prog->log();
 		else if (!prog->link())
 			log = prog->log();
@@ -231,7 +237,16 @@ bool ShaderRenderer::setChain(const QVector<ShaderLayerSource> &layers, QString 
 				*err = log;
 			return false;
 		}
-		built.append({prog, layers[i].defs});
+		Pass pass;
+		pass.prog = prog;
+		pass.defs = layers[i].defs;
+		pass.locRes = prog->uniformLocation("iResolution");
+		pass.locTime = prog->uniformLocation("iTime");
+		pass.locFrame = prog->uniformLocation("iFrame");
+		pass.locChannel = prog->uniformLocation("iChannel0");
+		for (const ShaderParam &sp : pass.defs)
+			pass.paramLocs.append(prog->uniformLocation(sp.uniform.toUtf8().constData()));
+		built.append(pass);
 	}
 
 	deletePasses();
@@ -288,11 +303,19 @@ QImage ShaderRenderer::apply(const QImage &src, float iTime, int iFrame,
 	const QImage up = rgba.mirrored(false, true);
 #endif
 	f->glBindTexture(GL_TEXTURE_2D, tex_);
-	f->glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, up.constBits());
-	f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	// Same size as last frame: refill the texture's existing storage rather
+	// than reallocating it on the GPU every frame.
+	if (w == texW_ && h == texH_) {
+		f->glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, up.constBits());
+	} else {
+		f->glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, up.constBits());
+		f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		texW_ = w;
+		texH_ = h;
+	}
 
 	const int n = passes_.size();
 	int lastTarget = 0;
@@ -308,30 +331,32 @@ QImage ShaderRenderer::apply(const QImage &src, float iTime, int iFrame,
 
 		Pass &p = passes_[i];
 		p.prog->bind();
-		p.prog->setUniformValue("iResolution", QVector3D(float(w), float(h), 1.0f));
-		p.prog->setUniformValue("iTime", iTime);
-		p.prog->setUniformValue("iFrame", iFrame);
+		p.prog->setUniformValue(p.locRes, QVector3D(float(w), float(h), 1.0f));
+		p.prog->setUniformValue(p.locTime, iTime);
+		p.prog->setUniformValue(p.locFrame, iFrame);
 		f->glActiveTexture(GL_TEXTURE0);
 		f->glBindTexture(GL_TEXTURE_2D, inputTex);
-		p.prog->setUniformValue("iChannel0", 0);
-		const QMap<QString, double> &vals =
-			(i < perLayerParams.size()) ? perLayerParams[i] : QMap<QString, double>();
-		for (const ShaderParam &sp : p.defs) {
+		p.prog->setUniformValue(p.locChannel, 0);
+		static const QMap<QString, double> kNoValues;
+		const QMap<QString, double> &vals = (i < perLayerParams.size()) ? perLayerParams[i] : kNoValues;
+		for (int pi = 0; pi < p.defs.size(); ++pi) {
+			const ShaderParam &sp = p.defs[pi];
+			const int loc = p.paramLocs.value(pi, -1);
+			if (loc < 0)
+				continue; // declared but optimised out of the shader
 			const double v = vals.value(sp.uniform, sp.def);
-			const QByteArray name = sp.uniform.toUtf8();
 			if (sp.type == ShaderParam::Type::Bool) {
-				p.prog->setUniformValue(name.constData(), v != 0.0);
+				p.prog->setUniformValue(loc, v != 0.0);
 			} else if (sp.type == ShaderParam::Type::Color) {
 				// Unpacked here rather than stored unpacked: the value has to
 				// survive as ONE double through the project file, the keyframe
 				// list and the property bag, and this is the only place that
 				// wants four floats.
 				const QColor c = QColor::fromRgba(QRgb(quint32(std::llround(v))));
-				p.prog->setUniformValue(name.constData(),
-							QVector4D(float(c.redF()), float(c.greenF()),
-								  float(c.blueF()), float(c.alphaF())));
+				p.prog->setUniformValue(loc, QVector4D(float(c.redF()), float(c.greenF()),
+								       float(c.blueF()), float(c.alphaF())));
 			} else {
-				p.prog->setUniformValue(name.constData(), GLfloat(v));
+				p.prog->setUniformValue(loc, GLfloat(v));
 			}
 		}
 

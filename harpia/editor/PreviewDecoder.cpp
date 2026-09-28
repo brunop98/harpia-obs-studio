@@ -253,13 +253,19 @@ void PreviewDecoder::store(int sourceId, const Request &req, const QImage &img)
 			return;
 		}
 	}
-	if (v.size() >= kCachePerSource) {
-		// Drop the least recently looked at, not the oldest decoded: during a
-		// scrub back and forth the useful frames are the ones being asked for.
+	// Drop the least recently looked at, not the oldest decoded: during a
+	// scrub back and forth the useful frames are the ones being asked for.
+	// Bounded by count and by bytes, so a 4K preview cannot hold as many
+	// frames as a small one.
+	qint64 bytes = img.sizeInBytes();
+	for (const Cached &c : v)
+		bytes += c.img.sizeInBytes();
+	while (!v.isEmpty() && (v.size() >= kCachePerSource || bytes > kCacheBytesPerSource)) {
 		int worst = 0;
 		for (int i = 1; i < v.size(); ++i)
 			if (v[i].useSeq < v[worst].useSeq)
 				worst = i;
+		bytes -= v[worst].img.sizeInBytes();
 		v.removeAt(worst);
 	}
 	v.push_back(Cached{req.ms, req.w, req.h, ++useSeq_, img});

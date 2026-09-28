@@ -58,6 +58,7 @@ build() { # source-file output-name
 		"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
 		"$H/editor/shader/SpotlightGl.cpp" \
 		"$H/editor/script/TransformScript.cpp" "$H/editor/shader/ShaderRenderer.cpp" \
+		"$H/editor/component/ShaderComponent.cpp" \
 		"$WORK/moc_ClipExporter.cpp" \
 		-o "$WORK/$2" $LF
 }

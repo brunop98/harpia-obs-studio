@@ -268,8 +268,9 @@ private:
 	static QOpenGLShaderProgram *compile(const char *frag)
 	{
 		auto *p = new QOpenGLShaderProgram();
-		if (!p->addShaderFromSourceCode(QOpenGLShader::Vertex, kVert) ||
-		    !p->addShaderFromSourceCode(QOpenGLShader::Fragment, frag) || !p->link()) {
+		// Cacheable: the linked binary is kept on disk between runs.
+		if (!p->addCacheableShaderFromSourceCode(QOpenGLShader::Vertex, kVert) ||
+		    !p->addCacheableShaderFromSourceCode(QOpenGLShader::Fragment, frag) || !p->link()) {
 			delete p;
 			return nullptr;
 		}

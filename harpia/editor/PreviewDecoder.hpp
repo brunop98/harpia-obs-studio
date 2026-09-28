@@ -65,10 +65,13 @@ public:
 	// somewhere unrelated and the queued positions are no longer interesting.
 	void cancelPending();
 
-	// How many frames are kept per source. Small on purpose: at a 1280x720
-	// preview each is 3.7 MB, and the value of an old scrub position falls off
-	// a cliff.
-	static constexpr int kCachePerSource = 4;
+	// How many decoded frames are kept per source, bounded by memory as well
+	// as count. It used to be 4, which made a scrub back over the last second
+	// decode every frame again; RAM is the cheap resource here and decoding is
+	// the expensive one, so a source keeps up to 512 MB of recent frames
+	// (about 250 at a 960x540 preview) and drops the least recently used.
+	static constexpr int kCachePerSource = 400;
+	static constexpr qint64 kCacheBytesPerSource = qint64(512) << 20;
 
 signals:
 	// A requested frame is now available. Queued to the GUI thread.

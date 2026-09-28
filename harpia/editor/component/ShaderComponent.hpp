@@ -71,6 +71,10 @@ public:
 	// silently throw the shaders away.
 	static bool available();
 
+	// Bumped on every loadFolder: a cached preview frame made before a shader
+	// changed on disk is not the frame the shader would make now.
+	static int generation();
+
 	// Free this thread's GL context and surface. Every worker that renders
 	// shader components MUST call this before it finishes.
 	//

@@ -140,6 +140,11 @@ void ShaderComponents::releaseThreadResources()
 	ThreadRenderers::get().release();
 }
 
+int ShaderComponents::generation()
+{
+	return g_generation.loadAcquire();
+}
+
 int ShaderComponents::loadFolder(const QString &folder, ComponentRegistry &reg,
 				 QStringList *errors)
 {

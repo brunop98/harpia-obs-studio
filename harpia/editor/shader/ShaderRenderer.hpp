@@ -81,7 +81,13 @@ private:
 	struct Pass {
 		QOpenGLShaderProgram *prog = nullptr;
 		QVector<ShaderParam> defs;
+		// Uniform locations, looked up once at link time instead of by name
+		// (a string conversion and a driver lookup) for every uniform of every
+		// frame. -1 = not used by the shader, which setUniformValue ignores.
+		int locRes = -1, locTime = -1, locFrame = -1, locChannel = -1;
+		QVector<int> paramLocs; // parallel to defs
 	};
+	int texW_ = 0, texH_ = 0; // the input texture's allocated size
 
 	QOffscreenSurface *surface_ = nullptr;
 	QOpenGLContext *ctx_ = nullptr;

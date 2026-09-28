@@ -55,6 +55,23 @@ QStringList browserProfileDirs(const QString &id, const QString &os, const QStri
 QString browserLabel(const QString &id);
 QVector<YtBrowser> detectBrowsers();
 
+// The process names a browser runs under ("chrome.exe", "msedge.exe"...),
+// on `os` as above. Chromium browsers lock their cookie file while they run,
+// so yt-dlp cannot copy it ("Could not copy Chrome cookie database"); the
+// dialog looks for the process before it starts and offers to close it.
+QStringList browserProcessNames(const QString &id, const QString &os);
+// True when a Chromium-based browser: the ones that lock their cookies.
+bool browserLocksCookies(const QString &id);
+// Is that browser running now? (tasklist on Windows, pgrep elsewhere.)
+bool browserRunning(const QString &id);
+// Close it: every process of it, so the lock goes. Returns false when a
+// process is still there afterwards.
+bool closeBrowser(const QString &id);
+
+// What to tell the user about a failed download, from yt-dlp's ERROR line
+// and the cookie setting in force. "" when there is nothing to add.
+QString downloadErrorHint(const QString &error, const QString &cookiesBrowser, bool haveCookiesFile);
+
 // One quality on offer, one row of the dropdown.
 struct YtQuality {
 	QString label;    // "1080p60", "720p", "Best available"

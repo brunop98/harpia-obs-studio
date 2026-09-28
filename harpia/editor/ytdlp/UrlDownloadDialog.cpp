@@ -8,12 +8,14 @@
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QLocale>
+#include <QMessageBox>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPixmap>
@@ -26,6 +28,9 @@
 namespace harpia {
 
 namespace {
+// Combo data of the two cookies.txt rows: the stored file, and "pick one".
+const char kUseFile[] = "file";
+const char kPickFile[] = "pick-file";
 QString bytesText(qint64 b)
 {
 	if (b < 0)
@@ -139,12 +144,40 @@ void UrlDownloadDialog::buildUi()
 	cookies_->setToolTip(QStringLiteral(
 		"Send the cookies of a browser you are signed in with (yt-dlp --cookies-from-browser). "
 		"Needed when the site answers 403 Forbidden, or for age-restricted, members-only or "
-		"private videos. On Windows, close Chrome/Edge/Brave first: they lock their cookie file "
-		"while running."));
+		"private videos. Chrome, Edge and Brave lock their cookie file while running (close them "
+		"first), and Chrome 127+ encrypts it: then export a cookies.txt with the \"Get cookies.txt "
+		"LOCALLY\" extension and choose it here."));
 	fillCookiesCombo();
 	connect(cookies_, &QComboBox::currentIndexChanged, this, [this](int) {
-		settings_.cookiesBrowser = cookies_->currentData().toString();
+		const QString pick = cookies_->currentData().toString();
+		if (pick == QLatin1String(kPickFile)) {
+			// A cookies.txt (Netscape format) exported from the browser: the
+			// route that works with the browser open, and the only one for
+			// Chrome 127+, whose cookies yt-dlp cannot decrypt any more.
+			const QString start = settings_.cookiesFile.isEmpty()
+						      ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)
+						      : QFileInfo(settings_.cookiesFile).absolutePath();
+			const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("Choose the exported cookies.txt"),
+								       start, QStringLiteral("Cookies (*.txt);;All files (*)"));
+			if (f.isEmpty()) {
+				fillCookiesCombo(); // back to what it was
+				return;
+			}
+			settings_.cookiesFile = f;
+			settings_.cookiesBrowser.clear();
+			settings_.save();
+			fillCookiesCombo();
+			status_->setText(QStringLiteral("Using %1. Export it again when it stops working: the login inside expires.")
+						 .arg(QDir::toNativeSeparators(f)));
+			return;
+		}
+		// A browser, the stored cookies.txt (no browser = the file goes),
+		// or None, which also forgets the file: None must mean none.
+		settings_.cookiesBrowser = pick == QLatin1String(kUseFile) ? QString() : pick;
+		if (pick.isEmpty())
+			settings_.cookiesFile.clear();
 		settings_.save();
+		fillCookiesCombo();
 	});
 	of->addRow(QStringLiteral("Cookies"), cookies_);
 	subtitles_ = new QComboBox(optionsBox_);
@@ -369,6 +402,8 @@ void UrlDownloadDialog::startDownload()
 		status_->setText(QStringLiteral("yt-dlp was not found. Point at it in Settings…"));
 		return;
 	}
+	if (!cookiesPreflight())
+		return;
 	YtDownloadOptions o;
 	o.audioOnly = quality_->currentData().toInt() < 0;
 	o.maxHeight = o.audioOnly ? 0 : quality_->currentData().toInt();
@@ -442,20 +477,12 @@ void UrlDownloadDialog::finishDownload(int exitCode)
 		else {
 			QString msg = QStringLiteral("Download failed: %1").arg(
 				lastError_.isEmpty() ? QStringLiteral("yt-dlp exited with code %1").arg(exitCode) : lastError_);
-			// A 403, or a "sign in" of any wording, is the site asking for a
-			// login. Say what fixes it, right where the failure is read.
-			if (lastError_.contains(QLatin1String("403")) ||
-			    lastError_.contains(QLatin1String("Sign in"), Qt::CaseInsensitive) ||
-			    lastError_.contains(QLatin1String("login"), Qt::CaseInsensitive) ||
-			    lastError_.contains(QLatin1String("cookies"), Qt::CaseInsensitive)) {
-				msg += settings_.cookiesBrowser.isEmpty()
-					       ? QStringLiteral("\nThe site wants a login. Pick the browser you are signed "
-								"in with under Cookies and try again.")
-					       : QStringLiteral("\nThe site still wants a login. Make sure you are signed in "
-								"in %1, close it (Windows locks its cookies while it runs), "
-								"and try again. yt-dlp itself may also need updating.")
-							 .arg(browserLabel(settings_.cookiesBrowser));
-			}
+			// A locked or unreadable cookie file, a 403, a "sign in" of any
+			// wording: say what fixes it, right where the failure is read.
+			const QString hint = downloadErrorHint(lastError_, settings_.cookiesBrowser,
+							       !settings_.cookiesFile.isEmpty());
+			if (!hint.isEmpty())
+				msg += QLatin1Char('\n') + hint;
 			status_->setText(msg);
 		}
 		return;
@@ -483,9 +510,59 @@ void UrlDownloadDialog::fillCookiesCombo()
 	for (const YtBrowser &b : detectBrowsers())
 		cookies_->addItem(b.found ? QStringLiteral("%1   (found)").arg(b.label) : b.label, b.id);
 	if (!settings_.cookiesFile.isEmpty())
-		cookies_->addItem(QStringLiteral("cookies.txt (Settings\u2026)"), QString());
-	const int i = cookies_->findData(settings_.cookiesBrowser);
+		cookies_->addItem(QStringLiteral("cookies.txt:  %1").arg(QFileInfo(settings_.cookiesFile).fileName()),
+				  QString::fromLatin1(kUseFile));
+	cookies_->addItem(QStringLiteral("cookies.txt file\u2026"), QString::fromLatin1(kPickFile));
+	int i = cookies_->findData(settings_.cookiesBrowser);
+	if (settings_.cookiesBrowser.isEmpty() && !settings_.cookiesFile.isEmpty())
+		i = cookies_->findData(QString::fromLatin1(kUseFile));
 	cookies_->setCurrentIndex(i < 0 ? 0 : i);
+}
+
+bool UrlDownloadDialog::cookiesPreflight()
+{
+	const QString id = settings_.cookiesBrowser;
+	if (id.isEmpty() || !browserLocksCookies(id) || !browserRunning(id))
+		return true;
+	// The browser is open and holds its cookie file: yt-dlp would fail with
+	// "Could not copy ... cookie database". Ask now, with the ways out.
+	const QString label = browserLabel(id);
+	QMessageBox box(this);
+	box.setIcon(QMessageBox::Warning);
+	box.setWindowTitle(QStringLiteral("%1 is open").arg(label));
+	box.setText(QStringLiteral("%1 is running and locks its cookie file, so yt-dlp cannot read your login "
+				   "from it.")
+			    .arg(label));
+	box.setInformativeText(QStringLiteral(
+		"Close it and download, or use a cookies.txt exported with the \"Get cookies.txt LOCALLY\" "
+		"extension, which works with the browser open (and is the only way for Chrome 127 and later, "
+		"which encrypts its cookies against other programs).\n\nClosing it shuts every %1 window; "
+		"the tabs come back when it starts again.")
+				       .arg(label));
+	QPushButton *close = box.addButton(QStringLiteral("Close %1 and download").arg(label), QMessageBox::AcceptRole);
+	QPushButton *file = box.addButton(QStringLiteral("Use a cookies.txt file\u2026"), QMessageBox::ActionRole);
+	QPushButton *anyway = box.addButton(QStringLiteral("Try anyway"), QMessageBox::ActionRole);
+	box.addButton(QMessageBox::Cancel);
+	box.setDefaultButton(close);
+	box.exec();
+	if (box.clickedButton() == close) {
+		status_->setText(QStringLiteral("Closing %1\u2026").arg(label));
+		QCoreApplication::processEvents();
+		if (closeBrowser(id))
+			return true;
+		status_->setText(QStringLiteral("%1 is still running. Close it yourself (also from the system tray) "
+						"and press Download again.")
+					 .arg(label));
+		return false;
+	}
+	if (box.clickedButton() == file) {
+		const int i = cookies_->findData(QString::fromLatin1(kPickFile));
+		if (i >= 0)
+			cookies_->setCurrentIndex(i); // opens the file picker
+		// Downloads once the file is in place; the user presses the button again.
+		return !settings_.cookiesFile.isEmpty() && settings_.cookiesBrowser.isEmpty();
+	}
+	return box.clickedButton() == anyway;
 }
 
 } // namespace harpia

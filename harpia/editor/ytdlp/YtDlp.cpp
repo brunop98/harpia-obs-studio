@@ -9,6 +9,7 @@
 #include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QThread>
 #include <QUrl>
 
 #include <algorithm>
@@ -170,6 +171,154 @@ QVector<YtBrowser> detectBrowsers()
 		return a.found && !b.found;
 	});
 	return out;
+}
+
+QStringList browserProcessNames(const QString &id, const QString &os)
+{
+	const bool win = os == QLatin1String("windows");
+	const bool mac = os == QLatin1String("macos");
+	auto pick = [&](const char *w, const char *m, const char *l) {
+		return QStringList{QString::fromLatin1(win ? w : mac ? m : l)};
+	};
+	if (id == QLatin1String("chrome"))
+		return pick("chrome.exe", "Google Chrome", "chrome");
+	if (id == QLatin1String("edge"))
+		return pick("msedge.exe", "Microsoft Edge", "msedge");
+	if (id == QLatin1String("brave"))
+		return pick("brave.exe", "Brave Browser", "brave");
+	if (id == QLatin1String("chromium"))
+		return pick("chromium.exe", "Chromium", "chromium");
+	if (id == QLatin1String("vivaldi"))
+		return pick("vivaldi.exe", "Vivaldi", "vivaldi-bin");
+	if (id == QLatin1String("opera"))
+		return pick("opera.exe", "Opera", "opera");
+	if (id == QLatin1String("firefox"))
+		return pick("firefox.exe", "firefox", "firefox");
+	if (id == QLatin1String("safari"))
+		return mac ? QStringList{QStringLiteral("Safari")} : QStringList{};
+	return {};
+}
+
+bool browserLocksCookies(const QString &id)
+{
+	// Firefox and Safari read fine while open; the Chromium family holds an
+	// exclusive lock on its cookie database (and Windows will not let anyone
+	// else copy a locked file).
+	return id == QLatin1String("chrome") || id == QLatin1String("edge") || id == QLatin1String("brave") ||
+	       id == QLatin1String("chromium") || id == QLatin1String("vivaldi") || id == QLatin1String("opera");
+}
+
+namespace {
+QString hostOs()
+{
+#if defined(_WIN32)
+	return QStringLiteral("windows");
+#elif defined(__APPLE__)
+	return QStringLiteral("macos");
+#else
+	return QStringLiteral("linux");
+#endif
+}
+} // namespace
+
+bool browserRunning(const QString &id)
+{
+	for (const QString &name : browserProcessNames(id, hostOs())) {
+		QProcess p;
+#if defined(_WIN32)
+		p.setProgram(QStringLiteral("tasklist"));
+		p.setArguments({QStringLiteral("/FI"), QStringLiteral("IMAGENAME eq %1").arg(name), QStringLiteral("/NH"),
+				QStringLiteral("/FO"), QStringLiteral("CSV")});
+		p.start();
+		if (!p.waitForFinished(4000))
+			continue;
+		// tasklist prints the rows as CSV, or "INFO: No tasks are running..."
+		const QString out = QString::fromLocal8Bit(p.readAllStandardOutput());
+		if (out.contains(QLatin1Char('"') + name, Qt::CaseInsensitive))
+			return true;
+#else
+		p.setProgram(QStringLiteral("pgrep"));
+		p.setArguments({QStringLiteral("-x"), name});
+		p.start();
+		if (p.waitForFinished(4000) && p.exitCode() == 0)
+			return true;
+#endif
+	}
+	return false;
+}
+
+bool closeBrowser(const QString &id)
+{
+	for (const QString &name : browserProcessNames(id, hostOs())) {
+		QProcess p;
+#if defined(_WIN32)
+		// /F: Chrome keeps helper processes that ignore a polite close, and
+		// it restores the tabs on its next start anyway.
+		p.setProgram(QStringLiteral("taskkill"));
+		p.setArguments({QStringLiteral("/IM"), name, QStringLiteral("/F"), QStringLiteral("/T")});
+#else
+		p.setProgram(QStringLiteral("pkill"));
+		p.setArguments({QStringLiteral("-x"), name});
+#endif
+		p.start();
+		p.waitForFinished(8000);
+	}
+	// The lock goes when the last process has gone; give it a moment.
+	for (int i = 0; i < 20; ++i) {
+		if (!browserRunning(id))
+			return true;
+		QThread::msleep(150);
+	}
+	return false;
+}
+
+QString downloadErrorHint(const QString &error, const QString &cookiesBrowser, bool haveCookiesFile)
+{
+	const QString label = cookiesBrowser.isEmpty() ? QString() : browserLabel(cookiesBrowser);
+	// yt-dlp could not read the browser's cookies at all: the file is locked
+	// (browser open) or, in Chrome 127 and later, encrypted so that only
+	// Chrome itself can open it. Either way a cookies.txt always works.
+	if (error.contains(QLatin1String("Could not copy"), Qt::CaseInsensitive) &&
+	    error.contains(QLatin1String("cookie"), Qt::CaseInsensitive)) {
+		return QStringLiteral("%1 is open and locks its cookie file, so yt-dlp cannot read it.\n"
+				      "Close %1 completely (also its background apps in the system tray) and try again, "
+				      "or choose \"cookies.txt file…\" under Cookies: export the file with the "
+				      "\"Get cookies.txt LOCALLY\" browser extension while you are signed in, then point at it. "
+				      "That works with the browser open.")
+			.arg(label.isEmpty() ? QStringLiteral("The browser") : label);
+	}
+	if ((error.contains(QLatin1String("decrypt"), Qt::CaseInsensitive) ||
+	     error.contains(QLatin1String("DPAPI"), Qt::CaseInsensitive) ||
+	     error.contains(QLatin1String("app-bound"), Qt::CaseInsensitive) ||
+	     error.contains(QLatin1String("app_bound"), Qt::CaseInsensitive)) &&
+	    !cookiesBrowser.isEmpty()) {
+		return QStringLiteral("%1 encrypts its cookies so that only it can read them (Chrome 127 and later), "
+				      "and yt-dlp cannot decrypt them.\nChoose \"cookies.txt file…\" under Cookies: export the "
+				      "file with the \"Get cookies.txt LOCALLY\" extension while signed in, then point at it. "
+				      "Firefox cookies read directly without this trouble.")
+			.arg(label);
+	}
+	if (error.contains(QLatin1String("could not find"), Qt::CaseInsensitive) &&
+	    error.contains(QLatin1String("cookies"), Qt::CaseInsensitive)) {
+		return QStringLiteral("yt-dlp found no cookie database for %1. Is that the browser you use, and "
+				      "has it a profile on this computer? Pick another under Cookies.")
+			.arg(label.isEmpty() ? QStringLiteral("that browser") : label);
+	}
+	if (error.contains(QLatin1String("403")) || error.contains(QLatin1String("Sign in"), Qt::CaseInsensitive) ||
+	    error.contains(QLatin1String("login"), Qt::CaseInsensitive) ||
+	    error.contains(QLatin1String("cookies"), Qt::CaseInsensitive)) {
+		if (cookiesBrowser.isEmpty() && !haveCookiesFile)
+			return QStringLiteral("The site wants a login. Pick the browser you are signed in with under "
+					      "Cookies and try again.");
+		if (!cookiesBrowser.isEmpty())
+			return QStringLiteral("The site still wants a login. Make sure you are signed in in %1 and "
+					      "try again, or use \"cookies.txt file…\" exported while signed in. yt-dlp "
+					      "itself may also need updating.")
+				.arg(label);
+		return QStringLiteral("The site still wants a login. Export the cookies.txt again while you are "
+				      "signed in (they expire), and check that yt-dlp is up to date.");
+	}
+	return QString();
 }
 
 QString YtDlpSettings::defaultDownloadDir()

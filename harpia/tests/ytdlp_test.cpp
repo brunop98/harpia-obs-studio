@@ -189,6 +189,37 @@ int main(int argc, char **argv)
 			if (found[i].found && !found[i - 1].found)
 				sorted = false;
 		ok(sorted, "with the ones on this computer first");
+
+		// The Chromium family locks its cookies while open; Firefox does not.
+		for (const QString &id : {QStringLiteral("chrome"), QStringLiteral("edge"), QStringLiteral("brave")})
+			ok(browserLocksCookies(id), qPrintable(QStringLiteral("%1 locks its cookie file while running").arg(id)));
+		ok(!browserLocksCookies(QStringLiteral("firefox")), "Firefox does not");
+		eqs(browserProcessNames(QStringLiteral("chrome"), QStringLiteral("windows")).join(","), "chrome.exe",
+		    "Chrome on Windows runs as chrome.exe");
+		eqs(browserProcessNames(QStringLiteral("edge"), QStringLiteral("windows")).join(","), "msedge.exe",
+		    "Edge as msedge.exe");
+		eqs(browserProcessNames(QStringLiteral("chrome"), QStringLiteral("linux")).join(","), "chrome",
+		    "and chrome on Linux");
+		ok(browserProcessNames(QStringLiteral("safari"), QStringLiteral("windows")).isEmpty(), "no Safari on Windows");
+		ok(!browserRunning(QStringLiteral("safari")), "a browser that cannot run here is not running");
+
+		// What the user is told, from yt-dlp's own words.
+		const QString locked = QStringLiteral("Could not copy Chrome cookie database. See  https://github.com/yt-dlp/yt-dlp/issues/7271  for more info");
+		QString h = downloadErrorHint(locked, QStringLiteral("chrome"), false);
+		ok(h.contains(QLatin1String("Google Chrome is open")) && h.contains(QLatin1String("cookies.txt")),
+		   "a locked cookie database: close the browser, or use a cookies.txt");
+		h = downloadErrorHint(QStringLiteral("Failed to decrypt with DPAPI"), QStringLiteral("chrome"), false);
+		ok(h.contains(QLatin1String("encrypts")) && h.contains(QLatin1String("cookies.txt")),
+		   "undecryptable cookies (Chrome 127+): the cookies.txt route");
+		h = downloadErrorHint(QStringLiteral("unable to download video data: HTTP Error 403: Forbidden"), QString(), false);
+		ok(h.contains(QLatin1String("Pick the browser")), "a 403 with no cookies: pick a browser");
+		h = downloadErrorHint(QStringLiteral("HTTP Error 403: Forbidden"), QStringLiteral("firefox"), false);
+		ok(h.contains(QLatin1String("in Firefox")) && h.contains(QLatin1String("signed in")),
+		   "a 403 with a browser: check the login there");
+		h = downloadErrorHint(QStringLiteral("HTTP Error 403: Forbidden"), QString(), true);
+		ok(h.contains(QLatin1String("Export the cookies.txt again")), "a 403 with a file: re-export it");
+		ok(downloadErrorHint(QStringLiteral("No space left on device"), QStringLiteral("chrome"), false).isEmpty(),
+		   "an unrelated error gets no cookie advice");
 	}
 
 	std::printf("\n-- progress lines --\n");

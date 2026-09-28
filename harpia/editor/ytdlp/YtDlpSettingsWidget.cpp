@@ -56,12 +56,13 @@ YtDlpSettingsWidget::YtDlpSettingsWidget(QWidget *parent) : QWidget(parent)
 		cookiesBrowser_->addItem(b.found ? QStringLiteral("%1   (found on this computer)").arg(b.label) : b.label, b.id);
 	cookiesBrowser_->setToolTip(QStringLiteral(
 		"Use the cookies of a browser you are signed in with (--cookies-from-browser): needed "
-		"for age-restricted, members-only or private videos. Close the browser first on Windows."));
+		"for age-restricted, members-only or private videos. Chrome, Edge and Brave must be closed "
+		"(they lock their cookie file), and Chrome 127+ cannot be read at all: use a cookies.txt then."));
 	form->addRow(QStringLiteral("Cookies from browser"), cookiesBrowser_);
 
 	auto *ckRow = new QHBoxLayout;
 	cookiesFile_ = new QLineEdit(this);
-	cookiesFile_->setPlaceholderText(QStringLiteral("cookies.txt (used when no browser is chosen)"));
+	cookiesFile_->setPlaceholderText(QStringLiteral("cookies.txt exported with the \"Get cookies.txt LOCALLY\" extension (used when no browser is chosen)"));
 	ckRow->addWidget(cookiesFile_, 1);
 	auto *browseCk = new QPushButton(QStringLiteral("Browse…"), this);
 	connect(browseCk, &QPushButton::clicked, this, [this]() {

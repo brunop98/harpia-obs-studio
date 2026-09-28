@@ -51,6 +51,9 @@ private:
 	void refreshFolder();
 	void loadThumbnail(const QString &url);
 	void fillCookiesCombo();
+	// False when the download should not start (a running browser holds the
+	// cookies and the user chose to fix that first).
+	bool cookiesPreflight();
 
 	YtDlpSettings settings_;
 	YtVideoInfo info_;

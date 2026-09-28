@@ -297,6 +297,9 @@ target_sources(
     editor/shader/SpotlightGl.cpp
     editor/shader/SpotlightGl.hpp
     editor/shader/ShaderRenderer.cpp
+    editor/shader/GpuFx.hpp
+    editor/shader/GpuFxGl.cpp
+    editor/shader/GpuFxGl.hpp
     editor/shader/ShaderRenderer.hpp
     # "Full editing" multi-track NLE timeline.
     editor/timeline/TimelineModel.hpp

@@ -6,6 +6,7 @@
 #include "SlideMotion.hpp"
 
 #include "../timeline/EffectClip.hpp" // the effect table, and Effects::apply
+#include "../shader/GpuFx.hpp"
 #include "../timeline/Spotlight.hpp" // blurInPlace -- one blur in the program, not two
 #include "ComponentRegistry.hpp"
 
@@ -155,6 +156,15 @@ public:
 		if (px > 0)
 			Spotlight::blurInPlace(*io.frame, px);
 	}
+
+	bool hasGpu() const override { return true; }
+	bool evaluateGpu(const EvalContext &ctx, GpuFx &gpu) const override
+	{
+		const double amount = std::clamp(ctx.f("radius", 0.15), 0.0, 1.0);
+		const QSize s = gpu.size();
+		const int px = int(std::lround(amount * 0.08 * std::min(s.width(), s.height())));
+		return px <= 0 || gpu.blur(px);
+	}
 };
 
 // ---- Mask ----------------------------------------------------------------
@@ -237,6 +247,37 @@ public:
 			}
 		}
 	}
+
+	bool hasGpu() const override { return true; }
+	// The shape is still drawn by QPainter (one antialiased fill, cheap), so
+	// the edge is the CPU path's edge; the feathering blur and the alpha
+	// multiply -- the expensive part -- run on the GPU.
+	bool evaluateGpu(const EvalContext &ctx, GpuFx &gpu) const override
+	{
+		const QSize size = gpu.size();
+		SpotMask m;
+		m.shape = spotShapeFromInt(int(std::lround(ctx.f("shape", 1.0))));
+		SpotPose pose;
+		pose.cx = ctx.f("centreX", 0.5);
+		pose.cy = ctx.f("centreY", 0.5);
+		pose.w = std::max(0.0, ctx.f("width", 0.5));
+		pose.h = std::max(0.0, ctx.f("height", 0.5));
+		pose.rotation = ctx.f("rotation", 0.0);
+		pose.radius = std::clamp(ctx.f("corner", 0.15), 0.0, 0.5);
+		const bool invert = ctx.b("invert", false);
+		const double feather = std::clamp(ctx.f("feather", 0.02), 0.0, 1.0);
+		QImage cover(size, QImage::Format_RGBA8888);
+		cover.fill(Qt::black);
+		{
+			QPainter p(&cover);
+			p.setRenderHint(QPainter::Antialiasing, true);
+			p.setPen(Qt::NoPen);
+			p.setBrush(Qt::white);
+			p.drawPath(Spotlight::maskPath(m, pose, size));
+		}
+		const int soft = int(std::lround(feather * 0.25 * std::min(size.width(), size.height())));
+		return gpu.maskAlpha(cover, soft, invert);
+	}
 };
 
 // ---- Transform -----------------------------------------------------------
@@ -289,6 +330,19 @@ public:
 		// resolved into ctx.p, so letting FxSpec interpolate again would be a
 		// second animation system fighting the first.
 		Effects::apply(*io.frame, spec, 0);
+	}
+
+	bool hasGpu() const override { return true; }
+	bool evaluateGpu(const EvalContext &ctx, GpuFx &gpu) const override
+	{
+		QMap<QString, double> params;
+		for (const FxParamDef &d : fxParams(type_))
+			params.insert(QString::fromLatin1(d.key), ctx.f(d.key, d.def));
+		FxSpec spec;
+		spec.type = type_;
+		if (Effects::isNoOp(spec, params))
+			return true; // changes nothing, on either side
+		return gpu.fx(int(type_), params);
 	}
 
 private:

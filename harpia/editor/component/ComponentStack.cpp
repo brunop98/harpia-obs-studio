@@ -1,6 +1,7 @@
 #include "ComponentStack.hpp"
 
 #include "ComponentEnvelope.hpp"
+#include "../shader/GpuFx.hpp"
 
 #include <QImage>
 #include <QPainter>
@@ -46,9 +47,55 @@ bool ComponentStack::pixelStageIsPointOp() const
 
 void ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io) const
 {
+	// Pixel and Composite stages on the GPU: the frame is uploaded at the
+	// first component that can run there, stays there through every one after
+	// it that can, and comes back once -- before a component that cannot, and
+	// at the end. See shader/GpuFx.hpp.
+	GpuFx *gpu = nullptr;
+	if ((stage == Stage::Pixel || stage == Stage::Composite) && io.frame && !io.frame->isNull() &&
+	    qint64(io.frame->width()) * io.frame->height() >= kGpuFxMinPixels) {
+		for (const Entry &e : entries_)
+			if (e.stage == stage && e.inst->enabled && e.impl->hasGpu()) {
+				gpu = gpuFx();
+				break;
+			}
+		if (gpu && gpu->active())
+			gpu = nullptr; // someone further up is mid-session: stay on the CPU
+	}
+	bool onGpu = false;
+	const auto bringBack = [&]() {
+		if (!onGpu)
+			return;
+		onGpu = false;
+		const QImage out = gpu->end();
+		if (!out.isNull())
+			*io.frame = out;
+	};
+
 	for (const Entry &e : entries_) {
 		if (e.stage != stage || !e.inst->enabled)
 			continue;
+
+		if (gpu && e.impl->hasGpu()) {
+			const double wg = componentWeight(base.tMs, base.durMs, e.inst->inMs, e.inst->outMs);
+			if (envelopeIsEmpty(wg))
+				continue;
+			if (!onGpu)
+				onGpu = gpu->begin(*io.frame);
+			if (onGpu) {
+				EvalContext ctx = base;
+				ctx.p = resolveProps(*e.type, *e.inst, base.tMs);
+				const bool full = envelopeIsFull(wg);
+				if (!full)
+					gpu->saveInput();
+				if (e.impl->evaluateGpu(ctx, *gpu)) {
+					if (!full)
+						gpu->mixWithSaved(1.0 - wg); // the CPU path's cross-fade, below
+					continue;
+				}
+			}
+		}
+		bringBack(); // this one runs on the CPU, on the frame as it is now
 
 		// In / Out ramp. Zero on both (the default, and every project written
 		// before this) yields exactly 1 and takes none of the paths below --
@@ -107,6 +154,7 @@ void ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io) co
 
 		e.impl->evaluate(ctx, io); // Audio and anything with no frame yet
 	}
+	bringBack();
 }
 
 ClipState ComponentStack::evaluatePose(const EvalContext &base, const TlTransform &seed,

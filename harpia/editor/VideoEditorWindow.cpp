@@ -53,6 +53,7 @@
 #include <QRegularExpression>
 #include "../ui/MenuHints.hpp"
 #include "StillWeight.hpp"
+#include "shader/GpuFxGl.hpp"
 #include "subtitles/SubtitleDialog.hpp"
 #include "timeline/MotionPath.hpp"
 #include "ytdlp/UrlDownloadDialog.hpp"
@@ -201,6 +202,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	: QDialog(parent), inPath_(inPath), libraryFolders_(libraryFolders)
 {
 	++openCount_; // the recorder hides its region overlay while one is up
+	// Effects on the GPU from here on, for the preview and the exporter alike
+	// (each thread gets its own engine, or the CPU where GL is unusable).
+	installGpuFx();
 	setWindowTitle(inPath.isEmpty() ? QStringLiteral("Video Editor")
 					: QStringLiteral("Edit — %1").arg(QFileInfo(inPath).fileName()));
 	// A real window with minimize/maximize (QDialog hides them by default), so

@@ -1,4 +1,7 @@
 #include "EffectClip.hpp"
+#include "../shader/GpuFx.hpp"
+
+#include <functional>
 
 #include "editor/Parallel.hpp"
 
@@ -135,13 +138,9 @@ template <typename RowFn> void parallelRows(QImage &img, RowFn rowFn)
 	blockingFor(bands, [&](int b) { rowFn(base, bpl, h * b / bands, h * (b + 1) / bands); });
 }
 
-// `fn(channel, value)` is called 768 times, whatever the frame size.
-template <typename F> void channelLut(QImage &img, F fn)
+// Apply a per-channel table (fxChannelTable) to every pixel.
+void channelLut(QImage &img, const unsigned char lut[3][256])
 {
-	unsigned char lut[3][256];
-	for (int c = 0; c < 3; ++c)
-		for (int v = 0; v < 256; ++v)
-			lut[c][v] = clamp8(fn(c, float(v)));
 	if (img.format() != QImage::Format_RGBA8888)
 		img = img.convertToFormat(QImage::Format_RGBA8888);
 	const int w = img.width();
@@ -160,12 +159,8 @@ template <typename F> void channelLut(QImage &img, F fn)
 // The same idea for a 3x3 colour matrix, where an output channel mixes all
 // three inputs: nine tables of pre-multiplied contributions, summed as integers
 // in 16.16 so the pixel loop still never touches floating point.
-void colourMatrix(QImage &img, const float m[9])
+void colourMatrix(QImage &img, const int lut[9][256])
 {
-	int lut[9][256];
-	for (int i = 0; i < 9; ++i)
-		for (int v = 0; v < 256; ++v)
-			lut[i][v] = int(std::lround(double(m[i]) * v * 65536.0));
 	if (img.format() != QImage::Format_RGBA8888)
 		img = img.convertToFormat(QImage::Format_RGBA8888);
 	const int w = img.width();
@@ -239,8 +234,7 @@ inline void rotateHue(unsigned char *px, float deg6, const float *recip)
 // same at any render size — including a reduced-size preview.
 int radiusPx(double norm, const QImage &img)
 {
-	return int(std::lround(std::clamp(norm, 0.0, 1.0) * 0.08 *
-			       std::min(img.width(), img.height())));
+	return fxRadiusPx(norm, img.width(), img.height());
 }
 
 // Deterministic value noise: the same frame always gets the same grain, so two
@@ -318,8 +312,7 @@ void applyVignette(QImage &img, double amount, double size, double softness)
 
 void applyPixelate(QImage &img, double sizeNorm)
 {
-	const int block = std::max(2, int(std::lround(std::clamp(sizeNorm, 0.002, 0.5) *
-						      std::min(img.width(), img.height()))));
+	const int block = fxPixelateBlock(sizeNorm, img.width(), img.height());
 	if (img.format() != QImage::Format_RGBA8888)
 		img = img.convertToFormat(QImage::Format_RGBA8888);
 	const int w = img.width(), h = img.height();
@@ -365,7 +358,7 @@ void applySharpen(QImage &img, double amount)
 	if (img.format() != QImage::Format_RGBA8888)
 		img = img.convertToFormat(QImage::Format_RGBA8888);
 	QImage soft = img.copy();
-	Spotlight::blurInPlace(soft, std::max(1, radiusPx(0.06, img)));
+	Spotlight::blurInPlaceCpu(soft, std::max(1, radiusPx(0.06, img)));
 	const int w = img.width(), h = img.height();
 	// 8.8 fixed point: the difference is at most ±255, so amount*diff stays well
 	// inside an int and the whole loop avoids floating point entirely.
@@ -398,7 +391,7 @@ void applyGlow(QImage &img, double amount, double radius, double threshold)
 				px[x] = px[x + 1] = px[x + 2] = 0;
 		}
 	}
-	Spotlight::blurInPlace(bright, std::max(1, radiusPx(radius, img)));
+	Spotlight::blurInPlaceCpu(bright, std::max(1, radiusPx(radius, img)));
 	const int amt = int(std::lround(std::clamp(amount, 0.0, 4.0) * 256.0));
 	for (int y = 0; y < h; ++y) {
 		unsigned char *a = img.scanLine(y);
@@ -416,38 +409,111 @@ void applyChromatic(QImage &img, double amount)
 		img = img.convertToFormat(QImage::Format_RGBA8888);
 	const int w = img.width(), h = img.height();
 	// Red and blue are pushed apart radially from the centre, which is what a
-	// real lens does — a flat sideways offset reads as a mistake.
-	const double maxShift = amount * 0.012 * std::min(w, h);
-	if (maxShift < 0.5)
+	// real lens does — a flat sideways offset reads as a mistake. The tables
+	// (fxChromaticTables) say which pixel each output column and row reads.
+	const ChromaticTables t = fxChromaticTables(amount, w, h);
+	if (t.empty())
 		return;
 	const QImage src = img.copy();
-	const double cx = w / 2.0, cy = h / 2.0;
-	// The displacement is separable: the source column depends only on x and the
-	// source row only on y. Four small tables replace four roundings, two
-	// divisions and four clamps per pixel with four array reads.
-	std::vector<int> rxT(size_t(w), 0), bxT(size_t(w), 0), ryT(size_t(h), 0), byT(size_t(h), 0);
-	for (int x = 0; x < w; ++x) {
-		const double d = (x - cx) / cx * maxShift;
-		rxT[size_t(x)] = std::clamp(int(std::lround(x + d)), 0, w - 1) * 4;
-		bxT[size_t(x)] = std::clamp(int(std::lround(x - d)), 0, w - 1) * 4;
-	}
-	for (int y = 0; y < h; ++y) {
-		const double d = (y - cy) / cy * maxShift;
-		ryT[size_t(y)] = std::clamp(int(std::lround(y + d)), 0, h - 1);
-		byT[size_t(y)] = std::clamp(int(std::lround(y - d)), 0, h - 1);
-	}
 	for (int y = 0; y < h; ++y) {
 		unsigned char *dst = img.scanLine(y);
-		const unsigned char *rrow = src.constScanLine(ryT[size_t(y)]);
-		const unsigned char *brow = src.constScanLine(byT[size_t(y)]);
+		const unsigned char *rrow = src.constScanLine(t.ry[size_t(y)]);
+		const unsigned char *brow = src.constScanLine(t.by[size_t(y)]);
 		for (int x = 0; x < w; ++x) {
-			dst[x * 4 + 0] = rrow[rxT[size_t(x)] + 0];
-			dst[x * 4 + 2] = brow[bxT[size_t(x)] + 2];
+			dst[x * 4 + 0] = rrow[t.rx[size_t(x)] * 4 + 0];
+			dst[x * 4 + 2] = brow[t.bx[size_t(x)] * 4 + 2];
 		}
 	}
 }
 
 } // namespace
+
+int fxRadiusPx(double norm, int w, int h)
+{
+	return int(std::lround(std::clamp(norm, 0.0, 1.0) * 0.08 * std::min(w, h)));
+}
+
+int fxPixelateBlock(double sizeNorm, int w, int h)
+{
+	return std::max(2, int(std::lround(std::clamp(sizeNorm, 0.002, 0.5) * std::min(w, h))));
+}
+
+ChromaticTables fxChromaticTables(double amount, int w, int h)
+{
+	ChromaticTables t;
+	const double maxShift = amount * 0.012 * std::min(w, h);
+	if (maxShift < 0.5 || w <= 0 || h <= 0)
+		return t;
+	const double cx = w / 2.0, cy = h / 2.0;
+	// The displacement is separable: the source column depends only on x and the
+	// source row only on y. Four small tables replace four roundings, two
+	// divisions and four clamps per pixel with four array reads.
+	t.rx.assign(size_t(w), 0);
+	t.bx.assign(size_t(w), 0);
+	t.ry.assign(size_t(h), 0);
+	t.by.assign(size_t(h), 0);
+	for (int x = 0; x < w; ++x) {
+		const double d = (x - cx) / cx * maxShift;
+		t.rx[size_t(x)] = std::clamp(int(std::lround(x + d)), 0, w - 1);
+		t.bx[size_t(x)] = std::clamp(int(std::lround(x - d)), 0, w - 1);
+	}
+	for (int y = 0; y < h; ++y) {
+		const double d = (y - cy) / cy * maxShift;
+		t.ry[size_t(y)] = std::clamp(int(std::lround(y + d)), 0, h - 1);
+		t.by[size_t(y)] = std::clamp(int(std::lround(y - d)), 0, h - 1);
+	}
+	return t;
+}
+
+bool fxChannelTable(FxType t, const QMap<QString, double> &p, unsigned char lut[3][256])
+{
+	auto v = [&](const char *k, double d = 0.0) { return p.value(QString::fromLatin1(k), d); };
+	std::function<float(int, float)> fn;
+	switch (t) {
+	case FxType::Brightness: {
+		const float add = float(v("amount") * 255.0);
+		fn = [add](int, float x) { return x + add; };
+		break;
+	}
+	case FxType::Contrast: {
+		// Pivot on mid grey so raising contrast doesn't also brighten.
+		const float k = float(1.0 + v("amount"));
+		fn = [k](int, float x) { return 128.0f + (x - 128.0f) * k; };
+		break;
+	}
+	case FxType::Exposure: {
+		const float k = float(std::pow(2.0, v("stops")));
+		fn = [k](int, float x) { return x * k; };
+		break;
+	}
+	case FxType::ColorBalance: {
+		const float d0 = float(v("r") * 255.0), d1 = float(v("g") * 255.0), d2 = float(v("b") * 255.0);
+		fn = [d0, d1, d2](int c, float x) { return x + (c == 0 ? d0 : c == 1 ? d1 : d2); };
+		break;
+	}
+	default:
+		return false;
+	}
+	for (int c = 0; c < 3; ++c)
+		for (int x = 0; x < 256; ++x)
+			lut[c][x] = clamp8(fn(c, float(x)));
+	return true;
+}
+
+bool fxMatrixTables(FxType t, const QMap<QString, double> &p, int lut[9][256])
+{
+	if (t != FxType::Saturation)
+		return false;
+	// Pulling every channel towards or away from the luma is linear in all
+	// three inputs, so saturation is exactly a colour matrix.
+	const float k = float(1.0 + p.value(QStringLiteral("amount"), 0.0));
+	const float lr = 0.2126f * (1.0f - k), lg = 0.7152f * (1.0f - k), lb = 0.0722f * (1.0f - k);
+	const float m[9] = {lr + k, lg, lb, lr, lg + k, lb, lr, lg, lb + k};
+	for (int i = 0; i < 9; ++i)
+		for (int x = 0; x < 256; ++x)
+			lut[i][x] = int(std::lround(double(m[i]) * x * 65536.0));
+	return true;
+}
 
 const char *fxTypeName(FxType t)
 {
@@ -582,38 +648,48 @@ void Effects::apply(QImage &img, const FxSpec &fx, qint64 tMs)
 {
 	if (img.isNull())
 		return;
+	// On the GPU when there is one to spare (shader/GpuFx.hpp): same answer.
+	if (fx.type != FxType::InverseSelection) {
+		if (GpuFx *g = gpuFxIdleFor(img)) {
+			const QMap<QString, double> p = fx.paramsAt(tMs);
+			if (isNoOp(fx, p))
+				return;
+			if (g->begin(img)) {
+				const bool done = g->fx(int(fx.type), p);
+				QImage out = g->end();
+				if (done && !out.isNull()) {
+					img = out;
+					return;
+				}
+			}
+		}
+	}
+	applyCpu(img, fx, tMs);
+}
+
+void Effects::applyCpu(QImage &img, const FxSpec &fx, qint64 tMs)
+{
+	if (img.isNull())
+		return;
 	const QMap<QString, double> p = fx.paramsAt(tMs);
 	if (isNoOp(fx, p))
 		return; // an effect that would change nothing costs nothing
 	auto v = [&](const char *k, double d = 0.0) { return p.value(QString::fromLatin1(k), d); };
 
 	switch (fx.type) {
-	case FxType::Brightness: {
-		const float add = float(v("amount") * 255.0);
-		channelLut(img, [add](int, float x) { return x + add; });
-		break;
-	}
-	case FxType::Contrast: {
-		// Pivot on mid grey so raising contrast doesn't also brighten.
-		const float k = float(1.0 + v("amount"));
-		channelLut(img, [k](int, float x) { return 128.0f + (x - 128.0f) * k; });
+	case FxType::Brightness:
+	case FxType::Contrast:
+	case FxType::Exposure:
+	case FxType::ColorBalance: {
+		unsigned char lut[3][256];
+		fxChannelTable(fx.type, p, lut);
+		channelLut(img, lut);
 		break;
 	}
 	case FxType::Saturation: {
-		// Pulling every channel towards or away from the luma is linear in all
-		// three inputs, so saturation is exactly a colour matrix.
-		const float k = float(1.0 + v("amount"));
-		const float lr = 0.2126f * (1.0f - k), lg = 0.7152f * (1.0f - k),
-			    lb = 0.0722f * (1.0f - k);
-		const float m[9] = {lr + k, lg,     lb,
-				    lr,     lg + k, lb,
-				    lr,     lg,     lb + k};
-		colourMatrix(img, m);
-		break;
-	}
-	case FxType::Exposure: {
-		const float k = float(std::pow(2.0, v("stops")));
-		channelLut(img, [k](int, float x) { return x * k; });
+		static thread_local int mlut[9][256];
+		fxMatrixTables(fx.type, p, mlut);
+		colourMatrix(img, mlut);
 		break;
 	}
 	case FxType::HueShift: {
@@ -634,18 +710,12 @@ void Effects::apply(QImage &img, const FxSpec &fx, qint64 tMs)
 		}
 		break;
 	}
-	case FxType::ColorBalance: {
-		const float d[3] = {float(v("r") * 255.0), float(v("g") * 255.0),
-				    float(v("b") * 255.0)};
-		channelLut(img, [&d](int c, float x) { return x + d[c]; });
-		break;
-	}
 	case FxType::Blur:
 	case FxType::GaussianBlur:
 		// The box blur is run three times, which IS a Gaussian approximation, so
 		// the two differ only in how hard they hit: "Blur" is the cheap single
 		// radius, "Gaussian" uses a wider one for a softer falloff.
-		Spotlight::blurInPlace(img, std::max(1, radiusPx(v("radius") *
+		Spotlight::blurInPlaceCpu(img, std::max(1, radiusPx(v("radius") *
 								(fx.type == FxType::GaussianBlur ? 1.6
 												 : 1.0),
 							  img)));

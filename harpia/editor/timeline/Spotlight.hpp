@@ -209,6 +209,8 @@ public:
 	// Separable box blur, run three times to approximate a Gaussian. Exposed for
 	// testing; `radius` is in pixels.
 	static void blurInPlace(QImage &img, int radius);
+	// The CPU passes only (blurInPlace tries the GPU first).
+	static void blurInPlaceCpu(QImage &img, int radius);
 
 	// Built-in starting points.
 	static QVector<SpotMask> presets(); // one per name below

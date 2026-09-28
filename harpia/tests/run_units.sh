@@ -264,6 +264,19 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/previewcache_test" "$QJSLIB/libqjs.a" $LF
 
+# Effects on the GPU give the CPU's answer: every effect both ways, compared.
+# Needs a GL 3.3 context, so it runs under Xvfb when that is installed.
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -DHARPIA_SRC="\"$H\"" -I"$H" -I"$QJS" -I"$ROOT" $CF \
+	"$HERE/gpufx_test.cpp" "$H/editor/shader/GpuFxGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/component/ScriptComponent.cpp" "$H/editor/component/ShaderComponent.cpp" \
+	"$H/editor/shader/ShaderRenderer.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
+	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
+	-o "$WORK/gpufx_test" "$QJSLIB/libqjs.a" $LF
+
 # Effects as components: every FxType registered, rendering pixel-for-pixel
 # what the old path did, and an unmigrated project opening with its grade.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -792,6 +805,11 @@ QT_QPA_PLATFORM=offscreen "$WORK/searchpicker_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/componentrender_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/stillweight_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewcache_test" || rc=1
+if command -v xvfb-run >/dev/null 2>&1; then
+	QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 640x480x24" "$WORK/gpufx_test" || rc=1
+else
+	QT_QPA_PLATFORM=offscreen "$WORK/gpufx_test" || rc=1
+fi
 QT_QPA_PLATFORM=offscreen "$WORK/effectcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/assetcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectarea_test" || rc=1

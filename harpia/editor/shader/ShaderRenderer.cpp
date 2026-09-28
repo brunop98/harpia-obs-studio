@@ -1,5 +1,6 @@
 #include "ShaderRenderer.hpp"
 
+#include <QCoreApplication>
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
 #include <QOpenGLFramebufferObject>
@@ -76,6 +77,17 @@ void ShaderRenderer::release()
 	// thread_local renderer on the main thread is destroyed after Qt has begun
 	// packing up. Two null thread pointers would compare EQUAL and send us
 	// straight into makeCurrent, which is the branch this exists to avoid.
+	// After the application object is gone (a thread_local destroyed at
+	// process exit) Qt's GL and window machinery is already torn down, and
+	// touching the context crashes inside Qt. Let the process take it.
+	if (!QCoreApplication::instance()) {
+		passes_.clear();
+		fbo_[0] = fbo_[1] = nullptr;
+		ctx_ = nullptr;
+		surface_ = nullptr;
+		glReady_ = false;
+		return;
+	}
 	QThread *cur = QThread::currentThread();
 	const bool sameThread = ctx_ && cur && ctx_->thread() == cur;
 	if (ctx_ && surface_ && sameThread && ctx_->makeCurrent(surface_)) {

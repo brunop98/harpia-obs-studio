@@ -221,10 +221,25 @@ struct ClipState {
 
 // The behaviour itself. Stateless: everything it needs arrives in EvalContext,
 // which is what lets one instance serve every thread and every frame.
+class GpuFx; // shader/GpuFx.hpp
+
 class IComponent {
 public:
 	virtual ~IComponent() = default;
 	virtual void evaluate(const EvalContext &ctx, ClipState &io) const = 0;
+	// The same thing on the frame while it sits on the GPU (Pixel stage). True
+	// when done there; false leaves the frame untouched and ComponentStack
+	// brings it back and runs evaluate() instead. The default -- every
+	// component that has no GPU form -- is false.
+	virtual bool evaluateGpu(const EvalContext &ctx, GpuFx &gpu) const
+	{
+		Q_UNUSED(ctx);
+		Q_UNUSED(gpu);
+		return false;
+	}
+	// Cheap check, so a stack does not upload a frame for a component that
+	// will not use the GPU anyway.
+	virtual bool hasGpu() const { return false; }
 };
 
 // A button a component puts in its own box in the Inspector.

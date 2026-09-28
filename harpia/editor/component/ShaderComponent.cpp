@@ -1,6 +1,7 @@
 #include "ShaderComponent.hpp"
 
 #include "../shader/ShaderEffect.hpp"
+#include "../shader/GpuFx.hpp"
 #include "../shader/ShaderRenderer.hpp"
 #include "Component.hpp"
 #include "ComponentRegistry.hpp"
@@ -124,6 +125,21 @@ public:
 			*io.frame = outImg;
 	}
 
+	// In the GPU effect engine's session, so a shader next to a blur or a
+	// grade shares its upload and read-back instead of doing its own.
+	bool hasGpu() const override { return true; }
+	bool evaluateGpu(const EvalContext &ctx, GpuFx &gpu) const override
+	{
+		const auto it = g_sources.constFind(id_);
+		if (it == g_sources.constEnd())
+			return true; // no such shader: the CPU path would leave the frame alone too
+		QMap<QString, double> params;
+		for (const ShaderParam &p : it->defs)
+			params.insert(p.uniform, ctx.f(p.uniform.toLatin1().constData(), p.def));
+		return gpu.shader(id_, it->generation, it->wrapped, it->defs, params, float(ctx.tSec()),
+				  int(ctx.tSec() * ctx.fps));
+	}
+
 private:
 	QString id_;
 };
@@ -138,6 +154,7 @@ bool ShaderComponents::available()
 void ShaderComponents::releaseThreadResources()
 {
 	ThreadRenderers::get().release();
+	releaseGpuFxThread(); // the effect engine's context on this thread, too
 }
 
 int ShaderComponents::generation()

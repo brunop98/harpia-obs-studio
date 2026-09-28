@@ -1,4 +1,5 @@
 #include "Spotlight.hpp"
+#include "../shader/GpuFx.hpp"
 
 #include "../Parallel.hpp"
 
@@ -48,6 +49,24 @@ QPainterPath Spotlight::maskPath(const SpotMask &m, const SpotPose &pose, QSize 
 }
 
 void Spotlight::blurInPlace(QImage &img, int radius)
+{
+	if (radius < 1 || img.isNull())
+		return;
+	// On the GPU when there is one to spare (shader/GpuFx.hpp): same answer.
+	if (GpuFx *g = gpuFxIdleFor(img)) {
+		if (g->begin(img)) {
+			const bool done = g->blur(radius);
+			QImage out = g->end();
+			if (done && !out.isNull()) {
+				img = out;
+				return;
+			}
+		}
+	}
+	blurInPlaceCpu(img, radius);
+}
+
+void Spotlight::blurInPlaceCpu(QImage &img, int radius)
 {
 	if (radius < 1 || img.isNull())
 		return;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 // Effect clips: a clip on an Effect track that grades everything composited
 // BELOW it, for exactly as long as the clip lasts.
 //
@@ -176,6 +178,27 @@ struct FxSpec {
 	}
 };
 
+// The exact numbers an effect works from, shared by the CPU passes and the GPU
+// ones (shader/GpuFx) so the two cannot drift apart.
+//
+// The per-channel table of a point effect (Brightness, Contrast, Exposure,
+// Colour balance): out = lut[channel][in]. False for any other type.
+bool fxChannelTable(FxType t, const QMap<QString, double> &p, unsigned char lut[3][256]);
+// Saturation's 3x3 colour matrix as nine 16.16 tables. False for any other type.
+bool fxMatrixTables(FxType t, const QMap<QString, double> &p, int lut[9][256]);
+// A 0..1 radius parameter in pixels on a w x h frame (0.08 of the shorter side
+// at 1), so an effect looks the same at every render size.
+int fxRadiusPx(double norm, int w, int h);
+// Chromatic aberration's source columns/rows: for red and blue, the pixel each
+// output column (x) and row (y) reads. Empty when the shift is under half a pixel.
+struct ChromaticTables {
+	std::vector<int> rx, bx, ry, by;
+	bool empty() const { return rx.empty(); }
+};
+ChromaticTables fxChromaticTables(double amount, int w, int h);
+// Pixelate's block edge in pixels on a w x h frame.
+int fxPixelateBlock(double sizeNorm, int w, int h);
+
 class Effects {
 public:
 	// Force the number of row bands the pixel passes use, for tests. 0 restores
@@ -193,6 +216,9 @@ public:
 	// parameters and the Spotlight's masks alike, is keyed against it, and so
 	// moving a clip carries its animation along.
 	static void apply(QImage &img, const FxSpec &fx, qint64 tMs);
+	// The CPU passes only -- what apply() falls back to, and the reference the
+	// GPU engine is tested against.
+	static void applyCpu(QImage &img, const FxSpec &fx, qint64 tMs);
 
 	// True when this effect at these parameters would not change a single pixel
 	// — the compositor skips it rather than paying for a no-op pass.

@@ -207,6 +207,43 @@ int main(int argc, char **argv)
 	   "help() prints the property list");
 	ok(EditConsole::refName(model(), 1, 1) == QStringLiteral("V1[2]"), "refName gives the slot, not the vector index");
 
+	std::printf("\n-- autocomplete --\n");
+	{
+		const TimelineModel m = model();
+		QString part;
+		QStringList c = EditConsole::completions(QStringLiteral("clip."), m, &part);
+		ok(c.contains(QStringLiteral("position")) && c.contains(QStringLiteral("scale")) &&
+			   c.contains(QStringLiteral("opacity")) && part.isEmpty(),
+		   "clip. offers the clip's properties");
+		c = EditConsole::completions(QStringLiteral("clip.po"), m, &part);
+		ok(c == QStringList{QStringLiteral("position")} && part == QStringLiteral("po"), "clip.po narrows to position, partial po");
+		c = EditConsole::completions(QStringLiteral("clip.s"), m, &part);
+		ok(c.contains(QStringLiteral("scale")) && c.contains(QStringLiteral("speed")) && c.contains(QStringLiteral("start")) &&
+			   !c.contains(QStringLiteral("opacity")),
+		   "clip.s: scale, speed, start");
+		c = EditConsole::completions(QStringLiteral("tracks."), m, &part);
+		ok(c == (QStringList{QStringLiteral("V2"), QStringLiteral("V1"), QStringLiteral("A1")}),
+		   "tracks. offers the lanes this timeline has");
+		c = EditConsole::completions(QStringLiteral("tracks.V1[0]."), m, &part);
+		ok(c.contains(QStringLiteral("position")), "a clip reached through a lane has clip properties");
+		c = EditConsole::completions(QStringLiteral("selection."), m, &part);
+		ok(c.contains(QStringLiteral("forEach(")) && c.contains(QStringLiteral("length")), "selection. is an array");
+		c = EditConsole::completions(QStringLiteral("c"), m, &part);
+		ok(c.contains(QStringLiteral("clip")) && c.contains(QStringLiteral("clips")) && c.contains(QStringLiteral("canvas")) &&
+			   !c.contains(QStringLiteral("tracks")) && part == QStringLiteral("c"),
+		   "a bare c: the globals starting with c");
+		c = EditConsole::completions(QString(), m, &part);
+		ok(c.contains(QStringLiteral("help()")) && c.contains(QStringLiteral("clip")), "an empty line offers the globals");
+		c = EditConsole::completions(QStringLiteral("clip.position = [500, 3"), m, &part);
+		ok(c.isEmpty(), "nothing after a number");
+		c = EditConsole::completions(QStringLiteral("run(\"intro"), m, &part);
+		ok(c.isEmpty(), "nothing inside a string");
+		c = EditConsole::completions(QStringLiteral("clip.position = cl"), m, &part);
+		ok(c.contains(QStringLiteral("clip")) && part == QStringLiteral("cl"), "and the globals again after =");
+		c = EditConsole::completions(QStringLiteral("clip.position"), m, &part);
+		ok(c.isEmpty(), "a name typed in full has nothing to add");
+	}
+
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
 }

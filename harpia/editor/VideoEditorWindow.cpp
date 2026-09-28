@@ -614,14 +614,57 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			QMenu menu(this);
 			QAction *zoom = menu.addAction(QStringLiteral("Zoom here"));
 			const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
-			zoom->setEnabled(sel != nullptr);
 			zoom->setToolTip(QStringLiteral(
 				"Push in to this point at the playhead and back out again. It is written "
 				"as ordinary keyframes, so you can drag, retime or delete it afterwards."));
-			if (!sel)
-				zoom->setText(QStringLiteral("Zoom here  (select a clip first)"));
-			if (menu.exec(globalPos) == zoom && sel)
+			const QString needClip = QStringLiteral(
+				"Select a clip first: click one on the timeline (or on the picture), then "
+				"right-click here.");
+			disableBecause(zoom, sel != nullptr, needClip);
+			// Aligning the selected clip's rect to the canvas. The pose is
+			// written the way a drag writes it (a key at the playhead on a
+			// keyed clip, the base pose otherwise), so it undoes as one step.
+			menu.addSeparator();
+			QMenu *align = menu.addMenu(QStringLiteral("Align"));
+			struct Entry {
+				int how;
+				const char *text;
+			};
+			static const Entry entries[] = {
+				{0, "Centre on canvas"},
+				{1, "Centre horizontally"},
+				{2, "Centre vertically"},
+				{-1, nullptr},
+				{3, "Align left edge"},
+				{4, "Align right edge"},
+				{5, "Align top edge"},
+				{6, "Align bottom edge"},
+				{-1, nullptr},
+				{7, "Fit inside canvas"},
+				{8, "Fill canvas"},
+				{-1, nullptr},
+				{9, "Reset position"},
+				{10, "Reset scale"},
+				{11, "Reset rotation"},
+				{12, "Reset all"},
+			};
+			QHash<QAction *, int> alignHow;
+			for (const Entry &en : entries) {
+				if (!en.text) {
+					align->addSeparator();
+					continue;
+				}
+				QAction *a = align->addAction(QString::fromUtf8(en.text));
+				disableBecause(a, sel != nullptr, needClip);
+				alignHow.insert(a, en.how);
+			}
+			explainDisabled(&menu);
+			explainDisabled(align);
+			QAction *chosen = menu.exec(globalPos);
+			if (chosen == zoom && sel)
 				addZoomAtPreviewPoint(xn, yn);
+			else if (chosen && alignHow.contains(chosen) && sel)
+				alignSelectedClip(alignHow.value(chosen));
 		});
 
 	// Direct manipulation of the selected clip straight in the preview.
@@ -881,6 +924,27 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			pasteImageAct_->setEnabled(systemClipboardHasMedia());
 	});
 	pasteImageAct_->setEnabled(systemClipboardHasMedia());
+	addMenu->addSeparator();
+	// Empty lanes, for laying out a project before there is anything to
+	// put on it. A new picture lane goes at the top of the picture group, a
+	// new audio lane at the top of the audio group, like the lane menu's
+	// "Add track above" does.
+	QAction *newVideoTrack = addMenu->addAction(QStringLiteral("New video track"));
+	newVideoTrack->setToolTip(QStringLiteral("An empty picture lane at the top of the timeline."));
+	connect(newVideoTrack, &QAction::triggered, this, [this]() {
+		if (!fullEdit())
+			setEditMode(EditMode::Full);
+		if (timelineView_)
+			timelineView_->addTrack(TlTrack::Kind::Video);
+	});
+	QAction *newAudioTrack = addMenu->addAction(QStringLiteral("New audio track"));
+	newAudioTrack->setToolTip(QStringLiteral("An empty audio lane, above the other audio lanes."));
+	connect(newAudioTrack, &QAction::triggered, this, [this]() {
+		if (!fullEdit())
+			setEditMode(EditMode::Full);
+		if (timelineView_)
+			timelineView_->addTrack(TlTrack::Kind::Audio);
+	});
 	addMenu->addSeparator();
 	addFxClipAct_ = addMenu->addAction(QStringLiteral("Effect clip"));
 	addFxClipAct_->setToolTip(
@@ -6214,6 +6278,58 @@ void VideoEditorWindow::syncPreviewTransformTarget()
 	canvas_->setMaskEdit(me);
 }
 
+// Snap the selected clip's rect to the canvas. `how` is the Align menu's
+// row: 0 centre, 1/2 centre on one axis, 3-6 an edge, 7 fit, 8 fill, 9-12
+// resets. Everything is worked out from where the rect IS at the playhead
+// (clipRectOnCanvas), so it holds for a scaled or keyed clip too.
+void VideoEditorWindow::alignSelectedClip(int how)
+{
+	if (!timelineView_)
+		return;
+	const TlClip *sel = timelineView_->selectedClipPtr();
+	if (!sel)
+		return;
+	if (playing_)
+		stopPlayback();
+	const QSize canvas = timelineCanvasSize();
+	if (canvas.width() <= 0 || canvas.height() <= 0)
+		return;
+	const QSize natural = clipNaturalSize(*sel);
+	TlTransform tf = sel->transformAt(timelinePlayheadMs());
+	const double cw = canvas.width(), ch = canvas.height();
+	auto rectFor = [&](const TlTransform &t) {
+		return TimelineCompositor::clipRectOnCanvas(t, canvas, natural);
+	};
+	switch (how) {
+	case 0: tf.posX = 0.5; tf.posY = 0.5; break;
+	case 1: tf.posX = 0.5; break;
+	case 2: tf.posY = 0.5; break;
+	case 3: tf.posX = (rectFor(tf).width() / 2.0) / cw; break;
+	case 4: tf.posX = (cw - rectFor(tf).width() / 2.0) / cw; break;
+	case 5: tf.posY = (rectFor(tf).height() / 2.0) / ch; break;
+	case 6: tf.posY = (ch - rectFor(tf).height() / 2.0) / ch; break;
+	case 7: // scale 1 IS "fits inside the canvas" (clipRectOnCanvas fits the
+		// source by its longer side); centred so the fit is visible.
+		tf.scale = 1.0; tf.posX = 0.5; tf.posY = 0.5; tf.rotation = 0.0; break;
+	case 8: { // the shorter side reaches the canvas: no bars, edges cropped
+		if (natural.width() > 0 && natural.height() > 0) {
+			const double fit = std::min(cw / natural.width(), ch / natural.height());
+			const double fill = std::max(cw / natural.width(), ch / natural.height());
+			tf.scale = std::clamp(fill / fit, 0.05, 20.0);
+		}
+		tf.posX = 0.5; tf.posY = 0.5; tf.rotation = 0.0;
+		break;
+	}
+	case 9: tf.posX = 0.5; tf.posY = 0.5; break;
+	case 10: tf.scale = 1.0; break;
+	case 11: tf.rotation = 0.0; break;
+	case 12: tf.posX = 0.5; tf.posY = 0.5; tf.scale = 1.0; tf.rotation = 0.0; break;
+	default: return;
+	}
+	applySelectedClipTransform(tf);
+	commitSnapshot(); // a menu pick is a finished action, not a drag in progress
+}
+
 void VideoEditorWindow::applySelectedClipTransform(const TlTransform &tf)
 {
 	if (!timelineView_)
@@ -6498,6 +6614,35 @@ bool VideoEditorWindow::eventFilter(QObject *watched, QEvent *e)
 	// extra behaviour, and the window already filters events for its panels.
 	if (consoleIn_ && watched == consoleIn_ && e->type() == QEvent::KeyPress) {
 		auto *ke = static_cast<QKeyEvent *>(e);
+		// With the completion list open it owns Up/Down/Tab/Enter/Esc, like
+		// any IDE: the arrows pick, Tab or Enter take the pick, Esc closes.
+		if (consolePopup_ && consolePopup_->isVisible()) {
+			const int n = consolePopup_->count();
+			if (ke->key() == Qt::Key_Up || ke->key() == Qt::Key_Down) {
+				int row = consolePopup_->currentRow();
+				row += (ke->key() == Qt::Key_Up) ? -1 : 1;
+				if (row < 0)
+					row = n - 1;
+				if (row >= n)
+					row = 0;
+				consolePopup_->setCurrentRow(row);
+				return true;
+			}
+			if (ke->key() == Qt::Key_Tab || ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) {
+				acceptConsoleCompletion();
+				return true;
+			}
+			if (ke->key() == Qt::Key_Escape) {
+				hideConsoleCompletions();
+				return true;
+			}
+		} else if (ke->key() == Qt::Key_Tab) {
+			// Tab with the list closed opens it (or takes the only pick).
+			refreshConsoleCompletions();
+			if (consolePopup_ && consolePopup_->isVisible() && consolePopup_->count() == 1)
+				acceptConsoleCompletion();
+			return true;
+		}
 		if (ke->key() == Qt::Key_Up || ke->key() == Qt::Key_Down) {
 			if (consoleHistory_.isEmpty())
 				return true;
@@ -6515,13 +6660,70 @@ bool VideoEditorWindow::eventFilter(QObject *watched, QEvent *e)
 				consoleIn_->setText(consoleHistory_[idx]);
 			}
 			consoleIn_->end(false);
+			hideConsoleCompletions(); // a recalled line is not being typed
 			return true;
 		}
 	}
+	if (consoleIn_ && watched == consoleIn_ && e->type() == QEvent::FocusOut)
+		hideConsoleCompletions();
 	return QDialog::eventFilter(watched, e);
 }
 
 // ---- The editing console -----------------------------------------------------
+
+void VideoEditorWindow::refreshConsoleCompletions()
+{
+	if (!consoleIn_ || !consolePopup_ || !timelineView_)
+		return;
+	const QString before = consoleIn_->text().left(consoleIn_->cursorPosition());
+	const QStringList items = EditConsole::completions(before, timelineView_->model(), &consolePartial_);
+	if (items.isEmpty()) {
+		hideConsoleCompletions();
+		return;
+	}
+	consolePopup_->clear();
+	consolePopup_->addItems(items);
+	consolePopup_->setCurrentRow(0);
+	const int rowH = std::max(18, consolePopup_->sizeHintForRow(0));
+	const int rows = std::min(8, int(items.size()));
+	const int w = std::clamp(consoleIn_->width() / 2, 180, 360);
+	consolePopup_->resize(w, rows * rowH + 4);
+	// Under the caret, roughly: the line's left edge plus the width of what
+	// is typed before the partial, so the list sits where the eye is.
+	const QFontMetrics fm(consoleIn_->font());
+	const int x = std::min(consoleIn_->width() - w,
+			       fm.horizontalAdvance(before.left(before.size() - consolePartial_.size())) + 4);
+	consolePopup_->move(consoleIn_->mapToGlobal(QPoint(std::max(0, x), consoleIn_->height() + 2)));
+	if (!consolePopup_->isVisible())
+		consolePopup_->show();
+}
+
+void VideoEditorWindow::acceptConsoleCompletion()
+{
+	if (!consoleIn_ || !consolePopup_ || !consolePopup_->isVisible())
+		return;
+	QListWidgetItem *it = consolePopup_->currentItem();
+	if (!it) {
+		hideConsoleCompletions();
+		return;
+	}
+	const QString pick = it->text();
+	const int cur = consoleIn_->cursorPosition();
+	QString text = consoleIn_->text();
+	const int from = cur - consolePartial_.size();
+	text.replace(from, consolePartial_.size(), pick);
+	consoleIn_->setText(text);
+	consoleIn_->setCursorPosition(from + pick.size());
+	hideConsoleCompletions();
+	// Picking an object ("clip", "tracks") is usually the start of a path:
+	// offer its members straight away after a typed dot.
+}
+
+void VideoEditorWindow::hideConsoleCompletions()
+{
+	if (consolePopup_ && consolePopup_->isVisible())
+		consolePopup_->hide();
+}
 
 QString VideoEditorWindow::consoleTemplatesDir() const
 {
@@ -6547,7 +6749,12 @@ void VideoEditorWindow::consolePrint(const QString &text, ConsoleTone tone)
 	// came back, and a red line from a green one. appendHtml so the colour is
 	// per line; the text itself is escaped, never interpreted.
 	auto esc = [](const QString &t) {
-		return t.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>"));
+		QString h = t.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>"));
+		// HTML folds runs of spaces to one, which un-aligns the help table's
+		// columns. Every space in a run stays a space.
+		while (h.contains(QLatin1String("  ")))
+			h.replace(QLatin1String("  "), QLatin1String("&nbsp;&nbsp;"));
+		return h;
 	};
 	auto span = [&esc](const char *color, const QString &t) {
 		return QStringLiteral("<span style=\"color:%1;\">%2</span>").arg(QLatin1String(color), esc(t));
@@ -6647,7 +6854,32 @@ void VideoEditorWindow::openConsole()
 		connect(consoleIn_, &QLineEdit::returnPressed, this, [this]() {
 			const QString line = consoleIn_->text();
 			consoleIn_->clear();
+			hideConsoleCompletions();
 			runConsoleLine(line);
+		});
+		// The completion list: a frameless list floating under the line,
+		// never focused (the line keeps the keyboard; see eventFilter).
+		consolePopup_ = new QListWidget(p);
+		consolePopup_->setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus);
+		consolePopup_->setFocusPolicy(Qt::NoFocus);
+		consolePopup_->setAttribute(Qt::WA_ShowWithoutActivating);
+		consolePopup_->setFont(mono);
+		consolePopup_->setStyleSheet(QStringLiteral(
+			"QListWidget{background:#1d2026;color:#e8eaed;border:1px solid #3a3f48;}"
+			"QListWidget::item{padding:2px 8px;}"
+			"QListWidget::item:selected{background:#2f6fd6;color:#ffffff;}"));
+		consolePopup_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+		consolePopup_->hide();
+		connect(consolePopup_, &QListWidget::itemClicked, this, [this](QListWidgetItem *) {
+			acceptConsoleCompletion();
+			consoleIn_->setFocus();
+		});
+		connect(consoleIn_, &QLineEdit::textEdited, this, [this](const QString &) {
+			refreshConsoleCompletions();
+		});
+		connect(consoleIn_, &QLineEdit::cursorPositionChanged, this, [this](int, int) {
+			if (consolePopup_ && consolePopup_->isVisible())
+				refreshConsoleCompletions();
 		});
 		row->addWidget(consoleIn_, 1);
 		lay->addLayout(row);

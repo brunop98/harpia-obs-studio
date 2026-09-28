@@ -52,8 +52,8 @@ YtDlpSettingsWidget::YtDlpSettingsWidget(QWidget *parent) : QWidget(parent)
 
 	cookiesBrowser_ = new QComboBox(this);
 	cookiesBrowser_->addItem(QStringLiteral("None"), QString());
-	for (const QString &b : YtDlpSettings::cookieBrowsers())
-		cookiesBrowser_->addItem(b, b);
+	for (const YtBrowser &b : detectBrowsers())
+		cookiesBrowser_->addItem(b.found ? QStringLiteral("%1   (found on this computer)").arg(b.label) : b.label, b.id);
 	cookiesBrowser_->setToolTip(QStringLiteral(
 		"Use the cookies of a browser you are signed in with (--cookies-from-browser): needed "
 		"for age-restricted, members-only or private videos. Close the browser first on Windows."));

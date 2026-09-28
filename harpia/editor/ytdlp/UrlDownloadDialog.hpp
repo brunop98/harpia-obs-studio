@@ -50,6 +50,7 @@ private:
 	void openSettings();
 	void refreshFolder();
 	void loadThumbnail(const QString &url);
+	void fillCookiesCombo();
 
 	YtDlpSettings settings_;
 	YtVideoInfo info_;
@@ -70,6 +71,7 @@ private:
 	QWidget *optionsBox_ = nullptr;
 	QComboBox *quality_ = nullptr;
 	QCheckBox *audio_ = nullptr;
+	QComboBox *cookies_ = nullptr; // the browser whose cookies go with the request
 	QComboBox *subtitles_ = nullptr;
 	QLabel *folder_ = nullptr;
 	QProgressBar *progress_ = nullptr;

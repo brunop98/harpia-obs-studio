@@ -68,6 +68,110 @@ QStringList YtDlpSettings::cookieBrowsers()
 		QStringLiteral("vivaldi"), QStringLiteral("safari")};
 }
 
+QString browserLabel(const QString &id)
+{
+	if (id == QLatin1String("chrome"))
+		return QStringLiteral("Google Chrome");
+	if (id == QLatin1String("firefox"))
+		return QStringLiteral("Firefox");
+	if (id == QLatin1String("edge"))
+		return QStringLiteral("Microsoft Edge");
+	if (id == QLatin1String("brave"))
+		return QStringLiteral("Brave");
+	if (id == QLatin1String("chromium"))
+		return QStringLiteral("Chromium");
+	if (id == QLatin1String("opera"))
+		return QStringLiteral("Opera");
+	if (id == QLatin1String("vivaldi"))
+		return QStringLiteral("Vivaldi");
+	if (id == QLatin1String("safari"))
+		return QStringLiteral("Safari");
+	return id;
+}
+
+QStringList browserProfileDirs(const QString &id, const QString &os, const QString &home,
+			       const QString &localAppData, const QString &roamingAppData)
+{
+	QStringList d;
+	const bool win = os == QLatin1String("windows");
+	const bool mac = os == QLatin1String("macos");
+	const QString macApp = home + QStringLiteral("/Library/Application Support");
+	auto chromium = [&](const QString &winSub, const QString &macSub, const QString &linuxSub) {
+		if (win)
+			d << localAppData + QLatin1Char('/') + winSub + QStringLiteral("/User Data");
+		else if (mac)
+			d << macApp + QLatin1Char('/') + macSub;
+		else
+			d << home + QStringLiteral("/.config/") + linuxSub
+			  << home + QStringLiteral("/snap/") + linuxSub.section(QLatin1Char('/'), 0, 0) +
+				     QStringLiteral("/current/.config/") + linuxSub
+			  << home + QStringLiteral("/.var/app/") + linuxSub; // flatpak, loosely
+	};
+	if (id == QLatin1String("chrome"))
+		chromium(QStringLiteral("Google/Chrome"), QStringLiteral("Google/Chrome"), QStringLiteral("google-chrome"));
+	else if (id == QLatin1String("edge"))
+		chromium(QStringLiteral("Microsoft/Edge"), QStringLiteral("Microsoft Edge"), QStringLiteral("microsoft-edge"));
+	else if (id == QLatin1String("brave"))
+		chromium(QStringLiteral("BraveSoftware/Brave-Browser"), QStringLiteral("BraveSoftware/Brave-Browser"),
+			 QStringLiteral("BraveSoftware/Brave-Browser"));
+	else if (id == QLatin1String("chromium"))
+		chromium(QStringLiteral("Chromium"), QStringLiteral("Chromium"), QStringLiteral("chromium"));
+	else if (id == QLatin1String("vivaldi"))
+		chromium(QStringLiteral("Vivaldi"), QStringLiteral("Vivaldi"), QStringLiteral("vivaldi"));
+	else if (id == QLatin1String("opera")) {
+		if (win)
+			d << roamingAppData + QStringLiteral("/Opera Software/Opera Stable")
+			  << roamingAppData + QStringLiteral("/Opera Software/Opera GX Stable");
+		else if (mac)
+			d << macApp + QStringLiteral("/com.operasoftware.Opera");
+		else
+			d << home + QStringLiteral("/.config/opera");
+	} else if (id == QLatin1String("firefox")) {
+		if (win)
+			d << roamingAppData + QStringLiteral("/Mozilla/Firefox/Profiles");
+		else if (mac)
+			d << macApp + QStringLiteral("/Firefox/Profiles");
+		else
+			d << home + QStringLiteral("/.mozilla/firefox")
+			  << home + QStringLiteral("/snap/firefox/common/.mozilla/firefox");
+	} else if (id == QLatin1String("safari")) {
+		if (mac)
+			d << home + QStringLiteral("/Library/Cookies") << home + QStringLiteral("/Library/Containers/com.apple.Safari");
+	}
+	return d;
+}
+
+QVector<YtBrowser> detectBrowsers()
+{
+#if defined(_WIN32)
+	const QString os = QStringLiteral("windows");
+#elif defined(__APPLE__)
+	const QString os = QStringLiteral("macos");
+#else
+	const QString os = QStringLiteral("linux");
+#endif
+	const QString home = QDir::homePath();
+	const QString local = qEnvironmentVariable("LOCALAPPDATA");
+	const QString roaming = qEnvironmentVariable("APPDATA");
+	QVector<YtBrowser> out;
+	for (const QString &id : YtDlpSettings::cookieBrowsers()) {
+		YtBrowser b;
+		b.id = id;
+		b.label = browserLabel(id);
+		for (const QString &dir : browserProfileDirs(id, os, home, local, roaming))
+			if (!dir.isEmpty() && QDir(dir).exists()) {
+				b.found = true;
+				break;
+			}
+		out.append(b);
+	}
+	// The ones on this machine first, so the pick is the first row or two.
+	std::stable_sort(out.begin(), out.end(), [](const YtBrowser &a, const YtBrowser &b) {
+		return a.found && !b.found;
+	});
+	return out;
+}
+
 QString YtDlpSettings::defaultDownloadDir()
 {
 	const QString movies = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
@@ -172,6 +276,10 @@ QString YtDlp::formatSelector(const YtDownloadOptions &o)
 	// The "/" alternatives are fallbacks, so a site with only combined files
 	// still downloads. With audio off, only video streams are wanted at all.
 	const QString h = o.maxHeight > 0 ? QStringLiteral("[height<=%1]").arg(o.maxHeight) : QString();
+	// Audio only: the best audio stream, an .m4a when the site has one (it
+	// plays everywhere); a combined file as the last resort.
+	if (o.audioOnly)
+		return QStringLiteral("ba[ext=m4a]/ba/b");
 	if (o.includeAudio)
 		return QStringLiteral("bv*%1+ba/b%1/bv*+ba/b").arg(h);
 	return QStringLiteral("bv*%1/bv*/b%1").arg(h);
@@ -183,7 +291,7 @@ QStringList YtDlp::downloadArgs(const QString &url, const YtDlpSettings &s, cons
 	a << QStringLiteral("--no-playlist") << QStringLiteral("--no-warnings") << QStringLiteral("--newline")
 	  << QStringLiteral("--progress");
 	a << QStringLiteral("-f") << formatSelector(o);
-	if (s.preferMp4)
+	if (s.preferMp4 && !o.audioOnly) // nothing to merge into a video container
 		a << QStringLiteral("--merge-output-format") << QStringLiteral("mp4");
 	const QString dir = o.outDir.isEmpty() ? YtDlpSettings::defaultDownloadDir() : o.outDir;
 	a << QStringLiteral("-o") << QDir(dir).filePath(QStringLiteral("%(title).80s [%(id)s].%(ext)s"));

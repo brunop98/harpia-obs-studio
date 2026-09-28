@@ -121,12 +121,32 @@ void UrlDownloadDialog::buildUi()
 	of->setHorizontalSpacing(10);
 	of->setVerticalSpacing(6);
 	quality_ = new QComboBox(optionsBox_);
-	quality_->setToolTip(QStringLiteral("The qualities this video is actually offered in."));
+	quality_->setToolTip(QStringLiteral("The qualities this video is actually offered in, or the sound alone."));
 	of->addRow(QStringLiteral("Quality"), quality_);
 	audio_ = new QCheckBox(QStringLiteral("Include audio"), optionsBox_);
 	audio_->setChecked(true);
 	audio_->setToolTip(QStringLiteral("Off downloads the picture only: a silent clip, smaller and faster."));
 	of->addRow(QString(), audio_);
+	// "Audio only" is a quality row (data -1); the audio checkbox means
+	// nothing then, so it steps aside.
+	connect(quality_, &QComboBox::currentIndexChanged, this, [this](int) {
+		audio_->setEnabled(quality_->currentData().toInt() >= 0);
+	});
+	// The login knob, right here: a 403 from the site means "sign in", and
+	// the fix is the cookies of a browser you are signed in with. The
+	// browsers found on this machine are listed first.
+	cookies_ = new QComboBox(optionsBox_);
+	cookies_->setToolTip(QStringLiteral(
+		"Send the cookies of a browser you are signed in with (yt-dlp --cookies-from-browser). "
+		"Needed when the site answers 403 Forbidden, or for age-restricted, members-only or "
+		"private videos. On Windows, close Chrome/Edge/Brave first: they lock their cookie file "
+		"while running."));
+	fillCookiesCombo();
+	connect(cookies_, &QComboBox::currentIndexChanged, this, [this](int) {
+		settings_.cookiesBrowser = cookies_->currentData().toString();
+		settings_.save();
+	});
+	of->addRow(QStringLiteral("Cookies"), cookies_);
 	subtitles_ = new QComboBox(optionsBox_);
 	subtitles_->setToolTip(QStringLiteral(
 		"Also download this subtitle track as an .srt beside the video. (Placing it on the "
@@ -301,6 +321,7 @@ void UrlDownloadDialog::showInfo(const YtVideoInfo &v)
 		const QString size = bytesText(q.sizeBytes);
 		quality_->addItem(size.isEmpty() ? q.label : QStringLiteral("%1   (%2 video)").arg(q.label, size), q.height);
 	}
+	quality_->addItem(QStringLiteral("Audio only   (no picture)"), -1);
 	// Default to the best height at or under 1080: 4K into a 1080p project
 	// is a slower download for nothing you would see.
 	for (int i = 0; i < quality_->count(); ++i)
@@ -349,8 +370,9 @@ void UrlDownloadDialog::startDownload()
 		return;
 	}
 	YtDownloadOptions o;
-	o.maxHeight = quality_->currentData().toInt();
-	o.includeAudio = audio_->isChecked();
+	o.audioOnly = quality_->currentData().toInt() < 0;
+	o.maxHeight = o.audioOnly ? 0 : quality_->currentData().toInt();
+	o.includeAudio = o.audioOnly || audio_->isChecked();
 	o.subtitleLang = subtitles_->currentData().toString();
 	o.outDir = settings_.downloadDir.isEmpty() ? YtDlpSettings::defaultDownloadDir() : settings_.downloadDir;
 	QDir().mkpath(o.outDir);
@@ -417,9 +439,25 @@ void UrlDownloadDialog::finishDownload(int exitCode)
 		setStage(Stage::Ready);
 		if (exitCode == -1 || exitCode == 9 || exitCode == 137)
 			status_->setText(QStringLiteral("Stopped."));
-		else
-			status_->setText(QStringLiteral("Download failed: %1").arg(
-				lastError_.isEmpty() ? QStringLiteral("yt-dlp exited with code %1").arg(exitCode) : lastError_));
+		else {
+			QString msg = QStringLiteral("Download failed: %1").arg(
+				lastError_.isEmpty() ? QStringLiteral("yt-dlp exited with code %1").arg(exitCode) : lastError_);
+			// A 403, or a "sign in" of any wording, is the site asking for a
+			// login. Say what fixes it, right where the failure is read.
+			if (lastError_.contains(QLatin1String("403")) ||
+			    lastError_.contains(QLatin1String("Sign in"), Qt::CaseInsensitive) ||
+			    lastError_.contains(QLatin1String("login"), Qt::CaseInsensitive) ||
+			    lastError_.contains(QLatin1String("cookies"), Qt::CaseInsensitive)) {
+				msg += settings_.cookiesBrowser.isEmpty()
+					       ? QStringLiteral("\nThe site wants a login. Pick the browser you are signed "
+								"in with under Cookies and try again.")
+					       : QStringLiteral("\nThe site still wants a login. Make sure you are signed in "
+								"in %1, close it (Windows locks its cookies while it runs), "
+								"and try again. yt-dlp itself may also need updating.")
+							 .arg(browserLabel(settings_.cookiesBrowser));
+			}
+			status_->setText(msg);
+		}
 		return;
 	}
 	progress_->setValue(1000);
@@ -434,6 +472,20 @@ void UrlDownloadDialog::openSettings()
 	d.exec();
 	settings_ = YtDlpSettings::load();
 	refreshFolder();
+	fillCookiesCombo();
+}
+
+void UrlDownloadDialog::fillCookiesCombo()
+{
+	QSignalBlocker block(cookies_);
+	cookies_->clear();
+	cookies_->addItem(QStringLiteral("None"), QString());
+	for (const YtBrowser &b : detectBrowsers())
+		cookies_->addItem(b.found ? QStringLiteral("%1   (found)").arg(b.label) : b.label, b.id);
+	if (!settings_.cookiesFile.isEmpty())
+		cookies_->addItem(QStringLiteral("cookies.txt (Settings\u2026)"), QString());
+	const int i = cookies_->findData(settings_.cookiesBrowser);
+	cookies_->setCurrentIndex(i < 0 ? 0 : i);
 }
 
 } // namespace harpia

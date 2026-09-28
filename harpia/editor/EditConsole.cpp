@@ -2,6 +2,7 @@
 
 #include <QElapsedTimer>
 #include <QHash>
+#include <QRegularExpression>
 #include <QStringList>
 
 #include <algorithm>
@@ -411,5 +412,97 @@ EditConsole::Result EditConsole::run(const QString &source, const Input &in)
 }
 
 #endif // HARPIA_HAVE_QJS
+
+QStringList EditConsole::completions(const QString &lineBeforeCursor, const TimelineModel &m, QString *partial)
+{
+	if (partial)
+		partial->clear();
+	// Inside a string literal nothing is a name.
+	int quotes = 0;
+	for (const QChar ch : lineBeforeCursor)
+		if (ch == QLatin1Char('"') || ch == QLatin1Char('\''))
+			++quotes;
+	if (quotes % 2)
+		return {};
+
+	// The dotted path being typed: "clip.po" -> path "clip", partial "po";
+	// "tracks.V1[0].sc" -> path "tracks.V1[0]", partial "sc"; "cl" -> no
+	// path, partial "cl".
+	static const QRegularExpression rx(
+		QStringLiteral("([A-Za-z_$][\\w$]*(?:\\[[^\\]]*\\])*(?:\\.[A-Za-z_$][\\w$]*(?:\\[[^\\]]*\\])*)*)?(\\.)?([A-Za-z_$][\\w$]*)?$"));
+	const QRegularExpressionMatch mt = rx.match(lineBeforeCursor);
+	QString path, part;
+	bool dot = false;
+	if (mt.hasMatch()) {
+		if (mt.captured(2) == QLatin1String("."))
+			dot = true;
+		if (dot) {
+			path = mt.captured(1);
+			part = mt.captured(3);
+		} else {
+			// "clip.po" without a trailing dot: the regex put "clip" in (1)
+			// only when a dot followed; otherwise the whole word is the
+			// partial.
+			part = mt.captured(1).isEmpty() ? mt.captured(3) : mt.captured(1);
+			if (part.contains(QLatin1Char('.')) || part.contains(QLatin1Char('['))) {
+				// "clip.po": split at the last dot.
+				const int i = part.lastIndexOf(QLatin1Char('.'));
+				if (i < 0)
+					return {};
+				path = part.left(i);
+				part = part.mid(i + 1);
+				dot = true;
+			}
+		}
+	}
+	if (!dot && part.isEmpty() && !lineBeforeCursor.isEmpty() &&
+	    !lineBeforeCursor.trimmed().isEmpty() &&
+	    !QStringLiteral("(,;=+-*/ ").contains(lineBeforeCursor.back()))
+		return {}; // after a number or a bracket: nothing to name
+
+	QStringList all;
+	auto isClipPath = [](const QString &p) {
+		// clip, selection[i], clips[i], tracks.V1[i]
+		if (p == QLatin1String("clip"))
+			return true;
+		if (p.endsWith(QLatin1Char(']')) &&
+		    (p.startsWith(QLatin1String("selection[")) || p.startsWith(QLatin1String("clips[")) ||
+		     p.startsWith(QLatin1String("tracks."))))
+			return true;
+		return false;
+	};
+	if (!dot) {
+		all << QStringLiteral("clip") << QStringLiteral("selection") << QStringLiteral("clips")
+		    << QStringLiteral("tracks") << QStringLiteral("canvas") << QStringLiteral("playhead")
+		    << QStringLiteral("print(") << QStringLiteral("run(\"") << QStringLiteral("help()");
+	} else if (isClipPath(path)) {
+		all << QStringLiteral("position") << QStringLiteral("x") << QStringLiteral("y")
+		    << QStringLiteral("scale") << QStringLiteral("opacity") << QStringLiteral("name")
+		    << QStringLiteral("track") << QStringLiteral("index") << QStringLiteral("start")
+		    << QStringLiteral("duration") << QStringLiteral("end") << QStringLiteral("speed")
+		    << QStringLiteral("type") << QStringLiteral("ref");
+	} else if (path == QLatin1String("tracks")) {
+		for (const TlTrack &t : m.tracks)
+			if (!t.name.isEmpty())
+				all << t.name;
+	} else if (path == QLatin1String("canvas")) {
+		all << QStringLiteral("w") << QStringLiteral("h");
+	} else if (path == QLatin1String("selection") || path == QLatin1String("clips") ||
+		   (path.startsWith(QLatin1String("tracks.")) && !path.endsWith(QLatin1Char(']')))) {
+		all << QStringLiteral("length") << QStringLiteral("forEach(") << QStringLiteral("filter(")
+		    << QStringLiteral("map(") << QStringLiteral("find(");
+	} else if (path == QLatin1String("position")) {
+		return {};
+	}
+	QStringList out;
+	for (const QString &c : all)
+		if (part.isEmpty() || c.startsWith(part, Qt::CaseInsensitive))
+			out << c;
+	if (out.size() == 1 && out.first() == part)
+		out.clear(); // already typed in full: nothing to add
+	if (partial)
+		*partial = part;
+	return out;
+}
 
 } // namespace harpia

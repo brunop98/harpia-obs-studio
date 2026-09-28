@@ -715,6 +715,16 @@ private:
 	QStringList consoleHistory_;
 	int consoleHistIdx_ = -1; // -1 = past the newest entry (typing fresh)
 	QString consoleDraft_;    // what was being typed before walking the history
+	// Autocomplete: a list under the line, filled from EditConsole::completions
+	// as you type. Up/Down pick, Tab or Enter take the pick, Esc dismisses.
+	QListWidget *consolePopup_ = nullptr;
+	QString consolePartial_;  // the piece a chosen entry replaces
+	void refreshConsoleCompletions();
+	void acceptConsoleCompletion();
+	void hideConsoleCompletions();
+	// The preview's right-click menu: align the selected clip's rect to the
+	// canvas (centre, edges, fit, fill, reset).
+	void alignSelectedClip(int how);
 	void openConsole();
 	void runConsoleLine(const QString &line);
 	// The console's line colours: what you typed, what came back, why it

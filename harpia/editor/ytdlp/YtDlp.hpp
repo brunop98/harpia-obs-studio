@@ -37,6 +37,24 @@ struct YtDlpSettings {
 	static QString defaultDownloadDir();
 };
 
+// A browser yt-dlp can take cookies from, and whether this machine seems to
+// have it (its profile folder exists). The scan is a look at the disk, not a
+// run of yt-dlp: a browser's cookies can only be read when its profile is
+// there, and the profile folders are well known.
+struct YtBrowser {
+	QString id;    // what --cookies-from-browser takes: "chrome", "firefox"...
+	QString label; // "Google Chrome"
+	bool found = false;
+};
+
+// Where a browser keeps its profile on `os` ("windows", "macos", "linux"),
+// given the user's folders. Pure, for the test; detectBrowsers() fills the
+// folders in from the environment.
+QStringList browserProfileDirs(const QString &id, const QString &os, const QString &home,
+			       const QString &localAppData, const QString &roamingAppData);
+QString browserLabel(const QString &id);
+QVector<YtBrowser> detectBrowsers();
+
 // One quality on offer, one row of the dropdown.
 struct YtQuality {
 	QString label;    // "1080p60", "720p", "Best available"
@@ -66,6 +84,7 @@ struct YtVideoInfo {
 struct YtDownloadOptions {
 	int maxHeight = 0;         // 0 = best
 	bool includeAudio = true;
+	bool audioOnly = false;    // the sound only, no picture (an .m4a when offered)
 	QString subtitleLang;      // "" = none
 	QString outDir;
 	QString printPathTo;       // a file yt-dlp writes the final path into

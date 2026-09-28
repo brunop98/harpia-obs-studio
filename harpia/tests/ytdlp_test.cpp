@@ -147,6 +147,48 @@ int main(int argc, char **argv)
 		s.preferMp4 = false;
 		ok(!YtDlp::downloadArgs(QStringLiteral("https://x/y"), s, o).contains(QStringLiteral("--merge-output-format")),
 		   "no merge format when mp4 is not preferred");
+
+		// Audio only: the sound alone, an m4a when offered, and nothing is
+		// merged into an mp4 -- there is no picture to merge with.
+		s.preferMp4 = true;
+		YtDownloadOptions ao;
+		ao.audioOnly = true;
+		ao.maxHeight = 720; // ignored: there is no height to a sound
+		eqs(YtDlp::formatSelector(ao), "ba[ext=m4a]/ba/b", "audio only picks the best audio stream");
+		const QStringList f = YtDlp::downloadArgs(QStringLiteral("https://x/y"), s, ao);
+		ok(!f.contains(QStringLiteral("--merge-output-format")), "and asks for no mp4 merge");
+	}
+
+	std::printf("\n-- the browsers cookies can come from --\n");
+	{
+		// Every browser yt-dlp accepts has somewhere to look on each OS it
+		// runs on (Safari only on a Mac), and the folders are the real ones.
+		const QString home = QStringLiteral("C:/Users/me");
+		const QString local = QStringLiteral("C:/Users/me/AppData/Local");
+		const QString roam = QStringLiteral("C:/Users/me/AppData/Roaming");
+		for (const QString &id : YtDlpSettings::cookieBrowsers()) {
+			const bool mac = id == QLatin1String("safari");
+			const QStringList w = browserProfileDirs(id, QStringLiteral("windows"), home, local, roam);
+			const QStringList l = browserProfileDirs(id, QStringLiteral("linux"), QStringLiteral("/home/me"), QString(), QString());
+			const QStringList m = browserProfileDirs(id, QStringLiteral("macos"), QStringLiteral("/Users/me"), QString(), QString());
+			ok(mac ? (w.isEmpty() && l.isEmpty() && !m.isEmpty()) : (!w.isEmpty() && !l.isEmpty() && !m.isEmpty()),
+			   qPrintable(QStringLiteral("%1 has profile folders where it runs").arg(id)));
+			ok(!browserLabel(id).isEmpty() && browserLabel(id) != id, qPrintable(QStringLiteral("%1 has a display name").arg(id)));
+		}
+		eqs(browserProfileDirs(QStringLiteral("chrome"), QStringLiteral("windows"), home, local, roam).first(),
+		    "C:/Users/me/AppData/Local/Google/Chrome/User Data", "Chrome on Windows: Local AppData");
+		eqs(browserProfileDirs(QStringLiteral("firefox"), QStringLiteral("windows"), home, local, roam).first(),
+		    "C:/Users/me/AppData/Roaming/Mozilla/Firefox/Profiles", "Firefox on Windows: Roaming AppData");
+		ok(browserProfileDirs(QStringLiteral("nosuch"), QStringLiteral("windows"), home, local, roam).isEmpty(),
+		   "an unknown browser has nowhere to look");
+		// The scan itself: one row per browser, the found ones first.
+		const QVector<YtBrowser> found = detectBrowsers();
+		ok(found.size() == YtDlpSettings::cookieBrowsers().size(), "the scan lists every browser once");
+		bool sorted = true;
+		for (int i = 1; i < found.size(); ++i)
+			if (found[i].found && !found[i - 1].found)
+				sorted = false;
+		ok(sorted, "with the ones on this computer first");
 	}
 
 	std::printf("\n-- progress lines --\n");

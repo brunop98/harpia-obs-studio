@@ -75,6 +75,15 @@ public:
 
 	// The property list, for help() and the panel.
 	static QString helpText();
+
+	// Autocomplete. `lineBeforeCursor` is what has been typed up to the
+	// caret; the result is what could come next, in the order to show it,
+	// and *partial is the piece already typed that a chosen entry replaces
+	// ("po" in "clip.po"). Lane names come from the model, so "tracks."
+	// offers the lanes this timeline actually has. Empty when there is
+	// nothing sensible to offer (inside a string, after a number, ...).
+	static QStringList completions(const QString &lineBeforeCursor, const TimelineModel &m,
+				       QString *partial = nullptr);
 };
 
 } // namespace harpia

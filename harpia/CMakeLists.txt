@@ -174,6 +174,7 @@ target_sources(
 	ui/UrlDragList.hpp
 	ui/InfoHint.hpp
 	ui/MenuHints.hpp
+	ui/EditorLog.hpp
 	ui/UiIcons.hpp
 	ui/UiText.cpp
 	ui/UiText.hpp

@@ -97,7 +97,15 @@ QRect PreviewCanvas::frameRect() const
 	if (frame_.isNull() || d.isEmpty())
 		return d;
 	const QRect r = fitRectInCanvas(frame_.size(), d.size());
-	return r.isEmpty() ? d : r.translated(d.topLeft());
+	if (r.isEmpty())
+		return d;
+	// Same shape, rounded apart: a frame rendered at the canvas shape can
+	// still come out a pixel narrower once both are whole pixels (484x272 is
+	// not exactly 16:9). That is not a different shape, and a 1 px bar down
+	// one side is noise, so it fills the canvas.
+	if (std::abs(r.width() - d.width()) <= 2 && std::abs(r.height() - d.height()) <= 2)
+		return d;
+	return r.translated(d.topLeft());
 }
 
 QRect PreviewCanvas::videoToWidget(const QRect &r) const

@@ -15,7 +15,7 @@ namespace harpia {
 // Runtime-tweakable minimum size of the video preview canvas (shared by both
 // editor modes), edited live from the Developer Panel.
 struct PreviewLayoutParams {
-	int minW = 480;
+	int minW = 484;
 	int minH = 270;
 };
 
@@ -245,12 +245,12 @@ private:
 // Runtime-tweakable layout parameters for the trim Timeline (edited live from
 // the editor's Developer Panel to find the best UI configuration).
 struct TimelineLayoutParams {
-	int pad = 12;      // left/right margin
-	int barTop = 14;   // bar y
-	int barH = 36;     // bar height (tall enough for the filmstrip)
-	int handleW = 8;   // handle grab width
+	int pad = 10;      // left/right margin
+	int barTop = 6;    // bar y
+	int barH = 48;     // bar height (tall enough for the filmstrip)
+	int handleW = 7;   // handle grab width
 	int tileGap = 2;   // gap between filmstrip tiles
-	int fontPx = 12;   // Start/End time-label font size
+	int fontPx = 11;   // Start/End time-label font size
 	double maxZoom = 32.0;
 };
 

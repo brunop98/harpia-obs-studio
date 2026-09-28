@@ -34,7 +34,7 @@ struct EditorColors {
 	QColor audioClipSel{0x37, 0x74, 0x63};
 	QColor textClip{0x4a, 0x3a, 0x5e};
 	QColor textClipSel{0x6b, 0x51, 0x8c};
-	QColor waveform{0x6f, 0xd0, 0xb0};
+	QColor waveform{0x05, 0x20, 0xd0};
 	// Effect clips: amber, and never tinted by the track, so an adjustment
 	// layer can't be mistaken for footage.
 	QColor effectClip{0x7a, 0x5c, 0x1e};

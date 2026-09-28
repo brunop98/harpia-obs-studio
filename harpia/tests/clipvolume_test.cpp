@@ -168,12 +168,12 @@ int main(int argc, char **argv)
 		// timeline that ignores every drag would report.
 		//
 		// Below the line's grab range, but ABOVE the lane's bottom edge: the
-		// last 7 px of a lane are the drop band that means "make a new lane
+		// last dropBandPx of a lane are the drop band that means "make a new lane
 		// here", and a press in it would move the clip onto a fresh lane rather
 		// than along this one. (It did, once: the emptied lane used to be
 		// tidied away, so the indices happened to line up. Now a lane you were
 		// given stays when emptied, and the control has to mean what it says.)
-		const QPoint body(r.center().x(), r.bottom() - 9);
+		const QPoint body(r.center().x(), r.bottom() - (TimelineViewParams().dropBandPx + 2));
 		press(&v, body);
 		moveTo(&v, body + QPoint(80, 0), Qt::ShiftModifier);
 		release(&v, body + QPoint(80, 0));

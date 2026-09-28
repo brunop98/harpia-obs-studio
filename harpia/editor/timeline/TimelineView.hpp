@@ -25,25 +25,25 @@ namespace harpia {
 
 // Runtime-tweakable geometry for the multi-track timeline (Dev-panel tunable).
 struct TimelineViewParams {
-	int gutterW = 124;    // left column: track headers (name + lock/hide/mute)
-	int rulerH = 18;      // top time ruler
-	int videoLaneH = 48;  // per video-track height
-	int audioLaneH = 44;  // per audio-track height
+	int gutterW = 99;     // left column: track headers (name + lock/hide/mute)
+	int rulerH = 30;      // top time ruler
+	int videoLaneH = 55;  // per video-track height
+	int audioLaneH = 50;  // per audio-track height
 	int effectLaneH = 30; // effect tracks are thinner: they carry no picture
-	int laneGap = 3;
-	int margin = 6;
-	int minClipW = 6;     // don't let a clip shrink below this on screen
+	int laneGap = 5;
+	int margin = 0;
+	int minClipW = 9;     // don't let a clip shrink below this on screen
 	// Breathing room drawn INSIDE each clip's time span, per side. Two clips
 	// that touch therefore show 2*clipGap of lane between them, and their
 	// rounded corners face each other across it -- the "valley" that makes a
 	// boundary visible at all. Purely cosmetic: hit testing uses the full span,
 	// so the gap is not a dead strip you can click into.
-	int clipGap = 1;
-	int clipRadius = 5;   // corner radius; the valley is only as deep as this
+	int clipGap = 3;
+	int clipRadius = 0;   // corner radius; the valley is only as deep as this
 	int splitSeamW = 1;   // the line drawn in the gap where a clip was split
 	int snapPx = 8;       // snap threshold in pixels
 	int segFontPx = 10;
-	int dropBandPx = 7;   // edge band that means "make a new track here"
+	int dropBandPx = 14;  // edge band that means "make a new track here"
 	double maxZoom = 64.0;
 	int tagDot = 7;       // the coloured tag dots on a clip, diameter
 	int tagDotGap = 3;    // ...and the space between them

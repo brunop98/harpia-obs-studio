@@ -40,17 +40,17 @@ struct CutSegment {
 // Runtime-tweakable layout parameters for the multi-cut track editor (edited
 // live from the editor's Developer Panel to find the best UI configuration).
 struct TrackLayoutParams {
-	int margin = 8;
-	int captionH = 16;
-	int srcH = 34; // source-track height (tall enough for the filmstrip)
-	int trackGap = 8;
-	int outH = 40;       // output-track height
-	int segGap = 4;      // gap between output segments
-	int minSegW = 48;    // "reasonably wide" — easy to click and drag
-	int hardMinSegW = 24; // absolute floor when many segments compete
+	int margin = 0;
+	int captionH = 22;
+	int srcH = 60; // source-track height (tall enough for the filmstrip)
+	int trackGap = 10;
+	int outH = 70;       // output-track height
+	int segGap = 3;      // gap between output segments
+	int minSegW = 30;    // "reasonably wide" — easy to click and drag
+	int hardMinSegW = 30; // absolute floor when many segments compete
 	int tileGap = 2;     // gap between filmstrip tiles
-	int captionFontPx = 11; // track captions
-	int segFontPx = 10;     // per-segment labels
+	int captionFontPx = 10; // track captions
+	int segFontPx = 8;      // per-segment labels
 	double maxZoom = 32.0;
 };
 

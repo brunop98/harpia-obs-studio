@@ -24,12 +24,11 @@ namespace harpia {
 // any timeline layout struct. The editor reads these at startup and follows
 // chromeChanged() live from the Developer Panel.
 struct EditorChromeParams {
-	int buttonH = 28;         // toolbar/transport button height
-	// Derived from the app's base font rather than fixed, so these follow the
-	// global text scale; the Dev panel still overrides them per-install.
-	int timecodeFontPx = uiTimecodePx(); // the big monospace playhead timecode
-	int inspectorFontPx = uiReadoutPx(); // the inspector's value readouts
-	int speedSliderMinW = 96; // speed slider minimum width (drives the toolbar's
+	int buttonH = 30;         // toolbar/transport button height
+	// Fixed sizes, chosen in the Dev panel; it still overrides them per install.
+	int timecodeFontPx = 16;  // the big monospace playhead timecode
+	int inspectorFontPx = 10; // the inspector's value readouts
+	int speedSliderMinW = 80; // speed slider minimum width (drives the toolbar's
 				  // own minimum, so it caps how narrow the window can get)
 	int speedSpinW = 72;       // editable speed-value box width
 	// How much Up / Down (Multi-Cut, with cuts selected) changes a cut's speed
@@ -44,13 +43,13 @@ struct EditorChromeParams {
 // Sizing for the right-hand Inspector panel. Like the chrome params, the editor
 // reads these at startup and follows inspectorChanged() live.
 struct EditorInspectorParams {
-	int minWidth = 250;    // narrowest the splitter will let it get
-	int openWidth = 320;   // width it opens at from the toolbar button
-	int margin = 10;       // content margin, left/right
-	int spacing = 6;       // gap between sections
-	int labelSpacing = 10; // form layouts: label -> control
-	int rowSpacing = 4;    // form layouts: row -> row
-	int scriptListH = 112; // height of the transform-script stack list
+	int minWidth = 221;    // narrowest the splitter will let it get
+	int openWidth = 326;   // width it opens at from the toolbar button
+	int margin = 4;        // content margin, left/right
+	int spacing = 10;      // gap between sections
+	int labelSpacing = 30; // form layouts: label -> control
+	int rowSpacing = 5;    // form layouts: row -> row
+	int scriptListH = 119; // height of the transform-script stack list
 };
 
 // Sizes inside the editor's panels that used to be written into the code:

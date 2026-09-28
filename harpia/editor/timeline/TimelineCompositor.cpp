@@ -672,6 +672,23 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 				    !frame.isNull())
 					natural = drawn->crop.intersected(QRect(QPoint(0, 0), frame.size()))
 							  .size();
+				// A picture's size as the preview decodes it -- the source fitted
+				// down into the render canvas -- whatever size the frame really
+				// is. The export decodes zoomed/cropped clips and stills larger
+				// than that to keep their detail, and a script must not compute
+				// a different answer because of it.
+				if (c.type != TlClip::Type::Text && !frame.isNull() && !natural.isEmpty()) {
+					QSize full = fp.sourceSize(c.sourceId);
+					if (full.isEmpty())
+						full = frame.size();
+					const double fit = std::min(
+						1.0, std::min(double(canvas.width()) / std::max(1, full.width()),
+							      double(canvas.height()) / std::max(1, full.height())));
+					const double kf = double(full.width()) * fit / std::max(1, frame.width());
+					if (kf < 0.995) // not a one-pixel rounding of the same size
+						natural = QSize(std::max(1, int(natural.width() * kf)),
+								std::max(1, int(natural.height() * kf)));
+				}
 				const double k =
 					double(logicalCanvas.width()) / std::max(1, canvas.width());
 				sctx.clipW = int(std::lround(natural.width() * k));

@@ -1,6 +1,7 @@
 #!/bin/bash
 # Build and run the checks that need real media: A/V sync, all four export
-# paths, the preview decoder, the editing proxies and Multi-Cut playback.
+# paths (and the colour, placement and detail of their pixels), the preview
+# decoder, the editing proxies and Multi-Cut playback.
 #
 #   harpia/tests/run_avsync.sh [workdir]
 #
@@ -64,6 +65,7 @@ build() { # source-file output-name
 }
 build "$HERE/avsync_test.cpp" avsync_test
 build "$HERE/exportpaths_test.cpp" exportpaths_test
+build "$HERE/exportcolor_test.cpp" exportcolor_test
 
 # The preview decoder. Separate build: it needs its own moc and none of the
 # exporter, and its media is a long-GOP 1080p file it generates for itself --
@@ -129,6 +131,7 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/avsync_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportpaths_test" "$WORK" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/exportcolor_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewdecoder_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/proxymedia_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/multicutplay_test" "$WORK" || rc=1

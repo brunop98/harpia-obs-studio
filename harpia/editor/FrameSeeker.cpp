@@ -1,4 +1,5 @@
 #include "FrameSeeker.hpp"
+#include "SwsColor.hpp"
 
 #include <algorithm>
 
@@ -121,7 +122,7 @@ QImage FrameSeeker::toImage(AVFrame *f, int maxW, int maxH)
 			dh = std::max(1, int(dh * s));
 		}
 	}
-	if (!sws_ || swsW_ != dw || swsH_ != dh) {
+	if (!sws_ || swsW_ != dw || swsH_ != dh || swsFmt_ != f->format) {
 		if (sws_)
 			sws_freeContext(sws_);
 		// Bilinear reads two source pixels per output pixel, so on a big
@@ -136,8 +137,13 @@ QImage FrameSeeker::toImage(AVFrame *f, int maxW, int maxH)
 		const bool bigReduction = f->width >= dw * 3 / 2 && f->height >= dh * 3 / 2;
 		sws_ = sws_getContext(f->width, f->height, (AVPixelFormat)f->format, dw, dh, AV_PIX_FMT_RGBA,
 				      bigReduction ? SWS_AREA : SWS_BILINEAR, nullptr, nullptr, nullptr);
+		// The video's own matrix (usually BT.709), not swscale's BT.601
+		// default, which shifted every colour in the preview and in the
+		// timeline export. See SwsColor.hpp.
+		swsDecodeColors(sws_, f);
 		swsW_ = dw;
 		swsH_ = dh;
+		swsFmt_ = f->format;
 	}
 	if (!sws_)
 		return {};

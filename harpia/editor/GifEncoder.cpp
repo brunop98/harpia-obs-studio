@@ -1,4 +1,5 @@
 #include "GifEncoder.hpp"
+#include "SwsColor.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -119,6 +120,8 @@ bool GifEncoder::encode(const QString &inPath, const QString &outPath, const Par
 	// cropped rectangle directly).
 	s.sws = sws_getContext(cw, ch, s.vdec->pix_fmt, outW, outH, AV_PIX_FMT_RGB24, SWS_LANCZOS, nullptr,
 			       nullptr, nullptr);
+	// The source's own colour matrix (usually BT.709), not swscale's BT.601.
+	swsDecodeColors(s.sws, s.vdec->pix_fmt, s.vdec->colorspace, s.vdec->color_range, s.vdec->height);
 	if (!s.sws)
 		return fail("Could not set up GIF scaling.");
 	s.rgb = av_frame_alloc();
@@ -288,9 +291,9 @@ bool GifEncoder::encode(const QString &inPath, const QString &outPath, const Par
 
 				// Crop + scale to rgb24 at the GIF size.
 				const uint8_t *src[4] = {
-					frame->data[0] + cy * frame->linesize[0] + cx,
-					frame->data[1] + (cy / 2) * frame->linesize[1] + (cx / 2),
-					frame->data[2] + (cy / 2) * frame->linesize[2] + (cx / 2), nullptr};
+					frame->data[0] + planeOffset(frame, 0, cx, cy),
+					frame->data[1] + planeOffset(frame, 1, cx, cy),
+					frame->data[2] + planeOffset(frame, 2, cx, cy), nullptr};
 				const int srcStride[4] = {frame->linesize[0], frame->linesize[1],
 							  frame->linesize[2], 0};
 				if (av_frame_make_writable(s.rgb) < 0) {

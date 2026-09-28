@@ -1,5 +1,6 @@
 #include "ClipExporter.hpp"
 #include "StillWeight.hpp"
+#include "SwsColor.hpp"
 
 #include "AudioRetimer.hpp"
 #include "FrameSeeker.hpp"
@@ -72,6 +73,10 @@ int64_t durationMsOf(AVFormatContext *fmt)
 
 // Everything freed in the destructor so early returns clean up.
 struct VideoState {
+	// Paths that hand the source's own YUV to the encoder (trim, single-source
+	// cuts) set this, and the file is tagged with the SOURCE's matrix and
+	// range; the others convert to BT.709 themselves and say so.
+	const AVCodecContext *colorFrom = nullptr;
 	AVFormatContext *ifmt = nullptr;
 	AVFormatContext *ofmt = nullptr;
 	AVCodecContext *vdec = nullptr;
@@ -241,6 +246,30 @@ QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const
 	s.venc->color_primaries = AVCOL_PRI_BT709;
 	s.venc->color_trc = AVCOL_TRC_BT709;
 	s.venc->color_range = AVCOL_RANGE_MPEG;
+	if (const AVCodecContext *src = s.colorFrom) {
+		// The pixels are the source's, untouched: say what the SOURCE says,
+		// or an SD (BT.601) or full-range recording is labelled as something
+		// it is not and every player shows it shifted. Untagged keeps the
+		// HD/SD convention (SwsColor.hpp).
+		const int space = swsSpaceOf(src->colorspace, src->height);
+		s.venc->colorspace = space == SWS_CS_ITU709 ? AVCOL_SPC_BT709
+				     : space == SWS_CS_BT2020 ? AVCOL_SPC_BT2020_NCL
+								: AVCOL_SPC_SMPTE170M;
+		if (src->color_primaries != AVCOL_PRI_UNSPECIFIED)
+			s.venc->color_primaries = src->color_primaries;
+		else if (space != SWS_CS_ITU709)
+			s.venc->color_primaries = AVCOL_PRI_SMPTE170M;
+		if (src->color_trc != AVCOL_TRC_UNSPECIFIED)
+			s.venc->color_trc = src->color_trc;
+		else if (space != SWS_CS_ITU709)
+			s.venc->color_trc = AVCOL_TRC_SMPTE170M;
+		// A yuvj source is converted to limited range on the way in (swscale
+		// does that for the j formats); a plain yuv source tagged full range
+		// keeps its values, so keeps its tag.
+		const bool jFormat = isFullRange(AVCOL_RANGE_UNSPECIFIED, src->pix_fmt);
+		if (src->color_range == AVCOL_RANGE_JPEG && !jFormat)
+			s.venc->color_range = AVCOL_RANGE_JPEG;
+	}
 
 	// The container has to exist before the encoder opens: whether it wants a
 	// global header changes a flag on the encoder.
@@ -365,11 +394,13 @@ struct ShaderPass {
 				sws_freeContext(toYuv);
 			toRgba = sws_getContext(W, H, (AVPixelFormat)f->format, W, H, AV_PIX_FMT_RGBA,
 						SWS_BILINEAR, nullptr, nullptr, nullptr);
+			swsDecodeColors(toRgba, f); // the frame's own matrix, not swscale's 601
 			// Back into the frame's OWN format, not a hard-coded 4:2:0: this
 			// writes over the frame in place, and with 4:4:4 chosen a 4:2:0
 			// write would scribble past the U/V planes.
 			toYuv = sws_getContext(W, H, AV_PIX_FMT_RGBA, W, H, (AVPixelFormat)f->format,
 					       SWS_BILINEAR, nullptr, nullptr, nullptr);
+			swsEncodeColorsLike(toYuv, AVPixelFormat(f->format), f->colorspace, f->color_range, H);
 			w = W;
 			h = H;
 		}
@@ -633,6 +664,7 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 	// The source's own time base and frame rate: a straight trim re-encodes on
 	// the same clock it decoded from.
 	const AVRational fr = av_guess_frame_rate(s.ifmt, vin, nullptr);
+	s.colorFrom = s.vdec; // the source's pixels go straight through
 	if (const QString e = openVideoEncoder(
 		    s, opts, out, cw, ch, vin->time_base, fr,
 		    (fr.num > 0 && fr.den > 0) ? std::max(1, int(av_q2d(fr) * 2.0)) : 60);
@@ -738,11 +770,12 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 							av_frame_unref(frame);
 							break;
 						}
-						const uint8_t *src[4] = {
-							yf->data[0] + cy * yf->linesize[0] + cx,
-							yf->data[1] + (cy / 2) * yf->linesize[1] + (cx / 2),
-							yf->data[2] + (cy / 2) * yf->linesize[2] + (cx / 2),
-							nullptr};
+						// Each plane at ITS offset: 4:4:4 chroma is not
+						// halved (see planeOffset).
+						const uint8_t *src[4] = {yf->data[0] + planeOffset(yf, 0, cx, cy),
+									 yf->data[1] + planeOffset(yf, 1, cx, cy),
+									 yf->data[2] + planeOffset(yf, 2, cx, cy),
+									 nullptr};
 						av_image_copy(s.cropFrame->data, s.cropFrame->linesize, src,
 							      yf->linesize, encodePixFmt(opts), cw, ch);
 						toEnc = s.cropFrame;
@@ -801,11 +834,12 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 				bool ok = true;
 				if (cropNeeded) {
 					if (av_frame_make_writable(s.cropFrame) == 0) {
-						const uint8_t *src[4] = {
-							yf->data[0] + cy * yf->linesize[0] + cx,
-							yf->data[1] + (cy / 2) * yf->linesize[1] + (cx / 2),
-							yf->data[2] + (cy / 2) * yf->linesize[2] + (cx / 2),
-							nullptr};
+						// Each plane at ITS offset: 4:4:4 chroma is not
+						// halved (see planeOffset).
+						const uint8_t *src[4] = {yf->data[0] + planeOffset(yf, 0, cx, cy),
+									 yf->data[1] + planeOffset(yf, 1, cx, cy),
+									 yf->data[2] + planeOffset(yf, 2, cx, cy),
+									 nullptr};
 						av_image_copy(s.cropFrame->data, s.cropFrame->linesize, src,
 							      yf->linesize, encodePixFmt(opts), cw, ch);
 						toEnc = s.cropFrame;
@@ -898,6 +932,7 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 	// ---- Video encoder ----
 	// Same clock as the source: the cuts are re-timed by pts, not by the base.
 	const AVRational fr = av_guess_frame_rate(s.ifmt, vin, nullptr);
+	s.colorFrom = s.vdec; // the source's pixels go straight through
 	if (const QString e = openVideoEncoder(
 		    s, opts, out, cw, ch, vin->time_base, fr,
 		    (fr.num > 0 && fr.den > 0) ? std::max(1, int(av_q2d(fr) * 2.0)) : 60);
@@ -1004,10 +1039,8 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 			if (cropNeeded) {
 				if (av_frame_make_writable(s.cropFrame) < 0)
 					return false;
-				const uint8_t *src[4] = {yf->data[0] + cy * yf->linesize[0] + cx,
-							 yf->data[1] + (cy / 2) * yf->linesize[1] + (cx / 2),
-							 yf->data[2] + (cy / 2) * yf->linesize[2] + (cx / 2),
-							 nullptr};
+				const uint8_t *src[4] = {yf->data[0] + planeOffset(yf, 0, cx, cy), yf->data[1] + planeOffset(yf, 1, cx, cy),
+							 yf->data[2] + planeOffset(yf, 2, cx, cy), nullptr};
 				av_image_copy(s.cropFrame->data, s.cropFrame->linesize, src, yf->linesize,
 					      encodePixFmt(opts), cw, ch);
 				toEnc = s.cropFrame;
@@ -1183,8 +1216,16 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 	// Fit rectangle for each source (preserve aspect, centered, even-aligned).
 	for (MSrc &m : src) {
 		const double sc = std::min(double(cw) / m.vdec->width, double(ch) / m.vdec->height);
-		m.fitW = std::max(2, evenDown(int(m.vdec->width * sc)));
-		m.fitH = std::max(2, evenDown(int(m.vdec->height * sc)));
+		m.fitW = std::max(2, evenDown(int(std::lround(m.vdec->width * sc))));
+		m.fitH = std::max(2, evenDown(int(std::lround(m.vdec->height * sc))));
+		// Within a couple of pixels of the canvas is the canvas. An odd-sized
+		// source (a screen-region recording) makes the canvas one pixel
+		// smaller than it, and truncating the scaled other side as well left
+		// a two-pixel black strip along the bottom or right of every frame.
+		if (cw - m.fitW <= 2)
+			m.fitW = cw;
+		if (ch - m.fitH <= 2)
+			m.fitH = ch;
 		m.padX = evenDown((cw - m.fitW) / 2);
 		m.padY = evenDown((ch - m.fitH) / 2);
 		m.sws = sws_getContext(m.vdec->width, m.vdec->height, m.vdec->pix_fmt, m.fitW, m.fitH,
@@ -1214,6 +1255,12 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 	// Output container + H.264/VP9 encoder at the canvas size (VideoState owns
 	// the output side; its input fields stay null).
 	VideoState s;
+	// swscale (before its 7.1 rewrite) scales YUV to YUV without touching the
+	// matrix, so the pixels keep the primary's colour space: say so, rather
+	// than labelling an SD or untagged recording BT.709. Sources recorded
+	// alike (the usual case) all come out right; a second source with a
+	// different matrix keeps its values and shows slightly shifted.
+	s.colorFrom = src[0].vdec;
 	// A common 90 kHz tick rather than any one source's: the cuts can come from
 	// files with different time bases.
 	if (const QString e = openVideoEncoder(
@@ -1267,10 +1314,12 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 	bool errored = false;
 	QString audioErr;
 
+	// Every row of every plane: 4:4:4 chroma planes are full height, and
+	// clearing only half of them left the lower half of a letterbox tinted.
 	auto fillBlack = [&](AVFrame *f) {
-		std::memset(f->data[0], 16, size_t(f->linesize[0]) * f->height);
-		std::memset(f->data[1], 128, size_t(f->linesize[1]) * (f->height / 2));
-		std::memset(f->data[2], 128, size_t(f->linesize[2]) * (f->height / 2));
+		std::memset(f->data[0], 16, size_t(f->linesize[0]) * planeRows(f, 0));
+		std::memset(f->data[1], 128, size_t(f->linesize[1]) * planeRows(f, 1));
+		std::memset(f->data[2], 128, size_t(f->linesize[2]) * planeRows(f, 2));
 	};
 	VideoSink encodeVideo(s, outPkt);
 	if (QString e = encodeVideo.initShader(opts); !e.isEmpty())
@@ -1331,11 +1380,10 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 			if (av_frame_make_writable(s.cropFrame) < 0)
 				return false;
 			fillBlack(s.cropFrame); // letterbox background
-			uint8_t *dst[4] = {
-				s.cropFrame->data[0] + m.padY * s.cropFrame->linesize[0] + m.padX,
-				s.cropFrame->data[1] + (m.padY / 2) * s.cropFrame->linesize[1] + (m.padX / 2),
-				s.cropFrame->data[2] + (m.padY / 2) * s.cropFrame->linesize[2] + (m.padX / 2),
-				nullptr};
+			uint8_t *dst[4] = {s.cropFrame->data[0] + planeOffset(s.cropFrame, 0, m.padX, m.padY),
+					   s.cropFrame->data[1] + planeOffset(s.cropFrame, 1, m.padX, m.padY),
+					   s.cropFrame->data[2] + planeOffset(s.cropFrame, 2, m.padX, m.padY),
+					   nullptr};
 			sws_scale(m.sws, df->data, df->linesize, 0, m.vdec->height, dst,
 				  s.cropFrame->linesize);
 			const double srcMs = double(pts) * av_q2d(m.vin->time_base) * 1000.0;
@@ -1465,6 +1513,13 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 		std::map<std::pair<int, int>, std::unique_ptr<FrameSeeker>> seekers;
 		std::map<int, QImage> stills; // image clips: same picture at every time
 		std::map<int, QSize> stillSizes; // the original's size (crops are in its pixels)
+		// How big each decoder hands its frames over. The canvas alone was
+		// too small for a clip zoomed in or cropped: a 4K recording at 2x
+		// zoom was decoded to 1080p and then enlarged twice, so the export
+		// came out softer than the source. Sized per decoder from its clips'
+		// deepest zoom and tightest crop (toImage never enlarges past the
+		// video's own size, so this is at most native resolution).
+		std::map<std::pair<int, int>, QSize> bounds;
 		int w = 0, h = 0;
 		QSize sourceSize(int sourceId) override
 		{
@@ -1482,7 +1537,9 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 			auto it = seekers.find({sourceId, std::max(0, track())});
 			if (it == seekers.end() || !it->second)
 				return QImage();
-			return it->second->frameAt(srcMs, w, h);
+			const auto bit = bounds.find(it->first);
+			const QSize b = bit != bounds.end() ? bit->second : QSize(w, h);
+			return it->second->frameAt(srcMs, b.width(), b.height());
 		}
 	} provider;
 	provider.w = cw;
@@ -1531,8 +1588,29 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 			    provider.seekers.count({c.sourceId, ti}))
 				continue;
 			auto fs = std::make_unique<FrameSeeker>();
-			if (fs->open(path))
-				provider.seekers[{c.sourceId, ti}] = std::move(fs);
+			if (!fs->open(path))
+				continue;
+			// Detail every clip of this source on this track can show: its
+			// zoom (base pose and keyframes) times how much of the frame a
+			// crop throws away. At least the canvas, with a little headroom
+			// so a sub-pixel resample does not soften a 1:1 clip.
+			const double sw = std::max(1, fs->width()), sh = std::max(1, fs->height());
+			double head = 1.0;
+			for (const TlClip &c2 : t.clips) {
+				if (c2.sourceId != c.sourceId || c2.type != TlClip::Type::Video)
+					continue;
+				double zoom = std::max(1.0, c2.scale);
+				for (const TlKeyframe &k : c2.keys)
+					zoom = std::max(zoom, k.tf.scale);
+				double cropF = 1.0;
+				if (c2.crop.isValid() && c2.crop.width() > 0 && c2.crop.height() > 0)
+					cropF = std::max(sw / c2.crop.width(), sh / c2.crop.height());
+				head = std::max(head, zoom * cropF);
+			}
+			head = std::min(head, 8.0);
+			provider.bounds[{c.sourceId, ti}] =
+				QSize(int(std::ceil(cw * head)), int(std::ceil(ch * head)));
+			provider.seekers[{c.sourceId, ti}] = std::move(fs);
 		}
 	}
 
@@ -1587,6 +1665,9 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 	// the path where composited text and graphics live.
 	SwsContext *toYuv = sws_getContext(cw, ch, AV_PIX_FMT_RGBA, cw, ch, encodePixFmt(opts),
 					   SWS_BILINEAR, nullptr, nullptr, nullptr);
+	// BT.709, limited range: what the file says it is (openVideoEncoder).
+	// swscale's default is BT.601, which shifted every colour on the way out.
+	swsEncodeColors709(toYuv);
 	AVFrame *yuv = av_frame_alloc();
 	AVPacket *pkt = av_packet_alloc();
 	if (!toYuv || !yuv || !pkt) {

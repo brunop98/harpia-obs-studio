@@ -74,6 +74,7 @@ private:
 	SwsContext *sws_ = nullptr;
 	int swsW_ = 0;
 	int swsH_ = 0;
+	int swsFmt_ = -1; // the pixel format sws_ was made for (a stream can change it)
 	int vIdx_ = -1;
 
 	// Sequential-decode scratch (for nextFrame).

@@ -75,8 +75,8 @@ int main(int argc, char **argv)
 	{
 		// The fix itself, stated where it can be checked without a window.
 		using M = RegionTool::Mode;
-		const auto st = [](bool region, bool rec, bool focus, bool editor = false) {
-			return regionOverlayState(region, rec, focus, editor);
+		const auto st = [](bool region, bool rec, bool focus, bool editor = false, bool linger = false) {
+			return regionOverlayState(region, rec, focus, editor, linger);
 		};
 
 		// Entire Monitor: nothing to frame, so nothing on screen.
@@ -87,12 +87,17 @@ int main(int argc, char **argv)
 		ok(st(true, false, true).visible, "Custom Region shows it");
 		ok(st(true, false, true).mode == M::Editing, "interactive while Harpia is in front");
 
-		// THE change. Clicking the app you are about to record used to take the
-		// overlay away with the focus, which is the whole complaint.
-		const auto unfocused = st(true, false, false);
-		ok(unfocused.visible, "and it STAYS on screen when another app takes focus");
-		ok(unfocused.mode == M::Watching,
+		// Focus just left for the app you are about to record: the frame
+		// lingers, click-through, so it can be checked against that app.
+		const auto justLeft = st(true, false, false, false, /*linger=*/true);
+		ok(justLeft.visible, "it lingers for a moment when another app takes focus");
+		ok(justLeft.mode == M::Watching,
 		   "in Watching, so that app is still clickable through the middle");
+		// The moment over, idle and in the background: nothing to show. A
+		// green frame parked over other apps all day was the complaint.
+		ok(!st(true, false, false).visible,
+		   "and is hidden once the moment has passed, while Harpia is idle in the background");
+		ok(st(true, false, true).visible, "it is back the moment Harpia is in front again");
 
 		// Recording wins over focus either way.
 		ok(st(true, true, true).mode == M::Recording, "recording shows the recording state");

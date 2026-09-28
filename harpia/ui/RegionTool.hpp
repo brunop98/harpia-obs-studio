@@ -64,9 +64,11 @@ public:
 		// Harpia is in front. The whole rectangle takes the mouse, so dragging
 		// the interior moves the region -- the only state where that works.
 		Editing,
-		// Region capture is chosen but another app is in front. Still on
-		// screen, so the frame can be seen and adjusted against the thing being
-		// recorded; interior click-through, so that app stays usable.
+		// Region capture is chosen and another app has JUST taken the front:
+		// the frame lingers a few seconds so it can be seen against the thing
+		// about to be recorded, interior click-through so that app stays
+		// usable. Then it goes away -- a green frame sitting on the desktop
+		// while nothing is recorded is noise.
 		Watching,
 		// Recording. Same input rules as Watching, dimmed further, and the
 		// border turns red (or yellow when paused).
@@ -202,7 +204,11 @@ struct RegionOverlayState {
 		return visible == o.visible && mode == o.mode;
 	}
 };
+// `lingering`: focus left Harpia only moments ago. The frame stays (Watching)
+// for that moment so it can be checked against the app just clicked, and is
+// hidden once the moment has passed. Idle and in the background, there is
+// nothing to show.
 RegionOverlayState regionOverlayState(bool regionCaptureMode, bool recording, bool harpiaFocused,
-				      bool editorOpen);
+				      bool editorOpen, bool lingering = false);
 
 } // namespace harpia

@@ -230,6 +230,10 @@ private:
 	void applyResponsiveLayout(int width);
 	QString elapsedString() const;
 	void updateRegionToolVisibility(); // focus/record-driven overlay visibility
+	// When focus last left Harpia (invalid while it is in front). The region
+	// frame lingers kRegionLingerMs after that, then hides until focus is back.
+	QElapsedTimer regionUnfocusedSince_;
+	static constexpr int kRegionLingerMs = 4000;
 	void updateFloatingControls();     // show/hide + sync the desktop Pause/Stop HUD
 	void writeMarker(const QString &label); // append an Auto Paused/Resumed marker
 	void refreshDriveLink(); // show/hide the status-bar Google Drive shortcut

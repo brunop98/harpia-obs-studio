@@ -660,7 +660,7 @@ void RegionTool::paintEvent(QPaintEvent *)
 }
 
 RegionOverlayState regionOverlayState(bool regionCaptureMode, bool recording, bool harpiaFocused,
-				      bool editorOpen)
+				      bool editorOpen, bool lingering)
 {
 	RegionOverlayState st;
 	// Only Custom Region has a region to show. Entire Monitor has nothing to
@@ -685,10 +685,20 @@ RegionOverlayState regionOverlayState(bool regionCaptureMode, bool recording, bo
 		st.mode = RegionTool::Mode::Recording;
 		return st;
 	}
-	// The change that matters: NOT hidden when Harpia is in the background.
-	// Lining the frame up against the app being recorded means clicking that
-	// app, and the overlay used to leave with the focus.
-	st.mode = harpiaFocused ? RegionTool::Mode::Editing : RegionTool::Mode::Watching;
+	if (harpiaFocused) {
+		st.mode = RegionTool::Mode::Editing;
+		return st;
+	}
+	// Harpia in the background and nothing recording. For a few seconds after
+	// focus leaves the frame stays, click-through, so it can be checked against
+	// the app just clicked -- lining it up is what it is for. After that it is
+	// hidden: a green frame parked on the desktop all day, over apps that have
+	// nothing to do with it, is the thing people complained about.
+	if (lingering) {
+		st.mode = RegionTool::Mode::Watching;
+		return st;
+	}
+	st.visible = false;
 	return st;
 }
 

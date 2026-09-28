@@ -3322,9 +3322,21 @@ void MainWindow::updateRegionToolVisibility()
 	// Harpia, which made the one job it exists for -- lining the frame up
 	// against the app you are about to record -- impossible.
 	const bool focused = isActiveWindow() || regionTool_->isActiveWindow();
+	// Focus just left: the frame lingers for a moment (see regionOverlayState)
+	// and a one-shot brings this back to hide it when the moment is over.
+	bool lingering = false;
+	if (focused) {
+		regionUnfocusedSince_.invalidate();
+	} else {
+		if (!regionUnfocusedSince_.isValid()) {
+			regionUnfocusedSince_.start();
+			QTimer::singleShot(kRegionLingerMs + 50, this, &MainWindow::updateRegionToolVisibility);
+		}
+		lingering = regionUnfocusedSince_.elapsed() < kRegionLingerMs;
+	}
 	const RegionOverlayState st = regionOverlayState(captureMode_ == CaptureMode::Region,
 							 recorder_.isRecording(), focused,
-							 VideoEditorWindow::anyOpen());
+							 VideoEditorWindow::anyOpen(), lingering);
 	// The one place the preset's move-handle flag needs applying: every path that
 	// could change it -- editing the preset, switching preset, switching capture
 	// mode, startup, the 250 ms tick -- ends up here. The setter early-returns

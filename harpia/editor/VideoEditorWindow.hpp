@@ -47,12 +47,13 @@ class QFileSystemWatcher;
 class QSpinBox;
 class QPlainTextEdit;
 class QFontComboBox;
-class QVBoxLayout;
 class QLineEdit;
 class QDragEnterEvent;
 class QDropEvent;
 class QEvent;
 class QAction;
+class QMenuBar;
+class QVBoxLayout;
 class QShowEvent;
 class QKeyEvent;
 namespace harpia {
@@ -293,6 +294,20 @@ private:
 	ShortcutRegistry *shortcuts_ = nullptr;
 	ShortcutPanel *shortcutPanel_ = nullptr;
 	void openShortcutPanel();
+
+	// The menu bar (File / Edit / Add / View / Tools / Help). Items show their
+	// shortcuts from the registry; Full-editing-only items grey in other modes.
+	QMenuBar *menuBar_ = nullptr;
+	QVector<QPair<QAction *, QString>> menuShortcutActs_; // action -> command id
+	QVector<QAction *> fullOnlyActs_;
+	QPushButton *devBtn_ = nullptr;
+	QPushButton *openProjBtn_ = nullptr;
+	QPushButton *saveProjBtn_ = nullptr;
+	QPushButton *exportBtn_ = nullptr;
+	QPushButton *closeBtn_ = nullptr;
+	void buildMenuBar(QVBoxLayout *root);
+	void refreshMenuLabels();
+	void showAbout();
 	// Append " (Ctrl+E)" to a button's tooltip from the registry, and keep it
 	// right when the binding changes.
 	void refreshShortcutHints();

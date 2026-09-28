@@ -57,6 +57,7 @@
 #include "timeline/Transitions.hpp"
 
 #include "../Version.hpp"
+#include "../core/Logger.hpp"
 
 #include <QCheckBox>
 #include <QRadioButton>
@@ -95,6 +96,7 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QTextEdit>
@@ -422,7 +424,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		}
 		st.setValue(QStringLiteral("editor/sourcesShown"), on);
 	});
-	bar->addWidget(sourcesBtn_);
+	sourcesBtn_->setVisible(false); // View > Sources; the button holds the state
 	bar->addSpacing(6);
 
 	// Effects toggle — opens the right panel, where a clip's components live.
@@ -439,7 +441,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			inspectorBtn_->setChecked(on);
 		}
 	});
-	bar->addWidget(effectsBtn_);
+	effectsBtn_->setVisible(false); // View > Effects
 	bar->addSpacing(6);
 
 	// Inspector toggle — show/hide the right-side properties panel.
@@ -455,11 +457,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			effectsBtn_->setChecked(on);
 		}
 	});
-	bar->addWidget(inspectorBtn_);
+	inspectorBtn_->setVisible(false); // View > Inspector
 	bar->addSpacing(6);
 	// Developer Panel: live-tweak every timeline layout variable to find the
 	// best UI configuration (editor-only tool, values are not persisted).
 	auto *devBtn = new QPushButton(QStringLiteral("Dev"), this);
+	devBtn_ = devBtn;
 	devBtn->setFlat(true);
 	devBtn->setToolTip(QStringLiteral(
 		"Developer Panel — tweak timeline spacing, thumbnail size, padding and zoom live"));
@@ -482,7 +485,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		devPanel_->raise();
 		devPanel_->activateWindow();
 	});
-	bar->addWidget(devBtn);
+	devBtn->setVisible(false); // Tools > Developer panel
 	topLayout->addLayout(bar);
 	splitter->addWidget(topPane);
 
@@ -940,29 +943,24 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	controls->addWidget(consoleBtn_);
 	// View > Keyboard Shortcuts, always available (not just in Full editing):
 	// the panel is the reference for every mode.
-	auto *keysBtn = new QPushButton(this);
-	keysBtn->setIcon(uiIcon(Glyph::Keyboard));
-	keysBtn->setToolTip(QStringLiteral("Keyboard shortcuts (Ctrl+/)"));
-	keysBtn->setFixedWidth(30);
-	connect(keysBtn, &QPushButton::clicked, this, &VideoEditorWindow::openShortcutPanel);
-	controls->addWidget(keysBtn);
 	controls->addStretch(1);
 	infoLabel_ = new QLabel(this);
 	infoLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 	controls->addWidget(infoLabel_);
-	controls->addSpacing(12);
+	// Load / Save project, Export and Close live in the File menu now (and
+	// Keyboard shortcuts in Tools). The buttons stay as hidden slots the menu
+	// items click, so every connection below is unchanged.
 	auto *openProjBtn = new QPushButton(QStringLiteral("Load project"), this);
-	openProjBtn->setToolTip(QStringLiteral("Load a saved editing project (.harpiaproj)"));
 	auto *saveProjBtn = new QPushButton(QStringLiteral("Save project"), this);
-	saveProjBtn->setToolTip(QStringLiteral("Save the current editing as a project to continue later"));
-	controls->addWidget(openProjBtn);
-	controls->addWidget(saveProjBtn);
-	controls->addSpacing(12);
 	auto *saveBtn = new QPushButton(QStringLiteral("Export…"), this);
 	saveBtn->setDefault(true);
 	auto *cancelBtn = new QPushButton(QStringLiteral("Close"), this);
-	controls->addWidget(saveBtn);
-	controls->addWidget(cancelBtn);
+	for (QPushButton *b : {openProjBtn, saveProjBtn, saveBtn, cancelBtn})
+		b->setVisible(false);
+	openProjBtn_ = openProjBtn;
+	saveProjBtn_ = saveProjBtn;
+	exportBtn_ = saveBtn;
+	closeBtn_ = cancelBtn;
 	// ABOVE the timeline, not below it. At the bottom of the pane this row was
 	// the first thing to go when the window was taller than the screen -- and
 	// a full-screen dialog owned by the main window is exactly the case where
@@ -1768,6 +1766,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(shortcuts_, &ShortcutRegistry::bindingsChanged, this,
 		&VideoEditorWindow::refreshShortcutHints);
 	refreshShortcutHints();
+	buildMenuBar(root);
+	connect(shortcuts_, &ShortcutRegistry::bindingsChanged, this, &VideoEditorWindow::refreshMenuLabels);
 
 	connect(timeline_, &Timeline::scrub, this, &VideoEditorWindow::onScrub);
 	connect(timeline_, &Timeline::hoverScrub, this, &VideoEditorWindow::onHoverScrub);
@@ -5797,6 +5797,172 @@ void VideoEditorWindow::openSubtitles()
 	subtitleDialog_->activateWindow();
 }
 
+// ---- The menu bar ------------------------------------------------------------
+//
+// File / Edit / Add / View / Tools / Help, like every application. The items
+// that had been buttons on two rows are here now; the rows keep the controls
+// used while editing (transport, modes, Snap, Fit, Add). Shortcuts show on
+// the right of each item, read from the registry the shortcut panel edits,
+// so rebinding a key updates the menu -- and they are DISPLAYED, not bound
+// here: the registry's own QShortcuts do the firing, and a second binding on
+// the same key would make both ambiguous and dead.
+
+namespace {
+QString withShortcut(const QString &text, const QString &keys)
+{
+	// A tab in a QAction's text is drawn as the shortcut column.
+	return keys.isEmpty() ? text : text + QLatin1Char('\t') + keys;
+}
+} // namespace
+
+void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
+{
+	menuBar_ = new QMenuBar(this);
+	root->setMenuBar(menuBar_);
+	menuShortcutActs_.clear();
+	fullOnlyActs_.clear();
+	auto keyed = [this](QAction *a, const char *cmdId) {
+		menuShortcutActs_.append({a, QLatin1String(cmdId)});
+		return a;
+	};
+	auto fullOnly = [this](QAction *a) {
+		fullOnlyActs_.append(a);
+		return a;
+	};
+	auto run = [this](const char *cmdId) {
+		return [this, cmdId]() {
+			if (const ShortcutCommand *c = shortcuts_->command(QLatin1String(cmdId)))
+				if (c->run)
+					c->run();
+		};
+	};
+
+	// ---- File ----
+	QMenu *file = menuBar_->addMenu(QStringLiteral("&File"));
+	connect(file->addAction(QStringLiteral("Load project…")), &QAction::triggered, this,
+		[this]() { openProjBtn_->click(); });
+	connect(keyed(file->addAction(QStringLiteral("Save project")), "project.save"), &QAction::triggered, this,
+		[this]() { saveProjBtn_->click(); });
+	connect(file->addAction(QStringLiteral("Save project as…")), &QAction::triggered, this,
+		&VideoEditorWindow::onSaveProjectAs);
+	file->addSeparator();
+	connect(keyed(file->addAction(QStringLiteral("Export…")), "project.export"), &QAction::triggered, this,
+		[this]() { exportBtn_->click(); });
+	file->addSeparator();
+	connect(file->addAction(QStringLiteral("Close")), &QAction::triggered, this, [this]() { closeBtn_->click(); });
+
+	// ---- Edit ----
+	QMenu *edit = menuBar_->addMenu(QStringLiteral("&Edit"));
+	connect(keyed(edit->addAction(QStringLiteral("Undo")), "edit.undo"), &QAction::triggered, this, run("edit.undo"));
+	connect(keyed(edit->addAction(QStringLiteral("Redo")), "edit.redo"), &QAction::triggered, this, run("edit.redo"));
+	edit->addSeparator();
+	connect(keyed(fullOnly(edit->addAction(QStringLiteral("Cut clips"))), "edit.cut"), &QAction::triggered, this,
+		run("edit.cut"));
+	connect(keyed(fullOnly(edit->addAction(QStringLiteral("Copy clips"))), "edit.copy"), &QAction::triggered, this,
+		run("edit.copy"));
+	connect(keyed(edit->addAction(QStringLiteral("Paste")), "edit.paste"), &QAction::triggered, this, run("edit.paste"));
+	connect(keyed(edit->addAction(QStringLiteral("Delete selection")), "edit.delete"), &QAction::triggered, this,
+		run("edit.delete"));
+	connect(keyed(fullOnly(edit->addAction(QStringLiteral("Select all clips"))), "selection.all"), &QAction::triggered,
+		this, run("selection.all"));
+	edit->addSeparator();
+	connect(keyed(fullOnly(edit->addAction(QStringLiteral("Split clip at playhead"))), "timeline.split"),
+		&QAction::triggered, this, run("timeline.split"));
+	connect(keyed(fullOnly(edit->addAction(QStringLiteral("Randomize clips…"))), "timeline.randomize"),
+		&QAction::triggered, this, &VideoEditorWindow::openRandomizePanel);
+	connect(keyed(fullOnly(edit->addAction(QStringLiteral("Console"))), "view.console"), &QAction::triggered, this,
+		&VideoEditorWindow::openConsole);
+
+	// ---- Add: the same menu the Add button shows ----
+	if (addMenuBtn_ && addMenuBtn_->menu()) {
+		QMenu *add = menuBar_->addMenu(QStringLiteral("&Add"));
+		for (QAction *a : addMenuBtn_->menu()->actions())
+			add->addAction(a); // shared QActions: one enabled state, one handler
+		fullOnly(add->menuAction());
+	}
+
+	// ---- View ----
+	QMenu *view = menuBar_->addMenu(QStringLiteral("&View"));
+	auto panelToggle = [&](const QString &text, QPushButton *btn, const char *cmdId) {
+		QAction *a = view->addAction(text);
+		a->setCheckable(true);
+		a->setChecked(btn->isChecked());
+		if (cmdId)
+			keyed(a, cmdId);
+		connect(a, &QAction::toggled, btn, &QPushButton::setChecked);
+		connect(btn, &QPushButton::toggled, a, &QAction::setChecked);
+		return a;
+	};
+	panelToggle(QStringLiteral("Sources"), sourcesBtn_, nullptr);
+	panelToggle(QStringLiteral("Effects"), effectsBtn_, nullptr);
+	panelToggle(QStringLiteral("Inspector"), inspectorBtn_, "view.inspector");
+	view->addSeparator();
+	connect(keyed(fullOnly(view->addAction(QStringLiteral("Zoom timeline to fit"))), "timeline.fit"),
+		&QAction::triggered, this, run("timeline.fit"));
+	connect(keyed(fullOnly(view->addAction(QStringLiteral("Toggle snapping"))), "timeline.snap"),
+		&QAction::triggered, this, run("timeline.snap"));
+	view->addSeparator();
+	connect(keyed(view->addAction(QStringLiteral("Full screen")), "view.fullscreen"), &QAction::triggered, this,
+		[this]() { setFullScreen(!isFullScreen()); });
+
+	// ---- Tools ----
+	QMenu *tools = menuBar_->addMenu(QStringLiteral("&Tools"));
+	connect(keyed(tools->addAction(QStringLiteral("Keyboard shortcuts…")), "view.shortcuts"), &QAction::triggered,
+		this, &VideoEditorWindow::openShortcutPanel);
+	connect(tools->addAction(QStringLiteral("Developer panel")), &QAction::triggered, this, [this]() {
+		if (devBtn_)
+			devBtn_->click();
+	});
+
+	// ---- Help ----
+	QMenu *help = menuBar_->addMenu(QStringLiteral("&Help"));
+	connect(help->addAction(QStringLiteral("About Harpia…")), &QAction::triggered, this, &VideoEditorWindow::showAbout);
+
+	refreshMenuLabels();
+	for (QAction *a : fullOnlyActs_)
+		a->setEnabled(fullEdit());
+}
+
+void VideoEditorWindow::refreshMenuLabels()
+{
+	if (!shortcuts_)
+		return;
+	for (const auto &pr : menuShortcutActs_) {
+		QAction *a = pr.first;
+		const QString base = a->text().section(QLatin1Char('\t'), 0, 0);
+		a->setText(withShortcut(base, shortcuts_->displayText(pr.second)));
+	}
+}
+
+void VideoEditorWindow::showAbout()
+{
+	QMessageBox box(this);
+	box.setWindowTitle(QStringLiteral("About Harpia"));
+	box.setIconPixmap(QPixmap());
+	box.setText(QStringLiteral("<b>Harpia Recorder</b>  v%1").arg(QString::fromUtf8(appVersion())));
+	box.setInformativeText(QStringLiteral(
+		"Built %1 %2.<br>Screen recorder and editor.<br><br>"
+		"Log folder: %3<br>Scripts: %4<br>Templates: %5")
+				       .arg(QStringLiteral(__DATE__), QStringLiteral(__TIME__),
+					    QDir::toNativeSeparators(QString::fromStdString(Logger::instance().logDir())),
+					    QDir::toNativeSeparators(scriptsDir_), QDir::toNativeSeparators(consoleTemplatesDir())));
+	QPushButton *logs = box.addButton(QStringLiteral("Open log folder"), QMessageBox::ActionRole);
+	QPushButton *scripts = box.addButton(QStringLiteral("Open scripts folder"), QMessageBox::ActionRole);
+	QPushButton *templates = box.addButton(QStringLiteral("Open templates folder"), QMessageBox::ActionRole);
+	box.addButton(QMessageBox::Close);
+	box.exec();
+	const auto open = [](const QString &dir) {
+		if (!dir.isEmpty())
+			QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+	};
+	if (box.clickedButton() == logs)
+		open(QString::fromStdString(Logger::instance().logDir()));
+	else if (box.clickedButton() == scripts)
+		open(scriptsDir_);
+	else if (box.clickedButton() == templates)
+		open(consoleTemplatesDir());
+}
+
 void VideoEditorWindow::openUrlDownload()
 {
 	if (!timelineView_)
@@ -7209,6 +7375,8 @@ void VideoEditorWindow::setEditMode(EditMode m)
 	}
 	if (addMenuBtn_)
 		addMenuBtn_->setVisible(full); // the Add menu: text, subtitles, audio, image, effect clip
+	for (QAction *a : fullOnlyActs_)
+		a->setEnabled(full); // greyed, not hidden: the menus keep their shape
 	if (snapBtn_)
 		snapBtn_->setVisible(full);
 	if (fitBtn_)

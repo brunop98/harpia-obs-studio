@@ -23,7 +23,7 @@ QVector<SoundEvent> SoundRules::events(const TimelineModel &m)
 				continue;
 			for (int ci = 0; ci < t.clips.size(); ++ci) {
 				const TlClip &c = t.clips[ci];
-				if (c.tags.isEmpty() || c.soundRule > 0)
+				if (c.tags.isEmpty() || c.soundRule != 0)
 					continue;
 				SoundEvent e;
 				e.kind = TlSoundRule::Trigger::AnyClipStarts;
@@ -137,7 +137,7 @@ bool SoundRules::apply(TimelineModel &m, const SoundInfoLookup &info)
 	// converted, or the file hand-edited).
 	for (TlTrack &t : m.tracks)
 		t.clips.erase(std::remove_if(t.clips.begin(), t.clips.end(),
-					     [](const TlClip &c) { return c.soundRule > 0; }),
+					     [](const TlClip &c) { return c.soundRule != 0; }),
 			      t.clips.end());
 
 	// In with the current ones.
@@ -159,6 +159,41 @@ bool SoundRules::apply(TimelineModel &m, const SoundInfoLookup &info)
 				if (si.durationMs <= 0)
 					break; // the sound is not there: nothing to place
 				made.append(clipFor(r, e, si));
+			}
+		}
+	}
+	// Sound components: every enabled one on any clip that is not itself a
+	// derived sound.
+	for (const TlTrack &t : m.tracks) {
+		if (t.autoSounds)
+			continue;
+		for (const TlClip &c : t.clips) {
+			if (c.soundRule != 0)
+				continue;
+			for (const ComponentInstance &ci : c.components) {
+				if (!ci.enabled || ci.typeId != QLatin1String(kSoundComponentId))
+					continue;
+				qint64 inAt = -1, outAt = -1;
+				componentSoundTimes(c, ci, &inAt, &outAt);
+				auto place = [&](const char *srcKey, const char *volKey, qint64 at) {
+					const int src = ci.props.value(QString::fromLatin1(srcKey), 0).toInt();
+					if (src <= 0 || at < 0)
+						return;
+					const SoundInfo si = info ? info(src) : SoundInfo();
+					if (si.durationMs <= 0)
+						return;
+					TlSoundRule r;
+					r.sourceId = src;
+					r.volume = std::clamp(ci.props.value(QString::fromLatin1(volKey), 100).toDouble() / 100.0, 0.0, 2.0);
+					SoundEvent e;
+					e.atMs = at;
+					TlClip sc = clipFor(r, e, si);
+					sc.soundRule = kSoundFromComponent;
+					made.append(sc);
+				};
+				place("inSound", "inVolume", inAt);
+				if (outAt >= 0)
+					place("outSound", "outVolume", outAt);
 			}
 		}
 	}
@@ -188,11 +223,44 @@ bool SoundRules::apply(TimelineModel &m, const SoundInfoLookup &info)
 	return !(m == before);
 }
 
+void SoundRules::componentSoundTimes(const TlClip &c, const ComponentInstance &ci, qint64 *inAt, qint64 *outAt)
+{
+	auto num = [&](const char *k, double def) { return ci.props.value(QString::fromLatin1(k), def).toDouble(); };
+	*inAt = std::max<qint64>(0, c.outStartMs + qint64(std::llround(num("inOffsetMs", 0))));
+	*outAt = -1;
+	if (!ci.props.value(QStringLiteral("outOn"), false).toBool() || num("outSound", 0) <= 0)
+		return;
+	qint64 anchor = c.outEndMs();
+	if (ci.props.value(QStringLiteral("alignSlide"), true).toBool()) {
+		// The same arithmetic as slidePoseAt: the slide takes durationMs, or
+		// half the clip when both halves would not fit.
+		for (const ComponentInstance &s : c.components) {
+			if (!s.enabled || s.typeId != QLatin1String("harpia.slide") ||
+			    !s.props.value(QStringLiteral("slideOut"), false).toBool())
+				continue;
+			const qint64 dur = std::max<qint64>(1, c.outDurationMs());
+			qint64 d = std::max<qint64>(0, qint64(std::llround(s.props.value(QStringLiteral("durationMs"), 500).toDouble())));
+			d = std::min(d, dur / 2);
+			anchor = c.outEndMs() - d;
+			break;
+		}
+	}
+	*outAt = std::max<qint64>(0, anchor + qint64(std::llround(num("outOffsetMs", 0))));
+}
+
 void SoundRules::freeze(TimelineModel &m)
 {
 	for (TlTrack &t : m.tracks) {
-		for (TlClip &c : t.clips)
+		for (TlClip &c : t.clips) {
 			c.soundRule = 0;
+			// Its sounds are ordinary clips now; a Sound component left on
+			// the clip would place them a second time.
+			c.components.erase(std::remove_if(c.components.begin(), c.components.end(),
+							  [](const ComponentInstance &ci) {
+								  return ci.typeId == QLatin1String(kSoundComponentId);
+							  }),
+					   c.components.end());
+		}
 		if (t.autoSounds) {
 			t.autoSounds = false;
 			t.locked = false;

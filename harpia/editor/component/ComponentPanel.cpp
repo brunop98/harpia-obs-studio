@@ -175,6 +175,7 @@ bool ComponentPanel::shapeChanged(const View &next) const
 		const SharedComponent &a = next.shared[i];
 		const SharedComponent &b = view_.shared[i];
 		if (a.typeId != b.typeId || a.ordinal != b.ordinal || a.keyedHere != b.keyedHere ||
+		    a.actionLabels != b.actionLabels ||
 		    a.enabled.mixed != b.enabled.mixed || a.inMs.mixed != b.inMs.mixed ||
 		    a.outMs.mixed != b.outMs.mixed)
 			return true;
@@ -303,6 +304,8 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 		form->setHorizontalSpacing(8);
 		form->setVerticalSpacing(3);
 		for (const PropDef &d : type->props) {
+			if (d.hidden)
+				continue;
 			row->keys.append(d.key);
 			const Mixed m = values.value(d.key);
 			QWidget *control = nullptr;
@@ -545,8 +548,12 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 		auto *ah = new QHBoxLayout;
 		ah->setContentsMargins(0, 2, 0, 0);
 		ah->setSpacing(4);
+		QMap<QString, QString> labels;
+		for (const SharedComponent &sc : view_.shared)
+			if (sc.typeId == typeId && sc.ordinal == ordinal)
+				labels = sc.actionLabels;
 		for (const ComponentAction &a : type->actions) {
-			auto *b = new QPushButton(a.label, row->box);
+			auto *b = new QPushButton(labels.value(a.id, a.label), row->box);
 			b->setStyleSheet(QStringLiteral("padding:3px 8px;"));
 			if (!a.help.isEmpty())
 				b->setToolTip(a.help);

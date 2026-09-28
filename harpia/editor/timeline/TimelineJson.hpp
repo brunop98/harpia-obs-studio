@@ -272,7 +272,7 @@ inline QJsonObject clipToJson(const TlClip &c)
 		co[QStringLiteral("fadeInCurve")] = int(c.fadeInCurve);
 		co[QStringLiteral("fadeOutCurve")] = int(c.fadeOutCurve);
 	}
-	if (c.soundRule > 0)
+	if (c.soundRule != 0)
 		co[QStringLiteral("soundRule")] = c.soundRule;
 	if (!c.tags.isEmpty()) {
 		QJsonArray ta;

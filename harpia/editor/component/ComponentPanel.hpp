@@ -83,6 +83,9 @@ public:
 		Mixed outMs;
 		QMap<QString, Mixed> values;
 		QStringList keyedHere; // props with a key at the playhead on every clip
+		// Button text the window decides, by action id ("In sound: Whoosh").
+		// Falls back to the action's own label.
+		QMap<QString, QString> actionLabels;
 	};
 
 	// Everything the panel draws, handed over whole so it can decide in one

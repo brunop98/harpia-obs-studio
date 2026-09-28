@@ -101,6 +101,16 @@ public:
 	}
 };
 
+// ---- Sound -------------------------------------------------------------------
+// Plays a sound when the clip appears (and optionally when it goes). Nothing
+// to do per frame: the sounds are placed as clips on the Sounds lane by
+// SoundRules::apply, from these properties, so they are seen and mixed like
+// every other audio clip.
+class SoundComponent : public IComponent {
+public:
+	void evaluate(const EvalContext &, ClipState &) const override {}
+};
+
 // ---- Always Zoom ---------------------------------------------------------
 // The RATE half of the pair Always Grow is the destination half of. Grow is
 // told where to end up and works out its own pace from the clip's length; Zoom
@@ -614,6 +624,51 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 					"out, 3 ease in-out.")},
 		};
 		t.make = [] { return std::unique_ptr<IComponent>(new AlwaysGrowComponent); };
+		reg.add(t);
+	}
+	{
+		ComponentType t;
+		t.id = QStringLiteral("harpia.sound");
+		t.displayName = QStringLiteral("Sound");
+		t.category = QStringLiteral("Audio");
+		t.stage = Stage::Audio;
+		t.help = QStringLiteral("Play a sound when this clip appears, and optionally when it "
+					"goes. The sounds are placed on the Sounds lane and follow the clip "
+					"when it moves.");
+		auto hiddenInt = [](const char *key) {
+			PropDef d{QString::fromLatin1(key), QString::fromLatin1(key), PropType::Int, 0.0, 1e9, 0.0, false};
+			d.hidden = true;
+			return d;
+		};
+		t.props = {
+			hiddenInt("inSound"),
+			{QStringLiteral("inOffsetMs"), QStringLiteral("In offset (ms)"), PropType::Int, -5000.0,
+			 5000.0, 0.0, false,
+			 QStringLiteral("Move the In sound: negative plays it before the clip starts.")},
+			{QStringLiteral("inVolume"), QStringLiteral("In volume (%)"), PropType::Int, 0.0, 200.0,
+			 100.0, false, QStringLiteral("100 is the sound as it is.")},
+			{QStringLiteral("outOn"), QStringLiteral("Out sound"), PropType::Bool, 0.0, 1.0, 0.0, false,
+			 QStringLiteral("Also play a sound when the clip goes.")},
+			hiddenInt("outSound"),
+			{QStringLiteral("outOffsetMs"), QStringLiteral("Out offset (ms)"), PropType::Int, -5000.0,
+			 5000.0, 0.0, false,
+			 QStringLiteral("Move the Out sound: negative plays it before the clip ends.")},
+			{QStringLiteral("outVolume"), QStringLiteral("Out volume (%)"), PropType::Int, 0.0, 200.0,
+			 100.0, false, QStringLiteral("100 is the sound as it is.")},
+			{QStringLiteral("alignSlide"), QStringLiteral("Match Slide timing"), PropType::Bool, 0.0,
+			 1.0, 1.0, false,
+			 QStringLiteral("With a Slide to Position that slides out on this clip, the Out sound "
+					"plays when the slide out starts, not at the very end.")},
+		};
+		// The window answers these (a file picker and the speakers are its
+		// business); `run` is empty on purpose.
+		t.actions = {
+			{QStringLiteral("pickIn"), QStringLiteral("In sound\u2026"), QStringLiteral("Choose the sound played when the clip appears."), {}},
+			{QStringLiteral("playIn"), QStringLiteral("\u25B6 In"), QStringLiteral("Hear the In sound."), {}},
+			{QStringLiteral("pickOut"), QStringLiteral("Out sound\u2026"), QStringLiteral("Choose the sound played when the clip goes."), {}},
+			{QStringLiteral("playOut"), QStringLiteral("\u25B6 Out"), QStringLiteral("Hear the Out sound."), {}},
+		};
+		t.make = [] { return std::unique_ptr<IComponent>(new SoundComponent); };
 		reg.add(t);
 	}
 	{

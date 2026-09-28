@@ -4008,7 +4008,14 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	QAction *sndThis = nullptr, *sndKind = nullptr, *sndTrThis = nullptr, *sndTrAll = nullptr;
 	QAction *sndRules = nullptr;
 	const bool onPicture = TimelineModel::isPictureKind(model_.tracks[track].kind);
-	if (menuClip.soundRule > 0) {
+	if (menuClip.soundRule == kSoundFromComponent) {
+		menu.addSeparator();
+		QAction *why = menu.addAction(QStringLiteral("Placed by a Sound component"));
+		disableBecause(why, false,
+			       QStringLiteral("A Sound component on another clip placed this, and places it again "
+					      "whenever that clip moves. Select that clip and edit its Sound "
+					      "component in the inspector to change or remove it."));
+	} else if (menuClip.soundRule > 0) {
 		menu.addSeparator();
 		sndRules = menu.addAction(QStringLiteral("Sound rules…"));
 		sndRules->setToolTip(QStringLiteral(

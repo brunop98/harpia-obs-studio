@@ -440,6 +440,92 @@ int main(int argc, char **argv)
 		ok(!(w == m), "tags are part of the model's equality");
 	}
 
+	std::printf("\n-- the Sound component --\n");
+	{
+		TimelineModel w = m;
+		TlClip &st = w.tracks[1].clips[2]; // the still, 9000-11000
+		ComponentInstance snd;
+		snd.typeId = QString::fromLatin1(kSoundComponentId);
+		snd.instanceId = QStringLiteral("snd");
+		snd.props.insert(QStringLiteral("inSound"), 50);
+		snd.props.insert(QStringLiteral("inOffsetMs"), -200);
+		snd.props.insert(QStringLiteral("inVolume"), 50);
+		st.components.append(snd);
+		ok(SoundRules::apply(w, lookup), "a Sound component places a sound with no rules at all");
+		const int lane = w.soundsLane();
+		ok(lane >= 0 && w.tracks[lane].clips.size() == 1, "one sound on the Sounds lane");
+		if (lane >= 0 && w.tracks[lane].clips.size() == 1) {
+			const TlClip &c = w.tracks[lane].clips[0];
+			eqi(c.outStartMs, 8800, "at the clip's start plus the offset");
+			ok(std::abs(c.volume - 0.5) < 1e-9, "at the component's volume");
+			ok(c.soundRule == kSoundFromComponent, "marked as a component's sound");
+		}
+		// Out sound, at the end.
+		ComponentInstance &sc = w.tracks[1].clips[2].components.last();
+		sc.props.insert(QStringLiteral("outOn"), true);
+		sc.props.insert(QStringLiteral("outSound"), 51);
+		sc.props.insert(QStringLiteral("outOffsetMs"), 100);
+		SoundRules::apply(w, lookup);
+		eqi(w.tracks[w.soundsLane()].clips.size(), 2, "Out sound on: two sounds");
+		eqi(w.tracks[w.soundsLane()].clips[1].outStartMs, 11100, "the Out sound at the end plus its offset");
+
+		// Match Slide timing.
+		ComponentInstance slide;
+		slide.typeId = QStringLiteral("harpia.slide");
+		slide.instanceId = QStringLiteral("sl");
+		slide.props.insert(QStringLiteral("durationMs"), 400);
+		slide.props.insert(QStringLiteral("slideOut"), true);
+		w.tracks[1].clips[2].components.append(slide);
+		SoundRules::apply(w, lookup);
+		eqi(w.tracks[w.soundsLane()].clips[1].outStartMs, 10700,
+		    "with a Slide out, the Out sound starts where the slide out does (plus offset)");
+		w.tracks[1].clips[2].components[0].props.insert(QStringLiteral("alignSlide"), false);
+		SoundRules::apply(w, lookup);
+		eqi(w.tracks[w.soundsLane()].clips[1].outStartMs, 11100, "Match Slide timing off: back to the end");
+
+		// Moving the clip moves both.
+		w.tracks[1].clips[2].outStartMs = 12000;
+		SoundRules::apply(w, lookup);
+		eqi(w.tracks[w.soundsLane()].clips[0].outStartMs, 11800, "moving the clip moves its In sound");
+		ok(!SoundRules::apply(w, lookup), "and applying again changes nothing");
+
+		// Disabled: gone.
+		w.tracks[1].clips[2].components[0].enabled = false;
+		SoundRules::apply(w, lookup);
+		ok(w.soundsLane() < 0, "a disabled Sound component places nothing (and the lane goes)");
+		w.tracks[1].clips[2].components[0].enabled = true;
+
+		// A component's sound never triggers a tag rule or another component.
+		SoundRules::apply(w, lookup);
+		const QVector<SoundEvent> ev = SoundRules::events(w);
+		bool derived = false;
+		for (const SoundEvent &e : ev)
+			if (e.track == w.soundsLane())
+				derived = true;
+		ok(!derived, "the Sounds lane is never an event source");
+
+		// Freeze: the sounds stay as normal clips and the component goes.
+		SoundRules::freeze(w);
+		int sounds = 0;
+		for (const TlTrack &t : w.tracks)
+			for (const TlClip &c : t.clips)
+				if (c.sourceId == 50 || c.sourceId == 51)
+					++sounds;
+		eqi(sounds, 2, "freeze keeps both sounds as clips");
+		bool compLeft = false;
+		for (const ComponentInstance &ci : w.tracks[1].clips[2].components)
+			if (ci.typeId == QLatin1String(kSoundComponentId))
+				compLeft = true;
+		ok(!compLeft, "and removes the Sound component so they are not placed twice");
+		ok(!SoundRules::apply(w, lookup), "nothing is placed again after freezing");
+
+		ok(clipFromJson(clipToJson(w.tracks[w.tracks.size() - 1].clips.value(0))).soundRule == 0,
+		   "a frozen clip saves as the user's");
+		TlClip marked;
+		marked.soundRule = kSoundFromComponent;
+		ok(clipFromJson(clipToJson(marked)).soundRule == kSoundFromComponent, "the component mark is saved");
+	}
+
 	std::printf("\n-- the built-in sounds --\n");
 	{
 		QTemporaryDir dir;

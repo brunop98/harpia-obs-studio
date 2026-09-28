@@ -37,6 +37,11 @@ struct SoundEvent {
 	bool audioLane = false;
 };
 
+// The Sound component ("harpia.sound"): an In sound at the clip's start and
+// an optional Out sound at its end, each with an offset and a volume. Its
+// sounds are placed by apply() like a rule's, marked kSoundFromComponent.
+inline const char *kSoundComponentId = "harpia.sound";
+
 struct SoundInfo {
 	qint64 durationMs = 0; // 0 = unknown sound: the rule places nothing
 	QVector<float> peaks;  // waveform for the strip, may be empty
@@ -58,7 +63,8 @@ public:
 	// the offset would put it before the start.
 	static TlClip clipFor(const TlSoundRule &r, const SoundEvent &e, const SoundInfo &info);
 
-	// Rebuild every rule-made clip. Removes all clips with soundRule > 0 from
+	// Rebuild every derived clip (rules and Sound components). Removes all
+	// clips with soundRule != 0 from
 	// every lane, then places the current rules' clips on the Sounds lane
 	// (made, locked, at the bottom, when there is none and something is to be
 	// placed; removed again when it would be left empty and unnamed). Returns
@@ -69,6 +75,12 @@ public:
 	// soundRule is cleared, the lane unlocks and stops being the Sounds lane --
 	// and the rules that made them go, so the next apply makes nothing new.
 	static void freeze(TimelineModel &m);
+
+	// Where a Sound component's two sounds start, in output ms. `*outAt` is
+	// -1 when the Out sound is off or has no sound. With "Match Slide timing"
+	// the Out anchor is where a Slide to Position on the same clip starts
+	// sliding out, instead of the clip's end.
+	static void componentSoundTimes(const TlClip &c, const ComponentInstance &ci, qint64 *inAt, qint64 *outAt);
 
 	// Names for the list. "Every crossfade", "Every image appears", "Every
 	// clip tagged intro"... The model is where a tag's name lives.

@@ -230,6 +230,9 @@ inline QVector<TlScript> reorderScriptsByLabel(const QStringList &labels,
 // One clip placed on a track. Video and Text clips use the transform/keyframes;
 // audio clips use volume/fades (+ cached peaks for the waveform). `sourceId`
 // refers to an EditorSource in the window's media pool (unused for Text).
+// TlClip::soundRule on a clip placed by a Sound component rather than a rule.
+inline constexpr int kSoundFromComponent = -1;
+
 struct TlClip {
 	// Video = a decoded media clip (also used for audio-track clips); Image = a
 	// still whose duration is free; Text = a rendered caption; Effect = a grade
@@ -319,7 +322,8 @@ struct TlClip {
 	TlTransition transition;
 
 	// Non-zero on a clip a SOUND RULE placed (the id of the rule, see
-	// TlSoundRule). Such a clip is regenerated from the rule whenever the
+	// TlSoundRule), or kSoundFromComponent (-1) on one a Sound component on
+	// another clip placed. Such a clip is regenerated from the rule whenever the
 	// timeline changes, so it is not the user's to move: deleting the rule, or
 	// "Convert to normal clips" on the Sounds lane, is how it becomes theirs.
 	int soundRule = 0;

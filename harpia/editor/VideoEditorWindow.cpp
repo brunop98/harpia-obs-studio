@@ -1482,6 +1482,38 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// action costs nothing here.
 	connect(componentPanel_, &ComponentPanel::actionInvoked, this,
 		[this](const QString &typeId, int ordinal, const QString &actionId) {
+			// The Sound component's buttons need the window: a sound picker
+			// and the speakers.
+			if (typeId == QLatin1String(kSoundComponentId)) {
+				const bool in = actionId.endsWith(QLatin1String("In"));
+				const QString key = in ? QStringLiteral("inSound") : QStringLiteral("outSound");
+				if (actionId.startsWith(QLatin1String("pick"))) {
+					QString name;
+					const int src = pickSound(QCursor::pos(), &name);
+					if (src < 0)
+						return;
+					editSharedComponent(typeId, ordinal, [&](ComponentInstance &ci) {
+						ci.props.insert(key, src);
+						if (!in)
+							ci.props.insert(QStringLiteral("outOn"), true);
+					});
+					afterComponentEdit();
+					return;
+				}
+				// Play: the primary clip's sound for that slot.
+				if (const TlClip *c = timelineView_->selectedClipPtr()) {
+					int seen = 0;
+					for (const ComponentInstance &ci : c->components)
+						if (ci.typeId == typeId && seen++ == ordinal) {
+							const int src = ci.props.value(key, 0).toInt();
+							if (src > 0)
+								previewSound(src);
+							else if (infoLabel_)
+								infoLabel_->setText(QStringLiteral("No sound chosen yet."));
+						}
+				}
+				return;
+			}
 			const ComponentType *type = ComponentRegistry::instance().find(typeId);
 			if (!type)
 				return;
@@ -2882,12 +2914,17 @@ void VideoEditorWindow::applySoundRules()
 	const TimelineModel &cur = timelineView_->model();
 	if (cur.soundRules.isEmpty() && cur.soundsLane() < 0) {
 		// The common case, and the cheap one: no rules, no Sounds lane. Only a
-		// stray rule-made clip (a hand-edited file) would need the full pass.
+		// Sound component, or a stray derived clip (a hand-edited file), would
+		// need the full pass.
 		bool stray = false;
 		for (const TlTrack &t : cur.tracks)
-			for (const TlClip &c : t.clips)
-				if (c.soundRule > 0)
+			for (const TlClip &c : t.clips) {
+				if (c.soundRule != 0)
 					stray = true;
+				for (const ComponentInstance &ci : c.components)
+					if (ci.typeId == QLatin1String(kSoundComponentId))
+						stray = true;
+			}
 		if (!stray)
 			return;
 	}
@@ -3144,8 +3181,8 @@ void VideoEditorWindow::freezeSounds()
 	const auto answer = QMessageBox::question(
 		this, QStringLiteral("Convert to normal clips"),
 		QStringLiteral("The Sounds lane's clips become ordinary audio clips you can move, trim "
-			       "and delete, and the %1 rule(s) that made them are removed, so nothing is "
-			       "placed automatically from now on.\n\nConvert?")
+			       "and delete. The %1 rule(s) and any Sound components that made them are "
+			       "removed, so nothing is placed automatically from now on.\n\nConvert?")
 			.arg(m.soundRules.size()),
 		QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
 	if (answer != QMessageBox::Yes)
@@ -5606,6 +5643,26 @@ ComponentPanel::View VideoEditorWindow::buildComponentView() const
 				if (allKeyed)
 					sc.keyedHere.append(d.key);
 			}
+		}
+		// A Sound component's buttons name the sound they hold.
+		if (sc.typeId == QLatin1String(kSoundComponentId)) {
+			auto nameOf = [&](const char *key) -> QString {
+				const ComponentPanel::Mixed mv = sc.values.value(QString::fromLatin1(key));
+				if (mv.mixed)
+					return QStringLiteral("(different)");
+				const int id = mv.value.toInt();
+				for (const EditorSource &es : sources_)
+					if (es.id == id)
+						return es.name;
+				return QString();
+			};
+			const QString in = nameOf("inSound"), out = nameOf("outSound");
+			sc.actionLabels.insert(QStringLiteral("pickIn"),
+					       in.isEmpty() ? QStringLiteral("Choose In sound\u2026")
+							    : QStringLiteral("In: %1").arg(in));
+			sc.actionLabels.insert(QStringLiteral("pickOut"),
+					       out.isEmpty() ? QStringLiteral("Choose Out sound\u2026")
+							     : QStringLiteral("Out: %1").arg(out));
 		}
 		v.shared.append(sc);
 		sharedNames.insert(ci.typeId + QChar('#') + QString::number(ordinal));

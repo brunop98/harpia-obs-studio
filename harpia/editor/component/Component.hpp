@@ -78,6 +78,10 @@ struct PropDef {
 	// draws a dropdown from these, so the number stored is never something the
 	// user has to know.
 	QStringList choices;
+	// Stored, saved and evaluated like any property, but no row in the
+	// Inspector: a value the component's own buttons set (a Sound
+	// component's chosen sound is a media id nobody should type).
+	bool hidden = false;
 
 	bool operator==(const PropDef &o) const
 	{

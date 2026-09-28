@@ -9,7 +9,9 @@
 #include "editor/component/ComponentStack.hpp"
 #include "editor/component/TextSubtitle.hpp"
 #include "editor/subtitles/AudioForSpeech.hpp"
-#include "editor/subtitles/OpenAiTranscriber.hpp"
+#include "editor/subtitles/SecretStore.hpp"
+#include "editor/subtitles/SpeechProviders.hpp"
+#include "editor/subtitles/SpeechTranscriber.hpp"
 #include "editor/subtitles/SubtitleDialog.hpp"
 #include "editor/subtitles/Transcript.hpp"
 #include "editor/timeline/TimelineJson.hpp"
@@ -236,10 +238,10 @@ int main(int argc, char **argv)
 
 	std::printf("\n-- what goes on the wire --\n");
 	{
-		OpenAiTranscriber::Job j;
+		SpeechTranscriber::Job j;
 		j.language = QStringLiteral("pt");
 		j.apiKey = QStringLiteral("sk-secret");
-		const QByteArray body = OpenAiTranscriber::multipartBody(j, QByteArrayLiteral("RIFFxxxx"), "B0UNDARY");
+		const QByteArray body = SpeechTranscriber::multipartBody(j, QByteArrayLiteral("RIFFxxxx"), "B0UNDARY");
 		ok(body.contains("name=\"model\"\r\n\r\nwhisper-1") && body.contains("name=\"response_format\"\r\n\r\nverbose_json") &&
 			   body.contains("name=\"timestamp_granularities[]\"\r\n\r\nword") &&
 			   body.contains("name=\"language\"\r\n\r\npt") &&
@@ -247,11 +249,119 @@ int main(int argc, char **argv)
 		   "model, verbose_json, word timestamps, the language and the file, closed properly");
 		ok(!body.contains("sk-secret"), "and the key is never in the body (it goes in the header)");
 		j.language.clear();
-		ok(!OpenAiTranscriber::multipartBody(j, {}, "B").contains("name=\"language\""),
+		ok(!SpeechTranscriber::multipartBody(j, {}, "B").contains("name=\"language\""),
 		   "no language field when detecting");
 		const auto langs = SubtitleDialog::languages();
 		ok(langs.size() >= 10 && langs[0].second.isEmpty() && langs[1].second == QStringLiteral("pt"),
 		   "the picker offers Detect first, then Portuguese");
+	}
+
+	std::printf("\n-- other speech services --\n");
+	{
+		const auto &all = speechProviders();
+		ok(all.size() == 5 && all[0].provider == SpeechProvider::OpenAI, "five services, OpenAI first");
+		bool linked = true;
+		for (const SpeechProviderInfo &i : all)
+			linked = linked && QString::fromLatin1(i.keyUrl).startsWith(QLatin1String("https://")) && *i.name && *i.id;
+		ok(linked, "each has a name, an id and an https link to get a key");
+		ok(speechProviderFromId(QStringLiteral("deepgram")) == SpeechProvider::Deepgram &&
+			   speechProviderFromId(QStringLiteral("nonsense")) == SpeechProvider::OpenAI &&
+			   speechProviderFromId(QString()) == SpeechProvider::OpenAI,
+		   "ids round-trip; unknown or missing falls back to OpenAI");
+		ok(SecretStore::settingsName(SpeechProvider::OpenAI) == QStringLiteral("subtitles/apiKey") &&
+			   SecretStore::settingsName(SpeechProvider::Groq) == QStringLiteral("subtitles/apiKey_groq"),
+		   "a key saved before other services existed is still OpenAI's; the others get their own");
+
+		// Groq: OpenAI's request with its own model.
+		SpeechJob g;
+		g.provider = SpeechProvider::Groq;
+		g.language = QStringLiteral("pt");
+		const QByteArray gb = SpeechTranscriber::multipartBody(g, "RIFF", "B");
+		ok(gb.contains("name=\"model\"\r\n\r\nwhisper-large-v3-turbo") && gb.contains("timestamp_granularities[]\"\r\n\r\nword"),
+		   "Groq: the OpenAI request with whisper-large-v3-turbo and word timestamps");
+
+		// Where the key goes.
+		const QUrl u(QStringLiteral("https://example.test/"));
+		ok(SpeechTranscriber::authorized(SpeechProvider::Groq, u, QStringLiteral(" k1 ")).rawHeader("Authorization") == "Bearer k1" &&
+			   SpeechTranscriber::authorized(SpeechProvider::Deepgram, u, QStringLiteral("k2")).rawHeader("Authorization") == "Token k2" &&
+			   SpeechTranscriber::authorized(SpeechProvider::AssemblyAI, u, QStringLiteral("k3")).rawHeader("Authorization") == "k3" &&
+			   SpeechTranscriber::authorized(SpeechProvider::ElevenLabs, u, QStringLiteral("k4")).rawHeader("xi-api-key") == "k4" &&
+			   !SpeechTranscriber::authorized(SpeechProvider::ElevenLabs, u, QStringLiteral("k4")).hasRawHeader("Authorization"),
+		   "each service gets the key in the header it expects, trimmed");
+
+		// Deepgram: options in the query.
+		SpeechJob d;
+		d.provider = SpeechProvider::Deepgram;
+		d.language = QStringLiteral("pt");
+		const QUrlQuery dq(deepgramUrl(d));
+		ok(deepgramUrl(d).host() == QStringLiteral("api.deepgram.com") && dq.queryItemValue(QStringLiteral("model")) == QStringLiteral("nova-3") &&
+			   dq.queryItemValue(QStringLiteral("language")) == QStringLiteral("pt") && !dq.hasQueryItem(QStringLiteral("detect_language")) &&
+			   dq.queryItemValue(QStringLiteral("smart_format")) == QStringLiteral("true"),
+		   "Deepgram: nova-3, the language, punctuation, in the query");
+		d.language.clear();
+		ok(QUrlQuery(deepgramUrl(d)).queryItemValue(QStringLiteral("detect_language")) == QStringLiteral("true") &&
+			   !QUrlQuery(deepgramUrl(d)).hasQueryItem(QStringLiteral("language")),
+		   "Deepgram: detect_language when detecting");
+		QString err;
+		const Transcript dt = parseDeepgramJson(R"({"results":{"channels":[{"detected_language":"pt","alternatives":[{"transcript":"olá mundo",
+			"words":[{"word":"mundo","start":0.9,"end":1.3,"punctuated_word":"mundo."},{"word":"olá","start":0.25,"end":0.6,"punctuated_word":"Olá,"}]}]}]}})", &err);
+		ok(dt.words.size() == 2 && dt.words[0].text == QStringLiteral("Olá,") && dt.words[0].startMs == 250 &&
+			   dt.words[1].endMs == 1300 && dt.language == QStringLiteral("pt") && err.isEmpty(),
+		   "Deepgram reply: punctuated words, seconds to ms, sorted, detected language");
+		err.clear();
+		parseDeepgramJson(R"({"err_code":"INVALID_AUTH","err_msg":"Invalid credentials.","request_id":"x"})", &err);
+		ok(err == QStringLiteral("Invalid credentials."), "Deepgram error body: its own message");
+		ok(speechErrorMessage(SpeechProvider::Deepgram, R"({"category":"INVALID_AUTH","message":"Bad key"})") == QStringLiteral("Bad key"),
+		   "and the newer error shape too");
+
+		// AssemblyAI: upload -> create -> poll.
+		ok(parseAssemblyAiUploadUrl(R"({"upload_url":"https://cdn.assemblyai.com/upload/abc"})") ==
+			   QStringLiteral("https://cdn.assemblyai.com/upload/abc"),
+		   "AssemblyAI: where the upload went");
+		const QJsonObject cb = QJsonDocument::fromJson(assemblyAiCreateBody(QStringLiteral("https://u"), QStringLiteral("pt"))).object();
+		ok(cb.value(QStringLiteral("audio_url")).toString() == QStringLiteral("https://u") &&
+			   cb.value(QStringLiteral("language_code")).toString() == QStringLiteral("pt") && !cb.contains(QStringLiteral("language_detection")),
+		   "AssemblyAI job: the audio and the language");
+		ok(QJsonDocument::fromJson(assemblyAiCreateBody(QStringLiteral("https://u"), QString())).object().value(QStringLiteral("language_detection")).toBool(),
+		   "AssemblyAI job: language detection when detecting");
+		const AssemblyAiStatus st = parseAssemblyAiStatus(R"({"id":"t1","status":"processing"})");
+		ok(st.id == QStringLiteral("t1") && st.status == QStringLiteral("processing"), "AssemblyAI status: id and state");
+		err.clear();
+		const Transcript at = parseAssemblyAiJson(R"({"id":"t1","status":"completed","language_code":"en","text":"Hi there.",
+			"words":[{"text":"Hi","start":120,"end":400},{"text":"there.","start":450,"end":800}]})", &err);
+		ok(at.words.size() == 2 && at.words[0].startMs == 120 && at.words[1].text == QStringLiteral("there.") && at.language == QStringLiteral("en"),
+		   "AssemblyAI reply: words already in ms");
+		err.clear();
+		parseAssemblyAiJson(R"({"id":"t1","status":"error","error":"Audio file has no speech"})", &err);
+		ok(err == QStringLiteral("Audio file has no speech"), "AssemblyAI failed job: its reason");
+
+		// ElevenLabs Scribe.
+		SpeechJob e;
+		e.provider = SpeechProvider::ElevenLabs;
+		e.language = QStringLiteral("es");
+		e.apiKey = QStringLiteral("sk_secret");
+		const QByteArray eb = elevenLabsBody(e, "RIFF", "B");
+		ok(eb.contains("name=\"model_id\"\r\n\r\nscribe_v1") && eb.contains("name=\"timestamps_granularity\"\r\n\r\nword") &&
+			   eb.contains("name=\"language_code\"\r\n\r\nes") && eb.contains("filename=\"speech.wav\"") && !eb.contains("sk_secret"),
+		   "ElevenLabs: scribe_v1, word timestamps, the language and the file, no key");
+		err.clear();
+		const Transcript et = parseElevenLabsJson(R"J({"language_code":"spa","text":"Hola amigo","words":[
+			{"text":"Hola","start":0.1,"end":0.4,"type":"word"},{"text":" ","start":0.4,"end":0.5,"type":"spacing"},
+			{"text":"(risas)","start":0.5,"end":0.7,"type":"audio_event"},{"text":"amigo","start":0.7,"end":1.1,"type":"word"}]})J", &err);
+		ok(et.words.size() == 2 && et.words[1].text == QStringLiteral("amigo") && et.words[1].startMs == 700,
+		   "ElevenLabs reply: only the words, not spacing or audio events");
+		err.clear();
+		parseElevenLabsJson(R"({"detail":{"status":"invalid_api_key","message":"Invalid API key"}})", &err);
+		ok(err == QStringLiteral("Invalid API key"), "ElevenLabs error body: its own message");
+		ok(speechErrorMessage(SpeechProvider::ElevenLabs, R"({"detail":[{"loc":["body","file"],"msg":"field required"}]})") ==
+			   QStringLiteral("field required"),
+		   "and a validation error list");
+		ok(speechErrorMessage(SpeechProvider::Groq, R"({"error":{"message":"Invalid API Key"}})") == QStringLiteral("Invalid API Key") &&
+			   speechErrorMessage(SpeechProvider::AssemblyAI, "<html>") .isEmpty(),
+		   "Groq's error shape; a non-JSON body has no service message");
+		ok(parseSpeechReply(SpeechProvider::AssemblyAI, R"({"status":"completed","words":[{"text":"a","start":1,"end":2}]})").words.size() == 1 &&
+			   parseSpeechReply(SpeechProvider::Groq, R"({"words":[{"word":"a","start":0.001,"end":0.002}]})").words.size() == 1,
+		   "the final reply goes to each service's own parser");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

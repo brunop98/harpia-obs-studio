@@ -265,8 +265,9 @@ target_sources(
     editor/subtitles/Transcript.hpp
     editor/subtitles/AudioForSpeech.cpp
     editor/subtitles/AudioForSpeech.hpp
-    editor/subtitles/OpenAiTranscriber.cpp
-    editor/subtitles/OpenAiTranscriber.hpp
+    editor/subtitles/SpeechTranscriber.cpp
+    editor/subtitles/SpeechProviders.hpp
+    editor/subtitles/SpeechTranscriber.hpp
     editor/subtitles/SecretStore.cpp
     editor/subtitles/SecretStore.hpp
     editor/subtitles/SubtitleDialog.cpp

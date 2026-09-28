@@ -12,8 +12,6 @@
 namespace harpia {
 
 namespace {
-const QString kKey = QStringLiteral("subtitles/apiKey");
-const QString kKind = QStringLiteral("subtitles/apiKeyKind"); // "dpapi" | "scrambled"
 
 QSettings settings()
 {
@@ -35,8 +33,17 @@ QByteArray scramble(const QByteArray &in)
 #endif
 } // namespace
 
-void SecretStore::saveApiKey(const QString &key)
+QString SecretStore::settingsName(SpeechProvider p)
 {
+	if (p == SpeechProvider::OpenAI)
+		return QStringLiteral("subtitles/apiKey");
+	return QStringLiteral("subtitles/apiKey_%1").arg(QString::fromLatin1(speechProviderInfo(p).id));
+}
+
+void SecretStore::saveApiKey(SpeechProvider p, const QString &key)
+{
+	const QString kKey = settingsName(p);
+	const QString kKind = kKey + QStringLiteral("Kind"); // "dpapi" | "scrambled"
 	QSettings s = settings();
 	if (key.trimmed().isEmpty()) {
 		s.remove(kKey);
@@ -65,8 +72,10 @@ void SecretStore::saveApiKey(const QString &key)
 #endif
 }
 
-QString SecretStore::loadApiKey()
+QString SecretStore::loadApiKey(SpeechProvider p)
 {
+	const QString kKey = settingsName(p);
+	const QString kKind = kKey + QStringLiteral("Kind");
 	QSettings s = settings();
 	const QByteArray stored = QByteArray::fromBase64(s.value(kKey).toByteArray());
 	if (stored.isEmpty())

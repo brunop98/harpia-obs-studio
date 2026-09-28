@@ -12,12 +12,14 @@
 
 #include "../timeline/TimelineModel.hpp"
 #include "AudioForSpeech.hpp"
+#include "SpeechProviders.hpp"
 #include "Transcript.hpp"
 
 #include <QDialog>
 #include <QVector>
 
 class QCheckBox;
+class QGroupBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
@@ -27,7 +29,7 @@ class QSpinBox;
 
 namespace harpia {
 
-class OpenAiTranscriber;
+class SpeechTranscriber;
 
 class SubtitleDialog : public QDialog {
 	Q_OBJECT
@@ -48,6 +50,7 @@ public:
 	GroupRule groupRule() const;
 	SubtitleLook look() const;
 	QString languageCode() const; // "" = detect
+	SpeechProvider provider() const;
 
 	// The languages offered, as (label, ISO code). Exposed for the test.
 	static QVector<QPair<QString, QString>> languages();
@@ -65,9 +68,11 @@ private:
 	void nextChunk();
 	void finishJob(const QString &error);
 	void setBusy(bool on);
+	void refreshProvider(); // key hint, link and saved-key line for the picked service
+	QString currentKey() const;
 
 	QVector<Target> targets_;
-	OpenAiTranscriber *transcriber_ = nullptr;
+	SpeechTranscriber *transcriber_ = nullptr;
 
 	// Job state.
 	int targetIdx_ = -1;
@@ -79,6 +84,10 @@ private:
 	int wordsTotal_ = 0;
 
 	// Controls.
+	QComboBox *provider_ = nullptr;
+	QGroupBox *service_ = nullptr;
+	QLabel *about_ = nullptr;
+	QLabel *getKey_ = nullptr;
 	QComboBox *language_ = nullptr;
 	QLineEdit *apiKey_ = nullptr;
 	QLabel *keyState_ = nullptr;

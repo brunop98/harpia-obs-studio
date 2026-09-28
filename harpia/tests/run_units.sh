@@ -204,11 +204,11 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 
 # Subtitles from speech: API JSON -> words -> captions -> clips aligned to the
 # media clip; the Subtitle component; the audio downmix; the request body.
-"$MOC" -I"$H" "$H/editor/subtitles/OpenAiTranscriber.hpp" -o "$WORK/moc_OpenAiTranscriber.cpp"
+"$MOC" -I"$H" "$H/editor/subtitles/SpeechTranscriber.hpp" -o "$WORK/moc_SpeechTranscriber.cpp"
 "$MOC" -I"$H" "$H/editor/subtitles/SubtitleDialog.hpp" -o "$WORK/moc_SubtitleDialog.cpp"
 g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF $AVCF \
 	"$HERE/subtitles_test.cpp" \
-	"$H/editor/subtitles/OpenAiTranscriber.cpp" "$WORK/moc_OpenAiTranscriber.cpp" \
+	"$H/editor/subtitles/SpeechTranscriber.cpp" "$WORK/moc_SpeechTranscriber.cpp" \
 	"$H/editor/subtitles/SubtitleDialog.cpp" "$WORK/moc_SubtitleDialog.cpp" \
 	"$H/editor/subtitles/SecretStore.cpp" "$H/editor/subtitles/AudioForSpeech.cpp" \
 	"$H/editor/VoiceoverMixer.cpp" \

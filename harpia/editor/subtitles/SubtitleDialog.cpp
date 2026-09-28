@@ -2,7 +2,7 @@
 
 #include "../../ui/EditorLog.hpp"
 
-#include "OpenAiTranscriber.hpp"
+#include "SpeechTranscriber.hpp"
 #include "SecretStore.hpp"
 #include "../../ui/InfoHint.hpp"
 
@@ -21,6 +21,7 @@
 #include <QSettings>
 #include <QSpinBox>
 #include <QStandardPaths>
+#include <QUrl>
 #include <QVBoxLayout>
 
 namespace harpia {
@@ -57,17 +58,17 @@ SubtitleDialog::SubtitleDialog(QWidget *parent) : QDialog(parent)
 {
 	setWindowTitle(QStringLiteral("Subtitles"));
 	setModal(false);
-	transcriber_ = new OpenAiTranscriber(this);
+	transcriber_ = new SpeechTranscriber(this);
 	buildUi();
 	loadSettings();
 
-	connect(transcriber_, &OpenAiTranscriber::progress, this, [this](const QString &s) {
+	connect(transcriber_, &SpeechTranscriber::progress, this, [this](const QString &s) {
 		status_->setText(QStringLiteral("%1  (%2)").arg(s, targetIdx_ >= 0 && targetIdx_ < targets_.size()
 									     ? targets_[targetIdx_].name
 									     : QString()));
 	});
-	connect(transcriber_, &OpenAiTranscriber::failed, this, [this](const QString &why) { finishJob(why); });
-	connect(transcriber_, &OpenAiTranscriber::finished, this, [this](const Transcript &t) {
+	connect(transcriber_, &SpeechTranscriber::failed, this, [this](const QString &why) { finishJob(why); });
+	connect(transcriber_, &SpeechTranscriber::finished, this, [this](const Transcript &t) {
 		// Shift this chunk's words into source time and keep going.
 		const qint64 off = chunks_[chunkIdx_].offsetMs;
 		for (ClipWordTime w : t.words) {
@@ -100,50 +101,55 @@ void SubtitleDialog::buildUi()
 	intro->deleteLater();
 
 	// ---- Service ----
-	auto *svc = new QGroupBox(QStringLiteral("Speech to text (OpenAI)"), this);
+	service_ = new QGroupBox(QStringLiteral("Speech to text"), this);
+	auto *svc = service_;
 	auto *sf = new QFormLayout(svc);
 	sf->setHorizontalSpacing(10);
+	provider_ = new QComboBox(svc);
+	for (const SpeechProviderInfo &i : speechProviders())
+		provider_->addItem(QString::fromUtf8(i.name), QString::fromLatin1(i.id));
+	provider_->setToolTip(QStringLiteral(
+		"Which service turns the speech into words. Each one uses its own API key, saved "
+		"separately, and bills its own account. All of them give word-level timings."));
+	sf->addRow(QStringLiteral("Service"), provider_);
+	about_ = new QLabel(svc);
+	about_->setWordWrap(true);
+	about_->setStyleSheet(QStringLiteral("color:#9aa0a6;"));
+	sf->addRow(QString(), about_);
 	language_ = new QComboBox(svc);
 	for (const auto &l : languages())
 		language_->addItem(l.first, l.second);
 	language_->setToolTip(QStringLiteral(
-		"Telling the model the language makes it faster and more accurate. Detect "
+		"Telling the service the language makes it faster and more accurate. Detect "
 		"works, but can guess wrong on a short clip or one with music under it."));
 	sf->addRow(QStringLiteral("Language"), language_);
 	auto *keyRow = new QHBoxLayout;
 	apiKey_ = new QLineEdit(svc);
 	apiKey_->setEchoMode(QLineEdit::Password);
-	apiKey_->setPlaceholderText(QStringLiteral("sk-…  (paste your OpenAI API key)"));
-	apiKey_->setToolTip(QStringLiteral(
-		"Your own OpenAI API key. Kept on this computer only -- sealed with Windows' "
-		"credential protection, never written into a project. Transcription is billed to "
-		"your OpenAI account by the minute of audio."));
 	keyRow->addWidget(apiKey_, 1);
 	auto *saveKey = new QPushButton(QStringLiteral("Save key"), svc);
 	connect(saveKey, &QPushButton::clicked, this, [this]() {
-		SecretStore::saveApiKey(apiKey_->text());
+		SecretStore::saveApiKey(provider(), apiKey_->text());
 		apiKey_->clear();
-		const QString k = SecretStore::loadApiKey();
-		keyState_->setText(k.isEmpty() ? QStringLiteral("No key saved.")
-					       : QStringLiteral("Key saved: %1").arg(SecretStore::maskedKey(k)));
+		refreshProvider();
 	});
 	keyRow->addWidget(saveKey);
 	sf->addRow(QStringLiteral("API key"), keyRow);
-	// Where to get one, a click away.
-	auto *getKey = new QLabel(
-		QStringLiteral("<a href='https://platform.openai.com/api-keys' style='color:#6ea8fe;'>"
-			       "Get an API key \u2197</a>&nbsp;&nbsp;<span style='color:#7f858e;'>"
-			       "(OpenAI dashboard \u25B8 API keys \u25B8 Create new secret key)</span>"),
-		svc);
-	getKey->setTextFormat(Qt::RichText);
-	getKey->setOpenExternalLinks(true);
-	getKey->setTextInteractionFlags(Qt::TextBrowserInteraction);
-	getKey->setToolTip(QStringLiteral("Opens platform.openai.com/api-keys in your browser. "
-					  "Transcription needs billing set up on that account."));
-	sf->addRow(QString(), getKey);
+	// Where to get one, a click away; follows the picked service.
+	getKey_ = new QLabel(svc);
+	getKey_->setTextFormat(Qt::RichText);
+	getKey_->setOpenExternalLinks(true);
+	getKey_->setTextInteractionFlags(Qt::TextBrowserInteraction);
+	getKey_->setWordWrap(true);
+	sf->addRow(QString(), getKey_);
 	keyState_ = new QLabel(svc);
 	keyState_->setStyleSheet(QStringLiteral("color:#9aa0a6;"));
+	keyState_->setWordWrap(true);
 	sf->addRow(QString(), keyState_);
+	connect(provider_, &QComboBox::currentIndexChanged, this, [this]() {
+		apiKey_->clear(); // a key typed for one service is not another's
+		refreshProvider();
+	});
 	lay->addWidget(svc);
 
 	// ---- Grouping ----
@@ -238,14 +244,60 @@ void SubtitleDialog::loadSettings()
 	fontPx_->setValue(s.value(kGrp + QStringLiteral("fontPx"), 64).toInt());
 	bold_->setChecked(s.value(kGrp + QStringLiteral("bold"), true).toBool());
 	box_->setChecked(s.value(kGrp + QStringLiteral("box"), false).toBool());
-	const QString k = SecretStore::loadApiKey();
-	keyState_->setText(k.isEmpty() ? QStringLiteral("No key saved yet. Paste one and press Save key.")
+	const int pi = provider_->findData(
+		QString::fromLatin1(speechProviderInfo(speechProviderFromId(s.value(kGrp + QStringLiteral("provider")).toString())).id));
+	provider_->setCurrentIndex(std::max(0, pi));
+	refreshProvider();
+}
+
+SpeechProvider SubtitleDialog::provider() const
+{
+	return speechProviderFromId(provider_->currentData().toString());
+}
+
+void SubtitleDialog::refreshProvider()
+{
+	const SpeechProviderInfo &i = speechProviderInfo(provider());
+	const QString name = QString::fromUtf8(i.name);
+	about_->setText(QString::fromUtf8(i.about));
+	apiKey_->setPlaceholderText(QString::fromUtf8(i.keyPlaceholder));
+	apiKey_->setToolTip(QStringLiteral(
+		"Your own %1 API key. Kept on this computer only -- sealed with Windows' credential "
+		"protection, never written into a project. Transcription is billed to that account.")
+				    .arg(name));
+	const QString url = QString::fromLatin1(i.keyUrl);
+	getKey_->setText(QStringLiteral("<a href='%1' style='color:#6ea8fe;'>Get your %2 API key \u2197</a>"
+					"&nbsp;&nbsp;<span style='color:#7f858e;'>(%3)</span>")
+				 .arg(url, name.section(QLatin1Char(' '), 0, 0).toHtmlEscaped(),
+				      QString::fromUtf8(i.keySteps).toHtmlEscaped()));
+	getKey_->setToolTip(QStringLiteral("Opens %1 in your browser.").arg(QUrl(url).host()));
+	const QString k = SecretStore::loadApiKey(provider());
+	keyState_->setText(k.isEmpty() ? QStringLiteral("No %1 key saved yet. Paste one and press Save key.")
+						 .arg(name.section(QLatin1Char(' '), 0, 0))
 				       : QStringLiteral("Key saved: %1").arg(SecretStore::maskedKey(k)));
+	// The wrapped lines above change height with the service: let the form
+	// and the window grow to fit instead of clipping them.
+	for (QLabel *l : {about_, getKey_, keyState_})
+		l->setMinimumHeight(l->heightForWidth(std::max(200, l->width() > 0 ? l->width() : 330)));
+	if (layout()) {
+		layout()->invalidate();
+		layout()->activate();
+	}
+	if (isVisible())
+		resize(width(), std::max(height(), sizeHint().height()));
+}
+
+QString SubtitleDialog::currentKey() const
+{
+	// A key typed but not saved still works for this run; saved is the norm.
+	const QString typed = apiKey_->text().trimmed();
+	return typed.isEmpty() ? SecretStore::loadApiKey(provider()) : typed;
 }
 
 void SubtitleDialog::saveSettings()
 {
 	QSettings s = settings();
+	s.setValue(kGrp + QStringLiteral("provider"), provider_->currentData().toString());
 	s.setValue(kGrp + QStringLiteral("language"), languageCode());
 	s.setValue(kGrp + QStringLiteral("maxWords"), maxWords_->value());
 	s.setValue(kGrp + QStringLiteral("maxSeconds"), maxSeconds_->value());
@@ -303,6 +355,7 @@ void SubtitleDialog::setBusy(bool on)
 {
 	go_->setEnabled(!on && !targets_.isEmpty());
 	language_->setEnabled(!on);
+	provider_->setEnabled(!on);
 	cancel_->setText(on ? QStringLiteral("Stop") : QStringLiteral("Cancel"));
 }
 
@@ -310,12 +363,8 @@ void SubtitleDialog::startJob()
 {
 	if (targets_.isEmpty())
 		return;
-	// A key typed but not saved still works for this run; saved is the norm.
-	QString key = apiKey_->text().trimmed();
-	if (key.isEmpty())
-		key = SecretStore::loadApiKey();
-	if (key.isEmpty()) {
-		status_->setText(QStringLiteral("Paste your OpenAI API key first."));
+	if (currentKey().isEmpty()) {
+		status_->setText(QStringLiteral("Paste your %1 API key first.").arg(speechProviderName(provider())));
 		apiKey_->setFocus();
 		return;
 	}
@@ -359,13 +408,14 @@ void SubtitleDialog::nextChunk()
 		status_->setText(QStringLiteral("Preparing the audio of %1…").arg(t.name));
 		QString err;
 		editorLog(EditorLogLevel::Info, QStringLiteral("Subtitles"),
-			  QStringLiteral("clip %1 of %2: %3 (%4, source %5-%6 ms), language %7")
+			  QStringLiteral("clip %1 of %2: %3 (%4, source %5-%6 ms), language %7, service %8")
 				  .arg(targetIdx_ + 1)
 				  .arg(targets_.size())
 				  .arg(t.name, QDir::toNativeSeparators(t.path))
 				  .arg(t.media.srcStartMs)
 				  .arg(t.media.srcEndMs)
-				  .arg(languageCode().isEmpty() ? QStringLiteral("detect") : languageCode()));
+				  .arg(languageCode().isEmpty() ? QStringLiteral("detect") : languageCode(),
+				       speechProviderName(provider())));
 		chunks_ = AudioForSpeech::prepare(t.path, t.media.srcStartMs, t.media.srcEndMs, workDir_, &err);
 		if (chunks_.isEmpty()) {
 			editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
@@ -375,12 +425,10 @@ void SubtitleDialog::nextChunk()
 		}
 		chunkIdx_ = 0;
 	}
-	QString key = apiKey_->text().trimmed();
-	if (key.isEmpty())
-		key = SecretStore::loadApiKey();
-	OpenAiTranscriber::Job job;
+	SpeechTranscriber::Job job;
+	job.provider = provider();
 	job.wavPath = chunks_[chunkIdx_].wavPath;
-	job.apiKey = key;
+	job.apiKey = currentKey();
 	job.language = languageCode();
 	status_->setText(QStringLiteral("Sending %1 (part %2 of %3)…")
 				 .arg(targets_[targetIdx_].name)

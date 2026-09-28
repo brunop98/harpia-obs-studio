@@ -170,6 +170,34 @@ void TimelineView::editModel(const std::function<void(TimelineModel &)> &fn)
 	commitEdit();
 }
 
+int TimelineView::editLaneCaptions(int track, const std::function<void(TlClip &)> &fn)
+{
+	if (!fn || track < 0 || track >= model_.tracks.size() || model_.tracks[track].locked)
+		return 0;
+	int n = 0;
+	for (TlClip &c : model_.tracks[track].clips) {
+		if (c.type != TlClip::Type::Text)
+			continue;
+		fn(c);
+		++n;
+	}
+	if (n) {
+		update();
+		emit clipsChanged();
+	}
+	return n;
+}
+
+int TimelineView::laneCaptionCount(int track) const
+{
+	if (track < 0 || track >= model_.tracks.size())
+		return 0;
+	int n = 0;
+	for (const TlClip &c : model_.tracks[track].clips)
+		n += c.type == TlClip::Type::Text;
+	return n;
+}
+
 void TimelineView::editSoundRules(const std::function<void(QVector<TlSoundRule> &)> &fn)
 {
 	if (!fn)

@@ -623,6 +623,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		// back to Project is one click that then stays put.
 		if (insTabs_ && track >= 0 && clip >= 0)
 			insTabs_->setCurrentIndex(kInsTabClip);
+		// So does selecting a caption lane: its Clip tab styles every caption.
+		else if (insTabs_ && track < 0 && fullEdit() && captionLaneForBatch() >= 0)
+			insTabs_->setCurrentIndex(kInsTabClip);
 	});
 	// "Show in inspector" from a clip's right-click menu (any mode).
 	connect(timelineView_, &TimelineView::filesDropped, this,
@@ -6725,7 +6728,80 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	});
 
 	tv->addLayout(tForm);
-	v->addWidget(textBox_);
+
+	// ---- Every caption on a lane (batch style) ----------------------------
+	// Shown instead of a clip's panel when a caption lane's header is
+	// selected: a heading that says what is being edited, where the captions
+	// sit, and then the same Text controls as one caption has, each applied to
+	// every caption on the lane.
+	captionLaneBox_ = new QWidget(clipBox_);
+	captionLaneBox_->setVisible(false);
+	{
+		auto *lv = new QVBoxLayout(captionLaneBox_);
+		lv->setContentsMargins(0, 0, 0, 0);
+		lv->setSpacing(4);
+		captionLaneTitle_ = new QLabel(captionLaneBox_);
+		captionLaneTitle_->setWordWrap(true);
+		captionLaneTitle_->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
+		lv->addWidget(captionLaneTitle_);
+		auto *note = new QLabel(QStringLiteral(
+			"Every change below applies to all the captions on this lane at once; their words "
+			"stay their own. Click one caption to edit just that one."), captionLaneBox_);
+		note->setWordWrap(true);
+		note->setStyleSheet(QStringLiteral("color:#9aa0a6;"));
+		lv->addWidget(note);
+		auto *pf = new QFormLayout;
+		pf->setContentsMargins(0, 4, 0, 0);
+		pf->setHorizontalSpacing(8);
+		pf->setVerticalSpacing(4);
+		captionLanePos_ = new QComboBox(captionLaneBox_);
+		captionLanePos_->addItems({QStringLiteral("As they are"), QStringLiteral("Bottom"),
+					   QStringLiteral("Middle"), QStringLiteral("Top")});
+		captionLanePos_->setToolTip(QStringLiteral(
+			"Moves every caption to the same height. Fine-tune with Horizontal and Vertical."));
+		pf->addRow(QStringLiteral("Position"), captionLanePos_);
+		captionLaneX_ = new QDoubleSpinBox(captionLaneBox_);
+		captionLaneY_ = new QDoubleSpinBox(captionLaneBox_);
+		for (QDoubleSpinBox *sb : {captionLaneX_, captionLaneY_}) {
+			sb->setRange(0.0, 100.0);
+			sb->setDecimals(1);
+			sb->setSingleStep(1.0);
+			sb->setSuffix(QStringLiteral(" %"));
+			sb->setKeyboardTracking(false);
+		}
+		captionLaneX_->setToolTip(QStringLiteral("Centre of the captions across the picture: 0 % left edge, 100 % right."));
+		captionLaneY_->setToolTip(QStringLiteral("Centre of the captions down the picture: 0 % top, 100 % bottom."));
+		pf->addRow(QStringLiteral("Horizontal"), captionLaneX_);
+		pf->addRow(QStringLiteral("Vertical"), captionLaneY_);
+		lv->addLayout(pf);
+		// Position lives on the clip (and on its keys, if a caption was
+		// animated): all of them move together so an animated caption does not
+		// snap back to where it was on its next key.
+		const auto setPos = [this](bool horizontal, double frac) {
+			editSelectedClip([horizontal, frac](TlClip &c) {
+				(horizontal ? c.posX : c.posY) = frac;
+				for (TlKeyframe &k : c.keys)
+					(horizontal ? k.tf.posX : k.tf.posY) = frac;
+			});
+		};
+		connect(captionLaneX_, &QDoubleSpinBox::valueChanged, this, [this, setPos](double v) {
+			if (!syncingClip_)
+				setPos(true, v / 100.0);
+		});
+		connect(captionLaneY_, &QDoubleSpinBox::valueChanged, this, [this, setPos](double v) {
+			if (!syncingClip_)
+				setPos(false, v / 100.0);
+		});
+		connect(captionLanePos_, &QComboBox::activated, this, [this, setPos](int i) {
+			if (syncingClip_ || i <= 0)
+				return;
+			// The same heights the Subtitles window uses (12 % in from the edge).
+			const double y = i == 1 ? 0.88 : (i == 2 ? 0.5 : 0.12);
+			setPos(false, y);
+		});
+	}
+	clipOuter->insertWidget(clipOuter->indexOf(videoClipBox_) + 1, captionLaneBox_);
+	clipOuter->insertWidget(clipOuter->indexOf(captionLaneBox_) + 1, textBox_);
 
 	// ---- Audio clip: level and fades -------------------------------------
 	// These already existed in the model, were saved with the project and were
@@ -6846,7 +6922,7 @@ void VideoEditorWindow::syncTextBoxRows()
 // to keep the old dead-end behaviour.
 void VideoEditorWindow::pickTextColor(const QString &title, QColor TlText::*field)
 {
-	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	const TlClip *sel = inspectedClip();
 	if (!sel)
 		return;
 	const QColor original = sel->text.*field;
@@ -6859,7 +6935,7 @@ void VideoEditorWindow::pickTextColor(const QString &title, QColor TlText::*fiel
 	// dragged colour too, and the selection is re-read every time: `sel` was
 	// taken before the dialog opened and every preview since has replaced it.
 	pickColorLive(this, title, original, [this, field](const QColor &c) {
-		const TlClip *now = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+		const TlClip *now = inspectedClip();
 		if (now && now->text.*field != c)
 			editSelectedClip([c, field](TlClip &cl) { cl.text.*field = c; });
 	});
@@ -6870,6 +6946,15 @@ void VideoEditorWindow::editSelectedClip(const std::function<void(TlClip &)> &fn
 	if (!timelineView_)
 		return;
 	const TlClip *sel = timelineView_->selectedClipPtr();
+	if (!sel && captionLaneTrack_ >= 0) {
+		// Batch style: the same edit on every caption of the selected lane.
+		if (timelineView_->editLaneCaptions(captionLaneTrack_, fn) == 0)
+			return;
+		showTimelineFrame(timelinePlayheadMs());
+		syncClipInspector();
+		scheduleSnapshot();
+		return;
+	}
 	if (!sel)
 		return;
 	TlClip c = *sel;
@@ -7067,6 +7152,17 @@ void VideoEditorWindow::syncClipInspector()
 	// one is selected.
 	const bool onTransition = fullEdit() && timelineView_->transitionSelected();
 	const TlClip *c = (fullEdit() && !onTransition) ? timelineView_->selectedClipPtr() : nullptr;
+	// No clip, but a caption lane's header selected: style all of its captions.
+	captionLaneTrack_ = (fullEdit() && !onTransition && !c) ? captionLaneForBatch() : -1;
+	const bool batch = captionLaneTrack_ >= 0;
+	if (batch)
+		c = inspectedClip();
+	if (captionLaneBox_)
+		captionLaneBox_->setVisible(batch);
+	if (clipTagsBox_)
+		clipTagsBox_->setVisible(!batch);
+	if (textEdit_)
+		textEdit_->setVisible(!batch);
 	clipBox_->setVisible(c != nullptr);
 	// The tab is never blank: with nothing selected it says so, rather than
 	// showing an empty column that reads as a panel that failed to load.
@@ -7075,6 +7171,24 @@ void VideoEditorWindow::syncClipInspector()
 				       (!componentPanel_ || componentPanel_->isHidden()));
 	if (!c)
 		return;
+	if (batch) {
+		videoClipBox_->setVisible(false);
+		if (audioClipBox_)
+			audioClipBox_->setVisible(false);
+		const bool wasSyncingLane = syncingClip_;
+		syncingClip_ = true;
+		const TimelineModel &lm = timelineView_->model();
+		captionLaneTitle_->setText(QStringLiteral("All %1 captions on %2")
+						   .arg(timelineView_->laneCaptionCount(captionLaneTrack_))
+						   .arg(lm.tracks[captionLaneTrack_].name));
+		captionLanePos_->setCurrentIndex(0);
+		captionLaneX_->setValue(c->posX * 100.0);
+		captionLaneY_->setValue(c->posY * 100.0);
+		textBox_->setVisible(true);
+		syncTextInspector(*c);
+		syncingClip_ = wasSyncingLane;
+		return;
+	}
 	syncClipTags();
 
 	// Save/restore rather than clear: a live edit can reach here while an outer
@@ -7171,37 +7285,68 @@ void VideoEditorWindow::syncClipInspector()
 
 	const bool isText = !onAudioTrack && !isFx && c->type == TlClip::Type::Text;
 	textBox_->setVisible(isText);
-	if (isText) {
-		refreshTextPresets();
-		if (textEdit_->toPlainText() != c->text.text)
-			textEdit_->setPlainText(c->text.text);
-		// Only when it actually differs: setCurrentFont on every refresh makes the
-		// combo re-resolve the family, which is needless work now that this runs
-		// on each mouse-move of a drag.
-		if (!c->text.fontFamily.isEmpty() &&
-		    fontCombo_->currentFont().family() != c->text.fontFamily)
-			fontCombo_->setCurrentFont(QFont(c->text.fontFamily));
-		fontSizeSpin_->setValue(c->text.fontPx);
-		boldChk_->setChecked(c->text.bold);
-		italicChk_->setChecked(c->text.italic);
-		alignCombo_->setCurrentIndex(std::clamp(c->text.align, 0, 2));
-		caseCombo_->setCurrentIndex(std::clamp(c->text.textCase, 0, kTlTextCaseCount - 1));
-		titleCaseChk_->setChecked(c->text.textCase == TlCaseTitle);
-		outlineWSpin_->setValue(c->text.outlineWidth);
-		boxChk_->setChecked(c->text.boxEnabled);
-		// setChecked only emits when the value CHANGES, so selecting a second
-		// clip with the same box setting would leave the rows as the last one
-		// left them. Called directly, it is right either way.
-		syncTextBoxRows();
-		boxPadXSpin_->setValue(c->text.boxPadX);
-		boxPadYSpin_->setValue(c->text.boxPadY);
-		boxRadiusSpin_->setValue(c->text.boxRadius);
-		boxOpacitySpin_->setValue(c->text.boxOpacity);
-		styleSwatch(textColorBtn_, c->text.color);
-		styleSwatch(outlineColorBtn_, c->text.outlineColor);
-		styleSwatch(boxColorBtn_, c->text.boxColor);
-	}
+	if (isText)
+		syncTextInspector(*c);
 	syncingClip_ = wasSyncing;
+}
+
+// The Text section's controls, from one caption: the selected clip, or in
+// batch style the lane's first caption (the one the others are compared to).
+void VideoEditorWindow::syncTextInspector(const TlClip &c)
+{
+	refreshTextPresets();
+	if (textEdit_->toPlainText() != c.text.text)
+		textEdit_->setPlainText(c.text.text);
+	// Only when it actually differs: setCurrentFont on every refresh makes the
+	// combo re-resolve the family, which is needless work now that this runs
+	// on each mouse-move of a drag.
+	if (!c.text.fontFamily.isEmpty() &&
+	    fontCombo_->currentFont().family() != c.text.fontFamily)
+		fontCombo_->setCurrentFont(QFont(c.text.fontFamily));
+	fontSizeSpin_->setValue(c.text.fontPx);
+	boldChk_->setChecked(c.text.bold);
+	italicChk_->setChecked(c.text.italic);
+	alignCombo_->setCurrentIndex(std::clamp(c.text.align, 0, 2));
+	caseCombo_->setCurrentIndex(std::clamp(c.text.textCase, 0, kTlTextCaseCount - 1));
+	titleCaseChk_->setChecked(c.text.textCase == TlCaseTitle);
+	outlineWSpin_->setValue(c.text.outlineWidth);
+	boxChk_->setChecked(c.text.boxEnabled);
+	// setChecked only emits when the value CHANGES, so selecting a second
+	// clip with the same box setting would leave the rows as the last one
+	// left them. Called directly, it is right either way.
+	syncTextBoxRows();
+	boxPadXSpin_->setValue(c.text.boxPadX);
+	boxPadYSpin_->setValue(c.text.boxPadY);
+	boxRadiusSpin_->setValue(c.text.boxRadius);
+	boxOpacitySpin_->setValue(c.text.boxOpacity);
+	styleSwatch(textColorBtn_, c.text.color);
+	styleSwatch(outlineColorBtn_, c.text.outlineColor);
+	styleSwatch(boxColorBtn_, c.text.boxColor);
+}
+
+int VideoEditorWindow::captionLaneForBatch() const
+{
+	if (!timelineView_)
+		return -1;
+	const int t = timelineView_->selectedHeaderTrack();
+	return timelineView_->laneCaptionCount(t) > 0 ? t : -1;
+}
+
+const TlClip *VideoEditorWindow::inspectedClip() const
+{
+	if (!timelineView_)
+		return nullptr;
+	if (const TlClip *sel = timelineView_->selectedClipPtr())
+		return sel;
+	if (captionLaneTrack_ < 0)
+		return nullptr;
+	const TimelineModel &m = timelineView_->model();
+	if (captionLaneTrack_ >= m.tracks.size())
+		return nullptr;
+	for (const TlClip &c : m.tracks[captionLaneTrack_].clips)
+		if (c.type == TlClip::Type::Text)
+			return &c;
+	return nullptr;
 }
 
 void VideoEditorWindow::addKeyframeAtPlayhead()
@@ -8715,7 +8860,7 @@ void VideoEditorWindow::applyTextPreset(const QString &name)
 
 void VideoEditorWindow::saveTextPresetFromSelection()
 {
-	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	const TlClip *sel = inspectedClip();
 	if (!sel || sel->type != TlClip::Type::Text)
 		return;
 	auto presets = loadTextPresets();

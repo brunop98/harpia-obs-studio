@@ -732,6 +732,17 @@ private:
 	QListWidget *keyList_ = nullptr; // every keyframe on the selected clip
 	QLabel *keyInfo_ = nullptr;
 	QWidget *textBox_ = nullptr; // text-clip style controls
+	// Batch style: with a caption lane's header selected (and no clip), the
+	// text controls edit EVERY caption on that lane. -1 = not in batch mode.
+	int captionLaneTrack_ = -1;
+	QWidget *captionLaneBox_ = nullptr;
+	QLabel *captionLaneTitle_ = nullptr;
+	QComboBox *captionLanePos_ = nullptr;
+	QDoubleSpinBox *captionLaneX_ = nullptr;
+	QDoubleSpinBox *captionLaneY_ = nullptr;
+	int captionLaneForBatch() const;       // the lane batch mode would edit, or -1
+	const TlClip *inspectedClip() const;   // the selected clip, or the lane's first caption
+	void syncTextInspector(const TlClip &c);
 	QPlainTextEdit *textEdit_ = nullptr;
 	QFontComboBox *fontCombo_ = nullptr;
 	QSpinBox *fontSizeSpin_ = nullptr;

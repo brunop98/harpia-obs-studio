@@ -299,6 +299,17 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
 	-o "$WORK/clipvolume_test" $LF
 
+# Batch style for a caption lane: every text clip on the lane, nothing else,
+# not a locked lane, and one coalesced undo step.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/captionlane_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
+	-o "$WORK/captionlane_test" $LF
+
 # The track list: a typed name survives renumbering, an effect lane can be
 # hidden but not muted, only self-made lanes vanish when emptied, and a locked
 # lane takes no clip from a menu action either. Plus the two sound controls:
@@ -752,6 +763,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/gutterspill_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinekeys_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinedragspan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/clipvolume_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/captionlane_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/tracks_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/soundrules_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/soundlibrary_test" || rc=1

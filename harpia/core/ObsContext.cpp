@@ -1,4 +1,5 @@
 #include "ObsContext.hpp"
+#include "VideoStatus.hpp"
 
 #include <obs.h>
 #include <util/bmem.h>
@@ -151,26 +152,65 @@ int ObsContext::resetVideo(uint32_t baseWidth, uint32_t baseHeight, int fpsNum, 
 	    outWidth == lastOutW_ && outHeight == lastOutH_ && fpsNum == lastFps_)
 		return OBS_VIDEO_SUCCESS;
 
-	struct obs_video_info ovi = {};
-	ovi.graphics_module = renderModule();
-	ovi.fps_num = fpsNum > 0 ? (uint32_t)fpsNum : 30;
-	ovi.fps_den = 1;
-	ovi.base_width = baseWidth;
-	ovi.base_height = baseHeight;
-	ovi.output_width = outWidth;
-	ovi.output_height = outHeight;
-	ovi.output_format = VIDEO_FORMAT_NV12;
-	ovi.colorspace = VIDEO_CS_709;
-	ovi.range = VIDEO_RANGE_PARTIAL;
-	ovi.adapter = 0;
-	ovi.gpu_conversion = true;
-	ovi.scale_type = OBS_SCALE_BICUBIC;
+	const auto attempt = [&](uint32_t bw, uint32_t bh, uint32_t ow, uint32_t oh) {
+		struct obs_video_info ovi = {};
+		ovi.graphics_module = renderModule();
+		ovi.fps_num = fpsNum > 0 ? (uint32_t)fpsNum : 30;
+		ovi.fps_den = 1;
+		ovi.base_width = bw;
+		ovi.base_height = bh;
+		ovi.output_width = ow;
+		ovi.output_height = oh;
+		ovi.output_format = VIDEO_FORMAT_NV12;
+		ovi.colorspace = VIDEO_CS_709;
+		ovi.range = VIDEO_RANGE_PARTIAL;
+		ovi.adapter = 0;
+		ovi.gpu_conversion = true;
+		ovi.scale_type = OBS_SCALE_BICUBIC;
+		return obs_reset_video(&ovi);
+	};
 
-	int ret = obs_reset_video(&ovi);
-	if (ret != OBS_VIDEO_SUCCESS) {
-		blog(LOG_ERROR, "[harpia] obs_reset_video failed: %d", ret);
+	int ret = attempt(baseWidth, baseHeight, outWidth, outHeight);
+	if (ret == OBS_VIDEO_CURRENTLY_ACTIVE) {
+		// Refused before touching anything: the old video is still running.
+		blog(LOG_WARNING, "[harpia] obs_reset_video %ux%u refused: video is in use", baseWidth, baseHeight);
 		return ret;
 	}
+	if (ret != OBS_VIDEO_SUCCESS) {
+		// obs_reset_video tears the running video down BEFORE building the
+		// new one, so a failure here leaves no video engine at all -- and the
+		// "already running like this" shortcut above must not answer for it.
+		videoReady_ = false;
+		const int first = ret;
+		blog(LOG_ERROR, "[harpia] obs_reset_video failed: %d (%ux%u -> %ux%u @ %d fps)", ret, baseWidth,
+		     baseHeight, outWidth, outHeight, fpsNum);
+		// Once more as asked -- a GPU busy with a mode change or a driver
+		// hiccup often succeeds a moment later.
+		if (ret != OBS_VIDEO_MODULE_NOT_FOUND)
+			ret = attempt(baseWidth, baseHeight, outWidth, outHeight);
+		// Then at sizes the colour conversion always accepts: width a multiple
+		// of 4, height of 2. A region can be any size; the crop simply loses
+		// the odd pixels at the edge.
+		const uint32_t bw = baseWidth & ~3u, bh = baseHeight & ~1u;
+		if (ret != OBS_VIDEO_SUCCESS && ret != OBS_VIDEO_MODULE_NOT_FOUND &&
+		    (bw != baseWidth || bh != baseHeight || (outWidth & 3u) || (outHeight & 1u)) && bw >= 32 &&
+		    bh >= 32) {
+			ret = attempt(bw, bh, outWidth & ~3u, outHeight & ~1u);
+			if (ret == OBS_VIDEO_SUCCESS) {
+				blog(LOG_WARNING, "[harpia] video engine recovered at %ux%u", bw, bh);
+				baseWidth = bw;
+				baseHeight = bh;
+				outWidth &= ~3u;
+				outHeight &= ~1u;
+			}
+		}
+		if (ret != OBS_VIDEO_SUCCESS) {
+			lastVideoResetError() = describeVideoResetError(first, baseWidth, baseHeight);
+			blog(LOG_ERROR, "[harpia] video engine is down: %s", lastVideoResetError().c_str());
+			return first;
+		}
+	}
+	lastVideoResetError().clear();
 	videoReady_ = true;
 	lastBaseW_ = baseWidth;
 	lastBaseH_ = baseHeight;

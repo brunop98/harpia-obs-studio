@@ -105,6 +105,7 @@ target_sources(
     core/FollowMouse.cpp
     core/FollowMouse.hpp
     core/MultiArea.hpp
+    core/VideoStatus.hpp
     core/ZoomMode.hpp
     core/ModeCapabilities.hpp
     core/SpotlightFx.hpp

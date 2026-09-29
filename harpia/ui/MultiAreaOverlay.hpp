@@ -69,7 +69,11 @@ public:
 	// For tests: the same geometry the mouse handlers use.
 	int areaAtLocal(const QPoint &local) const;
 	QRect areaRectLocal(int i) const;
-	QRect doneRectLocal() const;
+	QRect doneRectLocal() const;        // the whole bar at the top
+	QRect doneButtonRectLocal() const;  // its Done button
+	QRect clearButtonRectLocal() const; // its Remove all button
+	// The × on area i's corner (Arrange; null for the region, which stays).
+	QRect removeRectLocal(int i) const;
 	// Stamp a new area centred on this local point, if there is room for one.
 	// Returns its index, or -1 at the limit.
 	int addAtLocal(const QPoint &local);
@@ -80,6 +84,9 @@ signals:
 	void areasEdited(const QVector<QPoint> &tops);
 	// Arrange is over (Done, Enter or Esc).
 	void arrangeFinished();
+	// "Remove all" pressed: every area but the region, on every monitor --
+	// which only the owner can do, since each overlay holds one screen.
+	void clearAllRequested();
 
 protected:
 	void paintEvent(QPaintEvent *) override;
@@ -110,6 +117,11 @@ private:
 	int nextNumber() const;
 
 	int hover_ = -1;       // area under the pointer (Arrange)
+	int hoverRemove_ = -1; // area whose × is under the pointer
+	// Remove all asks for a second click (a dialog could open behind these
+	// full-screen, always-on-top overlays): when the first one was, or 0.
+	qint64 clearArmedMs_ = 0;
+	bool clearArmed() const;
 	QPoint pointer_;       // local, for the stamp ghost
 	bool pointerIn_ = false;
 	int drag_ = -1;        // area being dragged

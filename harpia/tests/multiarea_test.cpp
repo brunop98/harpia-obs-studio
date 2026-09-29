@@ -8,6 +8,7 @@
 // key events: stamping, dragging, removing, and the two limits (area 1 stays,
 // nine at most).
 #include "core/MultiArea.hpp"
+#include "core/VideoStatus.hpp"
 #include "ui/MultiAreaOverlay.hpp"
 
 #include <QApplication>
@@ -315,6 +316,48 @@ int main(int argc, char **argv)
 		lk.removeArea(0);
 		lk.removeArea(0); // was index 1 (the locked one) before the first removal
 		ok(lk.areas().size() == 2, "and follows its index when an earlier one goes");
+	}
+
+	std::printf("\n-- removing in Arrange --\n");
+	{
+		MultiAreaOverlay ov;
+		ov.setScreen(QGuiApplication::primaryScreen());
+		ov.setAreas({QPoint(0, 200), QPoint(300, 200), QPoint(500, 400)}, QSize(160, 90));
+		ov.setMode(MultiAreaOverlay::Mode::Arrange);
+		ov.show();
+		ok(ov.removeRectLocal(0).isNull(), "the region has no × (it stays)");
+		const QRect x1 = ov.removeRectLocal(1);
+		ok(!x1.isNull() && ov.areaRectLocal(1).contains(x1), "every other area has a × in its corner");
+		mouse(&ov, QEvent::MouseButtonPress, x1.center());
+		mouse(&ov, QEvent::MouseButtonRelease, x1.center());
+		ok(ov.areas().size() == 2 && ov.areas()[1] == QPoint(500, 400), "clicking × removes that area");
+
+		QSignalSpy cleared(&ov, &MultiAreaOverlay::clearAllRequested);
+		QSignalSpy finished(&ov, &MultiAreaOverlay::arrangeFinished);
+		const QPoint c = ov.clearButtonRectLocal().center();
+		ok(ov.doneRectLocal().contains(ov.clearButtonRectLocal()) &&
+			   !ov.clearButtonRectLocal().intersects(ov.doneButtonRectLocal()),
+		   "Remove all sits in the bar, beside Done");
+		mouse(&ov, QEvent::MouseButtonPress, c);
+		ok(cleared.count() == 0 && finished.count() == 0, "the first click only asks (no accidental wipe)");
+		mouse(&ov, QEvent::MouseButtonPress, c);
+		ok(cleared.count() == 1, "a second click asks the owner to remove them all");
+		mouse(&ov, QEvent::MouseButtonPress, c);
+		ok(cleared.count() == 1, "and a third starts over");
+		mouse(&ov, QEvent::MouseButtonPress, ov.doneButtonRectLocal().center());
+		ok(finished.count() == 1, "Done still finishes");
+	}
+
+	std::printf("\n-- video engine errors, in words --\n");
+	{
+		const std::string inv = describeVideoResetError(-3, 1917, 881);
+		ok(inv.find("1917x881") != std::string::npos, "an invalid canvas names its size");
+		ok(describeVideoResetError(-5, 0, 0).find("libobs-d3d11") != std::string::npos,
+		   "a missing graphics module names the DLL");
+		ok(describeVideoResetError(-2, 0, 0).find("driver") != std::string::npos, "not supported: the driver");
+		ok(describeVideoResetError(-1, 800, 600).find("error -1") != std::string::npos,
+		   "anything else keeps its code");
+		ok(inv.find("d3d11") == std::string::npos, "and only the DLL case blames the DLL");
 	}
 
 	std::printf("\n-- area style: JSON --\n");

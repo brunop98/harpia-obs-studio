@@ -123,7 +123,12 @@ public:
 
 	// Offer "Arrange areas…" on the right-click menu -- only where the active
 	// preset records Multi-Area, so other presets keep the short menu.
-	void setMultiAreaMenu(bool on) { multiAreaMenu_ = on; }
+	// `extraAreas` (areas besides the region) enables "Remove all areas".
+	void setMultiAreaMenu(bool on, int extraAreas = 0)
+	{
+		multiAreaMenu_ = on;
+		extraAreas_ = extraAreas;
+	}
 
 	// Paused state — only meaningful in Recording mode; drives the border color
 	// (yellow when paused, red while actively recording).
@@ -136,6 +141,7 @@ signals:
 	void saveRegionRequested();  // "Save Region…" chosen from the right-click menu
 	void manageRegionsRequested(); // "Manage saved regions…" chosen
 	void arrangeAreasRequested();  // "Arrange areas…" chosen (Multi-Area)
+	void clearAreasRequested();    // "Remove all areas" chosen (Multi-Area)
 	// A move or resize finished. The owner defers mode changes while a drag is
 	// in flight (see isInteracting), so it needs telling when to look again --
 	// grabbing the overlay makes IT the active window, which usually means the
@@ -181,6 +187,7 @@ private:
 	bool paused_ = false;
 	bool moveHandle_ = false;
 	bool multiAreaMenu_ = false;
+	int extraAreas_ = 0;
 
 	// Coalesces the drag's mask rebuild + regionChanged to ~60 Hz (the window
 	// geometry itself still tracks every mouse event). Created on first drag.

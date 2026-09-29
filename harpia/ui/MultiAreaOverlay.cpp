@@ -2,7 +2,9 @@
 
 #include "core/MultiArea.hpp"
 
+#include <QDateTime>
 #include <QGuiApplication>
+#include <QTimer>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -152,8 +154,34 @@ int MultiAreaOverlay::areaAtLocal(const QPoint &local) const
 
 QRect MultiAreaOverlay::doneRectLocal() const
 {
-	const int w = 380, h = 40;
+	const int w = 520, h = 40;
 	return QRect((width() - w) / 2, 24, w, h);
+}
+
+QRect MultiAreaOverlay::doneButtonRectLocal() const
+{
+	const QRect bar = doneRectLocal();
+	return QRect(bar.right() - 76, bar.top() + 7, 66, bar.height() - 14);
+}
+
+QRect MultiAreaOverlay::clearButtonRectLocal() const
+{
+	const QRect done = doneButtonRectLocal();
+	return QRect(done.left() - 104, done.top(), 96, done.height());
+}
+
+bool MultiAreaOverlay::clearArmed() const
+{
+	return clearArmedMs_ > 0 && QDateTime::currentMSecsSinceEpoch() - clearArmedMs_ < 3000;
+}
+
+QRect MultiAreaOverlay::removeRectLocal(int i) const
+{
+	if (i < 0 || i >= tops_.size() || i == locked_)
+		return QRect();
+	const QRect r = areaRectLocal(i);
+	const int d = 22;
+	return QRect(r.right() - d - 6, r.top() + 6, d, d);
 }
 
 void MultiAreaOverlay::setNumbers(const QVector<int> &numbers)
@@ -298,6 +326,18 @@ void MultiAreaOverlay::paintEvent(QPaintEvent *)
 		// Area 1 (the region) is always solid, so it reads apart from copies.
 		outline(r, QPen(st.lineColor, hot ? lw + 1 : lw, i == locked_ ? Qt::SolidLine : st.penStyle()));
 		badge(r, numberOf(i), st.badgeColor);
+		// A visible way to remove it -- right-click and Delete work too, but
+		// nothing on screen said so.
+		const QRect x = removeRectLocal(i);
+		if (!x.isNull()) {
+			p.setPen(Qt::NoPen);
+			p.setBrush(i == hoverRemove_ ? QColor(0xe5, 0x48, 0x4d) : QColor(20, 22, 26, 220));
+			p.drawEllipse(x);
+			p.setPen(QPen(Qt::white, 2));
+			const QRect c = x.adjusted(7, 7, -7, -7);
+			p.drawLine(c.topLeft(), c.bottomRight());
+			p.drawLine(c.topRight(), c.bottomLeft());
+		}
 		if (i == locked_) {
 			p.setPen(Qt::white);
 			p.drawText(r.adjusted(8 + std::max(0, badgeSize) + 8, 8, -8, -8), Qt::AlignLeft | Qt::AlignTop,
@@ -332,10 +372,19 @@ void MultiAreaOverlay::paintEvent(QPaintEvent *)
 	const QString hint =
 		!areaFits() ? QStringLiteral("The region is bigger than this screen · Done when finished")
 		: tops_.size() >= maxAreas_
-			? QStringLiteral("%1 areas (the most). Drag to move · right-click to remove").arg(kMaxAreas)
-			: QStringLiteral("Click to add an area · drag to move · right-click to remove");
-	p.drawText(done.adjusted(14, 0, -86, 0), Qt::AlignVCenter | Qt::AlignLeft, hint);
-	const QRect btn(done.right() - 76, done.top() + 7, 66, done.height() - 14);
+			? QStringLiteral("%1 areas (the most) · drag to move · × to remove").arg(kMaxAreas)
+			: QStringLiteral("Click to add an area · drag to move · × to remove");
+	const QRect clear = clearButtonRectLocal();
+	p.drawText(QRect(done.left() + 14, done.top(), clear.left() - done.left() - 20, done.height()),
+		   Qt::AlignVCenter | Qt::AlignLeft, hint);
+	p.setPen(Qt::NoPen);
+	p.setBrush(QColor(0xe5, 0x48, 0x4d));
+	p.drawRoundedRect(clear, 6, 6);
+	p.setPen(Qt::white);
+	p.setFont(f);
+	p.drawText(clear, Qt::AlignCenter, clearArmed() ? QStringLiteral("Click again") : QStringLiteral("Remove all"));
+	const QRect btn = doneButtonRectLocal();
+	p.setPen(Qt::NoPen);
 	p.setBrush(st.lineColor);
 	p.drawRoundedRect(btn, 6, 6);
 	p.setPen(Qt::black);
@@ -349,10 +398,30 @@ void MultiAreaOverlay::mousePressEvent(QMouseEvent *e)
 		return;
 	const QPoint pos = e->position().toPoint();
 	if (doneRectLocal().contains(pos)) {
-		if (e->button() == Qt::LeftButton)
-			emit arrangeFinished();
+		if (e->button() == Qt::LeftButton) {
+			if (doneButtonRectLocal().contains(pos))
+				emit arrangeFinished();
+			else if (clearButtonRectLocal().contains(pos)) {
+				if (clearArmed()) {
+					clearArmedMs_ = 0;
+					emit clearAllRequested();
+				} else {
+					clearArmedMs_ = QDateTime::currentMSecsSinceEpoch();
+					QTimer::singleShot(3100, this, qOverload<>(&QWidget::update));
+				}
+				update();
+			}
+		}
 		return;
 	}
+	// An area's × (topmost first, like the hit test).
+	if (e->button() == Qt::LeftButton)
+		for (int k = int(tops_.size()) - 1; k >= 0; --k)
+			if (removeRectLocal(k).contains(pos)) {
+				removeArea(k);
+				hoverRemove_ = -1;
+				return;
+			}
 	const int i = areaAtLocal(pos);
 	if (e->button() == Qt::RightButton) {
 		removeArea(i);
@@ -391,8 +460,15 @@ void MultiAreaOverlay::mouseMoveEvent(QMouseEvent *e)
 		setCursor(Qt::ClosedHandCursor);
 	} else {
 		hover_ = areaAtLocal(pointer_);
-		setCursor(hover_ >= 0 ? Qt::OpenHandCursor
-			  : doneRectLocal().contains(pointer_) ? Qt::PointingHandCursor
+		hoverRemove_ = -1;
+		for (int k = int(tops_.size()) - 1; k >= 0 && hoverRemove_ < 0; --k)
+			if (removeRectLocal(k).contains(pointer_))
+				hoverRemove_ = k;
+		setCursor(hoverRemove_ >= 0 || doneButtonRectLocal().contains(pointer_) ||
+					  clearButtonRectLocal().contains(pointer_)
+				  ? Qt::PointingHandCursor
+			  : hover_ >= 0                  ? Qt::OpenHandCursor
+			  : doneRectLocal().contains(pointer_) ? Qt::ArrowCursor
 							       : Qt::CrossCursor);
 	}
 	update();

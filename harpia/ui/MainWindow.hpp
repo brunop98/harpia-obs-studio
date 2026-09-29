@@ -385,6 +385,9 @@ private:
 	void onArrangeAreas();
 	void onAreasEdited(int monitor, const QVector<QPoint> &tops);
 	void finishArrange();
+	// Every area but the region, on every monitor. `confirm` asks first (the
+	// region frame's menu); the Arrange bar confirms with a second click.
+	void clearAllAreas(bool confirm);
 	MultiAreaOverlay *areaOverlayFor(int monitor);
 	// Put `layout` on the overlays (one per monitor it touches, plus every
 	// other monitor when `allMonitors`); `active` is the area not to outline.

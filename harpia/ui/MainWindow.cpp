@@ -784,6 +784,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(regionTool_.get(), &RegionTool::manageRegionsRequested, this,
 		&MainWindow::openSavedRegionsManager);
 	connect(regionTool_.get(), &RegionTool::arrangeAreasRequested, this, &MainWindow::onArrangeAreas);
+	connect(regionTool_.get(), &RegionTool::clearAreasRequested, this, [this]() { clearAllAreas(true); });
 
 	// The memoized OBS-monitor -> QScreen mapping holds until the display
 	// topology changes. When it does, the live capture source may also be
@@ -4770,6 +4771,7 @@ MultiAreaOverlay *MainWindow::areaOverlayFor(int monitor)
 	connect(o.get(), &MultiAreaOverlay::areasEdited, this,
 		[this, monitor](const QVector<QPoint> &tops) { onAreasEdited(monitor, tops); });
 	connect(o.get(), &MultiAreaOverlay::arrangeFinished, this, &MainWindow::finishArrange);
+	connect(o.get(), &MultiAreaOverlay::clearAllRequested, this, [this]() { clearAllAreas(false); });
 	return o.get();
 }
 
@@ -4853,6 +4855,33 @@ void MainWindow::onAreasEdited(int monitor, const QVector<QPoint> &tops)
 	refreshReadiness();
 }
 
+void MainWindow::clearAllAreas(bool confirm)
+{
+	if (recorder_.isRecording() || starting_ || stopping_)
+		return; // the layout is fixed for a take
+	Preset *cur = const_cast<Preset *>(presets_.find(activePresetId_));
+	if (!cur || cur->multiAreaSpots.empty())
+		return;
+	const int n = int(cur->multiAreaSpots.size());
+	if (confirm &&
+	    QMessageBox::question(this, QStringLiteral("Remove all areas"),
+				  QStringLiteral("Remove all %1 extra area%2? The region itself stays.")
+					  .arg(n)
+					  .arg(n == 1 ? QString() : QStringLiteral("s")),
+				  QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+		return;
+	cur->multiAreaSpots.clear();
+	presets_.upsert(*cur);
+	blog(LOG_INFO, "[harpia] multi-area: removed all %d extra areas", n);
+	if (areaArranging_) {
+		areaEdit_ = multiAreaLayout(); // just the region now
+		showAreaOverlays(areaEdit_, QSize(currentRegion_.width, currentRegion_.height), -1, false, true);
+	} else {
+		updateAreaOverlay();
+	}
+	refreshReadiness();
+}
+
 void MainWindow::finishArrange()
 {
 	if (!areaArranging_)
@@ -4869,7 +4898,7 @@ void MainWindow::finishArrange()
 void MainWindow::updateAreaOverlay()
 {
 	if (regionTool_)
-		regionTool_->setMultiAreaMenu(multiAreaWanted());
+		regionTool_->setMultiAreaMenu(multiAreaWanted(), int(activePreset().multiAreaSpots.size()));
 	if (areaArranging_)
 		return;
 	const QSize size(currentRegion_.width, currentRegion_.height);

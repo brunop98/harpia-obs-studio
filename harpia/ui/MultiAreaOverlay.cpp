@@ -10,7 +10,18 @@
 #include <QScreen>
 
 #if defined(_WIN32)
+// Without these, windows.h defines min/max (breaking std::min) and drags in
+// rpcndr.h's `small` -- a macro for char.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
+#ifndef WDA_EXCLUDEFROMCAPTURE
+#define WDA_EXCLUDEFROMCAPTURE 0x00000011 // Windows 10 2004+; older SDKs lack the name
+#endif
 #endif
 
 #include <cmath>
@@ -246,9 +257,9 @@ void MultiAreaOverlay::paintEvent(QPaintEvent *)
 	p.setPen(Qt::NoPen);
 	p.setBrush(QColor(20, 22, 26, 230));
 	p.drawRoundedRect(done, 10, 10);
-	QFont small = font();
-	small.setPixelSize(12);
-	p.setFont(small);
+	QFont hintFont = font();
+	hintFont.setPixelSize(12);
+	p.setFont(hintFont);
 	p.setPen(QColor(230, 230, 230));
 	const QString hint =
 		tops_.size() >= kMaxAreas

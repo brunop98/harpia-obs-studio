@@ -92,6 +92,8 @@ bool GifEncoder::encode(const QString &inPath, const QString &outPath, const Par
 	if (!s.vdec || avcodec_parameters_to_context(s.vdec, vin->codecpar) < 0)
 		return fail("Could not set up the video decoder.");
 	s.vdec->pkt_timebase = vin->time_base;
+	s.vdec->thread_count = 0; // across cores; drained at the end like the others
+	s.vdec->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
 	if (avcodec_open2(s.vdec, vdc, nullptr) < 0)
 		return fail("Could not open the video decoder.");
 

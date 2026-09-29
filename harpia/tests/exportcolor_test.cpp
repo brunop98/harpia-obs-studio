@@ -13,6 +13,7 @@
 // Makes its own media with ffmpeg in the work dir; reads the results back with
 // ffmpeg, which honours the colour tags the way a player does.
 #include "editor/ClipExporter.hpp"
+#include "editor/FrameSeeker.hpp"
 #include "editor/timeline/TimelineModel.hpp"
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -142,6 +143,39 @@ int main(int argc, char **argv)
 	if (!media) {
 		std::printf("could not make the test media\n");
 		return 2;
+	}
+
+	std::printf("\n-- decoded frames: opaque sources are tagged opaque --\n");
+	{
+		// A YUV source has no alpha: its frames come out RGBX8888 (QPainter's
+		// fast blit) with 255 in every fourth byte, so retagging them RGBA8888
+		// for a component changes nothing. A source WITH alpha keeps it.
+		const QString alpha = work + "/col_alpha.mov";
+		if (!QFile::exists(alpha))
+			ffmpeg({"-f", "lavfi", "-i", "color=c=red@0.5:s=64x64:r=30:d=1,format=rgba", "-c:v", "png",
+				alpha});
+		FrameSeeker fs;
+		ok(fs.open(hd), "opens the 709 file");
+		const QImage f = fs.frameAt(500, 1280, 720);
+		ok(f.format() == QImage::Format_RGBX8888, "a yuv420p frame is RGBX8888");
+		size_t notOpaque = 0;
+		for (int y = 0; y < f.height(); ++y)
+			for (int x = 0; x < f.width(); ++x)
+				if (f.constScanLine(y)[x * 4 + 3] != 255)
+					++notOpaque;
+		ok(!f.isNull() && notOpaque == 0, "with 255 in every fourth byte");
+		const QImage small = fs.frameAt(500, 640, 360);
+		ok(small.format() == QImage::Format_RGBX8888 && small.width() == 640, "scaled down: the same tag");
+		FrameSeeker fa;
+		if (fa.open(alpha)) {
+			const QImage a = fa.frameAt(0, 64, 64);
+			ok(a.format() == QImage::Format_RGBA8888, "an rgba source stays RGBA8888");
+			const int al = a.isNull() ? -1 : a.constScanLine(32)[32 * 4 + 3];
+			std::printf("     alpha %d\n", al);
+			ok(al > 100 && al < 160, "and keeps its transparency (~50%)");
+		} else {
+			std::printf("     (no png-in-mov decoder here; alpha source skipped)\n");
+		}
 	}
 
 	std::printf("\n-- colour matrix (timeline export of a BT.709 source) --\n");

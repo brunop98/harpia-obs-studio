@@ -20,6 +20,7 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <cmath>
 
 namespace harpia {
 
@@ -424,6 +425,26 @@ void TimelineCompositor::drawClip(QPainter &p, const TlClip &c, const TlTransfor
 	const QRectF dst = clipRectOnCanvas(tf, canvas, srcRect.size());
 	if (dst.isEmpty())
 		return;
+	// An opaque-tagged frame (RGBX8888: a decoded video frame, a photo without
+	// transparency -- see FrameSeeker::toImage) is handed to QPainter as such
+	// ONLY when it lands on the canvas 1:1 at whole pixels. That is the draw
+	// where the tag pays -- the plain blit runs in a third of the time -- and
+	// the one where it is proven byte-identical to drawing the frame as
+	// straight alpha. Scaled or rotated, QPainter's smooth resampling of an
+	// opaque source rounds a shade differently (one count per byte), so those
+	// draws go through a view of the SAME bytes tagged RGBA8888, exactly as
+	// before the tag existed. The view copies nothing.
+	QImage drawn = sourceFrame;
+	if (sourceFrame.format() == QImage::Format_RGBX8888) {
+		const bool oneToOne = std::abs(tf.rotation) <= 0.001 &&
+				      std::abs(dst.width() - srcRect.width()) < 1e-6 &&
+				      std::abs(dst.height() - srcRect.height()) < 1e-6 &&
+				      std::abs(dst.x() - std::round(dst.x())) < 1e-6 &&
+				      std::abs(dst.y() - std::round(dst.y())) < 1e-6;
+		if (!oneToOne)
+			drawn = QImage(sourceFrame.constBits(), sourceFrame.width(), sourceFrame.height(),
+				       sourceFrame.bytesPerLine(), QImage::Format_RGBA8888);
+	}
 	p.save();
 	p.setOpacity(std::clamp(tf.opacity, 0.0, 1.0));
 	p.setRenderHint(QPainter::SmoothPixmapTransform, true);
@@ -433,7 +454,7 @@ void TimelineCompositor::drawClip(QPainter &p, const TlClip &c, const TlTransfor
 		p.rotate(tf.rotation);
 		p.translate(-c);
 	}
-	p.drawImage(dst, sourceFrame, srcRect);
+	p.drawImage(dst, drawn, srcRect);
 	p.restore();
 }
 
@@ -709,8 +730,16 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 			// canvas — so a component blurs the clip, not everything under it.
 			// Text clips have no frame to hand over; they are drawn straight to
 			// the canvas, and are the next thing the Source stage will fix.
-			if (hasComponents && !frame.isNull())
+			if (hasComponents && !frame.isNull()) {
+				// A component may write alpha (a mask cuts the clip out),
+				// and on an opaque-tagged frame (RGBX8888, see
+				// FrameSeeker::toImage) that would be ignored when drawn.
+				// Retag it as straight alpha first: the same bytes, and the
+				// fourth byte is 255 throughout, so nothing else changes.
+				if (frame.format() == QImage::Format_RGBX8888)
+					frame.reinterpretAsFormat(QImage::Format_RGBA8888);
 				stack->evaluatePixels(ectx, frame);
+			}
 
 			// A caption a component rewrote is drawn as the component left
 			// it. Copying the clip to change one string is cheap next to

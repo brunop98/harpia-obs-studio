@@ -145,6 +145,11 @@ void ShareExporter::run(const QString &inPath, const QString &outPath, Options o
 	if (!t.vdec || avcodec_parameters_to_context(t.vdec, vin->codecpar) < 0)
 		return fail(QStringLiteral("Could not set up the video decoder."));
 	t.vdec->pkt_timebase = vin->time_base;
+	// Across cores (identical frames, same order; drained at the end). A proxy
+	// build or a share transcode is decode-bound at the start, and this is the
+	// same 1.7x FrameSeeker got from it.
+	t.vdec->thread_count = 0;
+	t.vdec->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
 	if (avcodec_open2(t.vdec, vdecCodec, nullptr) < 0)
 		return fail(QStringLiteral("Could not open the video decoder."));
 

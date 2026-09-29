@@ -2822,7 +2822,10 @@ int VideoEditorWindow::addImageSource(const QString &path)
 	const QSize working = stillWorkingSize(fullSize);
 	if (working != fullSize)
 		img = img.scaled(working, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-	img = img.convertToFormat(QImage::Format_RGBA8888);
+	// Opaque (a JPEG, a PNG with no transparency) is tagged RGBX8888: the
+	// preview's copy inherits the tag and QPainter blits it without per-pixel
+	// alpha work. See FrameSeeker::toImage.
+	img = img.convertToFormat(img.hasAlphaChannel() ? QImage::Format_RGBA8888 : QImage::Format_RGBX8888);
 	EditorSource s;
 	s.id = nextSourceId_++;
 	s.path = path;

@@ -247,6 +247,18 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/componentrender_test" "$QJSLIB/libqjs.a" $LF
 
+# Opaque frames tagged RGBX8888 composite to the same bytes as RGBA8888 in
+# every pose, and a mask still cuts them (the compositor retags first).
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
+	"$HERE/opaqueframe_test.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/component/ScriptComponent.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
+	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
+	-o "$WORK/opaqueframe_test" "$QJSLIB/libqjs.a" $LF
+
 # Large stills: what is heavy, the working and preview copies, and a crop that
 # cuts the same part of a smaller copy through the real compositor.
 g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
@@ -827,6 +839,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/console_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/subtitles_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/searchpicker_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/componentrender_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/opaqueframe_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/stillweight_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewcache_test" || rc=1
 if command -v xvfb-run >/dev/null 2>&1; then

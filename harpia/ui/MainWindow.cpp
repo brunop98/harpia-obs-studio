@@ -59,6 +59,7 @@
 #include <algorithm>
 #include <functional>
 #include <map>
+#include <set>
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
@@ -790,6 +791,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// applyLiveCapture() is already a no-op while recording.
 	const auto screensChanged = [this]() {
 		screenCache_ = nullptr;
+		monitorScreens_.clear();
 		screenCacheMonitor_ = -1;
 		if (!recorder_.isRecording() && !starting_ && !stopping_)
 			applyLiveCapture();
@@ -1290,6 +1292,11 @@ QScreen *MainWindow::screenForActivePreset() const
 
 QScreen *MainWindow::resolveScreenForActivePreset() const
 {
+	return resolveScreenForMonitor(activePreset().monitorIndex);
+}
+
+QScreen *MainWindow::resolveScreenForMonitor(int monitorIndex) const
+{
 	const QList<QScreen *> screens = QGuiApplication::screens();
 	if (screens.isEmpty())
 		return nullptr;
@@ -1305,7 +1312,7 @@ QScreen *MainWindow::resolveScreenForActivePreset() const
 	// against Qt's count used to send a perfectly valid choice to 0 whenever
 	// OBS saw more displays than Qt did -- and only for the overlay, since the
 	// recording indexes the OBS list directly. That is the two disagreeing.
-	const int idx = clampMonitorIndex(activePreset().monitorIndex, int(mons.size()));
+	const int idx = clampMonitorIndex(monitorIndex, int(mons.size()));
 	if (idx < (int)mons.size() && mons[idx].isString) {
 		const QString gdi = gdiNameForMonitorId(mons[idx].strValue);
 		if (!gdi.isEmpty()) {
@@ -1342,7 +1349,7 @@ QScreen *MainWindow::resolveScreenForActivePreset() const
 #endif
 	// No identity to go on: the bare index against Qt's list, which is a guess,
 	// so it is range-checked against the list it is actually indexing.
-	return screens.at(clampMonitorIndex(activePreset().monitorIndex, screens.size()));
+	return screens.at(clampMonitorIndex(monitorIndex, screens.size()));
 }
 
 QSize MainWindow::canvasForActivePreset() const
@@ -3522,10 +3529,13 @@ void MainWindow::tickRegionWatch()
 		// into another one is how the recording switches, not a reason to
 		// pause (and the switch waits out a delay, during which the pointer
 		// is outside the area still being recorded).
-		if (!inside && areaSwitch_.armed())
-			inside = AreaSwitcher::areaAt(areaSwitch_.tops(),
-						      QSize(currentRegion_.width, currentRegion_.height),
-						      cursorPx) >= 0;
+		if (!inside && areaSwitch_.armed()) {
+			QPoint onScreen;
+			const int cm = cursorOnMonitor(areaSwitch_.monitors(), &onScreen);
+			inside = cm >= 0 && AreaSwitcher::areaAtOn(areaSwitch_.tops(), areaSwitch_.monitors(),
+								   QSize(currentRegion_.width, currentRegion_.height),
+								   cm, onScreen) >= 0;
+		}
 		lastCursorInside_ = inside; // the shared resume gate reads this
 	} else {
 		regionWatchArmed_ = false;
@@ -4500,6 +4510,16 @@ void MainWindow::tickFocus(uint64_t foregroundPid)
 
 // ---- Multi-Area --------------------------------------------------------------
 
+namespace {
+QSize deviceSizeOf(const QScreen *s)
+{
+	if (!s)
+		return QSize();
+	const double dpr = s->devicePixelRatio();
+	return QSize(int(s->geometry().width() * dpr), int(s->geometry().height() * dpr));
+}
+} // namespace
+
 bool MainWindow::multiAreaWanted() const
 {
 	const Preset &p = activePreset();
@@ -4509,32 +4529,64 @@ bool MainWindow::multiAreaWanted() const
 	       currentRegion_.enabled && currentRegion_.width > 0 && currentRegion_.height > 0;
 }
 
-QVector<QPoint> MainWindow::multiAreaTops() const
+int MainWindow::areaMainMonitor() const
 {
+	// The monitor the main capture really records; the preset's choice until
+	// a capture exists.
+	return capture_.monitorIndex() >= 0 ? capture_.monitorIndex() : activePreset().monitorIndex;
+}
+
+QScreen *MainWindow::screenForMonitor(int monitorIndex) const
+{
+	if (monitorIndex == activePreset().monitorIndex)
+		return screenForActivePreset();
+	const auto it = monitorScreens_.find(monitorIndex);
+	if (it != monitorScreens_.end() && QGuiApplication::screens().contains(it->second))
+		return it->second;
+	QScreen *s = resolveScreenForMonitor(monitorIndex);
+	monitorScreens_[monitorIndex] = s;
+	return s;
+}
+
+QVector<AreaRef> MainWindow::multiAreaLayout() const
+{
+	const int main = areaMainMonitor();
 	const QSize size(currentRegion_.width, currentRegion_.height);
 	// Mid-take the region has moved to whichever area is showing; area 1 is
 	// where it was when the take began.
 	const QPoint home = areaPrimed_ ? areaHome_ : QPoint(currentRegion_.x, currentRegion_.y);
-	QVector<QPoint> tops{home};
-	for (const auto &xy : activePreset().multiAreaSpots) {
-		if (tops.size() >= kMaxAreas)
+	QVector<AreaRef> out{{main, home}};
+	const int screens = int(QGuiApplication::screens().size());
+	for (const MultiAreaSpot &sp : activePreset().multiAreaSpots) {
+		if (out.size() >= kMaxAreas)
 			break;
-		// Laid out on a bigger region or another resolution: pulled back on
-		// screen rather than dropped.
-		tops.push_back(AreaSwitcher::clampTop(QPoint(xy.first, xy.second), size, areaScreenDevicePx_));
+		const int m = sp.monitor < 0 ? main : sp.monitor;
+		// A monitor that is not connected now: its areas sit this take out
+		// (they come back with the monitor) rather than landing on another.
+		if (m != main && m >= screens)
+			continue;
+		// Laid out with a bigger region or on another resolution: pulled back
+		// on screen rather than dropped.
+		out.push_back({m, AreaSwitcher::clampTop(QPoint(sp.x, sp.y), size, deviceSizeOf(screenForMonitor(m)))});
 	}
-	return tops;
+	return out;
 }
 
-void MainWindow::cacheAreaScreen()
+int MainWindow::cursorOnMonitor(const QVector<int> &monitors, QPoint *devicePx) const
 {
-	// Once per take (or per arrange), never per tick: see syncFollowMouse.
-	const QScreen *scr = screenForActivePreset();
-	areaOrigin_ = scr ? scr->geometry().topLeft() : QPoint(0, 0);
-	areaDpr_ = scr ? scr->devicePixelRatio() : 1.0;
-	areaScreenDevicePx_ = scr ? QSize(int(scr->geometry().width() * areaDpr_),
-					  int(scr->geometry().height() * areaDpr_))
-				  : QSize(0, 0);
+	const QPoint pos = QCursor::pos();
+	std::set<int> seen;
+	for (int m : monitors) {
+		if (!seen.insert(m).second)
+			continue;
+		const QScreen *s = screenForMonitor(m);
+		if (s && s->geometry().contains(pos)) {
+			if (devicePx)
+				*devicePx = RegionWatch::toRegionSpace(pos, s->geometry().topLeft(), s->devicePixelRatio());
+			return m;
+		}
+	}
+	return -1;
 }
 
 void MainWindow::moveRegionTo(QPoint topLeftDevicePx)
@@ -4554,21 +4606,71 @@ void MainWindow::moveRegionTo(QPoint topLeftDevicePx)
 	followApplying_ = false;
 }
 
+void MainWindow::placeFrame(int monitor, const QRect &deviceRect)
+{
+	if (!regionTool_)
+		return;
+	// The frame's regionChanged echo would overwrite currentRegion_ -- which
+	// always describes the MAIN monitor's crop -- with another screen's
+	// coordinates, so it is put back.
+	const CaptureRegion keep = currentRegion_;
+	followApplying_ = true;
+	regionTool_->setScreen(screenForMonitor(monitor));
+	regionTool_->setRegionDevicePx(deviceRect);
+	currentRegion_ = keep;
+	followApplying_ = false;
+}
+
+void MainWindow::showArea(int monitor, QPoint top)
+{
+	const QSize size(currentRegion_.width, currentRegion_.height);
+	if (monitor == areaMainMonitor_) {
+		const bool back = areaShownMonitor_ != monitor;
+		capture_.showMonitor(monitor);
+		areaShownMonitor_ = monitor;
+		moveRegionTo(top);
+		// Coming back from another screen: the frame is still over there, and
+		// moveRegionTo skips a crop that did not move.
+		if (back)
+			placeFrame(monitor, QRect(top, size));
+		return;
+	}
+	// Another monitor: its own capture, its own crop, and the frame goes with it.
+	capture_.setExtraRegion(monitor, CaptureRegion{currentRegion_.enabled, top.x(), top.y(), size.width(),
+						       size.height()});
+	capture_.showMonitor(monitor);
+	areaShownMonitor_ = monitor;
+	placeFrame(monitor, QRect(top, size));
+}
+
 void MainWindow::primeMultiArea()
 {
 	areaPrimed_ = false;
 	if (!multiAreaWanted() || activePreset().multiAreaSpots.empty())
 		return;
-	cacheAreaScreen();
+	areaMainMonitor_ = areaMainMonitor();
+	areaShownMonitor_ = areaMainMonitor_;
 	areaHome_ = QPoint(currentRegion_.x, currentRegion_.y);
 	areaPrimed_ = true;
-	const QVector<QPoint> tops = multiAreaTops();
+
+	// A capture for every other monitor the layout uses -- started now, before
+	// the recorder, so it is warm by the time the mouse gets there. An area on
+	// a monitor that cannot be captured is left out of this take.
+	areaTake_.clear();
+	for (const AreaRef &a : multiAreaLayout())
+		if (a.monitor == areaMainMonitor_ || capture_.addExtraMonitor(a.monitor))
+			areaTake_.push_back(a);
+
 	const QSize size(currentRegion_.width, currentRegion_.height);
-	areaStart_ = AreaSwitcher::startIndex(
-		tops, size, RegionWatch::toRegionSpace(QCursor::pos(), areaOrigin_, areaDpr_));
-	moveRegionTo(tops[areaStart_]);
-	blog(LOG_INFO, "[harpia] multi-area: %d areas of %dx%d, starting on area %d (%s, delay %d ms)",
-	     int(tops.size()), size.width(), size.height(), areaStart_ + 1,
+	const QVector<int> mons = area_layout::monitors(areaTake_);
+	QPoint cursor;
+	const int cm = cursorOnMonitor(mons, &cursor);
+	areaStart_ = AreaSwitcher::startIndex(area_layout::tops(areaTake_), size, cursor, mons, cm);
+	showArea(areaTake_[areaStart_].monitor, areaTake_[areaStart_].top);
+	const int monitorsUsed = int(std::set<int>(mons.begin(), mons.end()).size());
+	blog(LOG_INFO,
+	     "[harpia] multi-area: %d areas of %dx%d on %d monitor(s), starting on area %d (%s, delay %d ms)",
+	     int(areaTake_.size()), size.width(), size.height(), monitorsUsed, areaStart_ + 1,
 	     activePreset().multiAreaTransition == 1 ? "pan" : "cut", activePreset().multiAreaHoverMs);
 }
 
@@ -4580,9 +4682,11 @@ void MainWindow::restoreAreaHome()
 	areaSwitch_.disarm();
 	if (areaTimer_)
 		areaTimer_->stop();
-	// Back to area 1, so the layout is exactly where it was arranged and the
-	// next take starts from it.
-	moveRegionTo(areaHome_);
+	// Back to area 1 on the region's own monitor, so the layout is exactly
+	// where it was arranged and the next take starts from it.
+	showArea(areaMainMonitor_, areaHome_);
+	capture_.clearExtraMonitors();
+	areaTake_.clear();
 	updateAreaOverlay();
 }
 
@@ -4595,12 +4699,12 @@ void MainWindow::syncMultiArea()
 		return;
 	}
 	const bool want = areaPrimed_ && multiAreaWanted() && recorder_.isRecording() && !starting_ &&
-			  !stopping_;
+			  !stopping_ && !areaTake_.isEmpty();
 	if (want == areaSwitch_.armed())
 		return;
 	if (want) {
-		areaSwitch_.arm(multiAreaTops(), QSize(currentRegion_.width, currentRegion_.height), areaStart_,
-				currentRegion_.enabled);
+		areaSwitch_.arm(area_layout::tops(areaTake_), QSize(currentRegion_.width, currentRegion_.height),
+				areaStart_, currentRegion_.enabled, area_layout::monitors(areaTake_));
 		areaClock_.start();
 		if (areaSwitch_.armed())
 			areaTimer_->start();
@@ -4627,7 +4731,10 @@ void MainWindow::tickMultiArea()
 	// A hand-moved frame outranks the layout: the area showing is now wherever
 	// the user put it, for the rest of this take.
 	if (regionTool_ && regionTool_->isInteracting()) {
-		areaSwitch_.rebaseCurrent(QPoint(currentRegion_.x, currentRegion_.y));
+		const CaptureRegion r = regionTool_->region();
+		areaSwitch_.rebaseCurrent(QPoint(r.x, r.y));
+		if (areaSwitch_.currentMonitor() != areaMainMonitor_)
+			capture_.setExtraRegion(areaSwitch_.currentMonitor(), r);
 		return;
 	}
 	const Preset &p = activePreset();
@@ -4636,56 +4743,127 @@ void MainWindow::tickMultiArea()
 	params.panMs = std::clamp(p.multiAreaPanMs, 50, 3000);
 	params.hoverMs = std::clamp(p.multiAreaHoverMs, 0, 2000);
 
-	const QPoint cursor = RegionWatch::toRegionSpace(QCursor::pos(), areaOrigin_, areaDpr_);
-	const bool moved = areaSwitch_.tick(cursor, areaClock_.elapsed(), params);
+	QPoint cursor;
+	const int cm = cursorOnMonitor(areaSwitch_.monitors(), &cursor);
+	const bool moved = areaSwitch_.tick(cursor, areaClock_.elapsed(), params, cm);
 	if (areaSwitch_.switchedThisTick()) {
 		const int n = areaSwitch_.current() + 1;
-		blog(LOG_INFO, "[harpia] multi-area: switched to area %d", n);
+		blog(LOG_INFO, "[harpia] multi-area: switched to area %d (monitor #%d)", n,
+		     areaSwitch_.currentMonitor());
 		// A marker per switch, so the cuts can be found in the editor.
 		writeMarker(QStringLiteral("Area %1").arg(n));
-		if (areaOverlay_)
-			areaOverlay_->setActive(areaSwitch_.current());
+		updateAreaOverlay();
 	}
 	if (moved) {
 		const CaptureRegion r = areaSwitch_.region();
-		moveRegionTo(QPoint(r.x, r.y));
+		showArea(areaSwitch_.currentMonitor(), QPoint(r.x, r.y));
 	}
 }
 
-void MainWindow::ensureAreaOverlay()
+MultiAreaOverlay *MainWindow::areaOverlayFor(int monitor)
 {
-	if (areaOverlay_)
-		return;
-	areaOverlay_ = std::make_unique<MultiAreaOverlay>();
-	areaOverlay_->setStyle(areaStyle_);
-	connect(areaOverlay_.get(), &MultiAreaOverlay::areasEdited, this, [this](const QVector<QPoint> &tops) {
-		if (tops.isEmpty())
-			return;
-		Preset *cur = const_cast<Preset *>(presets_.find(activePresetId_));
-		if (!cur)
-			return;
-		cur->multiAreaSpots.clear();
-		for (int i = 1; i < tops.size(); ++i)
-			cur->multiAreaSpots.emplace_back(tops[i].x(), tops[i].y());
-		presets_.upsert(*cur);
-		// Area 1 is the region: moving it moves the region.
-		if (tops[0] != QPoint(currentRegion_.x, currentRegion_.y)) {
-			CaptureRegion r = currentRegion_;
-			r.x = tops[0].x();
-			r.y = tops[0].y();
-			if (regionTool_)
-				regionTool_->setRegionDevicePx(QRect(r.x, r.y, r.width, r.height));
-			onRegionChanged(r);
+	std::unique_ptr<MultiAreaOverlay> &o = areaOverlays_[monitor];
+	if (o)
+		return o.get();
+	o = std::make_unique<MultiAreaOverlay>();
+	o->setStyle(areaStyle_);
+	connect(o.get(), &MultiAreaOverlay::areasEdited, this,
+		[this, monitor](const QVector<QPoint> &tops) { onAreasEdited(monitor, tops); });
+	connect(o.get(), &MultiAreaOverlay::arrangeFinished, this, &MainWindow::finishArrange);
+	return o.get();
+}
+
+void MainWindow::showAreaOverlays(const QVector<AreaRef> &layout, QSize size, int active, bool recording,
+				  bool allMonitors)
+{
+	std::set<int> monitors;
+	for (const AreaRef &a : layout)
+		monitors.insert(a.monitor);
+	if (allMonitors) {
+		const int n = int(CaptureManager::enumerateMonitors().size());
+		for (int m = 0; m < n; ++m)
+			monitors.insert(m);
+	}
+	const int main = areaMainMonitor();
+	const int spare = kMaxAreas - int(layout.size());
+	for (auto &kv : areaOverlays_)
+		if (kv.second && !monitors.count(kv.first))
+			kv.second->hide();
+	for (int m : monitors) {
+		QScreen *scr = screenForMonitor(m);
+		if (!scr)
+			continue;
+		const QVector<QPoint> tops = area_layout::topsOn(layout, m);
+		int localActive = -1;
+		if (active >= 0 && active < layout.size() && layout[active].monitor == m)
+			localActive = int(area_layout::topsOn(layout.mid(0, active), m).size());
+		// Nothing to outline here (only the area being recorded, or none):
+		// no full-screen window for it, unless arranging.
+		if (!allMonitors && (tops.isEmpty() || (tops.size() == 1 && localActive == 0))) {
+			if (areaOverlays_.count(m) && areaOverlays_[m])
+				areaOverlays_[m]->hide();
+			continue;
 		}
-		refreshReadiness();
-	});
-	connect(areaOverlay_.get(), &MultiAreaOverlay::arrangeFinished, this, [this]() {
-		areaArranging_ = false;
-		areaOverlay_->setMode(MultiAreaOverlay::Mode::Passive);
-		blog(LOG_INFO, "[harpia] multi-area: layout has %d areas",
-		     1 + int(activePreset().multiAreaSpots.size()));
-		updateRegionToolVisibility();
-	});
+		MultiAreaOverlay *ov = areaOverlayFor(m);
+		ov->setScreen(scr);
+		ov->setAreas(tops, size);
+		ov->setNumbers(area_layout::numbersOn(layout, m));
+		ov->setLockedIndex(m == main ? 0 : -1); // the region is area 1, first on its screen
+		ov->setMaxAreas(int(tops.size()) + std::max(0, spare));
+		ov->setActive(localActive);
+		ov->setRecording(recording);
+		if (!ov->isVisible())
+			ov->show();
+	}
+}
+
+void MainWindow::hideAreaOverlays()
+{
+	for (auto &kv : areaOverlays_)
+		if (kv.second && kv.second->isVisible())
+			kv.second->hide();
+}
+
+void MainWindow::onAreasEdited(int monitor, const QVector<QPoint> &tops)
+{
+	if (!areaArranging_)
+		return;
+	areaEdit_ = area_layout::mergeEdit(areaEdit_, monitor, tops);
+	if (areaEdit_.isEmpty())
+		return;
+	Preset *cur = const_cast<Preset *>(presets_.find(activePresetId_));
+	if (!cur)
+		return;
+	cur->multiAreaSpots.clear();
+	for (int i = 1; i < areaEdit_.size(); ++i)
+		cur->multiAreaSpots.push_back({areaEdit_[i].monitor, areaEdit_[i].top.x(), areaEdit_[i].top.y()});
+	presets_.upsert(*cur);
+	// Area 1 is the region: moving it moves the region.
+	const QPoint t0 = areaEdit_[0].top;
+	if (t0 != QPoint(currentRegion_.x, currentRegion_.y)) {
+		CaptureRegion r = currentRegion_;
+		r.x = t0.x();
+		r.y = t0.y();
+		if (regionTool_)
+			regionTool_->setRegionDevicePx(QRect(r.x, r.y, r.width, r.height));
+		onRegionChanged(r);
+	}
+	// Numbers and the nine-area allowance changed on every screen.
+	showAreaOverlays(areaEdit_, QSize(currentRegion_.width, currentRegion_.height), -1, false, true);
+	refreshReadiness();
+}
+
+void MainWindow::finishArrange()
+{
+	if (!areaArranging_)
+		return;
+	areaArranging_ = false;
+	for (auto &kv : areaOverlays_)
+		if (kv.second)
+			kv.second->setMode(MultiAreaOverlay::Mode::Passive);
+	hideAreaOverlays(); // updateAreaOverlay brings back the ones with areas
+	blog(LOG_INFO, "[harpia] multi-area: layout has %d areas", int(areaEdit_.size()));
+	updateRegionToolVisibility();
 }
 
 void MainWindow::updateAreaOverlay()
@@ -4694,59 +4872,46 @@ void MainWindow::updateAreaOverlay()
 		regionTool_->setMultiAreaMenu(multiAreaWanted());
 	if (areaArranging_)
 		return;
+	const QSize size(currentRegion_.width, currentRegion_.height);
 	if (areaStylePreview_ > 0 && !recorder_.isRecording()) {
 		// Developer Panel preview: every area outlined (none is "the frame"),
 		// the real layout when there is one, three samples when there is not.
-		ensureAreaOverlay();
-		QScreen *scr = screenForActivePreset();
-		areaOverlay_->setScreen(scr);
-		cacheAreaScreen();
-		const bool real = multiAreaWanted() && !activePreset().multiAreaSpots.empty();
-		QVector<QPoint> tops;
-		QSize size;
-		if (real) {
-			tops = multiAreaTops();
-			size = QSize(currentRegion_.width, currentRegion_.height);
+		if (multiAreaWanted() && !activePreset().multiAreaSpots.empty()) {
+			showAreaOverlays(multiAreaLayout(), size, -1, areaStylePreview_ == 2, false);
 		} else {
-			const QSize sc = areaScreenDevicePx_.isEmpty() ? QSize(1920, 1080) : areaScreenDevicePx_;
-			size = QSize(sc.width() * 28 / 100, sc.height() * 28 / 100);
+			const int main = areaMainMonitor();
+			const QSize sc = deviceSizeOf(screenForMonitor(main)).isEmpty() ? QSize(1920, 1080)
+											: deviceSizeOf(screenForMonitor(main));
+			QVector<AreaRef> sample;
 			for (int k = 0; k < 3; ++k)
-				tops.push_back(QPoint(sc.width() * (4 + 33 * k) / 100, sc.height() * 12 / 100));
+				sample.push_back({main, QPoint(sc.width() * (4 + 33 * k) / 100, sc.height() * 12 / 100)});
+			showAreaOverlays(sample, QSize(sc.width() * 28 / 100, sc.height() * 28 / 100), -1,
+					 areaStylePreview_ == 2, false);
 		}
-		areaOverlay_->setAreas(tops, size);
-		areaOverlay_->setActive(-1);
-		areaOverlay_->setRecording(areaStylePreview_ == 2);
-		if (!areaOverlay_->isVisible())
-			areaOverlay_->show();
 		return;
 	}
 	const bool show = multiAreaWanted() && !activePreset().multiAreaSpots.empty() && regionTool_ &&
 			  regionTool_->isVisible();
 	if (!show) {
-		if (areaOverlay_ && areaOverlay_->isVisible())
-			areaOverlay_->hide();
+		hideAreaOverlays();
 		return;
 	}
-	ensureAreaOverlay();
-	if (!areaSwitch_.armed()) {
-		// Idle: cheap enough at the state tick's 4 Hz (the screen lookup is
-		// memoized), and it keeps the outlines on the right monitor.
-		areaOverlay_->setScreen(screenForActivePreset());
-		cacheAreaScreen();
+	if (areaSwitch_.armed()) {
+		QVector<AreaRef> live;
+		for (int i = 0; i < areaSwitch_.count(); ++i)
+			live.push_back({areaSwitch_.monitorOf(i), areaSwitch_.tops()[i]});
+		showAreaOverlays(live, size, areaSwitch_.current(), true, false);
+	} else {
+		showAreaOverlays(multiAreaLayout(), size, 0, recorder_.isRecording(), false);
 	}
-	const QSize size(currentRegion_.width, currentRegion_.height);
-	areaOverlay_->setAreas(areaSwitch_.armed() ? areaSwitch_.tops() : multiAreaTops(), size);
-	areaOverlay_->setActive(areaSwitch_.armed() ? areaSwitch_.current() : 0);
-	areaOverlay_->setRecording(recorder_.isRecording());
-	if (!areaOverlay_->isVisible())
-		areaOverlay_->show();
 }
 
 void MainWindow::setAreaStyle(const AreaStyle &s)
 {
 	areaStyle_ = s;
-	if (areaOverlay_)
-		areaOverlay_->setStyle(s);
+	for (auto &kv : areaOverlays_)
+		if (kv.second)
+			kv.second->setStyle(s);
 }
 
 void MainWindow::setAreaStylePreview(int mode)
@@ -4765,20 +4930,26 @@ void MainWindow::onArrangeAreas()
 	}
 	if (recorder_.isRecording() || starting_ || stopping_)
 		return; // the layout is fixed for a take
-	ensureAreaOverlay();
-	cacheAreaScreen();
-	areaOverlay_->setScreen(screenForActivePreset());
-	areaOverlay_->setAreas(multiAreaTops(), QSize(currentRegion_.width, currentRegion_.height));
-	areaOverlay_->setActive(-1);
-	areaOverlay_->setRecording(false);
+	areaEdit_ = multiAreaLayout();
 	areaArranging_ = true;
 	if (regionTool_)
 		regionTool_->setVisible(false);
-	areaOverlay_->setMode(MultiAreaOverlay::Mode::Arrange);
-	areaOverlay_->show();
-	areaOverlay_->raise();
-	areaOverlay_->activateWindow();
-	blog(LOG_INFO, "[harpia] multi-area: arranging");
+	// An overlay on EVERY monitor, so areas can be stamped on a screen that
+	// has none yet.
+	showAreaOverlays(areaEdit_, QSize(currentRegion_.width, currentRegion_.height), -1, false, true);
+	MultiAreaOverlay *focus = nullptr;
+	for (auto &kv : areaOverlays_) {
+		if (!kv.second || !kv.second->isVisible())
+			continue;
+		kv.second->setMode(MultiAreaOverlay::Mode::Arrange);
+		if (kv.first == areaMainMonitor())
+			focus = kv.second.get();
+	}
+	if (focus) {
+		focus->raise();
+		focus->activateWindow();
+	}
+	blog(LOG_INFO, "[harpia] multi-area: arranging (%d monitor overlays)", int(areaOverlays_.size()));
 }
 
 void MainWindow::writeMarker(const QString &label)

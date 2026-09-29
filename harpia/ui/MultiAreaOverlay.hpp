@@ -41,6 +41,20 @@ public:
 	void setAreas(const QVector<QPoint> &tops, QSize size);
 	QVector<QPoint> areas() const { return tops_; }
 	QSize areaSize() const { return size_; }
+	// Across monitors there is one overlay per screen, each holding that
+	// screen's share of the layout, so three things come from outside:
+	//  * the numbers its areas show (global: area 3 may be the first here);
+	//  * which of its areas is the region -- movable, never removable -- or -1
+	//    when the region is on another screen;
+	//  * how many areas it may hold, so the whole layout stays within nine.
+	// Defaults suit a single screen: 1, 2, 3...; area 0 locked; nine.
+	void setNumbers(const QVector<int> &numbers);
+	void setLockedIndex(int i);
+	void setMaxAreas(int n);
+	int maxAreas() const { return maxAreas_; }
+	// Can an area of the current size fit on this screen at all? (A region
+	// sized on a big monitor may not fit a small one.)
+	bool areaFits() const;
 	// How it is drawn (Developer Panel → Areas).
 	void setStyle(const AreaStyle &style);
 	const AreaStyle &style() const { return style_; }
@@ -89,6 +103,11 @@ private:
 	bool recording_ = false;
 	Mode mode_ = Mode::Passive;
 	AreaStyle style_;
+	QVector<int> numbers_; // shown numbers; empty = 1, 2, 3...
+	int locked_ = 0;
+	int maxAreas_ = 9;
+	int numberOf(int i) const { return i < numbers_.size() ? numbers_[i] : i + 1; }
+	int nextNumber() const;
 
 	int hover_ = -1;       // area under the pointer (Arrange)
 	QPoint pointer_;       // local, for the stamp ghost

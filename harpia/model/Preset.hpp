@@ -33,6 +33,19 @@ enum class FrameRateMode {
 	VFR,
 };
 
+// One Multi-Area area beyond the region itself: its top-left in device pixels
+// from the top-left of the monitor it is on. `monitor` is an OBS monitor index
+// like Preset::monitorIndex; -1 (layouts from before multi-monitor areas)
+// means "the region's monitor".
+struct MultiAreaSpot {
+	int monitor = -1;
+	int x = 0;
+	int y = 0;
+
+	bool operator==(const MultiAreaSpot &o) const { return monitor == o.monitor && x == o.x && y == o.y; }
+	bool operator!=(const MultiAreaSpot &o) const { return !(*this == o); }
+};
+
 // A single, self-contained recording configuration. This is the unit the UI
 // creates/edits/deletes and PresetStore persists. Everything the recording
 // pipeline needs is derived from a Preset, so adding a knob here is the single
@@ -108,9 +121,9 @@ struct Preset {
 	int multiAreaTransition = 0; // AreaTransition: 0 cut, 1 pan
 	int multiAreaPanMs = 400;    // pan length, 50..3000
 	int multiAreaHoverMs = 300;  // the cursor stays this long before a switch
-	// Top-left of areas 2..N, device pixels from the recorded screen's
-	// top-left. Area 1 is the region itself, and every area is its size.
-	std::vector<std::pair<int, int>> multiAreaSpots;
+	// Areas 2..N (see MultiAreaSpot), possibly on other monitors. Area 1 is
+	// the region itself, and every area is its size in pixels.
+	std::vector<MultiAreaSpot> multiAreaSpots;
 
 	// Spotlight: a shortcut that darkens everything except a patch around the
 	// cursor, so the viewer's eye lands where you are pointing. Drawn by the

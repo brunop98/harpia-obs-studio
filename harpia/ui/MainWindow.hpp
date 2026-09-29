@@ -352,27 +352,45 @@ private:
 	AreaSwitcher areaSwitch_;
 	QTimer *areaTimer_ = nullptr;
 	QElapsedTimer areaClock_;
-	QPoint areaOrigin_;         // screen top-left, logical px (cached at prime)
-	double areaDpr_ = 1.0;      // cached at prime
-	QSize areaScreenDevicePx_;  // cached at prime
 	QPoint areaHome_;           // area 1's top-left when primed
 	int areaStart_ = 0;         // the area the take starts on
+	int areaMainMonitor_ = -1;  // the main capture's OBS monitor (the region's)
+	int areaShownMonitor_ = -1; // the monitor being recorded right now
+	QVector<AreaRef> areaTake_; // the take's layout (areas whose monitor could be captured)
+	QVector<AreaRef> areaEdit_; // the layout being arranged
 	bool areaPrimed_ = false;   // a take is using the layout; restore at the end
-	bool areaArranging_ = false; // the Arrange overlay is up; the frame stays hidden
-	std::unique_ptr<MultiAreaOverlay> areaOverlay_;
+	bool areaArranging_ = false; // the Arrange overlays are up; the frame stays hidden
+	// One overlay per monitor, keyed by OBS monitor index.
+	std::map<int, std::unique_ptr<MultiAreaOverlay>> areaOverlays_;
 	AreaStyle areaStyle_;
 	int areaStylePreview_ = 0; // Developer Panel preview (see setAreaStylePreview)
+	// OBS monitor index -> QScreen, memoized like screenForActivePreset.
+	mutable std::map<int, QScreen *> monitorScreens_;
+	QScreen *screenForMonitor(int monitorIndex) const;
+	QScreen *resolveScreenForMonitor(int monitorIndex) const;
 	bool multiAreaWanted() const; // preset + capture mode say Multi-Area applies
-	QVector<QPoint> multiAreaTops() const; // area 1 first, clamped to the screen
-	void cacheAreaScreen();
+	int areaMainMonitor() const;  // the region's monitor
+	QVector<AreaRef> multiAreaLayout() const; // area 1 first, each clamped to its screen
+	// The monitor (of `monitors`) the cursor is on, and where on it in device
+	// pixels; -1 when it is on none of them.
+	int cursorOnMonitor(const QVector<int> &monitors, QPoint *devicePx) const;
 	void moveRegionTo(QPoint topLeftDevicePx); // live, like the follow tick
+	void placeFrame(int monitor, const QRect &deviceRect); // the frame, on any screen
+	void showArea(int monitor, QPoint topLeftDevicePx);   // record this area now
 	void primeMultiArea();
 	void restoreAreaHome();
 	void syncMultiArea();
 	void tickMultiArea();
 	void updateAreaOverlay();
 	void onArrangeAreas();
-	void ensureAreaOverlay();
+	void onAreasEdited(int monitor, const QVector<QPoint> &tops);
+	void finishArrange();
+	MultiAreaOverlay *areaOverlayFor(int monitor);
+	// Put `layout` on the overlays (one per monitor it touches, plus every
+	// other monitor when `allMonitors`); `active` is the area not to outline.
+	void showAreaOverlays(const QVector<AreaRef> &layout, QSize size, int active, bool recording,
+			      bool allMonitors);
+	void hideAreaOverlays();
 
 	// Automatic Zoom: the shortcut pushes the recorded picture in on the cursor
 	// and pulls it back out. Full Screen only for now -- see ZoomMode.hpp for

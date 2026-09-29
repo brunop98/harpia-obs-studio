@@ -180,7 +180,7 @@ private:
 	QWidget *multiAreaPanRow_ = nullptr;
 	// The layout itself is arranged on the desktop, not here; the dialog only
 	// carries it through (and can clear it).
-	std::vector<std::pair<int, int>> multiAreaSpots_;
+	std::vector<MultiAreaSpot> multiAreaSpots_;
 	void updateMultiAreaCount();
 
 	// Spotlight page

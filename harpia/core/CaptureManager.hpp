@@ -94,6 +94,29 @@ public:
 	void setZoomTransform(double scale, double posX, double posY);
 	void clearZoomTransform() { setZoomTransform(1.0, 0.0, 0.0); }
 
+	// ---- Multi-Area across monitors ----
+	//
+	// Extra display captures in the SAME scene as the main one, each with its
+	// own crop, and only one of them visible at a time. Switching to an area on
+	// another monitor then just flips visibility: every capture is already
+	// running, so the cut is instant -- no source to build, no black frames.
+	// Only created for monitors a layout actually uses (and only for a take),
+	// since each one is a second screen being duplicated.
+	//
+	// Add a capture of OBS monitor `monitorIndex` (hidden). Idempotent; false
+	// if it cannot be created or is the main capture's own monitor.
+	bool addExtraMonitor(int monitorIndex);
+	// That capture's crop (device px on its monitor).
+	void setExtraRegion(int monitorIndex, const CaptureRegion &region);
+	// Show the capture of `monitorIndex` -- the main one or an extra -- and
+	// hide every other. Unknown monitors are ignored (nothing changes).
+	void showMonitor(int monitorIndex);
+	int shownMonitor() const { return shownMonitor_; }
+	bool hasExtraMonitor(int monitorIndex) const;
+	void clearExtraMonitors();
+	// The OBS monitor the main capture records (-1: none, or a window).
+	int monitorIndex() const { return monitorIndex_; }
+
 	// Remove the source from channel 0 and release it.
 	void stopCapture();
 
@@ -131,6 +154,18 @@ private:
 	// can keep it instead of rebuilding. -1 = no live source.
 	int monitorIndex_ = -1;
 	bool captureCursor_ = true;
+
+	struct ExtraCapture {
+		int monitor = -1;
+		obs_source_t *source = nullptr;
+		obs_source_t *crop = nullptr;
+		obs_sceneitem_t *item = nullptr; // owned by scene_
+		CaptureRegion region;
+	};
+	std::vector<ExtraCapture> extras_;
+	int shownMonitor_ = -1; // -1: the main capture
+	obs_source_t *createDisplaySource(int monitorIndex, const char *label) const;
+	static void applyCrop(obs_source_t *source, obs_source_t *&crop, const CaptureRegion &region);
 };
 
 } // namespace harpia

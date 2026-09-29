@@ -175,10 +175,25 @@ bool CaptureManager::startCapture(int monitorIndex, bool captureCursor)
 
 	stopCapture();
 
+	captureCursor_ = captureCursor;
+	source_ = createDisplaySource(monitorIndex, "harpia_display_capture_");
+	if (!source_) {
+		blog(LOG_ERROR, "[harpia] failed to create capture source '%s' (plugin missing?)",
+		     platformCaptureId());
+		return false;
+	}
+
+	bindSceneToOutput();
+	monitorIndex_ = monitorIndex;
+	return true;
+}
+
+obs_source_t *CaptureManager::createDisplaySource(int monitorIndex, const char *label) const
+{
 	const char *id = platformCaptureId();
 
 	obs_data_t *settings = obs_data_create();
-	obs_data_set_bool(settings, "capture_cursor", captureCursor);
+	obs_data_set_bool(settings, "capture_cursor", captureCursor_);
 
 	// Apply the chosen display if the source supports selection.
 	const std::vector<MonitorOption> monitors = enumerateMonitors();
@@ -196,20 +211,103 @@ bool CaptureManager::startCapture(int monitorIndex, bool captureCursor)
 	// force libobs to rename it. A unique name per creation avoids that — the
 	// name is only a registry/UI label; harpia never looks the source up by it.
 	static std::atomic<uint64_t> creationCounter{0};
-	const std::string sourceName =
-		"harpia_display_capture_" + std::to_string(creationCounter.fetch_add(1));
-	source_ = obs_source_create(id, sourceName.c_str(), settings, nullptr);
+	const std::string sourceName = label + std::to_string(creationCounter.fetch_add(1));
+	obs_source_t *src = obs_source_create(id, sourceName.c_str(), settings, nullptr);
 	obs_data_release(settings);
+	return src;
+}
 
-	if (!source_) {
-		blog(LOG_ERROR, "[harpia] failed to create capture source '%s' (plugin missing?)", id);
+bool CaptureManager::hasExtraMonitor(int monitorIndex) const
+{
+	for (const ExtraCapture &e : extras_)
+		if (e.monitor == monitorIndex)
+			return true;
+	return false;
+}
+
+bool CaptureManager::addExtraMonitor(int monitorIndex)
+{
+	if (monitorIndex < 0 || monitorIndex == monitorIndex_ || !scene_ || !source_)
+		return false;
+	if (hasExtraMonitor(monitorIndex))
+		return true;
+	ExtraCapture e;
+	e.monitor = monitorIndex;
+	e.source = createDisplaySource(monitorIndex, "harpia_area_capture_");
+	if (!e.source) {
+		blog(LOG_ERROR, "[harpia] multi-area: could not capture monitor #%d", monitorIndex);
 		return false;
 	}
-
-	bindSceneToOutput();
-	monitorIndex_ = monitorIndex;
-	captureCursor_ = captureCursor;
+	e.item = obs_scene_add(scene_, e.source);
+	if (e.item) {
+		vec2 pos = {0.0f, 0.0f};
+		vec2 scale = {1.0f, 1.0f};
+		obs_sceneitem_set_pos(e.item, &pos);
+		obs_sceneitem_set_scale(e.item, &scale);
+		obs_sceneitem_set_alignment(e.item, OBS_ALIGN_LEFT | OBS_ALIGN_TOP);
+		obs_sceneitem_set_bounds_type(e.item, OBS_BOUNDS_NONE);
+		// Hidden until it is the monitor being recorded. A hidden item still
+		// captures, which is what makes the switch to it instant.
+		obs_sceneitem_set_visible(e.item, false);
+	}
+	blog(LOG_INFO, "[harpia] multi-area: capturing monitor #%d as well", monitorIndex);
+	extras_.push_back(e);
 	return true;
+}
+
+void CaptureManager::setExtraRegion(int monitorIndex, const CaptureRegion &region)
+{
+	for (ExtraCapture &e : extras_) {
+		if (e.monitor != monitorIndex)
+			continue;
+		if (region == e.region && e.crop)
+			return; // the 60 Hz tick often repeats itself
+		e.region = region;
+		applyCrop(e.source, e.crop, region);
+		return;
+	}
+}
+
+void CaptureManager::showMonitor(int monitorIndex)
+{
+	const bool main = monitorIndex == monitorIndex_ || monitorIndex < 0;
+	if (!main && !hasExtraMonitor(monitorIndex))
+		return;
+	const int want = main ? -1 : monitorIndex;
+	if (want == shownMonitor_)
+		return;
+	// Show the new one before hiding the old, so no frame is rendered with
+	// neither (a black frame in the file).
+	for (ExtraCapture &e : extras_)
+		if (e.item && e.monitor == want)
+			obs_sceneitem_set_visible(e.item, true);
+	if (item_ && main)
+		obs_sceneitem_set_visible(item_, true);
+	for (ExtraCapture &e : extras_)
+		if (e.item && e.monitor != want)
+			obs_sceneitem_set_visible(e.item, false);
+	if (item_ && !main)
+		obs_sceneitem_set_visible(item_, false);
+	shownMonitor_ = want;
+}
+
+void CaptureManager::clearExtraMonitors()
+{
+	if (item_)
+		obs_sceneitem_set_visible(item_, true);
+	shownMonitor_ = -1;
+	for (ExtraCapture &e : extras_) {
+		if (e.item)
+			obs_sceneitem_remove(e.item); // the scene's reference
+		if (e.crop) {
+			if (e.source)
+				obs_source_filter_remove(e.source, e.crop);
+			obs_source_release(e.crop);
+		}
+		if (e.source)
+			obs_source_release(e.source);
+	}
+	extras_.clear();
 }
 
 // Wrap the live source in a scene and put THAT on the output channel.
@@ -256,6 +354,7 @@ void CaptureManager::bindSceneToOutput()
 
 void CaptureManager::releaseScene()
 {
+	clearExtraMonitors(); // their items live in the scene about to go
 	if (!scene_)
 		return;
 	obs_source_t *ss = obs_scene_get_source(scene_);
@@ -297,12 +396,19 @@ void CaptureManager::setRegion(const CaptureRegion &region)
 	if (!source_)
 		return;
 
+	applyCrop(source_, cropFilter_, region);
+}
+
+void CaptureManager::applyCrop(obs_source_t *source, obs_source_t *&crop, const CaptureRegion &region)
+{
+	if (!source)
+		return;
 	if (!region.enabled || region.width <= 0 || region.height <= 0) {
 		// Clear any existing crop.
-		if (cropFilter_) {
-			obs_source_filter_remove(source_, cropFilter_);
-			obs_source_release(cropFilter_);
-			cropFilter_ = nullptr;
+		if (crop) {
+			obs_source_filter_remove(source, crop);
+			obs_source_release(crop);
+			crop = nullptr;
 		}
 		return;
 	}
@@ -316,11 +422,11 @@ void CaptureManager::setRegion(const CaptureRegion &region)
 	obs_data_set_int(settings, "cx", region.width);
 	obs_data_set_int(settings, "cy", region.height);
 
-	if (!cropFilter_) {
-		cropFilter_ = obs_source_create_private("crop_filter", "harpia_region_crop", settings);
-		obs_source_filter_add(source_, cropFilter_);
+	if (!crop) {
+		crop = obs_source_create_private("crop_filter", "harpia_region_crop", settings);
+		obs_source_filter_add(source, crop);
 	} else {
-		obs_source_update(cropFilter_, settings);
+		obs_source_update(crop, settings);
 	}
 	obs_data_release(settings);
 }

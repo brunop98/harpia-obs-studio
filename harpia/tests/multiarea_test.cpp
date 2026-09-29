@@ -232,6 +232,91 @@ int main(int argc, char **argv)
 		ok(!ov.windowFlags().testFlag(Qt::WindowTransparentForInput), "Arrange takes the mouse again");
 	}
 
+	std::printf("\n-- across monitors --\n");
+	{
+		// Two areas on monitor 0 and two on monitor 1, at the SAME device
+		// coordinates on both screens -- only the monitor tells them apart.
+		const QVector<QPoint> t{{0, 0}, {500, 0}, {0, 0}, {500, 0}};
+		const QVector<int> m{0, 0, 1, 1};
+		ok(AreaSwitcher::areaAtOn(t, m, sz, 1, {600, 50}) == 3, "the cursor's monitor picks the area");
+		ok(AreaSwitcher::areaAtOn(t, m, sz, 0, {600, 50}) == 1, "same spot on the other monitor");
+		ok(AreaSwitcher::areaAtOn(t, m, sz, 2, {600, 50}) == -1, "a monitor with no areas is a gap");
+		ok(AreaSwitcher::startIndex(t, sz, {50, 50}, m, 1) == 2, "starts on the area under the mouse, any screen");
+
+		MultiAreaParams pan;
+		pan.transition = AreaTransition::Pan;
+		pan.panMs = 400;
+		pan.hoverMs = 0;
+		AreaSwitcher s;
+		s.arm(t, sz, 0, true, m);
+		ok(s.currentMonitor() == 0, "armed on monitor 0");
+		s.tick({600, 50}, 0, pan, 0);
+		ok(s.current() == 1 && s.panning(), "same monitor: pans");
+		s.tick({600, 50}, 400, pan, 0);
+		const bool moved = s.tick({50, 50}, 1000, pan, 1);
+		ok(s.current() == 2 && s.currentMonitor() == 1, "cursor on monitor 1: switches there");
+		ok(!s.panning() && s.region().x == 0, "other monitor: always a cut, never a pan");
+		ok(moved, "reported as moved (the picture changed even where pixels did not)");
+		s.tick({50, 50}, 1100, pan, -1);
+		ok(s.current() == 2, "cursor on no layout monitor: stays (a gap)");
+		// Same coordinates, other monitor, no pixel move at all.
+		AreaSwitcher c;
+		c.arm({{100, 100}, {100, 100}}, sz, 0, true, {0, 1});
+		ok(c.tick({150, 150}, 0, cut, 1) == false && c.current() == 0, "delay still applies across monitors");
+		ok(c.tick({150, 150}, 300, cut, 1) == true && c.currentMonitor() == 1,
+		   "an identical-coordinate switch to another monitor still reports a move");
+	}
+
+	std::printf("\n-- layout edits per monitor --\n");
+	{
+		using namespace area_layout;
+		// Global order: A0 (region), B0, A1, B1.
+		const QVector<AreaRef> lay{{0, {0, 0}}, {1, {10, 0}}, {0, {20, 0}}, {1, {30, 0}}};
+		ok(topsOn(lay, 1) == QVector<QPoint>({{10, 0}, {30, 0}}), "a screen's share, in order");
+		ok(numbersOn(lay, 1) == QVector<int>({2, 4}), "with its global numbers");
+		const QVector<AreaRef> moved = mergeEdit(lay, 1, {{11, 5}, {30, 0}});
+		ok(moved[1].top == QPoint(11, 5) && moved.size() == 4 && moved[3].top == QPoint(30, 0),
+		   "a move keeps the area's number");
+		const QVector<AreaRef> added = mergeEdit(lay, 0, {{0, 0}, {20, 0}, {40, 0}});
+		ok(added.size() == 5 && added[4].monitor == 0 && added[4].top == QPoint(40, 0),
+		   "a new area gets the next number");
+		const QVector<AreaRef> removed = mergeEdit(lay, 0, {{0, 0}});
+		ok(removed.size() == 3 && removed[0].monitor == 0 && removed[1].monitor == 1 && removed[2].monitor == 1,
+		   "a removal closes up (later areas renumber)");
+		const QVector<AreaRef> fresh = mergeEdit(lay, 2, {{5, 5}});
+		ok(fresh.size() == 5 && fresh[4].monitor == 2, "the first area on a new monitor");
+		ok(monitors(fresh) == QVector<int>({0, 1, 0, 1, 2}) && area_layout::tops(fresh).size() == 5, "flattens for the switcher");
+	}
+
+	std::printf("\n-- one overlay per monitor --\n");
+	{
+		MultiAreaOverlay ov;
+		ov.setScreen(QGuiApplication::primaryScreen());
+		ov.setAreas({QPoint(0, 0), QPoint(300, 0)}, QSize(160, 90));
+		ov.setNumbers({2, 4});
+		ov.setLockedIndex(-1); // the region is on another screen
+		ov.setMaxAreas(3);
+		ov.setMode(MultiAreaOverlay::Mode::Arrange);
+		ov.removeArea(0);
+		ok(ov.areas().size() == 1, "no region here: any area can be removed");
+		ok(ov.addAtLocal({400, 400}) >= 0 && ov.addAtLocal({600, 400}) >= 0, "room for two more");
+		ok(ov.addAtLocal({200, 600}) == -1, "the shared nine-area allowance stops the next");
+		MultiAreaOverlay big;
+		big.setScreen(QGuiApplication::primaryScreen());
+		big.setAreas({}, QSize(5000, 5000));
+		big.setLockedIndex(-1);
+		ok(!big.areaFits() && big.addAtLocal({100, 100}) == -1, "a region bigger than this screen cannot be stamped");
+		MultiAreaOverlay lk;
+		lk.setScreen(QGuiApplication::primaryScreen());
+		lk.setAreas({QPoint(0, 0), QPoint(300, 0), QPoint(0, 300)}, QSize(160, 90));
+		lk.setLockedIndex(1);
+		lk.removeArea(1);
+		ok(lk.areas().size() == 3, "the locked area stays, wherever it is in the list");
+		lk.removeArea(0);
+		lk.removeArea(0); // was index 1 (the locked one) before the first removal
+		ok(lk.areas().size() == 2, "and follows its index when an earlier one goes");
+	}
+
 	std::printf("\n-- area style: JSON --\n");
 	{
 		AreaStyle st;

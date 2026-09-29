@@ -20,6 +20,7 @@
 #include "platform/CameraAccess.hpp"
 
 #include <map>
+#include <set>
 
 #include <algorithm>
 
@@ -2061,8 +2062,14 @@ void PresetEditorDialog::updateMultiAreaCount()
 	if (!multiAreaCountLabel_)
 		return;
 	const int n = 1 + int(multiAreaSpots_.size());
+	// -1 is the region's own monitor, so it counts with the region.
+	std::set<int> monitors{-1};
+	for (const MultiAreaSpot &sp : multiAreaSpots_)
+		monitors.insert(sp.monitor == result_.monitorIndex ? -1 : sp.monitor);
+	const int m = int(monitors.size());
 	multiAreaCountLabel_->setText(n == 1 ? QStringLiteral("1 area (just the region) — arrange more on the desktop")
-					     : QStringLiteral("%1 areas laid out").arg(n));
+				      : m > 1 ? QStringLiteral("%1 areas on %2 monitors").arg(n).arg(m)
+					      : QStringLiteral("%1 areas laid out").arg(n));
 	multiAreaClearBtn_->setEnabled(n > 1);
 }
 

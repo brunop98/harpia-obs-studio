@@ -61,10 +61,11 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_int(d, "multi_area_pan_ms", p.multiAreaPanMs);
 	obs_data_set_int(d, "multi_area_hover_ms", p.multiAreaHoverMs);
 	obs_data_array_t *spots = obs_data_array_create();
-	for (const auto &xy : p.multiAreaSpots) {
+	for (const MultiAreaSpot &sp : p.multiAreaSpots) {
 		obs_data_t *item = obs_data_create();
-		obs_data_set_int(item, "x", xy.first);
-		obs_data_set_int(item, "y", xy.second);
+		obs_data_set_int(item, "monitor", sp.monitor);
+		obs_data_set_int(item, "x", sp.x);
+		obs_data_set_int(item, "y", sp.y);
 		obs_data_array_push_back(spots, item);
 		obs_data_release(item);
 	}
@@ -184,8 +185,13 @@ Preset presetFromData(obs_data_t *d)
 		const size_t n = obs_data_array_count(spots);
 		for (size_t i = 0; i < n; i++) {
 			obs_data_t *item = obs_data_array_item(spots, i);
-			p.multiAreaSpots.emplace_back((int)obs_data_get_int(item, "x"),
-						      (int)obs_data_get_int(item, "y"));
+			// No "monitor" key (single-monitor layouts): the region's monitor.
+			obs_data_set_default_int(item, "monitor", -1);
+			MultiAreaSpot sp;
+			sp.monitor = (int)obs_data_get_int(item, "monitor");
+			sp.x = (int)obs_data_get_int(item, "x");
+			sp.y = (int)obs_data_get_int(item, "y");
+			p.multiAreaSpots.push_back(sp);
 			obs_data_release(item);
 		}
 		obs_data_array_release(spots);

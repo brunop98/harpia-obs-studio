@@ -56,13 +56,95 @@ struct MultiAreaParams {
 // numbers to one digit.
 inline constexpr int kMaxAreas = 9;
 
+// An area in a layout that may span monitors: which (OBS) monitor, and its
+// top-left in that monitor's device pixels. Layout order is area numbering.
+struct AreaRef {
+	int monitor = 0;
+	QPoint top;
+	bool operator==(const AreaRef &o) const { return monitor == o.monitor && top == o.top; }
+};
+
+// Arranging happens on one overlay per screen, each editing only its own
+// areas; these fold that back into the one numbered layout.
+namespace area_layout {
+
+// Monitor `m`'s areas, in layout order.
+inline QVector<QPoint> topsOn(const QVector<AreaRef> &layout, int m)
+{
+	QVector<QPoint> out;
+	for (const AreaRef &a : layout)
+		if (a.monitor == m)
+			out.push_back(a.top);
+	return out;
+}
+
+// Their numbers as shown (1-based, global).
+inline QVector<int> numbersOn(const QVector<AreaRef> &layout, int m)
+{
+	QVector<int> out;
+	for (int i = 0; i < layout.size(); ++i)
+		if (layout[i].monitor == m)
+			out.push_back(i + 1);
+	return out;
+}
+
+// Monitor `m`'s share replaced by `tops` -- that screen's areas after an edit,
+// in its own order. Its existing slots are refilled in order (so a move keeps
+// the area's number), surplus slots are dropped (a removal; later areas close
+// up), and extra tops are appended at the end (a new area gets the next
+// number). Other monitors' areas keep their places.
+inline QVector<AreaRef> mergeEdit(const QVector<AreaRef> &layout, int m, const QVector<QPoint> &tops)
+{
+	QVector<AreaRef> out;
+	int k = 0;
+	for (const AreaRef &a : layout) {
+		if (a.monitor != m) {
+			out.push_back(a);
+		} else if (k < tops.size()) {
+			out.push_back({m, tops[k++]});
+		}
+	}
+	for (; k < tops.size(); ++k)
+		out.push_back({m, tops[k]});
+	return out;
+}
+
+inline QVector<QPoint> tops(const QVector<AreaRef> &layout)
+{
+	QVector<QPoint> out;
+	for (const AreaRef &a : layout)
+		out.push_back(a.top);
+	return out;
+}
+
+inline QVector<int> monitors(const QVector<AreaRef> &layout)
+{
+	QVector<int> out;
+	for (const AreaRef &a : layout)
+		out.push_back(a.monitor);
+	return out;
+}
+
+} // namespace area_layout
+
 class AreaSwitcher {
 public:
 	// Which area contains `p` (half-open on the far edges, like the crop).
 	// `prefer` wins when it contains the point too; -1 when none does.
 	static int areaAt(const QVector<QPoint> &tops, QSize size, QPoint p, int prefer = -1)
 	{
+		return areaAtOn(tops, {}, size, 0, p, prefer);
+	}
+
+	// The same across monitors. `monitors[i]` is area i's monitor and `p` is
+	// in `monitor`'s device pixels -- only areas on that monitor can contain it.
+	// An empty `monitors` means everything is on one screen.
+	static int areaAtOn(const QVector<QPoint> &tops, const QVector<int> &monitors, QSize size, int monitor,
+			    QPoint p, int prefer = -1)
+	{
 		auto inside = [&](int i) {
+			if (!monitors.isEmpty() && (i >= monitors.size() || monitors[i] != monitor))
+				return false;
 			const QPoint t = tops[i];
 			return p.x() >= t.x() && p.y() >= t.y() && p.x() < t.x() + size.width() &&
 			       p.y() < t.y() + size.height();
@@ -76,9 +158,10 @@ public:
 	}
 
 	// Where a recording starts: the area under the cursor, else area 1.
-	static int startIndex(const QVector<QPoint> &tops, QSize size, QPoint cursor)
+	static int startIndex(const QVector<QPoint> &tops, QSize size, QPoint cursor,
+			      const QVector<int> &monitors = {}, int cursorMonitor = 0)
 	{
-		const int i = areaAt(tops, size, cursor);
+		const int i = areaAtOn(tops, monitors, size, cursorMonitor, cursor);
 		return i >= 0 ? i : 0;
 	}
 
@@ -100,9 +183,14 @@ public:
 
 	// Start switching between `tops` (area 1 first), every one `size` big,
 	// showing area `start`.
-	void arm(const QVector<QPoint> &tops, QSize size, int start, bool enabled = true)
+	// `monitors` (optional, one per area) spreads the areas over several
+	// screens; a switch to another screen is always a cut -- there is nothing
+	// to pan across between two monitors.
+	void arm(const QVector<QPoint> &tops, QSize size, int start, bool enabled = true,
+		 const QVector<int> &monitors = {})
 	{
 		tops_ = tops;
+		monitors_ = monitors.size() == tops.size() ? monitors : QVector<int>();
 		size_ = size;
 		enabled_ = enabled;
 		armed_ = !tops_.isEmpty() && !size_.isEmpty();
@@ -131,6 +219,9 @@ public:
 	int current() const { return current_; }
 	int count() const { return tops_.size(); }
 	const QVector<QPoint> &tops() const { return tops_; }
+	const QVector<int> &monitors() const { return monitors_; }
+	int monitorOf(int i) const { return (i >= 0 && i < monitors_.size()) ? monitors_[i] : 0; }
+	int currentMonitor() const { return monitorOf(current_); }
 	// True for the one tick() call on which the shown area changed -- the
 	// moment to drop a marker.
 	bool switchedThisTick() const { return switched_; }
@@ -141,10 +232,11 @@ public:
 	{
 		if (!armed_ || i < 0 || i >= tops_.size() || i == current_)
 			return;
+		const bool sameScreen = monitorOf(i) == monitorOf(current_);
 		current_ = i;
 		switched_ = true;
 		candidate_ = -1;
-		if (p.transition == AreaTransition::Pan && p.panMs > 0) {
+		if (sameScreen && p.transition == AreaTransition::Pan && p.panMs > 0) {
 			from_ = pos_;
 			panStart_ = nowMs;
 		} else {
@@ -155,14 +247,19 @@ public:
 
 	// One step. Returns true when the frame moved by at least a pixel, in which
 	// case region() is the rectangle to apply.
-	bool tick(QPoint cursor, qint64 nowMs, const MultiAreaParams &p)
+	// `cursorMonitor` is the monitor the cursor is on (cursor in its device
+	// pixels); -1 when it is on none of them, which counts as a gap.
+	bool tick(QPoint cursor, qint64 nowMs, const MultiAreaParams &p, int cursorMonitor = 0)
 	{
 		switched_ = false;
 		if (!armed_)
 			return false;
 		const QPoint before = pos_.toPoint();
+		const int monitorBefore = currentMonitor();
 
-		const int under = areaAt(tops_, size_, cursor, current_);
+		const int under = cursorMonitor < 0 && !monitors_.isEmpty()
+					  ? -1
+					  : areaAtOn(tops_, monitors_, size_, cursorMonitor, cursor, current_);
 		if (under < 0 || under == current_) {
 			// Nowhere, or already there: nothing pending.
 			candidate_ = -1;
@@ -185,7 +282,9 @@ public:
 				pos_ = from_ + (to - from_) * k;
 			}
 		}
-		return pos_.toPoint() != before;
+		// A cut to the same spot on another monitor moved nothing in pixels
+		// but everything on screen.
+		return pos_.toPoint() != before || currentMonitor() != monitorBefore;
 	}
 
 	CaptureRegion region() const
@@ -196,6 +295,7 @@ public:
 
 private:
 	QVector<QPoint> tops_;
+	QVector<int> monitors_; // empty: one screen
 	QSize size_;
 	bool enabled_ = true;
 	bool armed_ = false;

@@ -93,7 +93,7 @@ int main()
 	pin("multiAreaTransition", [](Preset &p) { p.multiAreaTransition += 1; });
 	pin("multiAreaPanMs", [](Preset &p) { p.multiAreaPanMs += 1; });
 	pin("multiAreaHoverMs", [](Preset &p) { p.multiAreaHoverMs += 1; });
-	pin("multiAreaSpots", [](Preset &p) { p.multiAreaSpots.push_back({10, 20}); });
+	pin("multiAreaSpots", [](Preset &p) { p.multiAreaSpots.push_back({-1, 10, 20}); });
 	pin("spotlightEnabled", [](Preset &p) { p.spotlightEnabled = !p.spotlightEnabled; });
 	pin("spotlightStartOn", [](Preset &p) { p.spotlightStartOn = !p.spotlightStartOn; });
 	pin("spotlightSize", [](Preset &p) { p.spotlightSize += 1; });

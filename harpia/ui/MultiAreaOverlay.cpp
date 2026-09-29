@@ -156,9 +156,50 @@ QRect MultiAreaOverlay::doneRectLocal() const
 	return QRect((width() - w) / 2, 24, w, h);
 }
 
+void MultiAreaOverlay::setNumbers(const QVector<int> &numbers)
+{
+	if (numbers == numbers_)
+		return;
+	numbers_ = numbers;
+	update();
+}
+
+void MultiAreaOverlay::setLockedIndex(int i)
+{
+	if (i == locked_)
+		return;
+	locked_ = i;
+	update();
+}
+
+void MultiAreaOverlay::setMaxAreas(int n)
+{
+	n = std::clamp(n, 0, kMaxAreas);
+	if (n == maxAreas_)
+		return;
+	maxAreas_ = n;
+	update();
+}
+
+bool MultiAreaOverlay::areaFits() const
+{
+	const QSize sd = screenDevice();
+	return !size_.isEmpty() && (sd.isEmpty() || (size_.width() <= sd.width() && size_.height() <= sd.height()));
+}
+
+int MultiAreaOverlay::nextNumber() const
+{
+	// The number a stamp here would get: after every number shown anywhere,
+	// which the owner reflects in the numbers it hands out.
+	int n = int(tops_.size());
+	for (int v : numbers_)
+		n = std::max(n, v);
+	return n + 1;
+}
+
 int MultiAreaOverlay::addAtLocal(const QPoint &local)
 {
-	if (tops_.size() >= kMaxAreas || size_.isEmpty())
+	if (tops_.size() >= maxAreas_ || !areaFits())
 		return -1;
 	const QPoint d = toDevice(local);
 	const QPoint t = AreaSwitcher::clampTop(d - QPoint(size_.width() / 2, size_.height() / 2), size_,
@@ -171,10 +212,14 @@ int MultiAreaOverlay::addAtLocal(const QPoint &local)
 
 void MultiAreaOverlay::removeArea(int i)
 {
-	// Area 1 is the region: it can move, but the recording needs it.
-	if (i <= 0 || i >= tops_.size())
+	// The region can move, but the recording needs it.
+	if (i < 0 || i >= tops_.size() || i == locked_)
 		return;
 	tops_.remove(i);
+	if (i < numbers_.size())
+		numbers_.remove(i); // the owner renumbers after areasEdited
+	if (locked_ > i)
+		--locked_;
 	hover_ = -1;
 	if (active_ >= tops_.size())
 		active_ = 0;
@@ -194,7 +239,7 @@ void MultiAreaOverlay::paintEvent(QPaintEvent *)
 	const AreaStyle &st = style_;
 	const int lw = std::max(1, st.lineWidth);
 	const int badgeSize = st.badgeSize;
-	auto badge = [&](const QRect &r, int i, const QColor &c) {
+	auto badge = [&](const QRect &r, int number, const QColor &c) {
 		if (badgeSize <= 0)
 			return;
 		const QRect b(r.left() + 8, r.top() + 8, badgeSize, badgeSize);
@@ -205,7 +250,7 @@ void MultiAreaOverlay::paintEvent(QPaintEvent *)
 		bf.setPixelSize(std::max(8, badgeSize * 14 / 26));
 		p.setFont(bf);
 		p.setPen(st.badgeTextColor);
-		p.drawText(b, Qt::AlignCenter, QString::number(i + 1));
+		p.drawText(b, Qt::AlignCenter, QString::number(number));
 		p.setFont(f);
 	};
 	// The outline sits inside the area, so a thick line never spills onto
@@ -229,7 +274,7 @@ void MultiAreaOverlay::paintEvent(QPaintEvent *)
 			const QRect r = areaRectLocal(i);
 			p.setBrush(Qt::NoBrush);
 			outline(r, QPen(st.lineColor, lw, st.penStyle()));
-			badge(r, i, st.badgeColor);
+			badge(r, numberOf(i), st.badgeColor);
 		}
 		return;
 	}
@@ -251,9 +296,9 @@ void MultiAreaOverlay::paintEvent(QPaintEvent *)
 		// that pass fully transparent pixels through.
 		p.setBrush(hot ? fill : QColor(0, 0, 0, 1));
 		// Area 1 (the region) is always solid, so it reads apart from copies.
-		outline(r, QPen(st.lineColor, hot ? lw + 1 : lw, i == 0 ? Qt::SolidLine : st.penStyle()));
-		badge(r, i, st.badgeColor);
-		if (i == 0) {
+		outline(r, QPen(st.lineColor, hot ? lw + 1 : lw, i == locked_ ? Qt::SolidLine : st.penStyle()));
+		badge(r, numberOf(i), st.badgeColor);
+		if (i == locked_) {
 			p.setPen(Qt::white);
 			p.drawText(r.adjusted(8 + std::max(0, badgeSize) + 8, 8, -8, -8), Qt::AlignLeft | Qt::AlignTop,
 				   QStringLiteral("Region"));
@@ -261,7 +306,7 @@ void MultiAreaOverlay::paintEvent(QPaintEvent *)
 	}
 
 	// Where a click would stamp the next one.
-	if (pointerIn_ && hover_ < 0 && drag_ < 0 && tops_.size() < kMaxAreas && !size_.isEmpty() &&
+	if (pointerIn_ && hover_ < 0 && drag_ < 0 && tops_.size() < maxAreas_ && areaFits() &&
 	    !doneRectLocal().contains(pointer_)) {
 		const QPoint d = toDevice(pointer_);
 		const QPoint t = AreaSwitcher::clampTop(d - QPoint(size_.width() / 2, size_.height() / 2), size_,
@@ -272,7 +317,7 @@ void MultiAreaOverlay::paintEvent(QPaintEvent *)
 		ghost.setAlpha(st.ghostOpacity * 255 / 100);
 		p.setBrush(Qt::NoBrush);
 		outline(g, QPen(ghost, lw, Qt::DotLine));
-		badge(g, int(tops_.size()), ghost);
+		badge(g, nextNumber(), ghost);
 	}
 
 	// Instructions and Done.
@@ -285,7 +330,8 @@ void MultiAreaOverlay::paintEvent(QPaintEvent *)
 	p.setFont(hintFont);
 	p.setPen(QColor(230, 230, 230));
 	const QString hint =
-		tops_.size() >= kMaxAreas
+		!areaFits() ? QStringLiteral("The region is bigger than this screen · Done when finished")
+		: tops_.size() >= maxAreas_
 			? QStringLiteral("%1 areas (the most). Drag to move · right-click to remove").arg(kMaxAreas)
 			: QStringLiteral("Click to add an area · drag to move · right-click to remove");
 	p.drawText(done.adjusted(14, 0, -86, 0), Qt::AlignVCenter | Qt::AlignLeft, hint);

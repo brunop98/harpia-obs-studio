@@ -337,6 +337,9 @@ public:
 	// that gets drawn. That they are DIFFERENT is the point of the gap, and
 	// that the first still tiles the lane is what keeps the gap clickable.
 	QRect clipRectForTest(int track, int clip) const { return clipRect(track, clip); }
+	QRect marqueeRectForTest() const { return marqueeRect_; }
+	bool marqueeActiveForTest() const { return mode_ == Mode::Marquee; }
+	int selectedCountForTest() const { return (selClip_ >= 0 ? 1 : 0) + extraSel_.size(); }
 	QRect clipPaintRectForTest(int track, int clip) const
 	{
 		return clipPaintRect(track, clip);
@@ -674,7 +677,7 @@ private:
 	// drags the playhead across a still view. Both are "navigating", and mixing
 	// them up is why it needs its own mode rather than a flag on Scrub.
 	// TrackDrag is a header being dragged up or down to reorder the lanes.
-	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan, KeyDrag, Volume, TrackDrag };
+	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan, KeyDrag, Volume, TrackDrag, Marquee };
 	Mode mode_ = Mode::None;
 	// The lane whose header is being dragged, and the slot (an insertion index,
 	// "before lane N", clamped into the lane's own kind group) it would land in
@@ -684,6 +687,17 @@ private:
 	int trackInsertAtY(int from, int y) const;
 	QPoint pressPos_;
 	bool dragMoved_ = false;
+	// Shift+drag: a box that selects every clip it touches, on every track
+	// that is not locked or hidden. Ctrl+Shift adds to the selection made
+	// before the press (marqueeBase_) instead of replacing it. The selection
+	// follows the box live, so what is picked is visible before the release.
+	QPoint marqueeStart_;
+	QRect marqueeRect_;
+	bool marqueeAdd_ = false;
+	QSet<QPair<int, int>> marqueeBase_;
+	int marqueeBaseTrack_ = -1, marqueeBaseClip_ = -1;
+	QVector<QPair<int, int>> clipsTouching(const QRect &box) const; // track order, then clip
+	void applyMarquee();
 	// captured at press
 	TlClip dragOrig_;
 	int dragTrack_ = -1, dragClip_ = -1;

@@ -2484,6 +2484,14 @@ void TimelineView::paintEvent(QPaintEvent *)
 	}
 
 	// Playhead across all lanes.
+	// The selection box, under the playhead.
+	if (mode_ == Mode::Marquee && marqueeRect_.width() + marqueeRect_.height() > 0) {
+		const QRect box = marqueeRect_.intersected(rect());
+		p.setPen(QPen(QColor(0x3d, 0xd6, 0x8c), 1));
+		p.setBrush(QColor(0x3d, 0xd6, 0x8c, 40));
+		p.drawRect(box.adjusted(0, 0, -1, -1));
+	}
+
 	if (playheadMs_ >= 0) {
 		const int x = msToX(playheadMs_);
 		if (x >= contentRect().x() - 1 && x <= contentRect().right() + 1) {
@@ -2627,6 +2635,28 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	}
 	if (e->button() != Qt::LeftButton)
 		return;
+
+	// Shift+drag draws a selection box. Anywhere in the tracks -- over a clip
+	// too, which then neither moves nor trims -- so the gesture is the same
+	// wherever it starts. Ctrl as well adds to what was already selected.
+	if (e->modifiers() & Qt::ShiftModifier) {
+		mode_ = Mode::Marquee;
+		marqueeStart_ = pos;
+		marqueeRect_ = QRect(pos, QSize(0, 0));
+		marqueeAdd_ = e->modifiers() & Qt::ControlModifier;
+		marqueeBase_.clear();
+		marqueeBaseTrack_ = marqueeBaseClip_ = -1;
+		if (marqueeAdd_ && !selTransition_) {
+			marqueeBase_ = extraSel_;
+			marqueeBaseTrack_ = selTrack_;
+			marqueeBaseClip_ = selClip_;
+		}
+		selTransition_ = false;
+		setCursor(Qt::CrossCursor);
+		applyMarquee(); // an empty box: the base, or nothing
+		update();
+		return;
+	}
 
 	// An overlap belongs to neither clip: clicking it selects the TRANSITION.
 	// Ctrl-click still falls through to the clips, so a group selection can
@@ -2803,6 +2833,57 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	update();
 }
 
+QVector<QPair<int, int>> TimelineView::clipsTouching(const QRect &box) const
+{
+	QVector<QPair<int, int>> out;
+	for (int ti = 0; ti < model_.tracks.size(); ++ti) {
+		const TlTrack &t = model_.tracks[ti];
+		// A locked track is not edited, and a hidden one is not seen: neither
+		// should be swept into a group about to be moved or deleted.
+		if (t.locked || t.hidden)
+			continue;
+		for (int ci = 0; ci < t.clips.size(); ++ci)
+			if (clipRect(ti, ci).intersects(box))
+				out.push_back({ti, ci});
+	}
+	return out;
+}
+
+void TimelineView::applyMarquee()
+{
+	// Touching the box is enough (a thin box across a lane takes everything it
+	// crosses), and a zero-size box -- the press itself -- touches nothing, so
+	// a Shift+click on empty space clears the selection.
+	const QVector<QPair<int, int>> hit =
+		marqueeRect_.width() > 0 || marqueeRect_.height() > 0 ? clipsTouching(marqueeRect_)
+								     : QVector<QPair<int, int>>();
+	QSet<QPair<int, int>> all = marqueeBase_;
+	if (marqueeBaseTrack_ >= 0)
+		all.insert({marqueeBaseTrack_, marqueeBaseClip_});
+	for (const auto &h : hit)
+		all.insert(h);
+
+	// The primary is the first clip the box touched (top track, then left),
+	// or what it was when adding to a selection the box has not reached yet.
+	int primT = -1, primC = -1;
+	if (!hit.isEmpty()) {
+		primT = hit.first().first;
+		primC = hit.first().second;
+	} else if (marqueeBaseTrack_ >= 0) {
+		primT = marqueeBaseTrack_;
+		primC = marqueeBaseClip_;
+	}
+	QSet<QPair<int, int>> extras = all;
+	if (primT >= 0)
+		extras.remove({primT, primC});
+	if (primT == selTrack_ && primC == selClip_ && extras == extraSel_)
+		return; // the box grew, but over nothing new: no churn downstream
+	selTrack_ = primT;
+	selClip_ = primC;
+	extraSel_ = extras;
+	emit selectionChanged(selTrack_, selClip_);
+}
+
 void TimelineView::mouseMoveEvent(QMouseEvent *e)
 {
 	const QPoint pos = e->pos();
@@ -2825,6 +2906,12 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 	if (mode_ == Mode::Scrub) {
 		playheadMs_ = xToMs(pos.x());
 		emitScrubAt(playheadMs_);
+		update();
+		return;
+	}
+	if (mode_ == Mode::Marquee) {
+		marqueeRect_ = QRect(marqueeStart_, pos).normalized();
+		applyMarquee();
 		update();
 		return;
 	}
@@ -3133,6 +3220,17 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 		mode_ = Mode::None;
 		unsetCursor();
 		releaseSpan();
+		return;
+	}
+	if (mode_ == Mode::Marquee) {
+		// The selection is already what the box last touched; only the box
+		// itself goes.
+		mode_ = Mode::None;
+		marqueeRect_ = QRect();
+		marqueeBase_.clear();
+		unsetCursor();
+		releaseSpan();
+		update();
 		return;
 	}
 	if (e->button() != Qt::LeftButton) {

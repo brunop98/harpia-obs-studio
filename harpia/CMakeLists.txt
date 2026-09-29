@@ -184,6 +184,7 @@ target_sources(
     ui/RegionTool.hpp
     ui/MultiAreaOverlay.cpp
     ui/MultiAreaOverlay.hpp
+    ui/AreaStyle.hpp
     ui/RegionDialogs.cpp
     ui/RegionDialogs.hpp
     # Built-in trim / crop / export editor (isolated module).

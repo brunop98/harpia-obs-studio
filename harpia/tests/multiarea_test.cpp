@@ -11,6 +11,8 @@
 #include "ui/MultiAreaOverlay.hpp"
 
 #include <QApplication>
+#include <QImage>
+#include <QJsonObject>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QScreen>
@@ -228,6 +230,70 @@ int main(int argc, char **argv)
 		ok(ov.areas().size() == before - 1, "and ignores clicks (no stamp)");
 		ov.setMode(MultiAreaOverlay::Mode::Arrange);
 		ok(!ov.windowFlags().testFlag(Qt::WindowTransparentForInput), "Arrange takes the mouse again");
+	}
+
+	std::printf("\n-- area style: JSON --\n");
+	{
+		AreaStyle st;
+		st.lineColor = QColor(0xff, 0x00, 0x00);
+		st.lineWidth = 5;
+		st.lineStyle = 3;
+		st.badgeSize = 0;
+		const QJsonObject o = areaStyleToJson(st);
+		ok(o.value("lineColor").toString() == "#ff0000" && o.value("lineWidth").toInt() == 5,
+		   "colours as #rrggbb, numbers as numbers");
+		AreaStyle back;
+		ok(areaStyleFromJson(o, back) == areaStyleFields().size(), "every field comes back");
+		ok(back.lineColor == st.lineColor && back.lineWidth == 5 && back.lineStyle == 3 && back.badgeSize == 0,
+		   "round trip is exact");
+		ok(back.penStyle() == Qt::DashDotLine, "line style 3 is dash-dot");
+
+		QJsonObject bad;
+		bad["lineWidth"] = 999;
+		bad["idleOpacity"] = -20;
+		bad["lineColor"] = "not a colour";
+		bad["nonsense"] = 1;
+		AreaStyle clamped;
+		const int n = areaStyleFromJson(bad, clamped);
+		ok(n == 2, "only the two known, well-formed values apply");
+		ok(clamped.lineWidth == 12 && clamped.idleOpacity == 5, "out-of-range values are clamped");
+		ok(clamped.lineColor == AreaStyle().lineColor, "a bad colour leaves the old one");
+	}
+
+	std::printf("\n-- area style: drawn --\n");
+	{
+		MultiAreaOverlay ov;
+		ov.setScreen(QGuiApplication::primaryScreen());
+		ov.setAreas({QPoint(100, 100), QPoint(400, 100)}, QSize(200, 100));
+		ov.setActive(0); // area 1 is the region frame's to draw
+		AreaStyle st;
+		st.lineColor = QColor(255, 0, 0);
+		st.lineWidth = 4;
+		st.lineStyle = 0;
+		st.idleOpacity = 100;
+		st.badgeSize = 0;
+		ov.setStyle(st);
+		QImage img(ov.size(), QImage::Format_ARGB32_Premultiplied);
+		img.fill(Qt::transparent);
+		ov.render(&img);
+		const QColor edge = img.pixelColor(401, 150), inside = img.pixelColor(500, 150);
+		std::printf("     edge %d,%d,%d,%d  inside alpha %d\n", edge.red(), edge.green(), edge.blue(),
+			    edge.alpha(), inside.alpha());
+		ok(edge.red() > 200 && edge.green() < 40 && edge.alpha() > 200, "outline in the chosen colour");
+		ok(img.pixelColor(403, 150).red() > 200, "4 px wide, drawn inside the area");
+		ok(img.pixelColor(405, 150).alpha() == 0, "and no wider");
+		ok(inside.alpha() == 0, "the inside stays see-through");
+		ok(img.pixelColor(101, 150).alpha() == 0, "the recorded area gets no outline (the frame has it)");
+		ok(img.pixelColor(412, 112).alpha() == 0, "badge size 0 hides the numbers");
+
+		st.recordingOpacity = 40;
+		ov.setStyle(st);
+		ov.setRecording(true);
+		img.fill(Qt::transparent);
+		ov.render(&img);
+		const int a = img.pixelColor(401, 150).alpha();
+		std::printf("     recording alpha %d\n", a);
+		ok(a > 90 && a < 115, "while recording it draws at the recording opacity (40%)");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

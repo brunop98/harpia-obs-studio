@@ -7,6 +7,7 @@
 #include "core/DiskSpace.hpp"
 #include "core/FollowMouse.hpp"
 #include "core/MultiArea.hpp"
+#include "ui/AreaStyle.hpp"
 #include "core/GlobalHotkeys.hpp"
 #include "core/ModeCapabilities.hpp"
 #include "core/ZoomMode.hpp"
@@ -214,6 +215,12 @@ private:
 	// (re)compute the recent-strip icon/grid/height from them.
 	MainLayoutParams layoutParams() const { return layout_; }
 	void setLayoutParams(const MainLayoutParams &p);
+	// How the Multi-Area layout is drawn (Developer Panel → Areas).
+	const AreaStyle &areaStyle() const { return areaStyle_; }
+	void setAreaStyle(const AreaStyle &s);
+	// Show the areas on screen with the current style: 0 off, 1 as when idle,
+	// 2 as while recording. Uses the real layout, or sample areas without one.
+	void setAreaStylePreview(int mode);
 	void applyStripMetrics();
 	void openDevPanel();
 
@@ -353,6 +360,8 @@ private:
 	bool areaPrimed_ = false;   // a take is using the layout; restore at the end
 	bool areaArranging_ = false; // the Arrange overlay is up; the frame stays hidden
 	std::unique_ptr<MultiAreaOverlay> areaOverlay_;
+	AreaStyle areaStyle_;
+	int areaStylePreview_ = 0; // Developer Panel preview (see setAreaStylePreview)
 	bool multiAreaWanted() const; // preset + capture mode say Multi-Area applies
 	QVector<QPoint> multiAreaTops() const; // area 1 first, clamped to the screen
 	void cacheAreaScreen();

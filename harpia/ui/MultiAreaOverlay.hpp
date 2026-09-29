@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AreaStyle.hpp"
+
 #include <QPoint>
 #include <QSize>
 #include <QVector>
@@ -39,6 +41,9 @@ public:
 	void setAreas(const QVector<QPoint> &tops, QSize size);
 	QVector<QPoint> areas() const { return tops_; }
 	QSize areaSize() const { return size_; }
+	// How it is drawn (Developer Panel → Areas).
+	void setStyle(const AreaStyle &style);
+	const AreaStyle &style() const { return style_; }
 	// The area being recorded -- not outlined in Passive (the frame is there).
 	void setActive(int index);
 	// Dimmer while recording, so it reads as a guide, not as part of the shot.
@@ -83,6 +88,7 @@ private:
 	int active_ = 0;
 	bool recording_ = false;
 	Mode mode_ = Mode::Passive;
+	AreaStyle style_;
 
 	int hover_ = -1;       // area under the pointer (Arrange)
 	QPoint pointer_;       // local, for the stamp ghost

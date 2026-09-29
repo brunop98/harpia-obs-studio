@@ -3,6 +3,11 @@
 #include "MainWindow.hpp"
 
 #include <QClipboard>
+#include <QColorDialog>
+#include <QComboBox>
+#include <QHideEvent>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QFormLayout>
 #include <QGuiApplication>
 #include <QGroupBox>
@@ -12,6 +17,7 @@
 #include <QScrollArea>
 #include <QSettings>
 #include <QSpinBox>
+#include <QTabWidget>
 #include <QVBoxLayout>
 
 namespace harpia {
@@ -41,9 +47,37 @@ void MainDevPanel::saveFrom(const MainLayoutParams &p)
 	s.endGroup();
 }
 
+void MainDevPanel::loadAreaStyle(AreaStyle &st)
+{
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout/areas"));
+	QJsonObject o;
+	for (const AreaStyleField &f : areaStyleFields()) {
+		const QString k = QString::fromLatin1(f.key);
+		if (!s.contains(k))
+			continue;
+		if (f.intMember)
+			o[k] = s.value(k).toInt();
+		else
+			o[k] = s.value(k).toString();
+	}
+	s.endGroup();
+	areaStyleFromJson(o, st); // same clamping and colour checks as Paste JSON
+}
+
+void MainDevPanel::saveAreaStyle(const AreaStyle &st)
+{
+	QSettings s = devSettings();
+	s.beginGroup(QStringLiteral("devLayout/areas"));
+	const QJsonObject o = areaStyleToJson(st);
+	for (auto it = o.begin(); it != o.end(); ++it)
+		s.setValue(it.key(), it.value().toVariant());
+	s.endGroup();
+}
+
 MainDevPanel::MainDevPanel(MainWindow *win, QWidget *parent) : QDialog(parent), win_(win)
 {
-	setWindowTitle(QStringLiteral("Developer Panel — window layout"));
+	setWindowTitle(QStringLiteral("Developer Panel"));
 	// A floating tool window so tweaks stay visible on the live window.
 	setWindowFlags(Qt::Tool | Qt::WindowTitleHint | Qt::WindowCloseButtonHint);
 	setModal(false);
@@ -157,21 +191,26 @@ MainDevPanel::MainDevPanel(MainWindow *win, QWidget *parent) : QDialog(parent), 
 
 	auto *outer = new QVBoxLayout(this);
 	outer->setContentsMargins(0, 0, 0, 0);
-	outer->addWidget(scroll, 1);
+	tabs_ = new QTabWidget(this);
+	tabs_->addTab(scroll, QStringLiteral("Window layout"));
+	areasTab_ = buildAreasTab();
+	tabs_->addTab(areasTab_, QStringLiteral("Areas"));
+	outer->addWidget(tabs_, 1);
 
 	auto *btnRow = new QHBoxLayout;
 	btnRow->setContentsMargins(10, 6, 10, 8);
 	auto *resetBtn = new QPushButton(QStringLiteral("Reset to defaults"), this);
+	resetBtn->setToolTip(QStringLiteral("Reset the tab you are on."));
 	connect(resetBtn, &QPushButton::clicked, this, &MainDevPanel::resetDefaults);
 	btnRow->addWidget(resetBtn);
 	// Copy / Paste JSON, like the editor's Developer Panel: send the values
 	// to have them made the shipped defaults, or bring a set back.
 	auto *copyBtn = new QPushButton(QStringLiteral("Copy JSON"), this);
-	copyBtn->setToolTip(QStringLiteral("Copy every size here as JSON, to paste into a message."));
+	copyBtn->setToolTip(QStringLiteral("Copy every value on both tabs as JSON, to paste into a message."));
 	connect(copyBtn, &QPushButton::clicked, this, &MainDevPanel::copyJson);
 	btnRow->addWidget(copyBtn);
 	auto *pasteBtn = new QPushButton(QStringLiteral("Paste JSON"), this);
-	pasteBtn->setToolTip(QStringLiteral("Apply sizes from JSON on the clipboard (as Copy JSON makes)."));
+	pasteBtn->setToolTip(QStringLiteral("Apply values from JSON on the clipboard (as Copy JSON makes)."));
 	connect(pasteBtn, &QPushButton::clicked, this, &MainDevPanel::pasteJson);
 	btnRow->addWidget(pasteBtn);
 	btnRow->addStretch(1);
@@ -212,26 +251,204 @@ void MainDevPanel::apply()
 
 void MainDevPanel::resetDefaults()
 {
-	showValues(MainLayoutParams()); // struct defaults ARE the app defaults
+	// Struct defaults ARE the app defaults.
+	if (tabs_ && tabs_->currentWidget() == areasTab_)
+		showAreaStyle(AreaStyle());
+	else
+		showValues(MainLayoutParams());
 }
 
 void MainDevPanel::copyJson()
 {
-	QGuiApplication::clipboard()->setText(QString::fromUtf8(mainLayoutToJson(current())));
-	jsonStatus_->setText(QStringLiteral("Copied %1 values as JSON.").arg(mainLayoutFields().size()));
+	// Both tabs in one message: the window sizes as before, plus "areaStyle".
+	QJsonObject root = QJsonDocument::fromJson(mainLayoutToJson(current())).object();
+	root[QStringLiteral("areaStyle")] = areaStyleToJson(currentAreaStyle());
+	QGuiApplication::clipboard()->setText(
+		QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+	jsonStatus_->setText(QStringLiteral("Copied %1 values as JSON.")
+				     .arg(mainLayoutFields().size() + areaStyleFields().size()));
 }
 
 void MainDevPanel::pasteJson()
 {
+	const QByteArray text = QGuiApplication::clipboard()->text().toUtf8();
 	MainLayoutParams p = current();
 	QString err;
-	const int n = mainLayoutFromJson(QGuiApplication::clipboard()->text().toUtf8(), p, &err);
-	if (n == 0) {
+	const int n = mainLayoutFromJson(text, p, &err);
+	AreaStyle st = currentAreaStyle();
+	const QJsonObject root = QJsonDocument::fromJson(text).object();
+	const int na = root.value(QStringLiteral("areaStyle")).isObject()
+			       ? areaStyleFromJson(root.value(QStringLiteral("areaStyle")).toObject(), st)
+			       : 0;
+	if (n == 0 && na == 0) {
 		jsonStatus_->setText(QStringLiteral("Nothing pasted: %1.").arg(err));
 		return;
 	}
-	showValues(p);
-	jsonStatus_->setText(QStringLiteral("Applied %1 values from the clipboard.").arg(n));
+	if (n > 0)
+		showValues(p);
+	if (na > 0)
+		showAreaStyle(st);
+	jsonStatus_->setText(QStringLiteral("Applied %1 values from the clipboard.").arg(n + na));
+}
+
+// ---- Areas tab --------------------------------------------------------------
+
+void MainDevPanel::paintSwatch(QPushButton *b, const QColor &c)
+{
+	b->setText(c.name(QColor::HexRgb));
+	b->setStyleSheet(QStringLiteral("QPushButton{background:%1;color:%2;border:1px solid #555;"
+					"border-radius:4px;padding:4px 10px;}")
+				 .arg(c.name(), c.lightness() > 140 ? QStringLiteral("#000") : QStringLiteral("#fff")));
+}
+
+QWidget *MainDevPanel::buildAreasTab()
+{
+	const AreaStyle cur = win_->areaStyle();
+	auto *inner = new QWidget;
+	auto *root = new QVBoxLayout(inner);
+	auto *hint = new QLabel(
+		QStringLiteral("How the Multiple-areas layout is drawn on the desktop. Changes apply live "
+			       "and are saved. Turn on the preview to see them without recording."),
+		inner);
+	hint->setWordWrap(true);
+	hint->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+	root->addWidget(hint);
+
+	auto *pvBox = new QGroupBox(QStringLiteral("Preview"), inner);
+	auto *pvForm = new QFormLayout(pvBox);
+	areaPreview_ = new QComboBox(pvBox);
+	areaPreview_->addItem(QStringLiteral("Off"));
+	areaPreview_->addItem(QStringLiteral("As when idle"));
+	areaPreview_->addItem(QStringLiteral("As while recording"));
+	areaPreview_->setToolTip(QStringLiteral("Show the areas on screen with this style. Uses your "
+						"layout, or three sample areas if there is none."));
+	connect(areaPreview_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+		[this](int i) { win_->setAreaStylePreview(i); });
+	pvForm->addRow(QStringLiteral("Show on screen"), areaPreview_);
+	root->addWidget(pvBox);
+
+	auto *lineBox = new QGroupBox(QStringLiteral("Outlines"), inner);
+	auto *lineForm = new QFormLayout(lineBox);
+	auto *badgeBox = new QGroupBox(QStringLiteral("Number badges"), inner);
+	auto *badgeForm = new QFormLayout(badgeBox);
+	auto *arrBox = new QGroupBox(QStringLiteral("Arrange mode"), inner);
+	auto *arrForm = new QFormLayout(arrBox);
+
+	const QVector<AreaStyleField> &fields = areaStyleFields();
+	areaSpins_.fill(nullptr, fields.size());
+	areaSwatches_.fill(nullptr, fields.size());
+	areaColors_.fill(QColor(), fields.size());
+	for (int i = 0; i < fields.size(); ++i) {
+		const AreaStyleField &f = fields[i];
+		const QString key = QString::fromLatin1(f.key);
+		QFormLayout *form = key.startsWith(QLatin1String("badge"))                          ? badgeForm
+				    : key.startsWith(QLatin1String("arrange")) || key.startsWith(QLatin1String("hover")) ||
+						      key.startsWith(QLatin1String("ghost"))
+					    ? arrForm
+					    : lineForm;
+		QWidget *control = nullptr;
+		if (f.colorMember) {
+			auto *b = new QPushButton(inner);
+			areaColors_[i] = cur.*(f.colorMember);
+			paintSwatch(b, areaColors_[i]);
+			connect(b, &QPushButton::clicked, this, [this, i, b]() {
+				const QColor c = QColorDialog::getColor(areaColors_[i], this,
+									 QStringLiteral("Pick a color"));
+				if (!c.isValid())
+					return;
+				areaColors_[i] = c;
+				paintSwatch(b, c);
+				if (!loading_)
+					applyAreaStyle();
+			});
+			areaSwatches_[i] = b;
+			control = b;
+		} else if (f.intMember == &AreaStyle::lineStyle) {
+			lineStyleCombo_ = new QComboBox(inner);
+			lineStyleCombo_->addItem(QStringLiteral("Solid"));
+			lineStyleCombo_->addItem(QStringLiteral("Dashed"));
+			lineStyleCombo_->addItem(QStringLiteral("Dotted"));
+			lineStyleCombo_->addItem(QStringLiteral("Dash-dot"));
+			lineStyleCombo_->setCurrentIndex(std::clamp(cur.lineStyle, 0, 3));
+			connect(lineStyleCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() {
+				if (!loading_)
+					applyAreaStyle();
+			});
+			control = lineStyleCombo_;
+		} else {
+			auto *sp = new QSpinBox(inner);
+			sp->setRange(f.min, f.max);
+			sp->setValue(cur.*(f.intMember));
+			connect(sp, &QSpinBox::valueChanged, this, [this]() {
+				if (!loading_)
+					applyAreaStyle();
+			});
+			areaSpins_[i] = sp;
+			control = sp;
+		}
+		form->addRow(QString::fromLatin1(f.label).remove(QStringLiteral("Arrange: ")), control);
+	}
+	root->addWidget(lineBox);
+	root->addWidget(badgeBox);
+	root->addWidget(arrBox);
+	root->addStretch(1);
+
+	auto *scroll = new QScrollArea(this);
+	scroll->setWidget(inner);
+	scroll->setWidgetResizable(true);
+	scroll->setFrameShape(QFrame::NoFrame);
+	return scroll;
+}
+
+AreaStyle MainDevPanel::currentAreaStyle() const
+{
+	AreaStyle st;
+	const QVector<AreaStyleField> &fields = areaStyleFields();
+	for (int i = 0; i < fields.size() && i < areaSpins_.size(); ++i) {
+		const AreaStyleField &f = fields[i];
+		if (f.colorMember)
+			st.*(f.colorMember) = areaColors_[i];
+		else if (f.intMember == &AreaStyle::lineStyle)
+			st.lineStyle = lineStyleCombo_ ? lineStyleCombo_->currentIndex() : st.lineStyle;
+		else if (areaSpins_[i])
+			st.*(f.intMember) = areaSpins_[i]->value();
+	}
+	return st;
+}
+
+void MainDevPanel::showAreaStyle(const AreaStyle &st)
+{
+	loading_ = true;
+	const QVector<AreaStyleField> &fields = areaStyleFields();
+	for (int i = 0; i < fields.size() && i < areaSpins_.size(); ++i) {
+		const AreaStyleField &f = fields[i];
+		if (f.colorMember) {
+			areaColors_[i] = st.*(f.colorMember);
+			paintSwatch(areaSwatches_[i], areaColors_[i]);
+		} else if (f.intMember == &AreaStyle::lineStyle) {
+			lineStyleCombo_->setCurrentIndex(std::clamp(st.lineStyle, 0, 3));
+		} else if (areaSpins_[i]) {
+			areaSpins_[i]->setValue(st.*(f.intMember));
+		}
+	}
+	loading_ = false;
+	applyAreaStyle();
+}
+
+void MainDevPanel::applyAreaStyle()
+{
+	const AreaStyle st = currentAreaStyle();
+	win_->setAreaStyle(st);
+	saveAreaStyle(st);
+}
+
+void MainDevPanel::hideEvent(QHideEvent *e)
+{
+	// A preview left on after the panel closes would be a set of green boxes
+	// on the desktop that nothing explains.
+	if (areaPreview_)
+		areaPreview_->setCurrentIndex(0);
+	QDialog::hideEvent(e);
 }
 
 } // namespace harpia

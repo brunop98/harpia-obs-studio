@@ -876,6 +876,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// and apply them over the freshly built (default-sized) layout.
 	MainDevPanel::loadInto(layout_);
 	setLayoutParams(layout_);
+	MainDevPanel::loadAreaStyle(areaStyle_);
 
 	// Start keyboard focus on the primary action instead of a random combo.
 	primaryButton_->setFocus();
@@ -4656,6 +4657,7 @@ void MainWindow::ensureAreaOverlay()
 	if (areaOverlay_)
 		return;
 	areaOverlay_ = std::make_unique<MultiAreaOverlay>();
+	areaOverlay_->setStyle(areaStyle_);
 	connect(areaOverlay_.get(), &MultiAreaOverlay::areasEdited, this, [this](const QVector<QPoint> &tops) {
 		if (tops.isEmpty())
 			return;
@@ -4692,6 +4694,32 @@ void MainWindow::updateAreaOverlay()
 		regionTool_->setMultiAreaMenu(multiAreaWanted());
 	if (areaArranging_)
 		return;
+	if (areaStylePreview_ > 0 && !recorder_.isRecording()) {
+		// Developer Panel preview: every area outlined (none is "the frame"),
+		// the real layout when there is one, three samples when there is not.
+		ensureAreaOverlay();
+		QScreen *scr = screenForActivePreset();
+		areaOverlay_->setScreen(scr);
+		cacheAreaScreen();
+		const bool real = multiAreaWanted() && !activePreset().multiAreaSpots.empty();
+		QVector<QPoint> tops;
+		QSize size;
+		if (real) {
+			tops = multiAreaTops();
+			size = QSize(currentRegion_.width, currentRegion_.height);
+		} else {
+			const QSize sc = areaScreenDevicePx_.isEmpty() ? QSize(1920, 1080) : areaScreenDevicePx_;
+			size = QSize(sc.width() * 28 / 100, sc.height() * 28 / 100);
+			for (int k = 0; k < 3; ++k)
+				tops.push_back(QPoint(sc.width() * (4 + 33 * k) / 100, sc.height() * 12 / 100));
+		}
+		areaOverlay_->setAreas(tops, size);
+		areaOverlay_->setActive(-1);
+		areaOverlay_->setRecording(areaStylePreview_ == 2);
+		if (!areaOverlay_->isVisible())
+			areaOverlay_->show();
+		return;
+	}
 	const bool show = multiAreaWanted() && !activePreset().multiAreaSpots.empty() && regionTool_ &&
 			  regionTool_->isVisible();
 	if (!show) {
@@ -4712,6 +4740,19 @@ void MainWindow::updateAreaOverlay()
 	areaOverlay_->setRecording(recorder_.isRecording());
 	if (!areaOverlay_->isVisible())
 		areaOverlay_->show();
+}
+
+void MainWindow::setAreaStyle(const AreaStyle &s)
+{
+	areaStyle_ = s;
+	if (areaOverlay_)
+		areaOverlay_->setStyle(s);
+}
+
+void MainWindow::setAreaStylePreview(int mode)
+{
+	areaStylePreview_ = std::clamp(mode, 0, 2);
+	updateAreaOverlay();
 }
 
 void MainWindow::onArrangeAreas()

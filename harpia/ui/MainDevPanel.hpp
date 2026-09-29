@@ -4,10 +4,14 @@
 #include <QPair>
 #include <QVector>
 
+#include "AreaStyle.hpp"
 #include "MainLayoutParams.hpp"
 
+class QComboBox;
 class QLabel;
+class QPushButton;
 class QSpinBox;
+class QTabWidget;
 
 namespace harpia {
 
@@ -26,6 +30,12 @@ public:
 	// saveFrom() after every change.
 	static void loadInto(MainLayoutParams &p);
 	static void saveFrom(const MainLayoutParams &p);
+	// The Multi-Area overlay's look (Areas tab), persisted the same way.
+	static void loadAreaStyle(AreaStyle &s);
+	static void saveAreaStyle(const AreaStyle &s);
+
+protected:
+	void hideEvent(QHideEvent *e) override; // ends the on-screen preview
 
 private:
 	void apply();
@@ -34,6 +44,21 @@ private:
 	void pasteJson();
 	MainLayoutParams current() const;        // what the boxes say
 	void showValues(const MainLayoutParams &p); // put values in the boxes, then apply
+
+	QWidget *buildAreasTab();
+	AreaStyle currentAreaStyle() const;
+	void showAreaStyle(const AreaStyle &s); // into the controls, then apply
+	void applyAreaStyle();
+	static void paintSwatch(QPushButton *b, const QColor &c);
+
+	QTabWidget *tabs_ = nullptr;
+	QWidget *areasTab_ = nullptr;
+	// Areas tab: one control per AreaStyle field, in areaStyleFields() order.
+	QVector<QSpinBox *> areaSpins_;       // null for colour fields
+	QVector<QPushButton *> areaSwatches_; // null for integer fields
+	QVector<QColor> areaColors_;          // the swatches' colours
+	QComboBox *lineStyleCombo_ = nullptr; // stands in for the lineStyle spin
+	QComboBox *areaPreview_ = nullptr;    // Off / Idle / Recording
 
 	QVector<QPair<QSpinBox *, int MainLayoutParams::*>> spins_;
 	QLabel *jsonStatus_ = nullptr;

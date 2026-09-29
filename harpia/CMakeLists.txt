@@ -104,6 +104,7 @@ target_sources(
     core/RecordingController.hpp
     core/FollowMouse.cpp
     core/FollowMouse.hpp
+    core/MultiArea.hpp
     core/ZoomMode.hpp
     core/ModeCapabilities.hpp
     core/SpotlightFx.hpp
@@ -181,6 +182,8 @@ target_sources(
     ui/MainDevPanel.hpp
     ui/RegionTool.cpp
     ui/RegionTool.hpp
+    ui/MultiAreaOverlay.cpp
+    ui/MultiAreaOverlay.hpp
     ui/RegionDialogs.cpp
     ui/RegionDialogs.hpp
     # Built-in trim / crop / export editor (isolated module).

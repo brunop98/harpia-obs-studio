@@ -56,6 +56,20 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_int(d, "follow_axis", p.followAxis);
 	obs_data_set_int(d, "follow_profile", p.followProfile);
 	obs_data_set_string(d, "follow_shortcut", p.followShortcut.c_str());
+	obs_data_set_bool(d, "multi_area", p.multiArea);
+	obs_data_set_int(d, "multi_area_transition", p.multiAreaTransition);
+	obs_data_set_int(d, "multi_area_pan_ms", p.multiAreaPanMs);
+	obs_data_set_int(d, "multi_area_hover_ms", p.multiAreaHoverMs);
+	obs_data_array_t *spots = obs_data_array_create();
+	for (const auto &xy : p.multiAreaSpots) {
+		obs_data_t *item = obs_data_create();
+		obs_data_set_int(item, "x", xy.first);
+		obs_data_set_int(item, "y", xy.second);
+		obs_data_array_push_back(spots, item);
+		obs_data_release(item);
+	}
+	obs_data_set_array(d, "multi_area_spots", spots);
+	obs_data_array_release(spots);
 	obs_data_set_bool(d, "spotlight_enabled", p.spotlightEnabled);
 	obs_data_set_bool(d, "spotlight_start_on", p.spotlightStartOn);
 	obs_data_set_int(d, "spotlight_size", p.spotlightSize);
@@ -159,6 +173,23 @@ Preset presetFromData(obs_data_t *d)
 	p.followProfile = (int)obs_data_get_int(d, "follow_profile");
 	obs_data_set_default_string(d, "follow_shortcut", "Ctrl+Shift+F");
 	p.followShortcut = obs_data_get_string(d, "follow_shortcut");
+	// Presets from before Multi-Area read back off, with the editor's defaults.
+	p.multiArea = obs_data_get_bool(d, "multi_area");
+	obs_data_set_default_int(d, "multi_area_pan_ms", 400);
+	obs_data_set_default_int(d, "multi_area_hover_ms", 300);
+	p.multiAreaTransition = (int)obs_data_get_int(d, "multi_area_transition");
+	p.multiAreaPanMs = (int)obs_data_get_int(d, "multi_area_pan_ms");
+	p.multiAreaHoverMs = (int)obs_data_get_int(d, "multi_area_hover_ms");
+	if (obs_data_array_t *spots = obs_data_get_array(d, "multi_area_spots")) {
+		const size_t n = obs_data_array_count(spots);
+		for (size_t i = 0; i < n; i++) {
+			obs_data_t *item = obs_data_array_item(spots, i);
+			p.multiAreaSpots.emplace_back((int)obs_data_get_int(item, "x"),
+						      (int)obs_data_get_int(item, "y"));
+			obs_data_release(item);
+		}
+		obs_data_array_release(spots);
+	}
 	// Same reasoning for Zoom: read back raw, a preset written before this
 	// feature would zoom to 0% over 0 ms -- an instant cut to a 16x16 crop.
 	// Non-zero defaults again: a preset written before this feature would read

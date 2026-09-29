@@ -3,6 +3,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace harpia {
 
@@ -97,6 +98,19 @@ struct Preset {
 	// resume. Only live where followMouse is set: the checkbox decides whether
 	// the feature exists, the key toggles it within a take.
 	std::string followShortcut = "Ctrl+Shift+F";
+
+	// Multi-Area: several same-size spots on the screen, and the recording
+	// switches to whichever one the mouse is in (see core/MultiArea.hpp).
+	// Custom Region only, and never together with Follow Mouse -- one moves the
+	// frame freely, the other keeps it on fixed framings; turning one on in the
+	// editor turns the other off.
+	bool multiArea = false;
+	int multiAreaTransition = 0; // AreaTransition: 0 cut, 1 pan
+	int multiAreaPanMs = 400;    // pan length, 50..3000
+	int multiAreaHoverMs = 300;  // the cursor stays this long before a switch
+	// Top-left of areas 2..N, device pixels from the recorded screen's
+	// top-left. Area 1 is the region itself, and every area is its size.
+	std::vector<std::pair<int, int>> multiAreaSpots;
 
 	// Spotlight: a shortcut that darkens everything except a patch around the
 	// cursor, so the viewer's eye lands where you are pointing. Drawn by the
@@ -221,7 +235,10 @@ inline bool operator==(const Preset &a, const Preset &b)
 	       a.rightClickColor == b.rightClickColor && a.followMouse == b.followMouse &&
 	       a.followPaddingPct == b.followPaddingPct && a.followSmoothness == b.followSmoothness &&
 	       a.followAxis == b.followAxis && a.followProfile == b.followProfile &&
-	       a.followShortcut == b.followShortcut && a.spotlightEnabled == b.spotlightEnabled &&
+	       a.followShortcut == b.followShortcut && a.multiArea == b.multiArea &&
+	       a.multiAreaTransition == b.multiAreaTransition && a.multiAreaPanMs == b.multiAreaPanMs &&
+	       a.multiAreaHoverMs == b.multiAreaHoverMs && a.multiAreaSpots == b.multiAreaSpots &&
+	       a.spotlightEnabled == b.spotlightEnabled &&
 	       a.spotlightStartOn == b.spotlightStartOn && a.spotlightSize == b.spotlightSize &&
 	       a.spotlightDarkPct == b.spotlightDarkPct &&
 	       a.spotlightRoundness == b.spotlightRoundness &&

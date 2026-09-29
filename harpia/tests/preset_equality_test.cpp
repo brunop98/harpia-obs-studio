@@ -89,6 +89,11 @@ int main()
 	pin("followAxis", [](Preset &p) { p.followAxis += 1; });
 	pin("followProfile", [](Preset &p) { p.followProfile += 1; });
 	pin("followShortcut", [](Preset &p) { p.followShortcut = "F7"; });
+	pin("multiArea", [](Preset &p) { p.multiArea = !p.multiArea; });
+	pin("multiAreaTransition", [](Preset &p) { p.multiAreaTransition += 1; });
+	pin("multiAreaPanMs", [](Preset &p) { p.multiAreaPanMs += 1; });
+	pin("multiAreaHoverMs", [](Preset &p) { p.multiAreaHoverMs += 1; });
+	pin("multiAreaSpots", [](Preset &p) { p.multiAreaSpots.push_back({10, 20}); });
 	pin("spotlightEnabled", [](Preset &p) { p.spotlightEnabled = !p.spotlightEnabled; });
 	pin("spotlightStartOn", [](Preset &p) { p.spotlightStartOn = !p.spotlightStartOn; });
 	pin("spotlightSize", [](Preset &p) { p.spotlightSize += 1; });

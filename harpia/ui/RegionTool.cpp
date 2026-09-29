@@ -530,8 +530,15 @@ void RegionTool::contextMenuEvent(QContextMenuEvent *e)
 	QMenu menu;
 	QAction *saveAct = menu.addAction(QStringLiteral("Save Region…"));
 	QAction *manageAct = menu.addAction(QStringLiteral("Manage saved regions…"));
+	QAction *arrangeAct = nullptr;
+	if (multiAreaMenu_ && mode_ != Mode::Recording) {
+		menu.addSeparator();
+		arrangeAct = menu.addAction(QStringLiteral("Arrange areas…"));
+	}
 	QAction *chosen = menu.exec(e->globalPos());
-	if (chosen == saveAct)
+	if (chosen && chosen == arrangeAct)
+		emit arrangeAreasRequested();
+	else if (chosen == saveAct)
 		emit saveRegionRequested();
 	else if (chosen == manageAct)
 		emit manageRegionsRequested();

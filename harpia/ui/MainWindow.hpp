@@ -6,6 +6,7 @@
 #include "core/RecordingController.hpp"
 #include "core/DiskSpace.hpp"
 #include "core/FollowMouse.hpp"
+#include "core/MultiArea.hpp"
 #include "core/GlobalHotkeys.hpp"
 #include "core/ModeCapabilities.hpp"
 #include "core/ZoomMode.hpp"
@@ -52,6 +53,7 @@ class ObsContext;
 class PresetStore;
 class ClipLibraryWindow;
 class RegionTool;
+class MultiAreaOverlay;
 class CountdownOverlay;
 class ScreenBorderOverlay;
 class AudioPanel;
@@ -334,6 +336,34 @@ private:
 	QPoint followHome_;            // region top-left when following armed
 	void rebindFollowHotkey();
 	void onFollowToggle();
+
+	// Multi-Area (core/MultiArea.hpp): the recording switches between fixed,
+	// same-size areas as the mouse moves between them. Area 1 is the region;
+	// the others come from the preset. Primed just before the recorder starts
+	// (so the first frame is already the area under the mouse), armed once the
+	// output is live, and area 1 is put back when the take is over.
+	AreaSwitcher areaSwitch_;
+	QTimer *areaTimer_ = nullptr;
+	QElapsedTimer areaClock_;
+	QPoint areaOrigin_;         // screen top-left, logical px (cached at prime)
+	double areaDpr_ = 1.0;      // cached at prime
+	QSize areaScreenDevicePx_;  // cached at prime
+	QPoint areaHome_;           // area 1's top-left when primed
+	int areaStart_ = 0;         // the area the take starts on
+	bool areaPrimed_ = false;   // a take is using the layout; restore at the end
+	bool areaArranging_ = false; // the Arrange overlay is up; the frame stays hidden
+	std::unique_ptr<MultiAreaOverlay> areaOverlay_;
+	bool multiAreaWanted() const; // preset + capture mode say Multi-Area applies
+	QVector<QPoint> multiAreaTops() const; // area 1 first, clamped to the screen
+	void cacheAreaScreen();
+	void moveRegionTo(QPoint topLeftDevicePx); // live, like the follow tick
+	void primeMultiArea();
+	void restoreAreaHome();
+	void syncMultiArea();
+	void tickMultiArea();
+	void updateAreaOverlay();
+	void onArrangeAreas();
+	void ensureAreaOverlay();
 
 	// Automatic Zoom: the shortcut pushes the recorded picture in on the cursor
 	// and pulls it back out. Full Screen only for now -- see ZoomMode.hpp for

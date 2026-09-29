@@ -695,6 +695,81 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	connect(followPaddingSlider_, &QSlider::valueChanged, this, toCustom);
 	connect(followSmoothSlider_, &QSlider::valueChanged, this, toCustom);
 
+	// ---- Multi-Area ----
+	multiAreaSpots_ = preset.multiAreaSpots;
+	multiAreaCheck_ = new QCheckBox(QStringLiteral("Multiple areas"), this);
+	multiAreaCheck_->setChecked(preset.multiArea && !preset.followMouse);
+	QWidget *multiAreaCheckRow = addCheck(
+		v, multiAreaCheck_,
+		QStringLiteral("Lay out several same-size areas; the recording switches to the one the "
+			       "mouse is in and stays there while it crosses the gaps. Arrange them by "
+			       "right-clicking the region frame → Arrange areas…"));
+
+	multiAreaTransitionCombo_ = new QComboBox(this);
+	multiAreaTransitionCombo_->addItem(QStringLiteral("Cut"));        // 0
+	multiAreaTransitionCombo_->addItem(QStringLiteral("Smooth pan")); // 1
+	multiAreaTransitionCombo_->setCurrentIndex(std::clamp(preset.multiAreaTransition, 0, 1));
+	QWidget *multiAreaTransitionRow = addField(
+		v, QStringLiteral("Switch"),
+		QStringLiteral("Cut jumps straight to the new area. Smooth pan slides there."),
+		multiAreaTransitionCombo_);
+
+	QWidget *panRow = sliderRow(multiAreaPanSlider_, 50, 3000,
+				    std::clamp(preset.multiAreaPanMs, 50, 3000), QStringLiteral(" ms"));
+	multiAreaPanRow_ = addField(v, QStringLiteral("Pan time"),
+				    QStringLiteral("How long the slide to the new area takes."), panRow);
+
+	QWidget *hoverRow = sliderRow(multiAreaHoverSlider_, 0, 2000,
+				      std::clamp(preset.multiAreaHoverMs, 0, 2000), QStringLiteral(" ms"));
+	QWidget *multiAreaHoverRow = addField(
+		v, QStringLiteral("Switch delay"),
+		QStringLiteral("The mouse must stay in a new area this long before the recording switches "
+			       "— passing through one on the way somewhere else does not flash it."),
+		hoverRow);
+
+	auto *countBox = new QWidget(this);
+	auto *countLay = new QHBoxLayout(countBox);
+	countLay->setContentsMargins(0, 0, 0, 0);
+	multiAreaCountLabel_ = new QLabel(countBox);
+	multiAreaClearBtn_ = new QPushButton(QStringLiteral("Remove extra areas"), countBox);
+	countLay->addWidget(multiAreaCountLabel_, 1);
+	countLay->addWidget(multiAreaClearBtn_);
+	QWidget *multiAreaCountRow = addField(v, QStringLiteral("Areas"), QString(), countBox);
+	connect(multiAreaClearBtn_, &QPushButton::clicked, this, [this]() {
+		multiAreaSpots_.clear();
+		updateMultiAreaCount();
+	});
+	updateMultiAreaCount();
+
+	dependsOn(multiAreaCheck_, {multiAreaTransitionRow, multiAreaPanRow_, multiAreaHoverRow,
+				    multiAreaCountRow});
+	// Pan time only means something for a pan.
+	const auto syncPanRow = [this]() {
+		multiAreaPanSlider_->setEnabled(multiAreaCheck_->isChecked() &&
+						multiAreaTransitionCombo_->currentIndex() == 1);
+	};
+	connect(multiAreaTransitionCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+		syncPanRow);
+	connect(multiAreaCheck_, &QCheckBox::toggled, this, syncPanRow);
+	syncPanRow();
+	// One or the other: Follow Mouse moves the frame freely, Multi-Area keeps
+	// it on fixed framings. Ticking one unticks the other.
+	connect(multiAreaCheck_, &QCheckBox::toggled, this, [this](bool on) {
+		if (on && followCheck_->isChecked())
+			followCheck_->setChecked(false);
+	});
+	connect(followCheck_, &QCheckBox::toggled, this, [this](bool on) {
+		if (on && multiAreaCheck_->isChecked())
+			multiAreaCheck_->setChecked(false);
+	});
+	if (!modeSupportsFollowMouse(mode_)) {
+		multiAreaCheckRow->hide();
+		multiAreaTransitionRow->hide();
+		multiAreaPanRow_->hide();
+		multiAreaHoverRow->hide();
+		multiAreaCountRow->hide();
+	}
+
 	mousePreview_ = new MousePreview(this);
 	addField(v, QStringLiteral("Preview"), QString(), mousePreview_);
 	connect(mouseAreaCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::updateMousePreview);
@@ -1336,6 +1411,12 @@ template <class F> void forEachPageField(const QString &page, F &&f)
 		f(&Preset::followAxis);
 		f(&Preset::followProfile);
 		f(&Preset::followShortcut);
+		// Not multiAreaSpots: resetting a page's settings should not throw
+		// away a layout arranged on the desktop.
+		f(&Preset::multiArea);
+		f(&Preset::multiAreaTransition);
+		f(&Preset::multiAreaPanMs);
+		f(&Preset::multiAreaHoverMs);
 	} else if (page == QStringLiteral("Spotlight")) {
 		f(&Preset::spotlightEnabled);
 		f(&Preset::spotlightStartOn);
@@ -1442,6 +1523,12 @@ void PresetEditorDialog::applyFrom(const Preset &p)
 	followAxisCombo_->setCurrentIndex(std::clamp(p.followAxis, 0, 2));
 	followProfileCombo_->setCurrentIndex(std::clamp(p.followProfile, 0, 4));
 	followShortcutEdit_->setKeySequence(QKeySequence(QString::fromStdString(p.followShortcut)));
+	multiAreaCheck_->setChecked(p.multiArea && !p.followMouse);
+	multiAreaTransitionCombo_->setCurrentIndex(std::clamp(p.multiAreaTransition, 0, 1));
+	multiAreaPanSlider_->setValue(std::clamp(p.multiAreaPanMs, 50, 3000));
+	multiAreaHoverSlider_->setValue(std::clamp(p.multiAreaHoverMs, 0, 2000));
+	multiAreaSpots_ = p.multiAreaSpots;
+	updateMultiAreaCount();
 
 	spotCheck_->setChecked(p.spotlightEnabled);
 	spotStartOnCheck_->setChecked(p.spotlightStartOn);
@@ -1823,6 +1910,13 @@ void PresetEditorDialog::collectInto(Preset &out) const
 	out.followAxis = followAxisCombo_->currentIndex();
 	out.followProfile = followProfileCombo_->currentIndex();
 	out.followShortcut = followShortcutEdit_->keySequence().toString().toStdString();
+	out.multiArea = multiAreaCheck_->isChecked();
+	if (out.multiArea)
+		out.followMouse = false;
+	out.multiAreaTransition = multiAreaTransitionCombo_->currentIndex();
+	out.multiAreaPanMs = multiAreaPanSlider_->value();
+	out.multiAreaHoverMs = multiAreaHoverSlider_->value();
+	out.multiAreaSpots = multiAreaSpots_;
 
 	out.spotlightEnabled = spotCheck_->isChecked();
 	out.spotlightStartOn = spotStartOnCheck_->isChecked();
@@ -1944,6 +2038,16 @@ void PresetEditorDialog::accept()
 	collectInto(result_);
 
 	QDialog::accept();
+}
+
+void PresetEditorDialog::updateMultiAreaCount()
+{
+	if (!multiAreaCountLabel_)
+		return;
+	const int n = 1 + int(multiAreaSpots_.size());
+	multiAreaCountLabel_->setText(n == 1 ? QStringLiteral("1 area (just the region) — arrange more on the desktop")
+					     : QStringLiteral("%1 areas laid out").arg(n));
+	multiAreaClearBtn_->setEnabled(n > 1);
 }
 
 } // namespace harpia

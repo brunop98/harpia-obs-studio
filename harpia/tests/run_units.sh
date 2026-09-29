@@ -109,6 +109,13 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/followmouse_test.cpp" "$H/core/FollowMouse.cpp" -o "$WORK/followmouse_test" $LF
 
+# Multi-Area: the switcher's rules (gaps, hover delay, overlaps, pans) with an
+# injected clock, and the Arrange overlay driven with real mouse/key events.
+"$MOC" -I"$H" "$H/ui/MultiAreaOverlay.hpp" -o "$WORK/moc_MultiAreaOverlay.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/multiarea_test.cpp" "$H/ui/MultiAreaOverlay.cpp" "$WORK/moc_MultiAreaOverlay.cpp" \
+	-o "$WORK/multiarea_test" $LF
+
 # Automatic Zoom: the animated crop that libobs scales back up. Aspect drift is
 # invisible on a still frame and unmissable on a face, so the aspect sweep --
 # with its deliberately-stretched control -- is the load-bearing check here.
@@ -781,6 +788,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/colorfield_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionwatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/followmouse_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/multiarea_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/zoommode_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/spotlight_fx_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/audioextract_test" || rc=1

@@ -164,6 +164,18 @@ private:
 	QComboBox *followAxisCombo_ = nullptr;
 	QKeySequenceEdit *followShortcutEdit_ = nullptr;
 	bool followProfileApplying_ = false; // combo is writing the sliders, not the user
+	// Multi-Area (Custom Region only; never with Follow Mouse)
+	QCheckBox *multiAreaCheck_ = nullptr;
+	QComboBox *multiAreaTransitionCombo_ = nullptr;
+	QSlider *multiAreaPanSlider_ = nullptr;
+	QSlider *multiAreaHoverSlider_ = nullptr;
+	QLabel *multiAreaCountLabel_ = nullptr;
+	QPushButton *multiAreaClearBtn_ = nullptr;
+	QWidget *multiAreaPanRow_ = nullptr;
+	// The layout itself is arranged on the desktop, not here; the dialog only
+	// carries it through (and can clear it).
+	std::vector<std::pair<int, int>> multiAreaSpots_;
+	void updateMultiAreaCount();
 
 	// Spotlight page
 	QCheckBox *spotCheck_ = nullptr;

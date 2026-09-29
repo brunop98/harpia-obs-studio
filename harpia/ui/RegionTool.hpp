@@ -121,6 +121,10 @@ public:
 	// the interior out from under a drag that started there drops it halfway.
 	bool isInteracting() const { return dragZone_ != Zone::None; }
 
+	// Offer "Arrange areas…" on the right-click menu -- only where the active
+	// preset records Multi-Area, so other presets keep the short menu.
+	void setMultiAreaMenu(bool on) { multiAreaMenu_ = on; }
+
 	// Paused state — only meaningful in Recording mode; drives the border color
 	// (yellow when paused, red while actively recording).
 	void setPaused(bool paused);
@@ -131,6 +135,7 @@ signals:
 	void startRecordingRequested(); // the Record button below the frame was pressed
 	void saveRegionRequested();  // "Save Region…" chosen from the right-click menu
 	void manageRegionsRequested(); // "Manage saved regions…" chosen
+	void arrangeAreasRequested();  // "Arrange areas…" chosen (Multi-Area)
 	// A move or resize finished. The owner defers mode changes while a drag is
 	// in flight (see isInteracting), so it needs telling when to look again --
 	// grabbing the overlay makes IT the active window, which usually means the
@@ -175,6 +180,7 @@ private:
 	Mode mode_ = Mode::Editing;
 	bool paused_ = false;
 	bool moveHandle_ = false;
+	bool multiAreaMenu_ = false;
 
 	// Coalesces the drag's mask rebuild + regionChanged to ~60 Hz (the window
 	// geometry itself still tracks every mouse event). Created on first drag.

@@ -19,6 +19,7 @@
 #include "RegionDialogs.hpp"
 #include "MonitorMatch.hpp"
 #include "RegionTool.hpp"
+#include "MultiAreaOverlay.hpp"
 #include "ScreenBorderOverlay.hpp"
 #include "ShareExportDialog.hpp"
 #include "StatusBadge.hpp"
@@ -781,6 +782,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(regionTool_.get(), &RegionTool::saveRegionRequested, this, &MainWindow::onSaveRegionRequested);
 	connect(regionTool_.get(), &RegionTool::manageRegionsRequested, this,
 		&MainWindow::openSavedRegionsManager);
+	connect(regionTool_.get(), &RegionTool::arrangeAreasRequested, this, &MainWindow::onArrangeAreas);
 
 	// The memoized OBS-monitor -> QScreen mapping holds until the display
 	// topology changes. When it does, the live capture source may also be
@@ -825,6 +827,11 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	followTimer_ = new QTimer(this);
 	followTimer_->setInterval(16);
 	connect(followTimer_, &QTimer::timeout, this, &MainWindow::tickFollowMouse);
+	// Multi-Area checks the cursor at display rate too -- a pan has to be as
+	// smooth as a follow -- and likewise only runs while a take is using it.
+	areaTimer_ = new QTimer(this);
+	areaTimer_->setInterval(16);
+	connect(areaTimer_, &QTimer::timeout, this, &MainWindow::tickMultiArea);
 
 	// Same deal for the zoom: 60 Hz while the picture is moving, stopped the
 	// rest of the time. It keeps running through the zoom-OUT after the toggle
@@ -1492,7 +1499,12 @@ void MainWindow::startRecording()
 				      ? QStringLiteral("mkv")
 				      : QString::fromStdString(preset.extension())));
 
+	// The first frame should already be the area under the mouse, not area 1
+	// for the quarter second until the state tick arms the switcher.
+	primeMultiArea();
+
 	if (!recorder_.start(preset, recordPath.toStdString())) {
+		restoreAreaHome();
 		// The timer label gets overwritten by the next tick — the status bar
 		// keeps the failure visible (details are in the Error Logs).
 		statusBar()->showMessage(
@@ -2487,6 +2499,15 @@ void MainWindow::refreshReadiness()
 				    /*blocking=*/false});
 	}
 
+	// --- Multi-Area with nothing to switch to --- (non-blocking: it records
+	// the region as usual, which is probably not what was meant).
+	if (p.multiArea && !p.followMouse && captureMode_ == CaptureMode::Region && p.multiAreaSpots.empty()) {
+		warnings.push_back({QStringLiteral("Multiple areas is on but only the region is laid out — "
+						   "right-click the region frame → Arrange areas… to add more."),
+				    [this]() { onArrangeAreas(); }, QStringLiteral("Arrange areas"),
+				    /*blocking=*/false});
+	}
+
 	// --- Codec / video settings --- (availability cached above)
 	// Skipped entirely in Audio Only, which creates no video encoder: a
 	// missing H.264 encoder or a nonsense frame rate cannot stop a take that
@@ -3320,6 +3341,12 @@ void MainWindow::updateRegionToolVisibility()
 	// this is checked before anything is decided.
 	if (regionTool_->isInteracting())
 		return;
+	// Arranging Multi-Area: the Arrange overlay draws area 1 itself, and a
+	// second always-on-top frame on the same spot would take its clicks.
+	if (areaArranging_) {
+		regionTool_->setVisible(false);
+		return;
+	}
 
 	// The policy itself lives in regionOverlayState(), so it can be stated once
 	// and tested without a window: whether the overlay is on screen at all, and
@@ -3353,6 +3380,8 @@ void MainWindow::updateRegionToolVisibility()
 	// -- and then bounce it straight back here on the next activation change.
 	regionTool_->setAttribute(Qt::WA_ShowWithoutActivating, !focused);
 	regionTool_->setVisible(st.visible);
+	// The other areas are shown exactly when the frame is.
+	updateAreaOverlay();
 }
 
 bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr *result)
@@ -3485,10 +3514,17 @@ void MainWindow::tickRegionWatch()
 			regionWatchDpr_ = scr ? scr->devicePixelRatio() : 1.0;
 			regionWatchArmed_ = true;
 		}
-		inside = RegionWatch::contains(currentRegion_,
-					       RegionWatch::toRegionSpace(QCursor::pos(),
-									  regionWatchOrigin_,
-									  regionWatchDpr_));
+		const QPoint cursorPx =
+			RegionWatch::toRegionSpace(QCursor::pos(), regionWatchOrigin_, regionWatchDpr_);
+		inside = RegionWatch::contains(currentRegion_, cursorPx);
+		// With Multi-Area, "left the region" means left EVERY area: moving
+		// into another one is how the recording switches, not a reason to
+		// pause (and the switch waits out a delay, during which the pointer
+		// is outside the area still being recorded).
+		if (!inside && areaSwitch_.armed())
+			inside = AreaSwitcher::areaAt(areaSwitch_.tops(),
+						      QSize(currentRegion_.width, currentRegion_.height),
+						      cursorPx) >= 0;
 		lastCursorInside_ = inside; // the shared resume gate reads this
 	} else {
 		regionWatchArmed_ = false;
@@ -4247,6 +4283,8 @@ void MainWindow::tickState()
 	// four calls a second cost nothing; the 60 Hz work happens on its own
 	// timer, which only runs while armed.
 	syncFollowMouse();
+	// Multi-Area likewise (primed at start, armed once the output is live).
+	syncMultiArea();
 	// Zoom arms and disarms off the same state, and for the same reasons.
 	syncZoom();
 
@@ -4457,6 +4495,249 @@ void MainWindow::tickFocus(uint64_t foregroundPid)
 		writeMarker(QStringLiteral("Auto Resumed (Application Regained Focus)"));
 		updateButtons();
 	}
+}
+
+// ---- Multi-Area --------------------------------------------------------------
+
+bool MainWindow::multiAreaWanted() const
+{
+	const Preset &p = activePreset();
+	// Follow Mouse wins if an old or hand-edited preset has both: the editor
+	// never saves them together.
+	return p.multiArea && !p.followMouse && captureMode_ == CaptureMode::Region &&
+	       currentRegion_.enabled && currentRegion_.width > 0 && currentRegion_.height > 0;
+}
+
+QVector<QPoint> MainWindow::multiAreaTops() const
+{
+	const QSize size(currentRegion_.width, currentRegion_.height);
+	// Mid-take the region has moved to whichever area is showing; area 1 is
+	// where it was when the take began.
+	const QPoint home = areaPrimed_ ? areaHome_ : QPoint(currentRegion_.x, currentRegion_.y);
+	QVector<QPoint> tops{home};
+	for (const auto &xy : activePreset().multiAreaSpots) {
+		if (tops.size() >= kMaxAreas)
+			break;
+		// Laid out on a bigger region or another resolution: pulled back on
+		// screen rather than dropped.
+		tops.push_back(AreaSwitcher::clampTop(QPoint(xy.first, xy.second), size, areaScreenDevicePx_));
+	}
+	return tops;
+}
+
+void MainWindow::cacheAreaScreen()
+{
+	// Once per take (or per arrange), never per tick: see syncFollowMouse.
+	const QScreen *scr = screenForActivePreset();
+	areaOrigin_ = scr ? scr->geometry().topLeft() : QPoint(0, 0);
+	areaDpr_ = scr ? scr->devicePixelRatio() : 1.0;
+	areaScreenDevicePx_ = scr ? QSize(int(scr->geometry().width() * areaDpr_),
+					  int(scr->geometry().height() * areaDpr_))
+				  : QSize(0, 0);
+}
+
+void MainWindow::moveRegionTo(QPoint topLeftDevicePx)
+{
+	if (topLeftDevicePx == QPoint(currentRegion_.x, currentRegion_.y))
+		return;
+	CaptureRegion r = currentRegion_;
+	r.x = topLeftDevicePx.x();
+	r.y = topLeftDevicePx.y();
+	// The same path as the follow tick: the crop moves live, the frame goes
+	// with it, and the frame's regionChanged echo is swallowed.
+	followApplying_ = true;
+	currentRegion_ = r;
+	applyRegionFraming();
+	if (regionTool_)
+		regionTool_->setRegionDevicePx(QRect(r.x, r.y, r.width, r.height));
+	followApplying_ = false;
+}
+
+void MainWindow::primeMultiArea()
+{
+	areaPrimed_ = false;
+	if (!multiAreaWanted() || activePreset().multiAreaSpots.empty())
+		return;
+	cacheAreaScreen();
+	areaHome_ = QPoint(currentRegion_.x, currentRegion_.y);
+	areaPrimed_ = true;
+	const QVector<QPoint> tops = multiAreaTops();
+	const QSize size(currentRegion_.width, currentRegion_.height);
+	areaStart_ = AreaSwitcher::startIndex(
+		tops, size, RegionWatch::toRegionSpace(QCursor::pos(), areaOrigin_, areaDpr_));
+	moveRegionTo(tops[areaStart_]);
+	blog(LOG_INFO, "[harpia] multi-area: %d areas of %dx%d, starting on area %d (%s, delay %d ms)",
+	     int(tops.size()), size.width(), size.height(), areaStart_ + 1,
+	     activePreset().multiAreaTransition == 1 ? "pan" : "cut", activePreset().multiAreaHoverMs);
+}
+
+void MainWindow::restoreAreaHome()
+{
+	if (!areaPrimed_)
+		return;
+	areaPrimed_ = false;
+	areaSwitch_.disarm();
+	if (areaTimer_)
+		areaTimer_->stop();
+	// Back to area 1, so the layout is exactly where it was arranged and the
+	// next take starts from it.
+	moveRegionTo(areaHome_);
+	updateAreaOverlay();
+}
+
+void MainWindow::syncMultiArea()
+{
+	// The take is over: put area 1 back. Not while stopping -- the last frames
+	// are still being written, and they should stay on the area they were on.
+	if (areaPrimed_ && !recorder_.isRecording() && !starting_ && !stopping_) {
+		restoreAreaHome();
+		return;
+	}
+	const bool want = areaPrimed_ && multiAreaWanted() && recorder_.isRecording() && !starting_ &&
+			  !stopping_;
+	if (want == areaSwitch_.armed())
+		return;
+	if (want) {
+		areaSwitch_.arm(multiAreaTops(), QSize(currentRegion_.width, currentRegion_.height), areaStart_,
+				currentRegion_.enabled);
+		areaClock_.start();
+		if (areaSwitch_.armed())
+			areaTimer_->start();
+	} else {
+		// Switched off mid-take (preset or capture mode changed): stay on the
+		// area showing; area 1 comes back when the take ends.
+		areaSwitch_.disarm();
+		areaTimer_->stop();
+	}
+	updateAreaOverlay();
+}
+
+void MainWindow::tickMultiArea()
+{
+	if (!areaSwitch_.armed()) {
+		areaTimer_->stop();
+		return;
+	}
+	// Paused: nothing is being written, and the pointer is probably on its way
+	// to the controls -- switching on that trip would change the shot the
+	// recording resumes on.
+	if (recorder_.isPaused())
+		return;
+	// A hand-moved frame outranks the layout: the area showing is now wherever
+	// the user put it, for the rest of this take.
+	if (regionTool_ && regionTool_->isInteracting()) {
+		areaSwitch_.rebaseCurrent(QPoint(currentRegion_.x, currentRegion_.y));
+		return;
+	}
+	const Preset &p = activePreset();
+	MultiAreaParams params;
+	params.transition = p.multiAreaTransition == 1 ? AreaTransition::Pan : AreaTransition::Cut;
+	params.panMs = std::clamp(p.multiAreaPanMs, 50, 3000);
+	params.hoverMs = std::clamp(p.multiAreaHoverMs, 0, 2000);
+
+	const QPoint cursor = RegionWatch::toRegionSpace(QCursor::pos(), areaOrigin_, areaDpr_);
+	const bool moved = areaSwitch_.tick(cursor, areaClock_.elapsed(), params);
+	if (areaSwitch_.switchedThisTick()) {
+		const int n = areaSwitch_.current() + 1;
+		blog(LOG_INFO, "[harpia] multi-area: switched to area %d", n);
+		// A marker per switch, so the cuts can be found in the editor.
+		writeMarker(QStringLiteral("Area %1").arg(n));
+		if (areaOverlay_)
+			areaOverlay_->setActive(areaSwitch_.current());
+	}
+	if (moved) {
+		const CaptureRegion r = areaSwitch_.region();
+		moveRegionTo(QPoint(r.x, r.y));
+	}
+}
+
+void MainWindow::ensureAreaOverlay()
+{
+	if (areaOverlay_)
+		return;
+	areaOverlay_ = std::make_unique<MultiAreaOverlay>();
+	connect(areaOverlay_.get(), &MultiAreaOverlay::areasEdited, this, [this](const QVector<QPoint> &tops) {
+		if (tops.isEmpty())
+			return;
+		Preset *cur = const_cast<Preset *>(presets_.find(activePresetId_));
+		if (!cur)
+			return;
+		cur->multiAreaSpots.clear();
+		for (int i = 1; i < tops.size(); ++i)
+			cur->multiAreaSpots.emplace_back(tops[i].x(), tops[i].y());
+		presets_.upsert(*cur);
+		// Area 1 is the region: moving it moves the region.
+		if (tops[0] != QPoint(currentRegion_.x, currentRegion_.y)) {
+			CaptureRegion r = currentRegion_;
+			r.x = tops[0].x();
+			r.y = tops[0].y();
+			if (regionTool_)
+				regionTool_->setRegionDevicePx(QRect(r.x, r.y, r.width, r.height));
+			onRegionChanged(r);
+		}
+		refreshReadiness();
+	});
+	connect(areaOverlay_.get(), &MultiAreaOverlay::arrangeFinished, this, [this]() {
+		areaArranging_ = false;
+		areaOverlay_->setMode(MultiAreaOverlay::Mode::Passive);
+		blog(LOG_INFO, "[harpia] multi-area: layout has %d areas",
+		     1 + int(activePreset().multiAreaSpots.size()));
+		updateRegionToolVisibility();
+	});
+}
+
+void MainWindow::updateAreaOverlay()
+{
+	if (regionTool_)
+		regionTool_->setMultiAreaMenu(multiAreaWanted());
+	if (areaArranging_)
+		return;
+	const bool show = multiAreaWanted() && !activePreset().multiAreaSpots.empty() && regionTool_ &&
+			  regionTool_->isVisible();
+	if (!show) {
+		if (areaOverlay_ && areaOverlay_->isVisible())
+			areaOverlay_->hide();
+		return;
+	}
+	ensureAreaOverlay();
+	if (!areaSwitch_.armed()) {
+		// Idle: cheap enough at the state tick's 4 Hz (the screen lookup is
+		// memoized), and it keeps the outlines on the right monitor.
+		areaOverlay_->setScreen(screenForActivePreset());
+		cacheAreaScreen();
+	}
+	const QSize size(currentRegion_.width, currentRegion_.height);
+	areaOverlay_->setAreas(areaSwitch_.armed() ? areaSwitch_.tops() : multiAreaTops(), size);
+	areaOverlay_->setActive(areaSwitch_.armed() ? areaSwitch_.current() : 0);
+	areaOverlay_->setRecording(recorder_.isRecording());
+	if (!areaOverlay_->isVisible())
+		areaOverlay_->show();
+}
+
+void MainWindow::onArrangeAreas()
+{
+	if (!multiAreaWanted()) {
+		statusBar()->showMessage(
+			QStringLiteral("Multiple areas needs a Custom Region and the preset's Multiple areas option."),
+			6000);
+		return;
+	}
+	if (recorder_.isRecording() || starting_ || stopping_)
+		return; // the layout is fixed for a take
+	ensureAreaOverlay();
+	cacheAreaScreen();
+	areaOverlay_->setScreen(screenForActivePreset());
+	areaOverlay_->setAreas(multiAreaTops(), QSize(currentRegion_.width, currentRegion_.height));
+	areaOverlay_->setActive(-1);
+	areaOverlay_->setRecording(false);
+	areaArranging_ = true;
+	if (regionTool_)
+		regionTool_->setVisible(false);
+	areaOverlay_->setMode(MultiAreaOverlay::Mode::Arrange);
+	areaOverlay_->show();
+	areaOverlay_->raise();
+	areaOverlay_->activateWindow();
+	blog(LOG_INFO, "[harpia] multi-area: arranging");
 }
 
 void MainWindow::writeMarker(const QString &label)

@@ -3421,6 +3421,10 @@ void MainWindow::changeEvent(QEvent *event)
 	QMainWindow::changeEvent(event);
 	if (event->type() == QEvent::ActivationChange)
 		updateRegionToolVisibility();
+	// Minimized, the webcam preview would go on rendering the camera every
+	// frame into a window nobody can see; children get no hideEvent for it.
+	if (event->type() == QEvent::WindowStateChange && webcamPreview_)
+		webcamPreview_->setDisplayEnabled(!(windowState() & Qt::WindowMinimized));
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -4485,7 +4489,16 @@ void MainWindow::tickFocus(uint64_t foregroundPid)
 	// Match by executable name, so ANY window of ANY process of the selected app
 	// counts as focused (child windows, dialogs, file pickers, and the extra
 	// processes of multi-process apps like browsers/Electron).
-	const QString fgExe = QString::fromStdString(ForegroundWatcher::foregroundExecutable());
+	// One name query per app-in-front, not per tick: a pid keeps its
+	// executable for its lifetime, and the 2 s limit covers a pid being
+	// reused by another process after the first one exits.
+	const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+	if (fg != fgExePid_ || nowMs - fgExeMs_ > 2000 || fgExe_.isEmpty()) {
+		fgExe_ = QString::fromStdString(ForegroundWatcher::foregroundExecutable());
+		fgExePid_ = fg;
+		fgExeMs_ = nowMs;
+	}
+	const QString fgExe = fgExe_;
 	if (fgExe.isEmpty())
 		return; // can't identify the app — don't change state
 	const bool focused = (fgExe.compare(targetExe_, Qt::CaseInsensitive) == 0);

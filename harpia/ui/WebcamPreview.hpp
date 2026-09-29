@@ -30,6 +30,12 @@ public:
 
 	// Destroy the camera source, releasing the physical device.
 	void clearDevice();
+	// Draw the preview or not. Off while the main window is minimized: the
+	// libobs display otherwise keeps rendering the camera every frame into a
+	// window nobody can see. (Hidden -- the webcam box collapsed, the preset
+	// without a webcam -- is handled by hideEvent.) The camera source itself
+	// keeps running either way; the recording shares it.
+	void setDisplayEnabled(bool on);
 
 	// The live camera source (may be null), so a recorder can reuse it.
 	obs_source_t *source() const { return source_; }
@@ -40,6 +46,7 @@ public:
 
 protected:
 	void showEvent(QShowEvent *event) override;
+	void hideEvent(QHideEvent *event) override;
 	void resizeEvent(QResizeEvent *event) override;
 	void paintEvent(QPaintEvent *event) override; // no-op
 
@@ -49,6 +56,7 @@ private:
 	static void drawPreview(void *data, uint32_t cx, uint32_t cy);
 
 	obs_display_t *display_ = nullptr;
+	bool displayWanted_ = true; // setDisplayEnabled's answer, applied on show
 	obs_source_t *source_ = nullptr;
 
 	// Remembered device config so the source survives show/hide cycles.

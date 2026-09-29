@@ -1,5 +1,8 @@
 #include "WebcamPreview.hpp"
 
+#include <QHideEvent>
+#include <QShowEvent>
+
 #include "core/AudioManager.hpp" // full AudioDevice definition ({id, name})
 #include "core/WebcamRecorder.hpp"
 
@@ -109,6 +112,23 @@ void WebcamPreview::clearDevice()
 void WebcamPreview::showEvent(QShowEvent *)
 {
 	ensureDisplay();
+	if (display_)
+		obs_display_set_enabled(display_, displayWanted_);
+}
+
+void WebcamPreview::hideEvent(QHideEvent *e)
+{
+	// Nothing to see: stop the graphics thread drawing it.
+	if (display_)
+		obs_display_set_enabled(display_, false);
+	QWidget::hideEvent(e);
+}
+
+void WebcamPreview::setDisplayEnabled(bool on)
+{
+	displayWanted_ = on;
+	if (display_)
+		obs_display_set_enabled(display_, on && isVisible());
 }
 
 void WebcamPreview::resizeEvent(QResizeEvent *)
@@ -139,8 +159,10 @@ void WebcamPreview::ensureDisplay()
 #endif
 
 	display_ = obs_display_create(&info, 0x000000);
-	if (display_)
+	if (display_) {
 		obs_display_add_draw_callback(display_, &WebcamPreview::drawPreview, this);
+		obs_display_set_enabled(display_, displayWanted_);
+	}
 }
 
 void WebcamPreview::destroyDisplay()

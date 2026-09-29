@@ -125,7 +125,13 @@ private slots:
 	void onThumbnailReady(const QString &path);
 	void tickState();  // recording/paused state + timer
 	void tickIdle();   // auto-pause/resume based on idle time
-	void tickFocus(uint64_t foregroundPid); // auto-pause/resume based on target-app focus
+	void tickFocus(uint64_t foregroundPid);
+	// The foreground process's executable name, remembered by pid for a
+	// moment: the name is an OpenProcess + image-path query, and the state
+	// tick asked for it four times a second while the same app sat in front.
+	uint64_t fgExePid_ = 0;
+	QString fgExe_;
+	qint64 fgExeMs_ = 0; // auto-pause/resume based on target-app focus
 	void refreshReadiness(); // validate settings, update warnings + Record button
 
 private:

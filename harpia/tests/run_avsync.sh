@@ -44,11 +44,12 @@ CF="$(pkg-config --cflags $PKGS)"
 LF="$(pkg-config --libs $PKGS)"
 
 "$MOC" -I"$H" "$H/editor/ClipExporter.hpp" -o "$WORK/moc_ClipExporter.cpp"
+"$MOC" -I"$H" "$H/editor/BatchExport.hpp" -o "$WORK/moc_BatchExport.cpp"
 
 build() { # source-file output-name
 	g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 		"$1" \
-		"$H/editor/ClipExporter.cpp" "$H/editor/TimelineAudio.cpp" \
+		"$H/editor/ClipExporter.cpp" "$H/editor/BatchExport.cpp" "$H/editor/TimelineAudio.cpp" \
 		"$H/editor/VoiceoverMixer.cpp" "$H/editor/AudioRetimer.cpp" \
 		"$H/editor/GifEncoder.cpp" "$H/editor/FrameSeeker.cpp" \
 		"$H/editor/StillImage.cpp" \
@@ -60,12 +61,13 @@ build() { # source-file output-name
 		"$H/editor/shader/SpotlightGl.cpp" \
 		"$H/editor/script/TransformScript.cpp" "$H/editor/shader/ShaderRenderer.cpp" \
 		"$H/editor/component/ShaderComponent.cpp" \
-		"$WORK/moc_ClipExporter.cpp" \
+		"$WORK/moc_ClipExporter.cpp" "$WORK/moc_BatchExport.cpp" \
 		-o "$WORK/$2" $LF
 }
 build "$HERE/avsync_test.cpp" avsync_test
 build "$HERE/exportpaths_test.cpp" exportpaths_test
 build "$HERE/exportcolor_test.cpp" exportcolor_test
+build "$HERE/batchexport_test.cpp" batchexport_test
 
 # The preview decoder. Separate build: it needs its own moc and none of the
 # exporter, and its media is a long-GOP 1080p file it generates for itself --
@@ -132,6 +134,7 @@ rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/avsync_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportpaths_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportcolor_test" "$WORK" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/batchexport_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewdecoder_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/proxymedia_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/multicutplay_test" "$WORK" || rc=1

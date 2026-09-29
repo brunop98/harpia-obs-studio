@@ -6,6 +6,8 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QTabWidget>
+#include <QListWidget>
 #include <QDir>
 #include <QFileDialog>
 #include <QFormLayout>
@@ -107,8 +109,19 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	setModal(true);
 
 	auto *root = new QVBoxLayout(this);
-	auto *columns = new QHBoxLayout;
-	root->addLayout(columns);
+	// The choices and the summary live on one page. With cuts on offer that
+	// page becomes the first tab, "Single video", beside "Batch".
+	auto *single = new QWidget(this);
+	auto *columns = new QHBoxLayout(single);
+	columns->setContentsMargins(0, 0, 0, 0);
+	if (ctx_.batchCuts.isEmpty()) {
+		root->addWidget(single);
+	} else {
+		tabs_ = new QTabWidget(this);
+		tabs_->addTab(single, QStringLiteral("Single video"));
+		buildBatchTab();
+		root->addWidget(tabs_);
+	}
 
 	// ---- Left: the choices ------------------------------------------------
 	auto *left = new QVBoxLayout;
@@ -358,6 +371,11 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 		&ExportOptionsDialog::refresh);
 	connect(gifDitherCheck_, &QCheckBox::toggled, this, &ExportOptionsDialog::refresh);
 	connect(this, &QDialog::accepted, this, &ExportOptionsDialog::saveRemembered);
+	if (tabs_) {
+		connect(tabs_, &QTabWidget::currentChanged, this, &ExportOptionsDialog::refresh);
+		connect(batchList_, &QListWidget::itemChanged, this, &ExportOptionsDialog::refresh);
+		connect(batchPrefix_, &QLineEdit::textChanged, this, &ExportOptionsDialog::refresh);
+	}
 
 	onFormatChanged();
 	setMinimumWidth(600);
@@ -387,7 +405,127 @@ bool ExportOptionsDialog::exportRange() const
 
 double ExportOptionsDialog::exportSeconds() const
 {
+	if (batchMode())
+		return batchSeconds();
 	return exportRange() ? ctx_.rangeSeconds : ctx_.seconds;
+}
+
+// ---- Batch tab ----------------------------------------------------------------
+
+namespace {
+QString mmss(qint64 ms)
+{
+	const qint64 s = ms / 1000;
+	return QStringLiteral("%1:%2.%3")
+		.arg(s / 60)
+		.arg(s % 60, 2, 10, QLatin1Char('0'))
+		.arg((ms % 1000) / 100);
+}
+} // namespace
+
+void ExportOptionsDialog::buildBatchTab()
+{
+	auto *page = new QWidget(this);
+	auto *v = new QVBoxLayout(page);
+	auto *hint = new QLabel(
+		QStringLiteral("Each cut becomes its own file, in a new folder under the folder chosen on the "
+			       "Single video tab, with that tab's format, quality, size, crop and audio. "
+			       "Each cut keeps its own speed."),
+		page);
+	hint->setWordWrap(true);
+	hint->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+	v->addWidget(hint);
+
+	batchList_ = new QListWidget(page);
+	batchList_->setSelectionMode(QAbstractItemView::NoSelection);
+	const int n = ctx_.batchCuts.size();
+	for (int i = 0; i < n; ++i) {
+		const Context::BatchCut &c = ctx_.batchCuts[i];
+		const double sp = c.speed > 0.01 ? c.speed : 1.0;
+		const double outSec = (c.endMs - c.startMs) / 1000.0 / sp;
+		QString text = QStringLiteral("%1    %2 – %3    %4 s")
+				       .arg(i + 1, 2, 10, QLatin1Char('0'))
+				       .arg(mmss(c.startMs), mmss(c.endMs))
+				       .arg(outSec, 0, 'f', 1);
+		if (std::abs(sp - 1.0) > 0.001)
+			text += QStringLiteral("   (%1×)").arg(sp, 0, 'g', 3);
+		auto *item = new QListWidgetItem(text, batchList_);
+		item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+		item->setCheckState(Qt::Checked);
+	}
+	v->addWidget(batchList_, 1);
+
+	auto *row = new QHBoxLayout;
+	auto *all = new QPushButton(QStringLiteral("All"), page);
+	auto *none = new QPushButton(QStringLiteral("None"), page);
+	connect(all, &QPushButton::clicked, this, [this]() {
+		for (int i = 0; i < batchList_->count(); ++i)
+			batchList_->item(i)->setCheckState(Qt::Checked);
+	});
+	connect(none, &QPushButton::clicked, this, [this]() {
+		for (int i = 0; i < batchList_->count(); ++i)
+			batchList_->item(i)->setCheckState(Qt::Unchecked);
+	});
+	row->addWidget(all);
+	row->addWidget(none);
+	batchCount_ = new QLabel(page);
+	row->addWidget(batchCount_, 1);
+	v->addLayout(row);
+
+	auto *form = new QFormLayout;
+	batchPrefix_ = new QLineEdit(ctx_.defaultName, page);
+	batchPrefix_->setToolTip(QStringLiteral("Files are named Prefix_01, Prefix_02… and the folder is named "
+						"after the prefix too."));
+	form->addRow(QStringLiteral("Name prefix"), batchPrefix_);
+	batchOpen_ = new QCheckBox(QStringLiteral("Open the folder when done"), page);
+	batchOpen_->setChecked(true);
+	form->addRow(QString(), batchOpen_);
+	v->addLayout(form);
+
+	tabs_->addTab(page, QStringLiteral("Batch  (%1 cuts)").arg(n));
+}
+
+bool ExportOptionsDialog::batchMode() const
+{
+	return tabs_ && tabs_->currentIndex() == 1;
+}
+
+void ExportOptionsDialog::setBatchTabForTest(bool on)
+{
+	if (tabs_)
+		tabs_->setCurrentIndex(on ? 1 : 0);
+}
+
+QVector<int> ExportOptionsDialog::batchSelection() const
+{
+	QVector<int> out;
+	if (!batchList_)
+		return out;
+	for (int i = 0; i < batchList_->count(); ++i)
+		if (batchList_->item(i)->checkState() == Qt::Checked)
+			out.push_back(i);
+	return out;
+}
+
+QString ExportOptionsDialog::batchPrefix() const
+{
+	return batchPrefix_ ? batchPrefix_->text() : QString();
+}
+
+bool ExportOptionsDialog::batchOpenFolder() const
+{
+	return batchOpen_ && batchOpen_->isChecked();
+}
+
+double ExportOptionsDialog::batchSeconds() const
+{
+	double total = 0.0;
+	for (int i : batchSelection()) {
+		const Context::BatchCut &c = ctx_.batchCuts[i];
+		const double sp = c.speed > 0.01 ? c.speed : 1.0;
+		total += (c.endMs - c.startMs) / 1000.0 / sp;
+	}
+	return total;
 }
 
 void ExportOptionsDialog::onScopeChanged()
@@ -426,6 +564,21 @@ QSize ExportOptionsDialog::outputSize() const
 void ExportOptionsDialog::refresh()
 {
 	customRow_->setVisible(resCombo_->currentData().toInt() < 0);
+	if (tabs_) {
+		const int sel = batchSelection().size();
+		batchCount_->setText(QStringLiteral("%1 of %2 selected · %3 s in all")
+					     .arg(sel)
+					     .arg(ctx_.batchCuts.size())
+					     .arg(batchSeconds(), 0, 'f', 1));
+		if (batchMode()) {
+			exportBtn_->setText(sel == 1 ? QStringLiteral("Export 1 clip")
+						     : QStringLiteral("Export %1 clips").arg(sel));
+			exportBtn_->setEnabled(sel > 0);
+		} else {
+			exportBtn_->setText(QStringLiteral("Export"));
+			exportBtn_->setEnabled(true);
+		}
+	}
 
 	const QSize out = outputSize().isValid() ? outputSize() : ctx_.sourceSize;
 	if (qualityLabel_)
@@ -481,6 +634,9 @@ void ExportOptionsDialog::loadRemembered()
 	if (!fld.isEmpty() && QDir(fld).exists())
 		folderEdit_->setText(QDir::toNativeSeparators(fld));
 
+	if (batchOpen_)
+		batchOpen_->setChecked(
+			s.value(QLatin1String(kGroup) + QStringLiteral("batchOpenFolder"), true).toBool());
 	const int fmt = s.value(QLatin1String(kGroup) + QStringLiteral("format"), -1).toInt();
 	const int fi = formatCombo_->findData(fmt);
 	if (fi >= 0)
@@ -524,6 +680,8 @@ void ExportOptionsDialog::saveRemembered() const
 	QSettings s;
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("folder"), folder());
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("format"), int(format()));
+	if (batchOpen_)
+		s.setValue(QLatin1String(kGroup) + QStringLiteral("batchOpenFolder"), batchOpen_->isChecked());
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("resHeight"),
 		   resCombo_->currentData().toInt());
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("crf"), videoCrf());

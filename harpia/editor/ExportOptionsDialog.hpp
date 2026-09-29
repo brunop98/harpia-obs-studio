@@ -11,6 +11,8 @@ class QCheckBox;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QListWidget;
+class QTabWidget;
 class QPushButton;
 class QSlider;
 class QSpinBox;
@@ -62,6 +64,16 @@ public:
 		// What to call the file when the range is chosen, so an excerpt does
 		// not silently overwrite the full export sitting next to it.
 		QString rangeName;
+
+		// Multi-Cut: the cuts, for the Batch tab, which writes each one to
+		// its own file. Empty = no Batch tab. Only what the list shows; the
+		// caller builds the real cuts (with their sources) itself.
+		struct BatchCut {
+			qint64 startMs = 0;
+			qint64 endMs = 0;
+			double speed = 1.0;
+		};
+		QVector<BatchCut> batchCuts;
 	};
 
 	explicit ExportOptionsDialog(const Context &ctx, QWidget *parent = nullptr);
@@ -91,6 +103,18 @@ public:
 	// The estimate currently on screen, so a test can check the label rather
 	// than re-deriving it.
 	qint64 estimatedBytes() const;
+
+	// The Batch tab (Multi-Cut only): true when it was the one showing on
+	// Export. The selection is indices into Context::batchCuts, in order.
+	bool batchMode() const;
+	QVector<int> batchSelection() const;
+	QString batchPrefix() const;
+	bool batchOpenFolder() const;
+	// Output seconds of the selected cuts (each at its own speed).
+	double batchSeconds() const;
+	// The Batch tab's checklist, for tests.
+	QListWidget *batchListForTest() const { return batchList_; }
+	void setBatchTabForTest(bool on);
 
 private slots:
 	void onFormatChanged();
@@ -126,6 +150,13 @@ private:
 	QCheckBox *gifDitherCheck_ = nullptr;
 	QCheckBox *gifLoopCheck_ = nullptr;
 	QWidget *gifRow_ = nullptr;
+
+	QTabWidget *tabs_ = nullptr;      // null without a Batch tab
+	QListWidget *batchList_ = nullptr;
+	QLineEdit *batchPrefix_ = nullptr;
+	QCheckBox *batchOpen_ = nullptr;
+	QLabel *batchCount_ = nullptr;
+	void buildBatchTab();
 
 	QLabel *summary_ = nullptr;
 	QLabel *sizeValue_ = nullptr;

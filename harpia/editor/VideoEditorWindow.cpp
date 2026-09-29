@@ -25,6 +25,7 @@
 #include "DevPanel.hpp"
 #include "EditorWidgets.hpp"
 #include "ExportOptionsDialog.hpp"
+#include "BatchExport.hpp"
 #include "FrameSeeker.hpp"
 #include "PreviewDecoder.hpp"
 #include "ProjectPaths.hpp"
@@ -12385,7 +12386,7 @@ void VideoEditorWindow::onExportRangeRequested(qint64 fromMs, qint64 toMs)
 
 void VideoEditorWindow::onSave()
 {
-	if (!valid_ || exporter_) // ignore while an export is already running
+	if (!valid_ || exporter_ || batch_) // ignore while an export is already running
 		return;
 	stopPlayback();
 
@@ -12451,6 +12452,9 @@ void VideoEditorWindow::onSave()
 		ec.fps = seeker_ ? seeker_->fps() : 30.0;
 		ec.seconds = tracks_->totalOutputMs() / 1000.0;
 		ec.previewFrame = canvas_->currentFrame();
+		// The Batch tab: each cut to its own file.
+		for (const CutSegment &cs : tracks_->segments())
+			ec.batchCuts.push_back({cs.srcStartMs, cs.srcEndMs, cs.speed});
 	} else {
 		const EditorSource *s0 = activeSource();
 		// The cropped area IS the output for a trim export, so the summary has
@@ -12532,6 +12536,14 @@ void VideoEditorWindow::onSave()
 		o.speed = 1.0;
 	}
 
+	// Batch: the same cut list, one file per selected cut, through the batch
+	// runner. Voiceover is skipped -- it is positioned on the JOINED output
+	// and has no place on a single cut.
+	if (cuts && dlg.batchMode()) {
+		startBatchExport(o, dlg.batchSelection(), dlg.batchPrefix(), dlg.folder(), dlg.batchOpenFolder());
+		return;
+	}
+
 	// Full editing: hand over the whole timeline. It replaces the trim range and
 	// the cut list — the exporter composites every visible track per frame.
 	if (fullEdit()) {
@@ -12602,6 +12614,102 @@ void VideoEditorWindow::onSave()
 	progress_->show(); // ensure the modal progress is visible immediately
 
 	exportThread_ = std::thread([this, o]() { exporter_->run(inPath_, outPath_, o); });
+}
+
+void VideoEditorWindow::startBatchExport(const ClipExporter::Options &base, const QVector<int> &selection,
+					 const QString &prefix, const QString &baseFolder, bool openFolder)
+{
+	QVector<BatchExporter::Item> items;
+	const int n = selection.size();
+	for (int k = 0; k < n; ++k) {
+		const int i = selection[k];
+		if (i < 0 || i >= int(base.cuts.size()))
+			continue;
+		BatchExporter::Item it;
+		it.name = batch_export::clipName(prefix, k + 1, n);
+		it.cut = base.cuts[size_t(i)];
+		items.push_back(it);
+	}
+	if (items.isEmpty())
+		return;
+	const QString folder = batch_export::uniqueFolder(baseFolder, prefix);
+	batchOpenFolder_ = openFolder;
+	batchTotal_ = items.size();
+
+	batch_ = new BatchExporter(this);
+	connect(batch_, &BatchExporter::progress, this, &VideoEditorWindow::onBatchProgress);
+	connect(batch_, &BatchExporter::finished, this, &VideoEditorWindow::onBatchFinished);
+
+	batchProgress_ = new QProgressDialog(QStringLiteral("Exporting %1 clips…").arg(items.size()),
+					     QStringLiteral("Cancel"), 0, 100, this);
+	batchProgress_->setWindowModality(Qt::WindowModal);
+	batchProgress_->setAutoClose(false);
+	batchProgress_->setAutoReset(false);
+	batchProgress_->setMinimumDuration(0);
+	connect(batchProgress_, &QProgressDialog::canceled, this, [this]() {
+		if (batch_) {
+			batch_->cancel();
+			if (batchProgress_)
+				batchProgress_->setLabelText(QStringLiteral("Stopping after this clip…"));
+		}
+	});
+	batchProgress_->setValue(0);
+	batchProgress_->show();
+
+	if (!batch_->start(inPath_, base, items, folder)) {
+		batchProgress_->deleteLater();
+		batchProgress_ = nullptr;
+		batch_->deleteLater();
+		batch_ = nullptr;
+		warnAndLog(this, QStringLiteral("Batch export"),
+			   QStringLiteral("Could not create the folder\n%1").arg(QDir::toNativeSeparators(folder)));
+	}
+}
+
+void VideoEditorWindow::onBatchProgress(int index, int count, int overallPct, qint64 etaMs)
+{
+	if (!batchProgress_ || batchProgress_->wasCanceled())
+		return;
+	batchProgress_->setValue(overallPct);
+	QString label = QStringLiteral("Exporting clip %1 of %2…   %3%").arg(index + 1).arg(count).arg(overallPct);
+	if (etaMs > 0)
+		label += QStringLiteral("   ~%1s left").arg((etaMs + 500) / 1000);
+	batchProgress_->setLabelText(label);
+}
+
+void VideoEditorWindow::onBatchFinished(int okCount, int failCount, bool canceled)
+{
+	if (batchProgress_) {
+		batchProgress_->reset();
+		batchProgress_->deleteLater();
+		batchProgress_ = nullptr;
+	}
+	if (!batch_)
+		return;
+	const QVector<BatchExporter::Result> results = batch_->results();
+	const QString folder = batch_->folder();
+	batch_->deleteLater(); // joins its (finished) thread
+	batch_ = nullptr;
+
+	QStringList failed;
+	for (const BatchExporter::Result &r : results) {
+		if (r.ok)
+			emit exported(r.path); // the library lists each clip
+		else
+			failed << QStringLiteral("%1 — %2").arg(r.name, r.error);
+	}
+	// The total is what was asked for: the clips that finished, plus the one
+	// a cancel interrupted, plus the ones after it that never started.
+	const int total = batchTotal_;
+	const QString head = batch_export::summary(okCount, failCount, total, canceled);
+	if (batchOpenFolder_ && okCount > 0)
+		QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+	if (failCount > 0 || (canceled && okCount == 0))
+		warnAndLog(this, QStringLiteral("Batch export"),
+			   head + (failed.isEmpty() ? QString() : QStringLiteral("\n\n") + failed.join(QLatin1Char('\n'))));
+	else
+		QMessageBox::information(this, QStringLiteral("Batch export"),
+					 head + QStringLiteral("\n\n") + QDir::toNativeSeparators(folder));
 }
 
 void VideoEditorWindow::onExportProgress(int pct, qint64 etaMs, qint64 bytes)

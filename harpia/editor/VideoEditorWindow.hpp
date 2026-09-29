@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ClipExporter.hpp" // Options, for the batch export signature
+
 #include "TrackEditor.hpp"        // CutSegment (stored in EditorSnapshot)
 #include "VoiceoverTrack.hpp"     // VoiceoverClip (stored in EditorSnapshot)
 #include "shader/ShaderEffect.hpp"    // ShaderState / ShaderParam (post-processing)
@@ -103,6 +105,7 @@ class Timeline;
 class TrackEditor;
 class TimelineThumbs;
 class ClipExporter;
+class BatchExporter;
 class ThumbnailCache;
 class ShaderRenderer;
 class TimelineView;
@@ -255,6 +258,19 @@ private slots:
 	// window, opened with the sub-range pre-selected.
 	void onExportRangeRequested(qint64 fromMs, qint64 toMs);
 	void onExportProgress(int pct, qint64 etaMs, qint64 bytes);
+	// Batch export (each Multi-Cut cut to its own file; see BatchExport.hpp).
+	void startBatchExport(const ClipExporter::Options &base, const QVector<int> &selection,
+			      const QString &prefix, const QString &baseFolder, bool openFolder);
+	void onBatchProgress(int index, int count, int overallPct, qint64 etaMs);
+	void onBatchFinished(int okCount, int failCount, bool canceled);
+
+private:
+	BatchExporter *batch_ = nullptr;
+	QProgressDialog *batchProgress_ = nullptr;
+	bool batchOpenFolder_ = false;
+	int batchTotal_ = 0;
+
+private slots:
 	void onExportFinished(bool ok, bool canceled, const QString &err);
 	void onPlayPause();
 	void onResetMarker(); // move the playhead back to the start

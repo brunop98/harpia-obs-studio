@@ -156,6 +156,12 @@ private:
 	QPushButton *leftColorBtn_ = nullptr;
 	QPushButton *rightColorBtn_ = nullptr;
 	MousePreview *mousePreview_ = nullptr;
+	// How the region moves while recording (Custom Region only): one dropdown
+	// -- Stays put / Follow Mouse / Multiple areas -- because the two features
+	// are exclusive. followCheck_ / multiAreaCheck_ are the hidden state it
+	// drives, so the rows that depend on each (dependsOn) work unchanged.
+	QComboBox *regionMoveCombo_ = nullptr;
+	void syncRegionMoveCombo(); // combo from the two checks
 	// Follow Mouse (Custom Region only)
 	QCheckBox *followCheck_ = nullptr;
 	QComboBox *followProfileCombo_ = nullptr;

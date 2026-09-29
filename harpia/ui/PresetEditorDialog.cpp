@@ -606,11 +606,39 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	QWidget *rightColorRow = addColorField(v, QStringLiteral("Right click color"), rightColorBtn_);
 	dependsOn(mouseClicksCheck_, {leftColorRow, rightColorRow});
 
-	// ---- Follow Mouse ----
-	followCheck_ = new QCheckBox(QStringLiteral("Follow Mouse"), this);
+	// ---- Region movement: stays put / Follow Mouse / Multiple areas ----
+	// One dropdown, not two checkboxes: the two ways of moving the region are
+	// exclusive, and a pair of checkboxes that untick each other reads as a
+	// bug. The checkboxes still exist -- hidden -- as the state the dropdown
+	// sets, which is what dependsOn() and the save path read.
+	followCheck_ = new QCheckBox(this);
 	followCheck_->setChecked(preset.followMouse);
-	QWidget *followCheckRow = addCheck(v, followCheck_,
-		 QStringLiteral("The region pans to keep the cursor framed. Its size never changes."));
+	followCheck_->hide();
+	multiAreaCheck_ = new QCheckBox(this);
+	multiAreaCheck_->setChecked(preset.multiArea && !preset.followMouse);
+	multiAreaCheck_->hide();
+	regionMoveCombo_ = new QComboBox(this);
+	regionMoveCombo_->addItem(QStringLiteral("Stays put"));      // 0
+	regionMoveCombo_->addItem(QStringLiteral("Follow Mouse"));   // 1
+	regionMoveCombo_->addItem(QStringLiteral("Multiple areas")); // 2
+	QWidget *regionMoveRow = addField(
+		v, QStringLiteral("Region movement"),
+		QStringLiteral("Stays put: the region records where you framed it. Follow Mouse: it pans "
+			       "to keep the cursor framed. Multiple areas: it switches between same-size "
+			       "areas you lay out, whichever the mouse is in. The size never changes."),
+		regionMoveCombo_);
+	syncRegionMoveCombo();
+	connect(regionMoveCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int i) {
+		// Off before on, so the two are never both ticked for a moment.
+		if (i != 1)
+			followCheck_->setChecked(false);
+		if (i != 2)
+			multiAreaCheck_->setChecked(false);
+		if (i == 1)
+			followCheck_->setChecked(true);
+		if (i == 2)
+			multiAreaCheck_->setChecked(true);
+	});
 
 	followProfileCombo_ = new QComboBox(this);
 	followProfileCombo_->addItem(QStringLiteral("Instant"));        // 0
@@ -662,7 +690,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	// Only a region has anywhere to pan to. Previously this was a greyed
 	// checkbox with the reason on a tooltip -- which is a tooltip nobody hovers.
 	if (!modeSupportsFollowMouse(mode_)) {
-		followCheckRow->hide();
+		regionMoveRow->hide();
 		followProfileRow->hide();
 		followPadRow->hide();
 		followSmoothRow->hide();
@@ -697,13 +725,6 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 
 	// ---- Multi-Area ----
 	multiAreaSpots_ = preset.multiAreaSpots;
-	multiAreaCheck_ = new QCheckBox(QStringLiteral("Multiple areas"), this);
-	multiAreaCheck_->setChecked(preset.multiArea && !preset.followMouse);
-	QWidget *multiAreaCheckRow = addCheck(
-		v, multiAreaCheck_,
-		QStringLiteral("Lay out several same-size areas; the recording switches to the one the "
-			       "mouse is in and stays there while it crosses the gaps. Arrange them by "
-			       "right-clicking the region frame → Arrange areas…"));
 
 	multiAreaTransitionCombo_ = new QComboBox(this);
 	multiAreaTransitionCombo_->addItem(QStringLiteral("Cut"));        // 0
@@ -734,36 +755,31 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	multiAreaClearBtn_ = new QPushButton(QStringLiteral("Remove extra areas"), countBox);
 	countLay->addWidget(multiAreaCountLabel_, 1);
 	countLay->addWidget(multiAreaClearBtn_);
-	QWidget *multiAreaCountRow = addField(v, QStringLiteral("Areas"), QString(), countBox);
+	QWidget *multiAreaCountRow = addField(
+		v, QStringLiteral("Areas"),
+		QStringLiteral("Lay them out on the desktop: right-click the region frame → Arrange areas…"),
+		countBox);
 	connect(multiAreaClearBtn_, &QPushButton::clicked, this, [this]() {
 		multiAreaSpots_.clear();
 		updateMultiAreaCount();
 	});
 	updateMultiAreaCount();
 
-	dependsOn(multiAreaCheck_, {multiAreaTransitionRow, multiAreaPanRow_, multiAreaHoverRow,
-				    multiAreaCountRow});
-	// Pan time only means something for a pan.
+	dependsOn(multiAreaCheck_, {multiAreaTransitionRow, multiAreaHoverRow, multiAreaCountRow});
+	// Pan time only means something for a pan: hidden for a cut, like every
+	// other setting that does nothing in the current choice.
 	const auto syncPanRow = [this]() {
-		multiAreaPanSlider_->setEnabled(multiAreaCheck_->isChecked() &&
-						multiAreaTransitionCombo_->currentIndex() == 1);
+		multiAreaPanRow_->setVisible(modeSupportsFollowMouse(mode_) && multiAreaCheck_->isChecked() &&
+					     multiAreaTransitionCombo_->currentIndex() == 1);
 	};
 	connect(multiAreaTransitionCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
 		syncPanRow);
 	connect(multiAreaCheck_, &QCheckBox::toggled, this, syncPanRow);
 	syncPanRow();
-	// One or the other: Follow Mouse moves the frame freely, Multi-Area keeps
-	// it on fixed framings. Ticking one unticks the other.
-	connect(multiAreaCheck_, &QCheckBox::toggled, this, [this](bool on) {
-		if (on && followCheck_->isChecked())
-			followCheck_->setChecked(false);
-	});
-	connect(followCheck_, &QCheckBox::toggled, this, [this](bool on) {
-		if (on && multiAreaCheck_->isChecked())
-			multiAreaCheck_->setChecked(false);
-	});
+	// A page reset or a loaded preset sets the checks; the dropdown follows.
+	connect(followCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::syncRegionMoveCombo);
+	connect(multiAreaCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::syncRegionMoveCombo);
 	if (!modeSupportsFollowMouse(mode_)) {
-		multiAreaCheckRow->hide();
 		multiAreaTransitionRow->hide();
 		multiAreaPanRow_->hide();
 		multiAreaHoverRow->hide();
@@ -2048,6 +2064,17 @@ void PresetEditorDialog::updateMultiAreaCount()
 	multiAreaCountLabel_->setText(n == 1 ? QStringLiteral("1 area (just the region) — arrange more on the desktop")
 					     : QStringLiteral("%1 areas laid out").arg(n));
 	multiAreaClearBtn_->setEnabled(n > 1);
+}
+
+void PresetEditorDialog::syncRegionMoveCombo()
+{
+	if (!regionMoveCombo_)
+		return;
+	const int i = followCheck_->isChecked() ? 1 : multiAreaCheck_->isChecked() ? 2 : 0;
+	if (regionMoveCombo_->currentIndex() != i) {
+		const QSignalBlocker block(regionMoveCombo_);
+		regionMoveCombo_->setCurrentIndex(i);
+	}
 }
 
 } // namespace harpia

@@ -1864,7 +1864,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 			// The cased text, so the strip's label reads the way the
 			// canvas does rather than showing what was typed.
 			what = QStringLiteral("T  %1").arg(
-				tlDisplayText(c.text).split(QLatin1Char('\n')).value(0));
+				tlPlainText(c.text).split(QLatin1Char('\n')).value(0));
 		else if (isImage)
 			what = QStringLiteral("IMG #%1").arg(c.sourceId);
 		else

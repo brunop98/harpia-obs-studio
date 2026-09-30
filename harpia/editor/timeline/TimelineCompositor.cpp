@@ -7,6 +7,7 @@
 #include "../component/ComponentRegistry.hpp"
 #include "../component/ComponentStack.hpp"
 #include "Spotlight.hpp"
+#include "RichText.hpp"
 
 #include "../script/TransformScript.hpp"
 
@@ -76,6 +77,18 @@ struct CachedText {
 	QRectF block;
 	double strokeWidth = -1.0; // what `stroke` was built for (<0 = not built)
 	QPainterPath stroke;
+
+	// Rich text (tags in the caption): `path` is still every glyph, for the
+	// outline and the bounds; the glyphs are FILLED from these, one path per
+	// colour, and the highlights go behind them.
+	bool rich = false;
+	struct Fill {
+		QPainterPath path;
+		QColor color; // invalid = the caption's own colour
+		int alpha = -1;
+	};
+	QVector<Fill> fills;
+	QVector<QPair<QRectF, QColor>> marks;
 };
 
 // The lines as DRAWN -- the case style applied here, at the one point the words
@@ -152,6 +165,170 @@ QPainterPath buildTextPath(const TlText &t, const QFont &f, double wrapW, QRectF
 	return path;
 }
 
+// Rich text: the same layout rules as buildTextPath -- lines centred as a block,
+// aligned within it, wrapped at a space past `wrapW` -- but each run with its
+// own font, colour and decorations. Words are measured run by run, so a word
+// that changes style halfway through still wraps as one word.
+void buildRichText(const TlText &t, const QFont &base, QSize canvas, double wrapW, CachedText &ct)
+{
+	using namespace rich_text;
+	const double k = textScale(canvas);
+	const QVector<Line> lines = parse(tlDisplayText(t), t.fontPx);
+	const auto fontFor = [&](const Style &st) {
+		QFont f = base;
+		if (st.sizePx > 0)
+			f.setPixelSize(std::max(4, int(std::llround(st.sizePx * k))));
+		if (st.bold)
+			f.setBold(true);
+		if (st.italic)
+			f.setItalic(true);
+		return f;
+	};
+	struct Tok {
+		QString text;
+		Style st;
+		QFont font;
+		double w = 0.0;
+		bool space = false;
+	};
+	using TokLine = QVector<Tok>;
+	const auto widthOf = [](const TokLine &l) {
+		double w = 0.0;
+		for (const Tok &x : l)
+			w += x.w;
+		return w;
+	};
+
+	QVector<TokLine> laid;
+	for (const Line &line : lines) {
+		TokLine toks;
+		for (const Run &r : line) {
+			const QFont f = fontFor(r.style);
+			const QFontMetricsF fm(f);
+			for (int i = 0; i < r.text.size();) {
+				const bool sp = r.text.at(i) == QLatin1Char(' ');
+				int j = i;
+				while (j < r.text.size() && (r.text.at(j) == QLatin1Char(' ')) == sp)
+					++j;
+				Tok tk;
+				tk.text = r.text.mid(i, j - i);
+				tk.st = r.style;
+				tk.font = f;
+				tk.w = fm.horizontalAdvance(tk.text);
+				tk.space = sp;
+				toks.push_back(tk);
+				i = j;
+			}
+		}
+		if (wrapW <= 0.0 || widthOf(toks) <= wrapW) {
+			laid.push_back(toks);
+			continue;
+		}
+		// Words: the spaces before them, then the pieces up to the next space.
+		struct Word {
+			TokLine lead, body;
+		};
+		QVector<Word> words;
+		for (int i = 0; i < toks.size();) {
+			Word w;
+			while (i < toks.size() && toks[i].space)
+				w.lead.push_back(toks[i++]);
+			while (i < toks.size() && !toks[i].space)
+				w.body.push_back(toks[i++]);
+			words.push_back(w);
+		}
+		TokLine cur;
+		for (int wi = 0; wi < words.size(); ++wi) {
+			const Word &w = words[wi];
+			if (cur.isEmpty()) {
+				if (wi == 0)
+					cur += w.lead; // the line's own indent
+				cur += w.body;
+				continue;
+			}
+			if (!w.body.isEmpty() && widthOf(cur) + widthOf(w.lead) + widthOf(w.body) > wrapW) {
+				laid.push_back(cur);
+				cur = w.body; // the spaces at a break go
+			} else {
+				cur += w.lead;
+				cur += w.body;
+			}
+		}
+		laid.push_back(cur);
+	}
+
+	const QFontMetricsF baseFm(base);
+	struct Metrics {
+		double w = 0.0, ascent = 0.0, height = 0.0;
+	};
+	QVector<Metrics> ms;
+	double maxW = 0.0, blockH = 0.0;
+	for (const TokLine &l : laid) {
+		Metrics m;
+		m.w = widthOf(l);
+		double descent = 0.0;
+		for (const Tok &x : l) {
+			const QFontMetricsF fm(x.font);
+			m.ascent = std::max(m.ascent, fm.ascent());
+			descent = std::max(descent, fm.height() - fm.ascent());
+		}
+		if (l.isEmpty()) { // an empty line is as tall as the caption's own font
+			m.ascent = baseFm.ascent();
+			descent = baseFm.height() - baseFm.ascent();
+		}
+		m.height = m.ascent + descent;
+		maxW = std::max(maxW, m.w);
+		blockH += m.height;
+		ms.push_back(m);
+	}
+
+	ct.rich = true;
+	ct.fills.clear();
+	ct.marks.clear();
+	const auto fillFor = [&ct](const Style &st) -> QPainterPath & {
+		for (CachedText::Fill &f : ct.fills)
+			if (f.color == st.color && f.alpha == st.alpha)
+				return f.path;
+		CachedText::Fill f;
+		f.color = st.color;
+		f.alpha = st.alpha;
+		ct.fills.push_back(f);
+		return ct.fills.last().path;
+	};
+	double top = -blockH / 2.0;
+	for (int li = 0; li < laid.size(); ++li) {
+		const Metrics &m = ms[li];
+		double x = -maxW / 2.0; // left
+		if (t.align == 1)       // centre
+			x = -m.w / 2.0;
+		else if (t.align == 2)  // right
+			x = maxW / 2.0 - m.w;
+		const double baseline = top + m.ascent;
+		for (const Tok &tk : laid[li]) {
+			const QFontMetricsF fm(tk.font);
+			if (tk.st.mark.isValid())
+				ct.marks.push_back({QRectF(x, top, tk.w, m.height), tk.st.mark});
+			QPainterPath &fill = fillFor(tk.st);
+			if (!tk.space)
+				fill.addText(QPointF(x, baseline), tk.font, tk.text);
+			const double lw = std::max(1.0, fm.lineWidth());
+			if (tk.st.underline)
+				fill.addRect(QRectF(x, baseline + fm.underlinePos(), tk.w, lw));
+			if (tk.st.strike)
+				fill.addRect(QRectF(x, baseline - fm.strikeOutPos() - lw / 2.0, tk.w, lw));
+			x += tk.w;
+		}
+		top += m.height;
+	}
+	ct.path = QPainterPath();
+	ct.path.setFillRule(Qt::WindingFill);
+	for (CachedText::Fill &f : ct.fills) {
+		f.path.setFillRule(Qt::WindingFill);
+		ct.path.addPath(f.path);
+	}
+	ct.block = QRectF(-maxW / 2.0, -blockH / 2.0, maxW, blockH);
+}
+
 // The cache is per-thread: the preview composes on the GUI thread and the
 // exporter on its worker, and QPainterPath is not shared safely between them.
 CachedText &cachedText(const TlText &t, const QFont &f, QSize canvas)
@@ -178,7 +355,10 @@ CachedText &cachedText(const TlText &t, const QFont &f, QSize canvas)
 		if (cache.size() > 2048)
 			cache.clear();
 		CachedText ct;
-		ct.path = buildTextPath(t, f, canvas.width() * kWrapShare, &ct.block);
+		if (rich_text::hasTags(k.text))
+			buildRichText(t, f, canvas, canvas.width() * kWrapShare, ct);
+		else
+			ct.path = buildTextPath(t, f, canvas.width() * kWrapShare, &ct.block);
 		it = cache.insert(k, ct);
 	}
 	return it.value();
@@ -319,11 +499,22 @@ void TimelineCompositor::drawTextClip(QPainter &p, const TlClip &c, const TlTran
 			q.setBrush(fill);
 			q.drawRoundedRect(box, boxR, boxR);
 		}
+		for (const auto &mk : ct.marks)
+			q.fillRect(mk.first, mk.second);
 		if (t.outlineWidth > 0.01) {
 			ensureStroke();
 			q.fillPath(ct.stroke, t.outlineColor);
 		}
-		q.fillPath(path, t.color);
+		if (!ct.rich) {
+			q.fillPath(path, t.color);
+			return;
+		}
+		for (const CachedText::Fill &f : ct.fills) {
+			QColor c = f.color.isValid() ? f.color : t.color;
+			if (f.alpha >= 0)
+				c.setAlpha(f.alpha);
+			q.fillPath(f.path, c);
+		}
 	};
 
 	// Not turning, not fading, and drawn by a painter with no transform of its
@@ -354,6 +545,8 @@ void TimelineCompositor::drawTextClip(QPainter &p, const TlClip &c, const TlTran
 								     t.outlineWidth, t.outlineWidth);
 			if (t.boxEnabled)
 				local = local.united(box);
+			for (const auto &mk : ct.marks)
+				local = local.united(mk.first);
 			const double px = double(phx) / kTextPhaseSteps, py = double(phy) / kTextPhaseSteps;
 			const int left = int(std::floor(px + local.left() * s)) - 2;
 			const int top = int(std::floor(py + local.top() * s)) - 2;

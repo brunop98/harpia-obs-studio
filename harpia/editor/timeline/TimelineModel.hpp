@@ -9,6 +9,7 @@
 // GL-free and libav-free so the widget, the compositor, the window, and the
 // exporter can all share it.
 
+#include "RichText.hpp"
 #include "../FadeCurve.hpp"
 #include "../component/Component.hpp"
 
@@ -197,6 +198,13 @@ inline QString tlApplyTextCase(const QString &s, int textCase)
 inline QString tlDisplayText(const TlText &t)
 {
 	return tlApplyTextCase(t.text, t.textCase);
+}
+
+// What a caption says, for a label or a name: cased, and without its rich-text
+// tags (<b>, <color=…>), which are how it is drawn rather than what it says.
+inline QString tlPlainText(const TlText &t)
+{
+	return rich_text::plainText(tlDisplayText(t));
 }
 
 // One entry in a clip's transform-script stack: which script (file stem in the

@@ -12,6 +12,8 @@
 // and a reveal that reassembles the words with single spaces would re-flow the
 // block as it typed.
 
+#include "../timeline/RichText.hpp"
+
 #include <QString>
 #include <QVector>
 
@@ -38,27 +40,55 @@ inline const char *revealUnitName(int u)
 // A "word" ends at the last character of a run of non-space; the spaces after
 // it belong to the NEXT step, which is what makes the following word appear
 // with its leading space already in place rather than jumping left.
+//
+// Rich-text tags (<b>, <color=…>) are not characters: they are never a step
+// of their own and a cut never lands inside one. An opening tag is revealed
+// with the first character after it; a closing tag need not be, because an
+// unclosed tag simply lasts to the end of what is shown.
 inline QVector<int> revealStops(const QString &s, RevealUnit unit)
 {
 	QVector<int> stops;
 	const int n = s.size();
 	if (n == 0)
 		return stops;
+	const QVector<bool> tag = s.contains(QLatin1Char('<')) ? rich_text::tagMask(s) : QVector<bool>(n, false);
+	// The last step always shows the whole string. When only tags follow the
+	// last drawn character, that step is widened to take them rather than
+	// adding one that shows nothing new.
+	const auto finish = [&]() {
+		if (stops.isEmpty()) {
+			stops.append(n);
+			return;
+		}
+		bool onlyTags = true;
+		for (int k = stops.back(); k < n && onlyTags; ++k)
+			onlyTags = tag[k];
+		if (onlyTags)
+			stops.back() = n;
+		else
+			stops.append(n);
+	};
 	switch (unit) {
 	case RevealUnit::Characters:
 		stops.reserve(n);
-		for (int i = 1; i <= n; ++i)
-			stops.append(i);
+		for (int i = 0; i < n; ++i)
+			if (!tag[i])
+				stops.append(i + 1);
+		finish();
 		break;
 	case RevealUnit::Words:
 		for (int i = 0; i < n; ++i) {
+			if (tag[i])
+				continue;
+			int next = i + 1; // the next character that is drawn
+			while (next < n && tag[next])
+				++next;
 			const bool wordChar = !s.at(i).isSpace();
-			const bool lastOfWord = wordChar && (i + 1 == n || s.at(i + 1).isSpace());
+			const bool lastOfWord = wordChar && (next == n || s.at(next).isSpace());
 			if (lastOfWord)
 				stops.append(i + 1);
 		}
-		if (stops.isEmpty() || stops.back() != n)
-			stops.append(n);
+		finish();
 		break;
 	case RevealUnit::Lines:
 		for (int i = 0; i < n; ++i)

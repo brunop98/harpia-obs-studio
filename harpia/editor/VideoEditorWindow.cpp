@@ -4,6 +4,7 @@
 #include "timeline/ClipShuffle.hpp"
 #include "timeline/SoundPresets.hpp"
 
+#include <QTextCursor>
 #include <QUuid>
 
 #include "../ui/ExportDoneDialog.hpp"
@@ -630,7 +631,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 					if (s.id == c.sourceId)
 						name = s.name;
 				if (c.type == TlClip::Type::Text)
-					name = c.text.text.left(40);
+					name = rich_text::plainText(c.text.text).left(40);
 			}
 			consolePrint(QStringLiteral("// clip -> %1  %2   (also tracks.%3)")
 					     .arg(EditConsole::refName(m, track, clip), name,
@@ -6754,7 +6755,71 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	textEdit_ = new QPlainTextEdit(textBox_);
 	textEdit_->setPlaceholderText(QStringLiteral("Type your caption… (Enter for a new line)"));
 	textEdit_->setFixedHeight(56);
+	textEdit_->setToolTip(QStringLiteral(
+		"Rich text, as in Unity:\n"
+		"  <b>bold</b>   <i>italic</i>   <u>underline</u>   <s>strike</s>\n"
+		"  <color=#ff8800>colour</color>   (#rgb, #rrggbb, #rrggbbaa or a name: red, yellow…)\n"
+		"  <size=90>size</size>   (also <size=150%> and <size=+20>)\n"
+		"  <alpha=#80>see-through   <mark=#ffff0080>highlight</mark>   <br> new line\n"
+		"  <noparse><b></noparse> shows a tag as typed"));
 	tv->addWidget(textEdit_);
+	// Quick tags: wrap the selected words (or put an empty pair at the caret).
+	{
+		auto *row = new QHBoxLayout;
+		row->setSpacing(3);
+		const auto wrapWith = [this](const QString &open, const QString &close) {
+			QTextCursor cur = textEdit_->textCursor();
+			const QString sel = cur.selectedText().replace(QChar(0x2029), QLatin1Char('\n'));
+			cur.beginEditBlock();
+			cur.insertText(open + sel + close);
+			cur.endEditBlock();
+			if (sel.isEmpty()) // the caret between the pair, ready to type
+				cur.movePosition(QTextCursor::Left, QTextCursor::MoveAnchor, int(close.size()));
+			textEdit_->setTextCursor(cur);
+			textEdit_->setFocus();
+		};
+		const auto tagButton = [&](const QString &label, const QString &tip, const QString &style,
+					    std::function<void()> act) {
+			auto *b = new QPushButton(label, textBox_);
+			b->setFixedSize(28, 24);
+			b->setToolTip(tip);
+			if (!style.isEmpty())
+				b->setStyleSheet(style);
+			connect(b, &QPushButton::clicked, this, std::move(act));
+			row->addWidget(b);
+		};
+		tagButton(QStringLiteral("B"), QStringLiteral("Bold the selection: <b>…</b>"),
+			  QStringLiteral("font-weight:bold;"), [wrapWith]() { wrapWith(QStringLiteral("<b>"), QStringLiteral("</b>")); });
+		tagButton(QStringLiteral("I"), QStringLiteral("Italic: <i>…</i>"), QStringLiteral("font-style:italic;"),
+			  [wrapWith]() { wrapWith(QStringLiteral("<i>"), QStringLiteral("</i>")); });
+		tagButton(QStringLiteral("U"), QStringLiteral("Underline: <u>…</u>"), QStringLiteral("text-decoration:underline;"),
+			  [wrapWith]() { wrapWith(QStringLiteral("<u>"), QStringLiteral("</u>")); });
+		tagButton(QStringLiteral("S"), QStringLiteral("Strike through: <s>…</s>"),
+			  QStringLiteral("text-decoration:line-through;"),
+			  [wrapWith]() { wrapWith(QStringLiteral("<s>"), QStringLiteral("</s>")); });
+		tagButton(QStringLiteral("A"), QStringLiteral("Colour the selection: <color=#rrggbb>…</color>"),
+			  QStringLiteral("color:#ff8a3d;font-weight:bold;"), [this, wrapWith]() {
+				  const QColor c = QColorDialog::getColor(QColor(0xff, 0xd2, 0x3f), this,
+									  QStringLiteral("Text colour"),
+									  QColorDialog::ShowAlphaChannel);
+				  if (!c.isValid())
+					  return;
+				  QString hex = QStringLiteral("#%1%2%3")
+							.arg(c.red(), 2, 16, QLatin1Char('0'))
+							.arg(c.green(), 2, 16, QLatin1Char('0'))
+							.arg(c.blue(), 2, 16, QLatin1Char('0'));
+				  if (c.alpha() != 255)
+					  hex += QStringLiteral("%1").arg(c.alpha(), 2, 16, QLatin1Char('0'));
+				  wrapWith(QStringLiteral("<color=%1>").arg(hex), QStringLiteral("</color>"));
+			  });
+		tagButton(QStringLiteral("A+"), QStringLiteral("Bigger: <size=150%>…</size>"), QString(),
+			  [wrapWith]() { wrapWith(QStringLiteral("<size=150%>"), QStringLiteral("</size>")); });
+		tagButton(QStringLiteral("▮"), QStringLiteral("Highlight: <mark=#ffff0080>…</mark>"),
+			  QStringLiteral("color:#e8d44d;"),
+			  [wrapWith]() { wrapWith(QStringLiteral("<mark=#ffff0080>"), QStringLiteral("</mark>")); });
+		row->addStretch(1);
+		tv->addLayout(row);
+	}
 	connect(textEdit_, &QPlainTextEdit::textChanged, this, [this]() {
 		if (syncingClip_)
 			return;
@@ -7351,7 +7416,7 @@ QString VideoEditorWindow::clipLabel(const TlClip &c) const
 	case TlClip::Type::Text:
 		// The first line only: a caption can be a paragraph, and a heading that
 		// grows to five lines pushes the panel around.
-		return tlDisplayText(c.text).split(QLatin1Char('\n')).value(0);
+		return tlPlainText(c.text).split(QLatin1Char('\n')).value(0);
 	case TlClip::Type::Effect:
 		return c.effectLabel([](const QString &id) {
 			const ComponentType *t = ComponentRegistry::instance().find(id);
@@ -12620,7 +12685,7 @@ void VideoEditorWindow::onSave()
 			for (qint64 i = 0; i < std::min(n, kListMax); ++i) {
 				QStringList parts;
 				for (const QString &t : text_variations::textsAt(vs, text_variations::combinationAt(vs, i)))
-					parts << t.simplified();
+					parts << rich_text::plainText(t).simplified();
 				ec.variantLabels << parts.join(QStringLiteral("  ·  "));
 			}
 		}

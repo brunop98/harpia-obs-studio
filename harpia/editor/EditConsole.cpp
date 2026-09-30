@@ -279,7 +279,7 @@ EditConsole::Result EditConsole::run(const QString &source, const Input &in)
 			setStr(ctx, o, "ref", QStringLiteral("%1[%2]").arg(m.tracks[s.track].name).arg(laneIndex));
 			QString name;
 			if (c.type == TlClip::Type::Text)
-				name = c.text.text.left(40);
+				name = rich_text::plainText(c.text.text).left(40);
 			else if (in.sourceName)
 				name = in.sourceName(c.sourceId);
 			setStr(ctx, o, "name", name);

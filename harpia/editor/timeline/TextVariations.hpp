@@ -129,7 +129,7 @@ inline QStringList textsAt(const QVector<Slot> &vs, const QVector<int> &pick)
 // characters Windows refuses dropped, cut to `maxLen` at a dash when it can.
 inline QString slug(const QString &text, int maxLen = 24)
 {
-	QString s = text.simplified();
+	QString s = rich_text::plainText(text).simplified();
 	s.remove(QRegularExpression(QStringLiteral("[<>:\"/\\\\|?*\\x00-\\x1f]")));
 	s.replace(QLatin1Char(' '), QLatin1Char('-'));
 	while (s.contains(QStringLiteral("--")))

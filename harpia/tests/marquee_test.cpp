@@ -129,12 +129,63 @@ int main(int argc, char **argv)
 		ok(v.isSelected(0, 1), "and is selected");
 	}
 
+	std::printf("\n-- dragging any member moves the whole group --\n");
+	{
+		// Box the three clips of track 0 (and none of track 1), then drag by
+		// the SECOND one, which is not the primary.
+		drag(&v, QPoint(a0.left() + 2, a0.top() + 2), QPoint(a2.right() - 2, a0.top() + 4), Qt::ShiftModifier);
+		ok(v.selectedCountForTest() == 3 && v.selectedTrack() == 0 && v.selectedClip() == 0,
+		   "three selected, the first is the primary");
+		const qint64 s0 = v.model().tracks[0].clips[0].outStartMs, s1 = v.model().tracks[0].clips[1].outStartMs,
+			     s2 = v.model().tracks[0].clips[2].outStartMs, o0 = v.model().tracks[1].clips[0].outStartMs;
+		const QPoint grab = v.clipRectForTest(0, 1).center();
+		drag(&v, grab, grab + QPoint(60, 0), Qt::NoModifier);
+		const qint64 d1 = v.model().tracks[0].clips[1].outStartMs - s1;
+		std::printf("     moved by %lld ms\n", (long long)d1);
+		ok(d1 > 0, "the grabbed clip moved");
+		ok(v.model().tracks[0].clips[0].outStartMs - s0 == d1, "the old primary moved by the same amount");
+		ok(v.model().tracks[0].clips[2].outStartMs - s2 == d1, "and so did the third");
+		ok(v.model().tracks[1].clips[0].outStartMs == o0, "an unselected clip stayed");
+		ok(v.selectedCountForTest() == 3, "the group is still selected afterwards");
+	}
+
 	std::printf("\n-- Shift+click on empty space clears --\n");
 	{
 		const QPoint gap((a0.right() + a1.left()) / 2, a0.center().y());
 		mouse(&v, QEvent::MouseButtonPress, gap, Qt::ShiftModifier);
 		mouse(&v, QEvent::MouseButtonRelease, gap, Qt::ShiftModifier);
 		ok(v.selectedCountForTest() == 0, "nothing selected");
+	}
+
+	std::printf("\n-- force ripple: closing a track's gaps --\n");
+	{
+		TlTrack g;
+		g.kind = TlTrack::Kind::Video;
+		// In the vector out of screen order, with a gap before the first clip,
+		// two gaps, and one clip overlapping another (a transition).
+		g.clips = {clip(1, 9000, 1000), clip(1, 1000, 2000), clip(1, 4000, 1000), clip(1, 4800, 1000)};
+		const int moved = closeTrackGaps(g);
+		ok(moved == 3, "three clips moved (the first stays)");
+		ok(g.clips[1].outStartMs == 1000, "the earliest clip keeps its place (the gap before it is not between clips)");
+		ok(g.clips[2].outStartMs == 3000, "the next one butts up against it");
+		ok(g.clips[3].outStartMs == 3800, "an overlap with the one before is kept (200 ms)");
+		ok(g.clips[0].outStartMs == 4800, "the last one on screen, first in the list, closes up too");
+		ok(g.clips[0].outDurationMs() == 1000 && g.clips[2].srcStartMs == 0, "lengths and sources untouched");
+		ok(closeTrackGaps(g) == 0, "a second pass has nothing to do");
+		TlTrack one;
+		one.clips = {clip(1, 5000, 1000)};
+		ok(closeTrackGaps(one) == 0 && one.clips[0].outStartMs == 5000, "a lone clip is left where it is");
+
+		TimelineModel gm;
+		TlTrack locked = g;
+		locked.clips = {clip(1, 0, 1000), clip(1, 3000, 1000)};
+		locked.locked = true;
+		gm.tracks = {locked};
+		TimelineView gv;
+		gv.resize(900, 300);
+		gv.setModel(gm);
+		ok(gv.forceRipple(0) == 0 && gv.model().tracks[0].clips[1].outStartMs == 3000,
+		   "a locked track is not rippled");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

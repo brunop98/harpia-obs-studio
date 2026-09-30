@@ -1182,6 +1182,14 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 							     .arg(gainPercent(t.gain)))
 				    : nullptr;
 	QAction *ripple = menu.addAction(QStringLiteral("Auto ripple on delete"));
+	// Close every gap now, rather than only as clips are deleted.
+	QAction *forceRip = menu.addAction(QStringLiteral("Force ripple (remove gaps)"));
+	{
+		TlTrack probe = t;
+		disableBecause(forceRip, !t.locked && closeTrackGaps(probe) > 0,
+			       t.locked ? QStringLiteral("The track is locked.")
+					: QStringLiteral("There are no gaps between this track's clips."));
+	}
 	ripple->setCheckable(true);
 	ripple->setChecked(t.ripple);
 	menu.addSeparator();
@@ -1275,6 +1283,9 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 		return;
 	} else if (chosen == ripple) {
 		t.ripple = !t.ripple;
+	} else if (chosen == forceRip) {
+		forceRipple(track); // commits on its own
+		return;
 	} else if (chosen == rename) {
 		bool ok = false;
 		const QString n = QInputDialog::getText(this, QStringLiteral("Rename track"),
@@ -2784,8 +2795,17 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	}
 	// A plain click on something already selected keeps the group, so a
 	// multi-selection can be dragged; otherwise it replaces the selection.
-	if (!isSelected(track, clip))
+	if (!isSelected(track, clip)) {
 		extraSel_.clear();
+	} else if (track != selTrack_ || clip != selClip_) {
+		// Grabbing a member that is not the primary: the old primary joins
+		// the extras rather than falling out of the group. It used to be
+		// dropped here, so a two-clip selection dragged by its second clip
+		// moved one clip.
+		if (selTrack_ >= 0 && selClip_ >= 0)
+			extraSel_.insert({selTrack_, selClip_});
+		extraSel_.remove({track, clip});
+	}
 	selTrack_ = track;
 	selClip_ = clip;
 	emit selectionChanged(selTrack_, selClip_);
@@ -2831,6 +2851,83 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 		mode_ = Mode::Move;
 	emitScrubAt(xToMs(pos.x()));
 	update();
+}
+
+int closeTrackGaps(TlTrack &t)
+{
+	const int n = t.clips.size();
+	if (n < 2)
+		return 0;
+	// The order on screen, not the order in the vector: a clip dragged to the
+	// front of a lane stays at the back of the list.
+	QVector<int> order(n);
+	for (int i = 0; i < n; ++i)
+		order[i] = i;
+	std::stable_sort(order.begin(), order.end(), [&t](int a, int b) {
+		return t.clips[a].outStartMs < t.clips[b].outStartMs;
+	});
+	// Every clip first moves left by however much the gaps before it closed
+	// (`shift`), so a clip overlapping its neighbour (a transition) travels
+	// with it and keeps the overlap; only then is a gap still left closed.
+	int moved = 0;
+	qint64 shift = 0;
+	qint64 end = t.clips[order[0]].outEndMs(); // the first clip stays put
+	for (int k = 1; k < n; ++k) {
+		TlClip &c = t.clips[order[k]];
+		qint64 start = c.outStartMs - shift;
+		if (start > end) { // a gap: close it
+			shift += start - end;
+			start = end;
+		}
+		if (start != c.outStartMs) {
+			c.outStartMs = start;
+			++moved;
+		}
+		end = std::max(end, c.outEndMs());
+	}
+	return moved;
+}
+
+TlSelection TimelineView::selectionState() const
+{
+	TlSelection s;
+	s.track = selTrack_;
+	s.clip = selClip_;
+	s.transition = selTransition_;
+	for (const auto &p : extraSel_)
+		s.extras.push_back(p);
+	std::sort(s.extras.begin(), s.extras.end());
+	return s;
+}
+
+void TimelineView::setSelectionState(const TlSelection &s)
+{
+	const auto valid = [this](int t, int c) {
+		return t >= 0 && t < model_.tracks.size() && c >= 0 && c < model_.tracks[t].clips.size();
+	};
+	selTrack_ = valid(s.track, s.clip) ? s.track : -1;
+	selClip_ = selTrack_ >= 0 ? s.clip : -1;
+	selTransition_ = selTrack_ >= 0 && s.transition;
+	extraSel_.clear();
+	for (const auto &p : s.extras)
+		if (valid(p.first, p.second))
+			extraSel_.insert(p);
+	emit selectionChanged(selTrack_, selClip_);
+	update();
+}
+
+int TimelineView::forceRipple(int track)
+{
+	if (track < 0 || track >= model_.tracks.size() || model_.tracks[track].locked)
+		return 0;
+	const int moved = closeTrackGaps(model_.tracks[track]);
+	if (moved == 0)
+		return 0;
+	clampView();
+	updateGeometry();
+	update();
+	commitEdit(); // one undo step for the whole track
+	return moved;
 }
 
 QVector<QPair<int, int>> TimelineView::clipsTouching(const QRect &box) const
@@ -3224,13 +3321,15 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 	}
 	if (mode_ == Mode::Marquee) {
 		// The selection is already what the box last touched; only the box
-		// itself goes.
+		// itself goes. Said once more now the box is gone, so whoever skipped
+		// the in-between states (the undo history) takes this one.
 		mode_ = Mode::None;
 		marqueeRect_ = QRect();
 		marqueeBase_.clear();
 		unsetCursor();
 		releaseSpan();
 		update();
+		emit selectionChanged(selTrack_, selClip_);
 		return;
 	}
 	if (e->button() != Qt::LeftButton) {

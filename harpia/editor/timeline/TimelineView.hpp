@@ -54,6 +54,26 @@ struct TimelineViewParams {
 // Clips carry explicit output positions, so they can sit anywhere with gaps and
 // move between same-kind tracks. Reuses the ms<->px / ease / filmstrip patterns
 // from TrackEditor and the waveform idea from VoiceoverTrack.
+// What is selected on the timeline, as the undo history keeps it: the primary
+// clip (or transition), and the rest of a group in a fixed order so two equal
+// selections compare equal.
+struct TlSelection {
+	int track = -1, clip = -1;
+	bool transition = false;
+	QVector<QPair<int, int>> extras; // sorted
+	bool operator==(const TlSelection &o) const
+	{
+		return track == o.track && clip == o.clip && transition == o.transition && extras == o.extras;
+	}
+	bool operator!=(const TlSelection &o) const { return !(*this == o); }
+};
+
+// Force ripple: the track's clips in their current order with every gap
+// between them closed. The first clip stays where it is; a clip overlapping
+// the one before it (a transition) keeps its overlap. Only outStartMs changes,
+// and clips keep their index. Returns how many clips moved.
+int closeTrackGaps(TlTrack &t);
+
 class TimelineView : public QWidget {
 	Q_OBJECT
 public:
@@ -168,6 +188,16 @@ public:
 	// Selection (track index, clip index). {-1,-1} = nothing.
 	int selectedTrack() const { return selTrack_; }
 	int selectedClip() const { return selClip_; }
+	// The selection for the undo history, and putting one back (indices that
+	// no longer exist are dropped). Setting emits selectionChanged.
+	TlSelection selectionState() const;
+	void setSelectionState(const TlSelection &s);
+	// A selection box is still being drawn: the selection is moving with it,
+	// and only the one it settles on at release is worth an undo step.
+	bool selectingWithBox() const { return mode_ == Mode::Marquee; }
+	// Force ripple on one track (the track menu's action), as one undo step.
+	// Returns how many clips moved; 0 changes nothing and records nothing.
+	int forceRipple(int track);
 	const TlClip *selectedClipPtr() const;
 	void updateSelectedClip(const TlClip &c); // Inspector edits push back here
 

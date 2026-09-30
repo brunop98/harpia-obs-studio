@@ -129,6 +129,12 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	"$HERE/projectwindow_test.cpp" \
 	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
 	-o "$WORK/projectwindow_test" $WLF
+# Undo through the real Ctrl+Z / Ctrl+Y: selection steps, a selection box as
+# one step, a group drag, Force ripple, and an edit through clipsChanged.
+g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
+	"$HERE/undohistory_test.cpp" \
+	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
+	-o "$WORK/undohistory_test" $WLF
 
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/avsync_test" "$WORK" || rc=1
@@ -142,4 +148,6 @@ QT_QPA_PLATFORM=offscreen "$WORK/multicutplay_test" "$WORK" || rc=1
 mkdir -p "$WORK/home"
 HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
 	"$WORK/projectwindow_test" "$WORK" || rc=1
+HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
+	"$WORK/undohistory_test" "$WORK" || rc=1
 exit $rc

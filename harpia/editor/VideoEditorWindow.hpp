@@ -86,13 +86,18 @@ struct EditorSnapshot {
 	QRect cropRect;
 	QVector<VoiceoverClip> voiceClips;
 	TimelineModel timeline;       // "Full editing" multi-track timeline
+	// What was selected on that timeline: undo brings the selection back with
+	// the edit, and a change of selection is a step of its own.
+	TlSelection selection;
 
-	bool operator==(const EditorSnapshot &o) const
+	// Everything but the selection.
+	bool sameContent(const EditorSnapshot &o) const
 	{
 		return segments == o.segments && trimStart == o.trimStart && trimEnd == o.trimEnd &&
 		       speed == o.speed && cropEnabled == o.cropEnabled && cropRect == o.cropRect &&
 		       voiceClips == o.voiceClips && timeline == o.timeline;
 	}
+	bool operator==(const EditorSnapshot &o) const { return sameContent(o) && selection == o.selection; }
 };
 
 class AudioRecorder;
@@ -1110,6 +1115,11 @@ private:
 	QVBoxLayout *insContentLayout_ = nullptr;
 	QVector<EditorSnapshot> history_;
 	int histIndex_ = -1;    // current position in history_
+	// The newest entry was recorded in this pass of the event loop. A
+	// selection change in the same pass is the edit selecting what it made
+	// (a paste, a split, a drop) and belongs to that edit's step; a user's
+	// click never arrives in the same pass as the edit before it.
+	bool histJustPushed_ = false;
 	bool restoring_ = false; // guard: restoring must not schedule new snapshots
 	QTimer *histTimer_ = nullptr;
 	QSlider *speedSlider_ = nullptr;

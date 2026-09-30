@@ -602,6 +602,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(timelineView_, &TimelineView::editCommitted, this,
 		&VideoEditorWindow::commitSnapshot);
 	connect(timelineView_, &TimelineView::selectionChanged, this, [this](int track, int clip) {
+		// A change of selection is an undo step. Not while a selection box is
+		// still being drawn -- only where it settles, which the release says
+		// again -- and not while undo itself is putting one back.
+		if (!restoring_ && !timelineView_->selectingWithBox())
+			commitSnapshot();
 		pathKeyPicked_ = -1; // a new selection: Delete means the selection again
 		syncPreviewTransformTarget();
 		updateInspector();
@@ -11231,8 +11236,10 @@ EditorSnapshot VideoEditorWindow::snapshot() const
 	s.cropEnabled = canvas_->cropEnabled() || (fullEdit() && trimCropWanted_);
 	s.cropRect = canvas_->cropRectVideo();
 	s.voiceClips = voTrack_->clips();
-	if (timelineView_)
+	if (timelineView_) {
 		s.timeline = timelineView_->model();
+		s.selection = timelineView_->selectionState();
+	}
 	return s;
 }
 
@@ -11260,6 +11267,14 @@ void VideoEditorWindow::captureSnapshot()
 	const EditorSnapshot s = snapshot();
 	if (histIndex_ >= 0 && histIndex_ < history_.size() && s == history_[histIndex_])
 		return; // nothing actually changed
+	// Only the selection moved, in the same pass as the newest entry: an edit
+	// selecting what it just made (a paste, a split, a drop). That is part of
+	// the edit, not a step of its own -- amend it.
+	if (histJustPushed_ && histIndex_ > 0 && histIndex_ + 1 == history_.size() &&
+	    s.sameContent(history_[histIndex_])) {
+		history_[histIndex_] = s;
+		return;
+	}
 	if (histIndex_ + 1 < history_.size())
 		history_.resize(histIndex_ + 1); // drop the redo tail
 	history_.push_back(s);
@@ -11267,6 +11282,8 @@ void VideoEditorWindow::captureSnapshot()
 	if (history_.size() > kMaxHistory)
 		history_.removeFirst();
 	histIndex_ = history_.size() - 1;
+	histJustPushed_ = true;
+	QTimer::singleShot(0, this, [this]() { histJustPushed_ = false; });
 	updateUndoRedoButtons();
 }
 
@@ -11300,6 +11317,8 @@ void VideoEditorWindow::restoreSnapshot(const EditorSnapshot &s)
 
 	if (timelineView_) {
 		timelineView_->setModel(s.timeline);
+		// After the model: the selection is indices into it.
+		timelineView_->setSelectionState(s.selection);
 		syncPreviewTransformTarget();
 	}
 

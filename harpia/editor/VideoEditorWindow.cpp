@@ -10592,6 +10592,25 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 		voArr.append(o);
 	}
 	root[QStringLiteral("voiceovers")] = voArr;
+	// How the takes are mixed with the video's own sound. Not part of a take,
+	// so it lived only on the sliders -- and a project reopened with the
+	// original back at 100% exported differently from the one that was saved.
+	{
+		QJsonObject mix;
+		mix[QStringLiteral("originalVolume")] = voOrigVol_ ? voOrigVol_->value() : 100;
+		mix[QStringLiteral("duck")] = voDuck_ && voDuck_->isChecked();
+		root[QStringLiteral("voiceoverMix")] = mix;
+	}
+	// The mode it was being edited in, and which source was in front. Both used
+	// to be guessed on open -- a timeline means Full editing, cuts mean
+	// Multi-Cut -- which reopened a Trim project that also had cuts in
+	// Multi-Cut, and applied the trim range to the first source rather than
+	// the one being trimmed.
+	root[QStringLiteral("editMode")] = fullEdit()   ? QStringLiteral("full")
+					   : multiCut() ? QStringLiteral("multicut")
+							: QStringLiteral("trim");
+	if (activeSourceId_ >= 0)
+		root[QStringLiteral("activeSource")] = activeSourceId_;
 
 	// "Full editing" multi-track timeline (project v3). Clip source ids are
 	// remapped through the same `sources` array as the Multi-Cut segments.
@@ -10753,6 +10772,8 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 			used.insert(sv.toObject().value(QStringLiteral("source")).toInt());
 		for (const QJsonValue &rv : root.value(QStringLiteral("soundRules")).toArray())
 			used.insert(rv.toObject().value(QStringLiteral("source")).toInt());
+		if (root.contains(QStringLiteral("activeSource")))
+			used.insert(root.value(QStringLiteral("activeSource")).toInt());
 
 		bool first = true;
 		for (const QJsonValue &jv : root.value(QStringLiteral("sources")).toArray()) {
@@ -11028,9 +11049,15 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 		}
 	}
 
-	// Show a source that the project actually uses, then apply the edits (which
-	// restore the trim range / segments on top).
-	setActiveSource(defaultSrcId);
+	// Show the source that was in front when it was saved (older projects: the
+	// first one it uses), then apply the edits -- the trim range belongs to it.
+	int activeSrc = defaultSrcId;
+	if (root.contains(QStringLiteral("activeSource"))) {
+		const int pid = root.value(QStringLiteral("activeSource")).toInt();
+		if (srcMap.contains(pid))
+			activeSrc = srcMap.value(pid);
+	}
+	setActiveSource(activeSrc);
 	restoreSnapshot(s);
 	// Remember where this project lives + its metadata (Project inspector).
 	projectPath_ = path;
@@ -11055,14 +11082,34 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	}
 	refreshProjectInspector();
 
-	// Open in the mode the project was authored in.
-	if (!s.timeline.isEmpty()) {
-		timelineSeeded_ = true; // don't seed over the loaded timeline
-		if (!fullEdit())
-			setEditMode(EditMode::Full);
-	} else if (!s.segments.isEmpty() && !multiCut()) {
-		setEditMode(EditMode::MultiCut);
+	// The voiceover mix. Absent (older projects) means the defaults, not
+	// whatever the last project left on the sliders.
+	{
+		const QJsonObject mix = root.value(QStringLiteral("voiceoverMix")).toObject();
+		if (voOrigVol_)
+			voOrigVol_->setValue(std::clamp(mix.value(QStringLiteral("originalVolume")).toInt(100), 0, 150));
+		if (voDuck_)
+			voDuck_->setChecked(mix.value(QStringLiteral("duck")).toBool(false));
 	}
+
+	// Open in the mode the project was saved in; older projects say nothing,
+	// and are opened in the mode their contents suggest.
+	if (!s.timeline.isEmpty())
+		timelineSeeded_ = true; // don't seed over the loaded timeline
+	const QString savedMode = root.value(QStringLiteral("editMode")).toString();
+	EditMode want = mode();
+	if (savedMode == QLatin1String("full"))
+		want = EditMode::Full;
+	else if (savedMode == QLatin1String("multicut"))
+		want = EditMode::MultiCut;
+	else if (savedMode == QLatin1String("trim"))
+		want = EditMode::Trim;
+	else if (!s.timeline.isEmpty())
+		want = EditMode::Full;
+	else if (!s.segments.isEmpty())
+		want = EditMode::MultiCut;
+	if (want != mode())
+		setEditMode(want);
 	captureSnapshot(); // make the load an undo step
 	updateUndoRedoButtons();
 

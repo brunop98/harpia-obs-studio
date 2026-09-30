@@ -214,6 +214,7 @@ public:
 	// than the session's decoded copy -- i.e. what a saved project points at.
 	QString sourceFileForTest(int sourceId) const;
 	QString infoTextForTest() const;
+	int activeSourceIdForTest() const { return activeSourceId_; }
 
 	QString saveProjectTo(const QString &path, bool quiet);
 	bool openProjectAt(const QString &path);

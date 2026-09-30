@@ -114,7 +114,7 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	auto *single = new QWidget(this);
 	auto *columns = new QHBoxLayout(single);
 	columns->setContentsMargins(0, 0, 0, 0);
-	if (ctx_.batchCuts.isEmpty()) {
+	if (ctx_.batchCuts.isEmpty() && ctx_.variantLabels.isEmpty()) {
 		root->addWidget(single);
 	} else {
 		tabs_ = new QTabWidget(this);
@@ -427,10 +427,16 @@ void ExportOptionsDialog::buildBatchTab()
 {
 	auto *page = new QWidget(this);
 	auto *v = new QVBoxLayout(page);
+	// One tab, two lists: Multi-Cut's cuts, or Full editing's text versions.
+	const bool variants = !ctx_.variantLabels.isEmpty();
 	auto *hint = new QLabel(
-		QStringLiteral("Each cut becomes its own file, in a new folder under the folder chosen on the "
-			       "Single video tab, with that tab's format, quality, size, crop and audio. "
-			       "Each cut keeps its own speed."),
+		variants ? QStringLiteral("Every version is the whole video with only the words changed: one file "
+					  "per combination of the text clips' variations, in a new folder under the "
+					  "folder chosen on the Single video tab, with that tab's format, quality, "
+					  "size and audio.")
+			 : QStringLiteral("Each cut becomes its own file, in a new folder under the folder chosen on "
+					  "the Single video tab, with that tab's format, quality, size, crop and "
+					  "audio. Each cut keeps its own speed."),
 		page);
 	hint->setWordWrap(true);
 	hint->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
@@ -438,8 +444,16 @@ void ExportOptionsDialog::buildBatchTab()
 
 	batchList_ = new QListWidget(page);
 	batchList_->setSelectionMode(QAbstractItemView::NoSelection);
-	const int n = ctx_.batchCuts.size();
-	for (int i = 0; i < n; ++i) {
+	const int n = variants ? ctx_.variantLabels.size() : ctx_.batchCuts.size();
+	for (int i = 0; i < n && variants; ++i) {
+		auto *item = new QListWidgetItem(
+			QStringLiteral("%1    %2").arg(i + 1, 2, 10, QLatin1Char('0')).arg(ctx_.variantLabels[i]),
+			batchList_);
+		item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+		item->setCheckState(Qt::Checked);
+		item->setToolTip(ctx_.variantLabels[i]);
+	}
+	for (int i = 0; i < n && !variants; ++i) {
 		const Context::BatchCut &c = ctx_.batchCuts[i];
 		const double sp = c.speed > 0.01 ? c.speed : 1.0;
 		const double outSec = (c.endMs - c.startMs) / 1000.0 / sp;
@@ -474,15 +488,18 @@ void ExportOptionsDialog::buildBatchTab()
 
 	auto *form = new QFormLayout;
 	batchPrefix_ = new QLineEdit(ctx_.defaultName, page);
-	batchPrefix_->setToolTip(QStringLiteral("Files are named Prefix_01, Prefix_02… and the folder is named "
-						"after the prefix too."));
+	batchPrefix_->setToolTip(variants ? QStringLiteral("Files are named Prefix_01_the-text, Prefix_02_… and "
+							   "the folder is named after the prefix too.")
+					  : QStringLiteral("Files are named Prefix_01, Prefix_02… and the folder is "
+							   "named after the prefix too."));
 	form->addRow(QStringLiteral("Name prefix"), batchPrefix_);
 	batchOpen_ = new QCheckBox(QStringLiteral("Open the folder when done"), page);
 	batchOpen_->setChecked(true);
 	form->addRow(QString(), batchOpen_);
 	v->addLayout(form);
 
-	tabs_->addTab(page, QStringLiteral("Batch  (%1 cuts)").arg(n));
+	tabs_->addTab(page, variants ? QStringLiteral("Variations  (%1 versions)").arg(n)
+				     : QStringLiteral("Batch  (%1 cuts)").arg(n));
 }
 
 bool ExportOptionsDialog::batchMode() const
@@ -520,6 +537,8 @@ bool ExportOptionsDialog::batchOpenFolder() const
 double ExportOptionsDialog::batchSeconds() const
 {
 	double total = 0.0;
+	if (!ctx_.variantLabels.isEmpty())
+		return ctx_.seconds * batchSelection().size(); // every version is the whole video
 	for (int i : batchSelection()) {
 		const Context::BatchCut &c = ctx_.batchCuts[i];
 		const double sp = c.speed > 0.01 ? c.speed : 1.0;
@@ -566,13 +585,15 @@ void ExportOptionsDialog::refresh()
 	customRow_->setVisible(resCombo_->currentData().toInt() < 0);
 	if (tabs_) {
 		const int sel = batchSelection().size();
+		const bool variants = !ctx_.variantLabels.isEmpty();
 		batchCount_->setText(QStringLiteral("%1 of %2 selected · %3 s in all")
 					     .arg(sel)
-					     .arg(ctx_.batchCuts.size())
+					     .arg(variants ? ctx_.variantLabels.size() : ctx_.batchCuts.size())
 					     .arg(batchSeconds(), 0, 'f', 1));
 		if (batchMode()) {
-			exportBtn_->setText(sel == 1 ? QStringLiteral("Export 1 clip")
-						     : QStringLiteral("Export %1 clips").arg(sel));
+			const QString unit = variants ? QStringLiteral("video") : QStringLiteral("clip");
+			exportBtn_->setText(sel == 1 ? QStringLiteral("Export 1 %1").arg(unit)
+						     : QStringLiteral("Export %1 %2s").arg(sel).arg(unit));
 			exportBtn_->setEnabled(sel > 0);
 		} else {
 			exportBtn_->setText(QStringLiteral("Export"));

@@ -26,6 +26,7 @@
 #include "EditorWidgets.hpp"
 #include "ExportOptionsDialog.hpp"
 #include "BatchExport.hpp"
+#include "timeline/TextVariations.hpp"
 #include "FrameSeeker.hpp"
 #include "PreviewDecoder.hpp"
 #include "ProjectPaths.hpp"
@@ -608,6 +609,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		if (!restoring_ && !timelineView_->selectingWithBox())
 			commitSnapshot();
 		pathKeyPicked_ = -1; // a new selection: Delete means the selection again
+		// The preview shows a new selection's own words, not a variation
+		// picked on the clip before it.
+		if (previewVariant_ != 0) {
+			previewVariant_ = 0;
+			requestPreview(-1, timelinePlayheadMs());
+		}
 		syncPreviewTransformTarget();
 		updateInspector();
 		refreshKeyframeEditor(); // it follows the selection
@@ -4563,14 +4570,18 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 	// Seen before, with nothing on screen changed since: no decode, no composite.
 	if (previewFrames_.maxCost() != kPreviewCacheMB * 1024)
 		previewFrames_.setMaxCost(kPreviewCacheMB * 1024); // in KB
-	const QByteArray sig = previewSignature(outMs, renderSize, canvasSize);
+	// The timeline as shown: with a text variation previewed, a copy with that
+	// clip's words swapped. Signed from the same copy, so a cached frame of the
+	// original text is never served for a variation, or the other way round.
+	const TimelineModel shownModel = previewModel();
+	const QByteArray sig = previewSignature(shownModel, outMs, renderSize, canvasSize);
 	if (const QImage *hit = previewFrames_.object(sig)) {
 		setPreviewFrame(*hit, outMs);
 		return;
 	}
 	frameCacheable_ = true;
-	const QImage composed = TimelineCompositor::compose(timelineView_->model(), outMs, renderSize,
-							    fp, scriptEval_.get(), fps, canvasSize);
+	const QImage composed = TimelineCompositor::compose(shownModel, outMs, renderSize, fp, scriptEval_.get(),
+							    fps, canvasSize);
 	if (frameCacheable_ && shownExact_ && !composed.isNull())
 		previewFrames_.insert(sig, new QImage(composed), int(std::max<qint64>(1, composed.sizeInBytes() / 1024)));
 	setPreviewFrame(composed, outMs);
@@ -4578,10 +4589,58 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 
 // See FrameSignature.hpp; the shader generation joins the window's own, since
 // a hot-reloaded .frag changes pixels without touching the model.
-QByteArray VideoEditorWindow::previewSignature(qint64 outMs, QSize render, QSize logical) const
+QByteArray VideoEditorWindow::previewSignature(const TimelineModel &m, qint64 outMs, QSize render,
+					      QSize logical) const
 {
 	const qint64 gen = qint64(previewGen_) * 1000003 + ShaderComponents::generation();
-	return timelineFrameSignature(timelineView_->model(), outMs, render, logical, gen);
+	return timelineFrameSignature(m, outMs, render, logical, gen);
+}
+
+TimelineModel VideoEditorWindow::previewModel() const
+{
+	if (previewVariant_ <= 0 || !timelineView_)
+		return timelineView_ ? timelineView_->model() : TimelineModel();
+	const int t = timelineView_->selectedTrack(), ci = timelineView_->selectedClip();
+	TimelineModel m = timelineView_->model();
+	if (t < 0 || t >= m.tracks.size() || ci < 0 || ci >= m.tracks[t].clips.size())
+		return m;
+	TlClip &c = m.tracks[t].clips[ci];
+	const QStringList opts = text_variations::optionsOf(c.text);
+	if (c.type == TlClip::Type::Text && previewVariant_ < opts.size()) {
+		c.text.text = opts[previewVariant_];
+		c.words.clear();
+	}
+	return m;
+}
+
+void VideoEditorWindow::stepPreviewVariant(int delta)
+{
+	const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!c || c->type != TlClip::Type::Text)
+		return;
+	const int n = text_variations::optionsOf(c->text).size();
+	if (n <= 1)
+		return;
+	previewVariant_ = ((previewVariant_ + delta) % n + n) % n; // wraps both ways
+	syncVariationsInspector(*c);
+	requestPreview(-1, timelinePlayheadMs());
+}
+
+void VideoEditorWindow::syncVariationsInspector(const TlClip &c)
+{
+	if (!variationsEdit_)
+		return;
+	const QString joined = c.text.variations.join(QLatin1Char('\n'));
+	if (variationsEdit_->toPlainText() != joined) {
+		const QSignalBlocker b(variationsEdit_);
+		variationsEdit_->setPlainText(joined);
+	}
+	const int n = text_variations::optionsOf(c.text).size();
+	previewVariant_ = std::clamp(previewVariant_, 0, std::max(0, n - 1));
+	variantLabel_->setText(n <= 1 ? QStringLiteral("No variations yet")
+				      : QStringLiteral("Preview: %1 of %2").arg(previewVariant_ + 1).arg(n));
+	variantPrev_->setEnabled(n > 1);
+	variantNext_->setEnabled(n > 1);
 }
 
 void VideoEditorWindow::invalidatePreviewCache()
@@ -6716,6 +6775,48 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		});
 	});
 
+	// Variations: other words for this caption, one per line -- each makes its
+	// own version of the video on export (Export → Variations).
+	variationsBox_ = new QWidget(textBox_);
+	{
+		auto *vl = new QVBoxLayout(variationsBox_);
+		vl->setContentsMargins(0, 0, 0, 0);
+		vl->setSpacing(3);
+		auto *cap = new QLabel(QStringLiteral("Variations — one per line; each exports its own video"),
+				       variationsBox_);
+		cap->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+		vl->addWidget(cap);
+		variationsEdit_ = new QPlainTextEdit(variationsBox_);
+		variationsEdit_->setPlaceholderText(QStringLiteral("I like cats\nI like vultures\nI like parrots"));
+		variationsEdit_->setFixedHeight(64);
+		vl->addWidget(variationsEdit_);
+		auto *row = new QHBoxLayout;
+		variantPrev_ = new QPushButton(QStringLiteral("◀"), variationsBox_);
+		variantNext_ = new QPushButton(QStringLiteral("▶"), variationsBox_);
+		for (QPushButton *b : {variantPrev_, variantNext_})
+			b->setFixedWidth(28);
+		variantPrev_->setToolTip(QStringLiteral("Preview the previous variation"));
+		variantNext_->setToolTip(QStringLiteral("Preview the next variation"));
+		variantLabel_ = new QLabel(variationsBox_);
+		row->addWidget(variantPrev_);
+		row->addWidget(variantLabel_, 1, Qt::AlignCenter);
+		row->addWidget(variantNext_);
+		vl->addLayout(row);
+		connect(variantPrev_, &QPushButton::clicked, this, [this]() { stepPreviewVariant(-1); });
+		connect(variantNext_, &QPushButton::clicked, this, [this]() { stepPreviewVariant(+1); });
+		connect(variationsEdit_, &QPlainTextEdit::textChanged, this, [this]() {
+			if (syncingClip_)
+				return;
+			const QStringList lines = variationsEdit_->toPlainText().split(QLatin1Char('\n'));
+			QStringList keep = lines;
+			while (!keep.isEmpty() && keep.last().trimmed().isEmpty())
+				keep.removeLast(); // the line still being typed below the last one
+			editSelectedClip([&keep](TlClip &c) { c.text.variations = keep; });
+			requestPreview(-1, timelinePlayheadMs());
+		});
+	}
+	tv->addWidget(variationsBox_);
+
 	fontCombo_ = new QFontComboBox(textBox_);
 	tv->addWidget(fontCombo_);
 	connect(fontCombo_, &QFontComboBox::currentFontChanged, this, [this](const QFont &f) {
@@ -7335,6 +7436,10 @@ void VideoEditorWindow::syncClipInspector()
 		clipTagsBox_->setVisible(!batch);
 	if (textEdit_)
 		textEdit_->setVisible(!batch);
+	// Variations are one caption's other words; not something to set for a
+	// whole lane of captions at once.
+	if (variationsBox_)
+		variationsBox_->setVisible(!batch);
 	clipBox_->setVisible(c != nullptr);
 	// The tab is never blank: with nothing selected it says so, rather than
 	// showing an empty column that reads as a panel that failed to load.
@@ -7469,6 +7574,7 @@ void VideoEditorWindow::syncTextInspector(const TlClip &c)
 	refreshTextPresets();
 	if (textEdit_->toPlainText() != c.text.text)
 		textEdit_->setPlainText(c.text.text);
+	syncVariationsInspector(c);
 	// Only when it actually differs: setCurrentFont on every refresh makes the
 	// combo re-resolve the family, which is needless work now that this runs
 	// on each mouse-move of a drag.
@@ -12499,6 +12605,25 @@ void VideoEditorWindow::onSave()
 		// one outcome, which is worse than no choice at all.
 		span.fromMs = std::max<qint64>(0, span.fromMs);
 		span.toMs = std::min(span.toMs, timelineView_->durationMs());
+		// Text variations: every combination is a version (Variations tab).
+		{
+			const QVector<text_variations::Slot> vs = text_variations::slotsOf(timelineView_->model());
+			const qint64 n = text_variations::combinationCount(vs);
+			constexpr qint64 kListMax = 2000;
+			if (n > kListMax)
+				QMessageBox::information(
+					this, QStringLiteral("Variations"),
+					QStringLiteral("The text variations make %1 versions; the Variations tab lists "
+						       "the first %2.")
+						.arg(n)
+						.arg(kListMax));
+			for (qint64 i = 0; i < std::min(n, kListMax); ++i) {
+				QStringList parts;
+				for (const QString &t : text_variations::textsAt(vs, text_variations::combinationAt(vs, i)))
+					parts << t.simplified();
+				ec.variantLabels << parts.join(QStringLiteral("  ·  "));
+			}
+		}
 		if (span.isValid() && span.durationMs() < timelineView_->durationMs()) {
 			ec.rangeSeconds = span.durationMs() / 1000.0;
 			ec.rangeLabel = QStringLiteral("Selection  (%1 – %2)")
@@ -12659,6 +12784,39 @@ void VideoEditorWindow::onSave()
 		o.duckOriginal = voDuck_->isChecked();
 	}
 
+	// Text variations: the same render, once per ticked version, with only the
+	// words swapped. Built from the WHOLE project (the Selection scope is a
+	// Single-video choice); voiceover and everything else as set above.
+	if (fullEdit() && dlg.batchMode()) {
+		const TimelineModel whole = timelineView_->model();
+		const QVector<text_variations::Slot> vs = text_variations::slotsOf(whole);
+		const qint64 total = text_variations::combinationCount(vs);
+		const QVector<int> picked = dlg.batchSelection();
+		if (picked.size() > 50 &&
+		    QMessageBox::question(this, QStringLiteral("Export variations"),
+					  QStringLiteral("This renders %1 videos of %2 s each. Continue?")
+						  .arg(picked.size())
+						  .arg(dlg.exportSeconds() / std::max<qsizetype>(1, picked.size()), 0, 'f', 1),
+					  QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) != QMessageBox::Yes)
+			return;
+		const QString prefix = batch_export::safePrefix(dlg.batchPrefix());
+		QVector<BatchExporter::Item> items;
+		for (int k : picked) {
+			const QVector<int> pick = text_variations::combinationAt(vs, k);
+			BatchExporter::Item it;
+			// Numbered as listed, so a file's number is its version whichever
+			// others were ticked.
+			it.name = text_variations::fileName(prefix, k + 1, int(std::min<qint64>(total, 1 << 30)),
+							    text_variations::textsAt(vs, pick));
+			it.useTimeline = true;
+			it.timeline = text_variations::applyCombination(whole, vs, pick);
+			items.push_back(it);
+		}
+		o.timeline = whole;
+		startBatchItems(o, items, dlg.batchPrefix(), dlg.folder(), dlg.batchOpenFolder());
+		return;
+	}
+
 	// Nothing to bake here any more: a shader is a component, so it runs inside
 	// the compositor the exporter already shares with the preview.
 
@@ -12696,6 +12854,13 @@ void VideoEditorWindow::startBatchExport(const ClipExporter::Options &base, cons
 		it.cut = base.cuts[size_t(i)];
 		items.push_back(it);
 	}
+	startBatchItems(base, items, prefix, baseFolder, openFolder);
+}
+
+void VideoEditorWindow::startBatchItems(const ClipExporter::Options &base,
+					const QVector<BatchExporter::Item> &items, const QString &prefix,
+					const QString &baseFolder, bool openFolder)
+{
 	if (items.isEmpty())
 		return;
 	const QString folder = batch_export::uniqueFolder(baseFolder, prefix);

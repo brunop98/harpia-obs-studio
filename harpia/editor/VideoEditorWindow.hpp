@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BatchExport.hpp"  // BatchExporter::Item, ClipExporter::Options
 #include "ClipExporter.hpp" // Options, for the batch export signature
 
 #include "TrackEditor.hpp"        // CutSegment (stored in EditorSnapshot)
@@ -269,6 +270,9 @@ private slots:
 			      const QString &prefix, const QString &baseFolder, bool openFolder);
 	void onBatchProgress(int index, int count, int overallPct, qint64 etaMs);
 	void onBatchFinished(int okCount, int failCount, bool canceled);
+	// Run any list of batch items (cuts or text-variation versions).
+	void startBatchItems(const ClipExporter::Options &base, const QVector<BatchExporter::Item> &items,
+			     const QString &prefix, const QString &baseFolder, bool openFolder);
 
 private:
 	BatchExporter *batch_ = nullptr;
@@ -480,7 +484,7 @@ private:
 	quint64 previewGen_ = 1;     // media, scripts, shaders: bumped when they change
 	bool frameCacheable_ = true; // cleared while composing if a frame was not exact
 	static constexpr int kPreviewCacheMB = 2048;
-	QByteArray previewSignature(qint64 outMs, QSize render, QSize logical) const;
+	QByteArray previewSignature(const TimelineModel &m, qint64 outMs, QSize render, QSize logical) const;
 	void invalidatePreviewCache();
 	QHash<int, QImage> stillImages_; // sourceId -> working copy (<= kStillWorkingMax, see StillWeight.hpp)
 	QHash<int, QSize> stillSizes_;   // sourceId -> the ORIGINAL's size, what geometry is measured in
@@ -799,6 +803,21 @@ private:
 	const TlClip *inspectedClip() const;   // the selected clip, or the lane's first caption
 	void syncTextInspector(const TlClip &c);
 	QPlainTextEdit *textEdit_ = nullptr;
+	// Text variations (timeline/TextVariations.hpp): the alternatives list and
+	// the preview switcher. previewVariant_ is which option of the SELECTED
+	// text clip the preview shows -- 0 is its own text -- and never changes
+	// what is saved; a new selection puts it back to 0.
+	QWidget *variationsBox_ = nullptr;
+	QPlainTextEdit *variationsEdit_ = nullptr;
+	QLabel *variantLabel_ = nullptr;
+	QPushButton *variantPrev_ = nullptr;
+	QPushButton *variantNext_ = nullptr;
+	int previewVariant_ = 0;
+	void syncVariationsInspector(const TlClip &c);
+	void stepPreviewVariant(int delta);
+	// The timeline as the preview shows it: the model, with the selected text
+	// clip on the variation being previewed.
+	TimelineModel previewModel() const;
 	QFontComboBox *fontCombo_ = nullptr;
 	QSpinBox *fontSizeSpin_ = nullptr;
 	QCheckBox *boldChk_ = nullptr;

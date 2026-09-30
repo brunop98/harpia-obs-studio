@@ -135,9 +135,15 @@ struct TlText {
 	// text as typed, which is the right thing to do with a style it cannot name.
 	int textCase = 0;
 
+	// Alternatives to `text`, one per version of the video (TextVariations.hpp):
+	// "I like cats", "I like vultures"... The clip's own text is the first
+	// version and is not repeated here. Empty = the clip has no variations.
+	// Content, not style: saved with the clip, never with a text preset.
+	QStringList variations;
+
 	bool operator==(const TlText &o) const
 	{
-		return text == o.text && fontFamily == o.fontFamily && fontPx == o.fontPx &&
+		return text == o.text && variations == o.variations && fontFamily == o.fontFamily && fontPx == o.fontPx &&
 		       bold == o.bold && italic == o.italic && color == o.color &&
 		       outlineWidth == o.outlineWidth && outlineColor == o.outlineColor &&
 		       boxEnabled == o.boxEnabled && boxColor == o.boxColor &&

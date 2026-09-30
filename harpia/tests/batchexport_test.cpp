@@ -1,10 +1,14 @@
 // Batch export through the real exporter: three cuts to three files with the
 // right lengths and names, a cut that cannot be exported is reported and the
-// rest still written, and Cancel stops after the clip being written.
+// rest still written, Cancel stops after the clip being written, and text
+// variations: one Full-editing timeline, one file per version, the same
+// footage with only the words changed.
 #include "editor/BatchExport.hpp"
 #include "editor/ClipExporter.hpp"
+#include "editor/timeline/TextVariations.hpp"
 
 #include <QCoreApplication>
+#include <QGuiApplication>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -31,6 +35,27 @@ static double durationOf(const QString &f)
 		{"-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", f});
 	p.waitForFinished(20000);
 	return p.readAllStandardOutput().trimmed().toDouble();
+}
+
+// One frame at `sec`, as raw 64x36 RGB bytes (small: enough to see the words).
+static QByteArray frameAt(const QString &f, double sec)
+{
+	QProcess p;
+	p.start(QStringLiteral("ffmpeg"), {"-v", "error", "-ss", QString::number(sec), "-i", f, "-frames:v", "1",
+					   "-vf", "scale=64:36", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"});
+	p.waitForFinished(20000);
+	return p.readAllStandardOutput();
+}
+
+static int bytesApart(const QByteArray &a, const QByteArray &b)
+{
+	if (a.size() != b.size() || a.isEmpty())
+		return -1;
+	int n = 0;
+	for (int i = 0; i < a.size(); ++i)
+		if (std::abs(int(uchar(a[i])) - int(uchar(b[i]))) > 24)
+			++n;
+	return n;
 }
 
 // Run a batch to the end (or until `cancelAfterFirst`), pumping events.
@@ -72,7 +97,7 @@ static Run runBatch(BatchExporter &b, const QString &in, const ClipExporter::Opt
 int main(int argc, char **argv)
 {
 	std::setvbuf(stdout, nullptr, _IONBF, 0);
-	QCoreApplication app(argc, argv);
+	QGuiApplication app(argc, argv); // text clips need fonts
 	const QString work = argc > 1 ? QString::fromLocal8Bit(argv[1]) : QStringLiteral(".");
 	const QString red = work + "/av_red.mp4";
 	if (!QFile::exists(red)) {
@@ -151,6 +176,67 @@ int main(int argc, char **argv)
 		ok(r.okCount >= 1 && r.okCount <= 2, "one or two clips got written before it took effect");
 		ok(!QFile::exists(folder + "/Stop_03.mp4"), "the last one was never started");
 		ok(!b.running(), "idle afterwards");
+	}
+
+	std::printf("\n-- text variations: one file per version --\n");
+	{
+		using namespace text_variations;
+		TimelineModel whole;
+		TlTrack words, footage;
+		TlClip txt;
+		txt.type = TlClip::Type::Text;
+		txt.outStartMs = 0;
+		txt.srcEndMs = 1500;
+		txt.text.text = QStringLiteral("I like dogs");
+		txt.text.fontPx = 220;
+		txt.text.boxEnabled = true;
+		txt.text.boxOpacity = 1.0;
+		txt.text.variations = {QStringLiteral("I like cats"), QStringLiteral(""),
+				       QStringLiteral("WWWWWWWWWWWWWWWW")};
+		words.clips = {txt};
+		TlClip v;
+		v.type = TlClip::Type::Video;
+		v.sourceId = 1;
+		v.srcStartMs = 0;
+		v.srcEndMs = 1500;
+		footage.clips = {v};
+		whole.tracks = {words, footage};
+
+		const QVector<Slot> vs = slotsOf(whole);
+		const qint64 total = combinationCount(vs);
+		ok(total == 3, "three versions (the blank line is not one)");
+		QVector<BatchExporter::Item> items;
+		for (qint64 k = 0; k < total; ++k) {
+			const QVector<int> pick = combinationAt(vs, k);
+			BatchExporter::Item it;
+			it.name = fileName(QStringLiteral("Pets"), int(k + 1), int(total), textsAt(vs, pick));
+			it.useTimeline = true;
+			it.timeline = applyCombination(whole, vs, pick);
+			items.push_back(it);
+		}
+		ClipExporter::Options tb = base;
+		tb.canvasW = 640;
+		tb.canvasH = 360;
+		tb.timelineFps = 15.0;
+		tb.timeline = whole;
+		tb.timelineSources[1] = red.toStdString();
+
+		const QString folder = batch_export::uniqueFolder(dir.path(), "Pets");
+		BatchExporter b;
+		const Run r = runBatch(b, red, tb, items, folder, false);
+		ok(r.done && r.okCount == 3 && r.failCount == 0, "all three versions exported");
+		const QString f1 = folder + "/Pets_01_I-like-dogs.mp4", f2 = folder + "/Pets_02_I-like-cats.mp4",
+			      f3 = folder + "/Pets_03_WWWWWWWWWWWWWWWW.mp4";
+		ok(QFile::exists(f1) && QFile::exists(f2) && QFile::exists(f3),
+		   "named prefix + number + text");
+		const double d1 = durationOf(f1), d3 = durationOf(f3);
+		std::printf("     lengths %.2f %.2f s\n", d1, d3);
+		ok(std::abs(d1 - 1.5) < 0.3 && std::abs(d3 - 1.5) < 0.3, "each the timeline's length");
+		const QByteArray a = frameAt(f1, 0.7), c = frameAt(f2, 0.7), w = frameAt(f3, 0.7);
+		const int ac = bytesApart(a, c), aw = bytesApart(a, w);
+		std::printf("     bytes apart: dogs/cats %d, dogs/WWW %d (of %d)\n", ac, aw, int(a.size()));
+		ok(ac > 0 && aw > ac, "the words differ between versions");
+		ok(aw < a.size() / 2, "and the footage around them is the same");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

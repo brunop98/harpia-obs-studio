@@ -255,6 +255,8 @@ inline QJsonObject clipToJson(const TlClip &c)
 	if (c.type == TlClip::Type::Text) {
 		QJsonObject tx = textStyleToJson(c.text);
 		tx[QStringLiteral("text")] = c.text.text; // the words travel with the clip
+		if (!c.text.variations.isEmpty())
+			tx[QStringLiteral("variations")] = QJsonArray::fromStringList(c.text.variations);
 		if (!c.words.isEmpty()) {
 			QJsonArray wa;
 			for (const ClipWordTime &w : c.words) {
@@ -474,6 +476,9 @@ inline TlClip clipFromJson(const QJsonObject &co)
 		const QJsonObject tx = co.value(QStringLiteral("textStyle")).toObject();
 		applyTextStyleFromJson(tx, c.text);
 		c.text.text = tx.value(QStringLiteral("text")).toString();
+		c.text.variations.clear();
+		for (const QJsonValue &vv : tx.value(QStringLiteral("variations")).toArray())
+			c.text.variations << vv.toString();
 		for (const QJsonValue &wv : tx.value(QStringLiteral("words")).toArray()) {
 			const QJsonObject wo = wv.toObject();
 			ClipWordTime w;

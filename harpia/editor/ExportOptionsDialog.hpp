@@ -74,6 +74,12 @@ public:
 			double speed = 1.0;
 		};
 		QVector<BatchCut> batchCuts;
+
+		// Full editing with text variations: one label per version ("I like
+		// cats · Blue sky"), for the Variations tab. Every version is the
+		// whole project, so each lasts `seconds`. Never set together with
+		// batchCuts -- the two tabs belong to different modes.
+		QStringList variantLabels;
 	};
 
 	explicit ExportOptionsDialog(const Context &ctx, QWidget *parent = nullptr);

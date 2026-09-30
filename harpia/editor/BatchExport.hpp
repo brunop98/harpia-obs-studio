@@ -85,9 +85,15 @@ inline QString summary(int okCount, int failCount, int total, bool canceled)
 class BatchExporter : public QObject {
 	Q_OBJECT
 public:
+	// One file. Either a Multi-Cut cut (`cut`), or -- when `useTimeline` --
+	// a whole Full-editing render of `timeline` (a text-variation version:
+	// the same project with other words), with everything else in `base`
+	// (canvas, frame rate, sources, voiceover) applied as for a single export.
 	struct Item {
 		QString name;          // file name without the extension
 		ClipExporter::Cut cut; // source index, range, speed
+		bool useTimeline = false;
+		TimelineModel timeline;
 	};
 	struct Result {
 		QString name;

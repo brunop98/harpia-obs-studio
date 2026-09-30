@@ -251,6 +251,10 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/batchplan_test.cpp" -o "$WORK/batchplan_test" $LF
 
+# Text variations: counting, order, substitution and file names (header-only).
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/textvariations_test.cpp" -o "$WORK/textvariations_test" $LF
+
 # Opaque frames tagged RGBX8888 composite to the same bytes as RGBA8888 in
 # every pose, and a mask still cuts them (the compositor retags first).
 g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
@@ -855,6 +859,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/searchpicker_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/componentrender_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/opaqueframe_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/batchplan_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/textvariations_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/stillweight_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewcache_test" || rc=1
 if command -v xvfb-run >/dev/null 2>&1; then

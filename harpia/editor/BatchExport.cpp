@@ -77,13 +77,19 @@ void BatchExporter::run(QString primaryInput, ClipExporter::Options base, QVecto
 		// export of a single cut, so crop, size, quality, audio and the
 		// cut's speed all land exactly as they do in the joined video.
 		ClipExporter::Options o = base;
-		o.cuts.clear();
-		o.cuts.push_back(item.cut);
-		o.startMs = 0;
-		o.endMs = 0;
-		o.speed = 1.0;
-		o.timeline = TimelineModel();
-		o.voiceovers.clear();
+		if (item.useTimeline) {
+			// A version of the whole project: only the timeline differs from
+			// the single export `base` describes, voiceover and all.
+			o.timeline = item.timeline;
+		} else {
+			o.cuts.clear();
+			o.cuts.push_back(item.cut);
+			o.startMs = 0;
+			o.endMs = 0;
+			o.speed = 1.0;
+			o.timeline = TimelineModel();
+			o.voiceovers.clear();
+		}
 
 		bool ok = false, itemCanceled = false;
 		QString err;

@@ -349,7 +349,8 @@ if(OS_WINDOWS)
     # Compiled into the .exe as the application icon (Explorer/taskbar).
     resources/harpia.rc)
   # DPAPI (CryptProtectData) seals the transcription API key -- SecretStore.cpp.
-  target_link_libraries(harpia-recorder PRIVATE crypt32)
+  # dbghelp: the stack and the minidump in a crash report -- CrashGuard.cpp.
+  target_link_libraries(harpia-recorder PRIVATE crypt32 dbghelp)
 elseif(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
   target_sources(harpia-recorder PRIVATE
     platform/nix/NixIdleMonitor.cpp

@@ -84,6 +84,12 @@ public:
 		// good-looking file, not a mediocre one it never chose.
 		int videoCrf = 12;    // x264/vp9 constant quality (lower = better; 0 = lossless)
 		bool keepAudio = true; // MP4/MKV/MOV keep the (trimmed) audio; GIF/WebM silent
+		// Give this thread's GL back when run() returns. A batch runs several
+		// exports on one thread and sets this false, keeping one context for
+		// all of them and releasing it once at the end itself: making and
+		// destroying a context -- and the hidden window behind it -- per file,
+		// off the GUI thread, is the pattern a single export never does.
+		bool releaseThreadGl = true;
 		// Output size, in pixels. 0 = whatever the path would produce anyway (the
 		// source, the cropped area, or the timeline canvas). Set BOTH or neither:
 		// the dialog derives the pair so the aspect is decided in one place

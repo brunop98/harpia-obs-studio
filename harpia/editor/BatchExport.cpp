@@ -1,5 +1,7 @@
 #include "BatchExport.hpp"
 
+#include "component/ShaderComponent.hpp"
+
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -77,6 +79,7 @@ void BatchExporter::run(QString primaryInput, ClipExporter::Options base, QVecto
 		// export of a single cut, so crop, size, quality, audio and the
 		// cut's speed all land exactly as they do in the joined video.
 		ClipExporter::Options o = base;
+		o.releaseThreadGl = false; // released once, after the last file (below)
 		if (item.useTimeline) {
 			// A version of the whole project: only the timeline differs from
 			// the single export `base` describes, voiceover and all.
@@ -140,6 +143,9 @@ void BatchExporter::run(QString primaryInput, ClipExporter::Options base, QVecto
 			++failCount;
 		emit itemFinished(i, ok, path, r.error);
 	}
+	// This thread's GL, released ONCE while the thread is still fully itself
+	// (see ClipExporter::Options::releaseThreadGl).
+	ShaderComponents::releaseThreadResources();
 	// The per-clip exporter stops its own count at 95 before the flush, so
 	// the batch says 100 itself once everything is written.
 	if (!canceled)

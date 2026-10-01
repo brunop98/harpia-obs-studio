@@ -511,8 +511,14 @@ void ClipExporter::run(const QString &inPath, const QString &outPath, const Opti
 	// with the export finished and a good file on disk. See
 	// ShaderComponents::releaseThreadResources.
 	struct ReleaseGl {
-		~ReleaseGl() { ShaderComponents::releaseThreadResources(); }
+		bool on = true;
+		~ReleaseGl()
+		{
+			if (on)
+				ShaderComponents::releaseThreadResources();
+		}
 	} releaseGl;
+	releaseGl.on = opts.releaseThreadGl; // a batch releases once, at its end
 
 	if (opts.format == Format::Gif) {
 		if (!opts.cuts.empty()) {

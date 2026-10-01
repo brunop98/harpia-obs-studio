@@ -4695,8 +4695,9 @@ void VideoEditorWindow::rebuildVariantEditors(int count)
 		cap->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 		auto *del = new QPushButton(row);
 		del->setIcon(uiIcon(Glyph::Cross, 11));
-		del->setFixedSize(22, 20);
-		del->setStyleSheet(QStringLiteral("padding:0px; min-width:0px;"));
+		del->setFixedSize(24, 22);
+		del->setStyleSheet(
+			QStringLiteral("padding:0px; min-width:24px; max-width:24px; min-height:22px; max-height:22px;"));
 		del->setFocusPolicy(Qt::NoFocus);
 		del->setToolTip(QStringLiteral("Remove this text"));
 		hdr->addWidget(cap, 1);
@@ -6902,7 +6903,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	// buttons never take the focus, so the selection stays where it was.
 	{
 		auto *row = new QHBoxLayout;
-		row->setSpacing(4);
+		row->setSpacing(5);
 		const auto wrapWith = [this](const QString &open, const QString &close) {
 			QPlainTextEdit *ed = tagTarget_ ? tagTarget_.data() : textEdit_;
 			if (!ed)
@@ -6920,10 +6921,17 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		const auto tagButton = [&](const QString &label, const QString &tip, const QString &style,
 					    std::function<void()> act) {
 			auto *b = new QPushButton(label, textBox_);
-			b->setFixedSize(34, 28);
+			// Big enough to hit and to read: seven of them still fit across
+			// the Inspector.
+			b->setFixedSize(42, 36);
 			b->setFocusPolicy(Qt::NoFocus);
 			b->setToolTip(tip);
-			b->setStyleSheet(QStringLiteral("padding:0px; min-width:0px;") + style);
+			// The size in the style sheet too: a style sheet's own min-width
+			// is applied after setFixedSize and wins, which is how these
+			// ended up squeezed to a sliver.
+			b->setStyleSheet(QStringLiteral("padding:0px; min-width:42px; max-width:42px; min-height:36px; "
+							"max-height:36px; font-size:16px;") +
+					 style);
 			connect(b, &QPushButton::clicked, this, std::move(act));
 			row->addWidget(b);
 		};
@@ -7028,8 +7036,9 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		variantPrev_->setIcon(uiIcon(Glyph::StepBack, 14));
 		variantNext_->setIcon(uiIcon(Glyph::StepForward, 14));
 		for (QPushButton *b : {variantPrev_, variantNext_}) {
-			b->setFixedSize(34, 28);
-			b->setStyleSheet(QStringLiteral("padding:0px; min-width:0px;"));
+			b->setFixedSize(42, 32);
+			b->setStyleSheet(QStringLiteral(
+				"padding:0px; min-width:42px; max-width:42px; min-height:32px; max-height:32px;"));
 		}
 		variantPrev_->setToolTip(QStringLiteral("Preview the previous text"));
 		variantNext_->setToolTip(QStringLiteral("Preview the next text"));

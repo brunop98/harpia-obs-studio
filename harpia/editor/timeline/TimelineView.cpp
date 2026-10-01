@@ -1,6 +1,7 @@
 #include "TimelineView.hpp"
 
 #include "SoundRules.hpp"
+#include "TextVariations.hpp"
 
 #include "editor/Filmstrip.hpp"
 
@@ -1863,8 +1864,12 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 		if (isText)
 			// The cased text, so the strip's label reads the way the
 			// canvas does rather than showing what was typed.
-			what = QStringLiteral("T  %1").arg(
-				tlPlainText(c.text).split(QLatin1Char('\n')).value(0));
+			// A Random text says how many texts it has: "T ×3".
+			what = (c.text.random ? QStringLiteral("T \u00D7%2  %1")
+							.arg(tlPlainText(c.text).split(QLatin1Char('\n')).value(0))
+							.arg(text_variations::optionsOf(c.text).size())
+					      : QStringLiteral("T  %1").arg(
+							tlPlainText(c.text).split(QLatin1Char('\n')).value(0)));
 		else if (isImage)
 			what = QStringLiteral("IMG #%1").arg(c.sourceId);
 		else

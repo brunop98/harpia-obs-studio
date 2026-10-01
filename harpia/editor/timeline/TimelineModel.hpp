@@ -140,11 +140,16 @@ struct TlText {
 	// "I like cats", "I like vultures"... The clip's own text is the first
 	// version and is not repeated here. Empty = the clip has no variations.
 	// Content, not style: saved with the clip, never with a text preset.
+	// Each entry may run over several lines.
 	QStringList variations;
+	// A "Random text" clip: one of the two kinds of text you can add. Only a
+	// random text makes versions -- a plain Text clip's `variations` (if it
+	// ever has any) are ignored, so the two kinds never blur together.
+	bool random = false;
 
 	bool operator==(const TlText &o) const
 	{
-		return text == o.text && variations == o.variations && fontFamily == o.fontFamily && fontPx == o.fontPx &&
+		return text == o.text && variations == o.variations && random == o.random && fontFamily == o.fontFamily && fontPx == o.fontPx &&
 		       bold == o.bold && italic == o.italic && color == o.color &&
 		       outlineWidth == o.outlineWidth && outlineColor == o.outlineColor &&
 		       boxEnabled == o.boxEnabled && boxColor == o.boxColor &&

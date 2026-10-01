@@ -191,6 +191,7 @@ int main(int argc, char **argv)
 		txt.text.fontPx = 220;
 		txt.text.boxEnabled = true;
 		txt.text.boxOpacity = 1.0;
+		txt.text.random = true;
 		txt.text.variations = {QStringLiteral("I like cats"), QStringLiteral(""),
 				       QStringLiteral("WWWWWWWWWWWWWWWW")};
 		words.clips = {txt};

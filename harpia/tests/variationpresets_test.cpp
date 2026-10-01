@@ -105,6 +105,7 @@ int main(int argc, char **argv)
 	c.type = TlClip::Type::Text;
 	c.srcEndMs = 2000;
 	c.text.text = QStringLiteral("I like dogs");
+	c.text.random = true;
 	t.clips = {c};
 	m.tracks = {t};
 	tv->setModelAndCommit(m);

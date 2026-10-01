@@ -257,6 +257,8 @@ inline QJsonObject clipToJson(const TlClip &c)
 		tx[QStringLiteral("text")] = c.text.text; // the words travel with the clip
 		if (!c.text.variations.isEmpty())
 			tx[QStringLiteral("variations")] = QJsonArray::fromStringList(c.text.variations);
+		if (c.text.random)
+			tx[QStringLiteral("random")] = true;
 		if (!c.words.isEmpty()) {
 			QJsonArray wa;
 			for (const ClipWordTime &w : c.words) {
@@ -479,6 +481,9 @@ inline TlClip clipFromJson(const QJsonObject &co)
 		c.text.variations.clear();
 		for (const QJsonValue &vv : tx.value(QStringLiteral("variations")).toArray())
 			c.text.variations << vv.toString();
+		// Projects from before the two kinds existed: a caption with
+		// variations was the random kind.
+		c.text.random = tx.value(QStringLiteral("random")).toBool(!c.text.variations.isEmpty());
 		for (const QJsonValue &wv : tx.value(QStringLiteral("words")).toArray()) {
 			const QJsonObject wo = wv.toObject();
 			ClipWordTime w;

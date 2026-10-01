@@ -31,6 +31,7 @@ static TlClip textClip(const QString &text, const QStringList &vars, qint64 at)
 	c.type = TlClip::Type::Text;
 	c.text.text = text;
 	c.text.variations = vars;
+	c.text.random = true;
 	c.outStartMs = at;
 	c.srcStartMs = 0;
 	c.srcEndMs = 1000;
@@ -78,6 +79,9 @@ int main(int argc, char **argv)
 		   "top track first, then by start time");
 		ok(combinationCount(vs) == 3 * 2 * 2, "3 x 2 x 2 = 12 videos");
 		ok(combinationCount({}) == 0, "no varying clips: no batch");
+		TimelineModel plainKind = m;
+		plainKind.tracks[0].clips[0].text.random = false;
+		ok(slotsOf(plainKind).size() == 2, "a plain Text clip never varies, whatever it carries");
 
 		const QVector<int> first = combinationAt(vs, 0);
 		ok(first == QVector<int>({0, 0, 0}), "version 1 is every clip on its own text");

@@ -47,8 +47,21 @@ inline QStringList optionsOf(const TlText &t)
 	return out;
 }
 
+// Which option the alternatives-list entry `entry` is (1 = the first
+// alternative), or -1 for a blank entry, which is not a version.
+inline int optionIndexOfEntry(const TlText &t, int entry)
+{
+	if (entry < 0 || entry >= t.variations.size() || t.variations[entry].trimmed().isEmpty())
+		return -1;
+	int k = 1;
+	for (int i = 0; i < entry; ++i)
+		if (!t.variations[i].trimmed().isEmpty())
+			++k;
+	return k;
+}
+
 // The varying text clips, in timeline order: tracks top to bottom, then clips
-// by where they start.
+// by where they start. Only Random text clips vary.
 inline QVector<Slot> slotsOf(const TimelineModel &m)
 {
 	QVector<Slot> out;
@@ -56,7 +69,8 @@ inline QVector<Slot> slotsOf(const TimelineModel &m)
 		const TlTrack &t = m.tracks[ti];
 		QVector<int> order;
 		for (int ci = 0; ci < t.clips.size(); ++ci)
-			if (t.clips[ci].type == TlClip::Type::Text && optionsOf(t.clips[ci].text).size() > 1)
+			if (t.clips[ci].type == TlClip::Type::Text && t.clips[ci].text.random &&
+			    optionsOf(t.clips[ci].text).size() > 1)
 				order.push_back(ci);
 		std::stable_sort(order.begin(), order.end(),
 				 [&t](int a, int b) { return t.clips[a].outStartMs < t.clips[b].outStartMs; });

@@ -52,7 +52,7 @@ static void compareText(const QString &w, const TlText &a, const TlText &b)
 	F(w, a, b, text); F(w, a, b, fontFamily); F(w, a, b, fontPx); F(w, a, b, bold); F(w, a, b, italic);
 	F(w, a, b, color); F(w, a, b, outlineWidth); F(w, a, b, outlineColor); F(w, a, b, boxEnabled);
 	F(w, a, b, boxColor); F(w, a, b, boxOpacity); F(w, a, b, boxPadX); F(w, a, b, boxPadY);
-	F(w, a, b, boxRadius); F(w, a, b, align); F(w, a, b, textCase); F(w, a, b, variations);
+	F(w, a, b, boxRadius); F(w, a, b, align); F(w, a, b, textCase); F(w, a, b, variations); F(w, a, b, random);
 }
 
 static void compareClip(const QString &w, const TlClip &a, const TlClip &b)
@@ -224,6 +224,7 @@ static TimelineModel everything()
 	txt.text.boxRadius = 17;
 	txt.text.align = 2;
 	txt.text.textCase = 2;
+	txt.text.random = true;
 	txt.text.variations = {QStringLiteral("Era uma vez\num gato"), QStringLiteral("I like \"vultures\" – ção"),
 			       QStringLiteral("")};
 	txt.words = {ClipWordTime{QStringLiteral("Era"), 0, 300}, ClipWordTime{QStringLiteral("uma"), 310, 520},

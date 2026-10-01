@@ -156,6 +156,17 @@
 
 namespace harpia {
 
+namespace {
+// Shown on every caption text field: the tags it takes.
+const QString kRichTextTip = QStringLiteral(
+	"Rich text, as in Unity:\n"
+	"  <b>bold</b>   <i>italic</i>   <u>underline</u>   <s>strike</s>\n"
+	"  <color=#ff8800>colour</color>   (#rgb, #rrggbb, #rrggbbaa or a name: red, yellow…)\n"
+	"  <size=90>size</size>   (also <size=150%> and <size=+20>)\n"
+	"  <alpha=#80>see-through   <mark=#ffff0080>highlight</mark>   <br> new line\n"
+	"  <noparse><b></noparse> shows a tag as typed");
+} // namespace
+
 
 
 namespace {
@@ -1005,6 +1016,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		QStringLiteral("Add a text clip at the playhead (font, colour, outline and background "
 			       "box are set in the Inspector)"));
 	connect(addTextAct_, &QAction::triggered, this, &VideoEditorWindow::addTextClip);
+	addRandomTextAct_ = addMenu->addAction(QStringLiteral("Random text"));
+	addRandomTextAct_->setToolTip(QStringLiteral(
+		"Add a text with several texts to choose from: the video is exported once per text "
+		"(Export → Variations), the footage the same in every one"));
+	connect(addRandomTextAct_, &QAction::triggered, this, &VideoEditorWindow::addRandomTextClip);
 	subtitleAct_ = addMenu->addAction(QStringLiteral("Subtitles from speech\u2026"));
 	subtitleAct_->setToolTip(QStringLiteral(
 		"Transcribe the selected clips' speech (OpenAI) and put caption clips on a "
@@ -4608,7 +4624,7 @@ TimelineModel VideoEditorWindow::previewModel() const
 		return m;
 	TlClip &c = m.tracks[t].clips[ci];
 	const QStringList opts = text_variations::optionsOf(c.text);
-	if (c.type == TlClip::Type::Text && previewVariant_ < opts.size()) {
+	if (c.type == TlClip::Type::Text && c.text.random && previewVariant_ < opts.size()) {
 		c.text.text = opts[previewVariant_];
 		c.words.clear();
 	}
@@ -4618,7 +4634,7 @@ TimelineModel VideoEditorWindow::previewModel() const
 void VideoEditorWindow::stepPreviewVariant(int delta)
 {
 	const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
-	if (!c || c->type != TlClip::Type::Text)
+	if (!c || c->type != TlClip::Type::Text || !c->text.random)
 		return;
 	const int n = text_variations::optionsOf(c->text).size();
 	if (n <= 1)
@@ -4628,21 +4644,149 @@ void VideoEditorWindow::stepPreviewVariant(int delta)
 	requestPreview(-1, timelinePlayheadMs());
 }
 
-void VideoEditorWindow::syncVariationsInspector(const TlClip &c)
+void VideoEditorWindow::syncVariationsInspector(const TlClip &c, bool texts)
 {
-	if (!variationsEdit_)
+	if (!variantListLayout_ || c.type != TlClip::Type::Text || !c.text.random)
 		return;
-	const QString joined = c.text.variations.join(QLatin1Char('\n'));
-	if (variationsEdit_->toPlainText() != joined) {
-		const QSignalBlocker b(variationsEdit_);
-		variationsEdit_->setPlainText(joined);
-	}
+	const QStringList &vars = c.text.variations;
+	if (texts && variantEdits_.size() != vars.size())
+		rebuildVariantEditors(int(vars.size()));
 	const int n = text_variations::optionsOf(c.text).size();
 	previewVariant_ = std::clamp(previewVariant_, 0, std::max(0, n - 1));
-	variantLabel_->setText(n <= 1 ? QStringLiteral("No variations yet")
-				      : QStringLiteral("Preview: %1 of %2").arg(previewVariant_ + 1).arg(n));
+	for (int i = 0; i < variantEdits_.size() && i < vars.size(); ++i) {
+		QPlainTextEdit *ed = variantEdits_[i];
+		// Only from the model when asked: a preview change arrives from a
+		// box's cursor signal, which fires BEFORE that box's own edit has
+		// reached the model -- writing the model's text back then would
+		// undo the keystroke being typed.
+		if (texts && ed->toPlainText() != vars[i]) {
+			const QSignalBlocker b(ed);
+			ed->setPlainText(vars[i]);
+		}
+		// The text the preview is showing is outlined.
+		const bool shown = previewVariant_ > 0 && text_variations::optionIndexOfEntry(c.text, i) == previewVariant_;
+		ed->setStyleSheet(shown ? QStringLiteral("QPlainTextEdit { border:1px solid #4c8dff; }") : QString());
+	}
+	textEdit_->setStyleSheet(previewVariant_ == 0 && n > 1 ? QStringLiteral("QPlainTextEdit { border:1px solid #4c8dff; }")
+							       : QString());
+	variantLabel_->setText(n <= 1 ? QStringLiteral("Add a text to make a second version")
+				      : QStringLiteral("Preview: text %1 of %2").arg(previewVariant_ + 1).arg(n));
 	variantPrev_->setEnabled(n > 1);
 	variantNext_->setEnabled(n > 1);
+}
+
+void VideoEditorWindow::rebuildVariantEditors(int count)
+{
+	// The old rows may hold the button whose click got us here: let them go
+	// once that click has returned.
+	for (QWidget *row : variantRows_) {
+		row->hide();
+		row->deleteLater();
+	}
+	variantRows_.clear();
+	variantEdits_.clear();
+	for (int i = 0; i < count; ++i) {
+		auto *row = new QWidget(variationsBox_);
+		auto *rl = new QVBoxLayout(row);
+		rl->setContentsMargins(0, 0, 0, 0);
+		rl->setSpacing(2);
+		auto *hdr = new QHBoxLayout;
+		auto *cap = new QLabel(QStringLiteral("Text %1").arg(i + 2), row);
+		cap->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+		auto *del = new QPushButton(row);
+		del->setIcon(uiIcon(Glyph::Cross, 11));
+		del->setFixedSize(22, 20);
+		del->setStyleSheet(QStringLiteral("padding:0px; min-width:0px;"));
+		del->setFocusPolicy(Qt::NoFocus);
+		del->setToolTip(QStringLiteral("Remove this text"));
+		hdr->addWidget(cap, 1);
+		hdr->addWidget(del);
+		rl->addLayout(hdr);
+		auto *ed = new QPlainTextEdit(row);
+		ed->setFixedHeight(48);
+		ed->setPlaceholderText(QStringLiteral("Another text for this caption… (Enter for a new line)"));
+		ed->setToolTip(kRichTextTip);
+		rl->addWidget(ed);
+		variantListLayout_->addWidget(row);
+		variantRows_.push_back(row);
+		variantEdits_.push_back(ed);
+		connect(del, &QPushButton::clicked, this, [this, i]() { removeVariantText(i); });
+		connect(ed, &QPlainTextEdit::textChanged, this, [this, i, ed]() {
+			if (syncingClip_)
+				return;
+			const QString t = ed->toPlainText();
+			editSelectedClip([i, &t](TlClip &c) {
+				if (i < c.text.variations.size())
+					c.text.variations[i] = t;
+			});
+			if (const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr)
+				showPreviewVariant(text_variations::optionIndexOfEntry(c->text, i));
+		});
+		connect(ed, &QPlainTextEdit::cursorPositionChanged, this, [this, i, ed]() {
+			if (syncingClip_ || !ed->hasFocus())
+				return;
+			if (const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr)
+				showPreviewVariant(text_variations::optionIndexOfEntry(c->text, i));
+		});
+	}
+}
+
+void VideoEditorWindow::showPreviewVariant(int option)
+{
+	const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (option < 0 || !c || c->type != TlClip::Type::Text || !c->text.random)
+		return;
+	if (option == previewVariant_)
+		return;
+	previewVariant_ = option;
+	syncVariationsInspector(*c, false);
+	requestPreview(-1, timelinePlayheadMs());
+}
+
+void VideoEditorWindow::addVariantText()
+{
+	const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!c || c->type != TlClip::Type::Text)
+		return;
+	editSelectedClip([](TlClip &c) {
+		c.text.random = true;
+		c.text.variations.append(QString());
+	});
+	syncClipInspector();
+	if (!variantEdits_.isEmpty())
+		variantEdits_.last()->setFocus();
+}
+
+void VideoEditorWindow::removeVariantText(int index)
+{
+	editSelectedClip([index](TlClip &c) {
+		if (index >= 0 && index < c.text.variations.size())
+			c.text.variations.removeAt(index);
+	});
+	previewVariant_ = 0;
+	syncClipInspector();
+	requestPreview(-1, timelinePlayheadMs());
+}
+
+void VideoEditorWindow::addRandomTextClip()
+{
+	if (!timelineView_)
+		return;
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	TlClip c;
+	c.type = TlClip::Type::Text;
+	c.srcStartMs = 0;
+	c.srcEndMs = 4000;
+	c.outStartMs = timelinePlayheadMs();
+	c.text.text = QStringLiteral("Your text");
+	c.text.random = true;
+	c.text.variations = {QStringLiteral("Your other text")}; // two versions from the start
+	timelineView_->addClipOnFreeLane(TlTrack::Kind::Video, c);
+	previewVariant_ = 0;
+	syncPreviewTransformTarget();
+	syncClipInspector();
+	showTimelineFrame(timelinePlayheadMs());
 }
 
 void VideoEditorWindow::invalidatePreviewCache()
@@ -6725,9 +6869,9 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	auto *tv = new QVBoxLayout(textBox_);
 	tv->setContentsMargins(0, 6, 0, 0);
 	tv->setSpacing(4);
-	auto *tHdr = new QLabel(QStringLiteral("Text"), textBox_);
-	tHdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
-	tv->addWidget(tHdr);
+	textHeader_ = new QLabel(QStringLiteral("Text"), textBox_);
+	textHeader_->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
+	tv->addWidget(textHeader_);
 
 	// Style presets: save the look you settled on, apply it to any other caption.
 	auto *presetRow = new QHBoxLayout;
@@ -6753,39 +6897,33 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(presetDel, &QPushButton::clicked, this, &VideoEditorWindow::deleteSelectedTextPreset);
 	refreshTextPresets();
 
-	textEdit_ = new QPlainTextEdit(textBox_);
-	textEdit_->setPlaceholderText(QStringLiteral("Type your caption… (Enter for a new line)"));
-	textEdit_->setFixedHeight(56);
-	textEdit_->setToolTip(QStringLiteral(
-		"Rich text, as in Unity:\n"
-		"  <b>bold</b>   <i>italic</i>   <u>underline</u>   <s>strike</s>\n"
-		"  <color=#ff8800>colour</color>   (#rgb, #rrggbb, #rrggbbaa or a name: red, yellow…)\n"
-		"  <size=90>size</size>   (also <size=150%> and <size=+20>)\n"
-		"  <alpha=#80>see-through   <mark=#ffff0080>highlight</mark>   <br> new line\n"
-		"  <noparse><b></noparse> shows a tag as typed"));
-	tv->addWidget(textEdit_);
-	// Quick tags: wrap the selected words (or put an empty pair at the caret).
+	// Quick tags, above every text field of the clip: wrap the selected words
+	// in the field being typed in (or put an empty pair at its caret). The
+	// buttons never take the focus, so the selection stays where it was.
 	{
 		auto *row = new QHBoxLayout;
-		row->setSpacing(3);
+		row->setSpacing(4);
 		const auto wrapWith = [this](const QString &open, const QString &close) {
-			QTextCursor cur = textEdit_->textCursor();
+			QPlainTextEdit *ed = tagTarget_ ? tagTarget_.data() : textEdit_;
+			if (!ed)
+				return;
+			QTextCursor cur = ed->textCursor();
 			const QString sel = cur.selectedText().replace(QChar(0x2029), QLatin1Char('\n'));
 			cur.beginEditBlock();
 			cur.insertText(open + sel + close);
 			cur.endEditBlock();
 			if (sel.isEmpty()) // the caret between the pair, ready to type
 				cur.movePosition(QTextCursor::Left, QTextCursor::MoveAnchor, int(close.size()));
-			textEdit_->setTextCursor(cur);
-			textEdit_->setFocus();
+			ed->setTextCursor(cur);
+			ed->setFocus();
 		};
 		const auto tagButton = [&](const QString &label, const QString &tip, const QString &style,
 					    std::function<void()> act) {
 			auto *b = new QPushButton(label, textBox_);
-			b->setFixedSize(28, 24);
+			b->setFixedSize(34, 28);
+			b->setFocusPolicy(Qt::NoFocus);
 			b->setToolTip(tip);
-			if (!style.isEmpty())
-				b->setStyleSheet(style);
+			b->setStyleSheet(QStringLiteral("padding:0px; min-width:0px;") + style);
 			connect(b, &QPushButton::clicked, this, std::move(act));
 			row->addWidget(b);
 		};
@@ -6815,12 +6953,30 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 			  });
 		tagButton(QStringLiteral("A+"), QStringLiteral("Bigger: <size=150%>…</size>"), QString(),
 			  [wrapWith]() { wrapWith(QStringLiteral("<size=150%>"), QStringLiteral("</size>")); });
-		tagButton(QStringLiteral("▮"), QStringLiteral("Highlight: <mark=#ffff0080>…</mark>"),
-			  QStringLiteral("color:#e8d44d;"),
+		tagButton(QStringLiteral("H"), QStringLiteral("Highlight: <mark=#ffff0080>…</mark>"),
+			  QStringLiteral("color:#1b1b1b;background:#e8d44d;font-weight:bold;"),
 			  [wrapWith]() { wrapWith(QStringLiteral("<mark=#ffff0080>"), QStringLiteral("</mark>")); });
 		row->addStretch(1);
 		tv->addLayout(row);
+		// The field the tags go into: whichever of this clip's text fields
+		// was typed in last (the main text until another is clicked).
+		connect(qApp, &QApplication::focusChanged, this, [this](QWidget *, QWidget *now) {
+			auto *ed = qobject_cast<QPlainTextEdit *>(now);
+			if (ed && (ed == textEdit_ || variantEdits_.contains(ed)))
+				tagTarget_ = ed;
+		});
 	}
+
+	// "Version 1" over the main text, for a Random text only: it is the first
+	// of the texts, not something apart from them.
+	textMainCap_ = new QLabel(QStringLiteral("Text 1"), textBox_);
+	textMainCap_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+	tv->addWidget(textMainCap_);
+	textEdit_ = new QPlainTextEdit(textBox_);
+	textEdit_->setPlaceholderText(QStringLiteral("Type your caption… (Enter for a new line)"));
+	textEdit_->setFixedHeight(56);
+	textEdit_->setToolTip(kRichTextTip);
+	tv->addWidget(textEdit_);
 	connect(textEdit_, &QPlainTextEdit::textChanged, this, [this]() {
 		if (syncingClip_)
 			return;
@@ -6840,25 +6996,58 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 				c.posY += double(newH - oldH) * std::max(0.001, c.scale) / 2.0 / canvas.height();
 		});
 	});
+	// Clicking into a Random text's first text previews it.
+	connect(textEdit_, &QPlainTextEdit::cursorPositionChanged, this, [this]() {
+		if (!syncingClip_ && textEdit_->hasFocus())
+			showPreviewVariant(0);
+	});
 
-	// Variations: other words for this caption, one per line -- each makes its
-	// own version of the video on export (Export → Variations).
+	// Random text: the other texts, each in its own box (a text can run over
+	// several lines), + to add one, × to remove one. Every one is its own
+	// version of the video on export (Export → Variations), styled like the
+	// first and taking the same tags.
 	variationsBox_ = new QWidget(textBox_);
 	{
 		auto *vl = new QVBoxLayout(variationsBox_);
 		vl->setContentsMargins(0, 0, 0, 0);
-		vl->setSpacing(3);
-		auto *cap = new QLabel(QStringLiteral("Variations — one per line; each exports its own video"),
-				       variationsBox_);
-		cap->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
-		vl->addWidget(cap);
-		// Saved lists: type a list once, put it on any caption again.
+		vl->setSpacing(4);
+		auto *list = new QWidget(variationsBox_);
+		variantListLayout_ = new QVBoxLayout(list);
+		variantListLayout_->setContentsMargins(0, 0, 0, 0);
+		variantListLayout_->setSpacing(4);
+		vl->addWidget(list);
+		auto *add = new QPushButton(QStringLiteral("+  Add text"), variationsBox_);
+		add->setObjectName(QStringLiteral("addVariantButton"));
+		add->setToolTip(QStringLiteral("Add another text: one more version of the video"));
+		vl->addWidget(add);
+		connect(add, &QPushButton::clicked, this, &VideoEditorWindow::addVariantText);
+
+		auto *row = new QHBoxLayout;
+		variantPrev_ = new QPushButton(variationsBox_);
+		variantNext_ = new QPushButton(variationsBox_);
+		variantPrev_->setIcon(uiIcon(Glyph::StepBack, 14));
+		variantNext_->setIcon(uiIcon(Glyph::StepForward, 14));
+		for (QPushButton *b : {variantPrev_, variantNext_}) {
+			b->setFixedSize(34, 28);
+			b->setStyleSheet(QStringLiteral("padding:0px; min-width:0px;"));
+		}
+		variantPrev_->setToolTip(QStringLiteral("Preview the previous text"));
+		variantNext_->setToolTip(QStringLiteral("Preview the next text"));
+		variantLabel_ = new QLabel(variationsBox_);
+		row->addWidget(variantPrev_);
+		row->addWidget(variantLabel_, 1, Qt::AlignCenter);
+		row->addWidget(variantNext_);
+		vl->addLayout(row);
+		connect(variantPrev_, &QPushButton::clicked, this, [this]() { stepPreviewVariant(-1); });
+		connect(variantNext_, &QPushButton::clicked, this, [this]() { stepPreviewVariant(+1); });
+
+		// Saved lists: type the texts once, put them on any Random text again.
 		auto *presetRow = new QHBoxLayout;
 		variationPresetCombo_ = new QComboBox(variationsBox_);
 		variationPresetCombo_->setToolTip(
-			QStringLiteral("Load a saved list of variations. The caption keeps its own text."));
+			QStringLiteral("Load a saved list of texts (Text 2 onwards). Text 1 stays as it is."));
 		auto *vSave = new QPushButton(QStringLiteral("Save…"), variationsBox_);
-		vSave->setToolTip(QStringLiteral("Save this caption's variations under a name"));
+		vSave->setToolTip(QStringLiteral("Save Text 2 onwards under a name"));
 		auto *vDel = new QPushButton(variationsBox_);
 		vDel->setIcon(uiIcon(Glyph::Cross, 13));
 		vDel->setFixedWidth(28);
@@ -6874,34 +7063,6 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		connect(vSave, &QPushButton::clicked, this, &VideoEditorWindow::saveVariationPresetFromSelection);
 		connect(vDel, &QPushButton::clicked, this, &VideoEditorWindow::deleteSelectedVariationPreset);
 		refreshVariationPresets();
-		variationsEdit_ = new QPlainTextEdit(variationsBox_);
-		variationsEdit_->setPlaceholderText(QStringLiteral("I like cats\nI like vultures\nI like parrots"));
-		variationsEdit_->setFixedHeight(64);
-		vl->addWidget(variationsEdit_);
-		auto *row = new QHBoxLayout;
-		variantPrev_ = new QPushButton(QStringLiteral("◀"), variationsBox_);
-		variantNext_ = new QPushButton(QStringLiteral("▶"), variationsBox_);
-		for (QPushButton *b : {variantPrev_, variantNext_})
-			b->setFixedWidth(28);
-		variantPrev_->setToolTip(QStringLiteral("Preview the previous variation"));
-		variantNext_->setToolTip(QStringLiteral("Preview the next variation"));
-		variantLabel_ = new QLabel(variationsBox_);
-		row->addWidget(variantPrev_);
-		row->addWidget(variantLabel_, 1, Qt::AlignCenter);
-		row->addWidget(variantNext_);
-		vl->addLayout(row);
-		connect(variantPrev_, &QPushButton::clicked, this, [this]() { stepPreviewVariant(-1); });
-		connect(variantNext_, &QPushButton::clicked, this, [this]() { stepPreviewVariant(+1); });
-		connect(variationsEdit_, &QPlainTextEdit::textChanged, this, [this]() {
-			if (syncingClip_)
-				return;
-			const QStringList lines = variationsEdit_->toPlainText().split(QLatin1Char('\n'));
-			QStringList keep = lines;
-			while (!keep.isEmpty() && keep.last().trimmed().isEmpty())
-				keep.removeLast(); // the line still being typed below the last one
-			editSelectedClip([&keep](TlClip &c) { c.text.variations = keep; });
-			requestPreview(-1, timelinePlayheadMs());
-		});
 	}
 	tv->addWidget(variationsBox_);
 
@@ -7524,10 +7685,17 @@ void VideoEditorWindow::syncClipInspector()
 		clipTagsBox_->setVisible(!batch);
 	if (textEdit_)
 		textEdit_->setVisible(!batch);
-	// Variations are one caption's other words; not something to set for a
-	// whole lane of captions at once.
+	// A Random text's other texts belong to that one caption: shown for a
+	// Random text only, and never for a whole lane of captions at once.
+	const bool randomText = !batch && c && c->type == TlClip::Type::Text && c->text.random;
 	if (variationsBox_)
-		variationsBox_->setVisible(!batch);
+		variationsBox_->setVisible(randomText);
+	if (textMainCap_)
+		textMainCap_->setVisible(randomText);
+	if (!randomText && textEdit_)
+		textEdit_->setStyleSheet(QString()); // no "being previewed" outline
+	if (textHeader_)
+		textHeader_->setText(randomText ? QStringLiteral("Random text") : QStringLiteral("Text"));
 	clipBox_->setVisible(c != nullptr);
 	// The tab is never blank: with nothing selected it says so, rather than
 	// showing an empty column that reads as a panel that failed to load.
@@ -9317,9 +9485,14 @@ void VideoEditorWindow::applyTextPreset(const QString &name)
 	// preset — apply the look you settled on to whatever this caption says.
 	const TlText style = it.value();
 	editSelectedClip([&style](TlClip &c) {
+		// Content stays: the words, a Random text's other texts and its kind.
 		const QString words = c.text.text;
+		const QStringList variations = c.text.variations;
+		const bool random = c.text.random;
 		c.text = style;
 		c.text.text = words;
+		c.text.variations = variations;
+		c.text.random = random;
 	});
 	syncClipInspector();
 }
@@ -9414,7 +9587,7 @@ void VideoEditorWindow::saveVariationPresetFromSelection()
 	const QStringList lines = variation_presets::cleaned(sel->text.variations);
 	if (lines.isEmpty()) {
 		QMessageBox::information(this, QStringLiteral("Save variations"),
-					 QStringLiteral("Type some variations first, one per line."));
+					 QStringLiteral("Add some texts first (+ Add text)."));
 		return;
 	}
 	auto presets = variation_presets::load(variationPresetsPath());

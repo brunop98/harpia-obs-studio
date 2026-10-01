@@ -542,6 +542,7 @@ private:
 	// new on the timeline as its entries.
 	QPushButton *addMenuBtn_ = nullptr;
 	QAction *addTextAct_ = nullptr;
+	QAction *addRandomTextAct_ = nullptr;
 	QAction *subtitleAct_ = nullptr;
 	QAction *addAudioAct_ = nullptr;
 	QAction *addImageAct_ = nullptr;
@@ -808,12 +809,21 @@ private:
 	// text clip the preview shows -- 0 is its own text -- and never changes
 	// what is saved; a new selection puts it back to 0.
 	QWidget *variationsBox_ = nullptr;
-	QPlainTextEdit *variationsEdit_ = nullptr;
+	QLabel *textHeader_ = nullptr;   // "Text" or "Random text"
+	QLabel *textMainCap_ = nullptr;  // "Text 1", over the main text of a Random text
+	QVBoxLayout *variantListLayout_ = nullptr;
+	QVector<QWidget *> variantRows_;
+	QVector<QPlainTextEdit *> variantEdits_; // Text 2, 3… of the selected Random text
+	QPointer<QPlainTextEdit> tagTarget_;     // where the quick-tag buttons type
+	void rebuildVariantEditors(int count);
+	void showPreviewVariant(int option);
+	void addVariantText();
+	void removeVariantText(int index);
 	QLabel *variantLabel_ = nullptr;
 	QPushButton *variantPrev_ = nullptr;
 	QPushButton *variantNext_ = nullptr;
 	int previewVariant_ = 0;
-	void syncVariationsInspector(const TlClip &c);
+	void syncVariationsInspector(const TlClip &c, bool texts = true);
 	// Saved variation lists (timeline/VariationPresets.hpp): a name and the
 	// alternatives, put back on any caption from the Variations box.
 	QComboBox *variationPresetCombo_ = nullptr;
@@ -1102,6 +1112,7 @@ private:
 	bool syncingSpot_ = false;
 	void syncClipInspector();                       // selected clip -> controls
 	void editSelectedClip(const std::function<void(TlClip &)> &fn); // controls -> clip
+	void addRandomTextClip();                       // the same, with several texts to export
 	void addTextClip();                             // new text clip at the playhead
 	void addKeyframeAtPlayhead();
 	void removeKeyframeAtPlayhead();

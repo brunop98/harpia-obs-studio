@@ -28,6 +28,7 @@
 #include "ExportOptionsDialog.hpp"
 #include "BatchExport.hpp"
 #include "timeline/TextVariations.hpp"
+#include "timeline/VariationPresets.hpp"
 #include "FrameSeeker.hpp"
 #include "PreviewDecoder.hpp"
 #include "ProjectPaths.hpp"
@@ -6851,6 +6852,28 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 				       variationsBox_);
 		cap->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 		vl->addWidget(cap);
+		// Saved lists: type a list once, put it on any caption again.
+		auto *presetRow = new QHBoxLayout;
+		variationPresetCombo_ = new QComboBox(variationsBox_);
+		variationPresetCombo_->setToolTip(
+			QStringLiteral("Load a saved list of variations. The caption keeps its own text."));
+		auto *vSave = new QPushButton(QStringLiteral("Save…"), variationsBox_);
+		vSave->setToolTip(QStringLiteral("Save this caption's variations under a name"));
+		auto *vDel = new QPushButton(variationsBox_);
+		vDel->setIcon(uiIcon(Glyph::Cross, 13));
+		vDel->setFixedWidth(28);
+		vDel->setToolTip(QStringLiteral("Delete the selected saved list"));
+		presetRow->addWidget(variationPresetCombo_, 1);
+		presetRow->addWidget(vSave);
+		presetRow->addWidget(vDel);
+		vl->addLayout(presetRow);
+		connect(variationPresetCombo_, &QComboBox::activated, this, [this](int i) {
+			if (i > 0 && !syncingClip_)
+				applyVariationPreset(variationPresetCombo_->currentText());
+		});
+		connect(vSave, &QPushButton::clicked, this, &VideoEditorWindow::saveVariationPresetFromSelection);
+		connect(vDel, &QPushButton::clicked, this, &VideoEditorWindow::deleteSelectedVariationPreset);
+		refreshVariationPresets();
 		variationsEdit_ = new QPlainTextEdit(variationsBox_);
 		variationsEdit_->setPlaceholderText(QStringLiteral("I like cats\nI like vultures\nI like parrots"));
 		variationsEdit_->setFixedHeight(64);
@@ -9342,6 +9365,98 @@ void VideoEditorWindow::deleteSelectedTextPreset()
 	presets.remove(name);
 	saveTextPresets(presets);
 	refreshTextPresets();
+}
+
+QString VideoEditorWindow::variationPresetsPath() const
+{
+	return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) +
+	       QStringLiteral("/harpia/variation-presets.json");
+}
+
+void VideoEditorWindow::refreshVariationPresets()
+{
+	if (!variationPresetCombo_)
+		return;
+	const QString keep = variationPresetCombo_->currentIndex() > 0 ? variationPresetCombo_->currentText() : QString();
+	const QSignalBlocker b(variationPresetCombo_);
+	variationPresetCombo_->clear();
+	variationPresetCombo_->addItem(QStringLiteral("Saved lists…"));
+	const auto presets = variation_presets::load(variationPresetsPath());
+	for (auto it = presets.constBegin(); it != presets.constEnd(); ++it) {
+		variationPresetCombo_->addItem(it.key());
+		variationPresetCombo_->setItemData(variationPresetCombo_->count() - 1,
+						   it.value().join(QLatin1Char('\n')), Qt::ToolTipRole);
+	}
+	const int i = keep.isEmpty() ? 0 : variationPresetCombo_->findText(keep);
+	variationPresetCombo_->setCurrentIndex(i >= 0 ? i : 0);
+}
+
+void VideoEditorWindow::applyVariationPreset(const QString &name)
+{
+	const auto presets = variation_presets::load(variationPresetsPath());
+	const auto it = presets.constFind(name);
+	if (it == presets.constEnd())
+		return;
+	// The alternatives only: the caption's own text is version 1 and stays.
+	// One edit, so Ctrl+Z puts the previous list back.
+	const QStringList lines = it.value();
+	editSelectedClip([&lines](TlClip &c) { c.text.variations = lines; });
+	previewVariant_ = 0;
+	syncClipInspector();
+	requestPreview(-1, timelinePlayheadMs());
+}
+
+void VideoEditorWindow::saveVariationPresetFromSelection()
+{
+	const TlClip *sel = inspectedClip();
+	if (!sel || sel->type != TlClip::Type::Text)
+		return;
+	const QStringList lines = variation_presets::cleaned(sel->text.variations);
+	if (lines.isEmpty()) {
+		QMessageBox::information(this, QStringLiteral("Save variations"),
+					 QStringLiteral("Type some variations first, one per line."));
+		return;
+	}
+	auto presets = variation_presets::load(variationPresetsPath());
+	bool ok = false;
+	const QString suggested = variationPresetCombo_ && variationPresetCombo_->currentIndex() > 0
+					  ? variationPresetCombo_->currentText()
+					  : QString();
+	const QString name = QInputDialog::getText(this, QStringLiteral("Save variations"),
+						   QStringLiteral("Name for this list (%1 lines):").arg(lines.size()),
+						   QLineEdit::Normal, suggested, &ok)
+				     .trimmed();
+	if (!ok || name.isEmpty())
+		return;
+	if (presets.contains(name) &&
+	    QMessageBox::question(this, QStringLiteral("Replace list"),
+				  QStringLiteral("\"%1\" already exists. Replace it?").arg(name)) != QMessageBox::Yes)
+		return;
+	presets.insert(name, lines);
+	if (!variation_presets::save(variationPresetsPath(), presets)) {
+		QMessageBox::warning(this, QStringLiteral("Save variations"),
+				     QStringLiteral("Could not write %1").arg(variationPresetsPath()));
+		return;
+	}
+	refreshVariationPresets();
+	if (variationPresetCombo_) {
+		const QSignalBlocker b(variationPresetCombo_);
+		variationPresetCombo_->setCurrentIndex(variationPresetCombo_->findText(name));
+	}
+}
+
+void VideoEditorWindow::deleteSelectedVariationPreset()
+{
+	if (!variationPresetCombo_ || variationPresetCombo_->currentIndex() <= 0)
+		return;
+	const QString name = variationPresetCombo_->currentText();
+	if (QMessageBox::question(this, QStringLiteral("Delete list"),
+				  QStringLiteral("Delete the saved variations \"%1\"?").arg(name)) != QMessageBox::Yes)
+		return;
+	auto presets = variation_presets::load(variationPresetsPath());
+	presets.remove(name);
+	variation_presets::save(variationPresetsPath(), presets);
+	refreshVariationPresets();
 }
 
 void VideoEditorWindow::copySelectedClips(bool cut)

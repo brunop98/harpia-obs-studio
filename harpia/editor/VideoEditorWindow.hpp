@@ -814,6 +814,14 @@ private:
 	QPushButton *variantNext_ = nullptr;
 	int previewVariant_ = 0;
 	void syncVariationsInspector(const TlClip &c);
+	// Saved variation lists (timeline/VariationPresets.hpp): a name and the
+	// alternatives, put back on any caption from the Variations box.
+	QComboBox *variationPresetCombo_ = nullptr;
+	QString variationPresetsPath() const;
+	void refreshVariationPresets();
+	void applyVariationPreset(const QString &name);
+	void saveVariationPresetFromSelection();
+	void deleteSelectedVariationPreset();
 	void stepPreviewVariant(int delta);
 	// The timeline as the preview shows it: the model, with the selected text
 	// clip on the variation being previewed.

@@ -312,6 +312,7 @@ target_sources(
     editor/timeline/TimelineModel.hpp
     editor/timeline/TextVariations.hpp
     editor/timeline/RichText.hpp
+    editor/timeline/VariationPresets.hpp
     editor/timeline/TimelineView.cpp
     editor/timeline/SoundRules.cpp
     editor/timeline/SoundRules.hpp

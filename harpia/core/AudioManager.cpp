@@ -1,5 +1,7 @@
 #include "AudioManager.hpp"
 
+#include "ObsChannel.hpp"
+
 #include <obs.h>
 
 #include <algorithm>
@@ -115,7 +117,7 @@ void AudioManager::destroyMeter(std::unique_ptr<Meter> &m)
 		m->volmeter = nullptr;
 	}
 	if (m->source) {
-		if (obs_get_output_source(m->channel) == m->source)
+		if (channelShows(m->channel, m->source))
 			obs_set_output_source(m->channel, nullptr);
 		obs_source_release(m->source);
 		m->source = nullptr;

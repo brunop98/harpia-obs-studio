@@ -1,5 +1,7 @@
 #include "CaptureManager.hpp"
 
+#include "ObsChannel.hpp"
+
 #include <obs.h>
 
 #include <atomic>
@@ -358,7 +360,7 @@ void CaptureManager::releaseScene()
 	if (!scene_)
 		return;
 	obs_source_t *ss = obs_scene_get_source(scene_);
-	if (ss && obs_get_output_source(kVideoChannel) == ss)
+	if (ss && channelShows(kVideoChannel, ss))
 		obs_set_output_source(kVideoChannel, nullptr);
 	item_ = nullptr; // owned by the scene
 	obs_scene_release(scene_);
@@ -434,7 +436,7 @@ void CaptureManager::applyCrop(obs_source_t *source, obs_source_t *&crop, const 
 void CaptureManager::stopCapture()
 {
 	releaseScene();
-	if (source_ && obs_get_output_source(kVideoChannel) == source_)
+	if (source_ && channelShows(kVideoChannel, source_))
 		obs_set_output_source(kVideoChannel, nullptr);
 
 	if (cropFilter_) {

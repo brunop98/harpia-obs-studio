@@ -95,6 +95,7 @@ target_sources(
     core/GlobalHotkeys.hpp
     core/CrashGuard.cpp
     core/CrashGuard.hpp
+    core/ObsChannel.hpp
     core/CaptureManager.cpp
     core/CaptureManager.hpp
     core/EncoderFactory.cpp

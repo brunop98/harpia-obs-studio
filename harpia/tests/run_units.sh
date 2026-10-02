@@ -821,6 +821,15 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$WORK/moc_RecorderControlsOverlay.cpp" -o "$WORK/recordercontrols_test" $LF
 
 rc=0
+# obs_get_output_source() returns a NEW reference: asked anywhere but the one
+# helper that releases it, it leaks the channel's source -- which is how a
+# capture scene outlived its capture and crashed obs_shutdown().
+if grep -rn "obs_get_output_source(" --include=*.cpp --include=*.hpp "$H/core" "$H/ui" "$H/editor" "$H/library" "$H/platform" "$H/main.cpp" 2>/dev/null | grep -v "core/ObsChannel.hpp"; then
+	echo "FAIL obs_get_output_source() called outside core/ObsChannel.hpp (leaks a reference)"
+	rc=1
+else
+	echo "  PASS every output-channel lookup releases its reference (core/ObsChannel.hpp)"
+fi
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/ytdlp_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/multicutshuffle_test" || rc=1

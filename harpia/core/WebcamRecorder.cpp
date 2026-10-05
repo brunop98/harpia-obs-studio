@@ -2,6 +2,7 @@
 
 #include "AudioManager.hpp" // for AudioDevice {id, name}
 #include "EncoderFactory.hpp"
+#include "ObsOutputs.hpp"
 
 #include <obs.h>
 
@@ -290,8 +291,9 @@ void WebcamRecorder::teardown()
 {
 	stopRequested_ = false;
 	if (output_) {
-		if (obs_output_active(output_))
-			obs_output_stop(output_);
+		// Finished before released: the view below is the encoder's video
+		// source, and destroying it under a running encoder is a crash.
+		stopOutputAndWait(output_);
 		obs_output_release(output_);
 		output_ = nullptr;
 	}

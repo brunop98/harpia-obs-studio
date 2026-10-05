@@ -1,6 +1,7 @@
 #include "RecordingController.hpp"
 
 #include "EncoderFactory.hpp"
+#include "ObsOutputs.hpp"
 #include "ModeCapabilities.hpp"
 #include "VideoStatus.hpp"
 
@@ -22,10 +23,11 @@ void RecordingController::teardown()
 		tap_.reset();
 	}
 	if (output_) {
-		// Never release an output that is still writing — stop it first so the
-		// muxer finalizes the file (matters when the app quits mid-recording).
-		if (obs_output_active(output_))
-			obs_output_stop(output_);
+		// Never release an output that is still writing: stop it AND wait for
+		// the muxer to finish the file (matters when the app quits
+		// mid-recording). The stop signal still reaches onStopSignal, so the
+		// recording is finalized as usual.
+		stopOutputAndWait(output_);
 		signal_handler_t *sh = obs_output_get_signal_handler(output_);
 		if (sh) {
 			signal_handler_disconnect(sh, "start", &RecordingController::onStartSignal, this);

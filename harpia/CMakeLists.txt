@@ -96,6 +96,7 @@ target_sources(
     core/CrashGuard.cpp
     core/CrashGuard.hpp
     core/ObsChannel.hpp
+    core/ObsOutputs.hpp
     core/CaptureManager.cpp
     core/CaptureManager.hpp
     core/EncoderFactory.cpp

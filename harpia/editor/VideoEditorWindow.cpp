@@ -27,6 +27,9 @@
 #include "EditorWidgets.hpp"
 #include "ExportOptionsDialog.hpp"
 #include "BatchExport.hpp"
+#include "FlowLayout.hpp"
+#include "InspectorSection.hpp"
+#include "ToolbarLayout.hpp"
 #include "timeline/TextVariations.hpp"
 #include "timeline/VariationPresets.hpp"
 #include "FrameSeeker.hpp"
@@ -104,6 +107,7 @@
 #include <QScreen>
 #include <QFileSystemWatcher>
 #include <QFormLayout>
+#include <QTabBar>
 #include <QFrame>
 #include <QLineEdit>
 #include <QHBoxLayout>
@@ -266,10 +270,25 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	canvas_->installEventFilter(this);
 	topLayout->addWidget(canvas_, 1);
 
-	// One unified toolbar under the preview, left → right:
-	//   [Simple Trim | Multi-Cut]  [undo][redo]  [reset][play] timecode
-	//   Speed <slider><value>  [Inspector]  [Dev]
-	auto *bar = new QHBoxLayout;
+	// One toolbar under the preview, in three zones (see ToolbarLayout):
+	//   Left   the mode switch and the editing tools (Add, Snap, Fit, ...)
+	//   Center undo/redo, the transport and timecode, speed
+	//   Right  preview quality, monitor, voiceover, the size/length readout
+	// It used to be two rows -- this one and a second above the timeline --
+	// and in a narrow window the first squeezed its buttons until their labels
+	// were cut off. Now it is one line when there is room and wraps when not.
+	auto *barHost = new QWidget(this);
+	toolbar_ = new ToolbarLayout(barHost, 6, 18, 4);
+	auto *bar = toolbar_;
+	// A group of controls that belong together, wrapped as one item so it
+	// moves to the next line as a unit.
+	const auto cluster = [this](QLayout *l) {
+		auto *w = new QWidget(this);
+		l->setContentsMargins(0, 0, 0, 0);
+		w->setLayout(l);
+		return w;
+	};
+	using Zone = ToolbarLayout::Zone;
 
 	// Mode switch as a segmented control: the two modes are mutually exclusive,
 	// so join them visually and enforce exclusivity with a button group.
@@ -308,8 +327,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	segBox->addWidget(trimModeBtn_);
 	segBox->addWidget(cutModeBtn_);
 	segBox->addWidget(fullModeBtn_);
-	bar->addLayout(segBox);
-	bar->addSpacing(6);
+	bar->addWidget(cluster(segBox), Zone::Left);
 
 	// The bridge between the fast modes and the powerful one. Shown only in
 	// Trim and Multi-Cut, where there is something to send.
@@ -319,8 +337,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		"every edit point — and switch to it.\n\nNothing is lost: the clips are ADDED "
 		"after whatever is already there, and this mode keeps its own work too."));
 	connect(sendToFullBtn_, &QPushButton::clicked, this, &VideoEditorWindow::sendToFullEditing);
-	bar->addWidget(sendToFullBtn_);
-	bar->addSpacing(12);
+	bar->addWidget(sendToFullBtn_, Zone::Left);
 
 	// Undo/redo, grouped tightly as one cluster.
 	auto *urBox = new QHBoxLayout;
@@ -340,8 +357,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	redoBtn_->setEnabled(false);
 	connect(redoBtn_, &QPushButton::clicked, this, &VideoEditorWindow::redo);
 	urBox->addWidget(redoBtn_);
-	bar->addLayout(urBox);
-	bar->addSpacing(12);
+	bar->addWidget(cluster(urBox), Zone::Center);
 
 	// Transport: reset · play · a big monospace timecode.
 	auto *resetBtn = new QPushButton(this);
@@ -349,13 +365,15 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	resetBtn->setIcon(uiIcon(Glyph::SkipStart));
 	resetBtn->setFixedWidth(40);
 	connect(resetBtn, &QPushButton::clicked, this, &VideoEditorWindow::onResetMarker);
-	bar->addWidget(resetBtn);
+	auto *transport = new QHBoxLayout;
+	transport->setSpacing(4);
+	transport->addWidget(resetBtn);
 	playBtn_ = new QPushButton(this);
 	playBtn_->setIcon(uiIcon(Glyph::Play));
 	playBtn_->setToolTip(QStringLiteral("Play from the marker at the current speed"));
 	playBtn_->setFixedWidth(40);
-	bar->addWidget(playBtn_);
-	bar->addSpacing(8);
+	transport->addWidget(playBtn_);
+	transport->addSpacing(6);
 	// Live cursor readout: the source time of the frame being previewed — large
 	// and monospace so it reads as the editor's primary timecode.
 	cursorTimeLabel_ = new QLabel(QStringLiteral("0:00.000"), this);
@@ -363,8 +381,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		"color:#e8eaed; font-family:monospace; font-weight:bold; font-size:%1px;")
 						.arg(uiTimecodePx()));
 	cursorTimeLabel_->setToolTip(QStringLiteral("Time of the frame shown in the preview"));
-	bar->addWidget(cursorTimeLabel_);
-	bar->addSpacing(16);
+	transport->addWidget(cursorTimeLabel_);
+	bar->addWidget(cluster(transport), Zone::Center);
 
 	// Preview quality. Everything in a preview frame — decode, composite, text,
 	// shaders — scales with the rendered size, so this is the one knob that
@@ -391,8 +409,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		st.setValue(QStringLiteral("editor/previewQuality"), i);
 		refreshPreviewAtPlayhead();
 	});
-	bar->addWidget(previewQualityCombo_);
-	bar->addSpacing(8);
+	bar->addWidget(previewQualityCombo_, Zone::Right);
 
 	// Monitor toggle. Preview audio is Full-editing only for now, so it hides
 	// with the other Full-only controls.
@@ -411,28 +428,29 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		if (!off && playing_ && fullEdit())
 			startPreviewAudio(timelinePlayheadMs()); // catch up to the picture
 	});
-	bar->addWidget(muteBtn_);
+	bar->addWidget(muteBtn_, Zone::Right);
 	// Voiceover: one button, in every mode, opening the voiceover window.
 	// It turns red while a take is recording, so a running mic is never
 	// hidden behind a closed window.
 	voOpenBtn_ = new QPushButton(QStringLiteral("Voiceover"), this);
 	voOpenBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
 	voOpenBtn_->setToolTip(QStringLiteral("Record narration over the video: microphone, countdown, play-along"));
-	bar->addWidget(voOpenBtn_);
-	bar->addSpacing(10);
+	bar->addWidget(voOpenBtn_, Zone::Right);
 
 	// Speed: label · slider (stretches) · editable value · per-cut count.
 	// Full editing has per-clip speed in the Inspector instead, so the whole group
 	// hides there rather than sitting greyed out taking up the toolbar.
 	speedCaption_ = new QLabel(QStringLiteral("Speed"), this);
-	bar->addWidget(speedCaption_);
+	auto *speedBox = new QHBoxLayout;
+	speedBox->setSpacing(4);
+	speedBox->addWidget(speedCaption_);
 	speedSlider_ = new QSlider(Qt::Horizontal, this);
 	speedSlider_->setRange(0, kSpeedTicks); // exponential 0.1×..50×
 	speedSlider_->setPageStep(kSpeedTicks / 20);
 	speedSlider_->setValue(speedToSlider(1.0));
 	speedSlider_->setMinimumWidth(96); // see EditorChromeParams::speedSliderMinW
 	speedSlider_->setToolTip(QStringLiteral("Playback speed (0.1×–50×); scaled so low speeds are easy to fine-tune"));
-	bar->addWidget(speedSlider_); // compact, fixed width (see applyChrome)
+	speedBox->addWidget(speedSlider_); // compact, fixed width (see applyChrome)
 	speedSpin_ = new QDoubleSpinBox(this);
 	speedSpin_->setRange(kMinSpeed, kMaxSpeed);
 	speedSpin_->setDecimals(2);
@@ -441,13 +459,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	speedSpin_->setValue(1.0);
 	speedSpin_->setKeyboardTracking(false); // apply on Enter/focus-out, not each digit
 	speedSpin_->setFixedWidth(72);
-	bar->addWidget(speedSpin_);
+	speedBox->addWidget(speedSpin_);
 	speedLabel_ = new QLabel(QString(), this); // "(N cuts)" / "—" status
 	// No reserved width: it is empty in Simple Trim and hidden in Full editing,
 	// and 56px of nothing was pushing the toolbar's minimum width up.
 	speedLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
-	bar->addWidget(speedLabel_);
-	bar->addStretch(1); // slack here: transport+speed left, panel toggles right
+	speedBox->addWidget(speedLabel_);
+	bar->addWidget(cluster(speedBox), Zone::Center);
 
 	// Sources toggle — show/hide the floating Sources panel.
 	sourcesBtn_ = new QPushButton(QStringLiteral("Sources"), this);
@@ -467,7 +485,6 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		st.setValue(QStringLiteral("editor/sourcesShown"), on);
 	});
 	sourcesBtn_->setVisible(false); // View > Sources; the button holds the state
-	bar->addSpacing(6);
 
 	// Effects toggle — opens the right panel, where a clip's components live.
 	effectsBtn_ = new QPushButton(QStringLiteral("Effects"), this);
@@ -484,7 +501,6 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		}
 	});
 	effectsBtn_->setVisible(false); // View > Effects
-	bar->addSpacing(6);
 
 	// Inspector toggle — show/hide the right-side properties panel.
 	inspectorBtn_ = new QPushButton(QStringLiteral("Inspector"), this);
@@ -500,7 +516,6 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		}
 	});
 	inspectorBtn_->setVisible(false); // View > Inspector
-	bar->addSpacing(6);
 	// Developer Panel: live-tweak every timeline layout variable to find the
 	// best UI configuration (editor-only tool, values are not persisted).
 	auto *devBtn = new QPushButton(QStringLiteral("Dev"), this);
@@ -530,7 +545,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		devPanel_->activateWindow();
 	});
 	devBtn->setVisible(false); // Tools > Developer panel
-	topLayout->addLayout(bar);
+	topLayout->addWidget(barHost);
 	splitter->addWidget(topPane);
 
 	// ---- Bottom pane: timelines, voiceover and file controls ----
@@ -994,13 +1009,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		scheduleSnapshot();
 	});
 
-	auto *controls = new QHBoxLayout;
+	// The rest of the toolbar (see ToolbarLayout above): editing tools on the
+	// left, the size/length readout on the right.
 	cropToggle_ = new QCheckBox(QStringLiteral("Crop"), this);
 	cropToggle_->setToolTip(QStringLiteral("Drag the rectangle to crop the image (great for smaller GIFs)"));
-	controls->addWidget(cropToggle_);
 	auto *resetCrop = new QPushButton(QStringLiteral("Reset crop"), this);
 	resetCropBtn_ = resetCrop;
-	controls->addWidget(resetCrop);
 	// Everything that puts something NEW on the timeline, in one menu. Six
 	// buttons in a row read as six unrelated things; one "Add" reads as the
 	// place to go when you want more on the timeline, and leaves the row room
@@ -1105,7 +1119,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			       "below it, for as long as the clip lasts."));
 	connect(addFxClipAct_, &QAction::triggered, this, &VideoEditorWindow::addEffectClip);
 	addMenuBtn_->setMenu(addMenu);
-	controls->addWidget(addMenuBtn_);
+	toolbar_->addWidget(addMenuBtn_, ToolbarLayout::Zone::Left);
 	// Magnet: snap dragged clips to the playhead, 0 and other clips' edges.
 	// A sticky toggle — whichever way you leave it is how the next session opens.
 	snapBtn_ = new QPushButton(QStringLiteral("Snap"), this);
@@ -1135,7 +1149,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		snapBtn_->setChecked(on);
 		applySnap(on);
 	}
-	controls->addWidget(snapBtn_);
+	toolbar_->addWidget(snapBtn_, ToolbarLayout::Zone::Left);
 	fitBtn_ = new QPushButton(QStringLiteral("Fit"), this);
 	fitBtn_->setToolTip(QStringLiteral("Zoom the timeline out so the whole edit fits"));
 	fitBtn_->setVisible(false); // Full editing only
@@ -1143,7 +1157,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		if (timelineView_)
 			timelineView_->zoomToFit();
 	});
-	controls->addWidget(fitBtn_);
+	toolbar_->addWidget(fitBtn_, ToolbarLayout::Zone::Left);
 	// Randomise the clip order: many versions of one edit, each a Ctrl+Z from
 	// the last, to find the sequence that plays best.
 	randomBtn_ = new QPushButton(QStringLiteral("Randomize"), this);
@@ -1152,7 +1166,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		"previous order back, so try as many as you like."));
 	randomBtn_->setVisible(false); // Multi-Cut and Full editing
 	connect(randomBtn_, &QPushButton::clicked, this, &VideoEditorWindow::openRandomizePanel);
-	controls->addWidget(randomBtn_);
+	toolbar_->addWidget(randomBtn_, ToolbarLayout::Zone::Left);
 	// The editing console: exact numbers and whole-timeline edits by typing,
 	// and the same lines saved as templates for the next project.
 	consoleBtn_ = new QPushButton(QStringLiteral("Console"), this);
@@ -1161,13 +1175,15 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		"clips.forEach(c => c.scale = 1.1), run(\"template\"). Each line is one undo step."));
 	consoleBtn_->setVisible(false); // Full editing only, and only with an engine
 	connect(consoleBtn_, &QPushButton::clicked, this, &VideoEditorWindow::openConsole);
-	controls->addWidget(consoleBtn_);
-	// View > Keyboard Shortcuts, always available (not just in Full editing):
-	// the panel is the reference for every mode.
-	controls->addStretch(1);
+	toolbar_->addWidget(consoleBtn_, ToolbarLayout::Zone::Left);
+	toolbar_->addWidget(cropToggle_, ToolbarLayout::Zone::Left);
+	toolbar_->addWidget(resetCrop, ToolbarLayout::Zone::Left);
+	// What the output is: size and length. Read while editing, so it is as
+	// legible as the controls around it rather than a faint footnote.
 	infoLabel_ = new QLabel(this);
-	infoLabel_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
-	controls->addWidget(infoLabel_);
+	infoLabel_->setStyleSheet(QStringLiteral("color:#c8ccd4; font-family:monospace;"));
+	infoLabel_->setToolTip(QStringLiteral("Output size and length"));
+	toolbar_->addWidget(infoLabel_, ToolbarLayout::Zone::Right);
 	// Load / Save project, Export and Close live in the File menu now (and
 	// Keyboard shortcuts in Tools). The buttons stay as hidden slots the menu
 	// items click, so every connection below is unchanged.
@@ -1182,18 +1198,21 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	saveProjBtn_ = saveProjBtn;
 	exportBtn_ = saveBtn;
 	closeBtn_ = cancelBtn;
-	// ABOVE the timeline, not below it. At the bottom of the pane this row was
-	// the first thing to go when the window was taller than the screen -- and
-	// a full-screen dialog owned by the main window is exactly the case where
-	// Windows keeps the taskbar on top, so Export, Close and every Full-editing
-	// button sat under it, unreachable. Under the transport bar nothing can push
-	// it off; the timeline gives up its bottom edge instead.
-	bottomLayout->insertLayout(0, controls);
 
 	splitter->addWidget(bottomPane);
 	splitter->setStretchFactor(0, 3); // preview grows more than the editing area
 	splitter->setStretchFactor(1, 2);
 	vsplit_ = splitter;
+	// Where you drag the divider is remembered for the mode you are in: Simple
+	// Trim wants a big preview over one short bar, Full Editing a tall track
+	// stack. splitterMoved is only the user's own drags, never setSizes.
+	connect(splitter, &QSplitter::splitterMoved, this, [this]() {
+		if (!vsplit_ || vsplit_->sizes().size() != 2)
+			return;
+		const int bottom = vsplit_->sizes().at(1);
+		QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+			.setValue(QStringLiteral("editor/splitBottom/%1").arg(int(mode())), bottom);
+	});
 
 	// ---- Right-side inspector: properties of the selected cut / trim range.
 	// Portrait clips leave wide black bars beside the preview; this panel puts
@@ -1220,6 +1239,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// of project metadata, and every selection meant scrolling past it again.
 	insTabs_ = new QTabWidget(inspector_);
 	insTabs_->setDocumentMode(true);
+	// Four tabs in the narrowest panel: tighter padding instead of scroll
+	// arrows, and an elided label as the last resort rather than a tab you
+	// have to scroll the strip to reach.
+	insTabs_->tabBar()->setUsesScrollButtons(false);
+	insTabs_->tabBar()->setElideMode(Qt::ElideRight);
+	insTabs_->tabBar()->setExpanding(true);
+	insTabs_->setStyleSheet(QStringLiteral("QTabBar::tab { padding: 5px 8px; min-width: 0px; }"));
 	insOuter->addWidget(insTabs_, 1);
 
 	// Each tab scrolls on its own. One shared scroll area would carry the
@@ -1698,8 +1724,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			afterComponentEdit();
 		});
 	insLayout->addWidget(componentPanel_);
+	// Animation and Tags: after the components (see buildClipInspector).
+	insLayout->addWidget(clipTailBox_);
 
 	insLayout->addStretch(1);
+	fitInspectorToWidth();
 
 	// ---- Sources: a floating, toggleable panel with two tabs ----------------
 	sourcesPanel_ = new QWidget(this, Qt::Tool | Qt::WindowTitleHint | Qt::WindowCloseButtonHint);
@@ -3784,7 +3813,8 @@ void VideoEditorWindow::buildSoundsTab(QVBoxLayout *into)
 	soundsEmpty_->setStyleSheet(QStringLiteral("color:#7f858e; padding:6px 2px;"));
 	into->addWidget(soundsEmpty_);
 
-	auto *btns = new QHBoxLayout;
+	auto *btnsHost = new QWidget(this);
+	auto *btns = new FlowLayout(btnsHost, 6, 4); // two long labels: wrap, never scroll
 	auto *add = new QPushButton(QStringLiteral("Add rule…"), this);
 	add->setToolTip(QStringLiteral("Pick what it fires on, then the sound."));
 	connect(add, &QPushButton::clicked, this, [this, add]() {
@@ -3850,8 +3880,7 @@ void VideoEditorWindow::buildSoundsTab(QVBoxLayout *into)
 		"Hand the Sounds lane's clips to you as ordinary audio clips and remove the rules."));
 	connect(soundsFreezeBtn_, &QPushButton::clicked, this, &VideoEditorWindow::freezeSounds);
 	btns->addWidget(soundsFreezeBtn_);
-	btns->addStretch(1);
-	into->addLayout(btns);
+	into->addWidget(btnsHost);
 	into->addStretch(1);
 	rebuildSoundsTab();
 }
@@ -4669,8 +4698,10 @@ void VideoEditorWindow::syncVariationsInspector(const TlClip &c, bool texts)
 	}
 	textEdit_->setStyleSheet(previewVariant_ == 0 && n > 1 ? QStringLiteral("QPlainTextEdit { border:1px solid #4c8dff; }")
 							       : QString());
-	variantLabel_->setText(n <= 1 ? QStringLiteral("Add a text to make a second version")
-				      : QStringLiteral("Preview: text %1 of %2").arg(previewVariant_ + 1).arg(n));
+	// Short, so the arrows and it fit the narrowest panel; the tooltip says it in full.
+	variantLabel_->setText(n <= 1 ? QStringLiteral("1 text") : QStringLiteral("%1 of %2").arg(previewVariant_ + 1).arg(n));
+	variantLabel_->setToolTip(n <= 1 ? QStringLiteral("Add a text to make a second version")
+					 : QStringLiteral("The preview shows text %1 of %2").arg(previewVariant_ + 1).arg(n));
 	variantPrev_->setEnabled(n > 1);
 	variantNext_->setEnabled(n > 1);
 }
@@ -5227,30 +5258,30 @@ void styleSwatch(QPushButton *b, const QColor &c)
 }
 } // namespace
 
+// Everything in the Inspector has to fit its narrowest width (the splitter's
+// floor), or the tab grows a horizontal scrollbar and the right edge of every
+// row is cut off. Two kinds of control set that floor too high on their own:
+// a form row (label beside field) and a drop-down sized to its longest entry.
+// Rows now wrap (the field goes under its label when they will not fit side
+// by side) and drop-downs take their width from the panel, eliding the rest.
+void VideoEditorWindow::fitInspectorToWidth()
+{
+	if (!insTabs_)
+		return;
+	for (QFormLayout *f : insTabs_->findChildren<QFormLayout *>())
+		f->setRowWrapPolicy(QFormLayout::WrapLongRows);
+	for (QComboBox *c : insTabs_->findChildren<QComboBox *>()) {
+		c->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+		c->setMinimumContentsLength(3);
+	}
+}
+
 QWidget *VideoEditorWindow::addSection(QVBoxLayout *into, const QString &title, bool expanded)
 {
-	auto *head = new QPushButton(this);
-	head->setFlat(true);
-	head->setCursor(Qt::PointingHandCursor);
-	head->setStyleSheet(QStringLiteral(
-		"QPushButton{text-align:left;color:#e8eaed;font-weight:bold;border:none;padding:4px 0;}"
-		"QPushButton:hover{color:#ffffff;}"));
-	auto *body = new QWidget(this);
-	auto *bl = new QVBoxLayout(body);
-	bl->setContentsMargins(2, 2, 2, 6);
-	bl->setSpacing(4);
-	body->setVisible(expanded);
-	head->setText(title);
-	head->setIcon(uiIcon(expanded ? Glyph::ChevronDown : Glyph::ChevronRight, 12));
-	connect(head, &QPushButton::clicked, this, [head, body, title]() {
-		const bool on = !body->isVisible();
-		body->setVisible(on);
-		head->setText(title);
-		head->setIcon(uiIcon(on ? Glyph::ChevronDown : Glyph::ChevronRight, 12));
-	});
-	into->addWidget(head);
-	into->addWidget(body);
-	return body;
+	// Remembered per title: see InspectorSection.
+	auto *sec = new InspectorSection(title, QStringLiteral("project/") + title, expanded, this);
+	into->addWidget(sec);
+	return sec->body();
 }
 
 namespace {
@@ -5475,7 +5506,7 @@ void VideoEditorWindow::buildProjectInspector(QVBoxLayout *into)
 
 	pjAspect_ = mkVal();
 	fmt->addRow(mkKey(QStringLiteral("Aspect")), pjAspect_);
-	pjFormat_ = mkVal();
+	pjFormat_ = mkVal(true); // "1920 × 1080 @ 30 fps (auto)" is wider than the narrowest panel
 	fmt->addRow(mkKey(QStringLiteral("Effective")), pjFormat_);
 	v->addLayout(fmt);
 
@@ -5557,7 +5588,7 @@ void VideoEditorWindow::buildProjectInspector(QVBoxLayout *into)
 		applyProjectFormat();
 	});
 
-	autosaveChk_ = new QCheckBox(QStringLiteral("Autosave every 5 minutes"), this);
+	autosaveChk_ = new QCheckBox(QStringLiteral("Autosave every 5 min"), this);
 	autosaveChk_->setToolTip(QStringLiteral(
 		"Writes a separate <project>_autosave.harpiaproj beside your project — your own file "
 		"is never overwritten automatically."));
@@ -6712,16 +6743,22 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	clipOuter->setContentsMargins(0, 6, 0, 0);
 	clipOuter->setSpacing(5);
 
-	// Tags, for any clip -- picture, caption, effect or audio -- so they sit
-	// above the picture-only group rather than inside it.
-	clipTagsBox_ = new QWidget(clipBox_);
+	// Below the clip's own content and its components: the TAIL of the tab,
+	// the things you set once in a while (animation keys, tags). Shown and
+	// hidden with clipBox_, but placed after the component list, which is
+	// where a picture's Transform and Speed live.
+	clipTailBox_ = new QWidget(this);
+	clipTailBox_->setVisible(false);
+	auto *tailLayout = new QVBoxLayout(clipTailBox_);
+	tailLayout->setContentsMargins(0, 4, 0, 0);
+	tailLayout->setSpacing(5);
+
+	// Tags, for any clip -- picture, caption, effect or audio.
+	auto *tagsSec = new InspectorSection(QStringLiteral("Tags"), QStringLiteral("clip/tags"), true, clipTailBox_);
+	clipTagsBox_ = tagsSec;
 	{
-		auto *tl = new QVBoxLayout(clipTagsBox_);
-		tl->setContentsMargins(0, 0, 0, 4);
+		auto *tl = tagsSec->bodyLayout();
 		tl->setSpacing(3);
-		auto *th = new QLabel(QStringLiteral("Tags"), clipTagsBox_);
-		th->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
-		tl->addWidget(th);
 		clipTagChips_ = new QLabel(clipTagsBox_);
 		clipTagChips_->setWordWrap(true);
 		clipTagChips_->setTextFormat(Qt::RichText);
@@ -6766,20 +6803,16 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		});
 		tl->addWidget(clipTagEdit_);
 	}
-	clipOuter->addWidget(clipTagsBox_);
 
-	// Everything below applies to a picture: an audio clip has no transform,
-	// keyframes or scripts, so the whole group hides and the audio group below
-	// takes its place.
-	videoClipBox_ = new QWidget(clipBox_);
-	clipOuter->addWidget(videoClipBox_);
-	auto *v = new QVBoxLayout(videoClipBox_);
-	v->setContentsMargins(0, 0, 0, 0);
+	// Animation applies to a picture: an audio clip has no transform or
+	// keyframes, so the section hides and the Audio section takes its place.
+	auto *animSec = new InspectorSection(QStringLiteral("Animation"), QStringLiteral("clip/animation"), true,
+					     clipTailBox_);
+	videoClipBox_ = animSec;
+	tailLayout->addWidget(animSec);
+	tailLayout->addWidget(tagsSec);
+	auto *v = animSec->bodyLayout();
 	v->setSpacing(5);
-
-	auto *hdr = new QLabel(QStringLiteral("Transform"), clipBox_);
-	hdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
-	v->addWidget(hdr);
 
 	v->addWidget(infoHint(QStringLiteral("Scroll on the preview to zoom, drag to reposition."), clipBox_), 0,
 		     Qt::AlignLeft);
@@ -6794,9 +6827,6 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	// resets rather than floating above them.
 
 	// ---- Keyframes -------------------------------------------------------
-	auto *kfHdr = new QLabel(QStringLiteral("Animation"), clipBox_);
-	kfHdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed; margin-top:6px;"));
-	v->addWidget(kfHdr);
 	autoKeyChk_ = new QCheckBox(QStringLiteral("Auto-keyframe"), clipBox_);
 	autoKeyChk_->setToolTip(QStringLiteral(
 		"Record a keyframe at the playhead whenever the zoom/position changes, so the clip "
@@ -6856,6 +6886,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	v->addWidget(keyList_);
 
 	keyInfo_ = new QLabel(QString(), clipBox_);
+	keyInfo_->setWordWrap(true); // "No animation -- the clip holds one fixed framing." is wider than the panel
 	keyInfo_->setStyleSheet(QStringLiteral("color:#7f858e;"));
 	v->addWidget(keyInfo_);
 
@@ -6867,12 +6898,12 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	// ---- Text style (text clips only) ------------------------------------
 	textBox_ = new QWidget(clipBox_);
 	textBox_->setVisible(false);
-	auto *tv = new QVBoxLayout(textBox_);
-	tv->setContentsMargins(0, 6, 0, 0);
+	auto *textOuter = new QVBoxLayout(textBox_);
+	textOuter->setContentsMargins(0, 0, 0, 0);
+	textSection_ = new InspectorSection(QStringLiteral("Text"), QStringLiteral("clip/text"), true, textBox_);
+	textOuter->addWidget(textSection_);
+	auto *tv = textSection_->bodyLayout();
 	tv->setSpacing(4);
-	textHeader_ = new QLabel(QStringLiteral("Text"), textBox_);
-	textHeader_->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
-	tv->addWidget(textHeader_);
 
 	// Style presets: save the look you settled on, apply it to any other caption.
 	auto *presetRow = new QHBoxLayout;
@@ -6902,8 +6933,10 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	// in the field being typed in (or put an empty pair at its caret). The
 	// buttons never take the focus, so the selection stays where it was.
 	{
-		auto *row = new QHBoxLayout;
-		row->setSpacing(5);
+		// Wraps onto a second line in a narrow Inspector rather than pushing
+		// the panel into a horizontal scroll.
+		auto *rowHost = new QWidget(textBox_);
+		auto *row = new FlowLayout(rowHost, 5, 5);
 		const auto wrapWith = [this](const QString &open, const QString &close) {
 			QPlainTextEdit *ed = tagTarget_ ? tagTarget_.data() : textEdit_;
 			if (!ed)
@@ -6964,8 +6997,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		tagButton(QStringLiteral("H"), QStringLiteral("Highlight: <mark=#ffff0080>…</mark>"),
 			  QStringLiteral("color:#1b1b1b;background:#e8d44d;font-weight:bold;"),
 			  [wrapWith]() { wrapWith(QStringLiteral("<mark=#ffff0080>"), QStringLiteral("</mark>")); });
-		row->addStretch(1);
-		tv->addLayout(row);
+		tv->addWidget(rowHost);
 		// The field the tags go into: whichever of this clip's text fields
 		// was typed in last (the main text until another is clicked).
 		connect(qApp, &QApplication::focusChanged, this, [this](QWidget *, QWidget *now) {
@@ -7099,7 +7131,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		editSelectedClip([v](TlClip &c) { c.text.fontPx = v; });
 	});
 
-	auto *styleRow = new QHBoxLayout;
+	auto *styleRow = new FlowLayout(nullptr, 10, 2); // wraps in a narrow panel
 	boldChk_ = new QCheckBox(QStringLiteral("Bold"), textBox_);
 	italicChk_ = new QCheckBox(QStringLiteral("Italic"), textBox_);
 	// Title case as a switch beside Bold and Italic: the Case dropdown below
@@ -7111,7 +7143,6 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	styleRow->addWidget(boldChk_);
 	styleRow->addWidget(italicChk_);
 	styleRow->addWidget(titleCaseChk_);
-	styleRow->addStretch(1);
 	tForm->addRow(QStringLiteral("Style"), [&] {
 		auto *w = new QWidget(textBox_);
 		w->setLayout(styleRow);
@@ -7331,21 +7362,19 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 			setPos(false, y);
 		});
 	}
-	clipOuter->insertWidget(clipOuter->indexOf(videoClipBox_) + 1, captionLaneBox_);
-	clipOuter->insertWidget(clipOuter->indexOf(captionLaneBox_) + 1, textBox_);
+	// The clip's own content first: a caption's words, a lane's captions.
+	clipOuter->insertWidget(0, captionLaneBox_);
+	clipOuter->insertWidget(1, textBox_);
 
 	// ---- Audio clip: level and fades -------------------------------------
 	// These already existed in the model, were saved with the project and were
 	// applied at export — there was simply no way to reach them.
-	audioClipBox_ = new QWidget(clipBox_);
+	auto *audioSec = new InspectorSection(QStringLiteral("Audio"), QStringLiteral("clip/audio"), true, clipBox_);
+	audioClipBox_ = audioSec;
 	audioClipBox_->setVisible(false);
 	clipOuter->addWidget(audioClipBox_);
-	auto *av = new QVBoxLayout(audioClipBox_);
-	av->setContentsMargins(0, 0, 0, 0);
+	auto *av = audioSec->bodyLayout();
 	av->setSpacing(5);
-	auto *aHdr = new QLabel(QStringLiteral("Audio"), audioClipBox_);
-	aHdr->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
-	av->addWidget(aHdr);
 
 	auto *aForm = new QFormLayout;
 	aForm->setContentsMargins(0, 2, 0, 0);
@@ -7703,9 +7732,11 @@ void VideoEditorWindow::syncClipInspector()
 		textMainCap_->setVisible(randomText);
 	if (!randomText && textEdit_)
 		textEdit_->setStyleSheet(QString()); // no "being previewed" outline
-	if (textHeader_)
-		textHeader_->setText(randomText ? QStringLiteral("Random text") : QStringLiteral("Text"));
+	if (textSection_)
+		textSection_->setTitle(randomText ? QStringLiteral("Random text") : QStringLiteral("Text"));
 	clipBox_->setVisible(c != nullptr);
+	if (clipTailBox_)
+		clipTailBox_->setVisible(c != nullptr);
 	// The tab is never blank: with nothing selected it says so, rather than
 	// showing an empty column that reads as a panel that failed to load.
 	if (clipEmpty_)
@@ -9867,6 +9898,18 @@ void VideoEditorWindow::applyModeSplit()
 	const int total = sizes[0] + sizes[1];
 	if (total <= 0)
 		return;
+	// A height the user chose for this mode wins: put it back, within reason
+	// (the window may be smaller than when it was set).
+	{
+		const QVariant saved = QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+					       .value(QStringLiteral("editor/splitBottom/%1").arg(int(mode())));
+		if (saved.isValid()) {
+			const int floor = std::max(80, bottomPane_->minimumSizeHint().height());
+			const int want = std::clamp(saved.toInt(), floor, std::max(floor, total - 160));
+			vsplit_->setSizes({total - want, want});
+			return;
+		}
+	}
 	// The stack reports the TALLEST page, so ask this page directly and add the
 	// rows around it (mode bar, audio foldout, buttons) measured, not guessed.
 	const int chrome = bottomPane_->sizeHint().height() - stack_->sizeHint().height();

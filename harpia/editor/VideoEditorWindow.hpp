@@ -64,6 +64,8 @@ class QVBoxLayout;
 class QShowEvent;
 class QKeyEvent;
 namespace harpia {
+class InspectorSection;
+class ToolbarLayout;
 class SubtitleDialog;
 class UrlDownloadDialog;
 }
@@ -762,6 +764,8 @@ private:
 	QLineEdit *newTagEdit_ = nullptr;
 	QVector<int> tagRowIds_;
 	QWidget *clipTagsBox_ = nullptr;   // clip tab
+	ToolbarLayout *toolbar_ = nullptr;   // the one toolbar under the preview
+	QWidget *clipTailBox_ = nullptr;   // clip tab: Animation + Tags, below the components
 	QLabel *clipTagChips_ = nullptr;   // the selected clips' tags, click x to remove
 	QLineEdit *clipTagEdit_ = nullptr; // type a name, Enter
 	QStringListModel *tagNames_ = nullptr; // completer source
@@ -809,7 +813,7 @@ private:
 	// text clip the preview shows -- 0 is its own text -- and never changes
 	// what is saved; a new selection puts it back to 0.
 	QWidget *variationsBox_ = nullptr;
-	QLabel *textHeader_ = nullptr;   // "Text" or "Random text"
+	InspectorSection *textSection_ = nullptr; // titled "Text" or "Random text"
 	QLabel *textMainCap_ = nullptr;  // "Text 1", over the main text of a Random text
 	QVBoxLayout *variantListLayout_ = nullptr;
 	QVector<QWidget *> variantRows_;
@@ -975,6 +979,8 @@ private:
 	void revealProjectFolder();
 	// A collapsible "▾ Title" section; returns the body to fill in.
 	QWidget *addSection(QVBoxLayout *into, const QString &title, bool expanded);
+	// Wrap form rows and shrink drop-downs so every tab fits the panel's width.
+	void fitInspectorToWidth();
 
 	// ---- Per-clip transform scripting ----
 	// The GUI-thread evaluator (the exporter makes its own on its worker). Script

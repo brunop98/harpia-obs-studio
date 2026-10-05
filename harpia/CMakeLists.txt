@@ -193,6 +193,12 @@ target_sources(
     # Built-in trim / crop / export editor (isolated module).
     editor/BatchExport.cpp
     editor/BatchExport.hpp
+    editor/FlowLayout.cpp
+    editor/FlowLayout.hpp
+    editor/InspectorSection.cpp
+    editor/InspectorSection.hpp
+    editor/ToolbarLayout.cpp
+    editor/ToolbarLayout.hpp
     editor/KeyList.cpp
     editor/KeyList.hpp
     editor/ParamSlider.cpp

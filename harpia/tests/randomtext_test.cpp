@@ -10,6 +10,7 @@
 #include "editor/timeline/TextVariations.hpp"
 #include "editor/timeline/TimelineView.hpp"
 
+#include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
 #include <QElapsedTimer>
@@ -65,10 +66,14 @@ static QPushButton *button(QWidget &w, const QString &text)
 	return nullptr;
 }
 
+// The Text section's title: a section header (a button you click to fold it).
 static bool headerSays(QWidget &w, const QString &text)
 {
 	for (QLabel *l : w.findChildren<QLabel *>())
 		if (l->isVisible() && l->text() == text)
+			return true;
+	for (QAbstractButton *b : w.findChildren<QAbstractButton *>())
+		if (b->isVisible() && b->text() == text)
 			return true;
 	return false;
 }

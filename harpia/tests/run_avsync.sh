@@ -164,6 +164,12 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	"$HERE/editorlayout_test.cpp" \
 	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
 	-o "$WORK/editorlayout_test" $WLF
+# Curved motion paths in the real window: Curve/Straight path, the curve and
+# handles on the preview, a real handle drag (mirrored, Alt to break), undo.
+g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
+	"$HERE/curvepathwindow_test.cpp" \
+	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
+	-o "$WORK/curvepathwindow_test" $WLF
 
 rc=0
 QT_QPA_PLATFORM=offscreen "$WORK/avsync_test" "$WORK" || rc=1
@@ -189,4 +195,6 @@ HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen
 	"$WORK/variationexport_test" "$WORK" || rc=1
 HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
 	"$WORK/editorlayout_test" "$WORK" || rc=1
+HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
+	"$WORK/curvepathwindow_test" "$WORK" || rc=1
 exit $rc

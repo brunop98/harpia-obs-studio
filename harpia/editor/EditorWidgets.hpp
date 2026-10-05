@@ -110,8 +110,22 @@ public:
 		QVector<int> keyIds;     // TlClip::keys index of each
 		QVector<QPointF> frames; // the clip's centre on each frame
 		int current = -1;        // index into keys: the key at the playhead
+		// The path as drawn, through the keys, curves sampled (empty = the
+		// straight lines between the keys).
+		QVector<QPointF> line;
+		// The current key's Bezier handles, absolute canvas fractions: shown
+		// only where a curved segment arrives at it (in) or leaves it (out).
+		bool showIn = false, showOut = false;
+		QPointF inHandle, outHandle;
 	};
 	void setMotionPath(const PathDraw &path);
+	// For tests: what the path is drawing, and where a handle is on screen.
+	const PathDraw &motionPathForTest() const { return path_; }
+	QPointF pathHandlePxForTest(bool out) const
+	{
+		const QPointF n = out ? path_.outHandle : path_.inHandle;
+		return canvasToWidgetF(n.x(), n.y());
+	}
 	// The picture's size on screen, px: what "near the path" is measured in.
 	QSizeF displaySize() const;
 
@@ -120,7 +134,11 @@ signals:
 	void pathKeyPressed(int keyId);
 	// Live while dragging a key dot: its new position, canvas fractions.
 	void pathKeyDragged(int keyId, double nx, double ny);
-	void pathKeyDragFinished(); // one undo step per drag
+	void pathKeyDragFinished(); // one undo step per drag (a key or a handle)
+	// Live while dragging one of the current key's handles: where it is now,
+	// canvas fractions. `breakHandles` is Alt: move this one alone instead of
+	// mirroring the other.
+	void pathHandleDragged(int keyId, bool outHandle, double nx, double ny, bool breakHandles);
 	// Double-click (or Alt+click) on the path: add a key where it passes.
 	void pathAddRequested(double nx, double ny);
 	// Right-click on a key dot.
@@ -169,7 +187,10 @@ private:
 	QPointF pathPressPx_;        // where the drag started, widget px
 	QPointF pathStartNorm_;      // the key's position at the press
 	bool pathMoved_ = false;
+	int handleDrag_ = -1;        // 0 = in, 1 = out handle being dragged, or -1
 	QVector<QPointF> pathKeysPx() const;
+	QVector<QPointF> pathLinePx() const;      // the drawn path, widget px
+	int pathHandleAt(const QPointF &px) const; // 0 in, 1 out, -1 none
 	bool pathActive() const { return path_.on && !cropEnabled_ && !spotMode_ && path_.keys.size() >= 2; }
 	void drawMotionPath(QPainter &p) const;
 	enum class Zone { None, Move, L, R, T, B, TL, TR, BL, BR };

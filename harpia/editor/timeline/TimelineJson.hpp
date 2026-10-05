@@ -187,6 +187,15 @@ inline QJsonObject clipToJson(const TlClip &c)
 				chArr.append(cho);
 			}
 			ko[QStringLiteral("chan")] = chArr;
+			// The path leaving this key: only written when it is not the
+			// plain straight line every older project has.
+			if (k.curvedPath)
+				ko[QStringLiteral("curved")] = true;
+			if (k.handlesManual) {
+				ko[QStringLiteral("hand")] = QJsonArray{k.inX, k.inY, k.outX, k.outY};
+				if (k.handlesBroken)
+					ko[QStringLiteral("broken")] = true;
+			}
 			keyArr.append(ko);
 		}
 		co[QStringLiteral("keys")] = keyArr;
@@ -346,6 +355,16 @@ inline TlClip clipFromJson(const QJsonObject &co)
 			ch.ease = tlEaseFromInt(cho.value(QStringLiteral("ease")).toInt(int(legacy)));
 			ch.bez1 = std::clamp(cho.value(QStringLiteral("b1")).toDouble(0.42), 0.0, 1.0);
 			ch.bez2 = std::clamp(cho.value(QStringLiteral("b2")).toDouble(0.58), 0.0, 1.0);
+		}
+		k.curvedPath = ko.value(QStringLiteral("curved")).toBool(false);
+		const QJsonArray hand = ko.value(QStringLiteral("hand")).toArray();
+		if (hand.size() == 4) {
+			k.handlesManual = true;
+			k.inX = hand[0].toDouble();
+			k.inY = hand[1].toDouble();
+			k.outX = hand[2].toDouble();
+			k.outY = hand[3].toDouble();
+			k.handlesBroken = ko.value(QStringLiteral("broken")).toBool(false);
 		}
 		c.keys.append(k);
 	}

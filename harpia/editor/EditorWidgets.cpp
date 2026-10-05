@@ -731,6 +731,18 @@ void PreviewCanvas::mousePressEvent(QMouseEvent *e)
 	// they are asked first: a dot is small, and a press on one that went to the
 	// clip's body underneath would feel like the dot cannot be grabbed.
 	if (pathActive() && (e->button() == Qt::LeftButton || e->button() == Qt::RightButton)) {
+		// The current key's curve handles first: they sit on or near the path
+		// and the key dots, and are the smaller target.
+		if (e->button() == Qt::LeftButton) {
+			const int h = pathHandleAt(e->position());
+			if (h >= 0) {
+				handleDrag_ = h;
+				pathMoved_ = false;
+				pathPressPx_ = e->position();
+				setCursor(Qt::ClosedHandCursor);
+				return;
+			}
+		}
 		const QVector<QPointF> px = pathKeysPx();
 		const int k = motionPathKeyAt(px, QPointF(e->pos()), 9.0);
 		if (k >= 0 && e->button() == Qt::RightButton) {
@@ -747,7 +759,7 @@ void PreviewCanvas::mousePressEvent(QMouseEvent *e)
 			return;
 		}
 		if (e->button() == Qt::LeftButton && (e->modifiers() & Qt::AltModifier) &&
-		    motionPathHit(px, QPointF(e->pos()), 6.0)) {
+		    motionPathHit(pathLinePx(), QPointF(e->pos()), 6.0)) {
 			const QPointF n = widgetToCanvasF(QPointF(e->pos()));
 			emit pathAddRequested(n.x(), n.y());
 			return;
@@ -854,6 +866,20 @@ QCursor PreviewCanvas::gripCursor(int zoneOrdinal, double rotationDeg) const
 
 void PreviewCanvas::mouseMoveEvent(QMouseEvent *e)
 {
+	if (handleDrag_ >= 0) {
+		const QPointF delta = e->position() - pathPressPx_;
+		if (!pathMoved_ && std::abs(delta.x()) + std::abs(delta.y()) < 3.0)
+			return;
+		pathMoved_ = true;
+		const QPointF n = widgetToCanvasF(e->position());
+		const bool out = handleDrag_ == 1;
+		(out ? path_.outHandle : path_.inHandle) = n; // drawn there now
+		update();
+		if (path_.current >= 0 && path_.current < path_.keyIds.size())
+			emit pathHandleDragged(path_.keyIds[path_.current], out, n.x(), n.y(),
+					       e->modifiers() & Qt::AltModifier);
+		return;
+	}
 	if (pathDrag_ >= 0) {
 		const QRect d = displayRect();
 		if (d.width() <= 0 || d.height() <= 0)
@@ -870,8 +896,9 @@ void PreviewCanvas::mouseMoveEvent(QMouseEvent *e)
 		return;
 	}
 	if (pathActive() && !(e->buttons() & Qt::LeftButton)) {
-		// Hover: a hand over a key dot, so it reads as something to grab.
-		if (motionPathKeyAt(pathKeysPx(), e->position(), 9.0) >= 0) {
+		// Hover: a hand over a key dot or a handle, so it reads as something
+		// to grab.
+		if (pathHandleAt(e->position()) >= 0 || motionPathKeyAt(pathKeysPx(), e->position(), 9.0) >= 0) {
 			setCursor(Qt::OpenHandCursor);
 			return;
 		}
@@ -1217,6 +1244,14 @@ void PreviewCanvas::mouseMoveEvent(QMouseEvent *e)
 
 void PreviewCanvas::mouseReleaseEvent(QMouseEvent *)
 {
+	if (handleDrag_ >= 0) {
+		handleDrag_ = -1;
+		setCursor(Qt::OpenHandCursor);
+		if (pathMoved_)
+			emit pathKeyDragFinished();
+		pathMoved_ = false;
+		return;
+	}
 	if (pathDrag_ >= 0) {
 		pathDrag_ = -1;
 		setCursor(Qt::OpenHandCursor);
@@ -1253,7 +1288,8 @@ void PreviewCanvas::mouseDoubleClickEvent(QMouseEvent *e)
 	// Double-click on the path, away from its dots: a new key there.
 	if (pathActive() && e->button() == Qt::LeftButton) {
 		const QVector<QPointF> px = pathKeysPx();
-		if (motionPathKeyAt(px, e->position(), 9.0) < 0 && motionPathHit(px, e->position(), 6.0)) {
+		if (motionPathKeyAt(px, e->position(), 9.0) < 0 && pathHandleAt(e->position()) < 0 &&
+		    motionPathHit(pathLinePx(), e->position(), 6.0)) {
 			const QPointF n = widgetToCanvasF(e->position());
 			emit pathAddRequested(n.x(), n.y());
 			return;
@@ -1270,6 +1306,11 @@ void PreviewCanvas::setMotionPath(const PathDraw &path)
 		const QPointF held = path_.keys[pathDrag_];
 		path_ = path;
 		path_.keys[pathDrag_] = held;
+	} else if (handleDrag_ >= 0) {
+		// Same for a handle under the pointer.
+		const QPointF held = handleDrag_ == 1 ? path_.outHandle : path_.inHandle;
+		path_ = path;
+		(handleDrag_ == 1 ? path_.outHandle : path_.inHandle) = held;
 	} else {
 		if (path.keys.size() != path_.keys.size())
 			pathDrag_ = -1;
@@ -1292,11 +1333,38 @@ QVector<QPointF> PreviewCanvas::pathKeysPx() const
 	return out;
 }
 
+QVector<QPointF> PreviewCanvas::pathLinePx() const
+{
+	if (path_.line.size() < 2)
+		return pathKeysPx();
+	QVector<QPointF> out;
+	out.reserve(path_.line.size());
+	for (const QPointF &k : path_.line)
+		out.append(canvasToWidgetF(k.x(), k.y()));
+	return out;
+}
+
+int PreviewCanvas::pathHandleAt(const QPointF &px) const
+{
+	if (!pathActive() || path_.current < 0)
+		return -1;
+	const auto near = [&](const QPointF &n) {
+		const QPointF d = canvasToWidgetF(n.x(), n.y()) - px;
+		return std::sqrt(d.x() * d.x() + d.y() * d.y()) <= 7.0;
+	};
+	if (path_.showOut && near(path_.outHandle))
+		return 1;
+	if (path_.showIn && near(path_.inHandle))
+		return 0;
+	return -1;
+}
+
 void PreviewCanvas::drawMotionPath(QPainter &p) const
 {
-	const QVector<QPointF> px = pathKeysPx();
-	if (px.size() < 2)
+	const QVector<QPointF> keysPx = pathKeysPx();
+	if (keysPx.size() < 2)
 		return;
+	const QVector<QPointF> px = pathLinePx();
 	const QColor line(0xff, 0x8a, 0x3d);  // orange: not the clip's blue or the mask's amber
 	p.save();
 	p.setRenderHint(QPainter::Antialiasing, true);
@@ -1314,11 +1382,11 @@ void PreviewCanvas::drawMotionPath(QPainter &p) const
 	for (const QPointF &f : path_.frames)
 		p.drawEllipse(canvasToWidgetF(f.x(), f.y()), 1.9, 1.9);
 	// The keys: diamonds, the one at the playhead filled.
-	for (int i = 0; i < px.size(); ++i) {
+	for (int i = 0; i < keysPx.size(); ++i) {
 		const bool cur = i == path_.current || i == pathDrag_;
 		const double r = cur ? 6.5 : 5.5;
 		QPolygonF dia;
-		dia << px[i] + QPointF(0, -r) << px[i] + QPointF(r, 0) << px[i] + QPointF(0, r) << px[i] + QPointF(-r, 0);
+		dia << keysPx[i] + QPointF(0, -r) << keysPx[i] + QPointF(r, 0) << keysPx[i] + QPointF(0, r) << keysPx[i] + QPointF(-r, 0);
 		p.setPen(QPen(QColor(0, 0, 0, 200), 1.5));
 		p.setBrush(cur ? line : QColor(0x1a, 0x1c, 0x20));
 		p.drawPolygon(dia);
@@ -1326,6 +1394,25 @@ void PreviewCanvas::drawMotionPath(QPainter &p) const
 			p.setPen(QPen(line, 1.4));
 			p.setBrush(Qt::NoBrush);
 			p.drawPolygon(dia);
+		}
+	}
+	// The current key's curve handles: a thin arm from the key to a round
+	// grip, the way every drawing program shows them.
+	if (path_.current >= 0 && path_.current < keysPx.size()) {
+		const QPointF k = pathDrag_ >= 0 ? keysPx[pathDrag_] : keysPx[path_.current];
+		for (int which = 0; which < 2; ++which) {
+			const bool show = which == 1 ? path_.showOut : path_.showIn;
+			if (!show)
+				continue;
+			const QPointF n = which == 1 ? path_.outHandle : path_.inHandle;
+			const QPointF h = canvasToWidgetF(n.x(), n.y());
+			p.setPen(QPen(QColor(0, 0, 0, 150), 2.6));
+			p.drawLine(k, h);
+			p.setPen(QPen(QColor(0xff, 0xff, 0xff, 220), 1.0));
+			p.drawLine(k, h);
+			p.setPen(QPen(QColor(0, 0, 0, 200), 1.4));
+			p.setBrush(handleDrag_ == which ? line : QColor(0xff, 0xff, 0xff));
+			p.drawEllipse(h, 4.5, 4.5);
 		}
 	}
 	p.restore();

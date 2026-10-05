@@ -4,9 +4,10 @@
 //
 // Position is its own keyframe channel (TlLanePos): a key that pins only scale
 // or rotation does not bend the path, so only the keys that pin position are
-// points on it. Between two of them the clip travels in a STRAIGHT line --
-// easing changes how fast it goes, never where -- so the path is exactly the
-// polyline through those keys, and the per-frame dots along it are where the
+// points on it. Between two of them the clip travels in a straight line, or
+// along a curve when the first key says so (PathCurve.hpp) -- easing changes
+// how fast it goes, never where -- so the path is the line through those keys,
+// sampled along each curve, and the per-frame dots along it are where the
 // clip really is on each frame: bunched up where it is slow, spread out where
 // it is fast. That is what makes an ease visible without playing it.
 //
@@ -33,6 +34,7 @@ struct MotionPathKey {
 
 struct MotionPath {
 	QVector<MotionPathKey> keys; // position keys, in time order
+	QVector<QPointF> line;       // the path as drawn: through the keys, curves sampled
 	QVector<QPointF> frames;     // the centre on every frame between the first and last key
 	bool drawable() const { return keys.size() >= 2; }
 };
@@ -55,6 +57,22 @@ inline MotionPath buildMotionPath(const TlClip &c, double fps, int maxFrames = 1
 	}
 	if (mp.keys.size() < 2)
 		return mp;
+	// The drawn line: a straight segment is its two ends, a curve 24 chords --
+	// smooth at any size the preview is shown at.
+	for (int j = 0; j + 1 < mp.keys.size(); ++j) {
+		const int a = mp.keys[j].keyIndex, b = mp.keys[j + 1].keyIndex;
+		const QPointF p0 = mp.keys[j].pos, p3 = mp.keys[j + 1].pos;
+		if (mp.line.isEmpty())
+			mp.line.append(p0);
+		if (c.keys[a].curvedPath) {
+			QPointF inA, outA, inB, outB;
+			c.pathHandles(a, inA, outA);
+			c.pathHandles(b, inB, outB);
+			for (int i = 1; i < 24; ++i)
+				mp.line.append(path_curve::bezierPoint(p0, p0 + outA, p3 + inB, p3, i / 24.0));
+		}
+		mp.line.append(p3);
+	}
 	const qint64 t0 = mp.keys.first().tMs, t1 = mp.keys.last().tMs;
 	const double step = std::max(1000.0 / std::max(1.0, fps), double(t1 - t0) / std::max(1, maxFrames));
 	for (double t = double(t0); t <= double(t1) + 0.5; t += step) {
@@ -62,6 +80,32 @@ inline MotionPath buildMotionPath(const TlClip &c, double fps, int maxFrames = 1
 		mp.frames.append(QPointF(tf.posX, tf.posY));
 	}
 	return mp;
+}
+
+// Which handles key `keyIndex` shows on the preview, and where (canvas
+// fractions, absolute): the OUT handle when the path leaving it is curved, the
+// IN handle when the path arriving at it is. A straight path has no handles
+// to show; neither does a key that does not pin position.
+struct PathHandles {
+	bool in = false, out = false;
+	QPointF inPos, outPos;
+};
+inline PathHandles pathHandlesFor(const TlClip &c, int keyIndex)
+{
+	PathHandles h;
+	if (keyIndex < 0 || keyIndex >= c.keys.size() || !c.keys[keyIndex].channel(TlLanePos).on)
+		return h;
+	const QVector<int> pk = c.keysOnLane(TlLanePos);
+	const int j = int(pk.indexOf(keyIndex));
+	const TlKeyframe &k = c.keys[keyIndex];
+	const QPointF at(k.tf.posX, k.tf.posY);
+	QPointF in, out;
+	c.pathHandles(keyIndex, in, out);
+	h.out = k.curvedPath && j + 1 < pk.size();
+	h.in = j > 0 && c.keys[pk[j - 1]].curvedPath;
+	h.inPos = at + in;
+	h.outPos = at + out;
+	return h;
 }
 
 // Distance from p to the segment ab, in the same units as the points.

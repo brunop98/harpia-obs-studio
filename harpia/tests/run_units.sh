@@ -640,6 +640,12 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$WORK/moc_EditorWidgets.cpp" "$WORK/moc_ParamSlider2.cpp" \
 	-o "$WORK/previewaspect_test" $LF
 
+# Curved motion paths: Bezier segments, automatic and dragged handles, an even
+# pace along the curve, and the line the preview draws.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/curvepath_test.cpp" "$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	-o "$WORK/curvepath_test" $LF
+
 # The motion path: position keys only, speed dots, a click back to a time;
 # pick, drag, add and right-click on the preview; Delete takes the picked key.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -882,6 +888,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/opaqueframe_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/batchplan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textvariations_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/richtext_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/curvepath_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/stillweight_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewcache_test" || rc=1
 if command -v xvfb-run >/dev/null 2>&1; then

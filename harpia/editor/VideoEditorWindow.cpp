@@ -843,6 +843,43 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			c.keys[keyId].tf.posY = ny;
 		});
 	});
+	// A curve handle dragged on the preview. The first drag turns the key's
+	// automatic handles into its own (starting from where the automatic ones
+	// were, so nothing jumps); they stay mirrored -- a smooth corner -- unless
+	// Alt is held, which breaks them for good, as in any drawing program.
+	connect(canvas_, &PreviewCanvas::pathHandleDragged, this,
+		[this](int keyId, bool outHandle, double nx, double ny, bool breakHandles) {
+			if (playing_)
+				stopPlayback();
+			pathKeyPicked_ = keyId;
+			editSelectedClip([=](TlClip &c) {
+				if (keyId < 0 || keyId >= c.keys.size())
+					return;
+				QPointF in, out;
+				c.pathHandles(keyId, in, out);
+				TlKeyframe &k = c.keys[keyId];
+				if (!k.handlesManual) {
+					k.handlesManual = true;
+					k.inX = in.x();
+					k.inY = in.y();
+					k.outX = out.x();
+					k.outY = out.y();
+				}
+				k.handlesBroken = k.handlesBroken || breakHandles;
+				const QPointF off = QPointF(nx, ny) - QPointF(k.tf.posX, k.tf.posY);
+				if (outHandle) {
+					k.outX = off.x();
+					k.outY = off.y();
+				} else {
+					k.inX = off.x();
+					k.inY = off.y();
+				}
+				if (!k.handlesBroken) {
+					(outHandle ? k.inX : k.outX) = -off.x();
+					(outHandle ? k.inY : k.outY) = -off.y();
+				}
+			});
+		});
 	connect(canvas_, &PreviewCanvas::pathKeyDragFinished, this, [this]() {
 		commitSnapshot();
 		refreshKeyframeEditor();
@@ -6855,6 +6892,23 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	kfRow->addWidget(kfDel);
 	kfRow->addWidget(kfNext);
 	v->addLayout(kfRow);
+	// The motion path's shape for the whole clip. Per key: right-click a key
+	// on the preview's path.
+	{
+		auto *pathRow = new QHBoxLayout;
+		auto *curveBtn = new QPushButton(QStringLiteral("Curve path"), clipBox_);
+		curveBtn->setToolTip(QStringLiteral(
+			"Move between position keys along smooth curves instead of straight lines. Drag the "
+			"round handles on the preview to bend them; right-click a key to change just that "
+			"segment."));
+		auto *straightBtn = new QPushButton(QStringLiteral("Straight path"), clipBox_);
+		straightBtn->setToolTip(QStringLiteral("Straight lines between the position keys again"));
+		pathRow->addWidget(curveBtn, 1);
+		pathRow->addWidget(straightBtn, 1);
+		v->addLayout(pathRow);
+		connect(curveBtn, &QPushButton::clicked, this, [this]() { setSelectedClipPathCurved(true); });
+		connect(straightBtn, &QPushButton::clicked, this, [this]() { setSelectedClipPathCurved(false); });
+	}
 	connect(kfAdd, &QPushButton::clicked, this, &VideoEditorWindow::addKeyframeAtPlayhead);
 	connect(kfDel, &QPushButton::clicked, this, &VideoEditorWindow::removeKeyframeAtPlayhead);
 	connect(kfPrev, &QPushButton::clicked, this, [this]() { stepKeyframe(-1); });
@@ -8432,6 +8486,14 @@ void VideoEditorWindow::refreshMotionPath()
 					pd.current = i;
 			}
 			pd.frames = mp.frames;
+			pd.line = mp.line;
+			if (pd.current >= 0) {
+				const PathHandles h = pathHandlesFor(*c, pd.keyIds[pd.current]);
+				pd.showIn = h.in;
+				pd.showOut = h.out;
+				pd.inHandle = h.inPos;
+				pd.outHandle = h.outPos;
+			}
 		}
 	}
 	// A picked key stays picked (for Delete) only while the playhead is on it:
@@ -8476,7 +8538,7 @@ void VideoEditorWindow::motionPathKeyMenu(int keyId, const QPoint &globalPos)
 	QAction *go = menu.addAction(QStringLiteral("Go to this keyframe"));
 	QMenu *easeMenu = menu.addMenu(QStringLiteral("Easing to the next key"));
 	easeMenu->setToolTip(QStringLiteral("How the clip speeds up and slows down between this key and the next. "
-					    "The path stays straight; the dots show the speed."));
+					    "It changes the speed, never the path; the dots show the speed."));
 	QVector<QAction *> easeActs;
 	for (int i = 0; i < kTlEaseCount; ++i) {
 		const TlEase e = TlEase(i);
@@ -8488,6 +8550,19 @@ void VideoEditorWindow::motionPathKeyMenu(int keyId, const QPoint &globalPos)
 		a->setData(i);
 		easeActs.append(a);
 	}
+	// The path's shape, which the ease never changes.
+	const TlKeyframe &key = c->keys[keyId];
+	QAction *curved = menu.addAction(QStringLiteral("Curved path to the next key"));
+	curved->setCheckable(true);
+	curved->setChecked(key.curvedPath);
+	curved->setToolTip(QStringLiteral("Travel to the next position key along a curve instead of a straight "
+					  "line. Drag the round handles on the preview to bend it (Alt-drag moves one "
+					  "handle alone)."));
+	QAction *resetHandles = menu.addAction(QStringLiteral("Smooth handles (reset)"));
+	resetHandles->setEnabled(key.handlesManual);
+	resetHandles->setToolTip(QStringLiteral("Put this key's handles back to the automatic smooth curve"));
+	QAction *curveAll = menu.addAction(QStringLiteral("Curve the whole path"));
+	QAction *straightAll = menu.addAction(QStringLiteral("Straighten the whole path"));
 	menu.addSeparator();
 	QAction *del = menu.addAction(QStringLiteral("Delete keyframe"));
 	del->setShortcut(QKeySequence(Qt::Key_Delete));
@@ -8509,7 +8584,37 @@ void VideoEditorWindow::motionPathKeyMenu(int keyId, const QPoint &globalPos)
 				cl.keys[keyId].channel(TlLanePos).ease = e;
 		});
 		commitSnapshot();
+	} else if (chosen == curved) {
+		const bool on = curved->isChecked();
+		editSelectedClip([keyId, on](TlClip &cl) {
+			if (keyId >= 0 && keyId < cl.keys.size())
+				cl.keys[keyId].curvedPath = on;
+		});
+		commitSnapshot();
+	} else if (chosen == resetHandles) {
+		editSelectedClip([keyId](TlClip &cl) {
+			if (keyId >= 0 && keyId < cl.keys.size()) {
+				cl.keys[keyId].handlesManual = false;
+				cl.keys[keyId].handlesBroken = false;
+			}
+		});
+		commitSnapshot();
+	} else if (chosen == curveAll || chosen == straightAll) {
+		setSelectedClipPathCurved(chosen == curveAll);
 	}
+}
+
+// Every position key of the selected clip curved (smooth, automatic handles
+// unless they were dragged) or straight again. One undo step.
+void VideoEditorWindow::setSelectedClipPathCurved(bool curved)
+{
+	editSelectedClip([curved](TlClip &cl) {
+		for (TlKeyframe &k : cl.keys)
+			if (k.channel(TlLanePos).on)
+				k.curvedPath = curved;
+	});
+	commitSnapshot();
+	refreshMotionPath();
 }
 
 // Snap the selected clip's rect to the canvas. `how` is the Align menu's

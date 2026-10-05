@@ -76,6 +76,9 @@ static void compareClip(const QString &w, const TlClip &a, const TlClip &b)
 			F(c, a.keys[i].channel(l), b.keys[i].channel(l), bez1);
 			F(c, a.keys[i].channel(l), b.keys[i].channel(l), bez2);
 		}
+		F(k, a.keys[i], b.keys[i], curvedPath); F(k, a.keys[i], b.keys[i], handlesManual);
+		F(k, a.keys[i], b.keys[i], handlesBroken); F(k, a.keys[i], b.keys[i], inX);
+		F(k, a.keys[i], b.keys[i], inY); F(k, a.keys[i], b.keys[i], outX); F(k, a.keys[i], b.keys[i], outY);
 	}
 	if (a.type == TlClip::Type::Text)
 		compareText(w + QStringLiteral(".text"), a.text, b.text);
@@ -155,6 +158,14 @@ static TimelineModel everything()
 	v.crop = QRect(4, 8, 640, 360);
 	v.keys = {key(0, 0.1, 0.2, 2.5, 45, 0.5, TlEase::EaseIn, 0.11, 0.91, 0xF),
 		  key(750, 0.9, 0.8, 0.5, -30, 1.0, TlEase::Bezier, 0.2, 0.7, 0x5)};
+	// A curved path with dragged, broken handles on the first key.
+	v.keys[0].curvedPath = true;
+	v.keys[0].handlesManual = true;
+	v.keys[0].handlesBroken = true;
+	v.keys[0].inX = -0.05;
+	v.keys[0].inY = 0.125;
+	v.keys[0].outX = 0.3;
+	v.keys[0].outY = -0.0625;
 	v.scripts = {TlScript{QStringLiteral("wobble"), {{QStringLiteral("amt"), 3.5}, {QStringLiteral("hz"), 2.0}}}};
 	{
 		ComponentInstance ci;

@@ -571,6 +571,8 @@ private:
 	// The selected clip's position keys drawn on the preview, to click, drag,
 	// add to and delete from. Refreshed with the outline above.
 	void refreshMotionPath();
+	// Every position key of the selected clip curved or straight (one undo step).
+	void setSelectedClipPathCurved(bool curved);
 	void motionPathKeyMenu(int keyId, const QPoint &globalPos);
 	void deleteMotionPathKey(int keyId);
 	int pathKeyPicked_ = -1;

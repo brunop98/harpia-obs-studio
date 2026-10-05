@@ -15,6 +15,7 @@
 
 #include <functional>
 #include "Ease.hpp"
+#include "PathCurve.hpp"
 #include "TlTransform.hpp"
 #include "EffectClip.hpp"
 #include "Transitions.hpp"
@@ -59,6 +60,18 @@ struct TlKeyframe {
 	// exactly as it did.
 	TlKeyChannel pos, scale, rot, opacity;
 
+	// The motion PATH leaving this key, to the next key that pins position:
+	// straight (the default, and every key made before this existed) or a
+	// curve (PathCurve.hpp). The handles are offsets from this key's position,
+	// in canvas fractions; while `handlesManual` is off they are worked out
+	// from the neighbouring keys (a smooth curve) and the stored values are
+	// ignored. `handlesBroken`: in and out move independently (Alt-drag)
+	// instead of mirroring each other.
+	bool curvedPath = false;
+	bool handlesManual = false;
+	bool handlesBroken = false;
+	double inX = 0.0, inY = 0.0, outX = 0.0, outY = 0.0;
+
 	// The channel record for a lane index (0 = position, 1 = scale, 2 = rotation,
 	// 3 = opacity), so the editor can drive all four through one code path.
 	TlKeyChannel &channel(int lane)
@@ -80,7 +93,9 @@ struct TlKeyframe {
 		return tMs == o.tMs && tf.posX == o.tf.posX && tf.posY == o.tf.posY &&
 		       tf.scale == o.tf.scale && tf.rotation == o.tf.rotation &&
 		       tf.opacity == o.tf.opacity && pos == o.pos && scale == o.scale &&
-		       rot == o.rot && opacity == o.opacity;
+		       rot == o.rot && opacity == o.opacity && curvedPath == o.curvedPath &&
+		       handlesManual == o.handlesManual && handlesBroken == o.handlesBroken && inX == o.inX &&
+		       inY == o.inY && outX == o.outX && outY == o.outY;
 	}
 };
 
@@ -483,12 +498,85 @@ struct TlClip {
 		};
 		// Position is one channel driving two fields, so X and Y can never
 		// disagree about which keys they are between.
-		solve(TlLanePos, &TlTransform::posX);
-		solve(TlLanePos, &TlTransform::posY);
+		solvePosition(t, out);
 		solve(TlLaneScale, &TlTransform::scale);
 		solve(TlLaneRot, &TlTransform::rotation);
 		solve(TlLaneOpacity, &TlTransform::opacity);
 		return out;
+	}
+
+	// Position: the same walk as the other channels, plus the curve. A
+	// segment whose first key is curved follows a cubic Bezier (that key's
+	// OUT handle, the next key's IN handle) at an even pace: the ease says how
+	// far ALONG the path, by length, the clip is (PathCurve.hpp).
+	void solvePosition(qint64 t, TlTransform &out) const
+	{
+		const QVector<int> pk = keysOnLane(TlLanePos);
+		if (pk.isEmpty())
+			return;
+		const TlKeyframe &first = keys[pk.first()], &last = keys[pk.last()];
+		if (t <= first.tMs) {
+			out.posX = first.tf.posX;
+			out.posY = first.tf.posY;
+			return;
+		}
+		if (t >= last.tMs) {
+			out.posX = last.tf.posX;
+			out.posY = last.tf.posY;
+			return;
+		}
+		int j = 0;
+		while (j + 1 < pk.size() && keys[pk[j + 1]].tMs <= t)
+			++j;
+		if (j + 1 >= pk.size()) {
+			out.posX = keys[pk[j]].tf.posX;
+			out.posY = keys[pk[j]].tf.posY;
+			return;
+		}
+		const TlKeyframe &a = keys[pk[j]], &b = keys[pk[j + 1]];
+		const qint64 span = std::max<qint64>(1, b.tMs - a.tMs);
+		const double u = tlEaseAt(a.pos.ease, std::clamp(double(t - a.tMs) / double(span), 0.0, 1.0), a.pos.bez1,
+					  a.pos.bez2);
+		const QPointF p0(a.tf.posX, a.tf.posY), p3(b.tf.posX, b.tf.posY);
+		if (!a.curvedPath) {
+			const QPointF p = p0 + (p3 - p0) * u;
+			out.posX = p.x();
+			out.posY = p.y();
+			return;
+		}
+		QPointF inA, outA, inB, outB;
+		pathHandles(pk[j], inA, outA);
+		pathHandles(pk[j + 1], inB, outB);
+		const QPointF p = path_curve::pointAlong(p0, p0 + outA, p3 + inB, p3, u);
+		out.posX = p.x();
+		out.posY = p.y();
+	}
+
+	// Key `i`'s path handles as offsets from its position: the stored ones once
+	// dragged, otherwise the automatic smooth ones from its neighbours on the
+	// position lane.
+	void pathHandles(int i, QPointF &in, QPointF &out) const
+	{
+		if (i < 0 || i >= keys.size()) {
+			in = out = QPointF();
+			return;
+		}
+		const TlKeyframe &k = keys[i];
+		if (k.handlesManual) {
+			in = QPointF(k.inX, k.inY);
+			out = QPointF(k.outX, k.outY);
+			return;
+		}
+		const QVector<int> pk = keysOnLane(TlLanePos);
+		const int j = int(pk.indexOf(i));
+		const QPointF cur(k.tf.posX, k.tf.posY);
+		QPointF prev, next;
+		const bool hasPrev = j > 0, hasNext = j >= 0 && j + 1 < pk.size();
+		if (hasPrev)
+			prev = QPointF(keys[pk[j - 1]].tf.posX, keys[pk[j - 1]].tf.posY);
+		if (hasNext)
+			next = QPointF(keys[pk[j + 1]].tf.posX, keys[pk[j + 1]].tf.posY);
+		path_curve::autoHandles(cur, hasPrev ? &prev : nullptr, hasNext ? &next : nullptr, in, out);
 	}
 
 	// Keys that pin `lane`, in time order — what one tab of the keyframe editor

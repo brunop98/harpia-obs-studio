@@ -128,8 +128,9 @@ try {
 
     if ($Reconfigure -or -not $cacheExists) {
         Write-Host '==> Configuring (downloads Qt6/obs-deps on first run)...' -ForegroundColor Cyan
-        $cfgArgs = @('-S', $RepoRoot, '-B', $BuildDir,
-                     '-DENABLE_NEW_MPEGTS_OUTPUT=OFF', '-DENABLE_BROWSER=OFF')
+        # No feature flags needed: the SRT/RIST output and the browser source
+        # these used to switch off are no longer in the tree.
+        $cfgArgs = @('-S', $RepoRoot, '-B', $BuildDir)
         if (-not $cacheExists) {
             $cfgArgs += @('-G', $selectedGenerator, '-A', 'x64')
         }

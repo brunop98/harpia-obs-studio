@@ -3,6 +3,7 @@
 #include <QContextMenuEvent>
 #include <QGuiApplication>
 #include <QKeyEvent>
+#include <QFontMetrics>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
@@ -528,6 +529,22 @@ void RegionTool::contextMenuEvent(QContextMenuEvent *e)
 	// Right-click the region to save it as a reusable named region, or manage
 	// the saved list. Owner (MainWindow) handles the actual save/manage.
 	QMenu menu;
+	// The area from a window: point at one, and optionally keep the area on it.
+	QAction *pickAct = nullptr;
+	QAction *followAct = nullptr;
+	if (windowPick_) {
+		pickAct = menu.addAction(QStringLiteral("Snap to a window…"));
+		pickAct->setToolTip(QStringLiteral("Point at a window and click: the area becomes that window"));
+		if (!followTitle_.isEmpty()) {
+			followAct = menu.addAction(QStringLiteral("Follow “%1”").arg(
+				QFontMetrics(menu.font()).elidedText(followTitle_, Qt::ElideRight, 260)));
+			followAct->setCheckable(true);
+			followAct->setChecked(following_);
+			followAct->setToolTip(QStringLiteral(
+				"Keep the area on that window when it moves or is resized -- also while recording"));
+		}
+		menu.addSeparator();
+	}
 	QAction *saveAct = menu.addAction(QStringLiteral("Save Region…"));
 	QAction *manageAct = menu.addAction(QStringLiteral("Manage saved regions…"));
 	QAction *arrangeAct = nullptr;
@@ -541,7 +558,11 @@ void RegionTool::contextMenuEvent(QContextMenuEvent *e)
 		clearAct->setEnabled(extraAreas_ > 0);
 	}
 	QAction *chosen = menu.exec(e->globalPos());
-	if (chosen && chosen == arrangeAct)
+	if (chosen && chosen == pickAct)
+		emit pickWindowRequested();
+	else if (chosen && chosen == followAct)
+		emit followWindowToggled(followAct->isChecked());
+	else if (chosen && chosen == arrangeAct)
 		emit arrangeAreasRequested();
 	else if (chosen && chosen == clearAct)
 		emit clearAreasRequested();

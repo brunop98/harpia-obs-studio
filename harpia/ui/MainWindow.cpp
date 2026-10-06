@@ -18,6 +18,8 @@
 #include "CountdownOverlay.hpp"
 #include "RegionDialogs.hpp"
 #include "MonitorMatch.hpp"
+#include "WindowPicker.hpp"
+#include "platform/WindowList.hpp"
 #include "RegionTool.hpp"
 #include "MultiAreaOverlay.hpp"
 #include "ScreenBorderOverlay.hpp"
@@ -785,6 +787,15 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		&MainWindow::openSavedRegionsManager);
 	connect(regionTool_.get(), &RegionTool::arrangeAreasRequested, this, &MainWindow::onArrangeAreas);
 	connect(regionTool_.get(), &RegionTool::clearAreasRequested, this, [this]() { clearAllAreas(true); });
+	connect(regionTool_.get(), &RegionTool::pickWindowRequested, this, &MainWindow::startWindowPick);
+	connect(regionTool_.get(), &RegionTool::followWindowToggled, this, &MainWindow::setFollowWindow);
+	// Dragging the frame by hand means "this framing, not the window's": stop
+	// following, or the next tick would snap it back.
+	connect(regionTool_.get(), &RegionTool::interactionFinished, this, [this]() {
+		if (followWindowOn_)
+			setFollowWindow(false);
+	});
+	syncWindowMenu();
 
 	// The memoized OBS-monitor -> QScreen mapping holds until the display
 	// topology changes. When it does, the live capture source may also be
@@ -2655,7 +2666,16 @@ void MainWindow::onCaptureModeChanged()
 		openSavedRegionsManager();
 		return;
 	}
+	if (sel == QStringLiteral("pickwindow")) {
+		QSignalBlocker block(captureModeCombo_);
+		captureModeCombo_->setCurrentIndex(prevCaptureIndex_);
+		startWindowPick();
+		return;
+	}
 	prevCaptureIndex_ = captureModeCombo_->currentIndex();
+	// Any other choice than the region itself lets go of a picked window.
+	if (sel != QStringLiteral("region"))
+		forgetPickedWindow();
 
 	if (sel == QStringLiteral("audio")) {
 		// No picture at all. The region goes with it, and the capture source is
@@ -2722,6 +2742,15 @@ void MainWindow::reloadCaptureModeCombo()
 	captureModeCombo_->clear();
 	for (RecordMode m : {RecordMode::Monitor, RecordMode::Region, RecordMode::AudioOnly})
 		captureModeCombo_->addItem(recordModeLabel(m), QString::fromLatin1(recordModeTag(m)));
+	// An action, like "Manage saved regions…": point at a window and the region
+	// becomes it. After the three modes so their positions never move.
+	if (window_list::available()) {
+		captureModeCombo_->addItem(QStringLiteral("Pick a window…"), QStringLiteral("pickwindow"));
+		captureModeCombo_->setItemData(captureModeCombo_->count() - 1,
+					       QStringLiteral("Point at a window and click: the recording area becomes "
+							      "that window (as you see it, without its shadow)"),
+					       Qt::ToolTipRole);
+	}
 
 	const auto &regions = regionStore_->regions();
 	if (!regions.empty()) {
@@ -2744,6 +2773,125 @@ void MainWindow::reloadCaptureModeCombo()
 		idx = 0;
 	captureModeCombo_->setCurrentIndex(idx);
 	prevCaptureIndex_ = captureModeCombo_->currentIndex();
+}
+
+// ---- The area from a window ------------------------------------------------
+
+void MainWindow::startWindowPick()
+{
+	if (!window_list::available())
+		return;
+	if (!windowPicker_) {
+		windowPicker_ = std::make_unique<WindowPicker>();
+		connect(windowPicker_.get(), &WindowPicker::picked, this, &MainWindow::applyPickedWindow);
+		connect(windowPicker_.get(), &WindowPicker::cancelled, this, &MainWindow::updateRegionToolVisibility);
+	}
+	// The frame is one of our windows (never picked), but it would sit over the
+	// window you are pointing at.
+	if (regionTool_ && !recorder_.isRecording())
+		regionTool_->hide();
+	windowPicker_->start();
+}
+
+void MainWindow::applyPickedWindow(const DesktopWindow &w)
+{
+	// The physical rectangle of each display, in the capture's own order.
+	QVector<QRect> monitors;
+	const int count = std::max(hwMonitorCount_, int(CaptureManager::enumerateMonitors().size()));
+	for (int i = 0; i < count; ++i) {
+		QScreen *s = screenForMonitor(i);
+		monitors.push_back(s ? window_list::monitorRect(s->name()) : QRect());
+	}
+	const int m = window_region::monitorFor(w.bounds, monitors);
+	const std::optional<QRect> r = m >= 0 ? window_region::regionForWindow(w.bounds, monitors[m]) : std::nullopt;
+	if (!r) {
+		QMessageBox::information(this, QStringLiteral("Pick a window"),
+					 QStringLiteral("Too little of that window is on a screen to record."));
+		updateRegionToolVisibility();
+		return;
+	}
+	// The display cannot change under a running recording.
+	if (recorder_.isRecording() && m != activePreset().monitorIndex) {
+		QMessageBox::information(this, QStringLiteral("Pick a window"),
+					 QStringLiteral("That window is on another display. Stop the recording to "
+							"record it, or pick a window on the display being recorded."));
+		updateRegionToolVisibility();
+		return;
+	}
+	applyMonitorIndex(m);
+	pickedWindow_ = w.id;
+	pickedWindowTitle_ = w.title.isEmpty() ? QStringLiteral("this window") : w.title;
+	blog(LOG_INFO, "[harpia] area set to a window: %dx%d at %d,%d on monitor #%d", r->width(), r->height(),
+	     r->x(), r->y(), m);
+	setRegionFromDevicePx(*r);
+	syncWindowMenu();
+}
+
+void MainWindow::setRegionFromDevicePx(const QRect &r)
+{
+	currentRegion_ = CaptureRegion{true, r.x(), r.y(), r.width(), r.height()};
+	const int regionIdx = captureModeCombo_->findData(QString::fromLatin1(recordModeTag(RecordMode::Region)));
+	if (captureMode_ != CaptureMode::Region || captureModeCombo_->currentIndex() != regionIdx) {
+		// Through the mode switch, which shows the frame on the right display
+		// with currentRegion_ and applies the crop.
+		captureModeCombo_->setCurrentIndex(regionIdx);
+	} else if (regionTool_) {
+		regionTool_->setScreen(screenForActivePreset());
+		regionTool_->setRegionDevicePx(r); // emits regionChanged: the crop follows
+	}
+	updateRegionToolVisibility();
+}
+
+void MainWindow::setFollowWindow(bool on)
+{
+	followWindowOn_ = on && pickedWindow_ != 0;
+	if (followWindowOn_) {
+		if (!followWindowTimer_) {
+			followWindowTimer_ = new QTimer(this);
+			followWindowTimer_->setInterval(100);
+			connect(followWindowTimer_, &QTimer::timeout, this, &MainWindow::followWindowTick);
+		}
+		followWindowTimer_->start();
+		followWindowTick(); // catch up now, not in 100 ms
+	} else if (followWindowTimer_) {
+		followWindowTimer_->stop();
+	}
+	syncWindowMenu();
+}
+
+void MainWindow::followWindowTick()
+{
+	if (!followWindowOn_ || captureMode_ != CaptureMode::Region || !regionTool_ || regionTool_->isInteracting())
+		return;
+	// Minimised, hidden or closed: hold the last framing until it is back.
+	const std::optional<QRect> b = window_list::boundsOf(pickedWindow_);
+	if (!b)
+		return;
+	QScreen *s = screenForActivePreset();
+	const QRect mon = s ? window_list::monitorRect(s->name()) : QRect();
+	if (mon.isNull())
+		return;
+	// On the display being recorded: a window dragged to another one is
+	// followed up to the edge, not across (that would mean a new capture).
+	const std::optional<QRect> r = window_region::regionForWindow(*b, mon);
+	if (!r || (r->x() == currentRegion_.x && r->y() == currentRegion_.y && r->width() == currentRegion_.width &&
+		   r->height() == currentRegion_.height))
+		return;
+	regionTool_->setRegionDevicePx(*r); // emits regionChanged -> the crop, live, even while recording
+}
+
+void MainWindow::forgetPickedWindow()
+{
+	pickedWindow_ = 0;
+	pickedWindowTitle_.clear();
+	setFollowWindow(false);
+}
+
+void MainWindow::syncWindowMenu()
+{
+	if (regionTool_)
+		regionTool_->setWindowMenu(window_list::available(), pickedWindow_ ? pickedWindowTitle_ : QString(),
+					   followWindowOn_);
 }
 
 void MainWindow::onSaveRegionRequested()

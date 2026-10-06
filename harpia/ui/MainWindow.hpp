@@ -18,6 +18,8 @@
 #include "model/FileNameTemplate.hpp"
 #include "model/RegionStore.hpp"
 #include "platform/IdleMonitor.hpp"
+#include "platform/WindowList.hpp"
+#include "ui/WindowPicker.hpp"
 
 #include <QElapsedTimer>
 #include <QHash>
@@ -390,6 +392,15 @@ private:
 	void tickMultiArea();
 	void updateAreaOverlay();
 	void onArrangeAreas();
+	// The area from a window: point and click (WindowPicker), then optionally
+	// keep the area on that window as it moves or resizes.
+	void startWindowPick();
+	void applyPickedWindow(const harpia::DesktopWindow &w);
+	void setRegionFromDevicePx(const QRect &deviceRect); // a region on the active display
+	void setFollowWindow(bool on);
+	void followWindowTick();
+	void forgetPickedWindow();
+	void syncWindowMenu();
 	void onAreasEdited(int monitor, const QVector<QPoint> &tops);
 	void finishArrange();
 	// Every area but the region, on every monitor. `confirm` asks first (the
@@ -537,6 +548,11 @@ private:
 	std::unique_ptr<ClipLibraryWindow> clipWindow_;
 	std::unique_ptr<ErrorLogsPanel> errorLogsPanel_;
 	std::unique_ptr<RegionTool> regionTool_;
+	std::unique_ptr<WindowPicker> windowPicker_;
+	quintptr pickedWindow_ = 0;      // the window the area was set from (0 = none)
+	QString pickedWindowTitle_;
+	bool followWindowOn_ = false;    // keep the area on it (off unless asked)
+	QTimer *followWindowTimer_ = nullptr;
 	std::unique_ptr<MouseFxOverlay> mouseFx_;
 	std::unique_ptr<ScreenBorderOverlay> screenBorder_;
 	std::unique_ptr<RecorderControlsOverlay> floatingControls_; // desktop Record/Pause/Stop HUD

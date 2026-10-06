@@ -640,6 +640,18 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$WORK/moc_EditorWidgets.cpp" "$WORK/moc_ParamSlider2.cpp" \
 	-o "$WORK/previewaspect_test" $LF
 
+# Area from a window: the window under the pointer (never our overlay), its
+# monitor, and its area clipped, monitor-relative and even-sized.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/windowregion_test.cpp" -o "$WORK/windowregion_test" $LF
+
+# The window picker's layer: hover outlines, click picks, never our own
+# window, Esc / right-click cancel.
+"$MOC" -I"$H" "$H/ui/WindowPicker.hpp" -o "$WORK/moc_WindowPicker.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/windowpicker_test.cpp" "$H/ui/WindowPicker.cpp" "$H/platform/nix/NixWindowList.cpp" \
+	"$WORK/moc_WindowPicker.cpp" -o "$WORK/windowpicker_test" $LF
+
 # Curved motion paths: Bezier segments, automatic and dragged handles, an even
 # pace along the curve, and the line the preview draws.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -889,6 +901,8 @@ QT_QPA_PLATFORM=offscreen "$WORK/batchplan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textvariations_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/richtext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/curvepath_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/windowregion_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/windowpicker_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/stillweight_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewcache_test" || rc=1
 if command -v xvfb-run >/dev/null 2>&1; then

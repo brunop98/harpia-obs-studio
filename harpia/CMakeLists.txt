@@ -129,6 +129,7 @@ target_sources(
     model/RegionStore.cpp
     model/RegionStore.hpp
     platform/IdleMonitor.hpp
+    platform/WindowList.hpp
     library/AudioCard.cpp
     library/AudioCard.hpp
     library/ClipLibrary.cpp
@@ -184,6 +185,8 @@ target_sources(
 	ui/UiText.hpp
     ui/MainDevPanel.hpp
     ui/RegionTool.cpp
+    ui/WindowPicker.cpp
+    ui/WindowPicker.hpp
     ui/RegionTool.hpp
     ui/MultiAreaOverlay.cpp
     ui/MultiAreaOverlay.hpp
@@ -354,16 +357,18 @@ if(OS_WINDOWS)
   target_sources(harpia-recorder PRIVATE
     platform/win/WinIdleMonitor.cpp
     platform/win/WinForegroundWatcher.cpp
+    platform/win/WinWindowList.cpp
     platform/win/WinCameraAccess.cpp
     # Compiled into the .exe as the application icon (Explorer/taskbar).
     resources/harpia.rc)
   # DPAPI (CryptProtectData) seals the transcription API key -- SecretStore.cpp.
   # dbghelp: the stack and the minidump in a crash report -- CrashGuard.cpp.
-  target_link_libraries(harpia-recorder PRIVATE crypt32 dbghelp)
+  target_link_libraries(harpia-recorder PRIVATE crypt32 dbghelp dwmapi)
 elseif(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
   target_sources(harpia-recorder PRIVATE
     platform/nix/NixIdleMonitor.cpp
     platform/nix/NixForegroundWatcher.cpp
+    platform/nix/NixWindowList.cpp
     platform/nix/NixCameraAccess.cpp)
   # Wayland/GNOME idle uses the Mutter IdleMonitor over D-Bus (Qt::DBus); X11/Xss
   # are loaded at runtime via dlopen, so only libdl is needed at link time.
@@ -373,6 +378,7 @@ elseif(OS_MACOS)
   target_sources(harpia-recorder PRIVATE
     platform/mac/MacIdleMonitor.cpp
     platform/mac/MacForegroundWatcher.cpp
+    platform/mac/MacWindowList.cpp
     platform/mac/MacCameraAccess.cpp)
   target_link_libraries(harpia-recorder PRIVATE "-framework CoreGraphics")
 endif()

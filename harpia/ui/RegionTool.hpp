@@ -130,6 +130,15 @@ public:
 		extraAreas_ = extraAreas;
 	}
 
+	// "Snap to a window…" on the right-click menu (where the platform can list
+	// windows), and "Follow <title>" once the area came from one.
+	void setWindowMenu(bool canPick, const QString &followTitle, bool following)
+	{
+		windowPick_ = canPick;
+		followTitle_ = followTitle;
+		following_ = following;
+	}
+
 	// Paused state — only meaningful in Recording mode; drives the border color
 	// (yellow when paused, red while actively recording).
 	void setPaused(bool paused);
@@ -142,6 +151,8 @@ signals:
 	void manageRegionsRequested(); // "Manage saved regions…" chosen
 	void arrangeAreasRequested();  // "Arrange areas…" chosen (Multi-Area)
 	void clearAreasRequested();    // "Remove all areas" chosen (Multi-Area)
+	void pickWindowRequested();    // "Snap to a window…" chosen
+	void followWindowToggled(bool on); // "Follow <window>" toggled
 	// A move or resize finished. The owner defers mode changes while a drag is
 	// in flight (see isInteracting), so it needs telling when to look again --
 	// grabbing the overlay makes IT the active window, which usually means the
@@ -187,6 +198,9 @@ private:
 	bool paused_ = false;
 	bool moveHandle_ = false;
 	bool multiAreaMenu_ = false;
+	bool windowPick_ = false;
+	QString followTitle_;
+	bool following_ = false;
 	int extraAreas_ = 0;
 
 	// Coalesces the drag's mask rebuild + regionChanged to ~60 Hz (the window

@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.28...3.30)
 
 option(ENABLE_FFMPEG_LOGGING "Enables obs-ffmpeg logging" OFF)
-option(ENABLE_NEW_MPEGTS_OUTPUT "Use native SRT/RIST mpegts output" ON)
+# Not here: the native SRT/RIST streaming output (and the librist / libsrt it
+# needed) and the media source (with shared/media-playback). Harpia records
+# files; it neither streams nor plays media through libobs. The ffmpeg muxer
+# keeps its own mpegts output, as it does upstream with that option off.
 
 if(OS_LINUX OR OS_WINDOWS)
   option(ENABLE_FFMPEG_NVENC "Enable legacy FFmpeg NVENC encoder" OFF)
@@ -19,10 +22,7 @@ target_sources(
   PRIVATE
     $<$<BOOL:${ENABLE_FFMPEG_LOGGING}>:obs-ffmpeg-logging.c>
     $<$<BOOL:${ENABLE_FFMPEG_NVENC}>:obs-ffmpeg-nvenc.c>
-    $<$<BOOL:${ENABLE_NEW_MPEGTS_OUTPUT}>:obs-ffmpeg-mpegts.c>
-    $<$<BOOL:${ENABLE_NEW_MPEGTS_OUTPUT}>:obs-ffmpeg-rist.h>
-    $<$<BOOL:${ENABLE_NEW_MPEGTS_OUTPUT}>:obs-ffmpeg-srt.h>
-    $<$<BOOL:${ENABLE_NEW_MPEGTS_OUTPUT}>:obs-ffmpeg-url.h>
+    obs-ffmpeg-url.h
     $<$<PLATFORM_ID:Linux,FreeBSD,OpenBSD>:obs-ffmpeg-vaapi.c>
     $<$<PLATFORM_ID:Linux,FreeBSD,OpenBSD>:vaapi-utils.c>
     $<$<PLATFORM_ID:Linux,FreeBSD,OpenBSD>:vaapi-utils.h>
@@ -36,7 +36,6 @@ target_sources(
     obs-ffmpeg-mux.h
     obs-ffmpeg-output.c
     obs-ffmpeg-output.h
-    obs-ffmpeg-source.c
     obs-ffmpeg-video-encoders.c
     obs-ffmpeg.c
 )
@@ -47,14 +46,12 @@ target_compile_definitions(
   PRIVATE
     $<$<BOOL:${ENABLE_FFMPEG_LOGGING}>:ENABLE_FFMPEG_LOGGING>
     $<$<BOOL:${ENABLE_FFMPEG_NVENC}>:ENABLE_FFMPEG_NVENC>
-    $<$<BOOL:${ENABLE_NEW_MPEGTS_OUTPUT}>:NEW_MPEGTS_OUTPUT>
 )
 
 target_link_libraries(
   obs-ffmpeg
   PRIVATE
     OBS::libobs
-    OBS::media-playback
     OBS::opts-parser
     FFmpeg::avcodec
     FFmpeg::avfilter
@@ -69,8 +66,6 @@ target_link_libraries(
     $<$<PLATFORM_ID:Linux,FreeBSD,OpenBSD>:Libva::drm>
     $<$<PLATFORM_ID:Linux,FreeBSD,OpenBSD>:Libpci::pci>
     $<$<PLATFORM_ID:Linux,FreeBSD,OpenBSD>:Libdrm::Libdrm>
-    $<$<BOOL:${ENABLE_NEW_MPEGTS_OUTPUT}>:Librist::Librist>
-    $<$<BOOL:${ENABLE_NEW_MPEGTS_OUTPUT}>:Libsrt::Libsrt>
 )
 
 if(OS_WINDOWS)

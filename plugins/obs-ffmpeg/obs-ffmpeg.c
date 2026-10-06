@@ -22,7 +22,6 @@ MODULE_EXPORT const char *obs_module_description(void)
 	return "FFmpeg based sources/outputs/encoders";
 }
 
-extern struct obs_source_info ffmpeg_source;
 extern struct obs_output_info ffmpeg_output;
 extern struct obs_output_info ffmpeg_muxer;
 extern struct obs_output_info ffmpeg_mpegts_muxer;
@@ -343,7 +342,6 @@ static void register_encoder_if_available(struct obs_encoder_info *info, const c
 
 bool obs_module_load(void)
 {
-	obs_register_source(&ffmpeg_source);
 	obs_register_output(&ffmpeg_output);
 	obs_register_output(&ffmpeg_muxer);
 	obs_register_output(&ffmpeg_mpegts_muxer);

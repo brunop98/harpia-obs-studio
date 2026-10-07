@@ -16,9 +16,8 @@ find_package(ZLIB REQUIRED)
 find_package(Uthash REQUIRED)
 
 find_package(jansson REQUIRED)
-if(NOT TARGET OBS::caption)
-  add_subdirectory("${CMAKE_SOURCE_DIR}/deps/libcaption" "${CMAKE_BINARY_DIR}/deps/libcaption")
-endif()
+# No libcaption: the CEA-608 caption injection in obs-output.c is gone (Harpia
+# burns its subtitles into the picture and never sends caption data).
 
 add_library(libobs SHARED)
 add_library(OBS::libobs ALIAS libobs)
@@ -50,8 +49,6 @@ target_sources(
     obs-hotkeys.h
     obs-interaction.h
     obs-internal.h
-    obs-missing-files.c
-    obs-missing-files.h
     obs-module.c
     obs-module.h
     obs-nal.c
@@ -239,7 +236,6 @@ target_compile_definitions(
 target_link_libraries(
   libobs
   PRIVATE
-    OBS::caption
     OBS::libobs-version
     FFmpeg::avcodec
     FFmpeg::avformat
@@ -313,7 +309,6 @@ set(
   obs-hotkey.h
   obs-hotkeys.h
   obs-interaction.h
-  obs-missing-files.h
   obs-module.h
   obs-nal.h
   obs-nix-platform.h

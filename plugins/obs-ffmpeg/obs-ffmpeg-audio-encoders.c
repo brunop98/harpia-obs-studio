@@ -61,42 +61,6 @@ static const char *aac_getname(void *unused)
 	return obs_module_text("FFmpegAAC");
 }
 
-static const char *opus_getname(void *unused)
-{
-	UNUSED_PARAMETER(unused);
-	return obs_module_text("FFmpegOpus");
-}
-
-static const char *pcm_getname(void *unused)
-{
-	UNUSED_PARAMETER(unused);
-	return obs_module_text("FFmpegPCM16Bit");
-}
-
-static const char *pcm24_getname(void *unused)
-{
-	UNUSED_PARAMETER(unused);
-	return obs_module_text("FFmpegPCM24Bit");
-}
-
-static const char *pcm32_getname(void *unused)
-{
-	UNUSED_PARAMETER(unused);
-	return obs_module_text("FFmpegPCM32BitFloat");
-}
-
-static const char *alac_getname(void *unused)
-{
-	UNUSED_PARAMETER(unused);
-	return obs_module_text("FFmpegALAC");
-}
-
-static const char *flac_getname(void *unused)
-{
-	UNUSED_PARAMETER(unused);
-	return obs_module_text("FFmpegFLAC");
-}
-
 static void enc_destroy(void *data)
 {
 	struct enc_encoder *enc = data;
@@ -226,13 +190,10 @@ static void *enc_create(obs_data_t *settings, obs_encoder_t *encoder, const char
 	 * does not support. Manually set 5 channels to 4.1. */
 	if (aoi->speakers == SPEAKERS_4POINT1)
 		enc->context->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_4POINT1;
-	/* AAC, ALAC, & FLAC default to 3.0 for 3 channels instead of 2.1.
+	/* AAC defaults to 3.0 for 3 channels instead of 2.1.
 	 * Tell the encoder to deal with 2.1 as if it were 3.0. */
 	if (aoi->speakers == SPEAKERS_2POINT1)
 		enc->context->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_SURROUND;
-	// ALAC supports 7.1 wide instead of regular 7.1.
-	if (aoi->speakers == SPEAKERS_7POINT1 && astrcmpi(enc->type, "alac") == 0)
-		enc->context->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_7POINT1_WIDE_BACK;
 
 	enc->context->sample_rate = audio_output_get_sample_rate(audio);
 
@@ -312,36 +273,6 @@ fail:
 static void *aac_create(obs_data_t *settings, obs_encoder_t *encoder)
 {
 	return enc_create(settings, encoder, "aac", NULL, AV_SAMPLE_FMT_NONE);
-}
-
-static void *opus_create(obs_data_t *settings, obs_encoder_t *encoder)
-{
-	return enc_create(settings, encoder, "libopus", "opus", AV_SAMPLE_FMT_FLT);
-}
-
-static void *pcm_create(obs_data_t *settings, obs_encoder_t *encoder)
-{
-	return enc_create(settings, encoder, "pcm_s16le", NULL, AV_SAMPLE_FMT_NONE);
-}
-
-static void *pcm24_create(obs_data_t *settings, obs_encoder_t *encoder)
-{
-	return enc_create(settings, encoder, "pcm_s24le", NULL, AV_SAMPLE_FMT_NONE);
-}
-
-static void *pcm32_create(obs_data_t *settings, obs_encoder_t *encoder)
-{
-	return enc_create(settings, encoder, "pcm_f32le", NULL, AV_SAMPLE_FMT_NONE);
-}
-
-static void *alac_create(obs_data_t *settings, obs_encoder_t *encoder)
-{
-	return enc_create(settings, encoder, "alac", NULL, AV_SAMPLE_FMT_S32P);
-}
-
-static void *flac_create(obs_data_t *settings, obs_encoder_t *encoder)
-{
-	return enc_create(settings, encoder, "flac", NULL, AV_SAMPLE_FMT_S16);
 }
 
 static bool do_encode(struct enc_encoder *enc, struct encoder_packet *packet, bool *received_packet)
@@ -444,12 +375,6 @@ static void enc_audio_info(void *data, struct audio_convert_info *info)
 		info->speakers = SPEAKERS_UNKNOWN;
 }
 
-static void enc_audio_info_float(void *data, struct audio_convert_info *info)
-{
-	enc_audio_info(data, info);
-	info->allow_clipping = true;
-}
-
 static size_t enc_frame_size(void *data)
 {
 	struct enc_encoder *enc = data;
@@ -476,95 +401,4 @@ struct obs_encoder_info aac_encoder_info = {
 	.get_extra_data = enc_extra_data,
 	.get_audio_info = enc_audio_info,
 	.get_priming_samples = enc_initial_padding,
-};
-
-struct obs_encoder_info opus_encoder_info = {
-	.id = "ffmpeg_opus",
-	.type = OBS_ENCODER_AUDIO,
-	.codec = "opus",
-	.get_name = opus_getname,
-	.create = opus_create,
-	.destroy = enc_destroy,
-	.encode = enc_encode,
-	.get_frame_size = enc_frame_size,
-	.get_defaults = enc_defaults,
-	.get_properties = enc_properties,
-	.get_extra_data = enc_extra_data,
-	.get_audio_info = enc_audio_info,
-	.get_priming_samples = enc_initial_padding,
-};
-
-struct obs_encoder_info pcm_encoder_info = {
-	.id = "ffmpeg_pcm_s16le",
-	.type = OBS_ENCODER_AUDIO,
-	.codec = "pcm_s16le",
-	.get_name = pcm_getname,
-	.create = pcm_create,
-	.destroy = enc_destroy,
-	.encode = enc_encode,
-	.get_frame_size = enc_frame_size,
-	.get_defaults = enc_defaults,
-	.get_properties = enc_properties,
-	.get_extra_data = enc_extra_data,
-	.get_audio_info = enc_audio_info,
-};
-
-struct obs_encoder_info pcm24_encoder_info = {
-	.id = "ffmpeg_pcm_s24le",
-	.type = OBS_ENCODER_AUDIO,
-	.codec = "pcm_s24le",
-	.get_name = pcm24_getname,
-	.create = pcm24_create,
-	.destroy = enc_destroy,
-	.encode = enc_encode,
-	.get_frame_size = enc_frame_size,
-	.get_defaults = enc_defaults,
-	.get_properties = enc_properties,
-	.get_extra_data = enc_extra_data,
-	.get_audio_info = enc_audio_info,
-};
-
-struct obs_encoder_info pcm32_encoder_info = {
-	.id = "ffmpeg_pcm_f32le",
-	.type = OBS_ENCODER_AUDIO,
-	.codec = "pcm_f32le",
-	.get_name = pcm32_getname,
-	.create = pcm32_create,
-	.destroy = enc_destroy,
-	.encode = enc_encode,
-	.get_frame_size = enc_frame_size,
-	.get_defaults = enc_defaults,
-	.get_properties = enc_properties,
-	.get_extra_data = enc_extra_data,
-	.get_audio_info = enc_audio_info_float,
-};
-
-struct obs_encoder_info alac_encoder_info = {
-	.id = "ffmpeg_alac",
-	.type = OBS_ENCODER_AUDIO,
-	.codec = "alac",
-	.get_name = alac_getname,
-	.create = alac_create,
-	.destroy = enc_destroy,
-	.encode = enc_encode,
-	.get_frame_size = enc_frame_size,
-	.get_defaults = enc_defaults,
-	.get_properties = enc_properties,
-	.get_extra_data = enc_extra_data,
-	.get_audio_info = enc_audio_info,
-};
-
-struct obs_encoder_info flac_encoder_info = {
-	.id = "ffmpeg_flac",
-	.type = OBS_ENCODER_AUDIO,
-	.codec = "flac",
-	.get_name = flac_getname,
-	.create = flac_create,
-	.destroy = enc_destroy,
-	.encode = enc_encode,
-	.get_frame_size = enc_frame_size,
-	.get_defaults = enc_defaults,
-	.get_properties = enc_properties,
-	.get_extra_data = enc_extra_data,
-	.get_audio_info = enc_audio_info,
 };

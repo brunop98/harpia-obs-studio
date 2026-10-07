@@ -28,10 +28,9 @@ if(OS_WINDOWS)
   add_subdirectory(libobs-d3d11)
   add_subdirectory(libobs-winrt)
 endif()
+# macOS renders through libobs-opengl too (harpia/core/ObsContext.cpp); the
+# Swift Metal renderer upstream ships for macOS is gone.
 add_subdirectory(libobs-opengl)
-if(OS_MACOS)
-  add_subdirectory(libobs-metal)
-endif()
 add_subdirectory(plugins)
 
 if(ENABLE_HARPIA)

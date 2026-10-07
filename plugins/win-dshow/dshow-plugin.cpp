@@ -5,21 +5,20 @@
 // The virtual camera is not part of this build: Harpia uses win-dshow for
 // webcam CAPTURE only. VIRTUALCAM_AVAILABLE was never defined, so what stood
 // here was three blocks of unreachable code and an include of a header that no
-// longer exists.
+// longer exists. The AVerMedia C985/C353 hardware H.264 encoders it also
+// registered are gone too.
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("win-dshow", "en-US")
 MODULE_EXPORT const char *obs_module_description(void)
 {
-	return "Windows DirectShow source/encoder";
+	return "Windows DirectShow source";
 }
 
 extern void RegisterDShowSource();
-extern void RegisterDShowEncoders();
 
 bool obs_module_load(void)
 {
 	RegisterDShowSource();
-	RegisterDShowEncoders();
 	return true;
 }

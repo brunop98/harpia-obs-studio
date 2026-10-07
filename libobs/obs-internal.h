@@ -40,7 +40,7 @@
 #include "obs.h"
 
 #include <obsversion.h>
-#include <caption/caption.h>
+#include <inttypes.h>
 
 /* Custom helpers for the UUID hash table */
 #define HASH_FIND_UUID(head, uuid, out) HASH_FIND(hh_uuid, head, uuid, UUID_STR_LENGTH, out)
@@ -1166,23 +1166,6 @@ struct obs_weak_output {
 	struct obs_output *output;
 };
 
-#define CAPTION_LINE_CHARS (32)
-#define CAPTION_LINE_BYTES (4 * CAPTION_LINE_CHARS)
-struct caption_text {
-	char text[CAPTION_LINE_BYTES + 1];
-	double display_duration;
-	struct caption_text *next;
-};
-
-struct caption_track_data {
-	struct caption_text *caption_head;
-	struct caption_text *caption_tail;
-	pthread_mutex_t caption_mutex;
-	double caption_timestamp;
-	double last_caption_timestamp;
-	struct deque caption_data;
-};
-
 struct pause_data {
 	pthread_mutex_t mutex;
 	uint64_t last_video_ts;
@@ -1272,9 +1255,6 @@ struct obs_output {
 	bool audio_conversion_set;
 	struct video_scale_info video_conversion;
 	struct audio_convert_info audio_conversion;
-
-	// captions are output per track
-	struct caption_track_data *caption_tracks[MAX_OUTPUT_VIDEO_ENCODERS];
 
 	DARRAY(struct encoder_packet_time)
 	encoder_packet_times[MAX_OUTPUT_VIDEO_ENCODERS];

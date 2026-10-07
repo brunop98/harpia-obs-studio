@@ -5,11 +5,9 @@ option(ENABLE_FFMPEG_LOGGING "Enables obs-ffmpeg logging" OFF)
 # needed) and the media source (with shared/media-playback). Harpia records
 # files; it neither streams nor plays media through libobs. Nor its HLS,
 # MPEG-TS and replay-buffer outputs, or the OpenH264 encoder: Harpia records
-# with ffmpeg_muxer / ffmpeg_output and the hardware encoders or x264.
-
-if(OS_LINUX OR OS_WINDOWS)
-  option(ENABLE_FFMPEG_NVENC "Enable legacy FFmpeg NVENC encoder" OFF)
-endif()
+# with ffmpeg_muxer / ffmpeg_output and the hardware encoders or x264. The
+# legacy FFmpeg NVENC encoder (obs-nvenc registers the ffmpeg_nvenc ids now)
+# and the Opus/PCM/ALAC/FLAC audio encoders are gone too: audio is AAC.
 
 include(cmake/dependencies.cmake)
 
@@ -22,7 +20,6 @@ target_sources(
   obs-ffmpeg
   PRIVATE
     $<$<BOOL:${ENABLE_FFMPEG_LOGGING}>:obs-ffmpeg-logging.c>
-    $<$<BOOL:${ENABLE_FFMPEG_NVENC}>:obs-ffmpeg-nvenc.c>
     $<$<PLATFORM_ID:Linux,FreeBSD,OpenBSD>:obs-ffmpeg-vaapi.c>
     $<$<PLATFORM_ID:Linux,FreeBSD,OpenBSD>:vaapi-utils.c>
     $<$<PLATFORM_ID:Linux,FreeBSD,OpenBSD>:vaapi-utils.h>
@@ -43,7 +40,6 @@ target_compile_definitions(
   obs-ffmpeg
   PRIVATE
     $<$<BOOL:${ENABLE_FFMPEG_LOGGING}>:ENABLE_FFMPEG_LOGGING>
-    $<$<BOOL:${ENABLE_FFMPEG_NVENC}>:ENABLE_FFMPEG_NVENC>
 )
 
 target_link_libraries(

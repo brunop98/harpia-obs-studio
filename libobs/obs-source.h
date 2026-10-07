@@ -537,9 +537,6 @@ struct obs_source_info {
 	uint32_t version;           /* increment if needed to specify a new version */
 	const char *unversioned_id; /* set internally, don't set manually */
 
-	/** Missing files **/
-	obs_missing_files_t *(*missing_files)(void *data);
-
 	/** Get color space **/
 	enum gs_color_space (*video_get_color_space)(void *data, size_t count,
 						     const enum gs_color_space *preferred_spaces);

@@ -77,7 +77,6 @@ typedef struct obs_weak_encoder obs_weak_encoder_t;
 typedef struct obs_weak_service obs_weak_service_t;
 typedef struct obs_weak_canvas obs_weak_canvas_t;
 
-#include "obs-missing-files.h"
 #include "obs-source.h"
 #include "obs-encoder.h"
 #include "obs-output.h"
@@ -1087,11 +1086,6 @@ EXPORT obs_data_t *obs_get_source_defaults(const char *id);
 
 /** Returns the property list, if any.  Free with obs_properties_destroy */
 EXPORT obs_properties_t *obs_get_source_properties(const char *id);
-
-EXPORT obs_missing_files_t *obs_source_get_missing_files(const obs_source_t *source);
-
-EXPORT void obs_source_replace_missing_file(obs_missing_file_cb cb, obs_source_t *source, const char *new_path,
-					    void *data);
 
 /** Returns whether the source has custom properties or not */
 EXPORT bool obs_is_source_configurable(const char *id);
@@ -2117,11 +2111,6 @@ EXPORT uint32_t obs_output_get_height(const obs_output_t *output);
 EXPORT uint32_t obs_output_get_height2(const obs_output_t *output, size_t idx);
 
 EXPORT const char *obs_output_get_id(const obs_output_t *output);
-
-EXPORT void obs_output_caption(obs_output_t *output, const struct obs_source_cea_708 *captions);
-
-EXPORT void obs_output_output_caption_text1(obs_output_t *output, const char *text);
-EXPORT void obs_output_output_caption_text2(obs_output_t *output, const char *text, double display_duration);
 
 EXPORT float obs_output_get_congestion(obs_output_t *output);
 EXPORT int obs_output_get_connect_time_ms(obs_output_t *output);

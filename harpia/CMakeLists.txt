@@ -59,7 +59,7 @@ target_include_directories(harpia-recorder PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
 
 # Provide the graphics-module library file names to the app, exactly as the OBS
 # frontend does, so ObsContext can pass the right renderer to obs_reset_video.
-foreach(graphics_library IN ITEMS opengl metal d3d11)
+foreach(graphics_library IN ITEMS opengl d3d11)
   string(TOUPPER ${graphics_library} graphics_library_U)
   if(TARGET OBS::libobs-${graphics_library})
     target_compile_definitions(
@@ -412,11 +412,9 @@ set(_harpia_runtime_targets
     win-dshow
     mac-capture
     mac-avcapture
-    mac-videotoolbox
     linux-capture
     linux-pipewire
     linux-pulseaudio
-    linux-alsa
     linux-v4l2
 )
 foreach(_dep IN LISTS _harpia_runtime_targets)

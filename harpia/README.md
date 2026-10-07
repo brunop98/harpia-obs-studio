@@ -264,9 +264,9 @@ and Qt directly.
 ## The OBS tree
 
 The repository root is OBS Studio trimmed to the recorder's needs: `libobs`,
-its D3D11 / OpenGL / Metal back-ends, and these plugins — screen, window and
-audio capture per platform, the webcam (`win-dshow`, `linux-v4l2`,
-`mac-avcapture`), `obs-x264`, `obs-nvenc`, `obs-qsv11`, VideoToolbox, AMF and
+its D3D11 and OpenGL back-ends (macOS uses OpenGL too), and these plugins —
+screen, window and audio capture per platform, the webcam (`win-dshow`,
+`linux-v4l2`, `mac-avcapture`), `obs-x264`, `obs-nvenc`, `obs-qsv11`, AMF and
 VA-API via `obs-ffmpeg` (with the ffmpeg muxer), and `obs-filters` reduced to
 the crop filter. The OBS Studio frontend, scripting, streaming, translations
 and every other plugin are removed, so **stock OBS Studio no longer builds

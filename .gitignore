@@ -21,7 +21,6 @@
 !.gitmodules
 !.gitignore
 !.mailmap
-!.swift-format
 !AUTHORS
 !buildspec.json
 !CMakeLists.txt

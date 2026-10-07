@@ -14,18 +14,12 @@ get_target_property(libdrm_include_directories Libdrm::Libdrm INTERFACE_INCLUDE_
 add_library(linux-pipewire MODULE)
 add_library(OBS::pipewire ALIAS linux-pipewire)
 
-if(PipeWire_VERSION VERSION_GREATER_EQUAL 0.3.60)
-  target_enable_feature(linux-pipewire "PipeWire 0.3.60+ camera support")
-  set(_HAS_PIPEWIRE_CAMERA TRUE)
-else()
-  set(_HAS_PIPEWIRE_CAMERA FALSE)
-endif()
+# Screen capture only: Harpia's Linux webcam is v4l2_input, so the PipeWire
+# camera portal is gone.
 
 target_sources(
   linux-pipewire
   PRIVATE
-    $<$<BOOL:${_HAS_PIPEWIRE_CAMERA}>:camera-portal.c>
-    $<$<BOOL:${_HAS_PIPEWIRE_CAMERA}>:camera-portal.h>
     formats.c
     formats.h
     linux-pipewire.c

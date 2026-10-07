@@ -5,14 +5,6 @@ find_package(FFmpeg REQUIRED avcodec avutil)
 add_library(win-dshow MODULE)
 add_library(OBS::dshow ALIAS win-dshow)
 
-if(NOT TARGET OBS::tiny-nv12-scale)
-  add_subdirectory("${CMAKE_SOURCE_DIR}/shared/obs-tiny-nv12-scale" obs-tiny-nv12-scale)
-endif()
-
-if(NOT TARGET OBS::shared-memory-queue)
-  add_subdirectory("${CMAKE_SOURCE_DIR}/shared/obs-shared-memory-queue" obs-shared-memory-queue)
-endif()
-
 if(NOT TARGET OBS::libdshowcapture)
   add_subdirectory("${CMAKE_SOURCE_DIR}/deps/libdshowcapture" libdshowcapture)
 endif()
@@ -35,8 +27,6 @@ target_link_libraries(
     OBS::libobs
     OBS::w32-pthreads
     OBS::libdshowcapture
-    OBS::tiny-nv12-scale
-    OBS::shared-memory-queue
     OBS::winhandle
     FFmpeg::avcodec
     FFmpeg::avutil

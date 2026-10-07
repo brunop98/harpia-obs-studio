@@ -16,13 +16,12 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 #include <obs-module.h>
 #include <obs-nix-platform.h>
-#include "xcomposite-input.h"
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("linux-xshm", "en-US")
 MODULE_EXPORT const char *obs_module_description(void)
 {
-	return "xcomposite/xshm based window/screen capture for X11";
+	return "xshm based screen capture for X11";
 }
 
 extern struct obs_source_info xshm_input;
@@ -35,14 +34,7 @@ bool obs_module_load(void)
 	if (platform == OBS_NIX_PLATFORM_X11_EGL) {
 		obs_register_source(&xshm_input);
 		obs_register_source(&xshm_input_v2);
-		xcomposite_load();
 	}
 
 	return true;
-}
-
-void obs_module_unload(void)
-{
-	if (obs_get_nix_platform() == OBS_NIX_PLATFORM_X11_EGL)
-		xcomposite_unload();
 }

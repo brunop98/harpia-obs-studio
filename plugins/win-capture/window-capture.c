@@ -5,7 +5,6 @@
 
 #include "dc-capture.h"
 #include "audio-helpers.h"
-#include "compat-helpers.h"
 #ifdef OBS_LEGACY
 #include "../../libobs/util/platform.h"
 #include "../../libobs-winrt/winrt-capture.h"
@@ -460,24 +459,6 @@ static void update_settings_visibility(obs_properties_t *props, struct window_ca
 	pthread_mutex_unlock(&wc->update_mutex);
 }
 
-static void wc_check_compatibility(struct window_capture *wc, obs_properties_t *props)
-{
-	obs_property_t *p_warn = obs_properties_get(props, "compat_info");
-
-	struct compat_result *compat =
-		check_compatibility(wc->title, wc->class, wc->executable, (enum source_type)wc->method);
-	if (!compat) {
-		obs_property_set_visible(p_warn, false);
-		return;
-	}
-
-	obs_property_set_long_description(p_warn, compat->message);
-	obs_property_text_set_info_type(p_warn, compat->severity);
-	obs_property_set_visible(p_warn, true);
-
-	compat_result_free(compat);
-}
-
 static bool wc_capture_method_changed(obs_properties_t *props, obs_property_t *p, obs_data_t *settings)
 {
 	UNUSED_PARAMETER(p);
@@ -489,8 +470,6 @@ static bool wc_capture_method_changed(obs_properties_t *props, obs_property_t *p
 	update_settings(wc, settings);
 
 	update_settings_visibility(props, wc);
-
-	wc_check_compatibility(wc, props);
 
 	return true;
 }
@@ -506,8 +485,6 @@ static bool wc_window_changed(obs_properties_t *props, obs_property_t *p, obs_da
 	update_settings_visibility(props, wc);
 
 	ms_check_window_property_setting(props, p, settings, "window", 0);
-
-	wc_check_compatibility(wc, props);
 
 	return true;
 }
@@ -544,9 +521,6 @@ static obs_properties_t *wc_properties(void *data)
 	obs_property_list_add_int(p, TEXT_MATCH_TITLE, WINDOW_PRIORITY_TITLE);
 	obs_property_list_add_int(p, TEXT_MATCH_CLASS, WINDOW_PRIORITY_CLASS);
 	obs_property_list_add_int(p, TEXT_MATCH_EXE, WINDOW_PRIORITY_EXE);
-
-	p = obs_properties_add_text(ppts, "compat_info", NULL, OBS_TEXT_INFO);
-	obs_property_set_enabled(p, false);
 
 	if (audio_capture_available()) {
 		p = obs_properties_add_bool(ppts, "capture_audio", TEXT_CAPTURE_AUDIO);

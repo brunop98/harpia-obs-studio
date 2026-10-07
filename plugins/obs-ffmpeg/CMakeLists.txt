@@ -3,8 +3,9 @@ cmake_minimum_required(VERSION 3.28...3.30)
 option(ENABLE_FFMPEG_LOGGING "Enables obs-ffmpeg logging" OFF)
 # Not here: the native SRT/RIST streaming output (and the librist / libsrt it
 # needed) and the media source (with shared/media-playback). Harpia records
-# files; it neither streams nor plays media through libobs. The ffmpeg muxer
-# keeps its own mpegts output, as it does upstream with that option off.
+# files; it neither streams nor plays media through libobs. Nor its HLS,
+# MPEG-TS and replay-buffer outputs, or the OpenH264 encoder: Harpia records
+# with ffmpeg_muxer / ffmpeg_output and the hardware encoders or x264.
 
 if(OS_LINUX OR OS_WINDOWS)
   option(ENABLE_FFMPEG_NVENC "Enable legacy FFmpeg NVENC encoder" OFF)
@@ -22,7 +23,6 @@ target_sources(
   PRIVATE
     $<$<BOOL:${ENABLE_FFMPEG_LOGGING}>:obs-ffmpeg-logging.c>
     $<$<BOOL:${ENABLE_FFMPEG_NVENC}>:obs-ffmpeg-nvenc.c>
-    obs-ffmpeg-url.h
     $<$<PLATFORM_ID:Linux,FreeBSD,OpenBSD>:obs-ffmpeg-vaapi.c>
     $<$<PLATFORM_ID:Linux,FreeBSD,OpenBSD>:vaapi-utils.c>
     $<$<PLATFORM_ID:Linux,FreeBSD,OpenBSD>:vaapi-utils.h>
@@ -30,8 +30,6 @@ target_sources(
     obs-ffmpeg-av1.c
     obs-ffmpeg-compat.h
     obs-ffmpeg-formats.h
-    obs-ffmpeg-openh264.c
-    obs-ffmpeg-hls-mux.c
     obs-ffmpeg-mux.c
     obs-ffmpeg-mux.h
     obs-ffmpeg-output.c

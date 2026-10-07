@@ -24,9 +24,6 @@ MODULE_EXPORT const char *obs_module_description(void)
 
 extern struct obs_output_info ffmpeg_output;
 extern struct obs_output_info ffmpeg_muxer;
-extern struct obs_output_info ffmpeg_mpegts_muxer;
-extern struct obs_output_info replay_buffer;
-extern struct obs_output_info ffmpeg_hls_muxer;
 extern struct obs_encoder_info aac_encoder_info;
 extern struct obs_encoder_info opus_encoder_info;
 extern struct obs_encoder_info pcm_encoder_info;
@@ -34,7 +31,6 @@ extern struct obs_encoder_info pcm24_encoder_info;
 extern struct obs_encoder_info pcm32_encoder_info;
 extern struct obs_encoder_info alac_encoder_info;
 extern struct obs_encoder_info flac_encoder_info;
-extern struct obs_encoder_info openh264_encoder_info;
 #ifdef ENABLE_FFMPEG_NVENC
 extern struct obs_encoder_info h264_nvenc_encoder_info;
 #ifdef ENABLE_HEVC
@@ -344,11 +340,7 @@ bool obs_module_load(void)
 {
 	obs_register_output(&ffmpeg_output);
 	obs_register_output(&ffmpeg_muxer);
-	obs_register_output(&ffmpeg_mpegts_muxer);
-	obs_register_output(&ffmpeg_hls_muxer);
-	obs_register_output(&replay_buffer);
 	obs_register_encoder(&aac_encoder_info);
-	register_encoder_if_available(&openh264_encoder_info, "libopenh264");
 	register_encoder_if_available(&svt_av1_encoder_info, "libsvtav1");
 	register_encoder_if_available(&aom_av1_encoder_info, "libaom-av1");
 	obs_register_encoder(&opus_encoder_info);

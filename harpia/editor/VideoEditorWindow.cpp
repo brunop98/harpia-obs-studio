@@ -6918,12 +6918,38 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	// through them with the arrows and watching the preview. Each row is its
 	// time and the channels it pins; clicking one jumps the playhead to it.
 	keyList_ = new QListWidget(clipBox_);
+	keyList_->setObjectName(QStringLiteral("keyList"));
 	keyList_->setToolTip(QStringLiteral(
-		"Every keyframe on this clip. Click one to jump to it; the ✦ marks show which "
-		"channels that key pins."));
+		"Every keyframe on this clip. Click one to jump to it. Drag a row to change the order "
+		"the framings play in (the times stay put); right-click for more."));
 	keyList_->setAlternatingRowColors(true);
 	keyList_->setUniformItemSizes(true);
 	keyList_->setMaximumHeight(120);
+	// Drag to reorder. Qt moves the row; the model follows once the drop is
+	// over (queued: the list is rebuilt from the clip, and doing that inside
+	// the drop would pull the rows out from under the drag still finishing).
+	keyList_->setSelectionMode(QAbstractItemView::SingleSelection);
+	keyList_->setDragDropMode(QAbstractItemView::InternalMove);
+	keyList_->setDefaultDropAction(Qt::MoveAction);
+	connect(keyList_->model(), &QAbstractItemModel::rowsMoved, this,
+		[this](const QModelIndex &, int start, int, const QModelIndex &, int row) {
+			if (syncingClip_ || !keyList_)
+				return;
+			QVector<int> order;
+			order.reserve(keyList_->count());
+			for (int i = 0; i < keyList_->count(); ++i)
+				order.append(keyList_->item(i)->data(Qt::UserRole + 1).toInt());
+			const int landed = row > start ? row - 1 : row;
+			QTimer::singleShot(0, this, [this, order, landed]() { applyKeyRowOrder(order, landed); });
+		});
+	keyList_->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(keyList_, &QListWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+		QListWidgetItem *it = keyList_->itemAt(pos);
+		if (!it)
+			return;
+		keyList_->setCurrentItem(it);
+		keyRowMenu(keyList_->row(it), keyList_->viewport()->mapToGlobal(pos));
+	});
 	connect(keyList_, &QListWidget::itemClicked, this, [this](QListWidgetItem *it) {
 		if (syncingClip_ || !it)
 			return;
@@ -7855,6 +7881,7 @@ void VideoEditorWindow::syncClipInspector()
 					.arg(timeTextCentis(k.tMs), -8)
 					.arg(what));
 			item->setData(Qt::UserRole, qlonglong(k.tMs));
+			item->setData(Qt::UserRole + 1, i); // which key, for drag-to-reorder
 			keyList_->addItem(item);
 		}
 		// Highlight the one the instant being described is on, so the list and
@@ -8003,13 +8030,98 @@ void VideoEditorWindow::removeKeyframeAtPlayhead()
 	const int idx = sel->keyframeIndexAt(timelinePlayheadMs());
 	if (idx < 0)
 		return;
-	editSelectedClip([idx](TlClip &c) {
-		c.keys.remove(idx);
-		if (c.keys.size() == 1) { // a single key is just a static pose
-			c.setBaseTransform(c.keys.front().tf);
-			c.keys.clear();
-		}
-	});
+	editSelectedClip([idx](TlClip &c) { removeKeyframe(c, idx); });
+}
+
+void VideoEditorWindow::keyRowAction(int row, KeyRowAction act)
+{
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!sel || row < 0 || row >= sel->keys.size())
+		return;
+	if (playing_)
+		stopPlayback();
+	const int last = int(sel->keys.size()) - 1;
+	int showRow = -1; // the key to park the playhead on afterwards
+	switch (act) {
+	case KeyRowAction::MoveFirst:
+	case KeyRowAction::MoveLast: {
+		const int to = act == KeyRowAction::MoveFirst ? 0 : last;
+		if (to == row)
+			return;
+		editSelectedClip([row, to](TlClip &c) { moveKeyPose(c.keys, row, to); });
+		showRow = to;
+		break;
+	}
+	case KeyRowAction::Reset:
+		editSelectedClip([row](TlClip &c) {
+			if (row < c.keys.size())
+				resetKeyFraming(c.keys[row]);
+		});
+		showRow = row;
+		break;
+	case KeyRowAction::Delete:
+		editSelectedClip([row](TlClip &c) { removeKeyframe(c, row); });
+		pathKeyPicked_ = -1;
+		break;
+	}
+	commitSnapshot();
+	refreshMotionPath();
+	// Show the pose that moved (or was reset) where it now plays, so the
+	// preview and the highlighted row are the thing that just changed.
+	if (const TlClip *c = timelineView_->selectedClipPtr(); c && showRow >= 0 && showRow < c->keys.size()) {
+		onTimelineScrub(c->outStartMs + c->keys[showRow].tMs);
+		syncClipInspector();
+	}
+}
+
+void VideoEditorWindow::applyKeyRowOrder(const QVector<int> &order, int landed)
+{
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	QVector<TlKeyframe> probe = sel ? sel->keys : QVector<TlKeyframe>();
+	if (!sel || !reorderKeyPoses(probe, order)) {
+		syncClipInspector(); // a drop that changed nothing: put the rows back
+		return;
+	}
+	if (playing_)
+		stopPlayback();
+	editSelectedClip([order](TlClip &c) { reorderKeyPoses(c.keys, order); });
+	commitSnapshot();
+	refreshMotionPath();
+	if (const TlClip *c = timelineView_->selectedClipPtr(); c && landed >= 0 && landed < c->keys.size()) {
+		onTimelineScrub(c->outStartMs + c->keys[landed].tMs);
+		syncClipInspector();
+	}
+}
+
+void VideoEditorWindow::keyRowMenu(int row, const QPoint &globalPos)
+{
+	const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!c || row < 0 || row >= c->keys.size())
+		return;
+	const int last = int(c->keys.size()) - 1;
+	QMenu menu(this);
+	menu.addSection(QStringLiteral("Keyframe %1 at %2").arg(row + 1).arg(timeTextCentis(c->keys[row].tMs)));
+	QAction *first = menu.addAction(QStringLiteral("Move to first"));
+	first->setEnabled(row > 0);
+	first->setToolTip(QStringLiteral("This framing plays first; the times stay where they are."));
+	QAction *lastAct = menu.addAction(QStringLiteral("Move to last"));
+	lastAct->setEnabled(row < last);
+	lastAct->setToolTip(QStringLiteral("This framing plays last; the times stay where they are."));
+	menu.addSeparator();
+	QAction *reset = menu.addAction(QStringLiteral("Reset value (100%, centred)"));
+	reset->setToolTip(QStringLiteral("Frame the whole picture again at this key: full size, centred, upright."));
+	menu.addSeparator();
+	QAction *del = menu.addAction(QStringLiteral("Delete"));
+	menu.setToolTipsVisible(true);
+	QAction *chosen = menu.exec(globalPos);
+	if (chosen == first)
+		keyRowAction(row, KeyRowAction::MoveFirst);
+	else if (chosen == lastAct)
+		keyRowAction(row, KeyRowAction::MoveLast);
+	else if (chosen == reset)
+		keyRowAction(row, KeyRowAction::Reset);
+	else if (chosen == del)
+		keyRowAction(row, KeyRowAction::Delete);
 }
 
 void VideoEditorWindow::stepKeyframe(int dir)

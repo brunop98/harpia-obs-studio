@@ -219,6 +219,15 @@ public:
 	QString infoTextForTest() const;
 	int activeSourceIdForTest() const { return activeSourceId_; }
 
+	// The Animation section's keyframe list: what its right-click menu and its
+	// drag-to-reorder do to the selected clip, one undo step each. Public so a
+	// test can drive the same calls as the menu without opening it. Reordering
+	// moves the POSES; the key times stay put (reorderKeyPoses).
+	enum class KeyRowAction { MoveFirst, MoveLast, Reset, Delete };
+	void keyRowAction(int row, KeyRowAction act);
+	void applyKeyRowOrder(const QVector<int> &order, int landed);
+	void keyRowMenu(int row, const QPoint &globalPos);
+
 	QString saveProjectTo(const QString &path, bool quiet);
 	bool openProjectAt(const QString &path);
 

@@ -658,6 +658,11 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/curvepath_test.cpp" "$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/curvepath_test" $LF
 
+# The keyframe list's reorder (poses move, times stay), Reset value and Delete.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/keyorder_test.cpp" "$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	-o "$WORK/keyorder_test" $LF
+
 # The motion path: position keys only, speed dots, a click back to a time;
 # pick, drag, add and right-click on the preview; Delete takes the picked key.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -901,6 +906,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/batchplan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textvariations_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/richtext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/curvepath_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/keyorder_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/windowregion_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/windowpicker_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/stillweight_test" || rc=1

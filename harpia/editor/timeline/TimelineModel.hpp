@@ -689,6 +689,80 @@ inline int stepKeyIndex(const QVector<TlKeyframe> &keys, qint64 relMs, int dir)
 	return keys.size() > 1 ? keys.size() - 1 : -1;
 }
 
+// The keyframe list's reordering: drag a row, or "Move to first/last". Keys are
+// kept in time order, so moving a key in the list cannot mean moving it in
+// time; it means "this framing should happen at that point in the sequence".
+// The POSES change order and the times stay where they are: `order[i]` is the
+// old index of the key whose pose plays at slot i, and the times are dealt back
+// out in their old order. A key's pose travels with everything it carries --
+// which channels it pins, its easing, its path shape and handles. False (and
+// nothing changed) unless `order` is a permutation that actually moves a key.
+inline bool reorderKeyPoses(QVector<TlKeyframe> &keys, const QVector<int> &order)
+{
+	const int n = keys.size();
+	if (order.size() != n)
+		return false;
+	QVector<bool> seen(n, false);
+	bool moved = false;
+	for (int i = 0; i < n; ++i) {
+		const int o = order[i];
+		if (o < 0 || o >= n || seen[o])
+			return false;
+		seen[o] = true;
+		moved = moved || o != i;
+	}
+	if (!moved)
+		return false;
+	QVector<TlKeyframe> out;
+	out.reserve(n);
+	for (int i = 0; i < n; ++i) {
+		out.append(keys[order[i]]);
+		out.back().tMs = keys[i].tMs;
+	}
+	keys = out;
+	return true;
+}
+
+// One key's pose to another slot, the rest shifting along to make room.
+inline bool moveKeyPose(QVector<TlKeyframe> &keys, int from, int to)
+{
+	const int n = keys.size();
+	if (from < 0 || from >= n || to < 0 || to >= n || from == to)
+		return false;
+	QVector<int> order(n);
+	for (int i = 0; i < n; ++i)
+		order[i] = i;
+	order.move(from, to);
+	return reorderKeyPoses(keys, order);
+}
+
+// "Reset value": the key frames the whole picture again -- 100%, centred,
+// upright. Position and scale are pinned so the reset shows even on a key that
+// only held, say, rotation; opacity is left alone, as it is not framing.
+inline void resetKeyFraming(TlKeyframe &k)
+{
+	k.tf.posX = 0.5;
+	k.tf.posY = 0.5;
+	k.tf.scale = 1.0;
+	k.tf.rotation = 0.0;
+	k.pos.on = true;
+	k.scale.on = true;
+}
+
+// A whole key gone (every channel it pins). A single key left over is just a
+// static pose, so it becomes the clip's base framing and the animation ends.
+inline bool removeKeyframe(TlClip &c, int idx)
+{
+	if (idx < 0 || idx >= c.keys.size())
+		return false;
+	c.keys.remove(idx);
+	if (c.keys.size() == 1) {
+		c.setBaseTransform(c.keys.front().tf);
+		c.keys.clear();
+	}
+	return true;
+}
+
 // Every moment this clip has a keyframe at, whatever KIND of keyframe it is.
 //
 // A clip can be animated four different ways -- the pose (`keys`), an effect's

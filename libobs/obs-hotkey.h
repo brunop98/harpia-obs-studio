@@ -24,13 +24,8 @@ extern "C" {
 typedef size_t obs_hotkey_id;
 typedef size_t obs_hotkey_pair_id;
 
-#ifndef SWIG
 #define OBS_INVALID_HOTKEY_ID (~(obs_hotkey_id)0)
 #define OBS_INVALID_HOTKEY_PAIR_ID (~(obs_hotkey_pair_id)0)
-#else
-const size_t OBS_INVALID_HOTKEY_ID = (size_t)-1;
-const size_t OBS_INVALID_HOTKEY_PAIR_ID = (size_t)-1;
-#endif
 
 #define XINPUT_MOUSE_LEN 33
 
@@ -80,7 +75,6 @@ EXPORT void obs_hotkey_set_description(obs_hotkey_id id, const char *desc);
 EXPORT void obs_hotkey_pair_set_names(obs_hotkey_pair_id id, const char *name0, const char *name1);
 EXPORT void obs_hotkey_pair_set_descriptions(obs_hotkey_pair_id id, const char *desc0, const char *desc1);
 
-#ifndef SWIG
 struct obs_hotkeys_translations {
 	const char *insert;
 	const char *del;
@@ -128,7 +122,6 @@ struct obs_hotkeys_translations {
  * over these translations.  If no translations are specified, it will use
  * the default English translations for that specific operating system. */
 EXPORT void obs_hotkeys_set_translations_s(struct obs_hotkeys_translations *translations, size_t size);
-#endif
 
 #define obs_hotkeys_set_translations(translations) \
 	obs_hotkeys_set_translations_s(translations, sizeof(struct obs_hotkeys_translations))

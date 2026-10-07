@@ -189,12 +189,10 @@ struct obs_transform_info {
  * Video initialization structure
  */
 struct obs_video_info {
-#ifndef SWIG
 	/**
 	 * Graphics module to use (usually "libobs-opengl" or "libobs-d3d11")
 	 */
 	const char *graphics_module;
-#endif
 
 	uint32_t fps_num; /**< Output FPS numerator */
 	uint32_t fps_den; /**< Output FPS denominator */
@@ -547,7 +545,6 @@ EXPORT void obs_module_add_encoder(obs_module_t *module, const char *id);
 /** Adds an encoder service id to the module provided services list */
 EXPORT void obs_module_add_service(obs_module_t *module, const char *id);
 
-#ifndef SWIG
 /**
  * Adds a module search path to be used with obs_find_modules.  If the search
  * path strings contain %module%, that text will be replaced with the module
@@ -609,7 +606,6 @@ typedef void (*obs_find_module_callback2_t)(void *param, const struct obs_module
 
 /** Finds all modules within the search paths added by obs_add_module_path. */
 EXPORT void obs_find_modules2(obs_find_module_callback2_t callback, void *param);
-#endif
 
 typedef void (*obs_enum_module_callback_t)(void *param, obs_module_t *module);
 

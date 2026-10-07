@@ -16,16 +16,6 @@ include(xcode)
 
 include(buildspec)
 
-# SWIG hard codes the directory to its library directory at compile time. As obs-deps need to be relocatable, we need to
-# force SWIG to look for its files in a directory relative to the PREFIX_PATH. The best way to ensure this is to set the
-# SWIG_LIB environment variable.
-foreach(path IN LISTS CMAKE_PREFIX_PATH)
-  if(NOT DEFINED ENV{SWIG_LIB} AND EXISTS "${path}/bin/swig")
-    set(ENV{SWIG_LIB} "${path}/share/swig/CURRENT")
-    break()
-  endif()
-endforeach()
-
 # Enable find_package targets to become globally available targets
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 # Enable RPATH support for generated binaries

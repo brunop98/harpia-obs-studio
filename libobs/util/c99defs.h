@@ -33,11 +33,7 @@
 #define FORCE_INLINE inline __attribute__((always_inline))
 #endif
 
-#if defined(SWIG_TYPE_TABLE)
-#define OBS_DEPRECATED
-#else
 #define OBS_DEPRECATED _OBS_DEPRECATED
-#endif
 
 #if defined(IS_LIBOBS)
 #define OBS_EXTERNAL_DEPRECATED

@@ -76,7 +76,7 @@ EXPORT void base_set_crash_handler(void (*handler)(const char *, va_list, void *
 
 EXPORT void blogva(int log_level, const char *format, va_list args);
 
-#if !defined(_MSC_VER) && !defined(SWIG)
+#if !defined(_MSC_VER)
 #define PRINTFATTR(f, a) __attribute__((__format__(__printf__, f, a)))
 #else
 #define PRINTFATTR(f, a)
@@ -85,9 +85,7 @@ EXPORT void blogva(int log_level, const char *format, va_list args);
 PRINTFATTR(2, 3)
 EXPORT void blog(int log_level, const char *format, ...);
 PRINTFATTR(1, 2)
-#ifndef SWIG
 OBS_NORETURN
-#endif
 EXPORT void bcrash(const char *format, ...);
 
 #undef PRINTFATTR

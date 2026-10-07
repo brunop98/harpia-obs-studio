@@ -5,7 +5,7 @@ include_guard(GLOBAL)
 include(cpackconfig_common)
 
 # Add GPLv2 license file to CPack
-set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/frontend/data/license/gplv2.txt")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/COPYING")
 set(CPACK_PACKAGE_EXECUTABLES "obs")
 
 if(ENABLE_RELEASE_BUILD)
@@ -34,32 +34,16 @@ elseif(OS_FREEBSD)
   set(
     CPACK_FREEBSD_PACKAGE_DEPS
     "audio/alsa-lib"
-    "audio/fdk-aac"
-    "audio/jack"
     "audio/pulseaudio"
-    "audio/sndio"
     "devel/jansson"
     "devel/libpci"
     "devel/libsysinfo"
-    "devel/nlohmann-json"
     "devel/qt6-base"
-    "devel/qt6-svg"
-    "devel/swig"
-    "devel/websocketpp"
-    "ftp/curl"
     "graphics/mesa-libs"
-    "graphics/qr-code-generator"
-    "lang/luajit"
-    "lang/python39"
     "misc/e2fsprogs-libuuid"
     "multimedia/ffmpeg"
-    "multimedia/librist"
     "multimedia/pipewire"
     "multimedia/v4l_compat"
-    "multimedia/vlc"
-    "net/asio"
-    "www/libdatachannel"
-    "www/srt"
   )
 endif()
 

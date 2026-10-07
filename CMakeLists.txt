@@ -16,9 +16,9 @@ include(defaults)
 include(helpers)
 
 # This tree is slimmed down to build only the Harpia recorder (harpia/) on top
-# of libobs and a minimal plugin set. The stock OBS Studio frontend, scripting,
-# and streaming stack have been removed; the options below default off.
-option(ENABLE_SCRIPTING "Enable scripting support" OFF)
+# of libobs and a minimal plugin set. The stock OBS Studio frontend, the
+# Lua/Python scripting support (SWIG bindings, obs-scripting) and the streaming
+# stack have been removed.
 # HEVC stays ON: the recorder offers H.265 as a selectable per-preset codec.
 option(ENABLE_HEVC "Enable HEVC encoders" ON)
 option(ENABLE_HARPIA "Enable building the Harpia recorder (minimal screen recorder on libobs)" ON)

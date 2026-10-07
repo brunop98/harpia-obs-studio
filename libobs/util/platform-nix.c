@@ -76,13 +76,7 @@ void *os_dlopen(const char *path)
 		dstr_cat(&dylib_name, ".so");
 
 #ifdef __APPLE__
-	int dlopen_flags = RTLD_NOW | RTLD_FIRST;
-	if (dstr_find(&dylib_name, "Python")) {
-		dlopen_flags = dlopen_flags | RTLD_GLOBAL;
-	} else {
-		dlopen_flags = dlopen_flags | RTLD_LOCAL;
-	}
-	void *res = dlopen(dylib_name.array, dlopen_flags);
+	void *res = dlopen(dylib_name.array, RTLD_NOW | RTLD_FIRST | RTLD_LOCAL);
 #else
 	void *res = dlopen(dylib_name.array, RTLD_NOW);
 #endif

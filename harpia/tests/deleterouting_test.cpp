@@ -92,6 +92,34 @@ int main()
 		   "a focused but EMPTY lane falls through to the mode");
 	}
 
+	std::printf("\n-- the keyframe list --\n");
+	{
+		// A clip selected and a path key picked too: the list has the keyboard,
+		// so the highlighted key is what goes.
+		DeleteContext c;
+		c.fullEdit = true;
+		c.timelineHasSel = true;
+		c.pathKeyPicked = true;
+		c.keyListFocused = true;
+		c.keyListHasSel = true;
+		ok(deleteTargetFor(c) == DeleteTarget::ListKeyframe,
+		   "the highlighted key, not the clip or the path key");
+
+		// The clip must survive pressing Delete once too often.
+		c.keyListHasSel = false;
+		ok(deleteTargetFor(c) == DeleteTarget::Nothing,
+		   "with no row highlighted it deletes NOTHING -- never the selected clip");
+
+		c.keyListFocused = false;
+		ok(deleteTargetFor(c) == DeleteTarget::PathKeyframe,
+		   "CONTROL: without the list's focus the path key goes, as before");
+
+		DeleteContext t;
+		t.keyListFocused = t.keyListHasSel = true;
+		t.editingText = true;
+		ok(deleteTargetFor(t) == DeleteTarget::TextCursor, "typing still wins");
+	}
+
 	std::printf("\n-- Simple Trim has nothing to delete --\n");
 	{
 		DeleteContext c; // no mode flags: Simple Trim

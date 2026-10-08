@@ -6,8 +6,9 @@
 //   * Right-click opens a menu with Move to first, Move to last, Reset value
 //     and Delete; picking one from the menu does it.
 //   * Reset value makes the key 100% of the screen, centred.
-//   * Delete takes the key; down to one key, the animation ends and the list
-//     hides.
+//   * Delete (menu or key) takes the key and highlights the next; with no row
+//     highlighted the Delete key does nothing -- never deletes the clip; down
+//     to one key, the animation ends and the list hides.
 #include "editor/VideoEditorWindow.hpp"
 #include "editor/timeline/TimelineView.hpp"
 
@@ -232,16 +233,43 @@ int main(int argc, char **argv)
 		ok(keys()[0].tf.scale == 1.5 && keys()[2].tf.scale == 2.5, "the other keys untouched");
 	}
 
-	std::printf("\n-- delete --\n");
+	std::printf("\n-- delete from the menu --\n");
 	pick(1, QStringLiteral("Delete"));
 	ok(keys().size() == 2 && keys()[0].tMs == 0 && keys()[1].tMs == 5400, "the key is gone");
 	ok(list->count() == 2, "and its row");
-	w.keyRowAction(0, VideoEditorWindow::KeyRowAction::Delete);
-	settle(200);
+	ok(list->currentRow() == 1, "the next key along is highlighted");
+	if (undo) {
+		emit undo->activated();
+		settle(300);
+	}
+	ok(keys().size() == 3, "Ctrl+Z brings it back");
+
+	std::printf("\n-- the Delete key --\n");
+	const int clipsBefore = int(tv->model().tracks.value(0).clips.size());
+	const auto pressDelete = [&]() {
+		list->setFocus(Qt::OtherFocusReason);
+		settle(50);
+		QTest::keyClick(list, Qt::Key_Delete);
+		settle(300);
+	};
+	w.activateWindow();
+	settle(100);
+	list->setCurrentRow(1);
+	pressDelete();
+	std::printf("     focus on the list: %s\n", QApplication::focusWidget() == list ? "yes" : "no");
+	ok(keys().size() == 2 && keys()[0].tMs == 0 && keys()[1].tMs == 5400, "Delete takes the highlighted key");
+	ok(list->currentRow() == 1, "and highlights the next one");
+	list->setCurrentRow(-1);
+	pressDelete();
+	ok(keys().size() == 2, "with no row highlighted, Delete does nothing to the keys");
+	ok(int(tv->model().tracks.value(0).clips.size()) == clipsBefore, "and the clip is NOT deleted");
+	list->setCurrentRow(0);
+	pressDelete();
 	ok(keys().isEmpty(), "down to one key, the animation ends");
 	ok(std::abs(tv->selectedClipPtr()->baseTransform().posX - 0.8) < 1e-9,
 	   "and the clip holds the framing that was left");
 	ok(list->isHidden(), "the empty list hides");
+	ok(int(tv->model().tracks.value(0).clips.size()) == clipsBefore, "the clip itself is still there");
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;

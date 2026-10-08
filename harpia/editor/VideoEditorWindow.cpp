@@ -6921,7 +6921,8 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	keyList_->setObjectName(QStringLiteral("keyList"));
 	keyList_->setToolTip(QStringLiteral(
 		"Every keyframe on this clip. Click one to jump to it. Drag a row to change the order "
-		"the framings play in (the times stay put); right-click for more."));
+		"the framings play in (the times stay put); Delete removes the highlighted key; "
+		"right-click for more."));
 	keyList_->setAlternatingRowColors(true);
 	keyList_->setUniformItemSizes(true);
 	keyList_->setMaximumHeight(120);
@@ -8062,6 +8063,10 @@ void VideoEditorWindow::keyRowAction(int row, KeyRowAction act)
 	case KeyRowAction::Delete:
 		editSelectedClip([row](TlClip &c) { removeKeyframe(c, row); });
 		pathKeyPicked_ = -1;
+		// The next key along takes the highlight (the last one if this was the
+		// end), so pressing Delete again keeps going down the list.
+		if (const TlClip *c = timelineView_->selectedClipPtr(); c && !c->keys.isEmpty())
+			showRow = std::min(row, int(c->keys.size()) - 1);
 		break;
 	}
 	commitSnapshot();
@@ -8112,6 +8117,7 @@ void VideoEditorWindow::keyRowMenu(int row, const QPoint &globalPos)
 	reset->setToolTip(QStringLiteral("Frame the whole picture again at this key: full size, centred, upright."));
 	menu.addSeparator();
 	QAction *del = menu.addAction(QStringLiteral("Delete"));
+	del->setShortcut(QKeySequence(Qt::Key_Delete)); // shown, as a reminder; the window's Delete does it
 	menu.setToolTipsVisible(true);
 	QAction *chosen = menu.exec(globalPos);
 	if (chosen == first)
@@ -13139,6 +13145,8 @@ void VideoEditorWindow::deleteSelection()
 			  qobject_cast<const QTextEdit *>(f) || qobject_cast<const QComboBox *>(f);
 	ctx.voiceoverFocused = voTrack_ && f == voTrack_;
 	ctx.voiceoverHasSel = voTrack_ && voTrack_->selectedIndex() >= 0;
+	ctx.keyListFocused = keyList_ && keyList_->isVisible() && f && (f == keyList_ || keyList_->isAncestorOf(f));
+	ctx.keyListHasSel = keyList_ && keyList_->currentRow() >= 0;
 	ctx.pathKeyPicked = pathKeyPicked_ >= 0;
 	ctx.fullEdit = fullEdit();
 	ctx.timelineHasSel = timelineView_ && timelineView_->hasSelection();
@@ -13148,6 +13156,9 @@ void VideoEditorWindow::deleteSelection()
 	switch (deleteTargetFor(ctx)) {
 	case DeleteTarget::VoiceoverTake:
 		voTrack_->removeSelected();
+		break;
+	case DeleteTarget::ListKeyframe:
+		keyRowAction(keyList_->currentRow(), KeyRowAction::Delete);
 		break;
 	case DeleteTarget::PathKeyframe:
 		deleteMotionPathKey(pathKeyPicked_);

@@ -19,6 +19,7 @@ enum class DeleteTarget {
 	Nothing,          // nothing selected, or a mode with nothing to delete
 	TextCursor,       // a text field has focus: the key belongs to the text
 	VoiceoverTake,    // the voiceover lane's selection
+	ListKeyframe,     // the row highlighted in the Animation section's keyframe list
 	PathKeyframe,     // a key picked on the preview's motion path
 	TimelineClips,    // Full editing's selected clips
 	MultiCutSegment,  // Multi-Cut's selected cut
@@ -28,6 +29,8 @@ struct DeleteContext {
 	bool editingText = false;       // focus is in a line edit / spin box / text area
 	bool voiceoverFocused = false;  // the voiceover lane was the last thing clicked
 	bool voiceoverHasSel = false;
+	bool keyListFocused = false;    // the Inspector's keyframe list has the keyboard
+	bool keyListHasSel = false;     // ... and a row is highlighted
 	bool pathKeyPicked = false;     // a motion-path key was the last thing clicked, and is still there
 	bool fullEdit = false;
 	bool timelineHasSel = false;
@@ -46,6 +49,12 @@ inline DeleteTarget deleteTargetFor(const DeleteContext &c)
 	// window is in.
 	if (c.voiceoverFocused && c.voiceoverHasSel)
 		return DeleteTarget::VoiceoverTake;
+	// The keyframe list, likewise: Delete takes the highlighted key. With no
+	// row highlighted it does NOTHING rather than falling through to the
+	// timeline -- pressing Delete a few times to clear the keys must never take
+	// the whole clip with the last press.
+	if (c.keyListFocused)
+		return c.keyListHasSel ? DeleteTarget::ListKeyframe : DeleteTarget::Nothing;
 	// Same idea for a key picked on the preview's motion path: having just
 	// clicked a keyframe dot, Delete means that key -- not the whole clip it
 	// belongs to, which is what the timeline selection would otherwise say.

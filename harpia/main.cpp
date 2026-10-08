@@ -1,3 +1,4 @@
+#include "AppName.hpp"
 #include "Version.hpp"
 #include "ui/EditorLog.hpp"
 #include "core/CrashGuard.hpp"
@@ -148,6 +149,8 @@ void saveStartupTimings(const QMap<QString, int> &measured)
 int main(int argc, char *argv[])
 {
 	QApplication app(argc, argv);
+	// The internal name, which the settings and data folders are named after:
+	// keep it. What people see is HARPIA_APP_DISPLAY_NAME (AppName.hpp).
 	QApplication::setApplicationName(QStringLiteral("Harpia Recorder"));
 	QApplication::setOrganizationName(QStringLiteral("Harpia"));
 	// Window/taskbar/Alt-Tab icon (all platforms). The Windows .exe icon itself
@@ -190,7 +193,7 @@ int main(int argc, char *argv[])
 					       line.toStdString());
 	};
 	harpia::Logger::instance().log(harpia::LogLevel::Info,
-				       std::string("Harpia Recorder v") + HARPIA_VERSION_STRING + " starting");
+				       std::string(HARPIA_APP_DISPLAY_NAME " v") + HARPIA_VERSION_STRING + " starting");
 
 	// Something on screen for the rest of this. Startup is dominated by libobs
 	// work that has to finish before the window can exist -- the graphics device
@@ -212,7 +215,7 @@ int main(int argc, char *argv[])
 	harpia::ObsContext obs;
 	if (!obs.startup()) {
 		splash.hide();
-		QMessageBox::critical(nullptr, QStringLiteral("Harpia Recorder"),
+		QMessageBox::critical(nullptr, QStringLiteral(HARPIA_APP_DISPLAY_NAME),
 				      QStringLiteral("Failed to initialize the OBS backend (obs_startup)."));
 		return 1;
 	}
@@ -252,7 +255,7 @@ int main(int argc, char *argv[])
 			// always-on-top splash is a hang as far as anyone can tell.
 			splash.hide();
 			QMessageBox::warning(
-				nullptr, QStringLiteral("Harpia Recorder — missing components"),
+				nullptr, QStringLiteral(HARPIA_APP_DISPLAY_NAME " — missing components"),
 				QStringLiteral(
 					"Some required components did not load, so recording may not work:\n\n%1\n"
 					"This usually means plugin libraries are missing from the install, or "

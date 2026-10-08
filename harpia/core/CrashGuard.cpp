@@ -1,5 +1,6 @@
 #include "CrashGuard.hpp"
 
+#include "AppName.hpp"
 #include "Version.hpp"
 
 #include <QDateTime>
@@ -58,7 +59,7 @@ void writePendingFile(const char *reason)
 	const std::time_t now = std::time(nullptr);
 	if (std::tm *tm = std::localtime(&now))
 		std::strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", tm);
-	std::fprintf(f, "Harpia Recorder v%s crashed\n%s\n\n%s\n", HARPIA_VERSION_STRING, stamp,
+	std::fprintf(f, HARPIA_APP_DISPLAY_NAME " v%s crashed\n%s\n\n%s\n", HARPIA_VERSION_STRING, stamp,
 		     reason ? reason : "(no description)");
 	std::fflush(f);
 	std::fclose(f);
@@ -259,10 +260,10 @@ LONG WINAPI handleSeh(EXCEPTION_POINTERS *info)
 	// it surfaces even over a full-screen recording target.
 	char msg[768];
 	std::snprintf(msg, sizeof(msg),
-		      "Harpia Recorder has crashed.\n\n%s\n\nA crash report was saved and will be shown "
+		      HARPIA_APP_DISPLAY_NAME " has crashed.\n\n%s\n\nA crash report was saved and will be shown "
 		      "on the next start. Any in-progress recording can be recovered there too.",
 		      buf);
-	MessageBoxA(nullptr, msg, "Harpia Recorder crashed", MB_OK | MB_ICONERROR | MB_SYSTEMMODAL);
+	MessageBoxA(nullptr, msg, HARPIA_APP_DISPLAY_NAME " crashed", MB_OK | MB_ICONERROR | MB_SYSTEMMODAL);
 	return EXCEPTION_EXECUTE_HANDLER; // die now, after the report
 }
 #endif

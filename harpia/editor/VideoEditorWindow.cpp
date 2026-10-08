@@ -1,4 +1,5 @@
 #include "VideoEditorWindow.hpp"
+#include "AppName.hpp"
 #include "../ui/EditorLog.hpp"
 #include "timeline/SoundLibrary.hpp"
 #include "timeline/ClipShuffle.hpp"
@@ -8354,7 +8355,7 @@ void VideoEditorWindow::showAbout()
 	QMessageBox box(this);
 	box.setWindowTitle(QStringLiteral("About Harpia"));
 	box.setIconPixmap(QPixmap());
-	box.setText(QStringLiteral("<b>Harpia Recorder</b>  v%1").arg(QString::fromUtf8(appVersion())));
+	box.setText(QStringLiteral("<b>" HARPIA_APP_DISPLAY_NAME "</b>  v%1").arg(QString::fromUtf8(appVersion())));
 	box.setInformativeText(QStringLiteral(
 		"Built %1 %2.<br>Screen recorder and editor.<br><br>"
 		"Log folder: %3<br>Scripts: %4<br>Templates: %5")

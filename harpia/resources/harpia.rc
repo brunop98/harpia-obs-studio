@@ -1,3 +1,40 @@
-// Windows application icon. The icon resource with the lowest ordinal ID is the
-// one Explorer/taskbar use for the executable.
+// Windows resources for harpia.exe: the icon, and the version information
+// Windows shows for the program -- the name in Task Manager, on the taskbar
+// and in the file's Properties > Details.
+#include <winver.h>
+#include "harpia_version_rc.h" // generated from Version.hpp at build time
+#include "../AppName.hpp"      // HARPIA_APP_DISPLAY_NAME
+
+// The icon resource with the lowest ordinal ID is the one Explorer/taskbar use
+// for the executable.
 1 ICON "harpia.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION HARPIA_RC_VERSION
+ PRODUCTVERSION HARPIA_RC_VERSION
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0" // U.S. English, Unicode
+        BEGIN
+            VALUE "CompanyName", "Harpia"
+            // What Task Manager lists the running program as.
+            VALUE "FileDescription", HARPIA_APP_DISPLAY_NAME
+            VALUE "FileVersion", HARPIA_RC_VERSION_STR
+            VALUE "InternalName", "harpia"
+            VALUE "LegalCopyright", "GNU GPL v2 or later; built on libobs (OBS Studio)"
+            VALUE "OriginalFilename", "harpia.exe"
+            VALUE "ProductName", HARPIA_APP_DISPLAY_NAME
+            VALUE "ProductVersion", HARPIA_RC_VERSION_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

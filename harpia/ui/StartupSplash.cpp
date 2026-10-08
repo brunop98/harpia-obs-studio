@@ -1,5 +1,7 @@
 #include "StartupSplash.hpp"
 
+#include "AppName.hpp"
+
 #include <QApplication>
 #include <QIcon>
 #include <QLabel>
@@ -180,7 +182,7 @@ StartupSplash::StartupSplash(const QString &versionText, QWidget *parent)
 	icon->setAlignment(Qt::AlignCenter);
 	root->addWidget(icon);
 
-	auto *name = new QLabel(QStringLiteral("Harpia Recorder"), this);
+	auto *name = new QLabel(QStringLiteral(HARPIA_APP_DISPLAY_NAME), this);
 	name->setObjectName(QStringLiteral("splashName"));
 	name->setAlignment(Qt::AlignCenter);
 	root->addWidget(name);

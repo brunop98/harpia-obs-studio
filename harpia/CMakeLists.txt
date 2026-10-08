@@ -76,6 +76,7 @@ target_sources(
   harpia-recorder
   PRIVATE
     main.cpp
+    AppName.hpp
     Version.hpp
     # Qt resource bundle (embeds the window/taskbar icon); AUTORCC compiles it.
     resources/resources.qrc
@@ -361,8 +362,21 @@ if(OS_WINDOWS)
     platform/win/WinForegroundWatcher.cpp
     platform/win/WinWindowList.cpp
     platform/win/WinCameraAccess.cpp
-    # Compiled into the .exe as the application icon (Explorer/taskbar).
+    # Compiled into the .exe: the icon, and the name and version Windows shows
+    # for it ("Harpia Recorder and Editor" in Task Manager and Properties).
     resources/harpia.rc)
+  # The resource script's version numbers, from Version.hpp, written at build
+  # time so a patch bump needs no re-configure (rc.exe cannot read Version.hpp).
+  set(_harpia_rc_gen "${CMAKE_CURRENT_BINARY_DIR}/generated")
+  add_custom_command(
+    OUTPUT "${_harpia_rc_gen}/harpia_version_rc.h"
+    COMMAND "${CMAKE_COMMAND}" -DVERSION_HPP=${CMAKE_CURRENT_SOURCE_DIR}/Version.hpp
+            -DOUT=${_harpia_rc_gen}/harpia_version_rc.h -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/harpia-rc-version.cmake
+    DEPENDS Version.hpp cmake/harpia-rc-version.cmake
+    COMMENT "Harpia version for the Windows resources"
+    VERBATIM)
+  target_sources(harpia-recorder PRIVATE "${_harpia_rc_gen}/harpia_version_rc.h")
+  target_include_directories(harpia-recorder PRIVATE "${_harpia_rc_gen}")
   # DPAPI (CryptProtectData) seals the transcription API key -- SecretStore.cpp.
   # dbghelp: the stack and the minidump in a crash report -- CrashGuard.cpp.
   target_link_libraries(harpia-recorder PRIVATE crypt32 dbghelp dwmapi)

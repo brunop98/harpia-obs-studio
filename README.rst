@@ -1,5 +1,5 @@
-Harpia Recorder
-===============
+Harpia Recorder and Editor
+==========================
 
 A screen recorder and video editor built on libobs, the capture and encoding
 core of OBS Studio <https://obsproject.com>.

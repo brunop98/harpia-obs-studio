@@ -1,4 +1,4 @@
-# Harpia Recorder
+# Harpia Recorder and Editor
 
 A screen recorder and video editor for Windows, built directly on **libobs** —
 the capture and encoding core of OBS Studio — with its own Qt 6 interface.

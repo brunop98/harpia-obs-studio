@@ -1,5 +1,7 @@
 #include "MainWindow.hpp"
 
+#include "AppName.hpp"
+
 #include "core/Logger.hpp"
 #include "../editor/ytdlp/YtDlp.hpp"
 
@@ -138,7 +140,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	  idle_(IdleMonitor::create()),
 	  defaultFolder_(std::move(defaultFolder))
 {
-	setWindowTitle(QStringLiteral("Harpia Recorder  v%1").arg(QString::fromUtf8(appVersion())));
+	setWindowTitle(QStringLiteral(HARPIA_APP_DISPLAY_NAME "  v%1").arg(QString::fromUtf8(appVersion())));
 
 	ownPid_ = (uint64_t)QCoreApplication::applicationPid();
 

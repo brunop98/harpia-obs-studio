@@ -1,5 +1,6 @@
 #include "Logger.hpp"
 
+#include "AppName.hpp"
 #include "Version.hpp"
 
 #include <util/base.h>
@@ -108,7 +109,7 @@ void Logger::init(const std::string &logDir)
 
 	// Session header line.
 	if (file_) {
-		std::fprintf(file_, "===== Harpia Recorder v%s — session started %s =====\n",
+		std::fprintf(file_, "===== " HARPIA_APP_DISPLAY_NAME " v%s — session started %s =====\n",
 			     HARPIA_VERSION_STRING, timestamp(startMs, "%Y-%m-%d %H:%M:%S").c_str());
 		std::fflush(file_);
 	}

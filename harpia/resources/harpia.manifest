@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Merged by the linker into harpia.exe's manifest (CMake passes a .manifest
+  source as /MANIFESTINPUT). The linker adds the run-as-invoker trust info
+  itself, so it is not repeated here; DPI awareness is left to Qt, which sets
+  per-monitor awareness at startup and warns if a manifest already has.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!-- Built for Windows 10 and 11. Without this, Windows treats the program as
+       one written for Windows 8 and runs some functions in compatibility mode
+       (version checks, for one, report Windows 8). -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <!-- Paths past 260 characters (deep project or output folders), where
+           Windows has long paths turned on. -->
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+  <!-- Current-style native dialogs (the crash message box among them). -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0"
+                        processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
+    </dependentAssembly>
+  </dependency>
+</assembly>

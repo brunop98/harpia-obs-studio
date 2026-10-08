@@ -5,6 +5,7 @@
 #include "core/Logger.hpp"
 #include "core/ObsContext.hpp"
 #include "model/PresetStore.hpp"
+#include "platform/OsIntegration.hpp"
 #include "ui/MainWindow.hpp"
 #include "ui/SingleInstance.hpp"
 #include "ui/StartupSplash.hpp"
@@ -148,6 +149,10 @@ void saveStartupTimings(const QMap<QString, int> &measured)
 // minimal recorder window.
 int main(int argc, char *argv[])
 {
+	// Before any window exists: the taskbar id has to be in place before the
+	// first one appears, and power throttling is best left before anything
+	// starts. Logged once the log is open (below).
+	const QString osSetup = harpia::os_integration::applyAtStartup();
 	QApplication app(argc, argv);
 	// The internal name, which the settings and data folders are named after:
 	// keep it. What people see is HARPIA_APP_DISPLAY_NAME (AppName.hpp).
@@ -194,6 +199,8 @@ int main(int argc, char *argv[])
 	};
 	harpia::Logger::instance().log(harpia::LogLevel::Info,
 				       std::string(HARPIA_APP_DISPLAY_NAME " v") + HARPIA_VERSION_STRING + " starting");
+	if (!osSetup.isEmpty())
+		harpia::Logger::instance().log(harpia::LogLevel::Info, osSetup.toStdString());
 
 	// Something on screen for the rest of this. Startup is dominated by libobs
 	// work that has to finish before the window can exist -- the graphics device

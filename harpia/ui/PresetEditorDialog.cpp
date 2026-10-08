@@ -7,6 +7,7 @@
 #include "ZoomPreview.hpp"
 #include "ColorField.hpp"
 #include "InfoHint.hpp"
+#include "SystemSettingsWidget.hpp"
 #include "../editor/ytdlp/YtDlpSettingsWidget.hpp"
 #include "core/CaptureManager.hpp"
 #include "core/EncoderFactory.hpp"
@@ -1216,6 +1217,16 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 		v->addWidget(new YtDlpSettingsWidget(dlPage));
 		v->addStretch(1);
 		addPage(QStringLiteral("Downloads"), dlPage);
+	}
+
+	// ===== System =====
+	// Also about the machine: the graphics card on two-GPU laptops. Only where
+	// the operating system has the choice (Windows).
+	if (os_integration::gpuPreferenceSupported()) {
+		QWidget *sysPage = makePage(v);
+		v->addWidget(new SystemSettingsWidget(sysPage));
+		v->addStretch(1);
+		addPage(QStringLiteral("System"), sysPage);
 	}
 
 	// ---- Which pages this preset actually has ---------------------------

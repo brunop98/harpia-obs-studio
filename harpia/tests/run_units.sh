@@ -665,6 +665,12 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/recordingdelete_test.cpp" "$H/ui/RecordingDelete.cpp" "$WORK/moc_RecentListWidget.cpp" \
 	-o "$WORK/recordingdelete_test" $LF
 
+# The OS integration: the graphics-card registry value, the off-Windows stub,
+# and the System settings page.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/osintegration_test.cpp" "$H/ui/SystemSettingsWidget.cpp" "$H/platform/OsIntegrationStub.cpp" \
+	-o "$WORK/osintegration_test" $LF
+
 # The keyframe list's reorder (poses move, times stay), Reset value and Delete.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/keyorder_test.cpp" "$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
@@ -915,6 +921,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/richtext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/curvepath_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keyorder_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/recordingdelete_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/osintegration_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/windowregion_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/windowpicker_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/stillweight_test" || rc=1

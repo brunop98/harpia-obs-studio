@@ -131,6 +131,7 @@ target_sources(
     model/RegionStore.hpp
     platform/IdleMonitor.hpp
     platform/WindowList.hpp
+    platform/OsIntegration.hpp
     library/AudioCard.cpp
     library/AudioCard.hpp
     library/ClipLibrary.cpp
@@ -170,6 +171,8 @@ target_sources(
     ui/ClipLibraryWindow.hpp
     ui/RecordingDelete.cpp
     ui/RecordingDelete.hpp
+    ui/SystemSettingsWidget.cpp
+    ui/SystemSettingsWidget.hpp
     ui/ExportDoneDialog.cpp
     ui/ExportDoneDialog.hpp
     ui/ErrorLogsPanel.cpp
@@ -362,9 +365,13 @@ if(OS_WINDOWS)
     platform/win/WinForegroundWatcher.cpp
     platform/win/WinWindowList.cpp
     platform/win/WinCameraAccess.cpp
+    # Taskbar id, out of power throttling, the graphics-card choice.
+    platform/win/WinOsIntegration.cpp
     # Compiled into the .exe: the icon, and the name and version Windows shows
     # for it ("Harpia Recorder and Editor" in Task Manager and Properties).
-    resources/harpia.rc)
+    resources/harpia.rc
+    # Merged into the .exe's manifest: Windows 10/11, long paths.
+    resources/harpia.manifest)
   # The resource script's version numbers, from Version.hpp, written at build
   # time so a patch bump needs no re-configure (rc.exe cannot read Version.hpp).
   set(_harpia_rc_gen "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -379,13 +386,15 @@ if(OS_WINDOWS)
   target_include_directories(harpia-recorder PRIVATE "${_harpia_rc_gen}")
   # DPAPI (CryptProtectData) seals the transcription API key -- SecretStore.cpp.
   # dbghelp: the stack and the minidump in a crash report -- CrashGuard.cpp.
-  target_link_libraries(harpia-recorder PRIVATE crypt32 dbghelp dwmapi)
+  # shell32: the taskbar id (SetCurrentProcessExplicitAppUserModelID).
+  target_link_libraries(harpia-recorder PRIVATE crypt32 dbghelp dwmapi shell32)
 elseif(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
   target_sources(harpia-recorder PRIVATE
     platform/nix/NixIdleMonitor.cpp
     platform/nix/NixForegroundWatcher.cpp
     platform/nix/NixWindowList.cpp
-    platform/nix/NixCameraAccess.cpp)
+    platform/nix/NixCameraAccess.cpp
+    platform/OsIntegrationStub.cpp)
   # Wayland/GNOME idle uses the Mutter IdleMonitor over D-Bus (Qt::DBus); X11/Xss
   # are loaded at runtime via dlopen, so only libdl is needed at link time.
   find_package(Qt6 REQUIRED DBus)
@@ -395,7 +404,8 @@ elseif(OS_MACOS)
     platform/mac/MacIdleMonitor.cpp
     platform/mac/MacForegroundWatcher.cpp
     platform/mac/MacWindowList.cpp
-    platform/mac/MacCameraAccess.cpp)
+    platform/mac/MacCameraAccess.cpp
+    platform/OsIntegrationStub.cpp)
   target_link_libraries(harpia-recorder PRIVATE "-framework CoreGraphics")
 endif()
 

@@ -82,10 +82,14 @@ int main(int argc, char **argv)
 	std::setvbuf(stdout, nullptr, _IONBF, 0);
 	QTemporaryDir tmp;
 	// The recycle bin, sandboxed: on Linux it is $XDG_DATA_HOME/Trash, so this
-	// test never puts anything in the real one.
+	// test never puts anything in the real one. The folder is deliberately NOT
+	// made: with it missing, Qt 6.4 "trashes" into the current directory, so
+	// the test runs from an empty one and checks nothing lands there.
 	const QString dataHome = tmp.path() + QStringLiteral("/data");
-	QDir().mkpath(dataHome);
 	qputenv("XDG_DATA_HOME", dataHome.toLocal8Bit());
+	const QString cwd = tmp.path() + QStringLiteral("/cwd");
+	QDir().mkpath(cwd);
+	QDir::setCurrent(cwd);
 	QApplication app(argc, argv);
 
 	std::printf("\n-- the pieces --\n");
@@ -188,6 +192,8 @@ int main(int argc, char **argv)
 #ifdef Q_OS_LINUX
 		ok(QFile::exists(dataHome + QStringLiteral("/Trash/files/Day 144.mp4")),
 		   "they went to the recycle bin, not straight off the disk");
+		ok(QDir(cwd).entryList(QDir::NoDotAndDotDot | QDir::AllEntries).isEmpty(),
+		   "and nothing was 'trashed' into the current directory (the Qt 6.4 bug)");
 #endif
 	}
 

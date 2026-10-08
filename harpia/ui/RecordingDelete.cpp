@@ -5,6 +5,7 @@
 #include <QAbstractSpinBox>
 #include <QApplication>
 #include <QComboBox>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QKeySequenceEdit>
@@ -13,6 +14,7 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QShortcut>
+#include <QStandardPaths>
 #include <QTextEdit>
 
 namespace harpia::recording_delete {
@@ -59,6 +61,13 @@ bool recycle(const QString &path)
 	QFile f(path);
 	if (!f.exists())
 		return true; // already gone: nothing left to fail at
+#if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
+	// Qt 6.4 on Linux: when $XDG_DATA_HOME (~/.local/share) does not exist yet
+	// it cannot set up the Trash there, and then "trashes" into the CURRENT
+	// directory -- files/ and info/ next to wherever the app was started.
+	// With the folder there, the file goes to the real Trash.
+	QDir().mkpath(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation));
+#endif
 	if (f.moveToTrash())
 		return true;
 	return f.remove();

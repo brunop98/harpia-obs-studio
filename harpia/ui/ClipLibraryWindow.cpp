@@ -4,6 +4,7 @@
 #include "editor/VideoEditorWindow.hpp"
 
 #include "RecentListWidget.hpp"
+#include "RecordingDelete.hpp"
 #include "library/AudioCard.hpp"
 #include "model/PresetStore.hpp"
 
@@ -34,7 +35,6 @@
 #include <QPushButton>
 #include <QRunnable>
 #include <QSettings>
-#include <QShortcut>
 #include <QSlider>
 #include <QStyledItemDelegate>
 #include <QThreadPool>
@@ -348,9 +348,10 @@ ClipLibraryWindow::ClipLibraryWindow(PresetStore &store, QWidget *parent)
 	layout->addWidget(grid_, 1);
 	layout->addLayout(footer);
 
-	auto *del = new QShortcut(QKeySequence(QKeySequence::Delete), grid_);
-	del->setContext(Qt::WidgetShortcut);
-	connect(del, &QShortcut::activated, this, &ClipLibraryWindow::deleteSelected);
+	// Delete removes the selected clips wherever the keyboard is in this
+	// window -- the size slider, a button, the grid -- except the text fields.
+	// It used to work only while the grid itself had the keyboard.
+	recording_delete::installDeleteKey(this, grid_, [this](const QStringList &) { deleteSelected(); });
 }
 
 QSize ClipLibraryWindow::thumbSize() const
@@ -707,22 +708,16 @@ void ClipLibraryWindow::deleteSelected()
 	if (paths.isEmpty())
 		return;
 
-	const QString prompt =
-		paths.size() == 1
-			? QStringLiteral("Move \"%1\" to the recycle bin?").arg(QFileInfo(paths.front()).fileName())
-			: QStringLiteral("Move %1 clips to the recycle bin?").arg(paths.size());
-	if (QMessageBox::question(this, QStringLiteral("Delete"), prompt) != QMessageBox::Yes)
+	const QStringList gone = recording_delete::confirmAndRecycle(this, paths);
+	if (gone.isEmpty())
 		return;
-
-	for (const QString &path : paths) {
-		QFile f(path);
-		if (!f.moveToTrash())
-			f.remove();
+	for (const QString &path : gone) {
 		favorites_.remove(path);
 		recentlyViewed_.remove(path);
 	}
 	savePersistentState();
 	refresh();
+	emit recordingsDeleted(gone);
 }
 
 void ClipLibraryWindow::loadPersistentState()

@@ -123,6 +123,9 @@ private slots:
 	void refreshClipViews(); // recent strip + open Clip Library window
 	void reloadPresetCombo();
 	void showStripContextMenu(const QPoint &pos);
+	// Asks, then sends them to the recycle bin (RecordingDelete.hpp); the strip
+	// and an open Clip Library refresh.
+	void deleteRecordings(const QStringList &paths);
 	void openAudioExtract(const QString &path); // "Extract Audio Only", from either file menu
 	void onThumbnailReady(const QString &path);
 	void tickState();  // recording/paused state + timer

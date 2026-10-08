@@ -167,6 +167,8 @@ target_sources(
     ui/ShortcutConflictDialog.hpp
     ui/ClipLibraryWindow.cpp
     ui/ClipLibraryWindow.hpp
+    ui/RecordingDelete.cpp
+    ui/RecordingDelete.hpp
     ui/ExportDoneDialog.cpp
     ui/ExportDoneDialog.hpp
     ui/ErrorLogsPanel.cpp

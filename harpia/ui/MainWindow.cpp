@@ -14,6 +14,7 @@
 #include "Version.hpp"
 #include "PresetEditorDialog.hpp"
 #include "RecentListWidget.hpp"
+#include "RecordingDelete.hpp"
 #include "RecorderControlsOverlay.hpp"
 #include "CountdownOverlay.hpp"
 #include "RegionDialogs.hpp"
@@ -513,7 +514,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	auto *stripHeader = new QHBoxLayout;
 	auto *recentHeaderLabel = new QLabel(QStringLiteral("Recent recordings"), recentSection_);
 	recentHeaderLabel->setToolTip(
-		QStringLiteral("Your latest recordings — double-click to play, right-click for more."));
+		QStringLiteral("Your latest recordings — double-click to play, Delete removes the selected ones, "
+			       "right-click for more."));
 	stripHeader->addWidget(recentHeaderLabel);
 	stripHeader->addStretch(1);
 	libraryButton_ = new QPushButton(QStringLiteral("Open Clip Library…"), recentSection_);
@@ -696,6 +698,11 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	});
 	connect(recentStrip_, &QListWidget::customContextMenuRequested, this,
 		&MainWindow::showStripContextMenu);
+	// Delete removes the selected recordings, wherever the keyboard is in this
+	// window (except a text field): a card stays selected while you click
+	// around, and Delete should still mean it.
+	recording_delete::installDeleteKey(this, recentStrip_,
+					   [this](const QStringList &paths) { deleteRecordings(paths); });
 	connect(&thumbnails_, &ThumbnailCache::ready, this, &MainWindow::onThumbnailReady);
 	connect(audioPanel_, &AudioPanel::changed, this, &MainWindow::onAudioChanged);
 
@@ -2623,6 +2630,8 @@ void MainWindow::onOpenClipLibrary()
 		clipWindow_ = std::make_unique<ClipLibraryWindow>(presets_);
 		connect(clipWindow_.get(), &ClipLibraryWindow::extractAudioRequested, this,
 			&MainWindow::openAudioExtract);
+		connect(clipWindow_.get(), &ClipLibraryWindow::recordingsDeleted, this,
+			[this](const QStringList &) { refreshRecentList(); });
 	}
 	clipWindow_->show();
 	clipWindow_->raise();
@@ -4088,6 +4097,7 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 	menu.addSeparator();
 	QAction *renameAct = menu.addAction(QStringLiteral("Rename…"));
 	QAction *deleteAct = menu.addAction(QStringLiteral("Delete"));
+	deleteAct->setShortcut(QKeySequence(QKeySequence::Delete)); // shown as a reminder
 
 	QAction *chosen = menu.exec(recentStrip_->viewport()->mapToGlobal(pos));
 	if (!chosen)
@@ -4163,16 +4173,18 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 					     QStringLiteral("Could not rename the file."));
 		refreshRecentList();
 	} else if (chosen == deleteAct) {
-		if (QMessageBox::question(
-			    this, QStringLiteral("Delete recording"),
-			    QStringLiteral("Delete \"%1\"?\nThis cannot be undone.")
-				    .arg(QFileInfo(path).fileName())) != QMessageBox::Yes)
-			return;
-		if (!QFile::remove(path))
-			QMessageBox::warning(this, QStringLiteral("Delete recording"),
-					     QStringLiteral("Could not delete the file."));
-		refreshRecentList();
+		// Right-clicking one of several selected cards deletes them all, as a
+		// file manager does; right-clicking any other card deletes just it.
+		const QStringList sel = recording_delete::selectedPaths(recentStrip_);
+		deleteRecordings(item->isSelected() && sel.contains(path) ? sel : QStringList{path});
 	}
+}
+
+void MainWindow::deleteRecordings(const QStringList &paths)
+{
+	if (recording_delete::confirmAndRecycle(this, paths).isEmpty())
+		return;
+	refreshClipViews();
 }
 
 void MainWindow::notePauseTransition(bool paused)

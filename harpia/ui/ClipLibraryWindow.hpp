@@ -34,6 +34,9 @@ signals:
 	// already owns the one launcher, so both file menus reach the same code and
 	// cannot drift apart on what the item does.
 	void extractAudioRequested(const QString &path);
+	// Clips this window sent to the recycle bin, so the main window's Recent
+	// strip can drop them too.
+	void recordingsDeleted(const QStringList &paths);
 
 public slots:
 	void refresh();

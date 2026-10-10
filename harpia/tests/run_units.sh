@@ -665,10 +665,30 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/recordingdelete_test.cpp" "$H/ui/RecordingDelete.cpp" "$WORK/moc_RecentListWidget.cpp" \
 	-o "$WORK/recordingdelete_test" $LF
 
+# The local remote control (Unity Play Mode Recorder): the HTTP protocol, who
+# may talk to it, real sockets, the area outline and the session rules.
+"$MOC" -I"$H" "$H/core/RemoteControl.hpp" -o "$WORK/moc_RemoteControl.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/remotecontrol_test.cpp" "$H/core/RemoteControl.cpp" "$H/ui/AreaFlash.cpp" \
+	"$WORK/moc_RemoteControl.cpp" -o "$WORK/remotecontrol_test" $LF
+# The Unity package's Unity-free core (HarpiaClient, CommandQueue) under Mono,
+# against the real server and session rules (remotehost_tool). Only where
+# mcs + mono are installed; skipped (and said so) elsewhere.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/remotehost_tool.cpp" "$H/core/RemoteControl.cpp" "$WORK/moc_RemoteControl.cpp" \
+	-o "$WORK/remotehost_tool" $LF
+UPKG="$ROOT/unity/com.harpia.playmode-recorder"
+rm -f "$WORK/ClientTests.exe"
+if command -v mcs >/dev/null 2>&1 && command -v mono >/dev/null 2>&1; then
+	mcs -langversion:7 -warnaserror+ -out:"$WORK/ClientTests.exe" \
+		"$UPKG/Tests~/ClientTests.cs" "$UPKG/Editor/HarpiaClient.cs" "$UPKG/Editor/CommandQueue.cs"
+fi
+
 # The OS integration: the graphics-card registry value, the off-Windows stub,
 # and the System settings page.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/osintegration_test.cpp" "$H/ui/SystemSettingsWidget.cpp" "$H/platform/OsIntegrationStub.cpp" \
+	"$H/core/RemoteSettings.cpp" \
 	-o "$WORK/osintegration_test" $LF
 
 # The keyframe list's reorder (poses move, times stay), Reset value and Delete.
@@ -922,6 +942,12 @@ QT_QPA_PLATFORM=offscreen "$WORK/curvepath_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keyorder_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/recordingdelete_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/osintegration_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/remotecontrol_test" || rc=1
+if [ -f "$WORK/ClientTests.exe" ]; then
+	mono "$WORK/ClientTests.exe" "$WORK/remotehost_tool" 47963 || rc=1
+else
+	echo "(skipped: the Unity package's client tests need mcs and mono)"
+fi
 QT_QPA_PLATFORM=offscreen "$WORK/windowregion_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/windowpicker_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/stillweight_test" || rc=1

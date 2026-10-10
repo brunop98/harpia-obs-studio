@@ -22,6 +22,7 @@
 #include "RegionDialogs.hpp"
 #include "MonitorMatch.hpp"
 #include "WindowPicker.hpp"
+#include "AreaFlash.hpp"
 #include "platform/WindowList.hpp"
 #include "RegionTool.hpp"
 #include "MultiAreaOverlay.hpp"
@@ -910,6 +911,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 void MainWindow::finishStartup()
 {
+	// The Unity Play Mode Recorder's way in (off in Settings > System).
+	applyRemoteSettings();
 	// The slow half of coming up, deliberately after the window is on screen.
 	//
 	// None of this is needed to DRAW the window, and all of it talks to
@@ -1875,6 +1878,24 @@ void MainWindow::finalizeAfterStop()
 		return;
 	stopHandled_ = true;
 
+	// A recording the remote control started (Unity): its own rule for short
+	// runs -- deleted without a question, when its stop asked -- and then the
+	// user's own capture area back. The preset's "keep or discard?" question is
+	// not asked: nobody is looking at Harpia when Unity leaves Play Mode.
+	if (remoteSession_.owns()) {
+		const bool discarded = remoteDiscardIfAsked();
+		remoteSession_.ended();
+		restoreAreaAfterRemote();
+		const bool remux = !discarded && !lastRecordedPath_.isEmpty() && lastRecordedPath_ != lastScreenPath_;
+		if (remux)
+			finalizeStopped(lastRecordedPath_, lastScreenPath_, lastWebcamPath_, markersPath_, lastContentMs_, 0,
+					true);
+		else if (closePending_)
+			close();
+		markersPath_.clear();
+		return;
+	}
+
 	const bool needMinCheck = (lastMinSeconds_ > 0 && lastContentMs_ > 0 &&
 				   lastContentMs_ < (qint64)lastMinSeconds_ * 1000);
 	const bool needsRemux = (!lastRecordedPath_.isEmpty() && lastRecordedPath_ != lastScreenPath_);
@@ -2250,6 +2271,8 @@ void MainWindow::editActivePreset(const QString &initialPage)
 	if (!initialPage.isEmpty())
 		dlg.showPage(initialPage);
 	const int answer = dlg.exec();
+	// The System page saves as you go (OK or Cancel alike), like Downloads.
+	applyRemoteSettings();
 	if (answer != QDialog::Accepted) {
 		// Cancel: the Audio page has been driving the live capture, so put it
 		// back to what the active preset says.
@@ -2806,13 +2829,7 @@ void MainWindow::startWindowPick()
 
 void MainWindow::applyPickedWindow(const DesktopWindow &w)
 {
-	// The physical rectangle of each display, in the capture's own order.
-	QVector<QRect> monitors;
-	const int count = std::max(hwMonitorCount_, int(CaptureManager::enumerateMonitors().size()));
-	for (int i = 0; i < count; ++i) {
-		QScreen *s = screenForMonitor(i);
-		monitors.push_back(s ? window_list::monitorRect(s->name()) : QRect());
-	}
+	const QVector<QRect> monitors = monitorRectsPx();
 	const int m = window_region::monitorFor(w.bounds, monitors);
 	const std::optional<QRect> r = m >= 0 ? window_region::regionForWindow(w.bounds, monitors[m]) : std::nullopt;
 	if (!r) {
@@ -2903,6 +2920,238 @@ void MainWindow::syncWindowMenu()
 	if (regionTool_)
 		regionTool_->setWindowMenu(window_list::available(), pickedWindow_ ? pickedWindowTitle_ : QString(),
 					   followWindowOn_);
+}
+
+// ---- Remote control (the Unity Play Mode Recorder) ---------------------------
+
+QVector<QRect> MainWindow::monitorRectsPx() const
+{
+	// The physical rectangle of each display, in the capture's own order. Where
+	// the platform cannot say (no window list), the logical geometry scaled.
+	QVector<QRect> monitors;
+	const int count = std::max(hwMonitorCount_, int(CaptureManager::enumerateMonitors().size()));
+	for (int i = 0; i < count; ++i) {
+		QScreen *s = screenForMonitor(i);
+		QRect r = s ? window_list::monitorRect(s->name()) : QRect();
+		if (r.isNull() && s) {
+			const double dpr = s->devicePixelRatio();
+			r = QRect(s->geometry().topLeft() * dpr, s->geometry().size() * dpr);
+		}
+		monitors.push_back(r);
+	}
+	return monitors;
+}
+
+RecorderSnapshot MainWindow::recorderSnapshot() const
+{
+	RecorderSnapshot s;
+	s.recording = recorder_.isRecording();
+	s.paused = recorder_.isPaused();
+	s.starting = starting_;
+	s.stopping = stopping_;
+	s.countingDown = countingDown_;
+	return s;
+}
+
+namespace {
+QString stateName(const RecorderSnapshot &s)
+{
+	if (s.countingDown)
+		return QStringLiteral("countdown");
+	if (s.stopping)
+		return QStringLiteral("stopping");
+	if (s.starting && !s.recording)
+		return QStringLiteral("starting");
+	if (s.recording)
+		return s.paused ? QStringLiteral("paused") : QStringLiteral("recording");
+	return QStringLiteral("idle");
+}
+
+RemoteReply answerOf(const RemoteSession::Answer &a, const RecorderSnapshot &s)
+{
+	if (!a.ok)
+		return RemoteReply::fail(a.status, a.message);
+	QJsonObject o{{QStringLiteral("state"), stateName(s)}};
+	if (!a.message.isEmpty())
+		o.insert(QStringLiteral("note"), a.message);
+	return RemoteReply::ok(o);
+}
+} // namespace
+
+void MainWindow::applyRemoteSettings()
+{
+	const RemoteSettings rs = RemoteSettings::load();
+	if (!rs.enabled) {
+		if (remoteServer_ && remoteServer_->isListening()) {
+			remoteServer_->close();
+			blog(LOG_INFO, "[harpia] remote control: off");
+		}
+		return;
+	}
+	if (!remoteServer_)
+		remoteServer_ = std::make_unique<RemoteControlServer>(*this);
+	if (remoteServer_->isListening() && remoteServer_->port() == quint16(rs.port))
+		return;
+	if (remoteServer_->listen(quint16(rs.port))) {
+		blog(LOG_INFO, "[harpia] remote control: listening on 127.0.0.1:%d", rs.port);
+	} else {
+		const QString why = remoteServer_->errorString();
+		blog(LOG_WARNING, "[harpia] remote control: cannot listen on port %d: %s", rs.port,
+		     why.toUtf8().constData());
+		statusBar()->showMessage(QStringLiteral("Unity control is off: port %1 is taken (%2). Pick another "
+							"port in Settings > System.")
+						 .arg(rs.port)
+						 .arg(why),
+					 12000);
+	}
+}
+
+QJsonObject MainWindow::remoteStatus()
+{
+	const RecorderSnapshot s = recorderSnapshot();
+	return {{QStringLiteral("app"), QStringLiteral(HARPIA_APP_DISPLAY_NAME)},
+		{QStringLiteral("version"), QString::fromUtf8(appVersion())},
+		{QStringLiteral("state"), stateName(s)},
+		{QStringLiteral("remote"), remoteSession_.owns()},
+		{QStringLiteral("preset"), QString::fromStdString(activePreset().name)}};
+}
+
+RemoteReply MainWindow::remoteStart(const RemoteStartRequest &req)
+{
+	const RecorderSnapshot snap = recorderSnapshot();
+	const RemoteSession::Answer a = remoteSession_.start(snap);
+	if (!a.proceed)
+		return answerOf(a, snap);
+
+	// The display holding most of the area, and the part of it on that display
+	// -- the same as picking a window.
+	const QVector<QRect> monitors = monitorRectsPx();
+	const int m = window_region::monitorFor(req.areaPx, monitors);
+	const std::optional<QRect> r = m >= 0 ? window_region::regionForWindow(req.areaPx, monitors[m]) : std::nullopt;
+	if (!r)
+		return RemoteReply::fail(400, QStringLiteral("That area is not on a display Harpia can record"));
+
+	// The user's own area, put back when this recording is over.
+	if (!remoteArea_)
+		remoteArea_ = RemoteAreaBackup{captureModeCombo_->currentData().toString(), currentRegion_,
+					       activePreset().monitorIndex};
+	applyMonitorIndex(m);
+	setRegionFromDevicePx(*r);
+
+	// The checks Record makes, answered here instead of in dialogs: nobody is
+	// looking at Harpia when Unity starts it.
+	refreshReadiness();
+	if (recordingBlocked_) {
+		restoreAreaAfterRemote();
+		return RemoteReply::fail(409, QStringLiteral("Harpia can't record right now: %1").arg(firstIssue_));
+	}
+	const DiskStatus disk = diskStatusFor(QString::fromStdString(activePreset().outputFolder));
+	if (disk.level == DiskLevel::Critical) {
+		restoreAreaAfterRemote();
+		return RemoteReply::fail(409, lowDiskPrompt(disk));
+	}
+
+	remoteSession_.began();
+	remoteClient_ = req.client.isEmpty() ? QStringLiteral("a remote client") : req.client;
+	blog(LOG_INFO, "[harpia] remote: start for %s%s%s -- %dx%d at %d,%d on monitor #%d",
+	     remoteClient_.toUtf8().constData(), req.label.isEmpty() ? "" : ", ", req.label.toUtf8().constData(),
+	     r->width(), r->height(), r->x(), r->y(), m);
+	beginStart(); // no countdown: the game is already running
+	if (!recorder_.isRecording() && !starting_) {
+		remoteSession_.ended();
+		restoreAreaAfterRemote();
+		return RemoteReply::fail(500, QStringLiteral("Harpia could not start the recording (see its Error Logs)"));
+	}
+	return RemoteReply::ok({{QStringLiteral("state"), stateName(recorderSnapshot())},
+				{QStringLiteral("width"), r->width()},
+				{QStringLiteral("height"), r->height()},
+				{QStringLiteral("monitor"), m}});
+}
+
+RemoteReply MainWindow::remotePause()
+{
+	const RecorderSnapshot snap = recorderSnapshot();
+	const RemoteSession::Answer a = remoteSession_.pause(snap);
+	if (!a.proceed)
+		return answerOf(a, snap);
+	onPauseButton(); // known not paused, so this pauses
+	return answerOf(a, recorderSnapshot());
+}
+
+RemoteReply MainWindow::remoteResume()
+{
+	const RecorderSnapshot snap = recorderSnapshot();
+	const RemoteSession::Answer a = remoteSession_.resume(snap);
+	if (!a.proceed)
+		return answerOf(a, snap);
+	onPauseButton(); // known paused, so this resumes
+	return answerOf(a, recorderSnapshot());
+}
+
+RemoteReply MainWindow::remoteStop(int discardShorterThanMs)
+{
+	const RecorderSnapshot snap = recorderSnapshot();
+	const RemoteSession::Answer a = remoteSession_.stop(snap);
+	if (!a.proceed)
+		return answerOf(a, snap);
+	remoteSession_.stopRequested(discardShorterThanMs);
+	beginStop(); // async; finalizeAfterStop applies the minimum and restores the area
+	return answerOf(a, recorderSnapshot());
+}
+
+RemoteReply MainWindow::remoteShowArea(const QRect &areaPx)
+{
+	QVector<AreaFlash::ScreenArea> screens;
+	for (QScreen *s : QGuiApplication::screens())
+		screens.push_back({s, window_list::monitorRect(s->name())});
+	const QVector<QWidget *> layers = AreaFlash::show(
+		areaPx, screens, 2500,
+		QStringLiteral("Harpia records this: %1 \u00d7 %2").arg(areaPx.width()).arg(areaPx.height()));
+	if (layers.isEmpty())
+		return RemoteReply::fail(400, QStringLiteral("That area is not on any display"));
+	const int m = window_region::monitorFor(areaPx, monitorRectsPx());
+	return RemoteReply::ok({{QStringLiteral("monitor"), m}});
+}
+
+bool MainWindow::remoteDiscardIfAsked()
+{
+	if (!remoteSession_.discard(lastContentMs_) || lastRecordedPath_.isEmpty())
+		return false;
+	QFile::remove(lastRecordedPath_);
+	if (!lastWebcamPath_.isEmpty())
+		QFile::remove(lastWebcamPath_);
+	if (!markersPath_.isEmpty())
+		QFile::remove(markersPath_);
+	QDir().rmdir(QFileInfo(lastRecordedPath_).absolutePath()); // the temp folder, if now empty
+	blog(LOG_INFO, "[harpia] remote: deleted a %lld ms run, shorter than %s asked to keep",
+	     (long long)lastContentMs_, remoteClient_.toUtf8().constData());
+	statusBar()->showMessage(
+		QStringLiteral("Short run not saved (%1 s)").arg(double(lastContentMs_) / 1000.0, 0, 'f', 1), 6000);
+	refreshClipViews();
+	return true;
+}
+
+void MainWindow::restoreAreaAfterRemote()
+{
+	if (!remoteArea_)
+		return;
+	const RemoteAreaBackup b = *remoteArea_;
+	remoteArea_.reset();
+	applyMonitorIndex(b.monitor);
+	currentRegion_ = b.region;
+	const int idx = captureModeCombo_->findData(b.modeData);
+	if (idx >= 0 && idx != captureModeCombo_->currentIndex()) {
+		captureModeCombo_->setCurrentIndex(idx); // re-applies the mode (and a saved region) through the switch
+	} else {
+		// Same mode (a custom region): just the old rectangle back.
+		if (captureMode_ == CaptureMode::Region && currentRegion_.enabled && regionTool_) {
+			regionTool_->setScreen(screenForActivePreset());
+			regionTool_->setRegionDevicePx(
+				QRect(currentRegion_.x, currentRegion_.y, currentRegion_.width, currentRegion_.height));
+		}
+		capture_.setRegion(currentRegion_);
+	}
+	updateRegionToolVisibility();
 }
 
 void MainWindow::onSaveRegionRequested()
@@ -3080,7 +3329,8 @@ void MainWindow::syncFollowMouse()
 	// recordings do not follow: nothing is being captured, and the user is
 	// probably mousing over to the controls -- dragging the frame along on
 	// that trip would move the framing they paused to protect.
-	const bool want = p.followMouse && captureMode_ == CaptureMode::Region &&
+	// Never for a remote (Unity) recording: the Game view does not move.
+	const bool want = p.followMouse && !remoteSession_.owns() && captureMode_ == CaptureMode::Region &&
 			  currentRegion_.enabled && recorder_.isRecording() && !starting_ &&
 			  !stopping_ && !recorder_.isPaused();
 	if (want == followMouse_.armed())
@@ -3664,8 +3914,11 @@ void MainWindow::tickRegionWatch()
 	// lock it fired MID-FOLLOW, which read as the follow breaking.
 	const bool suspendedByFollow = activePreset().followMouse;
 
+	// A remote (Unity) recording pauses only when Unity says: the pointer is
+	// in the Inspector half the time.
 	const bool regionRec = captureMode_ == CaptureMode::Region && currentRegion_.enabled &&
-			       recorder_.isRecording() && !starting_ && !stopping_ && !suspendedByFollow;
+			       recorder_.isRecording() && !starting_ && !stopping_ && !suspendedByFollow &&
+			       !remoteSession_.owns();
 	// And never while the user is HOLDING the region's own controls: the move
 	// tab sits above the frame -- outside the captured rect by design -- and a
 	// resize keeps the pointer near the border. Counting either as "left the
@@ -4603,7 +4856,9 @@ bool MainWindow::autoResumeBlocked() const
 
 void MainWindow::tickIdle()
 {
-	if (!recorder_.isRecording() || !idle_)
+	// A remote (Unity) recording pauses only when Unity pauses: watching a
+	// cutscene with hands off the keyboard is not "away".
+	if (!recorder_.isRecording() || !idle_ || remoteSession_.owns())
 		return;
 
 	const int timeout = activePreset().idleTimeoutSeconds;
@@ -4634,8 +4889,8 @@ void MainWindow::tickFocus(uint64_t foregroundPid)
 	// Focus-driven pause is enabled by "Record only one application"; targetExe_
 	// is set (to the chosen app) only then, so this is inactive for a plain
 	// monitor/region recording.
-	if (!recorder_.isRecording() || !appCaptureEnabled_ || targetExe_.isEmpty())
-		return;
+	if (!recorder_.isRecording() || !appCaptureEnabled_ || targetExe_.isEmpty() || remoteSession_.owns())
+		return; // a remote (Unity) recording pauses only when Unity says
 
 	const uint64_t fg = foregroundPid;
 	if (fg == 0)
@@ -4701,7 +4956,8 @@ bool MainWindow::multiAreaWanted() const
 	const Preset &p = activePreset();
 	// Follow Mouse wins if an old or hand-edited preset has both: the editor
 	// never saves them together.
-	return p.multiArea && !p.followMouse && captureMode_ == CaptureMode::Region &&
+	// Not for a remote (Unity) recording: its area is the Game view.
+	return !remoteSession_.owns() && p.multiArea && !p.followMouse && captureMode_ == CaptureMode::Region &&
 	       currentRegion_.enabled && currentRegion_.width > 0 && currentRegion_.height > 0;
 }
 

@@ -8,10 +8,18 @@
 //   * The System page shows what is saved, saves a new pick, says a restart
 //     applies it -- and when saving fails, goes back to what is really in
 //     effect instead of showing a choice that did not stick.
+//   * Its Unity section (the remote control) is on by default, saves the
+//     switch and the port as you change them, and refuses a nonsense port.
+//     Settings go to a sandbox folder, never the real ones.
+#include "core/RemoteSettings.hpp"
 #include "platform/OsIntegration.hpp"
 #include "ui/SystemSettingsWidget.hpp"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QSettings>
+#include <QSpinBox>
+#include <QTemporaryDir>
 #include <QComboBox>
 #include <QLabel>
 
@@ -31,6 +39,8 @@ static void ok(bool c, const char *w)
 int main(int argc, char **argv)
 {
 	std::setvbuf(stdout, nullptr, _IONBF, 0);
+	QTemporaryDir sandbox; // QSettings writes here, not to the real config
+	qputenv("XDG_CONFIG_HOME", sandbox.path().toLocal8Bit());
 	QApplication app(argc, argv);
 	using os_integration::gpuPreferenceIn;
 	using os_integration::withGpuPreference;
@@ -107,6 +117,29 @@ int main(int argc, char **argv)
 		ok(GpuPreference(combo->currentData().toInt()) == GpuPreference::PowerSaving,
 		   "and the box goes back to what is really in effect");
 		ok(page.statusLabel()->text().contains(QStringLiteral("Could not")), "saying so");
+	}
+
+	std::printf("\n-- Unity control --\n");
+	{
+		ok(RemoteSettings::load().enabled && RemoteSettings::load().port == kRemoteDefaultPort,
+		   "on by default, on the default port");
+		SystemSettingsWidget page;
+		ok(page.remoteCheck() && page.remotePort(), "the System page has the Unity switch and port");
+#ifndef Q_OS_WIN
+		ok(page.gpuCombo() == nullptr, "and no graphics row where there is no such choice");
+#endif
+		ok(page.remoteCheck()->isChecked() && page.remotePort()->value() == kRemoteDefaultPort,
+		   "showing what is saved");
+		page.remotePort()->setValue(48000);
+		ok(RemoteSettings::load().port == 48000, "a new port is saved as you change it");
+		page.remoteCheck()->setChecked(false);
+		ok(!RemoteSettings::load().enabled, "and switching it off is saved");
+		ok(!page.remotePort()->isEnabled(), "the port greys out while off");
+		{
+			QSettings s(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+			s.setValue(QStringLiteral("remote/port"), 80);
+		}
+		ok(RemoteSettings::load().port == kRemoteDefaultPort, "a nonsense port (under 1024) reads as the default");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

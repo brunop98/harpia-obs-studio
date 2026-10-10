@@ -1220,9 +1220,9 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	}
 
 	// ===== System =====
-	// Also about the machine: the graphics card on two-GPU laptops. Only where
-	// the operating system has the choice (Windows).
-	if (os_integration::gpuPreferenceSupported()) {
+	// Also about the machine: Unity control, and the graphics card on two-GPU
+	// laptops (where the operating system has the choice).
+	{
 		QWidget *sysPage = makePage(v);
 		v->addWidget(new SystemSettingsWidget(sysPage));
 		v->addStretch(1);

@@ -115,6 +115,11 @@ target_sources(
     core/ShortcutConflicts.hpp
     core/RegionWatch.cpp
     core/RegionWatch.hpp
+    core/RemoteControl.cpp
+    core/RemoteControl.hpp
+    core/RemoteSession.hpp
+    core/RemoteSettings.cpp
+    core/RemoteSettings.hpp
     core/Remuxer.cpp
     core/Remuxer.hpp
     core/ShareExporter.cpp
@@ -173,6 +178,8 @@ target_sources(
     ui/RecordingDelete.hpp
     ui/SystemSettingsWidget.cpp
     ui/SystemSettingsWidget.hpp
+    ui/AreaFlash.cpp
+    ui/AreaFlash.hpp
     ui/ExportDoneDialog.cpp
     ui/ExportDoneDialog.hpp
     ui/ErrorLogsPanel.cpp

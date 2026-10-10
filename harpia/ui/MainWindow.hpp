@@ -12,6 +12,8 @@
 #include "core/ModeCapabilities.hpp"
 #include "core/ZoomMode.hpp"
 #include "core/RegionWatch.hpp"
+#include "core/RemoteControl.hpp"
+#include "core/RemoteSession.hpp"
 #include "core/WebcamRecorder.hpp"
 #include "library/ClipLibrary.hpp"
 #include "library/ThumbnailCache.hpp"
@@ -29,6 +31,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -77,7 +80,9 @@ class MainDevPanel;
 //   │                                                                 │
 //   │  [thumb] [thumb] [thumb] [thumb] …  (recent recordings)         │  strip
 //   └───────────────────────────────────────────────────────────────┘
-class MainWindow : public QMainWindow {
+// Also the recorder behind the local remote control (core/RemoteControl.hpp):
+// the Unity Play Mode Recorder starts, pauses and stops recordings through it.
+class MainWindow : public QMainWindow, public RemoteHandler {
 	Q_OBJECT
 public:
 	MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFolder, QWidget *parent = nullptr);
@@ -553,6 +558,33 @@ private:
 	std::unique_ptr<RegionTool> regionTool_;
 	std::unique_ptr<WindowPicker> windowPicker_;
 	quintptr pickedWindow_ = 0;      // the window the area was set from (0 = none)
+
+	// ---- Remote control (the Unity Play Mode Recorder) -------------------
+	// A remote start records the area it names (the Game view) with the
+	// active preset's settings, straight away (no countdown). The area it
+	// replaces is put back once that recording has finished, so the user's
+	// own capture mode, region and display are never changed by it.
+	QJsonObject remoteStatus() override;
+	RemoteReply remoteStart(const RemoteStartRequest &req) override;
+	RemoteReply remotePause() override;
+	RemoteReply remoteResume() override;
+	RemoteReply remoteStop(int discardShorterThanMs) override;
+	RemoteReply remoteShowArea(const QRect &areaPx) override;
+	void applyRemoteSettings(); // listen (or not) as the System settings say
+	RecorderSnapshot recorderSnapshot() const;
+	QVector<QRect> monitorRectsPx() const; // each display, physical px, in capture order
+	void restoreAreaAfterRemote();
+	// The remote's recording ended: silent delete if it asked, then the area back.
+	bool remoteDiscardIfAsked();
+	std::unique_ptr<RemoteControlServer> remoteServer_;
+	RemoteSession remoteSession_;
+	struct RemoteAreaBackup {
+		QString modeData; // the capture combo's choice ("monitor", "region", "saved:<id>", ...)
+		CaptureRegion region;
+		int monitor = 0;
+	};
+	std::optional<RemoteAreaBackup> remoteArea_;
+	QString remoteClient_;
 	QString pickedWindowTitle_;
 	bool followWindowOn_ = false;    // keep the area on it (off unless asked)
 	QTimer *followWindowTimer_ = nullptr;

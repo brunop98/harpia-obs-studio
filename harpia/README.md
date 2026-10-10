@@ -74,6 +74,15 @@ Three modes, each one step up from the last:
   thumbnails, rename, delete, drag-out to other apps, and audio extraction.
 - **Share copies:** a compressed, fast-start MP4 next to the original.
 
+### Unity Play Mode recording (experimental)
+
+- With the **Harpia Play Mode Recorder** package in a Unity project, entering
+  Play Mode records the Game view with the active preset; Unity's Pause pauses
+  it and leaving Play Mode saves it (very short runs are deleted). Unity talks
+  to a local control server (`core/RemoteControl`, 127.0.0.1:47811, on/off and
+  port in *Settings > System*). The package and its setup are in
+  [`unity/com.harpia.playmode-recorder`](../unity/com.harpia.playmode-recorder/README.md).
+
 ### Reliability
 
 - A start-up **dependency check** with readable messages instead of a failure

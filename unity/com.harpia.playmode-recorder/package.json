@@ -1,0 +1,17 @@
+{
+  "name": "com.harpia.playmode-recorder",
+  "version": "0.1.0",
+  "displayName": "Harpia Play Mode Recorder",
+  "description": "Records the Game view with Harpia Recorder and Editor every time you enter Play Mode, using Harpia's current preset. Pausing pauses the recording; leaving Play Mode saves it. Editor only; needs Harpia running with Unity control on (Settings > System).",
+  "unity": "2021.3",
+  "author": {
+    "name": "Harpia"
+  },
+  "keywords": [
+    "recording",
+    "video",
+    "capture",
+    "play mode",
+    "harpia"
+  ]
+}

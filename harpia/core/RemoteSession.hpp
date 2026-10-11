@@ -1,6 +1,6 @@
 #pragma once
 
-// The rules for a recording started by a remote client (the Unity package),
+// The rules for a recording started by a remote client (the Unity scripts),
 // apart from the recorder so they can be checked without one.
 //
 //   * A remote start never takes over a recording you started by hand: it is

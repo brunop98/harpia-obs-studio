@@ -1,7 +1,7 @@
 // Talks to Harpia Recorder and Editor's local remote control (127.0.0.1).
 //
 // Plain .NET, no UnityEngine: the same file is compiled and run against the
-// real Harpia server by the package's tests (Tests~), outside Unity.
+// real Harpia server by unity/Tests~ (in the Harpia repository), outside Unity.
 //
 // One HTTP request per command, over a raw socket with hard timeouts, written
 // and read synchronously. No HttpClient: its async plumbing and Unity's main
@@ -10,6 +10,7 @@
 // die with them.
 
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Net.Sockets;
@@ -25,7 +26,11 @@ namespace Harpia.PlayModeRecorder
         public string Error = "";   // Harpia's reason, or what went wrong on the way
         public string State = "";   // "idle", "recording", "paused", "stopping", ...
         public string Note = "";    // e.g. "already recording"
+        public bool Pending;        // "ask again shortly" (a thumbnail being made, durations being read)
         public string Body = "";    // the raw JSON
+        public Dictionary<string, object> Data = new Dictionary<string, object>(); // Body, parsed
+        public string ContentType = "";
+        public byte[] Bytes;        // a body that is not JSON (a thumbnail's PNG)
 
         public override string ToString()
         {
@@ -88,6 +93,36 @@ namespace Harpia.PlayModeRecorder
             AppendArea(json, x, y, width, height);
             json.Append('}');
             return Send("POST", "/area/show", json.ToString());
+        }
+
+        // Harpia's recordings, newest first (read them with HarpiaRecordingList.From).
+        public HarpiaReply Recordings(int limit)
+        {
+            return Send("GET", "/recordings?limit=" + Math.Max(1, limit).ToString(CultureInfo.InvariantCulture), null);
+        }
+
+        // A recording's thumbnail as PNG bytes (reply.Bytes). Pending while
+        // Harpia is still making it: ask again in a moment.
+        public HarpiaReply Thumbnail(string path)
+        {
+            return Send("GET", "/recordings/thumbnail?path=" + Uri.EscapeDataString(path ?? ""), null);
+        }
+
+        // To the recycle bin. Only recordings Harpia listed; the reply's Data
+        // has "deleted" and "failed" (each {"path","error"}).
+        public HarpiaReply Delete(params string[] paths)
+        {
+            var json = new StringBuilder("{\"paths\":[");
+            for (int i = 0; i < paths.Length; i++)
+                json.Append(i > 0 ? "," : "").Append(Json.Quote(paths[i]));
+            json.Append("]}");
+            return Send("POST", "/recordings/delete", json.ToString());
+        }
+
+        // Opens the recording in Harpia's editor.
+        public HarpiaReply Edit(string path)
+        {
+            return Send("POST", "/recordings/edit", "{\"path\":" + Json.Quote(path) + "}");
         }
 
         static void AppendArea(StringBuilder json, int x, int y, int width, int height)
@@ -177,36 +212,67 @@ namespace Harpia.PlayModeRecorder
             return buffer.ToArray();
         }
 
-        // "HTTP/1.1 409 Conflict\r\n...\r\n\r\n{json}"
+        // "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\n...\r\n\r\n{json}"
+        // or, for a thumbnail, "Content-Type: image/png" and the PNG's bytes.
         public static HarpiaReply Parse(byte[] raw, HarpiaReply reply)
         {
-            string text = Encoding.UTF8.GetString(raw ?? new byte[0]);
-            int lineEnd = text.IndexOf("\r\n", StringComparison.Ordinal);
-            int headEnd = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
-            if (lineEnd < 0 || headEnd < 0)
-            {
-                reply.Error = "Harpia sent an answer that could not be read";
-                return reply;
-            }
-            string[] statusLine = text.Substring(0, lineEnd).Split(' ');
+            raw = raw ?? new byte[0];
+            int headEnd = IndexOf(raw, new byte[] { 13, 10, 13, 10 });
+            if (headEnd < 0)
+                return Unreadable(reply);
+            string[] head = Encoding.ASCII.GetString(raw, 0, headEnd).Split(new[] { "\r\n" }, StringSplitOptions.None);
+            string[] statusLine = head[0].Split(' ');
             int status;
             if (statusLine.Length < 2 || !int.TryParse(statusLine[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out status))
+                return Unreadable(reply);
+            reply.Status = status;
+            for (int i = 1; i < head.Length; i++)
             {
-                reply.Error = "Harpia sent an answer that could not be read";
+                int colon = head[i].IndexOf(':');
+                if (colon > 0 && string.Equals(head[i].Substring(0, colon).Trim(), "Content-Type", StringComparison.OrdinalIgnoreCase))
+                    reply.ContentType = head[i].Substring(colon + 1).Trim();
+            }
+            int bodyStart = headEnd + 4;
+            if (reply.ContentType.Length > 0 && !reply.ContentType.StartsWith("application/json", StringComparison.OrdinalIgnoreCase))
+            {
+                reply.Bytes = new byte[raw.Length - bodyStart];
+                Array.Copy(raw, bodyStart, reply.Bytes, 0, reply.Bytes.Length);
+                reply.Ok = status == 200;
+                if (!reply.Ok)
+                    reply.Error = "Harpia answered " + status.ToString(CultureInfo.InvariantCulture);
                 return reply;
             }
-            reply.Status = status;
-            reply.Body = text.Substring(headEnd + 4);
-            bool ok;
-            reply.Ok = Json.TryGetBool(reply.Body, "ok", out ok) && ok && status == 200;
-            reply.State = Json.GetString(reply.Body, "state");
-            reply.Note = Json.GetString(reply.Body, "note");
+            reply.Body = Encoding.UTF8.GetString(raw, bodyStart, raw.Length - bodyStart);
+            reply.Data = Json.ParseObject(reply.Body);
+            reply.Ok = Json.Bool(reply.Data, "ok") && status == 200;
+            reply.State = Json.Str(reply.Data, "state");
+            reply.Note = Json.Str(reply.Data, "note");
+            reply.Pending = Json.Bool(reply.Data, "pending");
             if (!reply.Ok)
             {
-                string error = Json.GetString(reply.Body, "error");
+                string error = Json.Str(reply.Data, "error");
                 reply.Error = error.Length > 0 ? error : "Harpia answered " + status.ToString(CultureInfo.InvariantCulture);
             }
             return reply;
+        }
+
+        static HarpiaReply Unreadable(HarpiaReply reply)
+        {
+            reply.Error = "Harpia sent an answer that could not be read";
+            return reply;
+        }
+
+        static int IndexOf(byte[] haystack, byte[] needle)
+        {
+            for (int i = 0; i + needle.Length <= haystack.Length; i++)
+            {
+                int j = 0;
+                while (j < needle.Length && haystack[i + j] == needle[j])
+                    j++;
+                if (j == needle.Length)
+                    return i;
+            }
+            return -1;
         }
 
         static string HeaderSafe(string s)
@@ -214,104 +280,6 @@ namespace Harpia.PlayModeRecorder
             var b = new StringBuilder();
             foreach (char c in s)
                 b.Append(c >= 32 && c < 127 ? c : '?');
-            return b.ToString();
-        }
-    }
-
-    // Just enough JSON for Harpia's flat answers: quote a string, and read a
-    // string or a bool by key from a flat object.
-    public static class Json
-    {
-        public static string Quote(string s)
-        {
-            var b = new StringBuilder("\"");
-            foreach (char c in s ?? "")
-            {
-                switch (c)
-                {
-                    case '"': b.Append("\\\""); break;
-                    case '\\': b.Append("\\\\"); break;
-                    case '\n': b.Append("\\n"); break;
-                    case '\r': b.Append("\\r"); break;
-                    case '\t': b.Append("\\t"); break;
-                    default:
-                        if (c < 32)
-                            b.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
-                        else
-                            b.Append(c);
-                        break;
-                }
-            }
-            return b.Append('"').ToString();
-        }
-
-        // The position just after "key": (and any spaces), or -1.
-        static int ValueAt(string json, string key)
-        {
-            string needle = "\"" + key + "\"";
-            int i = 0;
-            while ((i = json.IndexOf(needle, i, StringComparison.Ordinal)) >= 0)
-            {
-                int j = i + needle.Length;
-                while (j < json.Length && char.IsWhiteSpace(json[j])) j++;
-                if (j < json.Length && json[j] == ':')
-                {
-                    j++;
-                    while (j < json.Length && char.IsWhiteSpace(json[j])) j++;
-                    return j;
-                }
-                i = j;
-            }
-            return -1;
-        }
-
-        public static bool TryGetBool(string json, string key, out bool value)
-        {
-            value = false;
-            int j = ValueAt(json ?? "", key);
-            if (j < 0)
-                return false;
-            if (string.CompareOrdinal(json, j, "true", 0, 4) == 0) { value = true; return true; }
-            if (string.CompareOrdinal(json, j, "false", 0, 5) == 0) { value = false; return true; }
-            return false;
-        }
-
-        public static string GetString(string json, string key)
-        {
-            int j = ValueAt(json ?? "", key);
-            if (j < 0 || j >= json.Length || json[j] != '"')
-                return "";
-            var b = new StringBuilder();
-            for (int i = j + 1; i < json.Length; i++)
-            {
-                char c = json[i];
-                if (c == '"')
-                    return b.ToString();
-                if (c != '\\' || i + 1 >= json.Length)
-                {
-                    b.Append(c);
-                    continue;
-                }
-                char e = json[++i];
-                switch (e)
-                {
-                    case 'n': b.Append('\n'); break;
-                    case 'r': b.Append('\r'); break;
-                    case 't': b.Append('\t'); break;
-                    case 'b': b.Append('\b'); break;
-                    case 'f': b.Append('\f'); break;
-                    case 'u':
-                        int code;
-                        if (i + 4 < json.Length &&
-                            int.TryParse(json.Substring(i + 1, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out code))
-                        {
-                            b.Append((char)code);
-                            i += 4;
-                        }
-                        break;
-                    default: b.Append(e); break; // \" \\ \/
-                }
-            }
             return b.ToString();
         }
     }

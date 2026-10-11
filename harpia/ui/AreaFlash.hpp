@@ -1,8 +1,8 @@
 #pragma once
 
 // Outlines an area of the desktop for a moment: "this is what will be
-// recorded". Used by the remote control's /area/show, so the Unity package can
-// check that the Game view it measured is the rectangle Harpia sees -- the
+// recorded". Used by the remote control's /area/show, so the Unity scripts can
+// check that the Game view they measured is the rectangle Harpia sees -- the
 // two count pixels differently on some setups (display scaling).
 //
 // One see-through, click-through layer per screen the area touches, drawn in

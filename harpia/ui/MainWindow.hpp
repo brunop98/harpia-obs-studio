@@ -25,6 +25,7 @@
 
 #include <QElapsedTimer>
 #include <QHash>
+#include <QSet>
 #include <QPoint>
 #include <QMainWindow>
 #include <QSize>
@@ -132,6 +133,7 @@ private slots:
 	// and an open Clip Library refresh.
 	void deleteRecordings(const QStringList &paths);
 	void openAudioExtract(const QString &path); // "Extract Audio Only", from either file menu
+	void openVideoEditor(const QString &path);  // "Edit...", from the strip's menu or a remote client
 	void onThumbnailReady(const QString &path);
 	void tickState();  // recording/paused state + timer
 	void tickIdle();   // auto-pause/resume based on idle time
@@ -570,6 +572,14 @@ private:
 	RemoteReply remoteResume() override;
 	RemoteReply remoteStop(int discardShorterThanMs) override;
 	RemoteReply remoteShowArea(const QRect &areaPx) override;
+	// The recordings: the same list as the Recent strip and the Clip Library
+	// (every preset's output folder). Deleting goes to the recycle bin, as it
+	// does from those; nothing is deleted or opened that is not on the list.
+	RemoteReply remoteRecordings(int limit) override;
+	RemoteReply remoteThumbnail(const QString &path) override;
+	RemoteReply remoteDelete(const QStringList &paths) override;
+	RemoteReply remoteEdit(const QString &path) override;
+	QVector<ClipInfo> scanClips() const;
 	void applyRemoteSettings(); // listen (or not) as the System settings say
 	RecorderSnapshot recorderSnapshot() const;
 	QVector<QRect> monitorRectsPx() const; // each display, physical px, in capture order
@@ -585,6 +595,13 @@ private:
 	};
 	std::optional<RemoteAreaBackup> remoteArea_;
 	QString remoteClient_;
+	// The recordings as last listed to a remote client; a thumbnail is made
+	// only for one of them (rescanned once when a path is not among them).
+	QVector<ClipInfo> remoteClips_;
+	// Durations for the list, probed off the GUI thread, by path|mtime|size
+	// (0 = unreadable, so it is not probed again).
+	QHash<QString, qint64> remoteDurations_;
+	QSet<QString> remoteDurationsInFlight_;
 	QString pickedWindowTitle_;
 	bool followWindowOn_ = false;    // keep the area on it (off unless asked)
 	QTimer *followWindowTimer_ = nullptr;

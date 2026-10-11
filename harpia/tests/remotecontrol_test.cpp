@@ -2,8 +2,9 @@
 //
 //   * Requests parse, in one piece or arriving in fragments; malformed or
 //     oversized ones are refused.
-//   * Web pages are refused (Origin header, a foreign Host, a POST without the
-//     X-Harpia-Client header); Unity/curl-style requests are accepted.
+//   * Web pages are refused (Origin header, a foreign Host, anything but
+//     GET /status without the X-Harpia-Client header -- the recordings list
+//     and thumbnails included); Unity/curl-style requests are accepted.
 //   * Each command reaches the recorder with its arguments; wrong paths,
 //     methods and bodies get 404/405/400.
 //   * Over real sockets on 127.0.0.1: start/pause/resume/stop/status/show,
@@ -13,6 +14,10 @@
 //   * The session rules: a remote start never takes over a hand-started
 //     recording; only its own recording can be paused or stopped; repeats are
 //     harmless; a stop can ask for a short run to be deleted.
+//   * The recordings: list (limit, query decoding), thumbnail (binary PNG over
+//     a real socket), delete and edit reach the recorder; only files Harpia
+//     listed can be deleted, and the answer says what happened to each.
+#include "core/RemoteClips.hpp"
 #include "core/RemoteControl.hpp"
 #include "core/RemoteSession.hpp"
 #include "ui/AreaFlash.hpp"
@@ -21,9 +26,13 @@
 #include <QGuiApplication>
 #include <QScreen>
 #include <QWidget>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QTemporaryDir>
 #include <QTcpSocket>
 #include <QThread>
 #include <QTimer>
@@ -77,6 +86,35 @@ struct FakeRecorder : RemoteHandler {
 	{
 		calls << QStringLiteral("show");
 		lastShown = r;
+		return RemoteReply::ok();
+	}
+	int lastLimit = -1;
+	QString lastThumb, lastEdit;
+	QStringList lastDelete;
+	RemoteReply remoteRecordings(int limit) override
+	{
+		calls << QStringLiteral("list");
+		lastLimit = limit;
+		return RemoteReply::ok({{QStringLiteral("recordings"), QJsonArray()}, {QStringLiteral("total"), 0}});
+	}
+	RemoteReply remoteThumbnail(const QString &path) override
+	{
+		calls << QStringLiteral("thumb");
+		lastThumb = path;
+		QImage img(16, 9, QImage::Format_RGB32);
+		img.fill(Qt::red);
+		return RemoteReply::bytes(remote_clips::png(img), "image/png");
+	}
+	RemoteReply remoteDelete(const QStringList &paths) override
+	{
+		calls << QStringLiteral("delete");
+		lastDelete = paths;
+		return RemoteReply::ok();
+	}
+	RemoteReply remoteEdit(const QString &path) override
+	{
+		calls << QStringLiteral("edit");
+		lastEdit = path;
 		return RemoteReply::ok();
 	}
 };
@@ -154,6 +192,7 @@ int main(int argc, char **argv)
 					"2\r\nX-Harpia-Client: a\r\n\r\n{}";
 		ok(parseHttpRequest(full, &r) == HttpParse::Complete, "a whole request");
 		ok(r.method == "POST" && r.path == "/record/stop" && r.body == "{}", "method, path (no query), body");
+		ok(r.query == "x=1", "the query, kept apart");
 		ok(r.headers.value("x-harpia-client") == "a", "header names in lower case");
 		ok(parseHttpRequest(full.left(30), &r) == HttpParse::Incomplete, "half a head: wait for more");
 		ok(parseHttpRequest(full.left(full.size() - 1), &r) == HttpParse::Incomplete, "half a body: wait");
@@ -175,6 +214,11 @@ int main(int argc, char **argv)
 		noHeader.headers.remove("x-harpia-client");
 		ok(!untrustedReason(noHeader, 47811).isEmpty(), "a command without X-Harpia-Client is refused");
 		ok(untrustedReason(req("GET", "/status"), 47811).isEmpty(), "status needs no client header (curl)");
+		// An <img> or <script> tag sends no Origin; the header keeps it out.
+		ok(!untrustedReason(req("GET", "/recordings"), 47811).isEmpty(), "the list needs the client header");
+		ok(!untrustedReason(req("GET", "/recordings/thumbnail"), 47811).isEmpty(), "so do thumbnails");
+		ok(untrustedReason(req("GET", "/recordings", {}, {{"x-harpia-client", "Unity"}}), 47811).isEmpty(),
+		   "with it: accepted");
 	}
 
 	std::printf("\n-- routing --\n");
@@ -198,6 +242,146 @@ int main(int argc, char **argv)
 		ok(dispatchRemote(req("POST", "/nope"), f).status == 404, "an unknown path: 404");
 		dispatchRemote(req("POST", "/area/show", R"({"x":0,"y":0,"width":640,"height":360})"), f);
 		ok(f.lastShown == QRect(0, 0, 640, 360), "show carries the area");
+	}
+
+	std::printf("\n-- recordings: routing --\n");
+	{
+		FakeRecorder f;
+		HttpRequest list = req("GET", "/recordings");
+		dispatchRemote(list, f);
+		ok(f.lastLimit == kRemoteListDefault, "the list without ?limit: the default");
+		list.query = "limit=5";
+		dispatchRemote(list, f);
+		ok(f.lastLimit == 5, "?limit=5");
+		list.query = "limit=999999";
+		dispatchRemote(list, f);
+		ok(f.lastLimit == kRemoteListMax, "an absurd limit is capped");
+		list.query = "limit=0";
+		dispatchRemote(list, f);
+		ok(f.lastLimit == 1, "and zero is one");
+		ok(dispatchRemote(req("POST", "/recordings"), f).status == 405, "the list by POST: 405");
+
+		HttpRequest thumb = req("GET", "/recordings/thumbnail");
+		ok(dispatchRemote(thumb, f).status == 400, "a thumbnail without ?path=: 400");
+		thumb.query = "path=C%3A%2FUsers%2FAna%20Lu%2FV%C3%ADdeos%2Fa%2Bb%20%231.mp4";
+		const RemoteReply t = dispatchRemote(thumb, f);
+		ok(f.lastThumb == QStringLiteral("C:/Users/Ana Lu/V\u00eddeos/a+b #1.mp4"),
+		   "?path= decoded: spaces, accents, + and # survive");
+		ok(t.contentType == "image/png" && t.raw.startsWith("\x89PNG"), "the answer is a PNG");
+
+		dispatchRemote(req("POST", "/recordings/delete", R"({"path":"/v/a.mp4"})"), f);
+		ok(f.lastDelete == QStringList{QStringLiteral("/v/a.mp4")}, "delete one");
+		dispatchRemote(req("POST", "/recordings/delete", R"({"paths":["/v/a.mp4","/v/b.mp4","/v/a.mp4"]})"), f);
+		ok(f.lastDelete == (QStringList{QStringLiteral("/v/a.mp4"), QStringLiteral("/v/b.mp4")}),
+		   "delete several, repeats once");
+		ok(dispatchRemote(req("POST", "/recordings/delete", "{}"), f).status == 400, "delete nothing: 400");
+		QJsonArray many;
+		for (int i = 0; i <= kRemoteDeleteMax; ++i)
+			many.append(QStringLiteral("/v/%1.mp4").arg(i));
+		ok(dispatchRemote(req("POST", "/recordings/delete",
+				      QJsonDocument(QJsonObject{{QStringLiteral("paths"), many}}).toJson()),
+				  f)
+				   .status == 400,
+		   "too many at once: 400");
+		ok(dispatchRemote(req("GET", "/recordings/delete"), f).status == 405, "delete by GET: 405");
+		dispatchRemote(req("POST", "/recordings/edit", R"({"path":"/v/a.mp4"})"), f);
+		ok(f.lastEdit == QStringLiteral("/v/a.mp4"), "edit");
+		ok(dispatchRemote(req("POST", "/recordings/edit", "{}"), f).status == 400, "edit nothing: 400");
+		ok(dispatchRemote(req("GET", "/recordings/nope", {}, {{"x-harpia-client", "u"}}), f).status == 404,
+		   "an unknown recordings path: 404");
+	}
+
+	std::printf("\n-- recordings: which files --\n");
+	{
+		QTemporaryDir tmp;
+		const QString dir = tmp.path();
+		const auto make = [&](const QString &name) {
+			QFile f(dir + QLatin1Char('/') + name);
+			f.open(QIODevice::WriteOnly);
+			f.write("x");
+			return f.fileName();
+		};
+		const QString a = make(QStringLiteral("Arena 1.mp4"));
+		const QString b = make(QStringLiteral("Arena 2.mkv"));
+		const QString w = make(QStringLiteral("Arena 2_webcam.mp4"));
+		const QString m = make(QStringLiteral("voice.m4a"));
+		const QString stranger = make(QStringLiteral("notes.txt"));
+		ClipLibrary::PresetByFolder presets;
+		presets.insert(dir, QStringLiteral("Unity"));
+		QVector<ClipInfo> clips = ClipLibrary::scan({dir}, presets);
+		ok(clips.size() == 3, "the library: the recordings, not the webcam companion or other files");
+
+		clips[0].durationMs = 61000;
+		const QJsonObject one = remote_clips::toJson(clips[0]);
+		ok(one.value(QStringLiteral("path")).toString() == clips[0].filePath &&
+			   one.value(QStringLiteral("name")).toString() == clips[0].fileName &&
+			   one.value(QStringLiteral("folder")).toString() == QDir(dir).absolutePath(),
+		   "a clip: path, name, folder");
+		ok(one.value(QStringLiteral("durationMs")).toDouble() == 61000 &&
+			   !one.value(QStringLiteral("duration")).toString().isEmpty() &&
+			   one.value(QStringLiteral("preset")).toString() == QStringLiteral("Unity") &&
+			   one.value(QStringLiteral("sizeBytes")).toDouble() == 1,
+		   "duration, preset, size");
+		ok(one.value(QStringLiteral("modified")).toString().endsWith(QLatin1Char('Z')) &&
+			   one.value(QStringLiteral("modifiedMs")).toDouble() > 0 &&
+			   !one.value(QStringLiteral("age")).toString().isEmpty(),
+		   "when (UTC, ms, and in words)");
+		const int audio = remote_clips::find(clips, m);
+		ok(audio >= 0 && remote_clips::toJson(clips[audio]).value(QStringLiteral("kind")).toString() ==
+					 QStringLiteral("audio"),
+		   "an audio recording says so");
+
+		const QJsonObject list = remote_clips::listJson(clips, 2, true);
+		ok(list.value(QStringLiteral("recordings")).toArray().size() == 2 &&
+			   list.value(QStringLiteral("total")).toInt() == 3 &&
+			   list.value(QStringLiteral("pending")).toBool(),
+		   "the list: at most `limit`, the total, and whether to ask again");
+
+		ok(remote_clips::find(clips, a) >= 0, "a listed path is found");
+		ok(remote_clips::find(clips, dir + QStringLiteral("/sub/../Arena 1.mp4")) >= 0, "also when not cleaned");
+		ok(remote_clips::find(clips, QDir::toNativeSeparators(a)) >= 0, "or with native separators");
+		ok(remote_clips::find(clips, stranger) < 0 && remote_clips::find(clips, w) < 0,
+		   "a file that is not a recording is not");
+#ifndef Q_OS_WIN
+		ok(remote_clips::find(clips, a.toUpper()) < 0, "case matters where the file system cares");
+#endif
+
+		QStringList removed;
+		const auto remove = [&](const QString &p) {
+			removed << p;
+			return QFile::remove(p);
+		};
+		RemoteReply r = remote_clips::deleteClips(clips, {stranger, QStringLiteral("/etc/passwd")}, remove);
+		ok(r.status == 404 && removed.isEmpty() && QFile::exists(stranger),
+		   "files Harpia did not list: 404, nothing touched");
+		ok(r.body.value(QStringLiteral("failed")).toArray().size() == 2 &&
+			   r.body.value(QStringLiteral("error")).toString().contains(QStringLiteral("not one of")),
+		   "and each one is named");
+
+		r = remote_clips::deleteClips(clips, {b}, remove, [&](const QString &p) {
+			return p == clips[remote_clips::find(clips, b)].filePath ? QStringLiteral("it is being recorded")
+										 : QString();
+		});
+		ok(r.status == 409 && removed.isEmpty() && QFile::exists(b), "a refused file: 409, left alone");
+		ok(r.body.value(QStringLiteral("error")).toString().contains(QStringLiteral("being recorded")),
+		   "with the reason");
+
+		r = remote_clips::deleteClips(clips, {a, stranger}, remove);
+		ok(r.status == 409 && !QFile::exists(a) && QFile::exists(stranger),
+		   "a mix: the recording goes, the stranger stays");
+		ok(r.body.value(QStringLiteral("deleted")).toArray().size() == 1 &&
+			   r.body.value(QStringLiteral("failed")).toArray().size() == 1,
+		   "and the answer says which is which");
+
+		r = remote_clips::deleteClips(clips, {m}, [](const QString &) { return false; });
+		ok(r.status == 409 && r.body.value(QStringLiteral("error")).toString().contains(QStringLiteral("open in")),
+		   "a file that will not go (open elsewhere): 409, says why");
+
+		r = remote_clips::deleteClips(clips, {QDir::toNativeSeparators(b)}, remove);
+		ok(r.status == 200 && r.body.value(QStringLiteral("ok")).toBool() && !QFile::exists(b),
+		   "a recording: deleted, ok");
+		ok(r.body.value(QStringLiteral("deleted")).toArray().first().toString() == clips[remote_clips::find(clips, b)].filePath,
+		   "reported by the library's own spelling of its path");
 	}
 
 	std::printf("\n-- over real sockets --\n");
@@ -231,6 +415,18 @@ int main(int argc, char **argv)
 		ok(resp.startsWith("HTTP/1.1 409") && f.lastStopMs == 2500, "stop, and an error comes back as 409");
 		ok(jsonOf(resp).value(QStringLiteral("error")).toString().contains(QStringLiteral("no recording")),
 		   "with the reason");
+
+		const QByteArray thumbReq = "GET /recordings/thumbnail?path=%2Fv%2Fa%20b.mp4 HTTP/1.1\r\nHost: "
+					    "127.0.0.1\r\nX-Harpia-Client: Unity test\r\n\r\n";
+		resp = roundTrip(port, thumbReq);
+		const int bodyAt = resp.indexOf("\r\n\r\n") + 4;
+		ok(resp.startsWith("HTTP/1.1 200") && resp.contains("Content-Type: image/png\r\n") &&
+			   resp.mid(bodyAt).startsWith("\x89PNG") && f.lastThumb == QStringLiteral("/v/a b.mp4"),
+		   "a thumbnail comes back as PNG bytes");
+		ok(resp.contains("Content-Length: " + QByteArray::number(resp.size() - bodyAt) + "\r\n"),
+		   "with its exact length");
+		resp = roundTrip(port, "GET /recordings HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+		ok(resp.startsWith("HTTP/1.1 403"), "the list without the client header: refused");
 
 		const int before = f.calls.size();
 		resp = roundTrip(port, post("/record/start", R"({"x":0,"y":0,"width":8,"height":8})", port, false));

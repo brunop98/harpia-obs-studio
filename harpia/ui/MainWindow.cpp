@@ -23,6 +23,7 @@
 #include "MonitorMatch.hpp"
 #include "WindowPicker.hpp"
 #include "AreaFlash.hpp"
+#include "core/RemoteClips.hpp"
 #include "platform/WindowList.hpp"
 #include "RegionTool.hpp"
 #include "MultiAreaOverlay.hpp"
@@ -68,6 +69,7 @@
 #include <set>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QFont>
 #include <QFrame>
 #include <QGroupBox>
@@ -3013,6 +3015,7 @@ QJsonObject MainWindow::remoteStatus()
 		{QStringLiteral("version"), QString::fromUtf8(appVersion())},
 		{QStringLiteral("state"), stateName(s)},
 		{QStringLiteral("remote"), remoteSession_.owns()},
+		{QStringLiteral("elapsedMs"), double(s.recording ? contentElapsedMs() : 0)},
 		{QStringLiteral("preset"), QString::fromStdString(activePreset().name)}};
 }
 
@@ -3022,6 +3025,12 @@ RemoteReply MainWindow::remoteStart(const RemoteStartRequest &req)
 	const RemoteSession::Answer a = remoteSession_.start(snap);
 	if (!a.proceed)
 		return answerOf(a, snap);
+	// The editor and the settings are modal, and cover the Record button for
+	// as long as they are open: nothing starts recording behind them, Unity
+	// included.
+	if (QWidget *w = QApplication::activeModalWidget())
+		return RemoteReply::fail(
+			409, QStringLiteral("Harpia has a window open (%1); close it to record").arg(w->windowTitle()));
 
 	// The display holding most of the area, and the part of it on that display
 	// -- the same as picking a window.
@@ -3111,6 +3120,123 @@ RemoteReply MainWindow::remoteShowArea(const QRect &areaPx)
 		return RemoteReply::fail(400, QStringLiteral("That area is not on any display"));
 	const int m = window_region::monitorFor(areaPx, monitorRectsPx());
 	return RemoteReply::ok({{QStringLiteral("monitor"), m}});
+}
+
+QVector<ClipInfo> MainWindow::scanClips() const
+{
+	return ClipLibrary::scan(presetFolders(), presetFolderMap());
+}
+
+RemoteReply MainWindow::remoteRecordings(int limit)
+{
+	remoteClips_ = scanClips();
+	QVector<ClipInfo> clips = remoteClips_;
+	bool pending = false;
+	for (int i = 0; i < clips.size() && i < limit; ++i) {
+		ClipInfo &clip = clips[i];
+		const QString key = QStringLiteral("%1|%2|%3")
+					    .arg(clip.filePath)
+					    .arg(clip.modified.toSecsSinceEpoch())
+					    .arg(clip.sizeBytes);
+		if (const auto it = remoteDurations_.constFind(key); it != remoteDurations_.constEnd()) {
+			clip.durationMs = *it;
+			continue;
+		}
+		// Reading a duration opens the file; a hundred of them on the GUI
+		// thread would stall Harpia. The client asks again while "pending".
+		pending = true;
+		if (remoteDurationsInFlight_.contains(key))
+			continue;
+		remoteDurationsInFlight_.insert(key);
+		QPointer<MainWindow> guard(this);
+		const QString path = clip.filePath;
+		QThreadPool::globalInstance()->start(QRunnable::create([guard, path, key]() {
+			const qint64 ms = ThumbnailCache::probeDurationMs(path);
+			QMetaObject::invokeMethod(
+				qApp,
+				[guard, key, ms]() {
+					if (!guard)
+						return;
+					guard->remoteDurationsInFlight_.remove(key);
+					guard->remoteDurations_.insert(key, ms);
+				},
+				Qt::QueuedConnection);
+		}));
+	}
+	return RemoteReply::ok(remote_clips::listJson(clips, limit, pending));
+}
+
+RemoteReply MainWindow::remoteThumbnail(const QString &path)
+{
+	int i = remote_clips::find(remoteClips_, path);
+	if (i < 0) {
+		remoteClips_ = scanClips(); // made since the last list
+		i = remote_clips::find(remoteClips_, path);
+	}
+	if (i < 0)
+		return RemoteReply::fail(404, QStringLiteral("not one of Harpia's recordings"));
+	const ClipInfo &clip = remoteClips_[i];
+	if (clip.isAudio)
+		return RemoteReply::fail(404, QStringLiteral("an audio recording has no picture"));
+	// The Recent strip's size: its thumbnails are already made and on disk.
+	const QImage img = thumbnails_.cached(clip.filePath, kStripThumb);
+	if (img.isNull()) {
+		thumbnails_.ensure(clip.filePath, kStripThumb);
+		RemoteReply r = RemoteReply::fail(202, QStringLiteral("the thumbnail is being made; ask again shortly"));
+		r.body.insert(QStringLiteral("pending"), true);
+		return r;
+	}
+	return RemoteReply::bytes(remote_clips::png(img), "image/png");
+}
+
+RemoteReply MainWindow::remoteDelete(const QStringList &paths)
+{
+	const bool busy = recorder_.isRecording() || starting_ || stopping_;
+	const auto refuse = [&](const QString &file) -> QString {
+		if (busy && (remote_clips::samePath(file, lastRecordedPath_) || remote_clips::samePath(file, lastScreenPath_)))
+			return QStringLiteral("it is being recorded");
+		return {};
+	};
+	const RemoteReply reply = remote_clips::deleteClips(scanClips(), paths, recording_delete::recycle, refuse);
+	const QJsonArray gone = reply.body.value(QStringLiteral("deleted")).toArray();
+	if (!gone.isEmpty()) {
+		blog(LOG_INFO, "[harpia] remote: moved %d recording(s) to the recycle bin for %s", int(gone.size()),
+		     remoteClient_.isEmpty() ? "a remote client" : remoteClient_.toUtf8().constData());
+		refreshClipViews();
+	}
+	return reply;
+}
+
+RemoteReply MainWindow::remoteEdit(const QString &path)
+{
+	const QVector<ClipInfo> clips = scanClips();
+	const int i = remote_clips::find(clips, path);
+	if (i < 0)
+		return RemoteReply::fail(404, QStringLiteral("not one of Harpia's recordings"));
+	const ClipInfo clip = clips[i];
+	if (clip.isGif)
+		return RemoteReply::fail(409, QStringLiteral("a GIF can't be edited in Harpia"));
+	if (recorder_.isRecording() || starting_ || stopping_ || countingDown_)
+		return RemoteReply::fail(409, QStringLiteral("Harpia is recording; stop the recording first"));
+	if (QWidget *w = QApplication::activeModalWidget())
+		return RemoteReply::fail(
+			409, QStringLiteral("Harpia has a window open (%1); close it first").arg(w->windowTitle()));
+	// After the answer: the editor runs its own event loop until it is
+	// closed, and the client should not wait that long.
+	QTimer::singleShot(0, this, [this, file = clip.filePath, audio = clip.isAudio]() {
+		if (QApplication::activeModalWidget() || recorder_.isRecording() || starting_)
+			return;
+		if (isMinimized())
+			showNormal();
+		show();
+		raise();
+		activateWindow();
+		if (audio)
+			openAudioExtract(file);
+		else
+			openVideoEditor(file);
+	});
+	return RemoteReply::ok({{QStringLiteral("path"), clip.filePath}});
 }
 
 bool MainWindow::remoteDiscardIfAsked()
@@ -4363,16 +4489,7 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 		return;
 	}
 	if (chosen == trimAct) {
-		auto *editor = new VideoEditorWindow(path, presetFolders(), this);
-		if (!editor->isValid()) {
-			QMessageBox::warning(this, QStringLiteral("Edit"),
-					     QStringLiteral("Could not open this video for editing."));
-			editor->deleteLater();
-			return;
-		}
-		connect(editor, &VideoEditorWindow::exported, this, [this]() { refreshClipViews(); });
-		editor->setAttribute(Qt::WA_DeleteOnClose);
-		editor->exec();
+		openVideoEditor(path);
 	} else if (chosen == optLowAct) {
 		ShareExportDialog::runModal(path, ShareExporter::Level::Low, this);
 		refreshClipViews();
@@ -4433,6 +4550,19 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 		const QStringList sel = recording_delete::selectedPaths(recentStrip_);
 		deleteRecordings(item->isSelected() && sel.contains(path) ? sel : QStringList{path});
 	}
+}
+
+void MainWindow::openVideoEditor(const QString &path)
+{
+	auto *editor = new VideoEditorWindow(path, presetFolders(), this);
+	if (!editor->isValid()) {
+		QMessageBox::warning(this, QStringLiteral("Edit"), QStringLiteral("Could not open this video for editing."));
+		editor->deleteLater();
+		return;
+	}
+	connect(editor, &VideoEditorWindow::exported, this, [this]() { refreshClipViews(); });
+	editor->setAttribute(Qt::WA_DeleteOnClose);
+	editor->exec();
 }
 
 void MainWindow::deleteRecordings(const QStringList &paths)

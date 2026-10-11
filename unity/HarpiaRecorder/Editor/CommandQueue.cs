@@ -7,7 +7,8 @@
 // for it. WaitIdle is the one place that does block -- leaving Play Mode, where
 // the Stop has to be out before Unity reloads the scripts.
 //
-// Plain .NET, no UnityEngine (tested outside Unity, see Tests~).
+// Plain .NET, no UnityEngine (tested outside Unity: unity/Tests~ in the Harpia
+// repository).
 
 using System;
 using System.Collections.Generic;

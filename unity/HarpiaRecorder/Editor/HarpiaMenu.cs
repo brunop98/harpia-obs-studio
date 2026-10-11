@@ -1,5 +1,5 @@
-// Tools > Harpia Recorder: switch Play Mode recording on and off, check the
-// connection, and see the area Harpia would record.
+// Tools > Harpia Recorder: the window, switching Play Mode recording on and
+// off, checking the connection, and seeing the area Harpia would record.
 
 using UnityEditor;
 using UnityEngine;
@@ -32,7 +32,7 @@ namespace Harpia.PlayModeRecorder
             if (!r.Ok)
             {
                 Debug.LogWarning(Tag + r.Error + (r.Unreachable
-                    ? ". Start Harpia Recorder and Editor, with Unity control on (Settings > System), and check the port in Preferences > Harpia Recorder."
+                    ? ". Start Harpia Recorder and Editor, with Unity control on (Settings > System), and check the port in Window > Harpia Recorder > Settings."
                     : "."));
                 return;
             }

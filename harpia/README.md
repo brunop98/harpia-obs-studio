@@ -76,12 +76,16 @@ Three modes, each one step up from the last:
 
 ### Unity Play Mode recording (experimental)
 
-- With the **Harpia Play Mode Recorder** package in a Unity project, entering
-  Play Mode records the Game view with the active preset; Unity's Pause pauses
-  it and leaving Play Mode saves it (very short runs are deleted). Unity talks
-  to a local control server (`core/RemoteControl`, 127.0.0.1:47811, on/off and
-  port in *Settings > System*). The package and its setup are in
-  [`unity/com.harpia.playmode-recorder`](../unity/com.harpia.playmode-recorder/README.md).
+- With the **Harpia Recorder** scripts in a Unity project (copy
+  `unity/HarpiaRecorder` into `Assets/`), entering Play Mode records the Game
+  view with the active preset; Unity's Pause pauses it and leaving Play Mode
+  saves it (very short runs are deleted).
+- A **Harpia Recorder window** in Unity holds the settings and lists Harpia's
+  recordings with thumbnails: play, show in Explorer, open in Harpia's editor,
+  or delete (to the recycle bin).
+- Unity talks to a local control server (`core/RemoteControl`,
+  127.0.0.1:47811; on/off and port in *Settings > System*). Setup:
+  [`unity/README.md`](../unity/README.md).
 
 ### Reliability
 

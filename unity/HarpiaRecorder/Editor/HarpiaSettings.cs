@@ -1,4 +1,5 @@
-// The package's settings (per user, per machine: EditorPrefs) and its page in
+// The settings (per user, per machine: EditorPrefs), drawn both in the
+// Harpia Recorder window (Window > Harpia Recorder) and in
 // Edit > Preferences > Harpia Recorder.
 
 using System.Collections.Generic;
@@ -58,7 +59,7 @@ namespace Harpia.PlayModeRecorder
         }
     }
 
-    static class HarpiaSettingsProvider
+    public static class HarpiaSettingsProvider
     {
         [SettingsProvider]
         public static SettingsProvider Create()
@@ -66,13 +67,14 @@ namespace Harpia.PlayModeRecorder
             return new SettingsProvider("Preferences/Harpia Recorder", SettingsScope.User)
             {
                 label = "Harpia Recorder",
-                guiHandler = _ => Draw(),
+                guiHandler = _ => Draw(true),
                 keywords = new HashSet<string> { "Harpia", "record", "recording", "Play Mode", "video", "capture" },
             };
         }
 
-        static void Draw()
+        public static void Draw(bool inPreferences)
         {
+            float labelWidth = EditorGUIUtility.labelWidth;
             EditorGUIUtility.labelWidth = 220;
             EditorGUILayout.HelpBox(
                 "Records the Game view with Harpia Recorder and Editor every time you enter Play Mode, using " +
@@ -114,11 +116,14 @@ namespace Harpia.PlayModeRecorder
                     HarpiaMenu.TestConnection();
                 if (GUILayout.Button("Show Recording Area", GUILayout.Width(150)))
                     HarpiaMenu.ShowRecordingArea();
+                if (inPreferences && GUILayout.Button("Open Window", GUILayout.Width(110)))
+                    HarpiaRecorderWindow.Open();
             }
             EditorGUILayout.LabelField(
                 "Show Recording Area asks Harpia to outline the Game view it would record. If the outline " +
                 "is off, try the other Area, and check that all displays use the same scaling.",
                 EditorStyles.wordWrappedMiniLabel);
+            EditorGUIUtility.labelWidth = labelWidth;
         }
     }
 }

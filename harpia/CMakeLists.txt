@@ -115,6 +115,8 @@ target_sources(
     core/ShortcutConflicts.hpp
     core/RegionWatch.cpp
     core/RegionWatch.hpp
+    core/RemoteClips.cpp
+    core/RemoteClips.hpp
     core/RemoteControl.cpp
     core/RemoteControl.hpp
     core/RemoteSession.hpp

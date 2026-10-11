@@ -71,9 +71,10 @@ SystemSettingsWidget::SystemSettingsWidget(QWidget *parent, GetGpu get, SetGpu s
 	remoteCheck_ = new QCheckBox(QStringLiteral("Let Unity start recordings (Play Mode Recorder)"), this);
 	remoteCheck_->setChecked(rs.enabled);
 	remoteCheck_->setToolTip(QStringLiteral(
-		"With the Harpia Play Mode Recorder package in a Unity project, entering Play Mode records the "
-		"Game view with this preset's settings; pausing pauses, leaving Play Mode saves. Only programs "
-		"on this computer can reach it, and web pages are refused."));
+		"With the Harpia Recorder scripts in a Unity project, entering Play Mode records the Game view "
+		"with this preset's settings; pausing pauses, leaving Play Mode saves. Unity's Harpia Recorder "
+		"window can also list, open and delete recordings. Only programs on this computer can reach it, "
+		"and web pages are refused."));
 	form->addRow(QStringLiteral("Unity"), remoteCheck_);
 	remotePort_ = new QSpinBox(this);
 	remotePort_->setRange(1024, 65535);

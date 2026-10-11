@@ -1,10 +1,13 @@
 #include "core/RemoteControl.hpp"
 
 #include <QHostAddress>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
+#include <QUrl>
+#include <QUrlQuery>
 
 #include <algorithm>
 #include <cmath>
@@ -27,8 +30,10 @@ HttpParse parseHttpRequest(const QByteArray &buf, HttpRequest *out, int maxBody)
 	HttpRequest r;
 	r.method = first[0].toUpper();
 	r.path = first[1];
-	if (const int q = r.path.indexOf('?'); q >= 0)
+	if (const int q = r.path.indexOf('?'); q >= 0) {
+		r.query = r.path.mid(q + 1);
 		r.path.truncate(q);
+	}
 	for (int i = 1; i < lines.size(); ++i) {
 		const QByteArray line = lines[i].trimmed();
 		if (line.isEmpty())
@@ -61,14 +66,26 @@ QString untrustedReason(const HttpRequest &r, quint16 port)
 		host.chop(portSuffix.size());
 	if (host != "127.0.0.1" && host != "localhost" && host != "[::1]")
 		return QStringLiteral("unexpected Host header");
-	if (r.method == "POST" && r.headers.value("x-harpia-client").isEmpty())
-		return QStringLiteral("commands need an X-Harpia-Client header");
+	const bool quickCheck = r.method == "GET" && r.path == "/status";
+	if (!quickCheck && r.headers.value("x-harpia-client").isEmpty())
+		return QStringLiteral("requests need an X-Harpia-Client header");
 	return {};
+}
+
+QString queryValue(const HttpRequest &r, const char *key)
+{
+	return QUrlQuery(QString::fromUtf8(r.query)).queryItemValue(QString::fromLatin1(key), QUrl::FullyDecoded);
 }
 
 QByteArray httpResponse(int status, const QJsonObject &json)
 {
+	return httpResponse(status, QJsonDocument(json).toJson(QJsonDocument::Compact), "application/json");
+}
+
+QByteArray httpResponse(int status, const QByteArray &body, const QByteArray &contentType)
+{
 	const char *text = status == 200   ? "OK"
+			   : status == 202 ? "Accepted"
 			   : status == 400 ? "Bad Request"
 			   : status == 403 ? "Forbidden"
 			   : status == 404 ? "Not Found"
@@ -76,9 +93,8 @@ QByteArray httpResponse(int status, const QJsonObject &json)
 			   : status == 409 ? "Conflict"
 			   : status == 503 ? "Service Unavailable"
 					   : "Internal Server Error";
-	const QByteArray body = QJsonDocument(json).toJson(QJsonDocument::Compact);
 	QByteArray out = "HTTP/1.1 " + QByteArray::number(status) + ' ' + text + "\r\n";
-	out += "Content-Type: application/json\r\n";
+	out += "Content-Type: " + contentType + "\r\n";
 	out += "Content-Length: " + QByteArray::number(body.size()) + "\r\n";
 	out += "Cache-Control: no-store\r\n";
 	out += "Connection: close\r\n\r\n";
@@ -105,6 +121,24 @@ bool rectFromJson(const QJsonObject &o, QRect *out)
 	return true;
 }
 
+bool pathsFromJson(const QJsonObject &o, QStringList *out)
+{
+	QStringList paths;
+	const auto add = [&](const QJsonValue &v) {
+		const QString p = v.toString();
+		if (!p.isEmpty() && !paths.contains(p))
+			paths << p;
+	};
+	add(o.value(QStringLiteral("path")));
+	for (const QJsonValue &v : o.value(QStringLiteral("paths")).toArray())
+		add(v);
+	if (paths.isEmpty() || paths.size() > kRemoteDeleteMax)
+		return false;
+	if (out)
+		*out = paths;
+	return true;
+}
+
 RemoteReply RemoteReply::ok(const QJsonObject &extra)
 {
 	RemoteReply r;
@@ -118,6 +152,14 @@ RemoteReply RemoteReply::fail(int status, const QString &message)
 	RemoteReply r;
 	r.status = status;
 	r.body = remoteError(message);
+	return r;
+}
+
+RemoteReply RemoteReply::bytes(const QByteArray &data, const QByteArray &contentType)
+{
+	RemoteReply r;
+	r.raw = data;
+	r.contentType = contentType;
 	return r;
 }
 
@@ -135,8 +177,21 @@ RemoteReply dispatchRemote(const HttpRequest &r, RemoteHandler &h)
 			return RemoteReply::fail(405, QStringLiteral("use GET"));
 		return RemoteReply::ok(h.remoteStatus());
 	}
-	static const QByteArray commands[] = {"/record/start", "/record/pause", "/record/resume", "/record/stop",
-					      "/area/show"};
+	if (r.path == "/recordings" || r.path == "/recordings/thumbnail") {
+		if (r.method != "GET")
+			return RemoteReply::fail(405, QStringLiteral("use GET"));
+		if (r.path == "/recordings") {
+			bool given = false;
+			const int limit = queryValue(r, "limit").toInt(&given);
+			return h.remoteRecordings(given ? std::clamp(limit, 1, kRemoteListMax) : kRemoteListDefault);
+		}
+		const QString path = queryValue(r, "path");
+		if (path.isEmpty())
+			return RemoteReply::fail(400, QStringLiteral("?path= is required"));
+		return h.remoteThumbnail(path);
+	}
+	static const QByteArray commands[] = {"/record/start", "/record/pause",      "/record/resume",  "/record/stop",
+					      "/area/show",    "/recordings/delete", "/recordings/edit"};
 	if (std::find(std::begin(commands), std::end(commands), r.path) == std::end(commands))
 		return RemoteReply::fail(404, QStringLiteral("no such command"));
 	if (r.method != "POST")
@@ -160,6 +215,19 @@ RemoteReply dispatchRemote(const HttpRequest &r, RemoteHandler &h)
 	if (r.path == "/record/stop") {
 		const int minMs = std::max(0, b.value(QStringLiteral("discardIfShorterThanMs")).toInt(0));
 		return h.remoteStop(minMs);
+	}
+	if (r.path == "/recordings/delete") {
+		QStringList paths;
+		if (!pathsFromJson(b, &paths))
+			return RemoteReply::fail(
+				400, QStringLiteral("\"path\" or \"paths\" (at most %1) is required").arg(kRemoteDeleteMax));
+		return h.remoteDelete(paths);
+	}
+	if (r.path == "/recordings/edit") {
+		const QString path = b.value(QStringLiteral("path")).toString();
+		if (path.isEmpty())
+			return RemoteReply::fail(400, QStringLiteral("\"path\" is required"));
+		return h.remoteEdit(path);
 	}
 	QRect area;
 	if (!rectFromJson(b, &area))
@@ -264,7 +332,8 @@ void RemoteControlServer::onReadyRead(QTcpSocket *s)
 
 void RemoteControlServer::respond(QTcpSocket *s, const RemoteReply &reply)
 {
-	s->write(httpResponse(reply.status, reply.body));
+	s->write(reply.contentType.isEmpty() ? httpResponse(reply.status, reply.body)
+					     : httpResponse(reply.status, reply.raw, reply.contentType));
 	s->disconnectFromHost();
 }
 

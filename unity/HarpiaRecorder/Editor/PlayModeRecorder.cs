@@ -3,7 +3,9 @@
 //   Enter Play Mode   -> Harpia starts recording the Game view (its current preset's settings)
 //   Pause / Unpause   -> the recording pauses / resumes
 //   Leave Play Mode   -> the recording stops and is saved; runs shorter than the
-//                        minimum in Preferences are deleted instead
+//                        minimum in the settings are deleted instead
+//
+// The settings and Harpia's recordings: Window > Harpia Recorder.
 //
 // If Harpia isn't running, a warning says so and Play Mode goes on as normal.
 // A recording you started by hand in Harpia is never touched.

@@ -47,16 +47,16 @@ namespace Harpia.PlayModeRecorder
         [MenuItem(Root + "Show Recording Area", false, 21)]
         public static void ShowRecordingArea()
         {
-            PixelRect area;
+            GameViewMeasure m;
             string why;
-            if (!GameViewArea.TryGet(HarpiaSettings.Area, out area, out why))
+            if (!GameViewArea.TryMeasure(HarpiaSettings.Area, out m, out why))
             {
                 Debug.LogWarning(Tag + "Cannot measure the Game view: " + why + ".");
                 return;
             }
-            HarpiaReply r = PlayModeRecorder.Client().ShowArea(area.X, area.Y, area.Width, area.Height);
+            HarpiaReply r = PlayModeRecorder.Client().ShowArea(m.Area.X, m.Area.Y, m.Area.Width, m.Area.Height);
             if (r.Ok)
-                Debug.Log(Tag + "Harpia is outlining " + area + " for a moment.");
+                Debug.Log(Tag + "Harpia is outlining what it would record: " + m.Describe() + "." + PlayModeRecorder.SizeHint(m));
             else
                 Debug.LogWarning(Tag + r.Error + ".");
         }

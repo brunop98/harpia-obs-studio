@@ -89,13 +89,14 @@ namespace Harpia.PlayModeRecorder
         {
             if (!EditorApplication.isPlaying)
                 return;
-            PixelRect area;
+            GameViewMeasure measure;
             string why;
-            if (!GameViewArea.TryGet(HarpiaSettings.Area, out area, out why))
+            if (!GameViewArea.TryMeasure(HarpiaSettings.Area, out measure, out why))
             {
                 Debug.LogWarning(Tag + "Not recording this play session: " + why + ".");
                 return;
             }
+            PixelRect area = measure.Area;
             HarpiaClient client = Client();
             string label = SceneManager.GetActiveScene().name;
             StartSent = true;
@@ -111,7 +112,7 @@ namespace Harpia.PlayModeRecorder
                     return;
                 }
                 if (HarpiaSettings.LogEachRecording)
-                    Debug.Log(Tag + "Recording the Game view, " + area + ".");
+                    Debug.Log(Tag + "Recording the Game view: " + measure.Describe() + "." + SizeHint(measure));
                 // Paused before the start got there ("Pause on Play", or a quick click).
                 if (EditorApplication.isPlaying && EditorApplication.isPaused)
                     Queue.Enqueue(() => client.Pause(), p => Report("Pause", p));
@@ -139,6 +140,17 @@ namespace Harpia.PlayModeRecorder
             if (!Queue.WaitIdle(4000))
                 Debug.LogWarning(Tag + "Harpia did not confirm the stop in time; check whether it is still recording.");
             Queue.DrainFinished();
+        }
+
+        // The recording is the picture as it is on screen: a game shown smaller
+        // than it renders is recorded smaller.
+        public static string SizeHint(GameViewMeasure m)
+        {
+            if (m.PixelForPixel || m.Shown >= 1f || HarpiaSettings.Area != RecordArea.GamePicture)
+                return "";
+            return " The Game view shows the game at " + Mathf.RoundToInt(m.Shown * 100f) + "%, so the video is " +
+                   m.Area.Width + "x" + m.Area.Height + ": for the full " + m.GameWidth + "x" + m.GameHeight +
+                   ", give the Game view more room (Play Maximized) or set it to Free Aspect.";
         }
 
         static void Report(string what, HarpiaReply r)

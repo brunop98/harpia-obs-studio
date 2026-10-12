@@ -680,11 +680,15 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/library/ClipLibrary.cpp" "$WORK/moc_RemoteControl.cpp" \
 	-o "$WORK/remotehost_tool" $LF
 UNITY="$ROOT/unity"
-rm -f "$WORK/ClientTests.exe"
+rm -f "$WORK/ClientTests.exe" "$WORK/GameViewAreaTests.exe"
 if command -v mcs >/dev/null 2>&1 && command -v mono >/dev/null 2>&1; then
 	mcs -langversion:7 -warnaserror+ -out:"$WORK/ClientTests.exe" "$UNITY/Tests~/ClientTests.cs" \
 		"$UNITY/HarpiaRecorder/Editor/HarpiaClient.cs" "$UNITY/HarpiaRecorder/Editor/HarpiaClip.cs" \
 		"$UNITY/HarpiaRecorder/Editor/Json.cs" "$UNITY/HarpiaRecorder/Editor/CommandQueue.cs"
+	# Where the game's picture is (GameViewArea), against a replica of Unity's
+	# internals from its C# reference source.
+	mcs -langversion:7 -warnaserror+ -out:"$WORK/GameViewAreaTests.exe" "$UNITY/Tests~/GameViewAreaTests.cs" \
+		"$UNITY/Tests~/FakeUnityEditor.cs" "$UNITY/HarpiaRecorder/Editor/GameViewArea.cs"
 fi
 
 # The OS integration: the graphics-card registry value, the off-Windows stub,
@@ -948,6 +952,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/osintegration_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/remotecontrol_test" || rc=1
 if [ -f "$WORK/ClientTests.exe" ]; then
 	mono "$WORK/ClientTests.exe" "$WORK/remotehost_tool" 47963 || rc=1
+	mono "$WORK/GameViewAreaTests.exe" || rc=1
 else
 	echo "(skipped: the Unity scripts' client tests need mcs and mono)"
 fi

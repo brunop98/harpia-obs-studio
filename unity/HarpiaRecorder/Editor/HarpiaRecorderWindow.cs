@@ -7,7 +7,8 @@
 //   Recordings: newest first, the same list as Harpia's Recent strip and Clip
 //   Library. Click to select; double-click or Enter plays it; right-click for
 //   the rest; Delete moves it to the recycle bin, after asking.
-//   Settings: the same as Edit > Preferences > Harpia Recorder.
+//   Settings: the same as Edit > Preferences > Harpia Recorder, plus what
+//   would be recorded right now (the Game view's picture, measured live).
 
 using System;
 using System.Collections.Generic;
@@ -58,6 +59,11 @@ namespace Harpia.PlayModeRecorder
         readonly Dictionary<string, Texture2D> thumbs = new Dictionary<string, Texture2D>();
         readonly Dictionary<string, ThumbJob> thumbJobs = new Dictionary<string, ThumbJob>();
         bool thumbAsked, thumbsWanted;
+
+        // What would be recorded, measured once a second while Settings is open.
+        string measureText = "";
+        MessageType measureType = MessageType.Info;
+        double nextMeasureAt;
 
         sealed class ThumbJob
         {
@@ -136,6 +142,12 @@ namespace Harpia.PlayModeRecorder
             {
                 listAgainAt = -1;
                 RefreshList();
+            }
+            if (tab == 1 && Now >= nextMeasureAt)
+            {
+                nextMeasureAt = Now + 1.0;
+                Measure();
+                answered = true;
             }
             // The clock while recording, and thumbnails that are due another try.
             if (answered || thumbsWanted || (Reachable && status.State == "recording"))
@@ -517,11 +529,34 @@ namespace Harpia.PlayModeRecorder
             }
         }
 
+        void Measure()
+        {
+            GameViewMeasure m;
+            string why;
+            if (GameViewArea.TryMeasure(HarpiaSettings.Area, out m, out why))
+            {
+                measureText = m.Describe() + "." + PlayModeRecorder.SizeHint(m);
+                measureType = m.PixelForPixel || m.Shown >= 1f || HarpiaSettings.Area != RecordArea.GamePicture
+                    ? MessageType.Info
+                    : MessageType.Warning;
+            }
+            else
+            {
+                measureText = "Cannot measure the Game view: " + why + ".";
+                measureType = MessageType.Warning;
+            }
+        }
+
         void DrawSettings()
         {
             settingsScroll = EditorGUILayout.BeginScrollView(settingsScroll);
             GUILayout.Space(6);
             HarpiaSettingsProvider.Draw(false);
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("What gets recorded (live)", EditorStyles.boldLabel);
+            if (measureText.Length == 0)
+                Measure();
+            EditorGUILayout.HelpBox(measureText, measureType);
             EditorGUILayout.Space();
             EditorGUILayout.LabelField(
                 "In Harpia: Settings > System > Unity must be on, with the same port. Video and sound " +

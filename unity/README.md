@@ -28,8 +28,9 @@ This is **experimental** (Harpia branch `claude/unity-play-mode-recorder`).
    folder named `Editor`.)
 3. Open **Window > Harpia Recorder**. The top line should turn green:
    "Harpia Recorder and Editor ... -- Ready".
-4. *Settings* tab > **Show Recording Area**. Harpia outlines the rectangle it
-   would record, which should sit exactly on the game picture.
+4. *Settings* tab: **What gets recorded (live)** shows the rectangle and the
+   game's resolution; **Show Recording Area** has Harpia outline it on screen.
+   It should sit exactly on the game picture.
 5. Press Play.
 
 To remove it, delete the `HarpiaRecorder` folder.
@@ -53,7 +54,10 @@ To remove it, delete the `HarpiaRecorder` folder.
     selection.
   - The list refreshes when a recording finishes, when you come back to the
     window, and with **Refresh**.
-- **Settings** tab (also *Edit > Preferences > Harpia Recorder*):
+- **Settings** tab (also *Edit > Preferences > Harpia Recorder*), with a live
+  line saying what would be recorded right now -- for example *"1280x720 at
+  (2560, 140); the game renders 1920x1080, shown at 67%; display scaling 150%;
+  position from Windows"*:
   - **Record Play Mode** -- on/off.
   - **Area** -- *Game Picture* (just the rendered game) or *Whole Game View*
     (everything under the Game view's toolbar, letterbox bars included).
@@ -72,6 +76,33 @@ countdown (none -- the game is already running), and the preset's automatic
 pauses (idle, focus, pointer leaving the area) and Follow Mouse / Multi-Area:
 Unity decides when to pause. Harpia puts your own area back afterwards.
 
+## Recording only the game
+
+Only the game's picture is recorded: not the Game view's toolbar, not its tab,
+not the bars around a game whose aspect ratio differs from the view's. The
+scripts read the Game view's own layout (by reflection, checked against
+[Unity's C# reference source](https://github.com/Unity-Technologies/UnityCsReference)
+for 2021.3, 2022.3 and Unity 6), the same rectangle Unity draws the game into:
+
+- **Which view**: the one Play Mode renders into (the maximized one with *Play
+  Maximized*). If that is the Device Simulator, nothing is recorded and the
+  Console says to switch to the Game view.
+- **Where in it**: under the toolbar, letterboxed as Unity letterboxes it;
+  zoomed in, only the part that shows.
+- **Display scaling**: the Game view's own display's, even when other displays
+  use another scaling.
+- **On the desktop**: on Windows, from the Game view's own window as Windows
+  reports it, in physical pixels -- exact with any mix of displays and
+  scalings. Elsewhere it is worked out from Unity's coordinates.
+
+**Resolution.** The video is the picture as it appears on screen. A game that
+renders at 1920x1080 in a Game view showing it at 67% is recorded at the size
+it appears: 1280x720. For the game's full resolution, give
+the Game view room for it: *Play Maximized*, a larger window, or *Free Aspect*
+(the game then renders at the view's size). The live line in *Settings* and
+the Console say when the picture is shown smaller than the game renders. The
+video's own size and quality still come from Harpia's preset.
+
 ## Troubleshooting
 
 - **"Harpia isn't running"** -- start Harpia; check *Settings > System > Unity*
@@ -81,10 +112,13 @@ Unity decides when to pause. Harpia puts your own area back afterwards.
 - **"Harpia has a window open"** -- Harpia does not start a recording, or open
   its editor, while one of its dialogs (Settings, the editor...) is open. Close
   it and try again.
-- **The outline is off** -- Unity measures windows in points and Harpia records
-  physical pixels; they are converted with the display scaling. With displays
-  at *different* scalings the conversion can be off: try the other *Area*, or
-  put Unity on a display with the same scaling as the main one.
+- **The outline is off** -- the live line in *Settings* ends with "position
+  from Windows" when the position was read from Windows (exact). If it says
+  "estimated from Unity's screen coordinates" instead, and your displays use
+  different scalings, the position can be off: put Unity on a display with
+  the same scaling as the main one, and please report it.
+- **"switch it to the Game view"** -- Play Mode is showing in the Device
+  Simulator, which these scripts do not measure.
 - **Moving or resizing the Game view during Play Mode** -- the area is measured
   once, when the recording starts.
 - **"Could not delete ... (is it open in another program?)"** -- close the
@@ -100,7 +134,7 @@ Unity decides when to pause. Harpia puts your own area back afterwards.
 | `HarpiaRecorderWindow.cs` | Window > Harpia Recorder |
 | `HarpiaSettings.cs` | The settings, and their page in Preferences |
 | `HarpiaMenu.cs` | Tools > Harpia Recorder |
-| `GameViewArea.cs` | Where the Game view is on screen, in physical pixels |
+| `GameViewArea.cs` | Where the game's picture is on screen, in physical pixels |
 | `HarpiaClient.cs`, `HarpiaClip.cs`, `Json.cs`, `CommandQueue.cs` | Talking to Harpia (plain .NET, no Unity) |
 
 `Tests~/` is not needed in a project (Unity ignores it anyway); see *Tests*.
@@ -135,7 +169,15 @@ file on the disk can be named. See `harpia/core/RemoteControl.hpp` and
 
 ## Tests
 
-`Tests~/ClientTests.cs` runs the scripts' Unity-free part (`HarpiaClient.cs`,
-`HarpiaClip.cs`, `Json.cs`, `CommandQueue.cs`) under Mono against the real
-Harpia server code; Harpia's `tests/run_units.sh` does this when `mcs` is
+Both run under Mono; Harpia's `tests/run_units.sh` runs them when `mcs` is
 installed.
+
+- `Tests~/ClientTests.cs`: the scripts' Unity-free part (`HarpiaClient.cs`,
+  `HarpiaClip.cs`, `Json.cs`, `CommandQueue.cs`) against the real Harpia server
+  code.
+- `Tests~/GameViewAreaTests.cs`: `GameViewArea.cs` against
+  `Tests~/FakeUnityEditor.cs`, a small replica of the Unity internals it reads
+  (same names, member kinds, visibility and inheritance as Unity's, geometry
+  copied from the reference source): docked, maximized and toolbar-less Game
+  views, letterboxing, zoom, 150% scaling, the Simulator. The Windows window
+  lookup itself only runs in Unity on Windows.

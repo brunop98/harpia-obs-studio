@@ -8,12 +8,6 @@ using UnityEngine;
 
 namespace Harpia.PlayModeRecorder
 {
-    public enum RecordArea
-    {
-        GamePicture = 0,   // just the rendered game, without the Game view's toolbar or letterbox bars
-        WholeGameView = 1, // everything under the Game view's toolbar
-    }
-
     public static class HarpiaSettings
     {
         const string Prefix = "Harpia.PlayModeRecorder.";

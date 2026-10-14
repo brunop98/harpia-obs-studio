@@ -433,6 +433,14 @@ set(_harpia_runtime_targets
     obs-x264
     obs-nvenc
     obs-qsv11
+    # Each hardware encoder first runs a small test program, next to harpia.exe,
+    # to learn what the graphics card can do. Without it the encoder is not
+    # offered at all -- obs-nvenc does not even load ("NVENC not supported"),
+    # AMD's and Intel's are skipped -- and every recording falls back to x264
+    # on the CPU. Nothing else asks for them to be built.
+    obs-nvenc-test
+    obs-amf-test
+    obs-qsv-test
     win-capture
     win-wasapi
     win-dshow

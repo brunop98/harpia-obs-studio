@@ -1,5 +1,5 @@
-// Windows side of platform/OsIntegration.hpp: the taskbar identity, opting out
-// of power throttling, and the per-app graphics preference.
+// Windows side of platform/OsIntegration.hpp: the working folder, the taskbar
+// identity, opting out of power throttling, and the per-app graphics preference.
 #include "platform/OsIntegration.hpp"
 
 #include <windows.h>
@@ -60,6 +60,23 @@ QString readGpuValue()
 QString applyAtStartup()
 {
 	QStringList done;
+	// libobs finds its own data (data\libobs: the shaders the video engine
+	// cannot start without) two folders up from the WORKING folder, not from
+	// the exe (libobs/obs-windows.c); OBS Studio's installer sets "Start in" on
+	// its shortcuts for it. Started any other way -- a taskbar pin, a shortcut
+	// without "Start in", Explorer's "Open with", a script -- Harpia would come
+	// up without its video engine. So it starts in its own folder, whoever
+	// starts it: the folder the zip's launcher has always started it in.
+	const std::wstring exe = exePath();
+	if (const size_t slash = exe.find_last_of(L"\\/"); slash != std::wstring::npos) {
+		const std::wstring dir = exe.substr(0, slash);
+		if (SetCurrentDirectoryW(dir.c_str()))
+			done << QStringLiteral("working folder %1").arg(QString::fromStdWString(dir));
+		else
+			done << QStringLiteral("working folder: could not change to %1 (error %2)")
+					.arg(QString::fromStdWString(dir))
+					.arg(GetLastError());
+	}
 	const std::wstring id = QString::fromLatin1(kAppUserModelId).toStdWString();
 	if (SUCCEEDED(SetCurrentProcessExplicitAppUserModelID(id.c_str())))
 		done << QStringLiteral("taskbar id %1").arg(QLatin1String(kAppUserModelId));

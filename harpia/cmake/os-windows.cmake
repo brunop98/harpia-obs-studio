@@ -33,6 +33,42 @@ add_custom_command(
   VERBATIM
 )
 
+# The Microsoft Visual C++ runtime the build was compiled against, next to the
+# exe (app-local), so the rundir and the package run on a PC that has never had
+# Visual Studio or the VC++ Redistributable. Taken from Visual Studio's own
+# redist folder (VC\Redist\MSVC\<version>\x64\Microsoft.VC143.CRT): the files
+# Microsoft licenses for redistribution, and -- CMake picks the newest one
+# installed -- no older than the compiler, which the runtime requires (an older
+# msvcp140.dll than the compiler can stop the app with "procedure entry point
+# not found"). The package used to copy whatever System32 happened to hold.
+# The obs-ffmpeg-mux and encoder test helpers beside the exe use the same copy.
+# (A Debug build runs on the debug runtime, which is not redistributable; the
+# release one copied next to it does no harm.)
+unset(MSVC_REDIST_DIR CACHE) # found again on every configure: a Visual Studio update replaces the folder
+set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
+set(CMAKE_INSTALL_UCRT_LIBRARIES FALSE) # the Universal CRT is part of Windows 10 and 11
+include(InstallRequiredSystemLibraries)
+set(_harpia_crt "")
+foreach(_dll IN LISTS CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+  if(EXISTS "${_dll}")
+    list(APPEND _harpia_crt "${_dll}")
+  endif()
+endforeach()
+if(_harpia_crt)
+  message(STATUS "Harpia: Visual C++ runtime from ${MSVC_REDIST_DIR}")
+  add_custom_command(
+    TARGET harpia-recorder
+    POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${_harpia_crt} "${_harpia_runtime_dir}"
+    COMMENT "Copying the Visual C++ runtime next to harpia.exe"
+    VERBATIM
+  )
+else()
+  message(WARNING "Harpia: Visual Studio's Visual C++ runtime (VC\\Redist\\MSVC) was not found, so it is not "
+                  "copied next to harpia.exe: the build will only run where the Visual C++ Redistributable "
+                  "is installed, and Build-Harpia.ps1 -Package will refuse to package it.")
+endif()
+
 # The ffmpeg_muxer recording output spawns the obs-ffmpeg-mux helper EXECUTABLE
 # as a child process, resolved as "<dir of harpia.exe>/obs-ffmpeg-mux.exe". Copy
 # the freshly built helper right next to harpia.exe so recording can start it —

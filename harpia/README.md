@@ -142,12 +142,18 @@ The binary lands at `build_x64\rundir\RelWithDebInfo\bin\64bit\harpia.exe`.
 ```
 
 This assembles `build_x64\dist\Harpia\`: `bin\64bit` (the exe, its DLLs, the
-`obs-ffmpeg-mux` helper, Qt's `platforms\`), `obs-plugins\64bit` and `data\`,
-with the Visual C++ runtime next to the exe. Zip the folder to share it.
+`obs-ffmpeg-mux` helper, the NVIDIA/AMD/Intel encoder test helpers, Qt's
+plugins), `obs-plugins\64bit` and `data\`, with the Visual C++ runtime next to
+the exe, and checks that nothing it needs is missing. Zip the folder to share
+it.
 
 At run time nothing auto-installs: the exe needs its DLLs, the OBS plugins and
 the Visual C++ runtime beside it, which the build `rundir` and the package
-both provide. `OBS_PLUGINS_PATH` / `OBS_PLUGINS_DATA_PATH` override where the
+both provide. The runtime comes from Visual Studio's `VC\Redist\MSVC` folder,
+no older than the compiler (if it is not found, configure warns and `-Package`
+refuses). `harpia.exe` can be started from anywhere -- a shortcut, a taskbar
+pin -- since it moves into its own folder at start-up, where libobs looks for
+its data. `OBS_PLUGINS_PATH` / `OBS_PLUGINS_DATA_PATH` override where the
 plugins are looked for.
 
 ### Other platforms

@@ -8,9 +8,9 @@ REM  (Harpia.exe + bin\64bit + obs-plugins + data) into
 REM  build_x64\dist\harpia-<config>-<timestamp>.zip and opens Explorer with the
 REM  new zip selected.
 REM
-REM  The root Harpia.exe launcher is required because libobs resolves its core
-REM  data as "..\..\data\libobs" relative to the working directory, so the real
-REM  harpia.exe must run from bin\64bit. The launcher does exactly that.
+REM  The root Harpia.exe launcher is a convenience: something to double-click at
+REM  the root. bin\64bit\harpia.exe works on its own however it is started -- it
+REM  moves into its own folder at start-up, where libobs looks for its data.
 REM
 REM  Usage:
 REM    zip-harpia.bat          zip RelWithDebInfo build

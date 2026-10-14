@@ -3,6 +3,10 @@
 // How Harpia presents itself to the operating system. Windows does the work
 // (platform/win/WinOsIntegration.cpp); elsewhere these do nothing.
 //
+//   * Its own folder as the working folder. libobs looks for its data
+//     (data\libobs) relative to the working folder, so harpia.exe has to run
+//     in bin\64bit however it was started -- a shortcut, a taskbar pin,
+//     "Open with" -- not only from the zip's launcher.
 //   * A taskbar identity (AppUserModelID), so the running window and a pinned
 //     shortcut group as one app and any future notification carries Harpia's
 //     name and icon. An installer that makes a Start-menu shortcut has to put

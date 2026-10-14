@@ -160,7 +160,7 @@ try {
     else {
         Write-Host "    Look for harpia.exe under: $(Join-Path $BuildDir "rundir/$Configuration/bin/64bit")"
     }
-    Write-Host '    (Run from that folder so the OBS plugins next to it are found.)'
+    Write-Host '    (It finds its plugins and data from its own folder, however it is started.)'
 
     if ($Run) {
         if (-not (Test-Path -LiteralPath $exe)) { throw "Executable not found: $exe" }
@@ -181,32 +181,44 @@ try {
         New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
         # The rundir already has the correct OBS layout: bin/64bit (exe + libobs +
-        # Qt/FFmpeg DLLs + the obs-ffmpeg-mux helper + platforms/), obs-plugins/64bit,
-        # and data/. Copy it wholesale.
+        # Qt/FFmpeg DLLs + the obs-ffmpeg-mux and encoder test helpers + platforms/
+        # + the Visual C++ runtime), obs-plugins/64bit, and data/. Copy it wholesale.
+        # The Visual C++ runtime is put there by the build itself, from Visual
+        # Studio's VC\Redist folder at a version no older than the compiler
+        # (harpia/cmake/os-windows.cmake) -- not copied from this PC's System32,
+        # which holds whatever version some other program installed.
         Copy-Item -Recurse -Force -Path (Join-Path $runDir '*') -Destination $dist
 
-        # Bundle the Microsoft Visual C++ runtime app-locally (next to the exe) so
-        # no separate redistributable install is required on the target machine.
-        $binDir = Join-Path $dist 'bin/64bit'
-        $vcDlls = @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'concrt140.dll')
-        $vcCopied = 0
-        foreach ($dll in $vcDlls) {
-            $src = Join-Path $env:SystemRoot "System32/$dll"
-            if (Test-Path $src) {
-                Copy-Item -Force -Path $src -Destination $binDir
-                $vcCopied++
+        # Check it before calling it done: a missing piece here is a Harpia that
+        # does not start, or does not record, on someone else's PC.
+        $required = @(
+            @{ Path = 'bin/64bit/harpia.exe'; Why = 'the program' },
+            @{ Path = 'bin/64bit/obs-ffmpeg-mux.exe'; Why = 'the recording helper: no recording starts without it' },
+            @{ Path = 'data/libobs/default.effect'; Why = "the video engine's data" },
+            @{ Path = 'bin/64bit/vcruntime140.dll'; Why = 'the Visual C++ runtime (not found in Visual Studio; see the configure warning)' },
+            @{ Path = 'bin/64bit/vcruntime140_1.dll'; Why = 'the Visual C++ runtime' },
+            @{ Path = 'bin/64bit/msvcp140.dll'; Why = 'the Visual C++ runtime' }
+        )
+        $expected = @(
+            @{ Path = 'bin/64bit/obs-nvenc-test.exe'; Why = 'NVIDIA hardware encoding' },
+            @{ Path = 'bin/64bit/obs-amf-test.exe'; Why = 'AMD hardware encoding' },
+            @{ Path = 'bin/64bit/obs-qsv-test.exe'; Why = 'Intel hardware encoding (it needs the ATL component to build)' }
+        )
+        foreach ($item in $expected) {
+            if (-not (Test-Path -LiteralPath (Join-Path $dist $item.Path))) {
+                Write-Host "    WARNING: $($item.Path) is missing: no $($item.Why) in this package." -ForegroundColor Yellow
             }
+        }
+        $missing = @($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $dist $_.Path)) })
+        if ($missing.Count -gt 0) {
+            foreach ($item in $missing) {
+                Write-Host "    MISSING: $($item.Path) -- $($item.Why)" -ForegroundColor Red
+            }
+            throw "The package in $dist is incomplete (see above)."
         }
 
         Write-Host "==> Distributable ready: $dist" -ForegroundColor Green
-        Write-Host "    Contents: bin/64bit (harpia.exe + all DLLs + obs-ffmpeg-mux), obs-plugins/64bit, data/"
-        if ($vcCopied -gt 0) {
-            Write-Host "    Bundled the Visual C++ runtime ($vcCopied DLLs) next to the exe."
-        }
-        else {
-            Write-Host "    NOTE: VC++ runtime DLLs were not found in System32 — install the" -ForegroundColor Yellow
-            Write-Host "    'Microsoft Visual C++ 2015-2022 Redistributable (x64)' on the target machine." -ForegroundColor Yellow
-        }
+        Write-Host "    Contents: bin/64bit (harpia.exe, its DLLs, the Visual C++ runtime, the helpers), obs-plugins/64bit, data/"
         Write-Host "    Zip the '$dist' folder to share it; run bin/64bit/harpia.exe on the other machine."
     }
 }

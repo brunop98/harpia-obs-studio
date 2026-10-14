@@ -1,7 +1,8 @@
-// Harpia.exe launcher. Sits at the distribution root and starts the real
-// recorder in bin\64bit with the correct working directory, because libobs
-// resolves its core data as "..\..\data\libobs" relative to the CWD (see
-// libobs/obs-windows.c). Double-clicking this from the zip root "just works".
+// Harpia.exe launcher: something to double-click at the root of the zip, which
+// starts the real recorder in bin\64bit. A convenience only -- harpia.exe moves
+// into its own folder at start-up (libobs resolves its core data as
+// "..\..\data\libobs" relative to the working folder; see
+// platform/win/WinOsIntegration.cpp), so it works however it is started.
 using System;
 using System.Diagnostics;
 using System.IO;

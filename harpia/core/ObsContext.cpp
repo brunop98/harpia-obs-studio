@@ -249,6 +249,15 @@ std::vector<std::string> ObsContext::missingDependencies() const
 {
 	std::vector<std::string> missing;
 
+	// The engine's own data (data/libobs: the shaders). Without it the video
+	// engine cannot start either, and the next check would blame the graphics
+	// module; this one says where the problem is -- an incomplete program folder.
+	if (char *effect = obs_find_data_file("default.effect"))
+		bfree(effect);
+	else
+		missing.push_back("the video engine's data (data/libobs/default.effect, two folders up from the program) "
+				  "-- is the program folder complete?");
+
 	// The video engine itself: without its graphics module (libobs-d3d11.dll
 	// on Windows) there is no capture, no filters and no recording, and every
 	// source fails quietly until Record crashes on the missing device.

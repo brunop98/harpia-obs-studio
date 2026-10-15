@@ -93,7 +93,7 @@ inline QVector<PronunciationRule> parsePronunciations(const QString &lines, QStr
 		if (line.isEmpty() || line.startsWith(QLatin1Char('#')))
 			continue;
 		qsizetype at = -1, len = 0;
-		for (const QString sep : {QStringLiteral("->"), QStringLiteral("→"), QStringLiteral("=")}) {
+		for (const QString &sep : {QStringLiteral("->"), QStringLiteral("→"), QStringLiteral("=")}) {
 			at = line.indexOf(sep);
 			if (at >= 0) {
 				len = sep.size();

@@ -8665,7 +8665,7 @@ bool VideoEditorWindow::applyRespoken(int link, const QString &sentence, const Q
 		return fail(QStringLiteral("The new take could not be put in place."));
 	const QFileInfo oi(oldPath);
 	QString base = oi.completeBaseName();
-	base.remove(QRegularExpression(QStringLiteral(" \(re-spoken \d+\)$")));
+	base.remove(QRegularExpression(QStringLiteral(" \\(re-spoken \\d+\\)$")));
 	QString newPath;
 	for (int i = 1; newPath.isEmpty() || QFileInfo::exists(newPath); ++i)
 		newPath = oi.dir().filePath(QStringLiteral("%1 (re-spoken %2).wav").arg(base).arg(i));

@@ -65,6 +65,8 @@
 #include "subtitles/SubtitleDialog.hpp"
 #include "tts/SpeechPlacement.hpp"
 #include "tts/TtsDialog.hpp"
+#include "tts/TtsEngine.hpp"
+#include "tts/TtsText.hpp"
 #include "timeline/MotionPath.hpp"
 #include "ytdlp/UrlDownloadDialog.hpp"
 #include "ytdlp/YtDlp.hpp"
@@ -690,6 +692,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		&VideoEditorWindow::onSoundForTransition);
 	connect(timelineView_, &TimelineView::soundRulesRequested, this, &VideoEditorWindow::showSoundsTab);
 	connect(timelineView_, &TimelineView::subtitlesRequested, this, &VideoEditorWindow::openSubtitles);
+	connect(timelineView_, &TimelineView::respeakRequested, this, &VideoEditorWindow::respeakSentence);
+	// Fit to selection (Text to speech) follows what is selected.
+	connect(timelineView_, &TimelineView::selectionChanged, this, [this]() { updateTtsFitTarget(); });
 	connect(timelineView_, &TimelineView::freezeSoundsRequested, this, &VideoEditorWindow::freezeSounds);
 	connect(timelineView_, &TimelineView::inspectClipRequested, this,
 		&VideoEditorWindow::revealInspector);
@@ -8457,13 +8462,292 @@ void VideoEditorWindow::openTextToSpeech()
 		ttsDialog_ = new TtsDialog(this);
 		connect(ttsDialog_, &TtsDialog::speechReady, this, &VideoEditorWindow::addSpeechClips);
 	}
+	updateTtsFitTarget();
 	ttsDialog_->show();
 	ttsDialog_->raise();
 	ttsDialog_->activateWindow();
 }
 
+void VideoEditorWindow::updateTtsFitTarget()
+{
+	if (!ttsDialog_ || !timelineView_)
+		return;
+	const TlSpan span = timelineView_->selectedPairs().isEmpty() ? TlSpan() : timelineView_->selectionSpan();
+	ttsDialog_->setFitTarget(span.fromMs, span.toMs);
+}
+
+namespace {
+// A narration's parts in `m`: its audio clip (the one carrying TlClip::tts),
+// its captions in time order, and the captions' words in the audio's own
+// (source) time -- what sentenceAround() and spliceSentence() work in.
+struct NarrationParts {
+	int audioTrack = -1, audioClip = -1;
+	QVector<QPair<int, int>> captions;
+	QVector<NarrationCaption> caps;
+};
+
+NarrationParts narrationParts(const TimelineModel &m, int link)
+{
+	NarrationParts n;
+	if (link == 0)
+		return n;
+	for (const auto &p : m.linkedClips(link)) {
+		const TlClip &c = m.tracks[p.first].clips[p.second];
+		if (n.audioTrack < 0 && !c.tts.isEmpty()) {
+			n.audioTrack = p.first;
+			n.audioClip = p.second;
+		} else if (c.type == TlClip::Type::Text) {
+			n.captions.append(p);
+		}
+	}
+	if (n.audioTrack < 0)
+		return n;
+	std::sort(n.captions.begin(), n.captions.end(), [&m](const QPair<int, int> &a, const QPair<int, int> &b) {
+		return m.tracks[a.first].clips[a.second].outStartMs < m.tracks[b.first].clips[b.second].outStartMs;
+	});
+	const TlClip &a = m.tracks[n.audioTrack].clips[n.audioClip];
+	const double sp = a.speed > 0.01 ? a.speed : 1.0;
+	const auto src = [&](qint64 out) { return a.srcStartMs + qint64(std::llround(double(out - a.outStartMs) * sp)); };
+	for (const auto &p : n.captions) {
+		const TlClip &c = m.tracks[p.first].clips[p.second];
+		NarrationCaption nc;
+		nc.text = tlPlainText(c.text);
+		for (const ClipWordTime &w : c.words) {
+			ClipWordTime x = w;
+			x.startMs = src(c.outStartMs + w.startMs);
+			x.endMs = src(c.outStartMs + w.endMs);
+			nc.words.append(x);
+		}
+		if (nc.words.isEmpty()) { // typed by hand: its own span
+			ClipWordTime x;
+			x.text = nc.text;
+			x.startMs = src(c.outStartMs);
+			x.endMs = src(c.outEndMs());
+			nc.words.append(x);
+		}
+		n.caps.append(nc);
+	}
+	return n;
+}
+} // namespace
+
+QString VideoEditorWindow::narrationSentenceAt(int track, int clip, qint64 atOutMs, int *link, QString *why) const
+{
+	const auto say = [why](const QString &w) {
+		if (why)
+			*why = w;
+		return QString();
+	};
+	if (!timelineView_)
+		return say(QStringLiteral("No timeline."));
+	const TimelineModel &m = timelineView_->model();
+	if (track < 0 || track >= m.tracks.size() || clip < 0 || clip >= m.tracks[track].clips.size())
+		return say(QStringLiteral("That clip is gone."));
+	const TlClip &c = m.tracks[track].clips[clip];
+	const NarrationParts n = narrationParts(m, c.link);
+	if (n.audioTrack < 0 || n.caps.isEmpty())
+		return say(QStringLiteral("This clip is not part of a text-to-speech narration with captions."));
+	int k = -1;
+	for (int i = 0; i < n.captions.size(); ++i)
+		if (n.captions[i] == QPair<int, int>(track, clip))
+			k = i;
+	if (k < 0) // the audio: the caption at the time clicked
+		for (int i = 0; i < n.captions.size(); ++i)
+			if (m.tracks[n.captions[i].first].clips[n.captions[i].second].outStartMs <= atOutMs)
+				k = i;
+	k = std::max(k, 0);
+	const TlClip &a = m.tracks[n.audioTrack].clips[n.audioClip];
+	const EditorSource *s = const_cast<VideoEditorWindow *>(this)->sourceById(a.sourceId);
+	const qint64 len = s && s->durationMs > 0 ? s->durationMs : a.srcEndMs;
+	if (link)
+		*link = c.link;
+	return sentenceAround(n.caps, k, len).text;
+}
+
+void VideoEditorWindow::respeakSentence(int track, int clip, qint64 atOutMs)
+{
+	int link = 0;
+	QString why;
+	const QString sentence = narrationSentenceAt(track, clip, atOutMs, &link, &why);
+	if (sentence.isEmpty()) {
+		QMessageBox::information(this, QStringLiteral("Re-speak"), why);
+		return;
+	}
+	if (respeakEngine_ && respeakEngine_->running()) {
+		QMessageBox::information(this, QStringLiteral("Re-speak"),
+					 QStringLiteral("A sentence is being spoken again already. Wait for it to land."));
+		return;
+	}
+	const TimelineModel &m = timelineView_->model();
+	const NarrationParts n = narrationParts(m, link);
+	bool specOk = false;
+	const TtsSpec spec = TtsSpec::fromJson(m.tracks[n.audioTrack].clips[n.audioClip].tts, &specOk);
+	const QString key = specOk ? TtsEngine::loadKey(spec.provider) : QString();
+	if (!specOk || key.isEmpty()) {
+		QMessageBox::information(this, QStringLiteral("Re-speak"),
+					 QStringLiteral("There is no %1 API key saved on this computer. Open Add > Text to "
+							"speech…, paste it, and try again.")
+						 .arg(ttsProviderName(spec.provider)));
+		return;
+	}
+	if (!respeakEngine_) {
+		respeakEngine_ = new TtsEngine(this);
+		connect(respeakEngine_, &TtsEngine::progress, this, [this](const QString &s) {
+			if (infoLabel_)
+				infoLabel_->setText(QStringLiteral("Re-speaking: %1").arg(s));
+		});
+		connect(respeakEngine_, &TtsEngine::failed, this, [this](const QString &w) {
+			warnAndLog(this, QStringLiteral("Re-speak"), QStringLiteral("The sentence could not be spoken again: %1").arg(w));
+		});
+		connect(respeakEngine_, &TtsEngine::finished, this, [this](const TtsResult &r) {
+			QString w;
+			if (!applyRespoken(respeakLink_, respeakText_, r.wavPath, r.words, &w))
+				warnAndLog(this, QStringLiteral("Re-speak"), w);
+			QFile::remove(r.wavPath);
+		});
+	}
+	respeakLink_ = link;
+	respeakText_ = sentence;
+	TtsJob job;
+	job.text = sentence;
+	job.spec = spec; // its tempo too: the same pace as the rest of the narration
+	job.apiKey = key;
+	job.rules = TtsEngine::pronunciations();
+	job.outPath = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
+			      .filePath(QStringLiteral("harpia-respoken-%1.wav").arg(QDateTime::currentMSecsSinceEpoch()));
+	if (infoLabel_)
+		infoLabel_->setText(QStringLiteral("Re-speaking “%1”…").arg(sentence));
+	respeakEngine_->start(job);
+}
+
+bool VideoEditorWindow::applyRespoken(int link, const QString &sentence, const QString &takeWav,
+				      const QVector<ClipWordTime> &takeWords, QString *why)
+{
+	const auto fail = [why](const QString &w) {
+		if (why)
+			*why = w;
+		return false;
+	};
+	if (!timelineView_)
+		return fail(QStringLiteral("No timeline."));
+	TimelineModel m = timelineView_->model();
+	const NarrationParts n = narrationParts(m, link);
+	if (n.audioTrack < 0 || n.caps.isEmpty())
+		return fail(QStringLiteral("The narration is no longer on the timeline."));
+	const TlClip oldAudio = m.tracks[n.audioTrack].clips[n.audioClip];
+	const EditorSource *src = sourceById(oldAudio.sourceId);
+	if (!src)
+		return fail(QStringLiteral("The narration's audio is gone."));
+	const qint64 len = src->durationMs > 0 ? src->durationMs : oldAudio.srcEndMs;
+	// The sentence as it was asked for: if the captions changed meanwhile,
+	// this take no longer belongs anywhere.
+	SentenceSpan span;
+	for (int k = 0; k < n.caps.size(); ++k) {
+		const SentenceSpan s = sentenceAround(n.caps, k, len);
+		if (s.text == sentence) {
+			span = s;
+			break;
+		}
+		k = s.last;
+	}
+	if (!span.valid())
+		return fail(QStringLiteral("The sentence changed on the timeline while it was being spoken again. Try again."));
+
+	// The audio: the narration's own file (the session copy if that is gone),
+	// the new take spliced in, saved beside it under a new name -- the old
+	// file stays, so Ctrl+Z has it.
+	const QString oldPath = !src->origPath.isEmpty() && QFileInfo::exists(src->origPath) ? src->origPath : src->path;
+	tts_audio::Pcm old, take;
+	if (!tts_audio::readWav16(oldPath, old) || !tts_audio::readWav16(takeWav, take))
+		return fail(QStringLiteral("The narration's audio could not be read."));
+	const Spliced spl = spliceSentence(old, span, take, takeWords);
+	if (!spl.ok)
+		return fail(QStringLiteral("The new take could not be put in place."));
+	const QFileInfo oi(oldPath);
+	QString base = oi.completeBaseName();
+	base.remove(QRegularExpression(QStringLiteral(" \(re-spoken \d+\)$")));
+	QString newPath;
+	for (int i = 1; newPath.isEmpty() || QFileInfo::exists(newPath); ++i)
+		newPath = oi.dir().filePath(QStringLiteral("%1 (re-spoken %2).wav").arg(base).arg(i));
+	if (!tts_audio::writeWav16(newPath, spl.pcm))
+		return fail(QStringLiteral("Could not save the new narration beside the old one (%1).")
+				    .arg(QDir::toNativeSeparators(oi.absolutePath())));
+	const int newId = addAudioSource(newPath);
+	if (newId < 0)
+		return fail(QStringLiteral("The new narration could not be read back."));
+
+	// The timeline, on a copy: one undo step.
+	const double sp = oldAudio.speed > 0.01 ? oldAudio.speed : 1.0;
+	const auto outOf = [&](qint64 srcMs) {
+		return oldAudio.outStartMs + qint64(std::llround(double(srcMs - oldAudio.srcStartMs) / sp));
+	};
+	const qint64 sentenceEndOut = outOf(span.cutToMs);
+	const qint64 deltaOut = qint64(std::llround(double(spl.deltaMs) / sp));
+	const QPair<int, int> tmplAt = n.captions[span.first];
+	const TlClip tmpl = m.tracks[tmplAt.first].clips[tmplAt.second];
+
+	TlClip &audio = m.tracks[n.audioTrack].clips[n.audioClip];
+	audio.sourceId = newId;
+	if (audio.srcEndMs >= span.cutToMs)
+		audio.srcEndMs += spl.deltaMs;
+	audio.srcEndMs = std::min(audio.srcEndMs, spl.pcm.durationMs());
+	if (const EditorSource *ns = sourceById(newId))
+		audio.peaks = VoiceoverTrack::loadPeaks(ns->path, 600);
+
+	// Out with the sentence's old captions (from the back, so the indices
+	// still mean what they meant)...
+	QVector<QPair<int, int>> gone;
+	for (int i = span.first; i <= span.last; ++i)
+		gone.append(n.captions[i]);
+	std::sort(gone.begin(), gone.end(), [](const QPair<int, int> &a, const QPair<int, int> &b) { return a > b; });
+	for (const auto &p : gone)
+		m.tracks[p.first].clips.remove(p.second);
+	// ...the rest of the narration moves by the difference...
+	for (TlTrack &t : m.tracks)
+		for (TlClip &c : t.clips)
+			if (c.link == link && c.tts.isEmpty() && c.outStartMs >= sentenceEndOut)
+				c.outStartMs += deltaOut;
+	// ...and in with new ones, in the old ones' style and place.
+	SubtitleLook look;
+	look.style = tmpl.text;
+	const QVector<TlClip> fresh =
+		buildSubtitleClips(groupWords(spl.words, TtsEngine::captionRule()), m.tracks[n.audioTrack].clips[n.audioClip], look);
+	for (TlClip c : fresh) {
+		const QString words = c.text.text;
+		c.text = tmpl.text;
+		c.text.text = words;
+		c.posX = tmpl.posX;
+		c.posY = tmpl.posY;
+		c.components = tmpl.components;
+		c.tags = tmpl.tags;
+		c.link = link;
+		m.tracks[tmplAt.first].clips.append(c);
+	}
+	timelineView_->setModel(m);
+	TlSelection sel;
+	const auto all = m.linkedClips(link);
+	if (!all.isEmpty()) {
+		sel.track = all.first().first;
+		sel.clip = all.first().second;
+		for (int i = 1; i < all.size(); ++i)
+			sel.extras.append(all[i]);
+		std::sort(sel.extras.begin(), sel.extras.end());
+	}
+	timelineView_->setSelectionState(sel);
+	syncPreviewTransformTarget();
+	syncClipInspector();
+	showTimelineFrame(timelinePlayheadMs());
+	commitSnapshot();
+	if (infoLabel_)
+		infoLabel_->setText(QStringLiteral("Spoken again: “%1” (%2%3 s).")
+					    .arg(sentence)
+					    .arg(spl.deltaMs >= 0 ? QStringLiteral("+") : QString())
+					    .arg(spl.deltaMs / 1000.0, 0, 'f', 1));
+	return true;
+}
+
 void VideoEditorWindow::addSpeechClips(const QString &wavPath, qint64 durationMs, const QVector<ClipWordTime> &words,
-				       const GroupRule &rule, const SubtitleLook &look)
+				       const GroupRule &rule, const SubtitleLook &look, const QString &specJson, qint64 atMs)
 {
 	if (!timelineView_)
 		return;
@@ -8483,8 +8767,9 @@ void VideoEditorWindow::addSpeechClips(const QString &wavPath, qint64 durationMs
 	audio.sourceId = src;
 	audio.srcStartMs = 0;
 	audio.srcEndMs = dur;
-	audio.outStartMs = timelinePlayheadMs();
+	audio.outStartMs = atMs >= 0 ? atMs : timelinePlayheadMs();
 	audio.peaks = VoiceoverTrack::loadPeaks(s ? s->path : wavPath, 600);
+	audio.tts = specJson; // how it was made: "Re-speak this sentence" needs it
 	// The captions, timed against that clip exactly as subtitles from speech
 	// are against theirs.
 	const QVector<TlClip> captions = buildSubtitleClips(groupWords(words, rule), audio, look);

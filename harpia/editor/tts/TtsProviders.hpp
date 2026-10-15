@@ -416,6 +416,43 @@ inline QUrl ttsVoicesUrl(TtsProvider p, const QString &language)
 	return u;
 }
 
+// How a narration was made, kept on its audio clip (TlClip::tts) so one
+// sentence can be spoken again later in the same voice, at the same pace.
+struct TtsSpec {
+	TtsProvider provider = TtsProvider::OpenAI;
+	QString voice, language, style;
+	double speed = 1.0; // the service's own speaking rate
+	double tempo = 1.0; // the stretch applied afterwards (Fit to selection)
+
+	QString toJson() const
+	{
+		QJsonObject o;
+		o.insert(QStringLiteral("provider"), QString::fromLatin1(ttsProviderInfo(provider).id));
+		o.insert(QStringLiteral("voice"), voice);
+		o.insert(QStringLiteral("language"), language);
+		if (!style.isEmpty())
+			o.insert(QStringLiteral("style"), style);
+		o.insert(QStringLiteral("speed"), speed);
+		o.insert(QStringLiteral("tempo"), tempo);
+		return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
+	}
+	static TtsSpec fromJson(const QString &json, bool *ok = nullptr)
+	{
+		TtsSpec s;
+		const QJsonDocument d = QJsonDocument::fromJson(json.toUtf8());
+		const QJsonObject o = d.object();
+		s.provider = ttsProviderFromId(o.value(QStringLiteral("provider")).toString());
+		s.voice = o.value(QStringLiteral("voice")).toString();
+		s.language = o.value(QStringLiteral("language")).toString();
+		s.style = o.value(QStringLiteral("style")).toString();
+		s.speed = o.value(QStringLiteral("speed")).toDouble(1.0);
+		s.tempo = o.value(QStringLiteral("tempo")).toDouble(1.0);
+		if (ok)
+			*ok = d.isObject() && !s.voice.isEmpty();
+		return s;
+	}
+};
+
 // ---- replies ----------------------------------------------------------------
 
 namespace ttsdetail {

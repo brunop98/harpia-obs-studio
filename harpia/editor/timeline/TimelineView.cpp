@@ -4366,11 +4366,32 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 					      : QStringLiteral("Generate subtitles…"));
 		subs->setToolTip(QStringLiteral("Transcribe what is said into caption clips above it."));
 	}
+	// A text-to-speech narration (TlClip::tts) and its captions: speak one
+	// sentence again -- after editing a caption's words, or to get a better take.
+	QAction *respeak = nullptr;
+	if (menuClip.link != 0) {
+		bool narrated = false;
+		for (const auto &p : model_.linkedClips(menuClip.link))
+			narrated = narrated || !model_.tracks[p.first].clips[p.second].tts.isEmpty();
+		if (narrated) {
+			menu.addSeparator();
+			respeak = menu.addAction(QStringLiteral("Re-speak this sentence…"));
+			respeak->setToolTip(QStringLiteral(
+				"A new take of just this sentence, in the same voice, with the captions' words as "
+				"they are now (edit them first to change what is said). The rest of the narration "
+				"moves to fit. Ctrl+Z brings the old take back."));
+			disableBecause(respeak, !locked, lockedWhy);
+		}
+	}
 	menu.addSeparator();
 	QAction *del = menu.addAction(QStringLiteral("Delete clip"));
 	disableBecause(del, !locked, lockedWhy);
 	explainDisabled(&menu);
 	QAction *chosen = menu.exec(globalPos);
+	if (respeak && chosen == respeak) {
+		emit respeakRequested(track, clip, atOutMs);
+		return;
+	}
 	if (subs && chosen == subs) {
 		if (!inSel) {
 			extraSel_.clear();

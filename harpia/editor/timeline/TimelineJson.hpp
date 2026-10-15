@@ -291,6 +291,8 @@ inline QJsonObject clipToJson(const TlClip &c)
 		co[QStringLiteral("soundRule")] = c.soundRule;
 	if (c.link != 0)
 		co[QStringLiteral("link")] = c.link;
+	if (!c.tts.isEmpty())
+		co[QStringLiteral("tts")] = c.tts;
 	if (!c.tags.isEmpty()) {
 		QJsonArray ta;
 		for (int id : c.tags)
@@ -317,6 +319,7 @@ inline TlClip clipFromJson(const QJsonObject &co)
 	c.outStartMs = qint64(co.value(QStringLiteral("outStart")).toDouble());
 	c.soundRule = co.value(QStringLiteral("soundRule")).toInt(0);
 	c.link = std::max(0, co.value(QStringLiteral("link")).toInt(0));
+	c.tts = co.value(QStringLiteral("tts")).toString();
 	for (const QJsonValue &tv : co.value(QStringLiteral("tags")).toArray())
 		if (const int id = tv.toInt(0); id > 0 && !c.tags.contains(id))
 			c.tags.append(id);

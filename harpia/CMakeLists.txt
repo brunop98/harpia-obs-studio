@@ -236,6 +236,9 @@ target_sources(
     # linked place on the timeline.
     editor/tts/TtsDialog.cpp
     editor/tts/TtsDialog.hpp
+    editor/tts/TtsEngine.cpp
+    editor/tts/TtsEngine.hpp
+    editor/tts/TtsText.hpp
     editor/tts/TtsSynthesizer.cpp
     editor/tts/TtsSynthesizer.hpp
     editor/tts/TtsProviders.hpp

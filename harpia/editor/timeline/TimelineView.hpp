@@ -413,6 +413,9 @@ signals:
 	// "Generate subtitles…" from a media clip or an audio lane: the view has
 	// set the selection to what should be transcribed.
 	void subtitlesRequested();
+	// "Re-speak this sentence" on a text-to-speech narration's caption (or its
+	// audio, at atOutMs): the editor makes a new take of that sentence.
+	void respeakRequested(int track, int clip, qint64 atOutMs);
 	void freezeSoundsRequested();
 	// "Export this clip…" / "Export selection…". The window owns the export
 	// dialog and the media pool, so the view only says which slice of output

@@ -369,6 +369,11 @@ struct TlClip {
 	// an index: it survives clips being reordered, added and removed around it.
 	int link = 0;
 
+	// A text-to-speech narration's audio clip: how it was made (TtsSpec, as
+	// compact JSON), so "Re-speak this sentence" can make a new take of one
+	// sentence in the same voice. Empty on every other clip.
+	QString tts;
+
 	// Tags (TlTag ids, see TimelineModel::tags): what this clip IS to you --
 	// "intro", "callout", "b-roll". A sound rule can fire on a tag, and
 	// later a tag will carry a component preset. Any number, unordered.
@@ -664,7 +669,7 @@ struct TlClip {
 		       rotation == o.rotation && opacity == o.opacity &&
 		       crop == o.crop && keys == o.keys && text == o.text && words == o.words &&
 		       scripts == o.scripts && fx == o.fx && components == o.components &&
-		       transition == o.transition && soundRule == o.soundRule && link == o.link && tags == o.tags &&
+		       transition == o.transition && soundRule == o.soundRule && link == o.link && tts == o.tts && tags == o.tags &&
 		       volume == o.volume && fadeInMs == o.fadeInMs &&
 		       fadeOutMs == o.fadeOutMs && fadeInCurve == o.fadeInCurve &&
 		       fadeOutCurve == o.fadeOutCurve;

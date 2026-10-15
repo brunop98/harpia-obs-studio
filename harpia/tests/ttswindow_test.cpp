@@ -8,21 +8,33 @@
 //   * Clicking one caption selects the whole group (move one, move all).
 //   * One Ctrl+Z takes all of it away.
 //   * Add > Text to speech… opens the window; a .srt opens as its words.
+//   * The narration keeps how it was made (TlClip::tts) and lands where it
+//     is asked to (Fit to selection: at the selection's start).
+//   * Re-speaking one sentence: the sentence as its captions say it now
+//     (an edited caption included), the new take spliced into a new file,
+//     its captions rebuilt, the later ones moved by the difference, all
+//     still linked -- and one Ctrl+Z brings the old take back.
+//   * Fit to selection follows the timeline's selection; ▶ says the text's
+//     first sentence.
 #include "editor/VideoEditorWindow.hpp"
 #include "editor/timeline/TimelineView.hpp"
 #include "editor/tts/TtsAudio.hpp"
 #include "editor/tts/TtsDialog.hpp"
+#include "editor/tts/TtsProviders.hpp"
 
 #include <QAction>
+#include <QCheckBox>
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QShortcut>
 #include <QTemporaryDir>
 #include <QThread>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -210,6 +222,193 @@ int main(int argc, char **argv)
 		std::printf("     %s\n", qPrintable(name));
 		ok(name == QStringLiteral("2026-10-15 14-03-22 Olá pessoal Hoje vamos lavar.wav"),
 		   "a narration is named by its time and first words");
+	}
+
+	// A narration of two sentences, 4 s, at 10 s, made "with OpenAI's marin".
+	const QString wav2 = tmp.filePath(QStringLiteral("two sentences.wav"));
+	{
+		tts_audio::Pcm p;
+		p.samples.resize(48000 * 4 * 2);
+		for (int i = 0; i < 48000 * 4; ++i)
+			p.samples[2 * i] = p.samples[2 * i + 1] = qint16(6000 * std::sin(i * 2 * M_PI * 330 / 48000.0));
+		tts_audio::writeWav16(wav2, p);
+	}
+	QVector<ClipWordTime> words2;
+	const QStringList said2 = {QStringLiteral("Olá"),   QStringLiteral("pessoal,"), QStringLiteral("hoje"),
+				   QStringLiteral("vamos"), QStringLiteral("lavar."),   QStringLiteral("As"),
+				   QStringLiteral("mãos"),  QStringLiteral("direito.")};
+	for (int i = 0; i < said2.size(); ++i) {
+		ClipWordTime wt;
+		wt.text = said2[i];
+		wt.startMs = (i < 5 ? 100 : 700) + i * 320;
+		wt.endMs = wt.startMs + 280;
+		words2.append(wt);
+	}
+	TtsSpec spec;
+	spec.voice = QStringLiteral("marin");
+	spec.language = QStringLiteral("pt");
+
+	std::printf("\n-- how it was made, and where --\n");
+	int link2 = 0;
+	{
+		w.addSpeechClips(wav2, 4000, words2, rule, look, spec.toJson(), 10000);
+		settle(300);
+		const TlClip *a = nullptr;
+		for (const TlTrack &t : tv->model().tracks)
+			for (const TlClip &c : t.clips)
+				if (!c.tts.isEmpty() && c.outStartMs == 10000) {
+					a = &c;
+					link2 = c.link;
+				}
+		ok(a != nullptr, "placed where asked (Fit to selection: the selection's start), not at the playhead");
+		bool good = false;
+		ok(a && TtsSpec::fromJson(a->tts, &good).voice == QLatin1String("marin") && good,
+		   "and keeps how it was made, for re-speaking");
+	}
+
+	// The captions of that narration, in time order: (track, clip).
+	const auto captions = [&]() {
+		QVector<QPair<int, int>> out;
+		for (const auto &p : tv->model().linkedClips(link2))
+			if (tv->model().tracks[p.first].clips[p.second].type == TlClip::Type::Text)
+				out.append(p);
+		std::sort(out.begin(), out.end(), [&](const QPair<int, int> &x, const QPair<int, int> &y) {
+			return tv->model().tracks[x.first].clips[x.second].outStartMs <
+			       tv->model().tracks[y.first].clips[y.second].outStartMs;
+		});
+		return out;
+	};
+	const auto capText = [&](const QPair<int, int> &p) { return tv->model().tracks[p.first].clips[p.second].text.text; };
+	const auto capAt = [&](const QPair<int, int> &p) { return tv->model().tracks[p.first].clips[p.second].outStartMs; };
+
+	std::printf("\n-- re-speak one sentence --\n");
+	{
+		QVector<QPair<int, int>> caps = captions();
+		QStringList texts;
+		for (const auto &p : caps)
+			texts << capText(p);
+		std::printf("     captions: %s\n", qPrintable(texts.join(QStringLiteral(" | "))));
+		ok(caps.size() == 3, "three captions");
+		int link = 0;
+		QString why;
+		ok(w.narrationSentenceAt(caps[2].first, caps[2].second, 0, &link, &why) == QStringLiteral("As mãos direito.") &&
+			   link == link2,
+		   "right-clicked on the last caption: its sentence");
+		// The user edits a caption's words first.
+		{
+			TimelineModel m = tv->model();
+			m.tracks[caps[1].first].clips[caps[1].second].text.text = QStringLiteral("vamos limpar.");
+			tv->setModelAndCommit(m);
+			settle(100);
+		}
+		const QString sentence = w.narrationSentenceAt(caps[0].first, caps[0].second, 0, &link, &why);
+		ok(sentence == QStringLiteral("Olá pessoal, hoje vamos limpar."), "the first sentence, with the edited words");
+
+		// The new take, 2.5 s, as the service would give it.
+		const QString take = tmp.filePath(QStringLiteral("take.wav"));
+		tts_audio::Pcm tp;
+		tp.samples.resize(48000 * 5 / 2 * 2);
+		for (qsizetype i = 0; i < tp.samples.size(); ++i)
+			tp.samples[i] = 4000;
+		tts_audio::writeWav16(take, tp);
+		QVector<ClipWordTime> tw;
+		const QStringList newWords = {QStringLiteral("Olá"), QStringLiteral("pessoal,"), QStringLiteral("hoje"),
+					      QStringLiteral("vamos"), QStringLiteral("limpar.")};
+		for (int i = 0; i < newWords.size(); ++i) {
+			ClipWordTime wt;
+			wt.text = newWords[i];
+			wt.startMs = 150 + i * 440;
+			wt.endMs = wt.startMs + 400;
+			tw.append(wt);
+		}
+		const qint64 laterBefore = capAt(caps[2]);
+		int srcBefore = 0;
+		qint64 lenBefore = 0;
+		for (const TlTrack &t : tv->model().tracks)
+			for (const TlClip &c : t.clips)
+				if (c.link == link2 && !c.tts.isEmpty()) {
+					srcBefore = c.sourceId;
+					lenBefore = c.outDurationMs();
+				}
+		ok(w.applyRespoken(link2, sentence, take, tw, &why), "the new take goes in");
+		if (!why.isEmpty())
+			std::printf("     %s\n", qPrintable(why));
+		settle(200);
+		caps = captions();
+		texts.clear();
+		for (const auto &p : caps)
+			texts << capText(p);
+		std::printf("     captions now: %s\n", qPrintable(texts.join(QStringLiteral(" | "))));
+		ok(texts.join(QLatin1Char(' ')) == QStringLiteral("Olá pessoal, hoje vamos limpar. As mãos direito."),
+		   "its captions say the new words; the other sentence's are kept");
+		int srcAfter = 0;
+		qint64 lenAfter = 0;
+		for (const TlTrack &t : tv->model().tracks)
+			for (const TlClip &c : t.clips)
+				if (c.link == link2 && !c.tts.isEmpty()) {
+					srcAfter = c.sourceId;
+					lenAfter = c.outDurationMs();
+				}
+		const qint64 grew = lenAfter - lenBefore;
+		std::printf("     narration %lld -> %lld ms; the later caption %lld -> %lld\n", (long long)lenBefore,
+			    (long long)lenAfter, (long long)laterBefore, (long long)capAt(caps.last()));
+		ok(srcAfter != srcBefore && grew > 300, "a new, longer narration file");
+		ok(QFileInfo::exists(tmp.filePath(QStringLiteral("two sentences (re-spoken 1).wav"))),
+		   "saved beside the old one, which stays");
+		ok(std::llabs(capAt(caps.last()) - laterBefore - grew) <= 2, "the later sentence moved by the difference");
+		ok(tv->model().linkedClips(link2).size() == 1 + caps.size(), "everything still linked");
+
+		QShortcut *undo = nullptr;
+		for (QShortcut *sc : w.findChildren<QShortcut *>())
+			if (sc->key() == QKeySequence(Qt::CTRL | Qt::Key_Z) && sc->isEnabled())
+				undo = sc;
+		if (undo) {
+			emit undo->activated();
+			settle(300);
+			int srcUndone = 0;
+			for (const TlTrack &t : tv->model().tracks)
+				for (const TlClip &c : t.clips)
+					if (c.link == link2 && !c.tts.isEmpty())
+						srcUndone = c.sourceId;
+			texts.clear();
+			for (const auto &p : captions())
+				texts << capText(p);
+			ok(srcUndone == srcBefore && texts.join(QLatin1Char(' ')) ==
+							     QStringLiteral("Olá pessoal, hoje vamos limpar. As mãos direito."),
+			   "one Ctrl+Z: the old take back (with the edited caption, the step before)");
+		}
+	}
+
+	std::printf("\n-- fit to selection, and the sample line --\n");
+	{
+		int vt = -1;
+		for (int t = 0; t < tv->model().tracks.size(); ++t)
+			for (const TlClip &c : tv->model().tracks[t].clips)
+				if (c.type == TlClip::Type::Video && c.tts.isEmpty() && tv->model().tracks[t].kind == TlTrack::Kind::Video)
+					vt = t;
+		TlSelection sel;
+		sel.track = vt;
+		sel.clip = 0;
+		tv->setSelectionState(sel);
+		settle(100);
+		TtsDialog *d = w.findChild<TtsDialog *>();
+		QCheckBox *fit = nullptr;
+		if (d)
+			for (QCheckBox *c : d->findChildren<QCheckBox *>())
+				if (c->text().startsWith(QLatin1String("Fit to the selected clips")))
+					fit = c;
+		ok(fit && fit->isEnabled() && fit->text().contains(QLatin1String("0:04.0")),
+		   "Fit to selection knows the selected clip: 4 s");
+		if (fit)
+			std::printf("     %s\n", qPrintable(fit->text()));
+		tv->setSelectionState(TlSelection());
+		settle(100);
+		ok(fit && !fit->isEnabled(), "and is off with nothing selected");
+		ok(TtsDialog::previewSentence(QStringLiteral("Olá pessoal! Tudo bem? [pause 1s] Mais."), QStringLiteral("pt")) ==
+			   QStringLiteral("Olá pessoal!"),
+		   "▶ says the text's first sentence");
+		ok(TtsDialog::previewSentence(QString(), QStringLiteral("pt")).startsWith(QStringLiteral("Olá!")),
+		   "or, with no text yet, a line in the language");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

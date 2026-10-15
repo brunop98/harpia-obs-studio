@@ -9,6 +9,7 @@
 #include <QString>
 #include <QVector>
 
+#include <algorithm>
 #include <cstring>
 
 namespace harpia::tts_audio {
@@ -84,26 +85,55 @@ inline bool writeWav16(const QString &path, const Pcm &pcm)
 	       f.write(reinterpret_cast<const char *>(pcm.samples.constData()), dataBytes) == qint64(dataBytes);
 }
 
-// The pieces back to back with `gapMs` of silence between them; `offsetsMs`
-// gets where each one starts. All pieces must share rate and channels (the
+// The pieces back to back, each after `gapsBeforeMs[i]` of silence (the first
+// one's is ignored: a narration starts with its first word); `offsetsMs` gets
+// where each one starts. All pieces must share rate and channels (the
 // editor's decode makes them so); a piece that does not is skipped.
-inline Pcm join(const QVector<Pcm> &pieces, qint64 gapMs, QVector<qint64> *offsetsMs)
+inline Pcm join(const QVector<Pcm> &pieces, const QVector<qint64> &gapsBeforeMs, QVector<qint64> *offsetsMs)
 {
 	Pcm out;
 	if (!pieces.isEmpty()) {
 		out.rate = pieces.first().rate;
 		out.channels = pieces.first().channels;
 	}
-	const qint64 gap = gapMs * out.rate / 1000 * out.channels;
 	offsetsMs->clear();
 	for (int i = 0; i < pieces.size(); ++i) {
 		const Pcm &p = pieces[i];
-		if (i > 0)
+		if (i > 0) {
+			const qint64 gap = std::max<qint64>(0, gapsBeforeMs.value(i)) * out.rate / 1000 * out.channels;
 			out.samples.resize(out.samples.size() + gap); // zero-filled
+		}
 		offsetsMs->append(out.frames() * 1000 / std::max(1, out.rate));
 		if (p.rate == out.rate && p.channels == out.channels)
 			out.samples += p.samples;
 	}
+	return out;
+}
+
+// The same gap between every two pieces.
+inline Pcm join(const QVector<Pcm> &pieces, qint64 gapMs, QVector<qint64> *offsetsMs)
+{
+	return join(pieces, QVector<qint64>(pieces.size(), gapMs), offsetsMs);
+}
+
+// [fromMs, toMs) of `p` (clamped to it).
+inline Pcm slice(const Pcm &p, qint64 fromMs, qint64 toMs)
+{
+	Pcm out;
+	out.rate = p.rate;
+	out.channels = p.channels;
+	const qint64 a = std::clamp<qint64>(fromMs * p.rate / 1000, 0, p.frames());
+	const qint64 b = std::clamp<qint64>(toMs * p.rate / 1000, a, p.frames());
+	out.samples = p.samples.mid(a * p.channels, (b - a) * p.channels);
+	return out;
+}
+
+inline Pcm silence(qint64 ms, int rate, int channels)
+{
+	Pcm out;
+	out.rate = rate;
+	out.channels = channels;
+	out.samples.resize(std::max<qint64>(0, ms) * rate / 1000 * channels);
 	return out;
 }
 

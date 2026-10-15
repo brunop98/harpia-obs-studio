@@ -237,7 +237,23 @@ public:
 	// (TlClip::link), so moving one moves all. One undo step. The Text to
 	// speech window calls it; public so a test can too, without a network.
 	void addSpeechClips(const QString &wavPath, qint64 durationMs, const QVector<ClipWordTime> &words,
-			    const GroupRule &rule, const SubtitleLook &look);
+			    const GroupRule &rule, const SubtitleLook &look, const QString &specJson = QString(),
+			    qint64 atMs = -1);
+
+	// Re-speaking one sentence of a narration (right-click a caption): the
+	// sentence under (track, clip) -- at atOutMs when that is the narration's
+	// audio -- as its captions say it now, and the narration's link id.
+	// Empty, with *why, when there is none.
+	QString narrationSentenceAt(int track, int clip, qint64 atOutMs, int *link, QString *why) const;
+	// Make a new take of it (the service, the key and the voice the narration
+	// was made with); applyRespoken() follows when it arrives.
+	void respeakSentence(int track, int clip, qint64 atOutMs);
+	// The new take in place of the old: the narration's audio spliced (a new
+	// file beside the old one), the sentence's captions rebuilt in their own
+	// style, everything after it in the narration moved by the difference.
+	// One undo step. Public so a test can hand it a take without a network.
+	bool applyRespoken(int link, const QString &sentence, const QString &takeWav,
+			   const QVector<ClipWordTime> &takeWords, QString *why);
 
 	// Called for every close path (title-bar X, Close button, Esc when not full
 	// screen). When there are unsaved edits, asks: Cancel (keep editing) or
@@ -892,6 +908,10 @@ private:
 	class TtsDialog *ttsDialog_ = nullptr;
 	QAction *ttsAct_ = nullptr;
 	void openTextToSpeech();
+	void updateTtsFitTarget(); // the timeline selection, for Fit to selection
+	class TtsEngine *respeakEngine_ = nullptr;
+	int respeakLink_ = 0;
+	QString respeakText_;
 	QPointer<class ErrorLogsPanel> errorLogs_; // Help > Error logs
 	void openSubtitles();
 	void addSubtitleClips(const QVector<TlClip> &clips, const QString &summary);

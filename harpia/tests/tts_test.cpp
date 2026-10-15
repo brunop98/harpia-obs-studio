@@ -5,6 +5,7 @@
 #include "editor/tts/SpeechPlacement.hpp"
 #include "editor/tts/TtsAudio.hpp"
 #include "editor/tts/TtsProviders.hpp"
+#include "editor/tts/TtsText.hpp"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -271,6 +272,122 @@ int main(int argc, char **argv)
 		ok(tts_audio::writeWav16(p, j) && tts_audio::readWav16(p, back) && back.samples == j.samples &&
 			   back.rate == 48000 && back.channels == 2,
 		   "written and read back the same");
+	}
+
+	std::printf("\n-- pauses --\n");
+	{
+		const QVector<TtsSegment> s =
+			ttsSegments(QStringLiteral("Olá. [pause 1.5s] Tudo bem?\n\nSim [PAUSA 300ms] [pause] fim"));
+		ok(s.size() == 4, "four parts");
+		if (s.size() == 4) {
+			ok(s[0].text == QStringLiteral("Olá.") && s[0].pauseBeforeMs == 0, "the first: no pause before it");
+			ok(s[1].text == QStringLiteral("Tudo bem?") && s[1].pauseBeforeMs == 1500, "[pause 1.5s]");
+			ok(s[2].pauseBeforeMs == kBlankLinePauseMs, "a blank line");
+			ok(s[3].text == QStringLiteral("fim") && s[3].pauseBeforeMs == 1300,
+			   "[pausa 300ms] then [pause] (1 s): added up");
+		}
+		ok(ttsPlainText(QStringLiteral("A [pause 2s] B")) == QStringLiteral("A B"), "markers are never said nor shown");
+		ok(ttsSegments(QStringLiteral("[pause 1s] A")).value(0).pauseBeforeMs == 0, "a pause before everything: none");
+	}
+
+	std::printf("\n-- pronunciation --\n");
+	{
+		QStringList bad;
+		const QVector<PronunciationRule> rules = parsePronunciations(
+			QStringLiteral("Harpia = Árpia\nOBS -> ó bê ésse\n# a comment\nHarpia Recorder → Árpia Recórder\nnonsense\n"),
+			&bad);
+		ok(rules.size() == 3 && bad.size() == 1 && bad.first().contains(QLatin1String("line 5")),
+		   "three rules, one line that is not");
+		const SpokenText st = ttsSpoken(QStringLiteral("Use o Harpia Recorder, com OBS. Harpia!"), rules);
+		std::printf("     said: %s\n", qPrintable(st.spoken));
+		ok(st.spoken == QStringLiteral("Use o Árpia Recórder, com ó bê ésse. Árpia!"),
+		   "the longest rule first; the written punctuation kept around the spoken words");
+		ok(st.written.size() == 7 && st.spokenCount == 9, "seven written words, nine spoken");
+		QVector<ClipWordTime> spoken;
+		for (int i = 0; i < st.spokenCount; ++i) {
+			ClipWordTime w;
+			w.startMs = i * 100;
+			w.endMs = i * 100 + 90;
+			spoken.append(w);
+		}
+		const QVector<ClipWordTime> written = ttsWrittenTimes(st, spoken);
+		ok(written[2].text == QStringLiteral("Harpia") && written[3].text == QStringLiteral("Recorder,"),
+		   "the captions keep the written words");
+		ok(written[2].startMs == 200 && written[3].endMs == 390 && written[2].endMs == written[3].startMs,
+		   "\"Harpia Recorder,\" shares the time of \"Árpia Recórder,\"");
+		ok(written[5].startMs == 500 && written[5].endMs == 790, "\"OBS.\" lasts as long as \"ó bê ésse.\"");
+		ok(written[6].startMs == 800, "and the words after it keep their place");
+		ok(ttsSpoken(QStringLiteral("nothing to change"), rules).spoken == QStringLiteral("nothing to change"),
+		   "no rule: said as written");
+	}
+
+	std::printf("\n-- a sentence of a narration --\n");
+	{
+		const auto cap = [](const char *text, qint64 from, qint64 to) {
+			NarrationCaption c;
+			c.text = QString::fromUtf8(text);
+			ClipWordTime w;
+			w.text = c.text;
+			w.startMs = from;
+			w.endMs = to;
+			c.words.append(w);
+			return c;
+		};
+		const QVector<NarrationCaption> caps = {cap("Olá pessoal,", 100, 800), cap("hoje vamos.", 900, 1600),
+							cap("Lavar as", 2200, 2700), cap("mãos agora.", 2800, 3300),
+							cap("sem ponto", 3400, 3800), cap("depois", 4500, 4900)};
+		const SentenceSpan s = sentenceAround(caps, 3, 5200);
+		ok(s.first == 2 && s.last == 3 && s.text == QStringLiteral("Lavar as mãos agora."), "the captions of one sentence");
+		ok(s.cutFromMs == 1900 && s.cutToMs == 3350 && s.wordsFromMs == 2200 && s.wordsToMs == 3300,
+		   "cut halfway into the silences around it");
+		const SentenceSpan p = sentenceAround(caps, 4, 5200);
+		ok(p.first == 4 && p.last == 4, "a long silence ends a sentence too (a [pause] leaves no full stop)");
+		ok(sentenceAround(caps, 5, 5200).cutToMs == 5200, "the last one runs to the end of the audio");
+
+		// The narration: 1 kHz in the first sentence's region, 0 elsewhere.
+		tts_audio::Pcm old;
+		old.samples.resize(48 * 5200 * 2);
+		for (qint64 i = 0; i < 48 * 1900; ++i)
+			old.samples[2 * i] = old.samples[2 * i + 1] = 1000;
+		for (qint64 i = 48 * 3350; i < 48 * 5200; ++i)
+			old.samples[2 * i] = old.samples[2 * i + 1] = 3000;
+		tts_audio::Pcm take;
+		take.samples.resize(48 * 2000 * 2); // a 2 s take, its words 200-1800
+		for (qsizetype i = 0; i < take.samples.size(); ++i)
+			take.samples[i] = 2000;
+		ClipWordTime a, b;
+		a.text = QStringLiteral("Lavem");
+		a.startMs = 200;
+		a.endMs = 900;
+		b.text = QStringLiteral("já.");
+		b.startMs = 1000;
+		b.endMs = 1800;
+		const Spliced spl = spliceSentence(old, s, take, {a, b});
+		// lead 300 + take 160..1880 (1720) + tail 50 = 2070, where 1450 was.
+		std::printf("     %lld ms longer, %lld ms in all\n", (long long)spl.deltaMs, (long long)spl.pcm.durationMs());
+		ok(spl.ok && spl.deltaMs == 620 && spl.pcm.durationMs() == 5820, "the narration grows by the difference");
+		ok(spl.words[0].startMs == 1900 + 300 + 40 && spl.words[1].endMs == spl.words[0].startMs + 1600,
+		   "the new words where the old ones were");
+		ok(spl.pcm.samples[2 * 48 * 1000] == 1000 && spl.pcm.samples[2 * 48 * 2500] == 2000 &&
+			   spl.pcm.samples[2 * 48 * 5000] == 3000,
+		   "before: untouched; the take in place; after: the same audio, moved");
+	}
+
+	std::printf("\n-- how it was made, kept --\n");
+	{
+		TtsSpec s;
+		s.provider = TtsProvider::ElevenLabs;
+		s.voice = QStringLiteral("21m00Tcm4TlvDq8ikWAM");
+		s.language = QStringLiteral("pt");
+		s.speed = 1.1;
+		s.tempo = 0.9;
+		bool good = false;
+		const TtsSpec back = TtsSpec::fromJson(s.toJson(), &good);
+		ok(good && back.provider == s.provider && back.voice == s.voice && back.language == s.language &&
+			   std::abs(back.speed - 1.1) < 1e-9 && std::abs(back.tempo - 0.9) < 1e-9,
+		   "service, voice, language, speed and pace survive the project file");
+		TtsSpec::fromJson(QStringLiteral("not json"), &good);
+		ok(!good, "nonsense is not a narration");
 	}
 
 	std::printf("\n-- on the timeline, linked --\n");

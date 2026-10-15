@@ -1,5 +1,7 @@
 #include "ThumbnailCache.hpp"
 
+#include "../editor/HdrToSdr.hpp"
+
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
@@ -60,12 +62,19 @@ QImage frameToImage(AVFrame *frame, const QSize &target)
 	if (out.width() < 1 || out.height() < 1)
 		out = QSize(std::max(1, out.width()), std::max(1, out.height()));
 
+	QImage img(out.width(), out.height(), QImage::Format_RGB888);
+	// HDR (an iPhone's HLG, HDR10): tone mapped to SDR, as the editor shows it.
+	if (harpia::hdr::kindOf(frame).needsConversion()) {
+		harpia::hdr::Converter conv;
+		if (!conv.toRgb(frame, out.width(), out.height(), AV_PIX_FMT_RGB24, img.bits(), int(img.bytesPerLine())))
+			return {};
+		return img;
+	}
 	SwsContext *sws = sws_getContext(sw, sh, (AVPixelFormat)frame->format, out.width(), out.height(),
 					 AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
 	if (!sws)
 		return {};
 
-	QImage img(out.width(), out.height(), QImage::Format_RGB888);
 	uint8_t *dst[4] = {img.bits(), nullptr, nullptr, nullptr};
 	int dstStride[4] = {(int)img.bytesPerLine(), 0, 0, 0};
 	sws_scale(sws, frame->data, frame->linesize, 0, sh, dst, dstStride);
@@ -86,7 +95,9 @@ QString ThumbnailCache::keyFor(const QString &videoPath, qint64 mtimeSecs, const
 {
 	// Plain string key for the in-memory map — hashing happens only when the
 	// key becomes a disk filename (diskPath), not on every cache lookup.
-	return QStringLiteral("%1|%2|%3x%4")
+	// "hdr1": thumbnails made before HDR video was tone mapped were too bright
+	// and pale, and are on disk keyed by file -- a new key makes them anew.
+	return QStringLiteral("%1|%2|%3x%4|hdr1")
 		.arg(videoPath)
 		.arg(mtimeSecs)
 		.arg(target.width())

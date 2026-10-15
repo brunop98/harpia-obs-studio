@@ -751,7 +751,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF $AVCF \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	"$H/editor/shader/ShaderRenderer.cpp" "$H/editor/script/TransformScript.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
-	"$H"/editor/component/*.cpp "$H/editor/StillImage.cpp" "$H/editor/FrameSeeker.cpp" \
+	"$H"/editor/component/*.cpp "$H/editor/StillImage.cpp" "$H/editor/FrameSeeker.cpp" "$H/editor/HdrToSdr.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK"/moc_dp_*.cpp \
 	-o "$WORK/devpanelreset_test" $LF $AVLF
 

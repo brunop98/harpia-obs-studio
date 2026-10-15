@@ -218,6 +218,8 @@ target_sources(
     editor/DeleteRouting.hpp
     editor/Filmstrip.hpp
     editor/FrameSeeker.cpp
+    editor/HdrToSdr.cpp
+    editor/HdrToSdr.hpp
     editor/PreviewDecoder.cpp
     editor/PreviewDecoder.hpp
     editor/ProxyMedia.cpp

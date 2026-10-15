@@ -1,5 +1,7 @@
 #pragma once
 
+#include "HdrToSdr.hpp"
+
 #include <QImage>
 #include <QString>
 
@@ -75,6 +77,7 @@ private:
 	int swsW_ = 0;
 	int swsH_ = 0;
 	int swsFmt_ = -1; // the pixel format sws_ was made for (a stream can change it)
+	hdr::Converter hdr_; // HDR (HLG/PQ) or BT.2020 frames: to SDR BT.709 (HdrToSdr.hpp)
 	int vIdx_ = -1;
 
 	// Sequential-decode scratch (for nextFrame).

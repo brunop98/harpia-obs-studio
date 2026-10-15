@@ -34,6 +34,14 @@ gen() { # name colour hz
 		-c:v libx264 -pix_fmt yuv420p -c:a aac -shortest "$WORK/av_$1.mp4"
 }
 gen red 0xC00000 300
+# An iPhone-style HDR clip: 10-bit HEVC, HLG, BT.2020, ten grey bars of HLG
+# signal (0 .1 .25 .38 .5 .6 .75 .85 .95 1). Skipped where FFmpeg has no libx265.
+if [ ! -f "$WORK/hlg_ramp.mp4" ] && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libx265; then
+	ffmpeg -y -loglevel error -f lavfi -i "nullsrc=s=640x64:r=30:d=1" \
+		-vf "format=gray16le,geq=lum='if(lt(X,64),0,if(lt(X,128),6554,if(lt(X,192),16384,if(lt(X,256),24903,if(lt(X,320),32768,if(lt(X,384),39321,if(lt(X,448),49151,if(lt(X,512),55705,if(lt(X,576),62258,65535)))))))))',format=yuv420p10le" \
+		-c:v libx265 -x265-params "log-level=error:colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc" \
+		-color_primaries bt2020 -color_trc arib-std-b67 -colorspace bt2020nc "$WORK/hlg_ramp.mp4" || true
+fi
 gen green 0x00A000 700
 gen blue 0x0000C0 1500
 
@@ -51,7 +59,7 @@ build() { # source-file output-name
 		"$1" \
 		"$H/editor/ClipExporter.cpp" "$H/editor/BatchExport.cpp" "$H/editor/TimelineAudio.cpp" \
 		"$H/editor/VoiceoverMixer.cpp" "$H/editor/AudioRetimer.cpp" \
-		"$H/editor/GifEncoder.cpp" "$H/editor/FrameSeeker.cpp" \
+		"$H/editor/GifEncoder.cpp" "$H/editor/FrameSeeker.cpp" "$H/editor/HdrToSdr.cpp" \
 		"$H/editor/StillImage.cpp" \
 		"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 		"$H/editor/component/ComponentStack.cpp" \
@@ -68,6 +76,9 @@ build "$HERE/avsync_test.cpp" avsync_test
 build "$HERE/exportpaths_test.cpp" exportpaths_test
 build "$HERE/exportcolor_test.cpp" exportcolor_test
 build "$HERE/batchexport_test.cpp" batchexport_test
+# HDR (HLG/PQ) to SDR: the curve, the colours, and a real 10-bit HLG clip.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/hdrtosdr_test.cpp" "$H/editor/HdrToSdr.cpp" -o "$WORK/hdrtosdr_test" $LF -lpthread
 
 # The preview decoder. Separate build: it needs its own moc and none of the
 # exporter, and its media is a long-GOP 1080p file it generates for itself --
@@ -75,7 +86,7 @@ build "$HERE/batchexport_test.cpp" batchexport_test
 "$MOC" -I"$H" "$H/editor/PreviewDecoder.hpp" -o "$WORK/moc_PreviewDecoder.cpp"
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/previewdecoder_test.cpp" "$H/editor/PreviewDecoder.cpp" \
-	"$H/editor/FrameSeeker.cpp" "$WORK/moc_PreviewDecoder.cpp" \
+	"$H/editor/FrameSeeker.cpp" "$H/editor/HdrToSdr.cpp" "$WORK/moc_PreviewDecoder.cpp" \
 	-o "$WORK/previewdecoder_test" $LF
 
 # Editing proxies. Links ShareExporter (the transcode a proxy build is) and the
@@ -84,7 +95,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 "$MOC" -I"$H" "$H/core/ShareExporter.hpp" -o "$WORK/moc_ShareExporter.cpp"
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/proxymedia_test.cpp" "$H/editor/ProxyMedia.cpp" "$H/editor/PreviewDecoder.cpp" \
-	"$H/editor/FrameSeeker.cpp" "$H/core/ShareExporter.cpp" \
+	"$H/editor/FrameSeeker.cpp" "$H/editor/HdrToSdr.cpp" "$H/core/ShareExporter.cpp" \
 	"$WORK/moc_ProxyMedia.cpp" "$WORK/moc_ShareExporter.cpp" "$WORK/moc_PreviewDecoder.cpp" \
 	-o "$WORK/proxymedia_test" $LF
 
@@ -92,7 +103,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # TrackEditor (its segment/output mapping) and a real decoder.
 "$MOC" -I"$H" "$H/editor/TrackEditor.hpp" -o "$WORK/moc_TrackEditor.cpp"
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
-	"$HERE/multicutplay_test.cpp" "$H/editor/TrackEditor.cpp" "$H/editor/FrameSeeker.cpp" \
+	"$HERE/multicutplay_test.cpp" "$H/editor/TrackEditor.cpp" "$H/editor/FrameSeeker.cpp" "$H/editor/HdrToSdr.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TrackEditor.cpp" \
 	-o "$WORK/multicutplay_test" $LF
 
@@ -194,6 +205,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/exportpaths_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportcolor_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/batchexport_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportprogress_test" "$WORK" || rc=1
+"$WORK/hdrtosdr_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewdecoder_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/proxymedia_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/multicutplay_test" "$WORK" || rc=1

@@ -1,5 +1,7 @@
 #include "ShareExporter.hpp"
 
+#include "editor/HdrToSdr.hpp"
+
 #include <algorithm>
 #include <chrono>
 
@@ -69,6 +71,7 @@ struct Transcoder {
 	AVCodecContext *venc = nullptr;
 	AVStream *vOut = nullptr;
 	SwsContext *sws = nullptr;
+	harpia::hdr::Converter hdr; // HDR (HLG/PQ) source frames: tone mapped to SDR BT.709
 	AVFrame *scaled = nullptr; // reusable yuv420p frame fed to the encoder
 
 	bool audioCopy = false;
@@ -80,6 +83,17 @@ struct Transcoder {
 	int64_t aNextPts = 0; // running pts for the re-encoded audio (in aenc time_base)
 
 	bool headerWritten = false;
+
+	// A decoded frame into `scaled`: HDR tone mapped to SDR BT.709 (as the
+	// editor shows it), anything else rescaled as it is.
+	void scaleFrame(const AVFrame *frame)
+	{
+		if (harpia::hdr::kindOf(frame).needsConversion())
+			hdr.toYuv(frame, scaled->data, scaled->linesize, AVPixelFormat(scaled->format), scaled->width,
+				  scaled->height);
+		else
+			sws_scale(sws, frame->data, frame->linesize, 0, vdec->height, scaled->data, scaled->linesize);
+	}
 
 	~Transcoder()
 	{
@@ -193,6 +207,13 @@ void ShareExporter::run(const QString &inPath, const QString &outPath, Options o
 	if (t.ofmt->oformat->flags & AVFMT_GLOBALHEADER)
 		t.venc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
+	// An HDR source comes out SDR (scaleFrame): say BT.709, not its HLG/PQ.
+	if (harpia::hdr::kindOf(t.vdec->color_trc, t.vdec->color_primaries).needsConversion()) {
+		t.venc->colorspace = AVCOL_SPC_BT709;
+		t.venc->color_primaries = AVCOL_PRI_BT709;
+		t.venc->color_trc = AVCOL_TRC_BT709;
+		t.venc->color_range = AVCOL_RANGE_MPEG;
+	}
 	if (avcodec_open2(t.venc, x264, nullptr) < 0)
 		return fail(QStringLiteral("Could not open the H.264 encoder."));
 
@@ -384,8 +405,7 @@ void ShareExporter::run(const QString &inPath, const QString &outPath, Options o
 						errored = true;
 						break;
 					}
-					sws_scale(t.sws, frame->data, frame->linesize, 0, t.vdec->height,
-						  t.scaled->data, t.scaled->linesize);
+					t.scaleFrame(frame);
 					int64_t bts = frame->best_effort_timestamp;
 					if (bts == AV_NOPTS_VALUE)
 						bts = vFallbackPts++;
@@ -465,8 +485,7 @@ void ShareExporter::run(const QString &inPath, const QString &outPath, Options o
 		while (avcodec_receive_frame(t.vdec, frame) >= 0) {
 			if (av_frame_make_writable(t.scaled) < 0)
 				break;
-			sws_scale(t.sws, frame->data, frame->linesize, 0, t.vdec->height, t.scaled->data,
-				  t.scaled->linesize);
+			t.scaleFrame(frame);
 			int64_t bts = frame->best_effort_timestamp;
 			if (bts == AV_NOPTS_VALUE)
 				bts = vFallbackPts++;

@@ -1,5 +1,6 @@
 #include "ClipExporter.hpp"
 #include "StillWeight.hpp"
+#include "HdrToSdr.hpp"
 #include "SwsColor.hpp"
 
 #include "AudioRetimer.hpp"
@@ -104,6 +105,7 @@ struct VideoState {
 	AVFrame *outScaled = nullptr;
 	AVFrame *fullYuv = nullptr;  // full-frame yuv420p scratch (for non-yuv sources)
 	AVFrame *cropFrame = nullptr; // cropped yuv420p frame fed to the encoder
+	hdr::Converter hdr;           // HDR (HLG/PQ) or BT.2020 source frames -> SDR BT.709
 	AVStream *vOut = nullptr;
 	AVStream *aOut = nullptr; // audio stream-copy (optional)
 	bool headerWritten = false;
@@ -115,7 +117,11 @@ struct VideoState {
 	// for them.
 	AVFrame *ensureEncodeFormat(AVFrame *f, AVPixelFormat want)
 	{
-		if (!f || AVPixelFormat(f->format) == want)
+		// An HDR frame is converted even when it is already in `want` (an
+		// 8-bit HLG file): tone mapped to SDR BT.709, as the preview shows it
+		// and the file is then tagged (see the colour tags in openVideoEncoder).
+		const bool toSdr = f && hdr::kindOf(f).needsConversion();
+		if (!f || (AVPixelFormat(f->format) == want && !toSdr))
 			return f;
 		if (!fullYuv) {
 			fullYuv = av_frame_alloc();
@@ -124,11 +130,13 @@ struct VideoState {
 			fullYuv->height = vdec->height;
 			av_frame_get_buffer(fullYuv, 0);
 		}
+		av_frame_make_writable(fullYuv); // the encoder may still hold a ref
+		if (toSdr)
+			return hdr.toYuv(f, fullYuv) ? fullYuv : f;
 		if (!toYuv)
 			toYuv = sws_getContext(vdec->width, vdec->height, AVPixelFormat(f->format),
 					       vdec->width, vdec->height, want, SWS_BILINEAR, nullptr,
 					       nullptr, nullptr);
-		av_frame_make_writable(fullYuv); // the encoder may still hold a ref
 		sws_scale(toYuv, f->data, f->linesize, 0, vdec->height, fullYuv->data,
 			  fullYuv->linesize);
 		return fullYuv;
@@ -260,7 +268,14 @@ QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const
 	s.venc->color_primaries = AVCOL_PRI_BT709;
 	s.venc->color_trc = AVCOL_TRC_BT709;
 	s.venc->color_range = AVCOL_RANGE_MPEG;
-	if (const AVCodecContext *src = s.colorFrom) {
+	// An HDR (or BT.2020) source's pixels do not go through as they are: they
+	// are tone mapped to SDR BT.709 on the way in (HdrToSdr.hpp), so the file
+	// says BT.709 -- copying the source's HLG/PQ tags onto SDR pixels is what
+	// made a player show an export of an iPhone clip wrong.
+	const AVCodecContext *colorSrc = s.colorFrom;
+	if (colorSrc && hdr::kindOf(colorSrc->color_trc, colorSrc->color_primaries).needsConversion())
+		colorSrc = nullptr;
+	if (const AVCodecContext *src = colorSrc) {
 		// The pixels are the source's, untouched: say what the SOURCE says,
 		// or an SD (BT.601) or full-range recording is labelled as something
 		// it is not and every player shows it shifted. Untagged keeps the
@@ -1204,6 +1219,7 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 		AVStream *vin = nullptr, *ain = nullptr;
 		AVCodecContext *vdec = nullptr;
 		SwsContext *sws = nullptr; // decoded -> fitW×fitH YUV420P (into the canvas)
+		hdr::Converter hdr;        // the same, for HDR frames: tone mapped to SDR BT.709
 		int fitW = 0, fitH = 0, padX = 0, padY = 0;
 		~MSrc()
 		{
@@ -1420,8 +1436,12 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 					   s.cropFrame->data[1] + planeOffset(s.cropFrame, 1, m.padX, m.padY),
 					   s.cropFrame->data[2] + planeOffset(s.cropFrame, 2, m.padX, m.padY),
 					   nullptr};
-			sws_scale(m.sws, df->data, df->linesize, 0, m.vdec->height, dst,
-				  s.cropFrame->linesize);
+			if (hdr::kindOf(df).needsConversion())
+				m.hdr.toYuv(df, dst, s.cropFrame->linesize, AVPixelFormat(s.cropFrame->format), m.fitW,
+					    m.fitH);
+			else
+				sws_scale(m.sws, df->data, df->linesize, 0, m.vdec->height, dst,
+					  s.cropFrame->linesize);
 			const double srcMs = double(pts) * av_q2d(m.vin->time_base) * 1000.0;
 			const double outMs = doneOutMs + (srcMs - cut.startMs) / cut.speed;
 			int64_t v = (int64_t)llround(outMs * 90.0); // 90000 ticks/s ÷ 1000

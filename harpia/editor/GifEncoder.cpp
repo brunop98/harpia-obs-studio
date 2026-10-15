@@ -1,4 +1,5 @@
 #include "GifEncoder.hpp"
+#include "HdrToSdr.hpp"
 #include "SwsColor.hpp"
 
 #include <algorithm>
@@ -120,6 +121,7 @@ bool GifEncoder::encode(const QString &inPath, const QString &outPath, const Par
 	// Scaler: crop + scale straight to rgb24 at the GIF size (crop by pointer
 	// offset on a yuv420p copy — but the decoder gives us YUV, so scale the
 	// cropped rectangle directly).
+	hdr::Converter hdrConv; // for HDR frames, instead of s.sws
 	s.sws = sws_getContext(cw, ch, s.vdec->pix_fmt, outW, outH, AV_PIX_FMT_RGB24, SWS_LANCZOS, nullptr,
 			       nullptr, nullptr);
 	// The source's own colour matrix (usually BT.709), not swscale's BT.601.
@@ -303,7 +305,13 @@ bool GifEncoder::encode(const QString &inPath, const QString &outPath, const Par
 					av_frame_unref(frame);
 					break;
 				}
-				sws_scale(s.sws, src, srcStride, 0, ch, s.rgb->data, s.rgb->linesize);
+				// HDR (HLG/PQ): tone mapped to SDR, as the editor shows it.
+				if (const hdr::Kind kind = hdr::kindOf(frame); kind.needsConversion())
+					hdrConv.toRgb(src, srcStride, AVPixelFormat(frame->format), cw, ch, frame->colorspace,
+						      frame->color_range, kind, s.rgb->width, s.rgb->height, AV_PIX_FMT_RGB24,
+						      s.rgb->data[0], s.rgb->linesize[0], SWS_LANCZOS);
+				else
+					sws_scale(s.sws, src, srcStride, 0, ch, s.rgb->data, s.rgb->linesize);
 				s.rgb->pts = outIndex++;
 				if (av_buffersrc_add_frame_flags(s.srcCtx, s.rgb, AV_BUFFERSRC_FLAG_KEEP_REF) < 0) {
 					errored = true;

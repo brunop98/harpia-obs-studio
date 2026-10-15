@@ -122,6 +122,18 @@ QImage FrameSeeker::toImage(AVFrame *f, int maxW, int maxH)
 			dh = std::max(1, int(dh * s));
 		}
 	}
+	// An HDR frame (an iPhone's HLG, an HDR10 file) is not just another
+	// matrix: it is tone mapped to SDR, as OBS does on an SDR canvas.
+	if (hdr::kindOf(f).needsConversion()) {
+		const AVPixFmtDescriptor *hd = av_pix_fmt_desc_get((AVPixelFormat)f->format);
+		const bool hdrAlpha = hd && (hd->flags & AV_PIX_FMT_FLAG_ALPHA);
+		QImage img(dw, dh, hdrAlpha ? QImage::Format_RGBA8888 : QImage::Format_RGBX8888);
+		const bool bigReduction = f->width >= dw * 3 / 2 && f->height >= dh * 3 / 2;
+		if (!hdr_.toRgb(f, dw, dh, AV_PIX_FMT_RGBA, img.bits(), int(img.bytesPerLine()),
+				bigReduction ? SWS_AREA : SWS_BILINEAR))
+			return {};
+		return img;
+	}
 	if (!sws_ || swsW_ != dw || swsH_ != dh || swsFmt_ != f->format) {
 		if (sws_)
 			sws_freeContext(sws_);

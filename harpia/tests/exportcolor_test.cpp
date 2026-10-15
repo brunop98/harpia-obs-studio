@@ -342,6 +342,32 @@ int main(int argc, char **argv)
 		}
 	}
 
+	std::printf("\n-- an HDR (HLG, iPhone-style) source exports as SDR --\n");
+	if (const QString hlg = work + "/hlg_ramp.mp4"; !QFile::exists(hlg)) {
+		std::printf("  (skipped: no hlg_ramp.mp4 -- this FFmpeg has no libx265)\n");
+	} else {
+		ClipExporter::Options o;
+		o.format = ClipExporter::Format::Mp4;
+		const QString out = dir.filePath("hlg_out.mp4");
+		ok(runExport(hlg, out, o, &err), "exported");
+		QProcess p;
+		p.start(QStringLiteral("ffprobe"), {"-v", "error", "-select_streams", "v:0", "-show_entries",
+						    "stream=color_transfer,color_primaries,pix_fmt", "-of",
+						    "default=nw=1", out});
+		p.waitForFinished(30000);
+		const QString tags = QString::fromUtf8(p.readAllStandardOutput());
+		ok(tags.contains("color_transfer=bt709") && tags.contains("color_primaries=bt709") &&
+			   !tags.contains("arib") && !tags.contains("bt2020"),
+		   "tagged BT.709, not the source's HLG/BT.2020");
+		// The 75% bar (HDR reference white): tone mapped (about 179), not
+		// the source's signal shown as SDR (192), which was too bright.
+		const Rgb f = frameOf(out, 0.2);
+		const int x = int(6.5 * f.w / 10), y = f.h / 2;
+		const int g = f.w ? uchar(f.px[(y * f.w + x) * 3 + 1]) : -1;
+		std::printf("     reference-white bar: %d\n", g);
+		ok(g >= 172 && g <= 186, "the reference-white bar is tone mapped");
+	}
+
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
 }

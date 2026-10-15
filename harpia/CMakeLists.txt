@@ -169,6 +169,7 @@ target_sources(
     ui/ShortcutConflictDialog.hpp
     ui/ClipLibraryWindow.cpp
     ui/ClipLibraryWindow.hpp
+    ui/PresetDelete.hpp
     ui/RecordingDelete.cpp
     ui/RecordingDelete.hpp
     ui/SystemSettingsWidget.cpp

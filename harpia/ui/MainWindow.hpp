@@ -98,6 +98,9 @@ private slots:
 	void onPauseButton();   // pause/resume while recording
 	void onNewPreset();
 	void showPresetMenu(const QPoint &pos); // right-click combo: edit/delete
+	// Delete, from the button or the combo's menu: asks first (saying what
+	// happens to its recordings), never the last preset, never mid-take.
+	void deleteActivePreset();
 	void onOpenClipLibrary();
 	void onOpenErrorLogs();
 	// Open the video editor with nothing loaded (status-bar button).
@@ -288,6 +291,7 @@ private:
 	QComboBox *presetCombo_ = nullptr;
 	QPushButton *editPresetButton_ = nullptr;
 	QPushButton *newPresetButton_ = nullptr;
+	QPushButton *deletePresetButton_ = nullptr;
 	QComboBox *captureModeCombo_ = nullptr;
 	QComboBox *monitorCombo_ = nullptr; // which display to record (owns preset.monitorIndex)
 	void reloadMonitorCombo();          // refresh the display list, keep selection

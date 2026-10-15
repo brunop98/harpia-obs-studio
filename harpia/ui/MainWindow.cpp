@@ -16,6 +16,7 @@
 #include "Version.hpp"
 #include "PresetEditorDialog.hpp"
 #include "RecentListWidget.hpp"
+#include "PresetDelete.hpp"
 #include "RecordingDelete.hpp"
 #include "RecorderControlsOverlay.hpp"
 #include "CountdownOverlay.hpp"
@@ -194,16 +195,25 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	presetCombo_ = new QComboBox(central);
 	presetCombo_->setMinimumWidth(160);
 	presetCombo_->setContextMenuPolicy(Qt::CustomContextMenu);
-	presetCombo_->setToolTip(QStringLiteral("Right-click to edit or delete this preset"));
+	presetCombo_->setToolTip(QStringLiteral("Right-click for more: duplicate, open its folder, delete"));
 	row1->addWidget(presetCombo_);
 
-	newPresetButton_ = new QPushButton(QStringLiteral("New"), central);
-	newPresetButton_->setToolTip(QStringLiteral("Create a new preset"));
-	row1->addWidget(newPresetButton_);
-
-	editPresetButton_ = new QPushButton(QStringLiteral("Edit"), central);
-	editPresetButton_->setToolTip(QStringLiteral("Edit the selected preset"));
-	row1->addWidget(editPresetButton_);
+	// New / Edit / Delete keep their usual size, but may shrink to their text
+	// when the window is narrow: Fusion otherwise holds every text button at
+	// 80 px, and Delete alone would have added 88 px to the narrowest this row
+	// can get (8 px this way).
+	const auto presetButton = [central, row1](const QString &text, const QString &tip) {
+		auto *b = new QPushButton(text, central);
+		b->setToolTip(tip);
+		b->setSizePolicy(QSizePolicy::Preferred, b->sizePolicy().verticalPolicy());
+		b->setMinimumWidth(b->fontMetrics().horizontalAdvance(text) + 24);
+		row1->addWidget(b);
+		return b;
+	};
+	newPresetButton_ = presetButton(QStringLiteral("New"), QStringLiteral("Create a new preset"));
+	editPresetButton_ = presetButton(QStringLiteral("Edit"), QStringLiteral("Edit the selected preset"));
+	// Before this it was only in the combo's right-click menu, easy to miss.
+	deletePresetButton_ = presetButton(QStringLiteral("Delete"), QString()); // tip: updateButtons()
 
 	row1->addSpacing(kGroupGap);
 	row1->addWidget(fieldLabel(
@@ -680,6 +690,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	});
 	connect(editPresetButton_, &QPushButton::clicked, this, [this]() { editActivePreset(); });
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
+	connect(deletePresetButton_, &QPushButton::clicked, this, &MainWindow::deleteActivePreset);
 	connect(webcamCombo_, &QComboBox::activated, this, &MainWindow::onWebcamDeviceChanged);
 	connect(appCombo_, &QComboBox::activated, this, &MainWindow::onAppWindowChanged);
 	connect(monitorCombo_, &QComboBox::activated, this, &MainWindow::onMonitorChanged);
@@ -2207,18 +2218,44 @@ void MainWindow::showPresetMenu(const QPoint &pos)
 		reloadPresetCombo();
 		syncIdleControls();
 	} else if (chosen == delAct) {
-		if (presets_.presets().size() <= 1)
-			return;
-		if (QMessageBox::question(this, QStringLiteral("Delete preset"),
-					  QStringLiteral("Delete preset \"%1\"?")
-						  .arg(QString::fromStdString(cur->name))) != QMessageBox::Yes)
-			return;
-		presets_.remove(activePresetId_);
-		activePresetId_ = presets_.presets().front().id;
-		reloadPresetCombo();
-		syncIdleControls();
-		refreshRecentList();
+		deleteActivePreset();
 	}
+}
+
+void MainWindow::deleteActivePreset()
+{
+	if (recorder_.isRecording() || starting_ || stopping_ || countingDown_)
+		return; // the button and the menu are locked then too
+	const std::vector<Preset> &all = presets_.presets();
+	if (all.size() <= 1)
+		return; // the store keeps one anyway; the button says why
+	const auto it = std::find_if(all.begin(), all.end(), [this](const Preset &p) { return p.id == activePresetId_; });
+	if (it == all.end())
+		return;
+	const std::string goneId = it->id;
+	const int goneIndex = int(it - all.begin());
+
+	QVector<preset_delete::OtherPreset> others;
+	for (const Preset &p : all)
+		if (p.id != goneId)
+			others.push_back({QString::fromStdString(p.name), QString::fromStdString(p.outputFolder)});
+	const QString folder = QString::fromStdString(it->outputFolder);
+	if (!preset_delete::confirm(this, preset_delete::question(QString::fromStdString(it->name), folder,
+								   preset_delete::sharing(folder, others))))
+		return;
+
+	presets_.remove(goneId);
+	// The one that took its place in the list (or the new last one), as a
+	// file manager selects the next file after a delete.
+	const std::vector<Preset> &left = presets_.presets();
+	activePresetId_ = left[size_t(std::min(goneIndex, int(left.size()) - 1))].id;
+	reloadPresetCombo();
+	// reloadPresetCombo() blocks the combo's signals, so nothing else applies
+	// the preset that is active now -- its audio, display, capture mode and
+	// shortcuts would stay the deleted one's. Do what picking it would do.
+	onPresetChanged();
+	refreshClipViews(); // its folder may no longer be listed
+	updateButtons();
 }
 
 void MainWindow::editActivePreset(const QString &initialPage)
@@ -4348,6 +4385,14 @@ void MainWindow::updateButtons()
 	presetCombo_->setEnabled(!locked);
 	editPresetButton_->setEnabled(!locked);
 	newPresetButton_->setEnabled(!locked);
+	const bool lastPreset = presets_.presets().size() <= 1;
+	deletePresetButton_->setEnabled(!locked && !lastPreset);
+	const QString deleteTip = lastPreset ? QStringLiteral("Harpia keeps at least one preset: make another one "
+							      "(New) before deleting this one")
+					     : QStringLiteral("Delete the selected preset. Its recordings are not "
+							      "deleted.");
+	if (deletePresetButton_->toolTip() != deleteTip)
+		deletePresetButton_->setToolTip(deleteTip);
 	// Custom Region can be combined with single-application capture, so the mode
 	// selector stays enabled regardless of the focus-app selection.
 	captureModeCombo_->setEnabled(!locked);

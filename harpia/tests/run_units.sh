@@ -665,6 +665,11 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/recordingdelete_test.cpp" "$H/ui/RecordingDelete.cpp" "$WORK/moc_RecentListWidget.cpp" \
 	-o "$WORK/recordingdelete_test" $LF
 
+# Deleting a preset: which folders are the same, who else saves there, the
+# question, and that only "Delete preset" says yes (Enter keeps it).
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/presetdelete_test.cpp" -o "$WORK/presetdelete_test" $LF
+
 # The OS integration: the graphics-card registry value, the off-Windows stub,
 # and the System settings page.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -921,6 +926,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/richtext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/curvepath_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keyorder_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/recordingdelete_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/presetdelete_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/osintegration_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/windowregion_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/windowpicker_test" || rc=1

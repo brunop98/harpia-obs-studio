@@ -284,6 +284,10 @@ private slots:
 	// Run any list of batch items (cuts or text-variation versions).
 	void startBatchItems(const ClipExporter::Options &base, const QVector<BatchExporter::Item> &items,
 			     const QString &prefix, const QString &baseFolder, bool openFolder);
+	// A one-clip batch (the first second, MP4) into `folder`: a test's way into
+	// the batch progress and finish above, which the user reaches through the
+	// Export window.
+	void startBatchForTest(const QString &folder);
 
 private:
 	BatchExporter *batch_ = nullptr;

@@ -13531,15 +13531,31 @@ void VideoEditorWindow::startBatchItems(const ClipExporter::Options &base,
 	}
 }
 
+void VideoEditorWindow::startBatchForTest(const QString &folder)
+{
+	ClipExporter::Options base;
+	base.format = ClipExporter::Format::Mp4;
+	BatchExporter::Item item;
+	item.name = QStringLiteral("test");
+	item.cut.startMs = 0;
+	item.cut.endMs = 1000;
+	startBatchItems(base, {item}, QStringLiteral("test"), folder, false);
+}
+
 void VideoEditorWindow::onBatchProgress(int index, int count, int overallPct, qint64 etaMs)
 {
 	if (!batchProgress_ || batchProgress_->wasCanceled())
 		return;
-	batchProgress_->setValue(overallPct);
 	QString label = QStringLiteral("Exporting clip %1 of %2…   %3%").arg(index + 1).arg(count).arg(overallPct);
 	if (etaMs > 0)
 		label += QStringLiteral("   ~%1s left").arg((etaMs + 500) / 1000);
 	batchProgress_->setLabelText(label);
+	// Last, and nothing after it. On a modal dialog setValue() runs the event
+	// loop, which can deliver the batch's finished() right here --
+	// onBatchFinished then deletes the dialog and clears batchProgress_. The
+	// label used to be set after this, through the cleared pointer, and the
+	// editor crashed as the export ended (tests/exportprogress_test.cpp).
+	batchProgress_->setValue(overallPct);
 }
 
 void VideoEditorWindow::onBatchFinished(int okCount, int failCount, bool canceled)
@@ -13581,13 +13597,16 @@ void VideoEditorWindow::onExportProgress(int pct, qint64 etaMs, qint64 bytes)
 {
 	if (!progress_)
 		return;
-	progress_->setValue(pct);
 	QString label = QStringLiteral("Exporting… %1%").arg(pct);
 	if (bytes > 0)
 		label += QStringLiteral("   %1 MB").arg(bytes / (1024.0 * 1024.0), 0, 'f', 1);
 	if (etaMs > 0)
 		label += QStringLiteral("   ~%1s left").arg((etaMs + 500) / 1000);
 	progress_->setLabelText(label);
+	// Last, and nothing after it: setValue() on a modal dialog runs the event
+	// loop, which can deliver finished() -- and onExportFinished deletes the
+	// dialog and clears progress_ (see onBatchProgress).
+	progress_->setValue(pct);
 }
 
 void VideoEditorWindow::onExportFinished(bool ok, bool canceled, const QString &err)

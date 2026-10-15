@@ -170,6 +170,8 @@ target_sources(
     ui/ClipLibraryWindow.cpp
     ui/ClipLibraryWindow.hpp
     ui/PresetDelete.hpp
+    ui/CrashReportDialog.cpp
+    ui/CrashReportDialog.hpp
     ui/RecordingDelete.cpp
     ui/RecordingDelete.hpp
     ui/SystemSettingsWidget.cpp

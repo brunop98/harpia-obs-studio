@@ -10,6 +10,7 @@
 
 #include "AudioPanel.hpp"
 #include "ClipLibraryWindow.hpp"
+#include "CrashReportDialog.hpp"
 #include "ErrorLogsPanel.hpp"
 #include "MainDevPanel.hpp"
 #include "MouseFxOverlay.hpp"
@@ -960,18 +961,11 @@ void MainWindow::finishStartup()
 		if (!report.isEmpty()) {
 			blog(LOG_WARNING, "[harpia] previous session crashed: %s",
 			     report.toUtf8().constData());
-			QMessageBox box(this);
-			box.setWindowTitle(QStringLiteral("Harpia crashed last time"));
-			box.setIcon(QMessageBox::Warning);
-			box.setText(QStringLiteral(
-				"The previous session ended in a crash. The description below was "
-				"captured as it happened; the session log has the full lead-up."));
-			box.setInformativeText(report);
-			QPushButton *openLogs =
-				box.addButton(QStringLiteral("Open logs folder"), QMessageBox::ActionRole);
-			box.addButton(QStringLiteral("Close"), QMessageBox::AcceptRole);
-			box.exec();
-			if (box.clickedButton() == openLogs) {
+			// The report scrolls inside the window; a message box grew with
+			// the stack until its buttons were below the screen.
+			CrashReportDialog dlg(report, this);
+			dlg.exec();
+			if (dlg.openLogsChosen()) {
 				char *ld = os_get_config_path_ptr("harpia-recorder/logs");
 				if (ld && *ld)
 					QDesktopServices::openUrl(

@@ -49,6 +49,7 @@ QSettings settings()
 }
 const QString kGrp = QStringLiteral("tts/");
 const QString kSubs = QStringLiteral("subtitles/"); // the caption settings, shared
+constexpr int kRightWidth = 440; // the settings column
 
 QString clock(qint64 ms)
 {
@@ -157,10 +158,14 @@ void TtsDialog::buildUi()
 	connect(text_, &QPlainTextEdit::textChanged, this, &TtsDialog::refreshCount);
 	outer->addLayout(left, 1);
 
-	// ---- Settings, on the right ----
-	auto *lay = new QVBoxLayout;
+	// ---- Settings, on the right: a fixed width, so the wrapped lines in it
+	// (what each service is, where its key comes from) have room to be read.
+	auto *right = new QWidget(this);
+	right->setFixedWidth(kRightWidth);
+	auto *lay = new QVBoxLayout(right);
+	lay->setContentsMargins(0, 0, 0, 0);
 	lay->setSpacing(10);
-	outer->addLayout(lay);
+	outer->addWidget(right);
 	lay->addWidget(infoHint(QStringLiteral(
 				   "Turns the text into a narration and captions: an audio clip and caption clips, "
 				   "linked so they move together. The audio is kept in Movies/Harpia/Speech. "
@@ -306,7 +311,7 @@ void TtsDialog::buildUi()
 	connect(go_, &QPushButton::clicked, this, &TtsDialog::startJob);
 	btns->addWidget(go_);
 	lay->addLayout(btns);
-	setMinimumWidth(860);
+	setMinimumWidth(kRightWidth + 380);
 	refreshFit();
 	refreshPronunciationButton();
 }
@@ -429,6 +434,13 @@ void TtsDialog::refreshProvider()
 							 : QStringLiteral(".")));
 	if (!k.isEmpty())
 		apiKey_->setPlaceholderText(QStringLiteral("Saved: %1  (paste to replace)").arg(SecretStore::maskedKey(k)));
+	// A form row does not grow for a label that wraps onto more lines: give
+	// each its height for the width it has (the column is fixed, so this
+	// holds), or the service's words are cut off at the bottom.
+	for (QLabel *l : {about_, getKey_, keyState_}) {
+		l->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+		l->setMinimumHeight(l->heightForWidth(kRightWidth - 116));
+	}
 }
 
 bool TtsDialog::storeTypedKey(TtsProvider p)

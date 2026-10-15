@@ -57,7 +57,7 @@ LF="$(pkg-config --libs $PKGS)"
 build() { # source-file output-name
 	g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 		"$1" \
-		"$H/editor/ClipExporter.cpp" "$H/editor/BatchExport.cpp" "$H/editor/TimelineAudio.cpp" \
+		"$H/editor/ClipExporter.cpp" "$H/editor/CoverArt.cpp" "$H/editor/BatchExport.cpp" "$H/editor/TimelineAudio.cpp" \
 		"$H/editor/VoiceoverMixer.cpp" "$H/editor/AudioRetimer.cpp" \
 		"$H/editor/GifEncoder.cpp" "$H/editor/FrameSeeker.cpp" "$H/editor/HdrToSdr.cpp" \
 		"$H/editor/StillImage.cpp" \

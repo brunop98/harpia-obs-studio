@@ -475,6 +475,18 @@ QString VoiceoverMixer::mix(const QString &videoPath, double originalVolume, boo
 	QString err;
 	AVStream *outV = avformat_new_stream(out, nullptr);
 	AVStream *outA = avformat_new_stream(out, nullptr);
+	// The export's cover picture (editor/CoverArt.hpp), if it has one: this
+	// pass rewrites the file, and what it does not copy is gone.
+	const AVStream *inCover = nullptr;
+	for (unsigned i = 0; i < in->nb_streams; ++i)
+		if ((in->streams[i]->disposition & AV_DISPOSITION_ATTACHED_PIC) && in->streams[i]->attached_pic.size > 0)
+			inCover = in->streams[i];
+	AVStream *outCover = inCover ? avformat_new_stream(out, nullptr) : nullptr;
+	if (outCover && avcodec_parameters_copy(outCover->codecpar, inCover->codecpar) >= 0) {
+		outCover->codecpar->codec_tag = 0;
+		outCover->disposition = AV_DISPOSITION_ATTACHED_PIC;
+		outCover->time_base = AVRational{1, 90000};
+	}
 	const AVCodec *aac = avcodec_find_encoder(AV_CODEC_ID_AAC);
 	AVCodecContext *enc = aac ? avcodec_alloc_context3(aac) : nullptr;
 	AVPacket *pkt = av_packet_alloc();
@@ -542,6 +554,16 @@ QString VoiceoverMixer::mix(const QString &videoPath, double originalVolume, boo
 		av_dict_free(&mux);
 		if (hr < 0)
 			return fail(QStringLiteral("Voiceover mix: could not write the header."));
+	}
+	if (outCover) {
+		AVPacket *cp = av_packet_clone(&inCover->attached_pic);
+		if (cp) {
+			cp->stream_index = outCover->index;
+			cp->pts = cp->dts = 0;
+			cp->flags |= AV_PKT_FLAG_KEY;
+			av_interleaved_write_frame(out, cp);
+			av_packet_free(&cp);
+		}
 	}
 
 	const int frameSize = enc->frame_size > 0 ? enc->frame_size : 1024;

@@ -747,6 +747,12 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/diskspace_test.cpp" -o "$WORK/diskspace_test" $LF
 
+# The cover picture inside an exported MP4/MOV: its size, the JPEG's colours,
+# and the picker that takes the middle frame of an export of any length.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/coverart_test.cpp" "$H/editor/CoverArt.cpp" \
+	-o "$WORK/coverart_test" $LF $(pkg-config --cflags --libs libavcodec libavutil libswscale)
+
 # Dev panel: "Reset to defaults" must mean the tab you are on. Links the real
 # panel and the four track widgets it edits, because the property under test is
 # that the OTHER pages are left alone -- which only the real thing can show.
@@ -986,6 +992,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/propkeys_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/pixelbands_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/mask_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textwrap_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/coverart_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/emoji_test" "$H/resources/emoji/noto-emoji.pack" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineslice_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/playbacktracks_test" || rc=1

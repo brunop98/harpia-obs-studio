@@ -1,6 +1,7 @@
 #include "ClipExporter.hpp"
 #include "StillWeight.hpp"
 #include "HdrToSdr.hpp"
+#include "CoverArt.hpp"
 #include "SwsColor.hpp"
 
 #include "AudioRetimer.hpp"
@@ -108,7 +109,30 @@ struct VideoState {
 	hdr::Converter hdr;           // HDR (HLG/PQ) or BT.2020 source frames -> SDR BT.709
 	AVStream *vOut = nullptr;
 	AVStream *aOut = nullptr; // audio stream-copy (optional)
+	// The file's cover picture (MP4/MOV; CoverArt.hpp): the stream, made with
+	// the header, and the frames it may come from.
+	AVStream *coverOut = nullptr;
+	std::unique_ptr<cover::Picker> cover;
 	bool headerWritten = false;
+
+	// The chosen cover, into the file. Before the trailer, after the last
+	// frame (the picker needs them all to know where the middle is).
+	void writeCover()
+	{
+		if (!coverOut || !cover)
+			return;
+		const QByteArray jpg = cover->pick();
+		cover.reset();
+		AVPacket *p = av_packet_alloc();
+		if (p && !jpg.isEmpty() && av_new_packet(p, int(jpg.size())) >= 0) {
+			std::memcpy(p->data, jpg.constData(), size_t(jpg.size()));
+			p->stream_index = coverOut->index;
+			p->flags |= AV_PKT_FLAG_KEY;
+			p->pts = p->dts = 0;
+			av_interleaved_write_frame(ofmt, p);
+		}
+		av_packet_free(&p);
+	}
 
 	// The decoded frame in the encoder's pixel format, converting once and
 	// reusing the buffer. Two export paths spelled this out identically (modulo
@@ -353,6 +377,22 @@ QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const
 // did not, which is precisely the kind of difference that survives in copies.
 QString openOutputFile(VideoState &s, const ClipExporter::Options &opts, const QByteArray &outPath)
 {
+	// The cover (see CoverArt.hpp). Its stream has to exist before the
+	// header; its one picture is written at the end, once it is chosen. Last,
+	// so the video and the audio keep their places.
+	if (opts.format == ClipExporter::Format::Mp4 || opts.format == ClipExporter::Format::Mov) {
+		const QSize size = cover::sizeFor(QSize(s.venc->width, s.venc->height));
+		s.coverOut = size.isEmpty() ? nullptr : avformat_new_stream(s.ofmt, nullptr);
+		if (s.coverOut) {
+			s.coverOut->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+			s.coverOut->codecpar->codec_id = AV_CODEC_ID_MJPEG;
+			s.coverOut->codecpar->width = size.width();
+			s.coverOut->codecpar->height = size.height();
+			s.coverOut->disposition = AV_DISPOSITION_ATTACHED_PIC;
+			s.coverOut->time_base = AVRational{1, 90000};
+			s.cover = std::make_unique<cover::Picker>(size, s.venc->colorspace, s.venc->color_range);
+		}
+	}
 	if (!(s.ofmt->oformat->flags & AVFMT_NOFILE) &&
 	    avio_open(&s.ofmt->pb, outPath.constData(), AVIO_FLAG_WRITE) < 0)
 		return QStringLiteral("Could not open the output file for writing.");
@@ -490,6 +530,9 @@ struct VideoSink {
 		f = s.scaleForEncode(f); // no-op unless an output size was chosen
 		if (f && shader.active)
 			shader.process(f, float(f->pts * av_q2d(s.venc->time_base)), shaderFrame++);
+		// The finished frame, as it is encoded: a candidate for the cover.
+		if (f && s.cover)
+			s.cover->offer(f, double(f->pts) * av_q2d(s.venc->time_base));
 		if (avcodec_send_frame(s.venc, f) < 0)
 			return false;
 		while (true) {
@@ -504,6 +547,10 @@ struct VideoSink {
 				return false;
 			av_packet_unref(pkt);
 		}
+		// The flush (every path's last call before the trailer): every frame
+		// has been offered, so the cover can be chosen and written.
+		if (!f)
+			s.writeCover();
 		return true;
 	}
 };

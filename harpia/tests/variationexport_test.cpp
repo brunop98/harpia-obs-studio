@@ -4,6 +4,10 @@
 //
 // A Random text with rich-text tags over the footage; every version must be
 // written, and the editor must still be alive and usable afterwards.
+//
+// Each file carries its own cover picture (editor/CoverArt), what Windows
+// shows as its thumbnail: a frame of THAT version, so the three differ --
+// and survive the audio mix, which rewrites the file after the picture.
 #include "editor/ExportOptionsDialog.hpp"
 #include "editor/VideoEditorWindow.hpp"
 #include "editor/timeline/TextVariations.hpp"
@@ -22,6 +26,12 @@
 #include <QTimer>
 
 #include <cstdio>
+#include <cstdlib>
+
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+}
 
 using namespace harpia;
 
@@ -31,6 +41,47 @@ static void ok(bool c, const char *w)
 	std::printf("  %s %s\n", c ? "PASS" : "FAIL", w);
 	if (!c)
 		++failures;
+}
+
+// The cover inside `path`, decoded: its luma, row by row. Empty if none.
+// `bestIsVideo`: the file's main video is still the H.264, not the picture.
+static QByteArray coverLuma(const QString &path, QSize &size, bool &bestIsVideo)
+{
+	QByteArray out;
+	AVFormatContext *fmt = nullptr;
+	if (avformat_open_input(&fmt, path.toUtf8().constData(), nullptr, nullptr) < 0)
+		return out;
+	avformat_find_stream_info(fmt, nullptr);
+	const int best = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+	bestIsVideo = best >= 0 && fmt->streams[best]->codecpar->codec_id == AV_CODEC_ID_H264;
+	for (unsigned i = 0; i < fmt->nb_streams; ++i) {
+		const AVStream *st = fmt->streams[i];
+		if (!(st->disposition & AV_DISPOSITION_ATTACHED_PIC) || st->attached_pic.size <= 0)
+			continue;
+		const AVCodec *c = avcodec_find_decoder(st->codecpar->codec_id);
+		AVCodecContext *d = avcodec_alloc_context3(c);
+		AVFrame *f = av_frame_alloc();
+		if (avcodec_open2(d, c, nullptr) >= 0 && avcodec_send_packet(d, &st->attached_pic) >= 0 &&
+		    avcodec_receive_frame(d, f) >= 0) {
+			size = QSize(f->width, f->height);
+			for (int y = 0; y < f->height; ++y)
+				out.append(reinterpret_cast<const char *>(f->data[0] + y * f->linesize[0]), f->width);
+		}
+		av_frame_free(&f);
+		avcodec_free_context(&d);
+	}
+	avformat_close_input(&fmt);
+	return out;
+}
+
+static double meanDiff(const QByteArray &a, const QByteArray &b)
+{
+	if (a.size() != b.size() || a.isEmpty())
+		return 0.0;
+	double sum = 0.0;
+	for (int i = 0; i < a.size(); ++i)
+		sum += std::abs(int(quint8(a[i])) - int(quint8(b[i])));
+	return sum / a.size();
 }
 
 static void settle(int ms)
@@ -75,7 +126,7 @@ int main(int argc, char **argv)
 	TlTrack words;
 	TlClip c;
 	c.type = TlClip::Type::Text;
-	c.srcEndMs = 1500;
+	c.srcEndMs = 4000; // the whole clip: the cover (its middle frame) shows the text
 	c.text.text = QStringLiteral("I like <color=yellow>dogs</color>");
 	c.text.random = true;
 	c.text.variations = {QStringLiteral("I like <b>cats</b>"), QStringLiteral("I like\n<i>vultures</i>")};
@@ -143,6 +194,22 @@ int main(int argc, char **argv)
 		if (mp4.size() == 3 && mp4.join(QLatin1Char(' ')).contains(QStringLiteral("I-like-cats"))) {
 			files = mp4.size();
 			std::printf("     %s: %s\n", qPrintable(d), qPrintable(mp4.join(QStringLiteral(", "))));
+			QVector<QByteArray> covers;
+			bool allVideo = true;
+			QSize size;
+			for (const QString &f : mp4) {
+				bool video = false;
+				covers.push_back(coverLuma(media + QLatin1Char('/') + d + QLatin1Char('/') + f, size, video));
+				allVideo = allVideo && video;
+			}
+			ok(!covers[0].isEmpty() && !covers[1].isEmpty() && !covers[2].isEmpty(),
+			   "each file has a cover picture (after the audio mix)");
+			std::printf("     cover %d x %d\n", size.width(), size.height());
+			ok(allVideo, "and its video is still the file's main video");
+			const double d01 = meanDiff(covers[0], covers[1]), d02 = meanDiff(covers[0], covers[2]),
+				     d12 = meanDiff(covers[1], covers[2]);
+			std::printf("     cover differences %.2f %.2f %.2f\n", d01, d02, d12);
+			ok(d01 > 0.3 && d02 > 0.3 && d12 > 0.3, "the three covers differ: each shows its own text");
 			QDir(media + QLatin1Char('/') + d).removeRecursively();
 			break;
 		}

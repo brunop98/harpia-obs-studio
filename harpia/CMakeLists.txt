@@ -232,6 +232,9 @@ target_sources(
     editor/ExportEstimate.hpp
     editor/FrameSeeker.hpp
     editor/ClipExporter.cpp
+    # The cover picture inside each exported MP4/MOV.
+    editor/CoverArt.cpp
+    editor/CoverArt.hpp
     editor/ClipExporter.hpp
     editor/GifEncoder.cpp
     editor/GifEncoder.hpp

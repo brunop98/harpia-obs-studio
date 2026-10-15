@@ -7541,14 +7541,10 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	addCurveCombo(QStringLiteral("Fade out curve"), clipFadeOutCurve_, false);
 	av->addLayout(aForm);
 
-	auto *aHint = new QLabel(
-		QStringLiteral("Drag the round grips in an audio clip's top corners to set "
+	av->addWidget(infoHint(QStringLiteral("Drag the round grips in an audio clip's top corners to set "
 			       "the fades (double-click one to clear it, Shift for a "
 			       "precise drag). Fades are applied to the mix, so the "
-			       "preview plays what the export will render."),
-		audioClipBox_);
-	av->addWidget(infoHint(aHint->text(), audioClipBox_), 0, Qt::AlignLeft);
-	aHint->deleteLater();
+			       "preview plays what the export will render."), audioClipBox_), 0, Qt::AlignLeft);
 
 	into->addWidget(clipBox_);
 }
@@ -11437,12 +11433,8 @@ void VideoEditorWindow::onAutoCut()
 	QDialog dlg(this);
 	dlg.setWindowTitle(QStringLiteral("Auto-cut on scene changes"));
 	auto *v = new QVBoxLayout(&dlg);
-	auto *info = new QLabel(
-		QStringLiteral("Detect visual scene changes and add a cut at each one.\n"
-			       "Lower threshold = more cuts, higher = fewer."),
-		&dlg);
-	v->addWidget(infoHint(info->text(), &dlg), 0, Qt::AlignLeft);
-	info->deleteLater();
+	v->addWidget(infoHint(QStringLiteral("Detect visual scene changes and add a cut at each one.\n"
+			       "Lower threshold = more cuts, higher = fewer."), &dlg), 0, Qt::AlignLeft);
 	auto *row = new QHBoxLayout;
 	row->addWidget(new QLabel(QStringLiteral("Threshold"), &dlg));
 	auto *sl = new QSlider(Qt::Horizontal, &dlg);
@@ -13001,11 +12993,8 @@ void VideoEditorWindow::openRandomizePanel()
 		lay->setContentsMargins(12, 10, 12, 10);
 		lay->setSpacing(6);
 
-		auto *what = new QLabel(QStringLiteral("Shuffle the order of the clips. Nothing about a clip "
-							"changes but where it sits; the edit stays exactly as long."),
-					p);
-		lay->addWidget(infoHint(what->text(), p), 0, Qt::AlignLeft);
-		what->deleteLater();
+		lay->addWidget(infoHint(QStringLiteral("Shuffle the order of the clips. Nothing about a clip "
+							"changes but where it sits; the edit stays exactly as long."), p), 0, Qt::AlignLeft);
 
 		auto *keepLbl = new QLabel(QStringLiteral("Keep in place"), p);
 		keepLbl->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
@@ -13046,11 +13035,9 @@ void VideoEditorWindow::openRandomizePanel()
 		form->addRow(QStringLiteral("Strength"), randomStrength_);
 		lay->addLayout(form);
 
-		auto *scope = new QLabel(QStringLiteral(
+		lay->addWidget(infoHint(QStringLiteral(
 			"Which lanes: the one holding the selected clip or header; with nothing selected, "
-			"every video lane, each on its own. Locked lanes are never touched."), p);
-		lay->addWidget(infoHint(scope->text(), p), 0, Qt::AlignLeft);
-		scope->deleteLater();
+			"every video lane, each on its own. Locked lanes are never touched."), p), 0, Qt::AlignLeft);
 
 		auto *go = new QPushButton(QStringLiteral("Randomize  (Ctrl+R)"), p);
 		go->setDefault(true);

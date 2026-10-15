@@ -22,6 +22,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QImage>
+#include <QLabel>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QScrollArea>
@@ -180,6 +181,24 @@ int main(int argc, char **argv)
 		}
 		ok(tv->selectedClipPtr() && tv->selectedClipPtr()->type == TlClip::Type::Video, "the video clip selected");
 		ok(inspectorFits(w, "video"), "a video clip: every tab fits");
+
+		// Nothing drawn over a section's header: a label made only for its
+		// text and never put in a layout sat at the top-left of the Audio
+		// section, over "Audio" ("Drag the round grips in…").
+		QStringList over;
+		for (QWidget *x : w.findChildren<QWidget *>()) {
+			auto *sec = dynamic_cast<InspectorSection *>(x);
+			if (!sec || !sec->isVisible())
+				continue;
+			const QRect head(sec->header()->mapToGlobal(QPoint(0, 0)), sec->header()->size());
+			for (QLabel *l : sec->findChildren<QLabel *>())
+				if (l->isVisible() && !l->text().isEmpty() &&
+				    QRect(l->mapToGlobal(QPoint(0, 0)), l->size()).intersects(head))
+					over << sec->title() + QStringLiteral(": ") + l->text().left(30);
+		}
+		for (const QString &o : over)
+			std::printf("     over a header -- %s\n", qPrintable(o));
+		ok(over.isEmpty(), "no stray text over any section's header");
 	}
 
 	std::printf("\n-- the Clip tab leads with the clip's own content --\n");

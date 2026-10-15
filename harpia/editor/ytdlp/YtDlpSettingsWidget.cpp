@@ -19,11 +19,9 @@ YtDlpSettingsWidget::YtDlpSettingsWidget(QWidget *parent) : QWidget(parent)
 	lay->setContentsMargins(0, 0, 0, 0);
 	lay->setSpacing(8);
 
-	auto *intro = new QLabel(QStringLiteral(
+	lay->addWidget(infoHint(QStringLiteral(
 		"yt-dlp is your own copy, found on the PATH. The editor's Add menu offers "
-		"\"Video from URL…\" only when it is found. Nothing here is required for anything else."), this);
-	lay->addWidget(infoHint(intro->text(), this), 0, Qt::AlignLeft);
-	intro->deleteLater();
+		"\"Video from URL…\" only when it is found. Nothing here is required for anything else."), this), 0, Qt::AlignLeft);
 
 	auto *form = new QFormLayout;
 	form->setHorizontalSpacing(10);

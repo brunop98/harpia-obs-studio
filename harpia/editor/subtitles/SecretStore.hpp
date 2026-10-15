@@ -27,6 +27,11 @@ public:
 	static bool saveApiKey(SpeechProvider p, const QString &key);
 	static QString loadApiKey(SpeechProvider p);
 	static bool hasApiKey(SpeechProvider p) { return !loadApiKey(p).isEmpty(); }
+	// A key that belongs to no transcription service (Google's text to
+	// speech): sealed the same way, under its own settings name; `display` is
+	// what the log calls it.
+	static bool saveNamedKey(const QString &settingsName, const QString &display, const QString &key);
+	static QString loadNamedKey(const QString &settingsName, const QString &display);
 	// Where each key lives in the settings. Exposed for the test.
 	static QString settingsName(SpeechProvider p);
 

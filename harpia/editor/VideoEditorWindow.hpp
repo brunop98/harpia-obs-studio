@@ -13,6 +13,7 @@
 #include "component/ComponentPanel.hpp"  // ComponentPanel::View (Inspector model)
 #include "timeline/TimelineView.hpp"    // ClipboardEntry (timeline copy/paste)
 #include "timeline/SoundRules.hpp"      // SoundInfo (sounds for events)
+#include "subtitles/Transcript.hpp"     // GroupRule / SubtitleLook (text to speech)
 
 #include <QCache>
 #include <QDateTime>
@@ -230,6 +231,13 @@ public:
 
 	QString saveProjectTo(const QString &path, bool quiet);
 	bool openProjectAt(const QString &path);
+
+	// Text to speech: a finished narration (a WAV) and the times of its words,
+	// put at the playhead as an audio clip and caption clips LINKED
+	// (TlClip::link), so moving one moves all. One undo step. The Text to
+	// speech window calls it; public so a test can too, without a network.
+	void addSpeechClips(const QString &wavPath, qint64 durationMs, const QVector<ClipWordTime> &words,
+			    const GroupRule &rule, const SubtitleLook &look);
 
 	// Called for every close path (title-bar X, Close button, Esc when not full
 	// screen). When there are unsaved edits, asks: Cancel (keep editing) or
@@ -879,6 +887,11 @@ private:
 	// back aligned caption clips; the window puts them on a "Subtitles" lane as
 	// one undo step.
 	SubtitleDialog *subtitleDialog_ = nullptr;
+	// Text to speech (Add menu): the dialog makes the narration and hands it
+	// to addSpeechClips().
+	class TtsDialog *ttsDialog_ = nullptr;
+	QAction *ttsAct_ = nullptr;
+	void openTextToSpeech();
 	QPointer<class ErrorLogsPanel> errorLogs_; // Help > Error logs
 	void openSubtitles();
 	void addSubtitleClips(const QVector<TlClip> &clips, const QString &summary);

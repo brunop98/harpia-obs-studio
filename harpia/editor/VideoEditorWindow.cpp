@@ -63,6 +63,8 @@
 #include "StillWeight.hpp"
 #include "shader/GpuFxGl.hpp"
 #include "subtitles/SubtitleDialog.hpp"
+#include "tts/SpeechPlacement.hpp"
+#include "tts/TtsDialog.hpp"
 #include "timeline/MotionPath.hpp"
 #include "ytdlp/UrlDownloadDialog.hpp"
 #include "ytdlp/YtDlp.hpp"
@@ -1078,6 +1080,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		"Transcribe the selected clips' speech (OpenAI) and put caption clips on a "
 		"Subtitles lane, lined up with the audio. Edit the text in the Inspector afterwards."));
 	connect(subtitleAct_, &QAction::triggered, this, &VideoEditorWindow::openSubtitles);
+	ttsAct_ = addMenu->addAction(QStringLiteral("Text to speech…"));
+	ttsAct_->setToolTip(QStringLiteral(
+		"Type or open a text and a voice reads it: a narration and its captions at the "
+		"playhead, linked so they move together (OpenAI, ElevenLabs, Google or Deepgram)."));
+	connect(ttsAct_, &QAction::triggered, this, &VideoEditorWindow::openTextToSpeech);
 	addMenu->addSeparator();
 	addAudioAct_ = addMenu->addAction(QStringLiteral("Audio\u2026"));
 	addAudioAct_->setToolTip(QStringLiteral(
@@ -8438,6 +8445,71 @@ void VideoEditorWindow::addSubtitleClips(const QVector<TlClip> &clips, const QSt
 	showTimelineFrame(timelinePlayheadMs());
 	commitSnapshot();
 	Q_UNUSED(summary); // the dialog shows it; the lane shows the result
+}
+
+void VideoEditorWindow::openTextToSpeech()
+{
+	if (!timelineView_)
+		return;
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	if (!ttsDialog_) {
+		ttsDialog_ = new TtsDialog(this);
+		connect(ttsDialog_, &TtsDialog::speechReady, this, &VideoEditorWindow::addSpeechClips);
+	}
+	ttsDialog_->show();
+	ttsDialog_->raise();
+	ttsDialog_->activateWindow();
+}
+
+void VideoEditorWindow::addSpeechClips(const QString &wavPath, qint64 durationMs, const QVector<ClipWordTime> &words,
+				       const GroupRule &rule, const SubtitleLook &look)
+{
+	if (!timelineView_)
+		return;
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	// A source like any imported audio file: the project keeps the narration's
+	// path (in Movies/Harpia/Speech), the session plays its decoded copy.
+	const int src = addAudioSource(wavPath);
+	if (src < 0)
+		return; // addAudioSource said why
+	const EditorSource *s = sourceById(src);
+	const qint64 dur = s && s->durationMs > 0 ? s->durationMs : durationMs;
+	if (dur <= 0)
+		return;
+	TlClip audio;
+	audio.type = TlClip::Type::Video; // "media clip"; the lane makes it audio
+	audio.sourceId = src;
+	audio.srcStartMs = 0;
+	audio.srcEndMs = dur;
+	audio.outStartMs = timelinePlayheadMs();
+	audio.peaks = VoiceoverTrack::loadPeaks(s ? s->path : wavPath, 600);
+	// The captions, timed against that clip exactly as subtitles from speech
+	// are against theirs.
+	const QVector<TlClip> captions = buildSubtitleClips(groupWords(words, rule), audio, look);
+
+	// Placed on a copy and swapped in: the lanes, the narration and every
+	// caption are ONE undo step, linked as one group.
+	TimelineModel m = timelineView_->model();
+	const SpeechPlacement placed = placeSpeech(m, audio, captions);
+	timelineView_->setModel(m);
+	TlSelection sel;
+	sel.track = placed.audioTrack;
+	sel.clip = placed.audioClip;
+	for (const auto &p : placed.all())
+		if (p != QPair<int, int>(placed.audioTrack, placed.audioClip))
+			sel.extras.append(p);
+	std::sort(sel.extras.begin(), sel.extras.end());
+	timelineView_->setSelectionState(sel);
+	syncPreviewTransformTarget();
+	syncClipInspector();
+	showTimelineFrame(timelinePlayheadMs());
+	commitSnapshot();
+	if (infoLabel_)
+		infoLabel_->setText(QStringLiteral("Narration added: %1, %2 captions, linked.")
+					    .arg(timeTextTenths(dur))
+					    .arg(captions.size()));
 }
 
 void VideoEditorWindow::addTextClip()

@@ -232,6 +232,15 @@ target_sources(
     editor/ExportEstimate.hpp
     editor/FrameSeeker.hpp
     editor/ClipExporter.cpp
+    # Text to speech: the window, the services, the narration's audio and its
+    # linked place on the timeline.
+    editor/tts/TtsDialog.cpp
+    editor/tts/TtsDialog.hpp
+    editor/tts/TtsSynthesizer.cpp
+    editor/tts/TtsSynthesizer.hpp
+    editor/tts/TtsProviders.hpp
+    editor/tts/TtsAudio.hpp
+    editor/tts/SpeechPlacement.hpp
     # The cover picture inside each exported MP4/MOV.
     editor/CoverArt.cpp
     editor/CoverArt.hpp

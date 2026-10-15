@@ -362,6 +362,13 @@ struct TlClip {
 	// "Convert to normal clips" on the Sounds lane, is how it becomes theirs.
 	int soundRule = 0;
 
+	// Linked clips: non-zero on clips that belong together and move as one --
+	// a text-to-speech narration and its subtitles. Clicking any of them
+	// selects all of them (TimelineView), so a drag or a nudge moves the lot;
+	// "Unlink" on any of them sets it back to 0 on the whole group. An id, not
+	// an index: it survives clips being reordered, added and removed around it.
+	int link = 0;
+
 	// Tags (TlTag ids, see TimelineModel::tags): what this clip IS to you --
 	// "intro", "callout", "b-roll". A sound rule can fire on a tag, and
 	// later a tag will carry a component preset. Any number, unordered.
@@ -657,7 +664,7 @@ struct TlClip {
 		       rotation == o.rotation && opacity == o.opacity &&
 		       crop == o.crop && keys == o.keys && text == o.text && words == o.words &&
 		       scripts == o.scripts && fx == o.fx && components == o.components &&
-		       transition == o.transition && soundRule == o.soundRule && tags == o.tags &&
+		       transition == o.transition && soundRule == o.soundRule && link == o.link && tags == o.tags &&
 		       volume == o.volume && fadeInMs == o.fadeInMs &&
 		       fadeOutMs == o.fadeOutMs && fadeInCurve == o.fadeInCurve &&
 		       fadeOutCurve == o.fadeOutCurve;
@@ -1231,6 +1238,28 @@ struct TimelineModel {
 	QVector<qint64> markers;
 
 	QVector<TlTrack> tracks;
+
+	// Linked clips (TlClip::link): an id no clip uses yet, and every clip that
+	// shares `link` (none for 0), as (track, clip) pairs.
+	int nextLinkId() const
+	{
+		int n = 1;
+		for (const TlTrack &t : tracks)
+			for (const TlClip &c : t.clips)
+				n = std::max(n, c.link + 1);
+		return n;
+	}
+	QVector<QPair<int, int>> linkedClips(int link) const
+	{
+		QVector<QPair<int, int>> out;
+		if (link == 0)
+			return out;
+		for (int ti = 0; ti < tracks.size(); ++ti)
+			for (int ci = 0; ci < tracks[ti].clips.size(); ++ci)
+				if (tracks[ti].clips[ci].link == link)
+					out.append({ti, ci});
+		return out;
+	}
 
 	// The project's tags (see TlTag). Saved, part of equality.
 	QVector<TlTag> tags;

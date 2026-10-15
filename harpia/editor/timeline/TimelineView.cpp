@@ -1876,9 +1876,25 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 			what = QStringLiteral("#%1").arg(c.sourceId);
 		const QString label =
 			QStringLiteral("%1 · %2s").arg(what).arg(c.outDurationMs() / 1000.0, 0, 'f', 1);
-		p.drawText(QRect(r.x() + 3, r.bottom() - 12, r.width() - 5, 13),
+		// A linked clip (TlClip::link) ends its label with a chain mark: it
+		// moves with others, and the mark says so before a drag does.
+		const int chainW = c.link != 0 && r.width() >= 44 ? 14 : 0;
+		p.drawText(QRect(r.x() + 3, r.bottom() - 12, r.width() - 5 - chainW, 13),
 			   Qt::AlignVCenter | Qt::AlignLeft,
-			   p.fontMetrics().elidedText(label, Qt::ElideRight, r.width() - 5));
+			   p.fontMetrics().elidedText(label, Qt::ElideRight, r.width() - 5 - chainW));
+		if (chainW > 0) {
+			AaOn aaChain(p);
+			p.setPen(QPen(QColor(0xe6, 0xe6, 0xe6), 1.4));
+			p.setBrush(Qt::NoBrush);
+			const QPointF mid(r.right() - 9.0, r.bottom() - 5.5);
+			// Two links, overlapping, on the diagonal.
+			p.save();
+			p.translate(mid);
+			p.rotate(-35.0);
+			p.drawRoundedRect(QRectF(-6.0, -2.2, 7.0, 4.4), 2.2, 2.2);
+			p.drawRoundedRect(QRectF(-1.0, -2.2, 7.0, 4.4), 2.2, 2.2);
+			p.restore();
+		}
 	}
 	// Tags: a coloured dot each along the top-right, so a tagged clip is
 	// visible from the timeline. Only as many as fit; hovering names them.
@@ -2813,6 +2829,12 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	}
 	selTrack_ = track;
 	selClip_ = clip;
+	// A linked clip brings its group (TlClip::link): a narration and its
+	// subtitles. The drag below then moves every one of them by the same
+	// amount, and so does a nudge -- move one, move all.
+	for (const auto &p : model_.linkedClips(model_.tracks[track].clips[clip].link))
+		if (p != QPair<int, int>(track, clip))
+			extraSel_.insert(p);
 	emit selectionChanged(selTrack_, selClip_);
 	// A locked track still selects (so you can inspect it) but never edits.
 	if (model_.tracks[track].locked) {
@@ -3774,6 +3796,9 @@ void TimelineView::pasteAt(const QVector<ClipboardEntry> &entries, qint64 atMs)
 
 	extraSel_.clear();
 	selTrack_ = selClip_ = -1;
+	// Pasted linked clips are linked to each other, not to the clips they were
+	// copied from: each group copied gets a new id.
+	QHash<int, int> relink;
 	for (const ClipboardEntry &e : entries) {
 		// Back onto its own track when that still exists and accepts it,
 		// otherwise the nearest track of the right kind.
@@ -3790,6 +3815,11 @@ void TimelineView::pasteAt(const QVector<ClipboardEntry> &entries, qint64 atMs)
 			continue; // every track is locked
 		TlClip c = e.clip;
 		c.outStartMs = std::max<qint64>(0, atMs + (e.clip.outStartMs - earliest));
+		if (c.link != 0) {
+			if (!relink.contains(c.link))
+				relink.insert(c.link, model_.nextLinkId());
+			c.link = relink.value(c.link);
+		}
 		model_.tracks[track].clips.append(c);
 		const int idx = int(model_.tracks[track].clips.size()) - 1;
 		if (selTrack_ < 0) {
@@ -4201,6 +4231,22 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 					.arg(kMinClipMs));
 	QAction *dup = menu.addAction(QStringLiteral("Duplicate"));
 	disableBecause(dup, !locked, lockedWhy);
+	// Linked clips (TlClip::link) move as one. A linked clip offers to let its
+	// group go; a selection of several unlinked clips offers to become one.
+	QAction *unlinkAct = nullptr, *linkAct = nullptr;
+	if (menuClip.link != 0) {
+		const int n = int(model_.linkedClips(menuClip.link).size());
+		unlinkAct = menu.addAction(QStringLiteral("Unlink  (%1 linked clips)").arg(n));
+		unlinkAct->setToolTip(QStringLiteral(
+			"These clips stop moving together: each one can then be dragged on its own. "
+			"Ctrl+Z links them again."));
+		disableBecause(unlinkAct, !locked, lockedWhy);
+	} else if (inSel && sel.size() > 1) {
+		linkAct = menu.addAction(QStringLiteral("Link selected clips  (%1)").arg(sel.size()));
+		linkAct->setToolTip(QStringLiteral(
+			"From now on, clicking any of them selects all of them, so they move as one."));
+		disableBecause(linkAct, !locked, lockedWhy);
+	}
 	// Transitions are made by OVERLAPPING two clips -- there is no transition
 	// object to create. That is a good model (moving a clip retimes the
 	// transition for free) but an invisible one: with no button anywhere, the
@@ -4424,10 +4470,23 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	}
 	if (chosen == split) {
 		splitClip(track, clip, atOutMs);
+	} else if (unlinkAct && chosen == unlinkAct) {
+		for (const auto &p : model_.linkedClips(menuClip.link))
+			model_.tracks[p.first].clips[p.second].link = 0;
+		update();
+		commitEdit();
+	} else if (linkAct && chosen == linkAct) {
+		const int id = model_.nextLinkId();
+		for (const auto &p : sel)
+			model_.tracks[p.first].clips[p.second].link = id;
+		update();
+		commitEdit();
 	} else if (chosen == dup) {
 		TlClip copy = model_.tracks[track].clips[clip];
 		copy.outStartMs = copy.outEndMs();
+		copy.link = 0; // a copy of one member is not a member
 		model_.tracks[track].clips.insert(clip + 1, copy);
+		extraSel_.clear(); // the insert moved the indices after it
 		selClip_ = clip + 1;
 		emit selectionChanged(track, selClip_);
 		update();

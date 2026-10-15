@@ -44,9 +44,19 @@ QString SecretStore::settingsName(SpeechProvider p)
 
 bool SecretStore::saveApiKey(SpeechProvider p, const QString &key)
 {
-	const QString kKey = settingsName(p);
+	return saveNamedKey(settingsName(p), speechProviderName(p), key);
+}
+
+QString SecretStore::loadApiKey(SpeechProvider p)
+{
+	return loadNamedKey(settingsName(p), speechProviderName(p));
+}
+
+bool SecretStore::saveNamedKey(const QString &settingsName, const QString &display, const QString &key)
+{
+	const QString kKey = settingsName;
 	const QString kKind = kKey + QStringLiteral("Kind"); // "dpapi" | "scrambled"
-	const QString name = speechProviderName(p);
+	const QString &name = display;
 	bool stored = false;
 	{
 		QSettings s = settings();
@@ -69,7 +79,7 @@ bool SecretStore::saveApiKey(SpeechProvider p, const QString &key)
 	}
 	// Read it back the way the next launch will: a key that cannot be
 	// recovered was not saved, whatever the write said.
-	const bool readable = stored && loadApiKey(p) == key.trimmed();
+	const bool readable = stored && loadNamedKey(settingsName, display) == key.trimmed();
 	if (readable)
 		editorLog(EditorLogLevel::Info, QStringLiteral("Subtitles"),
 			  QStringLiteral("%1 API key saved (%2)").arg(name, maskedKey(key)));
@@ -109,9 +119,9 @@ bool SecretStore::storeSealed(QSettings &s, const QString &kKey, const QString &
 #endif
 }
 
-QString SecretStore::loadApiKey(SpeechProvider p)
+QString SecretStore::loadNamedKey(const QString &settingsName, const QString &display)
 {
-	const QString kKey = settingsName(p);
+	const QString kKey = settingsName;
 	const QString kKind = kKey + QStringLiteral("Kind");
 	QSettings s = settings();
 	const QByteArray stored = QByteArray::fromBase64(s.value(kKey).toByteArray());
@@ -128,7 +138,7 @@ QString SecretStore::loadApiKey(SpeechProvider p)
 			editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
 				  QStringLiteral("the saved %1 API key could not be unsealed (Windows error %2); "
 						 "it was saved by another Windows user or machine. Save it again.")
-					  .arg(speechProviderName(p))
+					  .arg(display)
 					  .arg(qulonglong(GetLastError())));
 			return QString();
 		}

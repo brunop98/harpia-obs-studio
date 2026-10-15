@@ -6,6 +6,9 @@
 //   * The Clip tab leads with the clip's own content: a caption's Text
 //     section above the components, Animation and Tags below them.
 //   * Sections fold, and stay folded in the next window.
+//   * A section reads as one group: a card a shade lighter than the panel,
+//     its header a shade lighter again, the chevron and the controls inset
+//     from the card's edge rather than against it.
 //   * One toolbar: a single line in a wide window, wrapped in a narrow one,
 //     and never a button squeezed below its own label (the "le ti Ed" bug).
 //   * The preview/timeline divider is remembered per editing mode.
@@ -18,6 +21,7 @@
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QImage>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QScrollArea>
@@ -26,6 +30,7 @@
 #include <QTabWidget>
 #include <QThread>
 
+#include <algorithm>
 #include <cstdio>
 
 using namespace harpia;
@@ -221,6 +226,49 @@ int main(int argc, char **argv)
 		ok(tags && !tags->expanded(), "and it is still folded in the next window");
 		if (tags)
 			tags->setExpanded(true); // leave the settings as found
+	}
+
+	std::printf("\n-- a section is one card --\n");
+	{
+		VideoEditorWindow w(video);
+		w.resize(1000, 760);
+		w.show();
+		settle(300);
+		openFullEditing(w);
+		inspectorTabs(w)->setCurrentIndex(1);
+		trigger(w, QStringLiteral("Text"));
+		InspectorSection *anim = section(w, QStringLiteral("Animation"));
+		ok(anim && anim->expanded(), "the Animation section, open");
+		if (anim && anim->expanded()) {
+			const QImage img = anim->grab().toImage();
+			const auto lum = [](QRgb c) { return (qRed(c) * 2 + qGreen(c) * 5 + qBlue(c)) / 8; };
+			// The app's panel colour (main.cpp's dark palette; this test runs
+			// with Qt's default one).
+			const QColor panel(0x1e, 0x1f, 0x22);
+			// The empty inset at the bottom of the card, the header's right end.
+			const QRgb card = img.pixel(img.width() / 2, img.height() - 6 - 4);
+			const QRgb head = img.pixel(img.width() - 6, anim->header()->height() / 2);
+			std::printf("     panel %d, card %d, header %d\n", lum(panel.rgb()), lum(card), lum(head));
+			ok(lum(card) > lum(panel.rgb()) + 2, "the card is a shade lighter than the panel");
+			ok(lum(head) > lum(card) + 2, "and its header a shade lighter again");
+			// The chevron: the first bright column in the header.
+			const QImage h = anim->header()->grab().toImage();
+			int chevronX = -1;
+			for (int x = 0; x < h.width() && chevronX < 0; ++x)
+				for (int y = 0; y < h.height(); ++y)
+					if (lum(h.pixel(x, y)) > 110) {
+						chevronX = x;
+						break;
+					}
+			std::printf("     chevron at x=%d\n", chevronX);
+			ok(chevronX >= 8, "the chevron is inset from the edge");
+			int minX = 1 << 30;
+			for (QWidget *c : anim->body()->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
+				if (c->isVisible())
+					minX = std::min(minX, c->mapTo(anim, QPoint(0, 0)).x());
+			std::printf("     body content from x=%d\n", minX);
+			ok(minX >= 8 && minX < 1 << 30, "and so is everything in the body");
+		}
 	}
 
 	std::printf("\n-- one toolbar, wrapping rather than squeezing --\n");

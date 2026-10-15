@@ -6888,6 +6888,10 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	kfPrev->setFixedWidth(30);
 	kfDel->setFixedWidth(30);
 	kfNext->setFixedWidth(30);
+	// "◆ Key" needs about 50 px; Fusion holds every text button at 80, which
+	// made this row the widest thing in the Clip tab once the section became
+	// an inset card. It still stretches to fill the row.
+	kfAdd->setMinimumWidth(56);
 	kfRow->addWidget(kfPrev);
 	kfRow->addWidget(kfAdd, 1);
 	kfRow->addWidget(kfDel);
@@ -6994,6 +6998,9 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		QStringLiteral("Apply a saved text style. The caption keeps its own words."));
 	auto *presetSave = new QPushButton(QStringLiteral("Save…"), textBox_);
 	presetSave->setToolTip(QStringLiteral("Save this caption's style under a name"));
+	// Fusion's 80 px floor for a text button, not the label, set this row's
+	// width; it may give way when the panel is narrow (see the Key button).
+	presetSave->setMinimumWidth(56);
 	auto *presetDel = new QPushButton(textBox_);
 	presetDel->setIcon(uiIcon(Glyph::Cross, 13));
 	presetDel->setFixedWidth(28);
@@ -7171,6 +7178,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 			QStringLiteral("Load a saved list of texts (Text 2 onwards). Text 1 stays as it is."));
 		auto *vSave = new QPushButton(QStringLiteral("Save…"), variationsBox_);
 		vSave->setToolTip(QStringLiteral("Save Text 2 onwards under a name"));
+		vSave->setMinimumWidth(56); // as the style row's Save… above
 		auto *vDel = new QPushButton(variationsBox_);
 		vDel->setIcon(uiIcon(Glyph::Cross, 13));
 		vDel->setFixedWidth(28);

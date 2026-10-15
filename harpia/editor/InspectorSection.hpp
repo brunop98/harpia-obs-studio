@@ -3,6 +3,11 @@
 // One collapsible section of the Inspector: a "▾ Title" header you click to
 // fold the body away, and the body underneath.
 //
+// Drawn as one card -- a raised, rounded panel holding the header and, when
+// open, a divider and the body -- so what belongs to "Animation" reads as one
+// group, and the chevron and the controls sit inside it rather than against
+// the panel's edge.
+//
 // It remembers. Folding "Tags" because you never use it should not have to be
 // done again on every clip and every launch, so each section's open/closed
 // state is kept under its key (QSettings, editor/sections/<key>). The state is
@@ -31,6 +36,14 @@ public:
 
 	bool expanded() const { return expanded_; }
 	void setExpanded(bool on);
+
+	// The card's look, for the tests: inset of the header's chevron and of the
+	// body's content from the card's edge.
+	static constexpr int kHeaderInset = 10;
+	static constexpr int kBodyInset = 10;
+
+protected:
+	void paintEvent(QPaintEvent *e) override;
 
 private:
 	void applyState();

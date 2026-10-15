@@ -239,6 +239,8 @@ target_sources(
     editor/tts/TtsEngine.cpp
     editor/tts/TtsEngine.hpp
     editor/tts/TtsText.hpp
+    editor/tts/TtsMarkup.hpp
+    editor/tts/TtsPlan.hpp
     editor/tts/TtsSynthesizer.cpp
     editor/tts/TtsSynthesizer.hpp
     editor/tts/TtsProviders.hpp

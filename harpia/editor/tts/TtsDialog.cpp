@@ -3,6 +3,7 @@
 #include "TtsAudio.hpp"
 #include "TtsEngine.hpp"
 #include "TtsSynthesizer.hpp"
+#include "TtsMarkup.hpp"
 #include "TtsText.hpp"
 
 #include "../../ui/EditorLog.hpp"
@@ -12,7 +13,13 @@
 #include "../VoiceoverMixer.hpp"
 #include "../subtitles/SecretStore.hpp"
 
+#include <QAction>
 #include <QCheckBox>
+#include <QMenu>
+#include <QMessageBox>
+#include <QSyntaxHighlighter>
+#include <QTextCursor>
+#include <QToolButton>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -41,6 +48,59 @@
 #include <algorithm>
 
 namespace harpia {
+
+// The marks in the text box, in colour: pauses blue, marks the chosen service
+// does orange, marks it cannot do grey and struck through. Brackets that are
+// not marks are left as text.
+class TtsMarkHighlighter : public QSyntaxHighlighter {
+public:
+	explicit TtsMarkHighlighter(QTextDocument *doc) : QSyntaxHighlighter(doc) {}
+	void setService(TtsProvider p, const QString &model)
+	{
+		provider_ = p;
+		model_ = model;
+		rehighlight();
+	}
+
+protected:
+	void highlightBlock(const QString &text) override
+	{
+		static const QRegularExpression token(QStringLiteral("\\[([^\\[\\]\\n]{1,48})\\]"));
+		static const QRegularExpression pause(QStringLiteral("^(?:pause|pausa)\\b"),
+						      QRegularExpression::CaseInsensitiveOption);
+		auto it = token.globalMatch(text);
+		while (it.hasNext()) {
+			const QRegularExpressionMatch m = it.next();
+			const QString inside = m.captured(1).trimmed();
+			const QString low = inside.toLower();
+			const bool closing = low.startsWith(QLatin1Char('/'));
+			const QString name = closing ? low.mid(1).trimmed() : low;
+			QTextCharFormat f;
+			f.setFontWeight(QFont::DemiBold);
+			if (pause.match(inside).hasMatch()) {
+				f.setForeground(QColor(0x6e, 0xa8, 0xfe));
+			} else if (const TtsTag *t = ttsTagNamed(name)) {
+				if (ttsSupport(provider_, model_, *t).level == TtsSupport::None) {
+					f.setForeground(QColor(0x80, 0x84, 0x8c));
+					f.setFontStrikeOut(true);
+				} else {
+					f.setForeground(QColor(0xe5, 0xa8, 0x4d));
+				}
+			} else if (!closing && ttsIsOwnTag(inside)) {
+				const bool ok = provider_ == TtsProvider::ElevenLabs && elevenExpressive(model_);
+				f.setForeground(ok ? QColor(0xc0, 0x8c, 0xf0) : QColor(0x80, 0x84, 0x8c));
+				f.setFontStrikeOut(!ok);
+			} else {
+				continue; // not a mark: text
+			}
+			setFormat(int(m.capturedStart()), int(m.capturedLength()), f);
+		}
+	}
+
+private:
+	TtsProvider provider_ = TtsProvider::OpenAI;
+	QString model_;
+};
 
 namespace {
 QSettings settings()
@@ -138,9 +198,12 @@ void TtsDialog::buildUi()
 	text_->setPlaceholderText(QStringLiteral("Paste or type what should be said, or open a text file below.\n\n"
 						 "Each word becomes part of a caption, shown while it is spoken."));
 	text_->setMinimumSize(320, 300);
+	highlighter_ = new TtsMarkHighlighter(text_->document());
+	left->addLayout(buildMarksBar());
 	left->addWidget(text_, 1);
-	auto *pauses = new QLabel(QStringLiteral("Pauses: type [pause 1s] or [pause 500ms] where the voice should stop, "
-						 "or leave a blank line (%1 s). Neither is spoken nor shown.")
+	auto *pauses = new QLabel(QStringLiteral("Select words and use the buttons above, or type the marks: [pause 1s], "
+						 "[slow]…[/slow], [whisper]…[/whisper], [laugh]. A blank line is a %1 s "
+						 "pause. No mark is ever spoken or shown in the captions.")
 					  .arg(kBlankLinePauseMs / 1000.0, 0, 'f', 1),
 				  this);
 	pauses->setWordWrap(true);
@@ -209,6 +272,13 @@ void TtsDialog::buildUi()
 	connect(loadVoices_, &QPushButton::clicked, this, &TtsDialog::loadVoices);
 	vRow->addWidget(loadVoices_);
 	sf->addRow(QStringLiteral("Voice"), vRow);
+	model_ = new QComboBox(svc);
+	model_->setToolTip(QStringLiteral(
+		"Multilingual v2 is steady over long texts but takes only pace marks. v4 (and v3) take ElevenLabs' "
+		"audio tags: moods, whispers, laughs, your own [tags]."));
+	modelLabel_ = new QLabel(QStringLiteral("Model"), svc);
+	sf->addRow(modelLabel_, model_);
+	connect(model_, &QComboBox::currentIndexChanged, this, [this]() { refreshMarks(); });
 	style_ = new QLineEdit(svc);
 	style_->setPlaceholderText(QStringLiteral("e.g. Calm and warm, like a documentary"));
 	style_->setToolTip(QStringLiteral("How the voice should sound: tone, pace, accent, emotion."));
@@ -345,6 +415,8 @@ void TtsDialog::saveSettings()
 	s.setValue(kGrp + QStringLiteral("voice_") + provider_->currentData().toString(), voice());
 	s.setValue(kGrp + QStringLiteral("speed_") + provider_->currentData().toString(), speed_->value());
 	s.setValue(kGrp + QStringLiteral("style"), style_->text());
+	if (model_->count() > 0)
+		s.setValue(kGrp + QStringLiteral("model_") + provider_->currentData().toString(), model_->currentData());
 	s.setValue(kGrp + QStringLiteral("fit"), fit_->isChecked());
 	s.setValue(kSubs + QStringLiteral("maxWords"), maxWords_->value());
 	s.setValue(kSubs + QStringLiteral("mode"), mode_->currentIndex());
@@ -379,6 +451,7 @@ TtsSpec TtsDialog::spec() const
 	s.language = languageCode();
 	s.style = ttsProviderInfo(provider()).hasStyle ? style_->text().trimmed() : QString();
 	s.speed = ttsProviderInfo(provider()).hasSpeed ? speed_->value() : 1.0;
+	s.model = model_->currentData().toString();
 	return s;
 }
 
@@ -408,6 +481,17 @@ void TtsDialog::refreshProvider()
 	styleLabel_->setVisible(i.hasStyle);
 	speed_->setVisible(i.hasSpeed);
 	speedLabel_->setVisible(i.hasSpeed);
+	{
+		const QSignalBlocker b(model_);
+		model_->clear();
+		for (const auto &m : ttsModels(provider()))
+			model_->addItem(m.second, m.first);
+		const int mi = model_->findData(s.value(kGrp + QStringLiteral("model_") + QString::fromLatin1(i.id)).toString());
+		model_->setCurrentIndex(std::max(0, mi));
+		model_->setVisible(model_->count() > 0);
+		modelLabel_->setVisible(model_->count() > 0);
+	}
+	refreshMarks();
 	if (provider() == TtsProvider::ElevenLabs)
 		speed_->setRange(0.7, 1.2);
 	else
@@ -746,6 +830,179 @@ void TtsDialog::setBusy(bool on)
 	refreshFit();
 }
 
+QLayout *TtsDialog::buildMarksBar()
+{
+	auto *bar = new QHBoxLayout;
+	bar->setSpacing(4);
+	const auto button = [&](const QString &text, const QString &tip) {
+		auto *b = new QToolButton(this);
+		b->setText(text);
+		b->setToolTip(tip);
+		b->setAutoRaise(false);
+		b->setToolButtonStyle(Qt::ToolButtonTextOnly);
+		bar->addWidget(b);
+		return b;
+	};
+	// A drop-down of marks; each item wraps the selection (a sound or a pause
+	// is put in where the cursor is).
+	const auto menuOf = [&](const QString &text, const QString &tip, std::initializer_list<const char *> tags) {
+		QToolButton *b = button(text, tip);
+		auto *menu = new QMenu(b);
+		menu->setToolTipsVisible(true);
+		for (const char *name : tags) {
+			const TtsTag *t = ttsTagNamed(QString::fromLatin1(name));
+			QAction *a = menu->addAction(QString::fromUtf8(t->label));
+			connect(a, &QAction::triggered, this, [this, t]() {
+				if (t->sound)
+					insertMark(QStringLiteral("[%1]").arg(QString::fromLatin1(t->tag)));
+				else
+					wrapSelection(QString::fromLatin1(t->tag));
+			});
+			markActions_.append({a, t});
+		}
+		b->setMenu(menu);
+		b->setPopupMode(QToolButton::InstantPopup);
+		return b;
+	};
+
+	QToolButton *pause = button(QStringLiteral("Pause"), QStringLiteral("Silence where the cursor is. Every service: "
+										  "Harpia puts the silence in itself."));
+	{
+		auto *menu = new QMenu(pause);
+		for (const QString &d : {QStringLiteral("0.3s"), QStringLiteral("0.5s"), QStringLiteral("1s"), QStringLiteral("2s"),
+					 QStringLiteral("3s")})
+			connect(menu->addAction(d), &QAction::triggered, this,
+				[this, d]() { insertMark(QStringLiteral("[pause %1]").arg(d)); });
+		pause->setMenu(menu);
+		pause->setPopupMode(QToolButton::InstantPopup);
+	}
+	menuOf(QStringLiteral("Pace"), QStringLiteral("Say the selected words slower or faster."), {"slow", "fast"});
+	menuOf(QStringLiteral("Pitch"), QStringLiteral("Say the selected words higher or lower."), {"high", "low"});
+	menuOf(QStringLiteral("Volume"), QStringLiteral("Say the selected words louder or softer."), {"loud", "soft"});
+	{
+		const TtsTag *t = ttsTagNamed(QStringLiteral("stress"));
+		QToolButton *b = button(QString::fromUtf8(t->label), QString());
+		auto *a = new QAction(QString::fromUtf8(t->label), b);
+		connect(a, &QAction::triggered, this, [this]() { wrapSelection(QStringLiteral("stress")); });
+		b->setDefaultAction(a);
+		markActions_.append({a, t});
+	}
+	menuOf(QStringLiteral("Mood"), QStringLiteral("How the selected words sound."),
+	       {"whisper", "excited", "sad", "calm", "cheerful"});
+	menuOf(QStringLiteral("Sound"), QStringLiteral("A laugh or a sigh where the cursor is."), {"laugh", "sigh"});
+	QToolButton *clear = button(QStringLiteral("Clear"),
+				    QStringLiteral("Take every mark out of the selected text (or the whole text)."));
+	connect(clear, &QToolButton::clicked, this, &TtsDialog::clearMarks);
+	bar->addStretch(1);
+	auto *outer = new QVBoxLayout;
+	outer->setSpacing(3);
+	outer->addLayout(bar);
+	marksNote_ = new QLabel(this);
+	marksNote_->setWordWrap(true);
+	marksNote_->setStyleSheet(QStringLiteral("color:#7f858e;"));
+	outer->addWidget(marksNote_);
+	return outer;
+}
+
+void TtsDialog::refreshMarks()
+{
+	const TtsProvider p = provider();
+	const QString model = model_ ? model_->currentData().toString() : QString();
+	int none = 0, approx = 0;
+	for (const auto &ma : markActions_) {
+		const TtsSupportInfo s = ttsSupport(p, model, *ma.second);
+		QString label = QString::fromUtf8(ma.second->label);
+		if (s.level == TtsSupport::Approx)
+			label += QStringLiteral("  ≈"); // done another way
+		ma.first->setText(label);
+		ma.first->setEnabled(s.level != TtsSupport::None);
+		ma.first->setToolTip(s.how);
+		none += s.level == TtsSupport::None;
+		approx += s.level == TtsSupport::Approx;
+	}
+	if (marksNote_) {
+		const QString name = ttsProviderName(p) + (model_ && model_->count() ? QStringLiteral(" ") + model_->currentText().section(QLatin1Char(':'), 0, 0) : QString());
+		marksNote_->setText(none == 0 && approx == 0
+					    ? QStringLiteral("%1 does every mark itself.").arg(name)
+					    : QStringLiteral("%1: ≈ marks are done another way (hover for how)%2.")
+						      .arg(name, none ? QStringLiteral("; greyed ones it cannot do") : QString()));
+	}
+	if (highlighter_)
+		highlighter_->setService(p, model);
+}
+
+void TtsDialog::wrapSelection(const QString &tag)
+{
+	QTextCursor c = text_->textCursor();
+	const QString open = QStringLiteral("[%1]").arg(tag), close = QStringLiteral("[/%1]").arg(tag);
+	if (c.hasSelection()) {
+		QString sel = c.selectedText();
+		sel.replace(QChar(0x2029), QLatin1Char('\n')); // a selection's line breaks
+		c.insertText(open + sel + close);
+	} else {
+		c.insertText(open + close);
+		c.movePosition(QTextCursor::Left, QTextCursor::MoveAnchor, int(close.size()));
+		text_->setTextCursor(c);
+	}
+	text_->setFocus();
+}
+
+void TtsDialog::insertMark(const QString &mark)
+{
+	QTextCursor c = text_->textCursor();
+	c.clearSelection();
+	const QString before = text_->toPlainText().mid(std::max(0, c.position() - 1), 1);
+	c.insertText((before.isEmpty() || before.at(0).isSpace() ? QString() : QStringLiteral(" ")) + mark +
+		     QStringLiteral(" "));
+	text_->setTextCursor(c);
+	text_->setFocus();
+}
+
+void TtsDialog::clearMarks()
+{
+	QTextCursor c = text_->textCursor();
+	const bool sel = c.hasSelection();
+	if (!sel)
+		c.select(QTextCursor::Document);
+	QString t = c.selectedText();
+	t.replace(QChar(0x2029), QLatin1Char('\n'));
+	static const QRegularExpression token(QStringLiteral("\\[([^\\[\\]\\n]{1,48})\\]"));
+	static const QRegularExpression pause(QStringLiteral("^(?:pause|pausa)\\b"), QRegularExpression::CaseInsensitiveOption);
+	QString out;
+	qsizetype from = 0;
+	auto it = token.globalMatch(t);
+	while (it.hasNext()) {
+		const QRegularExpressionMatch m = it.next();
+		const QString inside = m.captured(1).trimmed();
+		const QString name = inside.startsWith(QLatin1Char('/')) ? inside.mid(1).trimmed() : inside;
+		const bool mark = pause.match(inside).hasMatch() || ttsTagNamed(name.toLower()) || ttsIsOwnTag(inside);
+		out += t.mid(from, m.capturedStart() - from);
+		if (!mark)
+			out += m.captured(0);
+		from = m.capturedEnd();
+	}
+	out += t.mid(from);
+	c.insertText(out);
+	text_->setFocus();
+}
+
+bool TtsDialog::confirmMarks()
+{
+	const TtsMarked m = ttsMark(text());
+	const QStringList cannot = ttsUnsupported(m, provider(), model_->currentData().toString());
+	if (cannot.isEmpty() && m.problems.isEmpty())
+		return true;
+	QString msg;
+	if (!cannot.isEmpty())
+		msg += QStringLiteral("%1 cannot do: %2. Those words are read normally.\n\n")
+			       .arg(ttsProviderName(provider()), cannot.join(QStringLiteral(", ")));
+	if (!m.problems.isEmpty())
+		msg += QStringLiteral("In the marks: %1.\n\n").arg(m.problems.join(QStringLiteral("; ")));
+	msg += QStringLiteral("Generate anyway?");
+	return QMessageBox::question(this, QStringLiteral("Text to speech"), msg, QMessageBox::Yes | QMessageBox::No,
+				     QMessageBox::Yes) == QMessageBox::Yes;
+}
+
 void TtsDialog::startJob()
 {
 	if (engine_->running())
@@ -765,6 +1022,8 @@ void TtsDialog::startJob()
 		status_->setText(QStringLiteral("Pick a voice first."));
 		return;
 	}
+	if (!confirmMarks())
+		return;
 	saveSettings();
 	const bool fit = fit_->isChecked() && fit_->isEnabled();
 	TtsJob job;

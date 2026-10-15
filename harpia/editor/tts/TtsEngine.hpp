@@ -15,6 +15,7 @@
 //      stretched (pitch kept) to the asked length.
 
 #include "../subtitles/Transcript.hpp"
+#include "TtsPlan.hpp"
 #include "TtsProviders.hpp"
 #include "TtsText.hpp"
 
@@ -72,8 +73,6 @@ public:
 	static constexpr double kMinTempo = 0.6, kMaxTempo = 1.8;
 	static double fitTempo(qint64 naturalMs, qint64 targetMs);
 
-	// The silence between two pieces of one part of the text (a sentence end).
-	static constexpr qint64 kPieceGapMs = 250;
 
 signals:
 	void progress(const QString &what);
@@ -82,8 +81,10 @@ signals:
 
 private:
 	struct Piece {
-		SpokenText st;
+		TtsPlanned plan;      // the words and the marks on them
+		TtsRendered rendered; // as the service is sent them
 		qint64 gapBeforeMs = 0;
+		const SpokenText &st() const { return plan.st; }
 	};
 	void nextPiece();
 	void onSynthesized(const TtsReply &reply);

@@ -20,7 +20,9 @@
 
 #include <vector>
 
+class QAction;
 class QCheckBox;
+class QLayout;
 class QComboBox;
 class QDateTime;
 class QDoubleSpinBox;
@@ -36,6 +38,8 @@ namespace harpia {
 class AudioPreview;
 class TtsEngine;
 class TtsSynthesizer;
+class TtsMarkHighlighter;
+struct TtsTag;
 struct TtsResult;
 
 class TtsDialog : public QDialog {
@@ -87,6 +91,14 @@ private:
 	void editPronunciations();
 	void loadVoices();
 	void playPreview();
+	// The marks toolbar over the text (TtsMarkup.hpp): what each button puts
+	// in, and whether the chosen service can do it.
+	QLayout *buildMarksBar();
+	void refreshMarks();
+	void wrapSelection(const QString &tag);
+	void insertMark(const QString &mark);
+	void clearMarks();
+	bool confirmMarks(); // before generating: the marks this service cannot do
 	void playPcm(const std::vector<float> &pcm);
 	void setVoices(const QVector<TtsVoice> &voices, const QString &select);
 	QString currentKey() const;
@@ -115,6 +127,11 @@ private:
 	QComboBox *voice_ = nullptr;
 	QPushButton *preview_ = nullptr;
 	QPushButton *loadVoices_ = nullptr;
+	QComboBox *model_ = nullptr; // ElevenLabs: v2 / v4 / v3
+	QLabel *modelLabel_ = nullptr;
+	TtsMarkHighlighter *highlighter_ = nullptr;
+	QVector<QPair<QAction *, const TtsTag *>> markActions_;
+	QLabel *marksNote_ = nullptr;
 	QLineEdit *style_ = nullptr;
 	QLabel *styleLabel_ = nullptr;
 	QDoubleSpinBox *speed_ = nullptr;

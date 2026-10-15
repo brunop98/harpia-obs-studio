@@ -60,7 +60,8 @@ void TtsSynthesizer::synthesize(const TtsRequest &r)
 	provider_ = r.provider;
 	editorLog(EditorLogLevel::Info, kWhere,
 		  QStringLiteral("asking %1 for %2 characters, voice %3").arg(name).arg(r.text.size()).arg(r.voice));
-	const QString text = r.text;
+	// Word times are found on the plain spoken words, never on the marks.
+	const QString text = r.timingText.isEmpty() ? r.text : r.timingText;
 	send(request(r.provider, ttsUrl(r), r.apiKey), "POST", ttsBody(r), [this, text, name](const QByteArray &data) {
 		QString err;
 		const TtsReply reply = parseTtsReply(provider_, data, text, &err);

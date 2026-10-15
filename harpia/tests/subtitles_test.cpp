@@ -344,9 +344,9 @@ int main(int argc, char **argv)
 		e.language = QStringLiteral("es");
 		e.apiKey = QStringLiteral("sk_secret");
 		const QByteArray eb = elevenLabsBody(e, "RIFF", "B");
-		ok(eb.contains("name=\"model_id\"\r\n\r\nscribe_v1") && eb.contains("name=\"timestamps_granularity\"\r\n\r\nword") &&
+		ok(eb.contains("name=\"model_id\"\r\n\r\nscribe_v2") && eb.contains("name=\"timestamps_granularity\"\r\n\r\nword") &&
 			   eb.contains("name=\"language_code\"\r\n\r\nes") && eb.contains("filename=\"speech.wav\"") && !eb.contains("sk_secret"),
-		   "ElevenLabs: scribe_v1, word timestamps, the language and the file, no key");
+		   "ElevenLabs: scribe_v2, word timestamps, the language and the file, no key");
 		err.clear();
 		const Transcript et = parseElevenLabsJson(R"J({"language_code":"spa","text":"Hola amigo","words":[
 			{"text":"Hola","start":0.1,"end":0.4,"type":"word"},{"text":" ","start":0.4,"end":0.5,"type":"spacing"},

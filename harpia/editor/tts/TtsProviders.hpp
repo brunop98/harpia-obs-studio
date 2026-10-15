@@ -96,6 +96,18 @@ inline const QVector<TtsProviderInfo> &ttsProviders()
 	return all;
 }
 
+// The models a service offers, as (id, what the picker says); empty when it
+// has one. ElevenLabs: Multilingual v2 takes no marks but pace; v3/v4 take its
+// audio tags (moods, whispers, laughs).
+inline QVector<QPair<QString, QString>> ttsModels(TtsProvider p)
+{
+	if (p != TtsProvider::ElevenLabs)
+		return {};
+	return {{QStringLiteral("eleven_multilingual_v2"), QStringLiteral("Multilingual v2: steady, long texts")},
+		{QStringLiteral("eleven_v4"), QStringLiteral("v4: expressive (moods, whispers, laughs)")},
+		{QStringLiteral("eleven_v3"), QStringLiteral("v3: expressive (the previous generation)")}};
+}
+
 inline const TtsProviderInfo &ttsProviderInfo(TtsProvider p)
 {
 	for (const TtsProviderInfo &i : ttsProviders())
@@ -302,11 +314,13 @@ inline int googleSsmlBytes(const QString &text)
 struct TtsRequest {
 	TtsProvider provider = TtsProvider::OpenAI;
 	QString apiKey;
-	QString text;     // one piece (see ttsChunks)
-	QString voice;    // TtsVoice::id
-	QString language; // ISO-639-1
-	QString style;    // OpenAI: how to say it
-	double speed = 1.0;
+	QString text;       // one piece, in the service's own form (TtsPlan.hpp; Google: SSML)
+	QString timingText; // its plain spoken words, where the word times are found ("" = text)
+	QString voice;      // TtsVoice::id
+	QString model;      // ElevenLabs: the model ("" = the service's default)
+	QString language;   // ISO-639-1
+	QString style;      // OpenAI: its instructions
+	double speed = 1.0; // ElevenLabs, Google: the rate; Deepgram: this passage's
 	// ElevenLabs: the text around this piece, so the joins sound continuous.
 	QString previousText, nextText;
 };
@@ -332,6 +346,8 @@ inline QUrl ttsUrl(const TtsRequest &r)
 		q.addQueryItem(QStringLiteral("encoding"), QStringLiteral("linear16"));
 		q.addQueryItem(QStringLiteral("container"), QStringLiteral("wav"));
 		q.addQueryItem(QStringLiteral("sample_rate"), QStringLiteral("24000"));
+		if (std::abs(r.speed - 1.0) > 0.001)
+			q.addQueryItem(QStringLiteral("speed"), QString::number(std::clamp(r.speed, 0.7, 1.5), 'f', 2));
 		u.setQuery(q);
 		return u;
 	}
@@ -367,7 +383,8 @@ inline QByteArray ttsBody(const TtsRequest &r)
 		break;
 	case TtsProvider::ElevenLabs:
 		o.insert(QStringLiteral("text"), r.text);
-		o.insert(QStringLiteral("model_id"), QString::fromLatin1(ttsProviderInfo(r.provider).model));
+		o.insert(QStringLiteral("model_id"),
+			 r.model.isEmpty() ? QString::fromLatin1(ttsProviderInfo(r.provider).model) : r.model);
 		if (std::abs(r.speed - 1.0) > 0.001) {
 			QJsonObject vs;
 			vs.insert(QStringLiteral("speed"), std::clamp(r.speed, 0.7, 1.2));
@@ -380,7 +397,8 @@ inline QByteArray ttsBody(const TtsRequest &r)
 		break;
 	case TtsProvider::Google: {
 		QJsonObject in;
-		in.insert(QStringLiteral("ssml"), googleSsml(r.text));
+		// Ready SSML (marks and all) from the planner, or plain text.
+		in.insert(QStringLiteral("ssml"), r.text.startsWith(QLatin1String("<speak>")) ? r.text : googleSsml(r.text));
 		o.insert(QStringLiteral("input"), in);
 		QJsonObject voice;
 		const QString name = r.voice.trimmed();
@@ -421,6 +439,7 @@ inline QUrl ttsVoicesUrl(TtsProvider p, const QString &language)
 struct TtsSpec {
 	TtsProvider provider = TtsProvider::OpenAI;
 	QString voice, language, style;
+	QString model;      // ElevenLabs: the model it was made with
 	double speed = 1.0; // the service's own speaking rate
 	double tempo = 1.0; // the stretch applied afterwards (Fit to selection)
 
@@ -432,6 +451,8 @@ struct TtsSpec {
 		o.insert(QStringLiteral("language"), language);
 		if (!style.isEmpty())
 			o.insert(QStringLiteral("style"), style);
+		if (!model.isEmpty())
+			o.insert(QStringLiteral("model"), model);
 		o.insert(QStringLiteral("speed"), speed);
 		o.insert(QStringLiteral("tempo"), tempo);
 		return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
@@ -445,6 +466,7 @@ struct TtsSpec {
 		s.voice = o.value(QStringLiteral("voice")).toString();
 		s.language = o.value(QStringLiteral("language")).toString();
 		s.style = o.value(QStringLiteral("style")).toString();
+		s.model = o.value(QStringLiteral("model")).toString();
 		s.speed = o.value(QStringLiteral("speed")).toDouble(1.0);
 		s.tempo = o.value(QStringLiteral("tempo")).toDouble(1.0);
 		if (ok)
@@ -552,7 +574,8 @@ inline QVector<ClipWordTime> wordsFromCharacters(const QVector<TtsWord> &words, 
 		w.text = words[i].text;
 		// The word as it stands, or (joined punctuation aside) its first part.
 		const QString core = words[i].text.section(QLatin1Char(' '), 0, 0);
-		const int p = all.indexOf(core, cursor);
+		// Case aside: a stressed word is sent in CAPITALS.
+		const int p = int(all.indexOf(core, cursor, Qt::CaseInsensitive));
 		if (p >= 0 && p - cursor < 200) {
 			const int a = elemAt[p], b = elemAt[p + core.size() - 1];
 			if (a < starts.size() && b < ends.size()) {
@@ -755,6 +778,12 @@ inline TtsReply parseTtsReply(TtsProvider p, const QByteArray &body, const QStri
 			if (err)
 				*err = ttsErrorMessage(p, body).isEmpty() ? QStringLiteral("the reply carried no audio")
 									  : ttsErrorMessage(p, body);
+			return r;
+		}
+		if (chars.isEmpty() || starts.size() != chars.size() || ends.size() != chars.size()) {
+			// No character times (a model that does not give them): the
+			// words are timed by transcribing the audio, as for OpenAI.
+			r.timed = false;
 			return r;
 		}
 		QVector<bool> matched;

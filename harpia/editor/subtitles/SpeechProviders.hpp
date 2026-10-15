@@ -63,7 +63,7 @@ inline const QVector<SpeechProviderInfo> &speechProviders()
 		 "AssemblyAI dashboard ▸ API Keys", "paste your AssemblyAI API key",
 		 "Accurate; uploads the audio, then waits for the job, so it takes a little longer. Free credit to start.",
 		 false},
-		{SpeechProvider::ElevenLabs, "elevenlabs", "ElevenLabs (Scribe)", "scribe_v1",
+		{SpeechProvider::ElevenLabs, "elevenlabs", "ElevenLabs (Scribe)", "scribe_v2",
 		 "https://elevenlabs.io/app/settings/api-keys",
 		 "ElevenLabs ▸ Settings ▸ API Keys ▸ Create API Key", "sk_…  (paste your ElevenLabs API key)",
 		 "Strong across many languages. The key needs the Speech to Text permission.", false},

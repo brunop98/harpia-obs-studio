@@ -24,6 +24,11 @@
 
 #include <QAction>
 #include <QCheckBox>
+#include <QComboBox>
+#include <QMenu>
+#include <QPlainTextEdit>
+#include <QTextCursor>
+#include <QToolButton>
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QFile>
@@ -409,6 +414,78 @@ int main(int argc, char **argv)
 		   "▶ says the text's first sentence");
 		ok(TtsDialog::previewSentence(QString(), QStringLiteral("pt")).startsWith(QStringLiteral("Olá!")),
 		   "or, with no text yet, a line in the language");
+	}
+
+	std::printf("\n-- the marks toolbar --\n");
+	{
+		TtsDialog *d = w.findChild<TtsDialog *>();
+		ok(d != nullptr, "the Text to speech window");
+		if (d) {
+			d->show();
+			settle(100);
+			auto *edit = d->findChild<QPlainTextEdit *>();
+			const auto action = [&](const QString &label) -> QAction * {
+				for (QAction *a : d->findChildren<QAction *>())
+					if (a->text().section(QStringLiteral("  "), 0, 0) == label)
+						return a;
+				return nullptr;
+			};
+			QComboBox *service = nullptr, *model = nullptr;
+			for (QComboBox *c : d->findChildren<QComboBox *>()) {
+				if (c->findData(QStringLiteral("deepgram")) >= 0)
+					service = c;
+				if (c->toolTip().startsWith(QLatin1String("Multilingual v2 is steady")))
+					model = c; // filled while ElevenLabs is the service
+			}
+			ok(edit && service && model && action(QStringLiteral("Slower")) && action(QStringLiteral("Whisper")),
+			   "Pace, Mood, ... over the text; a model picker for ElevenLabs");
+			if (edit && service && model) {
+				service->setCurrentIndex(service->findData(QStringLiteral("openai")));
+				settle(50);
+				d->setText(QStringLiteral("Hoje vamos lavar as mãos."));
+				QTextCursor c = edit->textCursor();
+				c.setPosition(5);
+				c.setPosition(16, QTextCursor::KeepAnchor); // "vamos lavar"
+				edit->setTextCursor(c);
+				action(QStringLiteral("Slower"))->trigger();
+				ok(d->text() == QStringLiteral("Hoje [slow]vamos lavar[/slow] as mãos."), "Slower wraps the selected words");
+				c = edit->textCursor();
+				c.setPosition(int(d->text().size()));
+				edit->setTextCursor(c);
+				for (QToolButton *b : d->findChildren<QToolButton *>())
+					if (b->text().startsWith(QLatin1String("Pause")) && b->menu())
+						for (QAction *a : b->menu()->actions())
+							if (a->text() == QLatin1String("1s"))
+								a->trigger();
+				ok(d->text().endsWith(QStringLiteral("mãos. [pause 1s] ")), "Pause puts [pause 1s] where the cursor is");
+
+				ok(action(QStringLiteral("Whisper"))->isEnabled() && action(QStringLiteral("Whisper"))->text().contains(QChar(0x2248)),
+				   "OpenAI: Whisper, done another way (≈)");
+				service->setCurrentIndex(service->findData(QStringLiteral("deepgram")));
+				settle(50);
+				ok(!action(QStringLiteral("Whisper"))->isEnabled() && action(QStringLiteral("Slower"))->isEnabled(),
+				   "Deepgram: Whisper greyed, pace still there");
+				ok(action(QStringLiteral("Whisper"))->toolTip().contains(QLatin1String("Deepgram")), "and it says why");
+				service->setCurrentIndex(service->findData(QStringLiteral("elevenlabs")));
+				settle(50);
+				ok(model->isVisible(), "ElevenLabs: the model picker shows");
+				model->setCurrentIndex(model->findData(QStringLiteral("eleven_multilingual_v2")));
+				settle(50);
+				const bool v2 = !action(QStringLiteral("Laugh"))->isEnabled();
+				model->setCurrentIndex(model->findData(QStringLiteral("eleven_v4")));
+				settle(50);
+				ok(v2 && action(QStringLiteral("Laugh"))->isEnabled(), "Laugh: not on v2, yes on v4");
+				ok(d->spec().model == QLatin1String("eleven_v4"), "and the narration is made with that model");
+
+				for (QToolButton *b : d->findChildren<QToolButton *>())
+					if (b->text() == QLatin1String("Clear")) {
+						edit->moveCursor(QTextCursor::Start);
+						b->click();
+					}
+				ok(d->text() == QStringLiteral("Hoje vamos lavar as mãos.  "), "Clear marks takes them all out");
+			}
+			d->close();
+		}
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

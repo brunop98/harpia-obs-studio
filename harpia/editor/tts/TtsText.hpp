@@ -16,6 +16,7 @@
 //     difference in length.
 
 #include "TtsAudio.hpp"
+#include "TtsMarkup.hpp"
 #include "TtsProviders.hpp"
 
 #include <QRegularExpression>
@@ -23,49 +24,44 @@
 
 namespace harpia {
 
-// ---- pauses -----------------------------------------------------------------
+// ---- pauses ------------------------------------------------------------------
 
 struct TtsSegment {
-	QString text;
+	QString text;             // as said and shown: no marks (TtsMarkup.hpp)
 	qint64 pauseBeforeMs = 0; // silence before it (0 for the first)
+	int from = 0, to = 0;     // where it is in ttsMark(text).plain
 };
 
-constexpr qint64 kBlankLinePauseMs = 700;
-
-inline QVector<TtsSegment> ttsSegments(const QString &text)
+// The parts of a text between its pauses ([pause 1s], blank lines).
+inline QVector<TtsSegment> ttsSegments(const TtsMarked &m)
 {
-	static const QRegularExpression marker(
-		QStringLiteral("\\[\\s*(?:pause|pausa)\\s*(?:(\\d+(?:[.,]\\d+)?)\\s*(ms|s|seg|sec)?)?\\s*\\]|\\n[ \\t]*\\n\\s*"),
-		QRegularExpression::CaseInsensitiveOption);
 	QVector<TtsSegment> out;
 	qint64 pending = 0;
-	qsizetype from = 0;
-	const auto flush = [&](qsizetype to) {
-		const QString t = text.mid(from, to - from).trimmed();
-		if (t.isEmpty() || !ttsHasLetter(t))
-			return;
-		out.append({t, out.isEmpty() ? 0 : pending});
-		pending = 0;
-	};
-	auto it = marker.globalMatch(text);
-	while (it.hasNext()) {
-		const QRegularExpressionMatch m = it.next();
-		flush(m.capturedStart());
-		if (m.captured(0).startsWith(QLatin1Char('['))) {
-			const QString num = m.captured(1);
-			const QString unit = m.captured(2).toLower();
-			const double v = num.isEmpty() ? 1.0 : QString(num).replace(QLatin1Char(','), QLatin1Char('.')).toDouble();
-			pending += unit == QLatin1String("ms") ? qint64(std::llround(v)) : qint64(std::llround(v * 1000.0));
-		} else {
-			pending += kBlankLinePauseMs;
+	int from = 0;
+	const auto flush = [&](int to) {
+		const QString raw = m.plain.mid(from, to - from);
+		const QString t = raw.trimmed();
+		if (!t.isEmpty() && ttsHasLetter(t)) {
+			const int lead = int(raw.indexOf(t));
+			out.append({t, out.isEmpty() ? 0 : pending, from + lead, from + lead + int(t.size())});
+			pending = 0;
 		}
-		from = m.capturedEnd();
+	};
+	for (const auto &p : m.pauses) {
+		flush(p.first);
+		pending += p.second;
+		from = p.first;
 	}
-	flush(text.size());
+	flush(int(m.plain.size()));
 	return out;
 }
 
-// The text as it will be said and shown: no markers, no blank lines.
+inline QVector<TtsSegment> ttsSegments(const QString &text)
+{
+	return ttsSegments(ttsMark(text));
+}
+
+// The text as it will be said and shown: no marks, no blank lines.
 inline QString ttsPlainText(const QString &text)
 {
 	QStringList parts;

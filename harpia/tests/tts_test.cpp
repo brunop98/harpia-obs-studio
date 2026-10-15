@@ -5,6 +5,7 @@
 #include "editor/tts/SpeechPlacement.hpp"
 #include "editor/tts/TtsAudio.hpp"
 #include "editor/tts/TtsProviders.hpp"
+#include "editor/tts/TtsPlan.hpp"
 #include "editor/tts/TtsText.hpp"
 
 #include <QCoreApplication>
@@ -388,6 +389,139 @@ int main(int argc, char **argv)
 		   "service, voice, language, speed and pace survive the project file");
 		TtsSpec::fromJson(QStringLiteral("not json"), &good);
 		ok(!good, "nonsense is not a narration");
+	}
+
+	std::printf("\n-- delivery marks: reading them --\n");
+	{
+		const TtsMarked m = ttsMark(QStringLiteral(
+			"Olá [slow]pessoal, tudo[/slow] bem? [pause 1s] [WHISPER]Segredo.[/whisper] [laugh] Fim [strong accent]acabou [1]. [/fast]"));
+		ok(!m.plain.contains(QLatin1String("[slow]")) && !m.plain.contains(QLatin1String("pause")) &&
+			   !m.plain.contains(QLatin1String("laugh")) && !m.plain.contains(QLatin1String("accent")),
+		   "no mark is left in what is said and shown");
+		ok(m.plain.contains(QLatin1String("[1]")), "brackets that are not a mark stay text");
+		const auto fxAt = [&](const char *w) { return m.fx.value(int(m.plain.indexOf(QString::fromUtf8(w)))); };
+		ok((fxAt("pessoal") & FxSlow) && (fxAt("tudo") & FxSlow) && !(fxAt("bem") & FxSlow), "[slow]…[/slow] covers its words");
+		ok(fxAt("Segredo") & FxWhisper, "case does not matter: [WHISPER]");
+		ok(m.pauses.size() == 1 && m.pauses.first().second == 1000, "the pause");
+		ok(m.points.size() == 2 && m.points[0].second == QLatin1String("laugh") &&
+			   m.points[1].second == QLatin1String("strong accent"),
+		   "a sound, and an own tag (ElevenLabs v3/v4)");
+		ok(m.problems.size() == 1 && m.problems.first().contains(QLatin1String("[/fast]")), "a close without its open is reported");
+		ok(ttsPlainText(QStringLiteral("A [slow]b[/slow] c [laugh]")) == QStringLiteral("A b c"), "the captions' text: plain");
+	}
+
+	std::printf("\n-- what each service can do --\n");
+	{
+		const auto lv = [](TtsProvider p, const char *model, const char *tag) {
+			return ttsSupport(p, QString::fromLatin1(model), *ttsTagNamed(QString::fromLatin1(tag))).level;
+		};
+		ok(lv(TtsProvider::Google, "", "slow") == TtsSupport::Native && lv(TtsProvider::Google, "", "stress") == TtsSupport::Native &&
+			   lv(TtsProvider::Google, "", "whisper") == TtsSupport::Approx && lv(TtsProvider::Google, "", "laugh") == TtsSupport::None,
+		   "Google: prosody and emphasis itself, moods near enough, no sounds");
+		ok(lv(TtsProvider::ElevenLabs, "eleven_v4", "whisper") == TtsSupport::Native &&
+			   lv(TtsProvider::ElevenLabs, "eleven_v4", "laugh") == TtsSupport::Native &&
+			   lv(TtsProvider::ElevenLabs, "eleven_multilingual_v2", "whisper") == TtsSupport::None &&
+			   lv(TtsProvider::ElevenLabs, "eleven_multilingual_v2", "slow") == TtsSupport::Approx,
+		   "ElevenLabs: v4 takes audio tags; v2 only pace (per request)");
+		ok(lv(TtsProvider::OpenAI, "", "high") == TtsSupport::Approx && lv(TtsProvider::OpenAI, "", "sigh") == TtsSupport::Approx,
+		   "OpenAI: everything, by instructions");
+		ok(lv(TtsProvider::Deepgram, "", "fast") == TtsSupport::Approx && lv(TtsProvider::Deepgram, "", "whisper") == TtsSupport::None,
+		   "Deepgram: pace only");
+		ok(ttsUnsupported(ttsMark(QStringLiteral("[whisper]a[/whisper] [slow]b[/slow]")), TtsProvider::Deepgram, QString()) ==
+			   QStringList{QStringLiteral("Whisper")},
+		   "what a service cannot do, named before generating");
+	}
+
+	std::printf("\n-- delivery marks: as each service is sent them --\n");
+	{
+		const QString text = QStringLiteral("Hoje [slow]vamos lavar[/slow] as mãos.");
+		QVector<TtsPlanned> g = ttsPlan(text, TtsProvider::Google, QString(), {}, 4800);
+		const TtsRendered gr = ttsRender(TtsProvider::Google, QString(), g.value(0));
+		std::printf("     Google: %s\n", qPrintable(gr.text));
+		ok(g.size() == 1 && gr.text.contains(QStringLiteral(
+					    "<prosody rate=\"slow\"><mark name=\"w1\"/>vamos <mark name=\"w2\"/>lavar </prosody>")) &&
+			   gr.text.contains(QStringLiteral("<mark name=\"w4\"/>mãos.")),
+		   "Google: <prosody> around the words, a mark before each");
+		ok(gr.timingText == QStringLiteral("Hoje vamos lavar as mãos."), "the times are found on the plain words");
+
+		const TtsRendered oa = ttsRender(TtsProvider::OpenAI, QString(),
+						 ttsPlan(text, TtsProvider::OpenAI, QString(), {}, 4000).value(0), QStringLiteral("Warm"));
+		std::printf("     OpenAI: \"%s\" / %s\n", qPrintable(oa.text), qPrintable(oa.instructions));
+		ok(oa.text == QStringLiteral("Hoje vamos lavar as mãos.") &&
+			   oa.instructions == QStringLiteral("Warm. Say “vamos lavar” slowly."),
+		   "OpenAI: the plain words; the mark in its instructions");
+		const TtsRendered whole = ttsRender(TtsProvider::OpenAI, QString(),
+						    ttsPlan(QStringLiteral("[whisper][slow]Tudo bem.[/slow][/whisper]"),
+							    TtsProvider::OpenAI, QString(), {}, 4000)
+							    .value(0));
+		ok(whole.instructions == QStringLiteral("Speak slowly and in a whisper."), "a mark on all of it: \"Speak …\"");
+
+		const QString e = QStringLiteral("[whisper]Um segredo[/whisper] e [stress]nada[/stress] mais [laugh]");
+		const TtsRendered v4 = ttsRender(TtsProvider::ElevenLabs, QStringLiteral("eleven_v4"),
+						 ttsPlan(e, TtsProvider::ElevenLabs, QStringLiteral("eleven_v4"), {}, 4500).value(0));
+		std::printf("     ElevenLabs v4: %s\n", qPrintable(v4.text));
+		ok(v4.text == QStringLiteral("[whispers] Um segredo e NADA mais [laughs]"),
+		   "ElevenLabs v4: its audio tags, stress in CAPITALS");
+		ok(v4.timingText == QStringLiteral("Um segredo e nada mais"), "its times found on the words as written");
+
+		const QVector<TtsPlanned> v2 = ttsPlan(QStringLiteral("Normal, [fast]bem rápido aqui[/fast] e devagar."),
+						       TtsProvider::ElevenLabs, QStringLiteral("eleven_multilingual_v2"), {}, 4500);
+		QStringList speeds;
+		for (const TtsPlanned &p : v2)
+			speeds << QString::number(ttsRender(TtsProvider::ElevenLabs, QStringLiteral("eleven_multilingual_v2"), p).speed);
+		std::printf("     ElevenLabs v2: %d requests at %s\n", int(v2.size()), qPrintable(speeds.join(QStringLiteral(", "))));
+		ok(v2.size() == 3 && speeds == QStringList({QStringLiteral("1"), QStringLiteral("1.15"), QStringLiteral("1")}),
+		   "ElevenLabs v2: a request per pace, each at its speed");
+		ok(v2.value(1).gapBeforeMs == kTtsPartGapMs, "joined with only a breath (same sentence)");
+
+		const QVector<TtsPlanned> dg = ttsPlan(QStringLiteral("[whisper]oi[/whisper] [slow]tchau[/slow]"),
+						       TtsProvider::Deepgram, QString(), {}, 1900);
+		ok(dg.size() == 2 && ttsRender(TtsProvider::Deepgram, QString(), dg[1]).speed < 1.0 &&
+			   ttsRender(TtsProvider::Deepgram, QString(), dg[0]).text == QStringLiteral("oi"),
+		   "Deepgram: pace per request; the whisper is read normally");
+
+		// Marks and pronunciation together.
+		const QVector<PronunciationRule> rules = parsePronunciations(QStringLiteral("OBS = ó bê ésse"));
+		const TtsPlanned pr = ttsPlan(QStringLiteral("[stress]OBS[/stress] grava."), TtsProvider::ElevenLabs,
+					      QStringLiteral("eleven_v4"), rules, 4500)
+					      .value(0);
+		ok(ttsRender(TtsProvider::ElevenLabs, QStringLiteral("eleven_v4"), pr).text == QStringLiteral("Ó BÊ ÉSSE grava."),
+		   "a stressed word said differently: the spoken form, stressed");
+
+		// Long, marked text in Google's pieces: none over the limit in SSML bytes.
+		QString longText;
+		for (int i = 0; i < 60; ++i)
+			longText += QStringLiteral("Frase %1 com [slow]palavras lentas[/slow] e [stress]ênfase[/stress]. ").arg(i);
+		const QVector<TtsPlanned> gp = ttsPlan(longText, TtsProvider::Google, QString(), {}, 1500);
+		bool under = true;
+		for (const TtsPlanned &p : gp)
+			under = under && ttsRender(TtsProvider::Google, QString(), p).text.toUtf8().size() <= 1500;
+		ok(gp.size() > 3 && under, "Google: every piece within its limit, marks included");
+	}
+
+	std::printf("\n-- ElevenLabs replies --\n");
+	{
+		QJsonObject o;
+		o.insert(QStringLiteral("audio_base64"), QString::fromLatin1(QByteArray("ID3x").toBase64()));
+		QString err;
+		const TtsReply r = parseTtsReply(TtsProvider::ElevenLabs, QJsonDocument(o).toJson(), QStringLiteral("oi"), &err);
+		ok(err.isEmpty() && !r.timed && r.audio == "ID3x", "no character times: audio, to be timed by transcribing");
+		QStringList chars;
+		QVector<double> st, en;
+		const QString sent = QStringLiteral("[whispers] OI gente");
+		for (int i = 0; i < sent.size(); ++i) {
+			chars << QString(sent[i]);
+			st << i * 0.05;
+			en << i * 0.05 + 0.05;
+		}
+		QVector<bool> matched;
+		const QVector<ClipWordTime> w = wordsFromCharacters(ttsWords(QStringLiteral("oi gente")), chars, st, en, &matched);
+		ok(matched.value(0) && matched.value(1) && w[0].startMs == 550, "a word in CAPITALS is found; the tag is skipped");
+		TtsSpec spec;
+		spec.provider = TtsProvider::ElevenLabs;
+		spec.voice = QStringLiteral("x");
+		spec.model = QStringLiteral("eleven_v4");
+		ok(TtsSpec::fromJson(spec.toJson()).model == QLatin1String("eleven_v4"), "the model is kept with the narration");
 	}
 
 	std::printf("\n-- on the timeline, linked --\n");

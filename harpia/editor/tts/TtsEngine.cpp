@@ -33,7 +33,11 @@ QSettings settings()
 // The services that give audio only are timed by transcribing it back.
 SpeechProvider transcriberFor(TtsProvider p)
 {
-	return p == TtsProvider::Deepgram ? SpeechProvider::Deepgram : SpeechProvider::OpenAI;
+	switch (p) {
+	case TtsProvider::Deepgram: return SpeechProvider::Deepgram;
+	case TtsProvider::ElevenLabs: return SpeechProvider::ElevenLabs; // a model without character times
+	default: return SpeechProvider::OpenAI;
+	}
 }
 } // namespace
 
@@ -134,16 +138,12 @@ void TtsEngine::start(const TtsJob &job)
 	wavs_.clear();
 	words_.clear();
 	idx_ = 0;
+	// Pauses, paces and sentences into requests; the marks in each service's
+	// own form (TtsPlan.hpp).
 	const TtsProviderInfo &info = ttsProviderInfo(job.spec.provider);
-	const auto cost = [&](const QString &piece) {
-		const QString said = ttsSpoken(piece, job.rules).spoken;
-		return job.spec.provider == TtsProvider::Google ? googleSsmlBytes(said) : int(said.size());
-	};
-	for (const TtsSegment &seg : ttsSegments(job.text)) {
-		const QStringList chunks = ttsChunks(seg.text, info.maxChars, cost);
-		for (int i = 0; i < chunks.size(); ++i)
-			pieces_.append({ttsSpoken(chunks[i], job.rules), i == 0 ? seg.pauseBeforeMs : kPieceGapMs});
-	}
+	for (const TtsPlanned &pl : ttsPlan(job.text, job.spec.provider, job.spec.model, job.rules, info.maxChars,
+					      job.spec.style))
+		pieces_.append({pl, ttsRender(job.spec.provider, job.spec.model, pl, job.spec.style), pl.gapBeforeMs});
 	if (pieces_.isEmpty()) {
 		emit failed(QStringLiteral("there is nothing to say in the text"));
 		return;
@@ -182,15 +182,23 @@ void TtsEngine::nextPiece()
 	TtsRequest r;
 	r.provider = job_.spec.provider;
 	r.apiKey = job_.apiKey;
-	r.text = pieces_[idx_].st.spoken;
+	const TtsRendered &rd = pieces_[idx_].rendered;
+	r.text = rd.text;
+	r.timingText = rd.timingText;
+	r.model = job_.spec.model;
 	r.voice = job_.spec.voice;
 	r.language = job_.spec.language;
-	r.style = job_.spec.style;
-	r.speed = job_.spec.speed;
+	// OpenAI: the style and what the marks ask, as instructions.
+	r.style = job_.spec.provider == TtsProvider::OpenAI ? rd.instructions : job_.spec.style;
+	// The pace: the service's own rate, times this passage's where the pace
+	// is per request (ElevenLabs v2: 0.7-1.2; Deepgram: its own).
+	r.speed = job_.spec.provider == TtsProvider::Deepgram ? rd.speed
+		  : job_.spec.provider == TtsProvider::ElevenLabs ? std::clamp(job_.spec.speed * rd.speed, 0.7, 1.2)
+								  : job_.spec.speed;
 	if (idx_ > 0)
-		r.previousText = pieces_[idx_ - 1].st.spoken;
+		r.previousText = pieces_[idx_ - 1].st().spoken;
 	if (idx_ + 1 < pieces_.size())
-		r.nextText = pieces_[idx_ + 1].st.spoken;
+		r.nextText = pieces_[idx_ + 1].st().spoken;
 	emit progress(QStringLiteral("Speaking part %1 of %2 with %3…")
 			      .arg(idx_ + 1)
 			      .arg(pieces_.size())
@@ -243,7 +251,7 @@ void TtsEngine::onTranscribed(const Transcript &t)
 	if (!running_)
 		return;
 	QVector<bool> matched;
-	QVector<ClipWordTime> spoken = alignToTranscript(ttsWords(pieces_[idx_].st.spoken), t.words, &matched);
+	QVector<ClipWordTime> spoken = alignToTranscript(ttsWords(pieces_[idx_].st().spoken), t.words, &matched);
 	editorLog(EditorLogLevel::Info, kWhere,
 		  QStringLiteral("part %1: %2 of %3 words matched to what was heard")
 			  .arg(idx_ + 1)
@@ -256,7 +264,7 @@ void TtsEngine::onTranscribed(const Transcript &t)
 void TtsEngine::pieceDone(const QVector<ClipWordTime> &spokenTimes)
 {
 	// Back from what was said to what is written: the captions' words.
-	words_.append(ttsWrittenTimes(pieces_[idx_].st, spokenTimes));
+	words_.append(ttsWrittenTimes(pieces_[idx_].st(), spokenTimes));
 	++idx_;
 	nextPiece();
 }

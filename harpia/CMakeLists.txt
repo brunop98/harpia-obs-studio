@@ -356,6 +356,9 @@ target_sources(
     editor/timeline/KeyframeEditor.hpp
     editor/timeline/TimelineCompositor.cpp
     editor/timeline/TimelineCompositor.hpp
+    # Colour emoji in text clips (the pack is copied next to the exe below).
+    editor/timeline/Emoji.cpp
+    editor/timeline/Emoji.hpp
     editor/timeline/TextStyleJson.hpp
     editor/timeline/TimelineJson.hpp
     # Per-clip transform scripting (QJSEngine).
@@ -416,6 +419,16 @@ endif()
 
 if(OS_WINDOWS)
   include(cmake/os-windows.cmake)
+else()
+  # Google's Noto emoji, drawn in text clips (editor/timeline/Emoji.hpp), next
+  # to the program. Windows copies them into the rundir (cmake/os-windows.cmake).
+  add_custom_command(
+    TARGET harpia-recorder
+    POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/resources/emoji/noto-emoji.pack"
+            "$<TARGET_FILE_DIR:harpia-recorder>"
+    VERBATIM
+  )
 endif()
 
 set_target_properties_obs(

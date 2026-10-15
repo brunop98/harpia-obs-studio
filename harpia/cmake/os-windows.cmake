@@ -30,6 +30,12 @@ add_custom_command(
   # multimedia/ is the audio backend for playback and the microphone,
   # imageformats/ reads JPEG/WebP stills, styles/ and iconengines/ the look.
   COMMAND "${CMAKE_COMMAND}" -E copy_directory "$<TARGET_FILE_DIR:Qt6::Core>/../plugins" "${_harpia_runtime_dir}"
+  # Google's Noto emoji, drawn in text clips (editor/timeline/Emoji.hpp), and
+  # their licence.
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/resources/emoji/noto-emoji.pack"
+          "${_harpia_runtime_dir}"
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/resources/emoji/LICENSE-Apache-2.0.txt"
+          "${_harpia_runtime_dir}/noto-emoji-LICENSE.txt"
   VERBATIM
 )
 

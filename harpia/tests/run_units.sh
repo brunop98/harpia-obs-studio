@@ -15,6 +15,9 @@ MOC="$(command -v moc || ls /usr/lib/qt6/libexec/moc /usr/lib/x86_64-linux-gnu/q
 # Qt6OpenGL is here for SpotlightGl, which Spotlight.cpp dispatches to.
 CF="$(pkg-config --cflags Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
 LF="$(pkg-config --libs Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
+# The colour emoji in text clips (editor/timeline/Emoji.cpp) decode their
+# pictures with FFmpeg: wherever the compositor is built, so is that.
+EMOJI_FLAGS="$(pkg-config --cflags --libs libavcodec libswscale libavutil)"
 
 # yt-dlp from the editor: the -J reply, the argument list, progress lines,
 # and finding (or not finding) the executable.
@@ -218,7 +221,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF $AVCF
 	"$H/editor/subtitles/SpeechTranscriber.cpp" "$WORK/moc_SpeechTranscriber.cpp" \
 	"$H/editor/subtitles/SubtitleDialog.cpp" "$WORK/moc_SubtitleDialog.cpp" \
 	"$H/editor/subtitles/SecretStore.cpp" "$H/editor/subtitles/AudioForSpeech.cpp" \
-	"$H/editor/timeline/TimelineCompositor.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS \
 	"$H/editor/VoiceoverMixer.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
@@ -242,7 +245,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/component/ScriptComponent.cpp" \
-	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/componentrender_test" "$QJSLIB/libqjs.a" $LF
@@ -254,7 +257,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/component/ScriptComponent.cpp" \
-	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/richtext_test" "$QJSLIB/libqjs.a" $LF
@@ -274,7 +277,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/component/ScriptComponent.cpp" \
-	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/opaqueframe_test" "$QJSLIB/libqjs.a" $LF
@@ -286,7 +289,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/component/ScriptComponent.cpp" \
-	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/stillweight_test" "$QJSLIB/libqjs.a" $LF
@@ -298,7 +301,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/component/ScriptComponent.cpp" \
-	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/previewcache_test" "$QJSLIB/libqjs.a" $LF
@@ -311,7 +314,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -DHARPIA_SRC="\"$H\"" -I"$H" -I"$QJ
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/component/ScriptComponent.cpp" "$H/editor/component/ShaderComponent.cpp" \
 	"$H/editor/shader/ShaderRenderer.cpp" \
-	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/gpufx_test" "$QJSLIB/libqjs.a" $LF
@@ -346,7 +349,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$HERE/effectarea_test.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
-	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/effectarea_test" "$QJSLIB/libqjs.a" $LF
@@ -532,7 +535,7 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$HERE/mask_test.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
-	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/mask_test" "$QJSLIB/libqjs.a" $LF
@@ -543,10 +546,22 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$HERE/textwrap_test.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
-	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	-o "$WORK/textwrap_test" "$QJSLIB/libqjs.a" $LF
+
+# Colour emoji in text clips: which characters are emoji, the pictures, and a
+# caption with an emoji in it drawn in colour rather than as a one-colour shape.
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
+	"$HERE/emoji_test.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS \
+	"$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
+	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	-o "$WORK/emoji_test" "$QJSLIB/libqjs.a" $LF
 
 # "Export this clip": the sliced timeline has to RENDER what the project
 # rendered, which is a claim about pixels rather than about field arithmetic.
@@ -554,7 +569,7 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$HERE/timelineslice_test.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
-	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" "$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
 	"$WORK/moc_TimelineView.cpp" \
@@ -569,7 +584,7 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$HERE/playbacktracks_test.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
-	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" "$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
 	"$WORK/moc_TimelineView.cpp" \
@@ -580,7 +595,7 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 # an edge must not drag the frame off the canvas.
 g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$HERE/zoomkeyframes_test.cpp" "$H/editor/timeline/ZoomKeyframes.cpp" \
-	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
@@ -971,6 +986,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/propkeys_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/pixelbands_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/mask_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textwrap_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/emoji_test" "$H/resources/emoji/noto-emoji.pack" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineslice_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/playbacktracks_test" || rc=1
 exit $rc

@@ -202,7 +202,8 @@ try {
         $expected = @(
             @{ Path = 'bin/64bit/obs-nvenc-test.exe'; Why = 'NVIDIA hardware encoding' },
             @{ Path = 'bin/64bit/obs-amf-test.exe'; Why = 'AMD hardware encoding' },
-            @{ Path = 'bin/64bit/obs-qsv-test.exe'; Why = 'Intel hardware encoding (it needs the ATL component to build)' }
+            @{ Path = 'bin/64bit/obs-qsv-test.exe'; Why = 'Intel hardware encoding (it needs the ATL component to build)' },
+            @{ Path = 'bin/64bit/noto-emoji.pack'; Why = 'colour emoji in text clips (they would be one-colour shapes)' }
         )
         foreach ($item in $expected) {
             if (-not (Test-Path -LiteralPath (Join-Path $dist $item.Path))) {

@@ -64,7 +64,7 @@ build() { # source-file output-name
 		"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 		"$H/editor/component/ComponentStack.cpp" \
 		"$H/editor/component/BuiltinComponents.cpp" \
-		"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Spotlight.cpp" \
+		"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" "$H/editor/timeline/Spotlight.cpp" \
 		"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
 		"$H/editor/shader/SpotlightGl.cpp" \
 		"$H/editor/script/TransformScript.cpp" "$H/editor/shader/ShaderRenderer.cpp" \

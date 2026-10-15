@@ -8,6 +8,7 @@
 #include "../component/ComponentStack.hpp"
 #include "Spotlight.hpp"
 #include "RichText.hpp"
+#include "Emoji.hpp"
 
 #include "../script/TransformScript.hpp"
 
@@ -89,6 +90,9 @@ struct CachedText {
 	};
 	QVector<Fill> fills;
 	QVector<QPair<QRectF, QColor>> marks;
+	// Colour emoji (see Emoji.hpp): not in the paths, drawn as pictures in
+	// these squares after the text, in the caption's space.
+	QVector<QPair<QRectF, QString>> emoji;
 };
 
 // The lines as DRAWN -- the case style applied here, at the one point the words
@@ -110,20 +114,20 @@ QStringList textLines(const TlText &t)
 // a long line).
 constexpr double kWrapShare = 0.92;
 
-QStringList wrapLines(const QStringList &lines, const QFontMetricsF &fm, double maxW)
+QStringList wrapLines(const QStringList &lines, const QFont &f, double maxW)
 {
 	if (maxW <= 0.0)
 		return lines;
 	QStringList out;
 	for (const QString &line : lines) {
-		if (fm.horizontalAdvance(line) <= maxW) {
+		if (emoji::width(f, line) <= maxW) {
 			out << line;
 			continue;
 		}
 		QString cur;
 		for (const QString &word : line.split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
 			const QString tryLine = cur.isEmpty() ? word : cur + QLatin1Char(' ') + word;
-			if (!cur.isEmpty() && fm.horizontalAdvance(tryLine) > maxW) {
+			if (!cur.isEmpty() && emoji::width(f, tryLine) > maxW) {
 				out << cur;
 				cur = word;
 			} else {
@@ -137,27 +141,38 @@ QStringList wrapLines(const QStringList &lines, const QFontMetricsF &fm, double 
 
 // Lay the (possibly multi-line) text out as a path centred on the origin, and
 // report the block's bounding box. `wrapW` is the widest a line may be before
-// it is broken (0 = never).
-QPainterPath buildTextPath(const TlText &t, const QFont &f, double wrapW, QRectF *blockOut)
+// it is broken (0 = never). Emoji are left out of the path and listed in
+// `emojiOut`, each with the square it is drawn in.
+QPainterPath buildTextPath(const TlText &t, const QFont &f, double wrapW, QRectF *blockOut,
+			   QVector<QPair<QRectF, QString>> *emojiOut)
 {
 	const QFontMetricsF fm(f);
-	const QStringList lines = wrapLines(textLines(t), fm, wrapW);
+	const QStringList lines = wrapLines(textLines(t), f, wrapW);
 	const double lineH = fm.height();
 	double maxW = 0.0;
 	for (const QString &l : lines)
-		maxW = std::max(maxW, fm.horizontalAdvance(l));
+		maxW = std::max(maxW, emoji::width(f, l));
 	const double blockH = lineH * lines.size();
 
 	QPainterPath path;
 	double y = -blockH / 2.0 + fm.ascent();
 	for (const QString &l : lines) {
-		const double w = fm.horizontalAdvance(l);
+		const double w = emoji::width(f, l);
 		double x = -maxW / 2.0;            // left
 		if (t.align == 1)                  // centre
 			x = -w / 2.0;
 		else if (t.align == 2)             // right
 			x = maxW / 2.0 - w;
-		path.addText(QPointF(x, y), f, l);
+		for (const emoji::Piece &pc : emoji::split(l)) {
+			if (pc.isEmoji()) {
+				if (emojiOut)
+					emojiOut->push_back({emoji::square(f, x, y), pc.key});
+				x += emoji::advance(f);
+			} else {
+				path.addText(QPointF(x, y), f, pc.text);
+				x += fm.horizontalAdvance(pc.text);
+			}
+		}
 		y += lineH;
 	}
 	if (blockOut)
@@ -214,7 +229,7 @@ void buildRichText(const TlText &t, const QFont &base, QSize canvas, double wrap
 				tk.text = r.text.mid(i, j - i);
 				tk.st = r.style;
 				tk.font = f;
-				tk.w = fm.horizontalAdvance(tk.text);
+				tk.w = emoji::width(f, tk.text);
 				tk.space = sp;
 				toks.push_back(tk);
 				i = j;
@@ -285,6 +300,7 @@ void buildRichText(const TlText &t, const QFont &base, QSize canvas, double wrap
 	ct.rich = true;
 	ct.fills.clear();
 	ct.marks.clear();
+	ct.emoji.clear();
 	const auto fillFor = [&ct](const Style &st) -> QPainterPath & {
 		for (CachedText::Fill &f : ct.fills)
 			if (f.color == st.color && f.alpha == st.alpha)
@@ -309,8 +325,18 @@ void buildRichText(const TlText &t, const QFont &base, QSize canvas, double wrap
 			if (tk.st.mark.isValid())
 				ct.marks.push_back({QRectF(x, top, tk.w, m.height), tk.st.mark});
 			QPainterPath &fill = fillFor(tk.st);
-			if (!tk.space)
-				fill.addText(QPointF(x, baseline), tk.font, tk.text);
+			if (!tk.space) {
+				double ex = x;
+				for (const emoji::Piece &pc : emoji::split(tk.text)) {
+					if (pc.isEmoji()) {
+						ct.emoji.push_back({emoji::square(tk.font, ex, baseline), pc.key});
+						ex += emoji::advance(tk.font);
+					} else {
+						fill.addText(QPointF(ex, baseline), tk.font, pc.text);
+						ex += fm.horizontalAdvance(pc.text);
+					}
+				}
+			}
 			const double lw = std::max(1.0, fm.lineWidth());
 			if (tk.st.underline)
 				fill.addRect(QRectF(x, baseline + fm.underlinePos(), tk.w, lw));
@@ -358,7 +384,7 @@ CachedText &cachedText(const TlText &t, const QFont &f, QSize canvas)
 		if (rich_text::hasTags(k.text))
 			buildRichText(t, f, canvas, canvas.width() * kWrapShare, ct);
 		else
-			ct.path = buildTextPath(t, f, canvas.width() * kWrapShare, &ct.block);
+			ct.path = buildTextPath(t, f, canvas.width() * kWrapShare, &ct.block, &ct.emoji);
 		it = cache.insert(k, ct);
 	}
 	return it.value();
@@ -507,13 +533,27 @@ void TimelineCompositor::drawTextClip(QPainter &p, const TlClip &c, const TlTran
 		}
 		if (!ct.rich) {
 			q.fillPath(path, t.color);
-			return;
+		} else {
+			for (const CachedText::Fill &f : ct.fills) {
+				QColor c = f.color.isValid() ? f.color : t.color;
+				if (f.alpha >= 0)
+					c.setAlpha(f.alpha);
+				q.fillPath(f.path, c);
+			}
 		}
-		for (const CachedText::Fill &f : ct.fills) {
-			QColor c = f.color.isValid() ? f.color : t.color;
-			if (f.alpha >= 0)
-				c.setAlpha(f.alpha);
-			q.fillPath(f.path, c);
+		// The emoji, in their own colours, over the outline: the artwork
+		// has its own dark edge, so it reads on any background.
+		if (!ct.emoji.isEmpty()) {
+			q.save();
+			q.setRenderHint(QPainter::SmoothPixmapTransform, true);
+			const QTransform &m = q.worldTransform();
+			const double dev = std::hypot(m.m11(), m.m12());
+			for (const auto &e : ct.emoji) {
+				const QImage img = emoji::image(e.second, int(std::ceil(e.first.width() * dev)));
+				if (!img.isNull())
+					q.drawImage(e.first, img);
+			}
+			q.restore();
 		}
 	};
 
@@ -547,6 +587,8 @@ void TimelineCompositor::drawTextClip(QPainter &p, const TlClip &c, const TlTran
 				local = local.united(box);
 			for (const auto &mk : ct.marks)
 				local = local.united(mk.first);
+			for (const auto &e : ct.emoji)
+				local = local.united(e.first);
 			const double px = double(phx) / kTextPhaseSteps, py = double(phy) / kTextPhaseSteps;
 			const int left = int(std::floor(px + local.left() * s)) - 2;
 			const int top = int(std::floor(py + local.top() * s)) - 2;

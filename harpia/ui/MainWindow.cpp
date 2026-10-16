@@ -3348,7 +3348,11 @@ void MainWindow::updateGuides()
 	}
 	GuideStyle s;
 	s.kinds = p.guideKinds;
-	s.color = QColor(QString::fromStdString(p.guideColor));
+	if (p.guideColor != guideColorName_ || !guideColor_.isValid()) {
+		guideColorName_ = p.guideColor;
+		guideColor_ = QColor(QString::fromStdString(p.guideColor));
+	}
+	s.color = guideColor_;
 	s.opacityPct = p.guideOpacityPct;
 	s.thickness = p.guideThickness;
 	guides_->showGuides(r, s);

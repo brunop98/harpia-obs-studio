@@ -25,6 +25,21 @@ struct GuideStyle {
 	bool operator!=(const GuideStyle &o) const { return !(*this == o); }
 };
 
+// The guides' lines for one frame, in device pixels, ready to stroke. Building
+// them (the spiral's arcs above all) is the costly half of drawing them, and
+// they depend only on the frame's size, the kinds, the thickness and the
+// display -- not on the colour -- so the overlay keeps them between paints.
+struct GuideGeometry {
+	GuidePaths paths;  // device pixels
+	int lineWidth = 1; // device pixels
+	double unit = 1.0; // device pixels per painter unit
+
+	bool isEmpty() const { return paths.solid.isEmpty() && paths.dashed.isEmpty(); }
+};
+GuideGeometry guideGeometry(const QRectF &frame, const GuideStyle &style, double pxPerUnit = 1.0);
+// Stroke `g` in the style's colour and opacity. See paintGuides.
+void strokeGuides(QPainter &p, const GuideGeometry &g, const GuideStyle &style);
+
 // Draw the guides inside `frame`, in the painter's current units. `pxPerUnit`
 // is how many device pixels one of those units is, so the line comes out as
 // thick as the style says on any display. Each line gets a faint edge in the
@@ -69,6 +84,13 @@ private:
 	GuideStyle style_;
 	QRect rect_;
 	bool hidden_ = false;
+	// The lines last drawn, and what they were built for: a moved region or
+	// a new colour repaints without rebuilding them.
+	GuideGeometry geometry_;
+	QSize geometrySize_;
+	double geometryDpr_ = 0.0;
+	int geometryKinds_ = -1;
+	int geometryThickness_ = -1;
 };
 
 // The guides over a small 16:9 picture: what the settings page shows, so the

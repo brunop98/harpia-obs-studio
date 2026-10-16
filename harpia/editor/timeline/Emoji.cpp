@@ -171,6 +171,20 @@ bool readsAsEmoji(const QList<uint> &cps)
 	return false;
 }
 
+// Whether `text` could hold an emoji at all. Everything readsAsEmoji() looks
+// for is at or above U+20E3 (the keycap mark) -- the selector, the BMP list,
+// and everything from U+1F000, which arrives as surrogates -- except the
+// joiner, and a joiner between characters that are none of those makes no
+// emoji in the pack. So plain text, which is nearly every caption, never needs
+// splitting into grapheme clusters: one pass over the code units says so.
+bool mayHoldEmoji(const QString &text)
+{
+	for (const QChar ch : text)
+		if (ch.unicode() >= 0x20E3)
+			return true;
+	return false;
+}
+
 } // namespace
 
 void setPackPath(const QString &path)
@@ -212,7 +226,7 @@ QVector<Piece> split(const QString &text)
 	QVector<Piece> out;
 	if (text.isEmpty())
 		return out;
-	if (!available()) {
+	if (!mayHoldEmoji(text) || !available()) {
 		out.push_back({text, QString()});
 		return out;
 	}
@@ -225,7 +239,7 @@ QVector<Piece> split(const QString &text)
 			break;
 		const QString cluster = text.mid(start, next - start);
 		start = next;
-			QString key;
+		QString key;
 		if (readsAsEmoji(cluster.toUcs4())) {
 			key = keyFor(cluster);
 			if (!hasKey(key))
@@ -302,6 +316,8 @@ QRectF square(const QFont &font, double x, double baseline)
 double width(const QFont &font, const QString &text)
 {
 	const QFontMetricsF fm(font);
+	if (!mayHoldEmoji(text))
+		return fm.horizontalAdvance(text); // what split() would come to, without it
 	double w = 0.0;
 	for (const Piece &pc : split(text))
 		w += pc.isEmoji() ? advance(font) : fm.horizontalAdvance(pc.text);

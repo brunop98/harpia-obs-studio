@@ -856,9 +856,13 @@ private:
 	QWidget *variationsBox_ = nullptr;
 	InspectorSection *textSection_ = nullptr; // titled "Text" or "Random text"
 	// Random clip (timeline/ClipVariations.hpp): the slot's footage choices,
-	// one version of the video each. Rows rebuilt from the clip on every sync.
+	// one version of the video each. One row per choice: its button and its
+	// remove button, made when the count changes and updated in place on
+	// every other sync (a slip renames the shown one on every mouse move).
 	QWidget *randomClipBox_ = nullptr;
 	QVBoxLayout *randomClipRows_ = nullptr;
+	QVector<QPushButton *> randomClipPicks_;
+	QVector<QPushButton *> randomClipDels_;
 	QLabel *randomClipCount_ = nullptr;
 	QPushButton *randomClipPrev_ = nullptr;
 	QPushButton *randomClipNext_ = nullptr;
@@ -866,6 +870,10 @@ private:
 	void buildRandomClipSection(QVBoxLayout *clipOuter);
 	void syncRandomClipInspector(const TlClip &c);
 	void showRandomClipOption(int k);
+	// A file's waveform (loadPeaks at 600), kept: flipping through a Random
+	// clip's choices on an audio lane reads each file once, not every time.
+	QVector<float> randomClipPeaks(const QString &path);
+	QHash<QString, QVector<float>> randomClipPeaks_; // by path, size and time
 	void addRandomClipOption(int sourceId);
 	void removeRandomClipOption(int k);
 	void importRandomClipOption();

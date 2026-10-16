@@ -745,6 +745,12 @@ private:
 	TlClip dragOrig_;
 	int dragTrack_ = -1, dragClip_ = -1;
 	double dragSrcPerPx_ = 0.0;
+	// A Random clip's room to grow, its head and its tail, as its other
+	// choices allow (clip_variations::roomOfOthers): fixed for the drag.
+	qint64 dragRoomHeadMs_ = 0, dragRoomTailMs_ = 0;
+	// How far a slip can move the footage, the clip and its partners together
+	// (lowest <= 0 <= highest): fixed for the drag.
+	qint64 slipLoMs_ = 0, slipHiMs_ = 0;
 	// Slip: the clip in slip mode, and -- during a drag -- the clips linked to
 	// it that play the same file (its detached sound), as they were at the
 	// press. They slip by the same amount, so picture and sound stay together.

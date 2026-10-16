@@ -8112,49 +8112,62 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 	randomClipBox_->setVisible(on);
 	if (!on)
 		return;
-	// Rebuilt rather than patched: a handful of rows, and a row's own click is
-	// often what got us here -- deleteLater lets that click finish first.
-	while (QLayoutItem *it = randomClipRows_->takeAt(0)) {
-		if (QWidget *w = it->widget()) {
-			w->hide();
-			w->deleteLater();
-		}
-		delete it;
-	}
 	const int n = int(c.clipOptions.size());
+	// A row per choice, made only when the count changes. Rebuilt then rather
+	// than patched, and a row's own click (its ×) is often what got us here:
+	// deleteLater lets that click finish first.
+	if (randomClipPicks_.size() != n) {
+		while (QLayoutItem *it = randomClipRows_->takeAt(0)) {
+			if (QWidget *w = it->widget()) {
+				w->hide();
+				w->deleteLater();
+			}
+			delete it;
+		}
+		randomClipPicks_.clear();
+		randomClipDels_.clear();
+		for (int k = 0; k < n; ++k) {
+			auto *row = new QWidget(randomClipBox_);
+			auto *h = new QHBoxLayout(row);
+			h->setContentsMargins(0, 0, 0, 0);
+			h->setSpacing(4);
+			auto *pick = new QPushButton(row);
+			pick->setObjectName(QStringLiteral("randomClipOption"));
+			pick->setCheckable(true);
+			// Never wider than the Inspector: a long file name is cut, in full on hover.
+			pick->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+			pick->setMinimumWidth(60);
+			pick->setStyleSheet(QStringLiteral("QPushButton{text-align:left; padding:4px 8px;}"
+							   "QPushButton:checked{border:2px solid #22c55e;}"));
+			connect(pick, &QPushButton::clicked, this, [this, k]() { showRandomClipOption(k); });
+			h->addWidget(pick, 1);
+			auto *del = new QPushButton(row);
+			del->setIcon(uiIcon(Glyph::Cross, 13));
+			del->setFixedWidth(28);
+			connect(del, &QPushButton::clicked, this, [this, k]() { removeRandomClipOption(k); });
+			h->addWidget(del);
+			randomClipRows_->addWidget(row);
+			randomClipPicks_.append(pick);
+			randomClipDels_.append(del);
+		}
+	}
+	// What each row says. setText and the rest do nothing when unchanged.
 	for (int k = 0; k < n; ++k) {
 		const TlClipOption o = c.clipOptionAt(k);
 		const QString full =
 			QStringLiteral("%1.  %2").arg(k + 1).arg(clip_variations::label(sourceLabel(o.sourceId), o));
-		auto *row = new QWidget(randomClipBox_);
-		auto *h = new QHBoxLayout(row);
-		h->setContentsMargins(0, 0, 0, 0);
-		h->setSpacing(4);
-		auto *pick = new QPushButton(full.size() > 38 ? full.left(36) + QStringLiteral("\u2026") : full, row);
-		pick->setObjectName(QStringLiteral("randomClipOption"));
-		pick->setCheckable(true);
+		QPushButton *pick = randomClipPicks_[k];
+		pick->setText(full.size() > 38 ? full.left(36) + QStringLiteral("\u2026") : full);
 		pick->setChecked(k == c.clipShown);
-		// Never wider than the Inspector: a long file name is cut, in full on hover.
-		pick->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-		pick->setMinimumWidth(60);
 		pick->setToolTip(k == c.clipShown
 					 ? full + QStringLiteral("\nShowing now. Right-click the clip \u203A Slip to pick "
 								 "its moment.")
 					 : full + QStringLiteral("\nShow this clip in the slot."));
-		pick->setStyleSheet(QStringLiteral("QPushButton{text-align:left; padding:4px 8px;}"
-						   "QPushButton:checked{border:2px solid #22c55e;}"));
-		connect(pick, &QPushButton::clicked, this, [this, k]() { showRandomClipOption(k); });
-		h->addWidget(pick, 1);
-		auto *del = new QPushButton(row);
-		del->setIcon(uiIcon(Glyph::Cross, 13));
-		del->setFixedWidth(28);
+		QPushButton *del = randomClipDels_[k];
 		del->setEnabled(n > 1);
 		del->setToolTip(n > 1 ? QStringLiteral("Remove this clip")
 				      : QStringLiteral("The last clip stays. To stop this being a Random clip, "
 						       "right-click it \u203A Make normal clip."));
-		connect(del, &QPushButton::clicked, this, [this, k]() { removeRandomClipOption(k); });
-		h->addWidget(del);
-		randomClipRows_->addWidget(row);
 	}
 	randomClipCount_->setText(QStringLiteral("Clip %1 of %2").arg(c.clipShown + 1).arg(n));
 	randomClipPrev_->setEnabled(n > 1);
@@ -8175,8 +8188,25 @@ void VideoEditorWindow::showRandomClipOption(int k)
 		// An audio lane draws a waveform, and it belongs to the file now playing.
 		if (audioLane)
 			if (const EditorSource *s = sourceById(c.sourceId))
-				c.peaks = VoiceoverTrack::loadPeaks(s->path, 600);
+				c.peaks = randomClipPeaks(s->path);
 	});
+}
+
+QVector<float> VideoEditorWindow::randomClipPeaks(const QString &path)
+{
+	// The size and the time are in the key, so a file written over since is
+	// read again rather than drawn as it was.
+	const QFileInfo fi(path);
+	const QString key = path + QLatin1Char('|') + QString::number(fi.size()) + QLatin1Char('|') +
+			    QString::number(fi.lastModified().toMSecsSinceEpoch());
+	const auto it = randomClipPeaks_.constFind(key);
+	if (it != randomClipPeaks_.constEnd())
+		return it.value();
+	const QVector<float> peaks = VoiceoverTrack::loadPeaks(path, 600);
+	if (randomClipPeaks_.size() >= 64) // a project's worth; never without bound
+		randomClipPeaks_.clear();
+	randomClipPeaks_.insert(key, peaks);
+	return peaks;
 }
 
 void VideoEditorWindow::addRandomClipOption(int sourceId)

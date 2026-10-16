@@ -321,7 +321,8 @@ void TimelineView::drawSlip(QPainter &p) const
 	const QRect r = clipRect(slipTrack_, slipClip_);
 	const QRect content = contentRect();
 	const double sp = c.speed > 0.01 ? c.speed : 1.0;
-	const qint64 total = std::max<qint64>(c.srcEndMs, slipSourceMs(c));
+	const qint64 sdur = slipSourceMs(c);
+	const qint64 total = std::max<qint64>(c.srcEndMs, sdur);
 	// The whole source, laid along the lane where it would play: the clip is
 	// a window onto it, and the footage either side is what a slip can reach.
 	const qint64 fromMs = c.outStartMs - qint64(std::llround(double(c.srcStartMs) / sp));
@@ -331,7 +332,6 @@ void TimelineView::drawSlip(QPainter &p) const
 	p.setClipRegion(QRegion(content.intersected(whole)) - QRegion(r));
 	p.fillRect(whole, QColor(0x0b, 0x0d, 0x10, 215));
 	const auto it = srcThumbs_.constFind(c.sourceId);
-	const qint64 sdur = srcThumbDur_.value(c.sourceId, 0);
 	if (it != srcThumbs_.constEnd() && !it.value().isEmpty() && sdur > 0 && whole.width() > 2) {
 		const double aspect = srcAspect_.value(c.sourceId, 16.0 / 9.0);
 		const int th = r.height() - 2;
@@ -361,7 +361,7 @@ void TimelineView::drawSlip(QPainter &p) const
 	const auto secs = [](qint64 ms) { return QString::number(ms / 1000.0, 'f', 1) + QLatin1Char('s'); };
 	const QString shown = QStringLiteral("%1 – %2 of %3").arg(secs(c.srcStartMs), secs(c.srcEndMs), secs(total));
 	p.setFont(clipFont_);
-	const QFontMetrics fm(clipFont_);
+	const QFontMetrics fm(clipFont_); // the pill's and the hint's
 	const QRect pill(r.x() + 6, r.y() + 5, fm.horizontalAdvance(shown) + 12, fm.height() + 4);
 	p.setPen(Qt::NoPen);
 	p.setBrush(QColor(0x0f, 0x5a, 0x2c, 235));
@@ -372,9 +372,8 @@ void TimelineView::drawSlip(QPainter &p) const
 
 	// How to use it, and how to stop.
 	const QString hint = QStringLiteral("Slip: drag the clip to pick another moment  ·  Enter or Esc when done");
-	const QFontMetrics hm(clipFont_);
-	const QRect hr(content.right() - hm.horizontalAdvance(hint) - 18, lp_.margin + 2,
-		       hm.horizontalAdvance(hint) + 14, std::max(14, lp_.rulerH - 4));
+	const int hintW = fm.horizontalAdvance(hint);
+	const QRect hr(content.right() - hintW - 18, lp_.margin + 2, hintW + 14, std::max(14, lp_.rulerH - 4));
 	p.save();
 	p.setRenderHint(QPainter::Antialiasing, true);
 	p.setPen(Qt::NoPen);
@@ -2773,6 +2772,18 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 					if (o.type == TlClip::Type::Video && o.sourceId == dragOrig_.sourceId)
 						slipPartners_.append({lp, o});
 				}
+			// Every one of them has to stay inside its footage: the
+			// tightest of their limits is the slip's.
+			slipLoMs_ = std::numeric_limits<qint64>::min() / 4;
+			slipHiMs_ = std::numeric_limits<qint64>::max() / 4;
+			const auto limitBy = [this](const TlClip &o) {
+				const qint64 total = slipSourceMs(o);
+				slipLoMs_ = std::max(slipLoMs_, tlSlipFit(o.srcStartMs, o.srcEndMs, total, slipLoMs_));
+				slipHiMs_ = std::min(slipHiMs_, tlSlipFit(o.srcStartMs, o.srcEndMs, total, slipHiMs_));
+			};
+			limitBy(dragOrig_);
+			for (const auto &pp : slipPartners_)
+				limitBy(pp.second);
 			setCursor(Qt::ClosedHandCursor);
 			return;
 		}
@@ -3055,6 +3066,12 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	const QRect r = clipRect(track, clip);
 	dragSrcPerPx_ = double(dragOrig_.srcLenMs()) / double(std::max(1, r.width()));
 	dragGrabOffsetMs_ = xToMs(pos.x()) - dragOrig_.outStartMs;
+	if (dragOrig_.isRandomClip()) {
+		const clip_variations::Room room =
+			clip_variations::roomOfOthers(dragOrig_, [this](int id) { return srcThumbDur_.value(id, 0); });
+		dragRoomHeadMs_ = room.headMs;
+		dragRoomTailMs_ = room.tailMs;
+	}
 	// A group drag moves everything by the same amount, so each member's
 	// starting position has to be remembered before the first delta is applied.
 	dragStarts_.clear();
@@ -3336,22 +3353,14 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 		if (!dragMoved_)
 			return;
 		TlClip &c = model_.tracks[dragTrack_].clips[dragClip_];
-		// Media clips can't be trimmed past their source; text clips have no
-		// source, so they stretch freely.
-		const qint64 srcTotal =
-			dragOrig_.freeDuration()
-				? std::numeric_limits<qint64>::max() / 4
-				: srcThumbDur_.value(dragOrig_.sourceId, dragOrig_.srcEndMs + (1 << 30));
 
 		if (mode_ == Mode::Slip) {
 			// The footage follows the pointer: drag right and earlier footage
 			// slides into the window, drag left and later footage does. Only
 			// the source window moves -- place, length, neighbours, keys and
 			// fades all stay as they were.
-			qint64 d = qint64(std::llround(-(pos.x() - pressPos_.x()) * dragSrcPerPx_));
-			d = tlSlipFit(dragOrig_.srcStartMs, dragOrig_.srcEndMs, slipSourceMs(dragOrig_), d);
-			for (const auto &pp : slipPartners_)
-				d = tlSlipFit(pp.second.srcStartMs, pp.second.srcEndMs, slipSourceMs(pp.second), d);
+			const qint64 d = std::clamp<qint64>(qint64(std::llround(-(pos.x() - pressPos_.x()) * dragSrcPerPx_)),
+							    slipLoMs_, slipHiMs_);
 			c.srcStartMs = dragOrig_.srcStartMs + d;
 			c.srcEndMs = dragOrig_.srcEndMs + d;
 			for (const auto &pp : slipPartners_) {
@@ -3428,9 +3437,7 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 			// A Random clip's head is every choice's head: it can only grow
 			// back as far as the choice with the least footage before it.
 			if (dragOrig_.isRandomClip())
-				newSrcStart = std::max(newSrcStart,
-						       dragOrig_.srcStartMs -
-							       clip_variations::roomOfOthers(dragOrig_, {}).headMs);
+				newSrcStart = std::max(newSrcStart, dragOrig_.srcStartMs - dragRoomHeadMs_);
 			const qint64 srcDelta = newSrcStart - dragOrig_.srcStartMs;
 			const qint64 outDelta = qint64(std::llround(double(srcDelta) / sp));
 			c.srcStartMs = newSrcStart;
@@ -3453,14 +3460,16 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 			const qint64 snapped = snap(wantOut, dragTrack_, dragClip_, &hit);
 			if (hit)
 				dMs = qint64(std::llround(double(snapped - dragOrig_.outEndMs()) * sp));
+			// Media clips can't be trimmed past their source; text clips have
+			// no source, so they stretch freely.
+			const qint64 srcTotal =
+				dragOrig_.freeDuration()
+					? std::numeric_limits<qint64>::max() / 4
+					: srcThumbDur_.value(dragOrig_.sourceId, dragOrig_.srcEndMs + (1 << 30));
 			// A Random clip can only get as long as its shortest choice allows.
-			const qint64 endMax =
-				dragOrig_.isRandomClip()
-					? std::min(srcTotal,
-						   dragOrig_.srcEndMs + clip_variations::roomOfOthers(dragOrig_, [this](int id) {
-										return srcThumbDur_.value(id, 0);
-									}).tailMs)
-					: srcTotal;
+			const qint64 endMax = dragOrig_.isRandomClip()
+						      ? std::min(srcTotal, dragOrig_.srcEndMs + dragRoomTailMs_)
+						      : srcTotal;
 			c.srcEndMs = std::clamp<qint64>(dragOrig_.srcEndMs + dMs, dragOrig_.srcStartMs + kMinClipMs,
 							std::max(dragOrig_.srcStartMs + kMinClipMs, endMax));
 			snapLineMs_ = (hit && c.outEndMs() == snapped) ? snapped : -1;

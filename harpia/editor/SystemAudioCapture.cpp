@@ -79,10 +79,16 @@ struct SystemAudioCapture::Impl {
 		startError = err;
 		startCv.notify_all();
 	}
-	void append(const QByteArray &pcm)
+	// 16-bit stereo, straight into the buffer: the lock covers only the copy.
+	void append(const char *pcm, qsizetype bytes)
 	{
 		std::lock_guard<std::mutex> lock(bufMutex);
-		buf.append(pcm);
+		buf.append(pcm, bytes);
+	}
+	void appendSilence(qint64 frames)
+	{
+		std::lock_guard<std::mutex> lock(bufMutex);
+		buf.append(qsizetype(frames) * 4, '\0');
 	}
 	void fail(const QString &why)
 	{
@@ -345,6 +351,11 @@ struct InFormat {
 	bool isFloat = false;
 	int blockAlign = 4;
 	int rate = 48000;
+
+	// Already what the take holds: copied as it comes.
+	bool isStereo16() const { return !isFloat && bits == 16 && channels == 2 && blockAlign == 4; }
+	// The usual mix format.
+	bool isStereoFloat() const { return isFloat && bits == 32 && channels == 2 && blockAlign == 8; }
 };
 
 InFormat formatOf(const WAVEFORMATEX *f)
@@ -390,14 +401,19 @@ qint16 toInt16(double v)
 	return qint16(std::lround(std::clamp(v, -1.0, 1.0) * 32767.0));
 }
 
-// Any capture format -> 16-bit stereo. Surround is folded down the usual way
-// (centre and the rear pair into both sides, the LFE left out).
-QByteArray toStereo16(const BYTE *data, UINT32 frames, const InFormat &f, bool silent)
+// Any capture format -> 16-bit stereo, `frames` * 2 samples into `dst`.
+// Surround is folded down the usual way (centre and the rear pair into both
+// sides, the LFE left out).
+void toStereo16(const BYTE *data, UINT32 frames, const InFormat &f, qint16 *dst)
 {
-	QByteArray out(int(frames) * 4, '\0');
-	if (silent || !data)
-		return out;
-	auto *dst = reinterpret_cast<qint16 *>(out.data());
+	if (f.isStereoFloat()) {
+		// The usual mix format: one loop, no format checks per sample.
+		const auto *src = reinterpret_cast<const float *>(data);
+		const size_t n = size_t(frames) * 2;
+		for (size_t i = 0; i < n; ++i)
+			dst[i] = toInt16(double(src[i]));
+		return;
+	}
 	for (UINT32 i = 0; i < frames; ++i) {
 		const BYTE *fr = data + size_t(i) * size_t(f.blockAlign);
 		double l = sampleAt(fr, f, 0);
@@ -414,7 +430,6 @@ QByteArray toStereo16(const BYTE *data, UINT32 frames, const InFormat &f, bool s
 		dst[2 * i] = toInt16(l);
 		dst[2 * i + 1] = toInt16(r);
 	}
-	return out;
 }
 
 QString hrText(HRESULT hr)
@@ -516,6 +531,9 @@ void SystemAudioCapture::Impl::run(DWORD pid, bool appOnly)
 	using clock = std::chrono::steady_clock;
 	const clock::time_point t0 = clock::now();
 	qint64 written = 0; // frames handed over, real or padded
+	// Converted packets land here first: one buffer for the whole take, grown
+	// to the largest packet, rather than a new one for every packet.
+	QByteArray scratch;
 	while (!quit.load()) {
 		if (ready)
 			WaitForSingleObject(ready, 40);
@@ -529,7 +547,15 @@ void SystemAudioCapture::Impl::run(DWORD pid, bool appOnly)
 			hr = capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
 			if (FAILED(hr))
 				break;
-			append(toStereo16(data, frames, fmt, (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0));
+			if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0 || !data) {
+				appendSilence(frames);
+			} else if (fmt.isStereo16()) {
+				append(reinterpret_cast<const char *>(data), qsizetype(frames) * 4);
+			} else {
+				scratch.resize(qsizetype(frames) * 4);
+				toStereo16(data, frames, fmt, reinterpret_cast<qint16 *>(scratch.data()));
+				append(scratch.constData(), scratch.size());
+			}
 			written += frames;
 			capture->ReleaseBuffer(frames);
 		}
@@ -547,7 +573,7 @@ void SystemAudioCapture::Impl::run(DWORD pid, bool appOnly)
 				   fmt.rate / 1000000;
 		if (due - written > fmt.rate * 15 / 100) {
 			const qint64 pad = due - written - fmt.rate * 3 / 100;
-			append(QByteArray(int(pad) * 4, '\0'));
+			appendSilence(pad);
 			written += pad;
 		}
 	}

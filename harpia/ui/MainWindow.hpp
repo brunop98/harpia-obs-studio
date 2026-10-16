@@ -584,6 +584,10 @@ private:
 	std::unique_ptr<MouseFxOverlay> mouseFx_;
 	std::unique_ptr<ScreenBorderOverlay> screenBorder_;
 	std::unique_ptr<GuidesOverlay> guides_;
+	// The preset's guide colour, parsed: the zoom asks for the guides on
+	// every frame of its animation, the colour changes only in the settings.
+	std::string guideColorName_;
+	QColor guideColor_;
 	std::unique_ptr<RecorderControlsOverlay> floatingControls_; // desktop Record/Pause/Stop HUD
 	// "Hide until next recording" was chosen from the HUD's right-click menu.
 	// Cleared when a recording starts, which is what "until" means.

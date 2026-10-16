@@ -22,20 +22,24 @@
 
 namespace harpia {
 
-void paintGuides(QPainter &p, const QRectF &frame, const GuideStyle &style, double pxPerUnit)
+GuideGeometry guideGeometry(const QRectF &frame, const GuideStyle &style, double pxPerUnit)
 {
-	const double unit = pxPerUnit > 0.01 ? pxPerUnit : 1.0;
+	GuideGeometry g;
+	g.unit = pxPerUnit > 0.01 ? pxPerUnit : 1.0;
 	// Thickness is in screen pixels at 100%; on a scaled display it grows with
 	// everything else, rounded to whole device pixels so it stays sharp.
-	const int devW = std::max(1, int(std::lround(std::clamp(style.thickness, 1, 5) * unit)));
+	g.lineWidth = std::max(1, int(std::lround(std::clamp(style.thickness, 1, 5) * g.unit)));
 	// Straight lines centred on a pixel for an odd width, on a pixel edge for
 	// an even one -- in device pixels, which is what the snapping is about.
-	const double crisp = (devW % 2) ? 0.5 : 0.0;
-	const QRectF devFrame(frame.topLeft() * unit, frame.size() * unit);
-	const GuidePaths dev = guidePaths(style.kinds, devFrame, crisp);
-	if (dev.solid.isEmpty() && dev.dashed.isEmpty())
-		return;
+	const double crisp = (g.lineWidth % 2) ? 0.5 : 0.0;
+	g.paths = guidePaths(style.kinds, QRectF(frame.topLeft() * g.unit, frame.size() * g.unit), crisp);
+	return g;
+}
 
+void strokeGuides(QPainter &p, const GuideGeometry &g, const GuideStyle &style)
+{
+	if (g.isEmpty())
+		return;
 	const double alpha = std::clamp(style.opacityPct, 10, 100) / 100.0;
 	QColor line = style.color.isValid() ? style.color : QColor(255, 255, 255);
 	line.setAlphaF(float(alpha));
@@ -43,22 +47,27 @@ void paintGuides(QPainter &p, const QRectF &frame, const GuideStyle &style, doub
 	edge.setAlphaF(float(alpha * 0.35));
 
 	p.save();
-	p.scale(1.0 / unit, 1.0 / unit);
+	p.scale(1.0 / g.unit, 1.0 / g.unit);
 	p.setRenderHint(QPainter::Antialiasing, true);
 	p.setBrush(Qt::NoBrush);
 	// The edge first, a pixel wider each side; then the line itself replaces
 	// whatever is under it, so the edge never darkens the colour you picked.
-	QPen pen(edge, devW + 2, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin);
+	QPen pen(edge, g.lineWidth + 2, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin);
 	p.setCompositionMode(QPainter::CompositionMode_SourceOver);
-	p.strokePath(dev.solid, pen);
+	p.strokePath(g.paths.solid, pen);
 	pen.setStyle(Qt::DashLine);
-	p.strokePath(dev.dashed, pen);
+	p.strokePath(g.paths.dashed, pen);
 	p.setCompositionMode(QPainter::CompositionMode_Source);
-	pen = QPen(line, devW, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin);
-	p.strokePath(dev.solid, pen);
+	pen = QPen(line, g.lineWidth, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin);
+	p.strokePath(g.paths.solid, pen);
 	pen.setStyle(Qt::DashLine);
-	p.strokePath(dev.dashed, pen);
+	p.strokePath(g.paths.dashed, pen);
 	p.restore();
+}
+
+void paintGuides(QPainter &p, const QRectF &frame, const GuideStyle &style, double pxPerUnit)
+{
+	strokeGuides(p, guideGeometry(frame, style, pxPerUnit), style);
 }
 
 GuidesOverlay::GuidesOverlay(QWidget *parent) : QWidget(parent)
@@ -78,9 +87,10 @@ bool GuidesOverlay::systemCanHideFromCapture()
 	// Before version 2004 (build 19041) the same flag means WDA_MONITOR, which
 	// puts the window in the capture as a solid BLACK rectangle -- over the
 	// whole picture, for a window this size. So the version decides, not the
-	// call's return value.
-	return QOperatingSystemVersion::current() >=
-	       QOperatingSystemVersion(QOperatingSystemVersion::Windows, 10, 0, 19041);
+	// call's return value. The version cannot change while we run.
+	static const bool can = QOperatingSystemVersion::current() >=
+				QOperatingSystemVersion(QOperatingSystemVersion::Windows, 10, 0, 19041);
+	return can;
 #else
 	return false;
 #endif
@@ -135,7 +145,18 @@ void GuidesOverlay::paintEvent(QPaintEvent *)
 	QPainter p(this);
 	p.setCompositionMode(QPainter::CompositionMode_Source);
 	p.fillRect(rect(), Qt::transparent);
-	paintGuides(p, QRectF(rect()), style_, devicePixelRatioF());
+	// The frame is the whole window, from (0, 0): its size is all that places
+	// the lines.
+	const double dpr = devicePixelRatioF();
+	if (size() != geometrySize_ || dpr != geometryDpr_ || style_.kinds != geometryKinds_ ||
+	    style_.thickness != geometryThickness_) {
+		geometry_ = guideGeometry(QRectF(rect()), style_, dpr);
+		geometrySize_ = size();
+		geometryDpr_ = dpr;
+		geometryKinds_ = style_.kinds;
+		geometryThickness_ = style_.thickness;
+	}
+	strokeGuides(p, geometry_, style_);
 }
 
 GuidesPreview::GuidesPreview(QWidget *parent) : QWidget(parent)

@@ -1,0 +1,213 @@
+// Styling a whole caption lane at once must never touch what the captions say.
+//
+// With a lane's header selected, the Inspector edits every caption on it --
+// font, size, colour. Its text box is hidden then, but it holds the FIRST
+// caption's words, and the quick-tag buttons (B, I, U, ...) stayed on screen
+// and typed into it: one click and every caption said what the first one did.
+// Generated subtitles came out as "Engine start, no" six times over.
+//
+//   * Lane selected: the quick tags are hidden (there is no one caption's text
+//     to wrap words in).
+//   * Even a tag pressed anyway leaves every caption its own words.
+//   * Lane styling still reaches every caption.
+//   * One caption selected: the quick tags are back and edit that one only.
+#include "editor/VideoEditorWindow.hpp"
+#include "editor/timeline/TimelineView.hpp"
+#include "editor/tts/TtsAudio.hpp"
+
+#include <QApplication>
+#include <QElapsedTimer>
+#include <QFile>
+#include <QMouseEvent>
+#include <QPlainTextEdit>
+#include <QPushButton>
+#include <QSpinBox>
+#include <QTemporaryDir>
+#include <QThread>
+
+#include <cmath>
+#include <cstdio>
+
+using namespace harpia;
+
+static int failures = 0;
+static void ok(bool c, const char *w)
+{
+	std::printf("  %s %s\n", c ? "PASS" : "FAIL", w);
+	if (!c)
+		++failures;
+}
+
+static void settle(int ms)
+{
+	QElapsedTimer t;
+	t.start();
+	while (t.elapsed() < ms) {
+		QApplication::processEvents();
+		QThread::msleep(5);
+	}
+}
+
+static void click(QWidget *w, QPoint p)
+{
+	QMouseEvent press(QEvent::MouseButtonPress, QPointF(p), w->mapToGlobal(QPointF(p)), Qt::LeftButton,
+			  Qt::LeftButton, Qt::NoModifier);
+	QApplication::sendEvent(w, &press);
+	QMouseEvent release(QEvent::MouseButtonRelease, QPointF(p), w->mapToGlobal(QPointF(p)), Qt::LeftButton,
+			    Qt::NoButton, Qt::NoModifier);
+	QApplication::sendEvent(w, &release);
+}
+
+// The captions on `lane`, in time order.
+static QStringList captionsOn(const TimelineView *tv, int lane)
+{
+	QStringList out;
+	for (const TlClip &c : tv->model().tracks[lane].clips)
+		if (c.type == TlClip::Type::Text)
+			out << c.text.text;
+	return out;
+}
+
+int main(int argc, char **argv)
+{
+	std::setvbuf(stdout, nullptr, _IONBF, 0);
+	QApplication app(argc, argv);
+	const QString media = argc > 1 ? QString::fromLocal8Bit(argv[1]) : QStringLiteral(".");
+	const QString video = media + QStringLiteral("/av_red.mp4");
+	if (!QFile::exists(video)) {
+		std::printf("missing %s\n", qPrintable(video));
+		return 2;
+	}
+	QTemporaryDir tmp;
+
+	// Something to caption: 3 s of tone and nine words, three per caption.
+	const QString wav = tmp.filePath(QStringLiteral("speech.wav"));
+	{
+		tts_audio::Pcm p;
+		p.samples.resize(48000 * 3 * 2);
+		for (int i = 0; i < 48000 * 3; ++i)
+			p.samples[2 * i] = p.samples[2 * i + 1] = qint16(8000 * std::sin(i * 2 * M_PI * 220 / 48000.0));
+		tts_audio::writeWav16(wav, p);
+	}
+	const QStringList said = {QStringLiteral("Engine"), QStringLiteral("start,"), QStringLiteral("no"),
+				  QStringLiteral("wait"),   QStringLiteral("for"),    QStringLiteral("the"),
+				  QStringLiteral("green"),  QStringLiteral("light"),  QStringLiteral("now.")};
+	QVector<ClipWordTime> words;
+	for (int i = 0; i < said.size(); ++i) {
+		ClipWordTime w;
+		w.text = said[i];
+		w.startMs = 100 + i * 300;
+		w.endMs = w.startMs + 250;
+		words.append(w);
+	}
+
+	VideoEditorWindow w(video);
+	w.resize(1200, 800);
+	w.show();
+	settle(300);
+	for (QPushButton *b : w.findChildren<QPushButton *>())
+		if (b->text() == QStringLiteral("Full Editing")) {
+			b->click();
+			settle(300);
+			break;
+		}
+	TimelineView *tv = w.findChild<TimelineView *>();
+	ok(tv != nullptr, "in Full editing");
+	if (!tv)
+		return 1;
+	tv->setPlayhead(0);
+	GroupRule rule;
+	rule.maxWords = 3;
+	w.addSpeechClips(wav, 3000, words, rule, SubtitleLook());
+	settle(300);
+	{
+		// Generated subtitles are not linked to anything: unlink these, so a
+		// click picks one caption rather than the narration's whole group.
+		TimelineModel m = tv->model();
+		for (TlTrack &t : m.tracks)
+			for (TlClip &c : t.clips)
+				c.link = 0;
+		tv->setModel(m);
+		settle(100);
+	}
+
+	int lane = -1;
+	for (int t = 0; t < tv->model().tracks.size() && lane < 0; ++t)
+		for (const TlClip &c : tv->model().tracks[t].clips)
+			if (c.type == TlClip::Type::Text)
+				lane = t;
+	ok(lane >= 0, "a lane of captions");
+	if (lane < 0)
+		return 1;
+	const QStringList before = captionsOn(tv, lane);
+	std::printf("     captions: %s\n", qPrintable(before.join(QStringLiteral(" | "))));
+	ok(before.size() == 3 && before.first() == QStringLiteral("Engine start, no"), "three different captions");
+
+	QPushButton *bold = nullptr;
+	for (QPushButton *b : w.findChildren<QPushButton *>())
+		if (b->text() == QStringLiteral("B") && b->toolTip().startsWith(QStringLiteral("Bold the selection")))
+			bold = b;
+	QSpinBox *size = nullptr;
+	for (QSpinBox *s : w.findChildren<QSpinBox *>())
+		if (s->minimum() == 6 && s->maximum() == 400)
+			size = s;
+	ok(bold && size, "the Inspector's quick tags and text size");
+	if (!bold || !size)
+		return 1;
+
+	std::printf("\n-- the whole lane selected --\n");
+	{
+		const QRect toggle = tv->headerToggleRectForTest(lane, 0);
+		click(tv, QPoint(tv->contentRectForTest().x() - 6, toggle.top() - 12));
+		settle(200);
+		ok(tv->selectedHeaderTrack() == lane && tv->selectedPairs().isEmpty(), "its header is selected, no clip");
+		// Their own row, not the button: the Inspector tab around them may
+		// not be on screen in a test window at all.
+		ok(bold->parentWidget()->isHidden(), "the quick tags are hidden: there is no one caption's text to tag");
+
+		// What the user did: a tag pressed while the lane was selected.
+		bold->click();
+		settle(100);
+		const QStringList after = captionsOn(tv, lane);
+		std::printf("     after B: %s\n", qPrintable(after.join(QStringLiteral(" | "))));
+		ok(after == before, "even pressed anyway, every caption keeps its own words");
+
+		size->setValue(77);
+		settle(100);
+		bool all = true;
+		for (const TlClip &c : tv->model().tracks[lane].clips)
+			if (c.type == TlClip::Type::Text)
+				all = all && c.text.fontPx == 77;
+		ok(all, "styling the lane still reaches every caption");
+		ok(captionsOn(tv, lane) == before, "and still leaves their words alone");
+	}
+
+	std::printf("\n-- one caption selected --\n");
+	{
+		const QRect second = tv->clipRectForTest(lane, 1);
+		click(tv, second.center());
+		settle(200);
+		ok(tv->selectedTrack() == lane && tv->selectedHeaderTrack() < 0, "the second caption is selected");
+		ok(!bold->parentWidget()->isHidden(), "the quick tags are back");
+		QPlainTextEdit *box = nullptr;
+		for (QPlainTextEdit *e : w.findChildren<QPlainTextEdit *>())
+			if (!e->isHidden() && e->toPlainText() == before[1])
+				box = e;
+		ok(box != nullptr, "the text box holds that caption's words");
+		if (box) {
+			QTextCursor cur = box->textCursor();
+			cur.select(QTextCursor::Document);
+			box->setTextCursor(cur);
+			box->setFocus();
+			bold->click();
+			settle(100);
+		}
+		const QStringList after = captionsOn(tv, lane);
+		std::printf("     after B: %s\n", qPrintable(after.join(QStringLiteral(" | "))));
+		ok(after[1] == QStringLiteral("<b>%1</b>").arg(before[1]), "B bolds that caption");
+		ok(after[0] == before[0] && after[2] == before[2], "and only that one");
+	}
+
+	std::printf("\n%s (%d failures)\n", failures ? "FAILURES" : "ALL PASSED", failures);
+	return failures ? 1 : 0;
+}

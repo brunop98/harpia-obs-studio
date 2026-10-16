@@ -2726,6 +2726,8 @@ void VideoEditorWindow::onRemoveSource()
 			setActiveSource(sources_.front().id);
 		} else {
 			activeSourceId_ = 0;
+			// Its decoder went with the source: nothing may read it now.
+			seeker_ = nullptr;
 			updateEmptyState(); // back to "Nothing loaded yet", correctly this time
 		}
 	}
@@ -4799,7 +4801,7 @@ void VideoEditorWindow::rebuildVariantEditors(int count)
 		variantEdits_.push_back(ed);
 		connect(del, &QPushButton::clicked, this, [this, i]() { removeVariantText(i); });
 		connect(ed, &QPlainTextEdit::textChanged, this, [this, i, ed]() {
-			if (syncingClip_)
+			if (syncingClip_ || captionLaneTrack_ >= 0)
 				return;
 			const QString t = ed->toPlainText();
 			editSelectedClip([i, &t](TlClip &c) {
@@ -7042,6 +7044,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		// Wraps onto a second line in a narrow Inspector rather than pushing
 		// the panel into a horizontal scroll.
 		auto *rowHost = new QWidget(textBox_);
+		quickTagsRow_ = rowHost;
 		auto *row = new FlowLayout(rowHost, 5, 5);
 		const auto wrapWith = [this](const QString &open, const QString &close) {
 			QPlainTextEdit *ed = tagTarget_ ? tagTarget_.data() : textEdit_;
@@ -7124,7 +7127,9 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	textEdit_->setToolTip(kRichTextTip);
 	tv->addWidget(textEdit_);
 	connect(textEdit_, &QPlainTextEdit::textChanged, this, [this]() {
-		if (syncingClip_)
+		// A whole caption lane is being styled: the box is hidden then, and
+		// what it holds is one caption's words, not the lane's.
+		if (syncingClip_ || captionLaneTrack_ >= 0)
 			return;
 		const QString t = textEdit_->toPlainText();
 		const QSize canvas = timelineCanvasSize();
@@ -7611,7 +7616,22 @@ void VideoEditorWindow::editSelectedClip(const std::function<void(TlClip &)> &fn
 	const TlClip *sel = timelineView_->selectedClipPtr();
 	if (!sel && captionLaneTrack_ >= 0) {
 		// Batch style: the same edit on every caption of the selected lane.
-		if (timelineView_->editLaneCaptions(captionLaneTrack_, fn) == 0)
+		// STYLE only. Every caption keeps its own words whatever the edit
+		// was: the Inspector's text fields hold the first caption's text in
+		// this mode, and anything that reached them (a quick-tag button did)
+		// used to write that one caption's words into all of them.
+		const auto styleOnly = [&fn](TlClip &c) {
+			const QString words = c.text.text;
+			const QStringList variations = c.text.variations;
+			const bool random = c.text.random;
+			const QVector<ClipWordTime> times = c.words;
+			fn(c);
+			c.text.text = words;
+			c.text.variations = variations;
+			c.text.random = random;
+			c.words = times;
+		};
+		if (timelineView_->editLaneCaptions(captionLaneTrack_, styleOnly) == 0)
 			return;
 		showTimelineFrame(timelinePlayheadMs());
 		syncClipInspector();
@@ -7826,6 +7846,10 @@ void VideoEditorWindow::syncClipInspector()
 		clipTagsBox_->setVisible(!batch);
 	if (textEdit_)
 		textEdit_->setVisible(!batch);
+	// The quick tags wrap words in one caption's text box: with a whole lane
+	// selected there is no such box, and nothing for them to do.
+	if (quickTagsRow_)
+		quickTagsRow_->setVisible(!batch);
 	// A Random text's other texts belong to that one caption: shown for a
 	// Random text only, and never for a whole lane of captions at once.
 	const bool randomText = !batch && c && c->type == TlClip::Type::Text && c->text.random;
@@ -9888,7 +9912,10 @@ bool VideoEditorWindow::hasUnsavedEdits() const
 		return false;
 	if (!tracks_->segments().isEmpty())
 		return true; // Multi-Cut edit in progress
-	if (timeline_->start() != 0 || timeline_->end() != seeker_->durationMs())
+	// The trim range only means something against a video: an editor opened
+	// blank, or with its last source removed, has none -- and closing one of
+	// those used to read through a null (or freed) decoder and crash.
+	if (seeker_ && (timeline_->start() != 0 || timeline_->end() != seeker_->durationMs()))
 		return true; // trim range changed
 	if (speed_ != 1.0)
 		return true;
@@ -11598,6 +11625,8 @@ void VideoEditorWindow::onSceneDetected(const QVector<qint64> &cutMs, const QStr
 	}
 
 	// Build cut spans from the boundaries: 0, each scene change, end.
+	if (!seeker_)
+		return; // the source went while it was being scanned
 	const qint64 dur = seeker_->durationMs();
 	QVector<qint64> bounds;
 	bounds.push_back(0);
@@ -12802,6 +12831,8 @@ void VideoEditorWindow::startPlayback()
 		playTimer_->start();
 		return;
 	}
+	if (!seeker_)
+		return; // Simple Trim with nothing loaded: nothing to play
 	playing_ = true;
 	playBtn_->setIcon(uiIcon(Glyph::Pause));
 	// Start from the marker (source-time), clamped into the trimmed region.
@@ -12939,6 +12970,10 @@ void VideoEditorWindow::onPlayTick()
 		return;
 	}
 
+	if (!seeker_) { // the source was removed mid-play
+		stopPlayback();
+		return;
+	}
 	const qint64 start = timeline_->start();
 	const qint64 end = timeline_->end();
 

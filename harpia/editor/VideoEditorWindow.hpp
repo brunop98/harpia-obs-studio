@@ -847,6 +847,7 @@ private:
 	const TlClip *inspectedClip() const;   // the selected clip, or the lane's first caption
 	void syncTextInspector(const TlClip &c);
 	QPlainTextEdit *textEdit_ = nullptr;
+	QWidget *quickTagsRow_ = nullptr; // B, I, U... over the text box; hidden for a whole lane
 	// Text variations (timeline/TextVariations.hpp): the alternatives list and
 	// the preview switcher. previewVariant_ is which option of the SELECTED
 	// text clip the preview shows -- 0 is its own text -- and never changes

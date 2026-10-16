@@ -223,14 +223,19 @@ inline GuidePaths guidePaths(int kinds, const QRectF &f, double crisp = -1.0)
 // the length of every recording -- lines burned into the video are the one
 // thing this feature must never produce.
 //
+// `areaShown`: the recorded area's frame is on screen. A Custom Region has one
+// (RegionTool), and the guides are drawn inside it, so they come and go WITH it
+// -- guides floating over the desktop after the frame they divide has gone
+// read as a leftover, not as a tool. Entire Monitor has no frame: pass true.
+//
 // Otherwise they stay up whenever they are switched on, Harpia in front or not:
 // lining up a shot happens with the game in front. The exception is the
 // editor, a window you work inside, with nothing being recorded -- the same rule
 // the region frame follows.
 inline bool guidesVisible(bool on, int kinds, bool hasVideo, bool recording, bool hiddenFromCapture,
-			  bool editorOpen, bool arrangingAreas)
+			  bool editorOpen, bool arrangingAreas, bool areaShown = true)
 {
-	if (!on || (kinds & kGuideKindsAll) == 0 || !hasVideo || arrangingAreas)
+	if (!on || (kinds & kGuideKindsAll) == 0 || !hasVideo || arrangingAreas || !areaShown)
 		return false;
 	if (recording)
 		return hiddenFromCapture;

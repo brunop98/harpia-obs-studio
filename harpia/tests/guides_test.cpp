@@ -197,6 +197,12 @@ int main(int argc, char **argv)
 		   "the editor open while recording (and kept out): still marking the take");
 		ok(!guidesVisible(true, GuideThirds, true, false, true, false, true),
 		   "arranging Multi-Area: the arrange overlay has the screen");
+		ok(!guidesVisible(true, GuideThirds, true, false, true, false, false, false),
+		   "a region whose frame is hidden: the guides go with it");
+		ok(!guidesVisible(true, GuideThirds, true, true, true, false, false, false),
+		   "even recording");
+		ok(guidesVisible(true, GuideThirds, true, false, true, false, false, true),
+		   "and come back when it does");
 	}
 
 	std::printf("\n-- the preset --\n");

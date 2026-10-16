@@ -2848,6 +2848,7 @@ void MainWindow::startWindowPick()
 	// window you are pointing at.
 	if (regionTool_ && !recorder_.isRecording())
 		regionTool_->hide();
+	updateGuides(); // they go with the frame
 	windowPicker_->start();
 }
 
@@ -3333,9 +3334,13 @@ void MainWindow::updateGuides()
 	if (!guides_)
 		return;
 	const Preset &p = activePreset();
+	// A region's guides belong to its frame: shown while it is, hidden with it
+	// (Harpia in the background past the linger, the editor open, picking a
+	// window, arranging areas).
+	const bool areaShown = captureMode_ != CaptureMode::Region || (regionTool_ && regionTool_->isVisible());
 	const bool show = guidesVisible(p.showGuides, p.guideKinds, modeSupportsGuides(recordMode()),
 					recorder_.isRecording() || starting_, guides_->hiddenFromCapture(),
-					VideoEditorWindow::anyOpen(), areaArranging_);
+					VideoEditorWindow::anyOpen(), areaArranging_, areaShown);
 	const QRect r = show ? recordedRectLogical() : QRect();
 	if (r.isEmpty()) {
 		guides_->hideGuides();
@@ -3703,8 +3708,10 @@ void MainWindow::updateRegionToolVisibility()
 	// -- and then bounce it straight back here on the next activation change.
 	regionTool_->setAttribute(Qt::WA_ShowWithoutActivating, !focused);
 	regionTool_->setVisible(st.visible);
-	// The other areas are shown exactly when the frame is.
+	// The other areas are shown exactly when the frame is -- and so are the
+	// guides, at once rather than on the next tick.
 	updateAreaOverlay();
+	updateGuides();
 }
 
 bool MainWindow::nativeEvent(const QByteArray &eventType, void *message, qintptr *result)
@@ -5318,6 +5325,7 @@ void MainWindow::onArrangeAreas()
 	areaArranging_ = true;
 	if (regionTool_)
 		regionTool_->setVisible(false);
+	updateGuides();
 	// An overlay on EVERY monitor, so areas can be stamped on a screen that
 	// has none yet.
 	showAreaOverlays(areaEdit_, QSize(currentRegion_.width, currentRegion_.height), -1, false, true);

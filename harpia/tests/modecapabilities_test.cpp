@@ -53,6 +53,7 @@ int main()
 		ok(!modeSupportsFollowMouse(aud), "nothing to follow");
 		ok(!modeSupportsMouseFx(aud), "no capture to draw the cursor into");
 		ok(!modeSupportsScreenBorder(aud), "nothing to outline");
+		ok(!modeSupportsGuides(aud), "nothing to frame with guides");
 		ok(!modeSupportsWebcam(aud), "and no camera — 'audio only' plus a video file is a contradiction");
 		ok(!modeUsesVideoEncoder(aud), "no video encoder is created at all");
 	}
@@ -90,6 +91,7 @@ int main()
 		ok(modeSupportsZoom(mon) && modeSupportsZoom(reg), "Zoom works in both video modes");
 		ok(modeSupportsSpotlight(mon) && modeSupportsSpotlight(reg), "so does the Spotlight");
 		ok(modeSupportsMouseFx(mon) && modeSupportsMouseFx(reg), "and the mouse effects");
+		ok(modeSupportsGuides(mon) && modeSupportsGuides(reg), "and the composition guides");
 		ok(modeUsesMonitor(reg), "a region still needs to know WHICH display it is on");
 	}
 

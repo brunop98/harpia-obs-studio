@@ -29,6 +29,8 @@ namespace harpia {
 class MousePreview;
 class SpotlightPreview;
 class ZoomPreview;
+class GuidesPreview;
+struct GuideStyle;
 
 // Modal editor for a single recording Preset. Construct with the preset to edit
 // (or a fresh default for "new"), exec(), and on Accepted read back result().
@@ -121,6 +123,18 @@ private:
 	QColor borderColor_;
 	// Move handle for the capture region (Custom Region only)
 	QCheckBox *regionHandleCheck_ = nullptr;
+
+	// Guides page: composition guides over the recorded area.
+	QCheckBox *guidesCheck_ = nullptr;
+	QList<QCheckBox *> guideKindChecks_; // in guideKindInfo() order
+	QPushButton *guideColorBtn_ = nullptr;
+	QColor guideColor_;
+	QSlider *guideOpacitySlider_ = nullptr;
+	QSpinBox *guideThicknessSpin_ = nullptr;
+	QKeySequenceEdit *guidesShortcutEdit_ = nullptr;
+	GuidesPreview *guidesPreview_ = nullptr;
+	int guideKindsChecked() const;
+	void syncGuidesPreview();
 	QLineEdit *templateEdit_ = nullptr;
 	QLabel *templatePreview_ = nullptr;
 	QLineEdit *driveLinkEdit_ = nullptr;

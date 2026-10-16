@@ -111,6 +111,7 @@ target_sources(
     core/VideoStatus.hpp
     core/ZoomMode.hpp
     core/ModeCapabilities.hpp
+    core/CompositionGuides.hpp
     core/SpotlightFx.hpp
     core/ShortcutConflicts.hpp
     core/RegionWatch.cpp
@@ -153,6 +154,8 @@ target_sources(
     ui/CountdownOverlay.hpp
     ui/ScreenBorderOverlay.cpp
     ui/ScreenBorderOverlay.hpp
+    ui/GuidesOverlay.cpp
+    ui/GuidesOverlay.hpp
     ui/RecorderControlsOverlay.cpp
     ui/RecorderControlsOverlay.hpp
     ui/ShareExportDialog.cpp

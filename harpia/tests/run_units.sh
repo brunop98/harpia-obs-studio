@@ -164,6 +164,13 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/modecapabilities_test.cpp" -o "$WORK/modecapabilities_test" $LF
 
+# Composition guides: where each line goes, the paint, and -- the one that
+# matters -- that they are never on screen during a recording the system
+# cannot keep them out of.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/guides_test.cpp" "$H/ui/GuidesOverlay.cpp" "$H/model/Preset.cpp" \
+	-o "$WORK/guides_test" $LF
+
 # Two actions on one key: nothing reports it and the second feature just never
 # fires, so the rule is that it cannot be saved at all.
 "$MOC" -I"$H" "$H/ui/ShortcutConflictDialog.hpp" -o "$WORK/moc_ShortcutConflictDialog.cpp"
@@ -932,6 +939,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/zoommode_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/spotlight_fx_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/audioextract_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/modecapabilities_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/guides_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/preset_equality_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/audiotap_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/shortcutconflict_test" || rc=1

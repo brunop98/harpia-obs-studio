@@ -28,6 +28,7 @@
 #include "RegionTool.hpp"
 #include "MultiAreaOverlay.hpp"
 #include "ScreenBorderOverlay.hpp"
+#include "GuidesOverlay.hpp"
 #include "ShareExportDialog.hpp"
 #include "StatusBadge.hpp"
 #include "editor/AudioExtractDialog.hpp"
@@ -263,6 +264,12 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	countdownCombo_->setToolTip(
 		QStringLiteral("A countdown before recording starts. Never part of it."));
 	countdownLayout->addWidget(countdownCombo_);
+	// The composition guides switch rides in the same group: both are about
+	// getting ready to record, and both can go when the window is narrow --
+	// the shortcut still works then. Synced from the preset (syncIdleControls).
+	countdownLayout->addSpacing(kGroupGap);
+	guidesCheck_ = new QCheckBox(QStringLiteral("Guides"), countdownGroup_);
+	countdownLayout->addWidget(guidesCheck_);
 	row1->addWidget(countdownGroup_);
 	row1->addStretch(1);
 	root->addLayout(row1);
@@ -661,6 +668,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 			onSpotlightToggle();
 		else if (id == 5)
 			onFollowToggle();
+		else if (id == 6)
+			onGuidesToggle();
 	});
 	// Zoom gets the same treatment: a global hotkey where the platform allows,
 	// a window-scoped fallback otherwise. Unlike the other two its key comes
@@ -672,6 +681,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(spotlightShortcut_, &QShortcut::activated, this, &MainWindow::onSpotlightToggle);
 	followShortcut_ = new QShortcut(QKeySequence(), this);
 	connect(followShortcut_, &QShortcut::activated, this, &MainWindow::onFollowToggle);
+	guidesShortcut_ = new QShortcut(QKeySequence(), this);
+	connect(guidesShortcut_, &QShortcut::activated, this, &MainWindow::onGuidesToggle);
 	rebindHotkeys();
 	rebindPresetHotkeys();
 
@@ -756,6 +767,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	mouseFx_ = std::make_unique<MouseFxOverlay>();
 	screenBorder_ = std::make_unique<ScreenBorderOverlay>();
+	guides_ = std::make_unique<GuidesOverlay>();
+	connect(guidesCheck_, &QCheckBox::toggled, this, &MainWindow::setGuidesOn);
 
 	// Floating desktop Pause/Stop HUD: its buttons reuse the exact same handlers
 	// as the main window's, so behavior stays identical wherever it's clicked.
@@ -1831,7 +1844,7 @@ void MainWindow::setHotkeysSuspended(bool on)
 	// does not exist, and there a key field would have the same problem for a
 	// different reason.
 	for (QShortcut *s : {recordShortcut_, pauseShortcut_, zoomShortcut_, spotlightShortcut_,
-			     followShortcut_})
+			     followShortcut_, guidesShortcut_})
 		if (s)
 			s->setEnabled(!on);
 
@@ -1894,6 +1907,9 @@ void MainWindow::finalizeAfterStop()
 void MainWindow::beginStart()
 {
 	starting_ = true;
+	// Where the guides cannot be kept out of the capture, they go now -- before
+	// the first frame, not on the next tick.
+	updateGuides();
 	// "Hide until next recording" is now spent -- this is that recording, and
 	// Stop needs to be reachable from the desktop again.
 	floatingDismissed_ = false;
@@ -3092,6 +3108,9 @@ void MainWindow::onAppWindowChanged()
 void MainWindow::onRegionChanged(const CaptureRegion &region)
 {
 	currentRegion_ = region;
+	// Before the echo check below: Follow Mouse moves the region through here
+	// too, and the guides have to glide with it.
+	updateGuides();
 	// When the FOLLOW TICK is the thing moving the overlay, this signal is our
 	// own change echoed back: the crop has already been applied, and restarting
 	// the readiness debounce 60 times a second would keep it from ever firing.
@@ -3228,6 +3247,106 @@ void MainWindow::rebindPresetHotkeys()
 	rebindZoomHotkey();
 	rebindSpotlightHotkey();
 	rebindFollowHotkey();
+	rebindGuidesHotkey();
+}
+
+void MainWindow::rebindGuidesHotkey()
+{
+	const Preset &p = activePreset();
+	// Live whenever there is a picture to frame -- on or off -- because turning
+	// the guides ON from inside a game is the reason it exists. Audio Only has
+	// nothing to frame, so it binds nothing there.
+	const QKeySequence seq = modeSupportsGuides(recordMode())
+					 ? QKeySequence(QString::fromStdString(p.guidesShortcut))
+					 : QKeySequence();
+	if (guidesShortcut_)
+		guidesShortcut_->setKey(seq);
+	if (guidesCheck_ && !modeSupportsGuides(recordMode()))
+		guidesCheck_->setToolTip(modeDisabledReason(recordMode(), false));
+	else if (guidesCheck_)
+		guidesCheck_->setToolTip(
+			seq.isEmpty()
+				? QStringLiteral("Composition guides over the recorded area. Never in the video.")
+				: QStringLiteral("Composition guides over the recorded area. Never in the video. "
+						 "%1 shows and hides them from anywhere.")
+					  .arg(seq.toString(QKeySequence::NativeText)));
+	if (!hotkeys_ || hotkeysSuspended_)
+		return;
+	const bool global = hotkeys_->bind(6, seq);
+	if (!seq.isEmpty())
+		blog(LOG_INFO, "[harpia] hotkeys: guides=%s (%s)", qUtf8Printable(seq.toString()),
+		     global ? "global" : "window-only");
+}
+
+void MainWindow::onGuidesToggle()
+{
+	if (!modeSupportsGuides(recordMode()))
+		return;
+	setGuidesOn(!activePreset().showGuides);
+}
+
+void MainWindow::setGuidesOn(bool on)
+{
+	// Written into the preset, like the countdown beside it: the switch is a
+	// setting you leave on, not a state that resets each launch.
+	const Preset *cur = presets_.find(activePresetId_);
+	if (cur && cur->showGuides != on) {
+		Preset updated = *cur;
+		updated.showGuides = on;
+		presets_.upsert(updated);
+		blog(LOG_INFO, "[harpia] composition guides %s", on ? "on" : "off");
+	}
+	if (guidesCheck_ && guidesCheck_->isChecked() != on) {
+		const QSignalBlocker block(guidesCheck_);
+		guidesCheck_->setChecked(on);
+	}
+	updateGuides();
+}
+
+QRect MainWindow::recordedRectLogical() const
+{
+	if (!modeHasVideo(recordMode()))
+		return QRect();
+	// Zoomed in, the file holds only the magnified part. The zoom border has
+	// already worked out where that is, from the transform on the scene.
+	if (zoomBorderShown_ && !zoomRectLogical_.isEmpty())
+		return zoomRectLogical_;
+	const QScreen *scr = screenForActivePreset();
+	if (!scr)
+		return QRect();
+	if (captureMode_ == CaptureMode::Region) {
+		const CaptureRegion &r = currentRegion_;
+		if (!r.enabled || r.width <= 0 || r.height <= 0)
+			return QRect();
+		// Device pixels from the display's corner -> Qt's logical desktop
+		// space, the same mapping the region frame and the zoom border use.
+		const double dpr = scr->devicePixelRatio() > 0.01 ? scr->devicePixelRatio() : 1.0;
+		return QRect(scr->geometry().topLeft() +
+				     QPoint(int(std::lround(r.x / dpr)), int(std::lround(r.y / dpr))),
+			     QSize(int(std::lround(r.width / dpr)), int(std::lround(r.height / dpr))));
+	}
+	return scr->geometry();
+}
+
+void MainWindow::updateGuides()
+{
+	if (!guides_)
+		return;
+	const Preset &p = activePreset();
+	const bool show = guidesVisible(p.showGuides, p.guideKinds, modeSupportsGuides(recordMode()),
+					recorder_.isRecording() || starting_, guides_->hiddenFromCapture(),
+					VideoEditorWindow::anyOpen(), areaArranging_);
+	const QRect r = show ? recordedRectLogical() : QRect();
+	if (r.isEmpty()) {
+		guides_->hideGuides();
+		return;
+	}
+	GuideStyle s;
+	s.kinds = p.guideKinds;
+	s.color = QColor(QString::fromStdString(p.guideColor));
+	s.opacityPct = p.guideOpacityPct;
+	s.thickness = p.guideThickness;
+	guides_->showGuides(r, s);
 }
 
 void MainWindow::rebindFollowHotkey()
@@ -3507,6 +3626,9 @@ void MainWindow::updateZoomBorder()
 		c = QColor(0xe5, 0x48, 0x4d);
 	zoomBorderShown_ = true;
 	screenBorder_->showRect(logical, c, p.screenBorderThickness);
+	// The guides frame what is recorded, and zoomed in that is this.
+	zoomRectLogical_ = logical;
+	updateGuides();
 }
 
 void MainWindow::hideZoomBorder()
@@ -3514,6 +3636,8 @@ void MainWindow::hideZoomBorder()
 	if (!zoomBorderShown_)
 		return;
 	zoomBorderShown_ = false;
+	zoomRectLogical_ = QRect();
+	updateGuides(); // back onto the whole recorded area
 	if (!screenBorder_)
 		return;
 	// Hand the monitor border back if the preset wanted one -- the zoom
@@ -3657,6 +3781,8 @@ void MainWindow::closeEvent(QCloseEvent *event)
 		return;
 	}
 
+	if (guides_)
+		guides_->hideGuides();
 	QMainWindow::closeEvent(event);
 }
 
@@ -3887,6 +4013,12 @@ void MainWindow::syncIdleControls()
 	QSignalBlocker b3(countdownCombo_);
 	const int ci = countdownCombo_->findData(p.countdownSeconds);
 	countdownCombo_->setCurrentIndex(ci >= 0 ? ci : 0);
+
+	if (guidesCheck_) {
+		QSignalBlocker b4(guidesCheck_);
+		guidesCheck_->setChecked(p.showGuides);
+	}
+	updateGuides();
 }
 
 void MainWindow::reloadPresetCombo()
@@ -4045,6 +4177,12 @@ void MainWindow::applyModeCapabilities()
 	gate(appCombo_, modeSupportsAppFocus(m));
 	gate(idleCombo_, modeSupportsIdlePause(m));
 	gate(countdownCombo_, modeSupportsCountdown(m));
+	// Not gate(): that locks a control for the length of a take, and the
+	// guides switch is one you flip mid-take.
+	if (guidesCheck_)
+		guidesCheck_->setEnabled(modeSupportsGuides(m));
+	rebindGuidesHotkey(); // Audio Only has nothing to frame, so no key there (sets the tip too)
+	updateGuides();
 
 	// The region-leave row already has a label+combo group that hides as a
 	// whole, from the Follow Mouse conflict work; reuse it rather than leaving
@@ -4494,6 +4632,9 @@ void MainWindow::tickState()
 	// from either of the two places an editor can be opened. setMode() and
 	// setVisible() are both no-ops when nothing has changed.
 	updateRegionToolVisibility();
+	// The guides' rules (the editor, a recording on a system that cannot keep
+	// them out of it) and their place, caught up four times a second.
+	updateGuides();
 
 	// Follow Mouse arms and disarms off the same state this tick already
 	// tracks (recording / paused / stopping). Early-returns when unchanged, so

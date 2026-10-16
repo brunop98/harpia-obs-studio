@@ -116,6 +116,12 @@ inline bool modeSupportsScreenBorder(RecordMode m)
 	return m == RecordMode::Monitor;
 }
 
+// Composition guides frame a picture: the monitor or the region, either one.
+inline bool modeSupportsGuides(RecordMode m)
+{
+	return modeHasVideo(m);
+}
+
 // Zoom and Spotlight both work on the captured picture, so both need one --
 // but neither cares whether it is a display or a region.
 inline bool modeSupportsZoom(RecordMode m)

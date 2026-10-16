@@ -50,6 +50,12 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_string(d, "screen_border_color", p.screenBorderColor.c_str());
 	obs_data_set_int(d, "screen_border_thickness", p.screenBorderThickness);
 	obs_data_set_bool(d, "region_move_handle", p.regionMoveHandle);
+	obs_data_set_bool(d, "show_guides", p.showGuides);
+	obs_data_set_int(d, "guide_kinds", p.guideKinds);
+	obs_data_set_string(d, "guide_color", p.guideColor.c_str());
+	obs_data_set_int(d, "guide_opacity_pct", p.guideOpacityPct);
+	obs_data_set_int(d, "guide_thickness", p.guideThickness);
+	obs_data_set_string(d, "guides_shortcut", p.guidesShortcut.c_str());
 	obs_data_set_bool(d, "follow_mouse", p.followMouse);
 	obs_data_set_int(d, "follow_padding_pct", p.followPaddingPct);
 	obs_data_set_int(d, "follow_smoothness", p.followSmoothness);
@@ -161,6 +167,22 @@ Preset presetFromData(obs_data_t *d)
 	// No default needed: a missing key reads as false, which is the default, so
 	// presets written before this option stay exactly as they were.
 	p.regionMoveHandle = obs_data_get_bool(d, "region_move_handle");
+	// A missing switch reads as off, the default. Everything else is seeded:
+	// zero kinds, zero opacity or zero thickness would each be "on, but
+	// invisible" for a preset written before guides existed.
+	p.showGuides = obs_data_get_bool(d, "show_guides");
+	obs_data_set_default_int(d, "guide_kinds", 1);
+	obs_data_set_default_string(d, "guide_color", "#ffffff");
+	obs_data_set_default_int(d, "guide_opacity_pct", 60);
+	obs_data_set_default_int(d, "guide_thickness", 1);
+	obs_data_set_default_string(d, "guides_shortcut", "Ctrl+Shift+G");
+	p.guideKinds = (int)obs_data_get_int(d, "guide_kinds");
+	if (const char *gc = obs_data_get_string(d, "guide_color"); gc && *gc)
+		p.guideColor = gc;
+	p.guideOpacityPct = (int)obs_data_get_int(d, "guide_opacity_pct");
+	p.guideThickness = (int)obs_data_get_int(d, "guide_thickness");
+	// Read as stored: an empty string is a shortcut someone cleared on purpose.
+	p.guidesShortcut = obs_data_get_string(d, "guides_shortcut");
 	p.followMouse = obs_data_get_bool(d, "follow_mouse");
 	// Non-zero defaults must be seeded, or presets from before this feature
 	// would read back padding 0 / smoothness 0 -- "snap instantly the moment

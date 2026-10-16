@@ -216,6 +216,23 @@ struct Preset {
 	// the frame is still resizable without it.
 	bool regionMoveHandle = false;
 
+	// Composition guides: rule of thirds, golden ratio and the like, drawn over
+	// the recorded area to help frame a shot (core/CompositionGuides.hpp). On
+	// your screen only -- the overlay is kept out of the capture, and where the
+	// system cannot do that they are hidden while recording.
+	//
+	// `showGuides` is the switch, and it is the same one on the main window and
+	// behind the shortcut: both write it straight into the preset, the way the
+	// main window's countdown does. Unlike Zoom's key, this one is live whenever
+	// there is a picture, because its whole job is turning the guides ON from
+	// inside a game. Off by default; once on, the rule of thirds.
+	bool showGuides = false;
+	int guideKinds = 1;                 // GuideKind bits; 1 = rule of thirds
+	std::string guideColor = "#ffffff";
+	int guideOpacityPct = 60;           // 10..100
+	int guideThickness = 1;             // px, 1..5
+	std::string guidesShortcut = "Ctrl+Shift+G";
+
 	// File extension (without the dot) for the current format.
 	std::string extension() const;
 
@@ -272,7 +289,10 @@ inline bool operator==(const Preset &a, const Preset &b)
 	       a.googleDriveLink == b.googleDriveLink && a.showScreenBorder == b.showScreenBorder &&
 	       a.screenBorderColor == b.screenBorderColor &&
 	       a.screenBorderThickness == b.screenBorderThickness &&
-	       a.regionMoveHandle == b.regionMoveHandle;
+	       a.regionMoveHandle == b.regionMoveHandle && a.showGuides == b.showGuides &&
+	       a.guideKinds == b.guideKinds && a.guideColor == b.guideColor &&
+	       a.guideOpacityPct == b.guideOpacityPct && a.guideThickness == b.guideThickness &&
+	       a.guidesShortcut == b.guidesShortcut;
 }
 
 inline bool operator!=(const Preset &a, const Preset &b)

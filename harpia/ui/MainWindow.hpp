@@ -59,6 +59,7 @@ class RegionTool;
 class MultiAreaOverlay;
 class CountdownOverlay;
 class ScreenBorderOverlay;
+class GuidesOverlay;
 class AudioPanel;
 class MouseFxOverlay;
 class ErrorLogsPanel;
@@ -360,6 +361,26 @@ private:
 	void rebindFollowHotkey();
 	void onFollowToggle();
 
+	// Composition guides over the recorded area (GuidesOverlay). One switch,
+	// in three places -- the main window's checkbox, the shortcut and the
+	// preset's Guides page -- all writing the preset's showGuides. The
+	// shortcut is the one that matters: lining up a shot happens with the game
+	// in front, not Harpia.
+	QCheckBox *guidesCheck_ = nullptr;
+	QShortcut *guidesShortcut_ = nullptr;
+	void rebindGuidesHotkey();
+	void onGuidesToggle();
+	void setGuidesOn(bool on);
+	// Put the guides where the recording is, or take them away. Cheap when
+	// nothing changed, so it is called from wherever the recorded area might
+	// have moved: region drags, Follow Mouse, Multi-Area, every zoom frame, and
+	// the 250 ms tick behind them all.
+	void updateGuides();
+	// The part of the desktop that ends up in the file, in Qt's logical
+	// coordinates. Empty when there is no picture.
+	QRect recordedRectLogical() const;
+	QRect zoomRectLogical_; // where the zoom border last was, while it is shown
+
 	// Multi-Area (core/MultiArea.hpp): the recording switches between fixed,
 	// same-size areas as the mouse moves between them. Area 1 is the region;
 	// the others come from the preset. Primed just before the recorder starts
@@ -562,6 +583,7 @@ private:
 	QTimer *followWindowTimer_ = nullptr;
 	std::unique_ptr<MouseFxOverlay> mouseFx_;
 	std::unique_ptr<ScreenBorderOverlay> screenBorder_;
+	std::unique_ptr<GuidesOverlay> guides_;
 	std::unique_ptr<RecorderControlsOverlay> floatingControls_; // desktop Record/Pause/Stop HUD
 	// "Hide until next recording" was chosen from the HUD's right-click menu.
 	// Cleared when a recording starts, which is what "until" means.

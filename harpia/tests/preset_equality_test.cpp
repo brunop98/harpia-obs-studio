@@ -126,6 +126,12 @@ int main()
 	pin("screenBorderColor", [](Preset &p) { p.screenBorderColor = "#000000"; });
 	pin("screenBorderThickness", [](Preset &p) { p.screenBorderThickness += 1; });
 	pin("regionMoveHandle", [](Preset &p) { p.regionMoveHandle = !p.regionMoveHandle; });
+	pin("showGuides", [](Preset &p) { p.showGuides = !p.showGuides; });
+	pin("guideKinds", [](Preset &p) { p.guideKinds ^= 8; });
+	pin("guideColor", [](Preset &p) { p.guideColor = "#00ff00"; });
+	pin("guideOpacityPct", [](Preset &p) { p.guideOpacityPct += 10; });
+	pin("guideThickness", [](Preset &p) { p.guideThickness += 1; });
+	pin("guidesShortcut", [](Preset &p) { p.guidesShortcut = "Ctrl+Alt+G"; });
 
 	std::printf("\n-- the containers, where a shallow compare would pass --\n");
 	{

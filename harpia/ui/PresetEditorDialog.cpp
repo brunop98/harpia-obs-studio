@@ -5,6 +5,7 @@
 #include "AudioPanel.hpp"
 #include "SpotlightPreview.hpp"
 #include "ZoomPreview.hpp"
+#include "GuidesOverlay.hpp"
 #include "ColorField.hpp"
 #include "InfoHint.hpp"
 #include "SystemSettingsWidget.hpp"
@@ -13,6 +14,7 @@
 #include "core/EncoderFactory.hpp"
 #include "core/WebcamRecorder.hpp"
 #include "core/ModeCapabilities.hpp"   // one table of what each mode supports
+#include "core/CompositionGuides.hpp"  // the guide kinds and their names
 #include "core/ShortcutConflicts.hpp" // the no-duplicate-shortcuts rule
 #include "core/SpotlightFx.hpp"     // SpotlightParams limits, shared with the overlay
 #include "core/ZoomMode.hpp"      // ZoomParams::kMinPercent / kMaxPercent
@@ -357,6 +359,89 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 
 	v->addStretch(1);
 	addPage(QStringLiteral("Recording"), recordingPage);
+
+	// ===== Guides =====
+	// Composition guides over the recorded area, like a phone camera's grid.
+	// Nothing here depends on the checkbox: it is the same switch as the main
+	// window's and the shortcut's, flipped mid-session far more often than the
+	// look is changed, so the look stays editable while they are off.
+	QWidget *guidesPage = makePage(v);
+	guidesCheck_ = new QCheckBox(QStringLiteral("Show composition guides"), this);
+	guidesCheck_->setChecked(preset.showGuides);
+	addCheck(v, guidesCheck_,
+		 QStringLiteral("Lines over the recorded area to help frame the shot. On your screen "
+				"only, never in the video. Also on the main window."));
+	{
+		auto *box = new QWidget(this);
+		auto *h = new QHBoxLayout(box);
+		h->setContentsMargins(0, 0, 0, 0);
+		h->setSpacing(16);
+		auto *grid = new QGridLayout;
+		grid->setContentsMargins(0, 0, 0, 0);
+		grid->setHorizontalSpacing(14);
+		grid->setVerticalSpacing(6);
+		for (int i = 0; i < kGuideKindCount; ++i) {
+			const GuideKindInfo &k = guideKindInfo()[i];
+			auto *c = new QCheckBox(QString::fromUtf8(k.label), box);
+			c->setToolTip(QString::fromUtf8(k.tip));
+			c->setChecked((preset.guideKinds & k.kind) != 0);
+			connect(c, &QCheckBox::toggled, this, &PresetEditorDialog::syncGuidesPreview);
+			grid->addWidget(c, i / 2, i % 2);
+			guideKindChecks_.append(c);
+		}
+		h->addLayout(grid);
+		guidesPreview_ = new GuidesPreview(box);
+		guidesPreview_->setToolTip(QStringLiteral("How the guides will look over a 16:9 recording."));
+		h->addWidget(guidesPreview_, 0, Qt::AlignTop);
+		h->addStretch(1);
+		addField(v, QStringLiteral("Guides"),
+			 QStringLiteral("Tick any mix. Hover one to see what it is for."), box);
+	}
+	guideColor_ = QColor(QString::fromStdString(preset.guideColor));
+	if (!guideColor_.isValid())
+		guideColor_ = QColor(255, 255, 255);
+	guideColorBtn_ = new QPushButton(this);
+	setButtonColor(guideColorBtn_, guideColor_);
+	connect(guideColorBtn_, &QPushButton::clicked, this,
+		[this]() { pickColor(guideColor_, guideColorBtn_); });
+	addColorField(v, QStringLiteral("Line color"), guideColorBtn_);
+	{
+		QSlider *opacity = nullptr;
+		QWidget *opacityRow = makeSliderRow(this, opacity, 10, 100, preset.guideOpacityPct,
+						    QStringLiteral("%"), 5);
+		guideOpacitySlider_ = opacity;
+		connect(opacity, &QSlider::valueChanged, this, &PresetEditorDialog::syncGuidesPreview);
+		addField(v, QStringLiteral("Line opacity"),
+			 QStringLiteral("Fainter lines get in the way less; stronger ones read over busy scenes."),
+			 opacityRow);
+	}
+	guideThicknessSpin_ = new QSpinBox(this);
+	guideThicknessSpin_->setRange(1, 5);
+	guideThicknessSpin_->setSuffix(QStringLiteral(" px"));
+	guideThicknessSpin_->setValue(std::clamp(preset.guideThickness, 1, 5));
+	connect(guideThicknessSpin_, &QSpinBox::valueChanged, this, &PresetEditorDialog::syncGuidesPreview);
+	addField(v, QStringLiteral("Line thickness"), QString(), guideThicknessSpin_);
+	guidesShortcutEdit_ =
+		new QKeySequenceEdit(QKeySequence(QString::fromStdString(preset.guidesShortcut)), this);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+	guidesShortcutEdit_->setMaximumSequenceLength(1);
+#endif
+	addField(v, QStringLiteral("Guides shortcut"),
+		 QStringLiteral("Shows and hides the guides from anywhere, even inside a game. Works "
+				"system-wide."),
+		 guidesShortcutEdit_);
+	if (!GuidesOverlay::systemCanHideFromCapture()) {
+		auto *note = new QLabel(QStringLiteral("This system can't keep windows out of a screen "
+						       "recording (that needs Windows 10 version 2004 or "
+						       "newer), so the guides hide while recording."),
+					this);
+		note->setWordWrap(true);
+		note->setStyleSheet(QStringLiteral("color:#8a8f98;"));
+		v->addWidget(note);
+	}
+	syncGuidesPreview();
+	v->addStretch(1);
+	addPage(QStringLiteral("Guides"), guidesPage);
 
 	// ===== Video =====
 	QWidget *videoPage = makePage(v);
@@ -1239,6 +1324,8 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 			return modeSupportsMouseFx(mode_);
 		if (title == QStringLiteral("Spotlight"))
 			return modeSupportsSpotlight(mode_);
+		if (title == QStringLiteral("Guides"))
+			return modeSupportsGuides(mode_);
 		if (title == QStringLiteral("Zoom"))
 			return modeSupportsZoom(mode_);
 		if (title == QStringLiteral("Webcam"))
@@ -1411,6 +1498,13 @@ template <class F> void forEachPageField(const QString &page, F &&f)
 		f(&Preset::screenBorderColor);
 		f(&Preset::screenBorderThickness);
 		f(&Preset::regionMoveHandle);
+	} else if (page == QStringLiteral("Guides")) {
+		f(&Preset::showGuides);
+		f(&Preset::guideKinds);
+		f(&Preset::guideColor);
+		f(&Preset::guideOpacityPct);
+		f(&Preset::guideThickness);
+		f(&Preset::guidesShortcut);
 	} else if (page == QStringLiteral("Video")) {
 		f(&Preset::format);
 		f(&Preset::codec);
@@ -1525,6 +1619,19 @@ void PresetEditorDialog::applyFrom(const Preset &p)
 	setButtonColor(borderColorBtn_, borderColor_);
 	borderThicknessSpin_->setValue(p.screenBorderThickness);
 	regionHandleCheck_->setChecked(p.regionMoveHandle);
+	guidesCheck_->setChecked(p.showGuides);
+	for (int i = 0; i < guideKindChecks_.size(); ++i) {
+		QSignalBlocker block(guideKindChecks_[i]);
+		guideKindChecks_[i]->setChecked((p.guideKinds & guideKindInfo()[i].kind) != 0);
+	}
+	guideColor_ = QColor(QString::fromStdString(p.guideColor));
+	if (!guideColor_.isValid())
+		guideColor_ = QColor(255, 255, 255);
+	setButtonColor(guideColorBtn_, guideColor_);
+	guideOpacitySlider_->setValue(p.guideOpacityPct);
+	guideThicknessSpin_->setValue(p.guideThickness);
+	guidesShortcutEdit_->setKeySequence(QKeySequence(QString::fromStdString(p.guidesShortcut)));
+	syncGuidesPreview();
 	templateEdit_->setText(QString::fromStdString(p.filenameTemplate));
 	driveLinkEdit_->setText(QString::fromStdString(p.googleDriveLink));
 
@@ -1688,7 +1795,29 @@ void PresetEditorDialog::pickColor(QColor &target, QPushButton *button)
 			      target = c;
 			      setButtonColor(button, c);
 			      updateMousePreview();
+			      syncGuidesPreview();
 		      });
+}
+
+int PresetEditorDialog::guideKindsChecked() const
+{
+	int kinds = 0;
+	for (int i = 0; i < guideKindChecks_.size(); ++i)
+		if (guideKindChecks_[i]->isChecked())
+			kinds |= guideKindInfo()[i].kind;
+	return kinds;
+}
+
+void PresetEditorDialog::syncGuidesPreview()
+{
+	if (!guidesPreview_ || !guideOpacitySlider_ || !guideThicknessSpin_)
+		return;
+	GuideStyle s;
+	s.kinds = guideKindsChecked();
+	s.color = guideColor_;
+	s.opacityPct = guideOpacitySlider_->value();
+	s.thickness = guideThicknessSpin_->value();
+	guidesPreview_->setStyle(s);
 }
 
 void PresetEditorDialog::syncZoomPreview()
@@ -1838,6 +1967,7 @@ bool PresetEditorDialog::resolveShortcutConflicts()
 		{"zoom", "Zoom in / out", zoomShortcutEdit_},
 		{"spotlight", "Spotlight on / off", spotShortcutEdit_},
 		{"follow", "Follow Mouse on / off", followShortcutEdit_},
+		{"guides", "Guides on / off", guidesShortcutEdit_},
 	};
 
 	QVector<ShortcutBinding> bindings;
@@ -1908,6 +2038,12 @@ void PresetEditorDialog::collectInto(Preset &out) const
 	out.screenBorderColor = borderColor_.name().toStdString();
 	out.screenBorderThickness = borderThicknessSpin_->value();
 	out.regionMoveHandle = regionHandleCheck_->isChecked();
+	out.showGuides = guidesCheck_->isChecked();
+	out.guideKinds = guideKindsChecked();
+	out.guideColor = guideColor_.name().toStdString();
+	out.guideOpacityPct = guideOpacitySlider_->value();
+	out.guideThickness = guideThicknessSpin_->value();
+	out.guidesShortcut = guidesShortcutEdit_->keySequence().toString().toStdString();
 	out.filenameTemplate = templateEdit_->text().trimmed().toStdString();
 	// An empty template would expand to an extension-only (hidden) filename
 	// like ".mp4" — restore the default naming instead of saving it.

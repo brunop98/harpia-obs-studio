@@ -4,6 +4,7 @@
 #include "TextVariations.hpp"
 
 #include "editor/Filmstrip.hpp"
+#include "ClipVariations.hpp"
 
 #include "../MediaFiles.hpp"
 
@@ -2034,6 +2035,12 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 							tlPlainText(c.text).split(QLatin1Char('\n')).value(0)));
 		else if (isImage)
 			what = QStringLiteral("IMG #%1").arg(c.sourceId);
+		else if (c.isRandomClip())
+			// A Random clip says how many clips it has, and which one shows.
+			what = QStringLiteral("\u00D7%1  #%2  (%3 of %1)")
+				       .arg(c.clipOptions.size())
+				       .arg(c.sourceId)
+				       .arg(c.clipShown + 1);
 		else
 			what = QStringLiteral("#%1").arg(c.sourceId);
 		const QString label =
@@ -3418,9 +3425,19 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 			// Move left edge in source-time; keep right (source end) fixed.
 			qint64 newSrcStart = std::clamp<qint64>(dragOrig_.srcStartMs + dMs, 0,
 								dragOrig_.srcEndMs - kMinClipMs);
+			// A Random clip's head is every choice's head: it can only grow
+			// back as far as the choice with the least footage before it.
+			if (dragOrig_.isRandomClip())
+				newSrcStart = std::max(newSrcStart,
+						       dragOrig_.srcStartMs -
+							       clip_variations::roomOfOthers(dragOrig_, {}).headMs);
 			const qint64 srcDelta = newSrcStart - dragOrig_.srcStartMs;
 			const qint64 outDelta = qint64(std::llround(double(srcDelta) / sp));
 			c.srcStartMs = newSrcStart;
+			if (dragOrig_.isRandomClip()) { // trimmed the same way, every one of them
+				c.clipOptions = dragOrig_.clipOptions;
+				clip_variations::shiftOthers(c, srcDelta);
+			}
 			c.outStartMs = std::max<qint64>(0, dragOrig_.outStartMs + outDelta);
 			// Clamping to the source bounds can pull the edge back off the
 			// candidate — don't draw a guide the clip isn't actually on.
@@ -3436,8 +3453,16 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 			const qint64 snapped = snap(wantOut, dragTrack_, dragClip_, &hit);
 			if (hit)
 				dMs = qint64(std::llround(double(snapped - dragOrig_.outEndMs()) * sp));
+			// A Random clip can only get as long as its shortest choice allows.
+			const qint64 endMax =
+				dragOrig_.isRandomClip()
+					? std::min(srcTotal,
+						   dragOrig_.srcEndMs + clip_variations::roomOfOthers(dragOrig_, [this](int id) {
+										return srcThumbDur_.value(id, 0);
+									}).tailMs)
+					: srcTotal;
 			c.srcEndMs = std::clamp<qint64>(dragOrig_.srcEndMs + dMs, dragOrig_.srcStartMs + kMinClipMs,
-							srcTotal);
+							std::max(dragOrig_.srcStartMs + kMinClipMs, endMax));
 			snapLineMs_ = (hit && c.outEndMs() == snapped) ? snapped : -1;
 			c.clampFades();
 			emitScrubAt(c.outEndMs());
@@ -4167,6 +4192,8 @@ void TimelineView::splitAtPlayhead()
 				continue; // too close to an edge to leave usable halves
 			TlClip right = c;
 			const qint64 srcCut = c.srcAtOutput(playheadMs_);
+			if (right.isRandomClip()) // the second half of every choice
+				clip_variations::shiftOthers(right, srcCut - c.srcStartMs);
 			c.srcEndMs = srcCut;
 			right.srcStartMs = srcCut;
 			right.outStartMs = playheadMs_;
@@ -4244,6 +4271,8 @@ void TimelineView::splitClip(int track, int clip, qint64 atOutMs)
 	const qint64 splitSrc = a.srcAtOutput(atOutMs);
 	TlClip b = a;
 	b.srcStartMs = splitSrc;
+	if (b.isRandomClip()) // the second half of every choice
+		clip_variations::shiftOthers(b, splitSrc - a.srcStartMs);
 	b.outStartMs = atOutMs;
 	a.srcEndMs = splitSrc;
 	splitFades(a, b);
@@ -4481,6 +4510,29 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 						"when done."));
 		disableBecause(slip, can, why);
 	}
+	// Random clip: this slot, several clips -- one version of the video each
+	// (Export > Variations), the way a Random text has several texts.
+	QAction *randomAct = nullptr;
+	if (menuClip.type == TlClip::Type::Video) {
+		randomAct = menu.addAction(menuClip.isRandomClip()
+						   ? QStringLiteral("Make normal clip  (keep the one shown)")
+						   : QStringLiteral("Make random clip"));
+		randomAct->setToolTip(
+			menuClip.isRandomClip()
+				? QStringLiteral("Back to one clip: the one showing now stays, the others are dropped. "
+						 "Ctrl+Z brings them back.")
+				: QStringLiteral("Give this slot other clips to choose from. Each one becomes a version "
+						 "of the video on export; they all share this clip's place, length "
+						 "and look. Add them in the Inspector."));
+		disableBecause(randomAct, !locked && menuClip.soundRule == 0 && menuClip.tts.isEmpty(),
+			       locked			  ? lockedWhy
+			       : menuClip.soundRule != 0 ? QStringLiteral("A sound rule places this sound. Choose "
+									  "Convert to normal clips on the Sounds lane "
+									  "first.")
+							  : QStringLiteral("A narration's captions are timed to its "
+									   "words, so it cannot swap in other "
+									   "footage."));
+	}
 	QAction *dup = menu.addAction(QStringLiteral("Duplicate"));
 	disableBecause(dup, !locked, lockedWhy);
 	// Linked clips (TlClip::link) move as one. A linked clip offers to let its
@@ -4642,6 +4694,21 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	QAction *chosen = menu.exec(globalPos);
 	if (chosen == slip) {
 		beginSlip(track, clip);
+		return;
+	}
+	if (randomAct && chosen == randomAct) {
+		TlClip &rc = model_.tracks[track].clips[clip];
+		if (rc.isRandomClip())
+			clip_variations::makeOrdinary(rc);
+		else
+			clip_variations::makeRandom(rc);
+		extraSel_.clear();
+		selTrack_ = track;
+		selClip_ = clip;
+		emit selectionChanged(selTrack_, selClip_);
+		update();
+		commitEdit();
+		emit inspectClipRequested(); // the list of clips is in the Inspector
 		return;
 	}
 	if (respeak && chosen == respeak) {

@@ -427,11 +427,12 @@ void ExportOptionsDialog::buildBatchTab()
 {
 	auto *page = new QWidget(this);
 	auto *v = new QVBoxLayout(page);
-	// One tab, two lists: Multi-Cut's cuts, or Full editing's text versions.
+	// One tab, two lists: Multi-Cut's cuts, or Full editing's versions (its
+	// Random texts and Random clips).
 	const bool variants = !ctx_.variantLabels.isEmpty();
 	auto *hint = new QLabel(
-		variants ? QStringLiteral("Every version is the whole video with only the words changed: one file "
-					  "per combination of the text clips' variations, in a new folder under the "
+		variants ? QStringLiteral("Every version is the whole video with only the Random texts and Random "
+					  "clips changed: one file per combination of their options, in a new folder under the "
 					  "folder chosen on the Single video tab, with that tab's format, quality, "
 					  "size and audio.")
 			 : QStringLiteral("Each cut becomes its own file, in a new folder under the folder chosen on "

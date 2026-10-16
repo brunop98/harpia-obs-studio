@@ -283,6 +283,11 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/textvariations_test.cpp" -o "$WORK/textvariations_test" $LF
 
+# Random clips: the shown clip and the list in step, what may be added and
+# removed, trims applied to every clip, and versions counted in with texts.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/clipvariations_test.cpp" -o "$WORK/clipvariations_test" $LF
+
 # Opaque frames tagged RGBX8888 composite to the same bytes as RGBA8888 in
 # every pose, and a mask still cuts them (the compositor retags first).
 g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
@@ -995,6 +1000,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/componentrender_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/opaqueframe_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/batchplan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textvariations_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/clipvariations_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/richtext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/curvepath_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keyorder_test" || rc=1

@@ -36,6 +36,7 @@
 #include <vector>
 
 class QButtonGroup;
+class QMenu;
 class QStringListModel;
 class QCheckBox;
 class QComboBox;
@@ -854,6 +855,22 @@ private:
 	// what is saved; a new selection puts it back to 0.
 	QWidget *variationsBox_ = nullptr;
 	InspectorSection *textSection_ = nullptr; // titled "Text" or "Random text"
+	// Random clip (timeline/ClipVariations.hpp): the slot's footage choices,
+	// one version of the video each. Rows rebuilt from the clip on every sync.
+	QWidget *randomClipBox_ = nullptr;
+	QVBoxLayout *randomClipRows_ = nullptr;
+	QLabel *randomClipCount_ = nullptr;
+	QPushButton *randomClipPrev_ = nullptr;
+	QPushButton *randomClipNext_ = nullptr;
+	QPushButton *randomClipAdd_ = nullptr;
+	void buildRandomClipSection(QVBoxLayout *clipOuter);
+	void syncRandomClipInspector(const TlClip &c);
+	void showRandomClipOption(int k);
+	void addRandomClipOption(int sourceId);
+	void removeRandomClipOption(int k);
+	void importRandomClipOption();
+	void fillRandomClipAddMenu(QMenu *menu);
+	QString sourceLabel(int sourceId) const; // its file name, no folder
 	QLabel *textMainCap_ = nullptr;  // "Text 1", over the main text of a Random text
 	QVBoxLayout *variantListLayout_ = nullptr;
 	QVector<QWidget *> variantRows_;

@@ -34,6 +34,7 @@
 #include "InspectorSection.hpp"
 #include "ToolbarLayout.hpp"
 #include "timeline/TextVariations.hpp"
+#include "timeline/ClipVariations.hpp"
 #include "timeline/VariationPresets.hpp"
 #include "FrameSeeker.hpp"
 #include "PreviewDecoder.hpp"
@@ -7477,6 +7478,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	// The clip's own content first: a caption's words, a lane's captions.
 	clipOuter->insertWidget(0, captionLaneBox_);
 	clipOuter->insertWidget(1, textBox_);
+	buildRandomClipSection(clipOuter); // at 2: a Random clip's choices, before its sound
 
 	// ---- Audio clip: level and fades -------------------------------------
 	// These already existed in the model, were saved with the project and were
@@ -7875,6 +7877,8 @@ void VideoEditorWindow::syncClipInspector()
 		videoClipBox_->setVisible(false);
 		if (audioClipBox_)
 			audioClipBox_->setVisible(false);
+		if (randomClipBox_)
+			randomClipBox_->setVisible(false);
 		const bool wasSyncingLane = syncingClip_;
 		syncingClip_ = true;
 		const TimelineModel &lm = timelineView_->model();
@@ -7988,6 +7992,7 @@ void VideoEditorWindow::syncClipInspector()
 	textBox_->setVisible(isText);
 	if (isText)
 		syncTextInspector(*c);
+	syncRandomClipInspector(*c);
 	syncingClip_ = wasSyncing;
 }
 
@@ -8024,6 +8029,240 @@ void VideoEditorWindow::syncTextInspector(const TlClip &c)
 	styleSwatch(textColorBtn_, c.text.color);
 	styleSwatch(outlineColorBtn_, c.text.outlineColor);
 	styleSwatch(boxColorBtn_, c.text.boxColor);
+}
+
+// ---- Random clip ----------------------------------------------------------------
+//
+// One slot, several clips: each is a version of the video on export, like a
+// Random text's texts. The rules (what is shared, what may be added, how the
+// shown one and the list stay in step) are in timeline/ClipVariations.hpp;
+// this is the list in the Clip tab.
+
+QString VideoEditorWindow::sourceLabel(int sourceId) const
+{
+	for (const EditorSource &s : sources_)
+		if (s.id == sourceId)
+			return QFileInfo(s.name.isEmpty() ? s.path : s.name).completeBaseName();
+	return QString();
+}
+
+void VideoEditorWindow::buildRandomClipSection(QVBoxLayout *clipOuter)
+{
+	auto *sec = new InspectorSection(QStringLiteral("Random clip"), QStringLiteral("clip/random"), true, clipBox_);
+	randomClipBox_ = sec;
+	randomClipBox_->setVisible(false);
+	clipOuter->insertWidget(2, randomClipBox_);
+	auto *v = sec->bodyLayout();
+	v->setSpacing(5);
+	auto *intro = new QLabel(QStringLiteral("Each clip is one version of the video (Export \u2192 Variations). "
+						"They share this slot's place, length and look. Show one, then "
+						"right-click the clip \u203A Slip to pick its moment."),
+				 randomClipBox_);
+	intro->setWordWrap(true);
+	intro->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+	v->addWidget(intro);
+	auto *rows = new QWidget(randomClipBox_);
+	randomClipRows_ = new QVBoxLayout(rows);
+	randomClipRows_->setContentsMargins(0, 0, 0, 0);
+	randomClipRows_->setSpacing(3);
+	v->addWidget(rows);
+
+	randomClipAdd_ = new QPushButton(QStringLiteral("+  Add clip"), randomClipBox_);
+	randomClipAdd_->setObjectName(QStringLiteral("addRandomClipButton"));
+	randomClipAdd_->setToolTip(QStringLiteral("Another clip for this slot: from the project's media, or a file"));
+	auto *menu = new QMenu(randomClipAdd_);
+	menu->setToolTipsVisible(true);
+	connect(menu, &QMenu::aboutToShow, this, [this, menu]() { fillRandomClipAddMenu(menu); });
+	randomClipAdd_->setMenu(menu);
+	v->addWidget(randomClipAdd_);
+
+	auto *row = new QHBoxLayout;
+	randomClipPrev_ = new QPushButton(randomClipBox_);
+	randomClipNext_ = new QPushButton(randomClipBox_);
+	randomClipPrev_->setIcon(uiIcon(Glyph::StepBack, 14));
+	randomClipNext_->setIcon(uiIcon(Glyph::StepForward, 14));
+	for (QPushButton *b : {randomClipPrev_, randomClipNext_}) {
+		b->setFixedSize(42, 32);
+		b->setStyleSheet(QStringLiteral(
+			"padding:0px; min-width:42px; max-width:42px; min-height:32px; max-height:32px;"));
+	}
+	randomClipPrev_->setToolTip(QStringLiteral("Show the previous clip"));
+	randomClipNext_->setToolTip(QStringLiteral("Show the next clip"));
+	randomClipCount_ = new QLabel(randomClipBox_);
+	row->addWidget(randomClipPrev_);
+	row->addWidget(randomClipCount_, 1, Qt::AlignCenter);
+	row->addWidget(randomClipNext_);
+	v->addLayout(row);
+	const auto step = [this](int d) {
+		const TlClip *c = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+		if (!c || !c->isRandomClip())
+			return;
+		const int n = int(c->clipOptions.size());
+		showRandomClipOption(((c->clipShown + d) % n + n) % n);
+	};
+	connect(randomClipPrev_, &QPushButton::clicked, this, [step]() { step(-1); });
+	connect(randomClipNext_, &QPushButton::clicked, this, [step]() { step(+1); });
+}
+
+void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
+{
+	if (!randomClipBox_)
+		return;
+	const bool on = c.type == TlClip::Type::Video && c.isRandomClip();
+	randomClipBox_->setVisible(on);
+	if (!on)
+		return;
+	// Rebuilt rather than patched: a handful of rows, and a row's own click is
+	// often what got us here -- deleteLater lets that click finish first.
+	while (QLayoutItem *it = randomClipRows_->takeAt(0)) {
+		if (QWidget *w = it->widget()) {
+			w->hide();
+			w->deleteLater();
+		}
+		delete it;
+	}
+	const int n = int(c.clipOptions.size());
+	for (int k = 0; k < n; ++k) {
+		const TlClipOption o = c.clipOptionAt(k);
+		const QString full =
+			QStringLiteral("%1.  %2").arg(k + 1).arg(clip_variations::label(sourceLabel(o.sourceId), o));
+		auto *row = new QWidget(randomClipBox_);
+		auto *h = new QHBoxLayout(row);
+		h->setContentsMargins(0, 0, 0, 0);
+		h->setSpacing(4);
+		auto *pick = new QPushButton(full.size() > 38 ? full.left(36) + QStringLiteral("\u2026") : full, row);
+		pick->setObjectName(QStringLiteral("randomClipOption"));
+		pick->setCheckable(true);
+		pick->setChecked(k == c.clipShown);
+		// Never wider than the Inspector: a long file name is cut, in full on hover.
+		pick->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+		pick->setMinimumWidth(60);
+		pick->setToolTip(k == c.clipShown
+					 ? full + QStringLiteral("\nShowing now. Right-click the clip \u203A Slip to pick "
+								 "its moment.")
+					 : full + QStringLiteral("\nShow this clip in the slot."));
+		pick->setStyleSheet(QStringLiteral("QPushButton{text-align:left; padding:4px 8px;}"
+						   "QPushButton:checked{border:2px solid #22c55e;}"));
+		connect(pick, &QPushButton::clicked, this, [this, k]() { showRandomClipOption(k); });
+		h->addWidget(pick, 1);
+		auto *del = new QPushButton(row);
+		del->setIcon(uiIcon(Glyph::Cross, 13));
+		del->setFixedWidth(28);
+		del->setEnabled(n > 1);
+		del->setToolTip(n > 1 ? QStringLiteral("Remove this clip")
+				      : QStringLiteral("The last clip stays. To stop this being a Random clip, "
+						       "right-click it \u203A Make normal clip."));
+		connect(del, &QPushButton::clicked, this, [this, k]() { removeRandomClipOption(k); });
+		h->addWidget(del);
+		randomClipRows_->addWidget(row);
+	}
+	randomClipCount_->setText(QStringLiteral("Clip %1 of %2").arg(c.clipShown + 1).arg(n));
+	randomClipPrev_->setEnabled(n > 1);
+	randomClipNext_->setEnabled(n > 1);
+}
+
+void VideoEditorWindow::showRandomClipOption(int k)
+{
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!sel || !sel->isRandomClip())
+		return;
+	const int track = timelineView_->selectedTrack();
+	const auto &tracks = timelineView_->model().tracks;
+	const bool audioLane = track >= 0 && track < tracks.size() && tracks[track].kind == TlTrack::Kind::Audio;
+	editSelectedClip([this, k, audioLane](TlClip &c) {
+		if (!clip_variations::show(c, k))
+			return;
+		// An audio lane draws a waveform, and it belongs to the file now playing.
+		if (audioLane)
+			if (const EditorSource *s = sourceById(c.sourceId))
+				c.peaks = VoiceoverTrack::loadPeaks(s->path, 600);
+	});
+}
+
+void VideoEditorWindow::addRandomClipOption(int sourceId)
+{
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	const EditorSource *s = sourceById(sourceId);
+	if (!sel || sel->type != TlClip::Type::Video || !s)
+		return;
+	QString why;
+	if (!clip_variations::fits(*sel, s->durationMs, &why)) {
+		warnAndLog(this, QStringLiteral("Random clip"),
+			   QStringLiteral("%1 can't be added. %2").arg(sourceLabel(sourceId), why));
+		return;
+	}
+	const qint64 total = s->durationMs;
+	int added = -1;
+	editSelectedClip([&added, sourceId, total](TlClip &c) {
+		added = clip_variations::add(c, sourceId, total);
+		if (added >= 0)
+			clip_variations::show(c, added); // shown at once, ready to slip
+	});
+	// The waveform, on an audio lane, through the same path a click takes.
+	if (added >= 0)
+		showRandomClipOption(added);
+}
+
+void VideoEditorWindow::removeRandomClipOption(int k)
+{
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!sel || !sel->isRandomClip())
+		return;
+	const int shownBefore = sel->clipShown;
+	editSelectedClip([k](TlClip &c) { clip_variations::remove(c, k); });
+	const TlClip *now = timelineView_->selectedClipPtr();
+	if (now && k == shownBefore)
+		showRandomClipOption(now->clipShown); // reload the waveform of the one now showing
+}
+
+void VideoEditorWindow::fillRandomClipAddMenu(QMenu *menu)
+{
+	menu->clear();
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!sel || sel->type != TlClip::Type::Video)
+		return;
+	const int track = timelineView_->selectedTrack();
+	const auto &tracks = timelineView_->model().tracks;
+	const bool audioLane = track >= 0 && track < tracks.size() && tracks[track].kind == TlTrack::Kind::Audio;
+	for (const EditorSource &es : sources_) {
+		if (es.durationMs <= 0)
+			continue; // a still has no time to fill a slot with
+		if (!audioLane && es.width <= 0)
+			continue; // a picture lane needs pictures
+		QAction *a = menu->addAction(QStringLiteral("%1  (%2 s)")
+						     .arg(sourceLabel(es.id))
+						     .arg(es.durationMs / 1000.0, 0, 'f', 1));
+		QString why;
+		const bool ok = clip_variations::fits(*sel, es.durationMs, &why);
+		a->setEnabled(ok);
+		a->setToolTip(ok ? QStringLiteral("Add it, starting at its beginning; slip it afterwards.") : why);
+		const int id = es.id;
+		connect(a, &QAction::triggered, this, [this, id]() { addRandomClipOption(id); });
+	}
+	if (!menu->isEmpty())
+		menu->addSeparator();
+	connect(menu->addAction(QStringLiteral("Import a file…")), &QAction::triggered, this,
+		&VideoEditorWindow::importRandomClipOption);
+}
+
+void VideoEditorWindow::importRandomClipOption()
+{
+	const TlClip *sel = timelineView_ ? timelineView_->selectedClipPtr() : nullptr;
+	if (!sel || sel->type != TlClip::Type::Video)
+		return;
+	const int track = timelineView_->selectedTrack();
+	const auto &tracks = timelineView_->model().tracks;
+	const bool audioLane = track >= 0 && track < tracks.size() && tracks[track].kind == TlTrack::Kind::Audio;
+	const QStringList paths = QFileDialog::getOpenFileNames(
+		this, QStringLiteral("Add clips"), QString(),
+		audioLane ? audioOpenFilter()
+			  : QStringLiteral("Video files (*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.gif *.wmv *.flv *.ts);;"
+					   "All files (*)"));
+	for (const QString &p : paths) {
+		const int id = isAudioFile(p) ? addAudioSource(p) : addSource(p);
+		if (id >= 0)
+			addRandomClipOption(id);
+	}
 }
 
 int VideoEditorWindow::captionLaneForBatch() const
@@ -12120,8 +12359,12 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	// Source ids in the file index the project's own `sources` array; map them
 	// onto whatever those files became in this session's media pool.
 	for (TlTrack &t : s.timeline.tracks)
-		for (TlClip &c : t.clips)
+		for (TlClip &c : t.clips) {
 			c.sourceId = srcMap.isEmpty() ? defaultSrcId : srcMap.value(c.sourceId, defaultSrcId);
+			// A Random clip's other choices name files the same way.
+			for (TlClipOption &o : c.clipOptions)
+				o.sourceId = srcMap.isEmpty() ? defaultSrcId : srcMap.value(o.sourceId, defaultSrcId);
+		}
 	for (TlSoundRule &r : s.timeline.soundRules)
 		r.sourceId = srcMap.isEmpty() ? r.sourceId : srcMap.value(r.sourceId, 0);
 
@@ -13717,14 +13960,15 @@ void VideoEditorWindow::onSave()
 		span.toMs = std::min(span.toMs, timelineView_->durationMs());
 		// Text variations: every combination is a version (Variations tab).
 		{
-			const QVector<text_variations::Slot> vs = text_variations::slotsOf(timelineView_->model());
+			const QVector<text_variations::Slot> vs = text_variations::slotsOf(
+				timelineView_->model(), [this](int id) { return sourceLabel(id); });
 			const qint64 n = text_variations::combinationCount(vs);
 			constexpr qint64 kListMax = 2000;
 			if (n > kListMax)
 				QMessageBox::information(
 					this, QStringLiteral("Variations"),
-					QStringLiteral("The text variations make %1 versions; the Variations tab lists "
-						       "the first %2.")
+					QStringLiteral("The Random texts and clips make %1 versions; the Variations tab "
+						       "lists the first %2.")
 						.arg(n)
 						.arg(kListMax));
 			for (qint64 i = 0; i < std::min(n, kListMax); ++i) {
@@ -13899,7 +14143,8 @@ void VideoEditorWindow::onSave()
 	// Single-video choice); voiceover and everything else as set above.
 	if (fullEdit() && dlg.batchMode()) {
 		const TimelineModel whole = timelineView_->model();
-		const QVector<text_variations::Slot> vs = text_variations::slotsOf(whole);
+		const QVector<text_variations::Slot> vs =
+			text_variations::slotsOf(whole, [this](int id) { return sourceLabel(id); });
 		const qint64 total = text_variations::combinationCount(vs);
 		const QVector<int> picked = dlg.batchSelection();
 		if (picked.size() > 50 &&

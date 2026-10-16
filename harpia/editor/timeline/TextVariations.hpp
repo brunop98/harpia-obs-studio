@@ -10,6 +10,11 @@
 // way an odometer counts, so a single varying clip gives its options in the
 // order they were typed.
 //
+// Random clips vary the same way (ClipVariations.hpp): a slot whose footage is
+// one of several files, counted in with the texts -- three clips and four
+// texts make twelve videos. For a clip, the options are its choices in list
+// order, named by file and start.
+//
 // Everything here is pure -- a timeline in, a timeline (or a name) out -- so
 // the counting, the substitution and the file names can be checked without
 // rendering anything. The export renders applyCombination()'s timeline through
@@ -22,17 +27,22 @@
 #include <QVector>
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 
 namespace harpia {
 
 namespace text_variations {
 
-// One text clip that has alternatives. options[0] is the clip's own text.
+// One clip that varies. For a Random text, options are its texts (options[0]
+// is the clip's own). For a Random clip, `clips` are its footage choices and
+// options are what they are called ("beach.mp4 @ 5.0s").
 struct Slot {
 	int track = -1;
 	int clip = -1;
 	QStringList options;
+	QVector<TlClipOption> clips;
+	bool isClip() const { return !clips.isEmpty(); }
 };
 
 // A clip's options: its own text first, then every non-blank alternative.
@@ -60,22 +70,42 @@ inline int optionIndexOfEntry(const TlText &t, int entry)
 	return k;
 }
 
-// The varying text clips, in timeline order: tracks top to bottom, then clips
-// by where they start. Only Random text clips vary.
-inline QVector<Slot> slotsOf(const TimelineModel &m)
+// The varying clips, in timeline order: tracks top to bottom, then clips by
+// where they start. Random texts with more than one text, Random clips with
+// more than one clip. `nameOf` names a Random clip's file by source id (the
+// window knows the files; without it, "clip 2" and so on).
+inline QVector<Slot> slotsOf(const TimelineModel &m, const std::function<QString(int)> &nameOf = {})
 {
 	QVector<Slot> out;
 	for (int ti = 0; ti < m.tracks.size(); ++ti) {
 		const TlTrack &t = m.tracks[ti];
 		QVector<int> order;
-		for (int ci = 0; ci < t.clips.size(); ++ci)
-			if (t.clips[ci].type == TlClip::Type::Text && t.clips[ci].text.random &&
-			    optionsOf(t.clips[ci].text).size() > 1)
+		for (int ci = 0; ci < t.clips.size(); ++ci) {
+			const TlClip &c = t.clips[ci];
+			const bool text = c.type == TlClip::Type::Text && c.text.random && optionsOf(c.text).size() > 1;
+			const bool footage = c.type == TlClip::Type::Video && c.clipOptions.size() > 1;
+			if (text || footage)
 				order.push_back(ci);
+		}
 		std::stable_sort(order.begin(), order.end(),
 				 [&t](int a, int b) { return t.clips[a].outStartMs < t.clips[b].outStartMs; });
-		for (int ci : order)
-			out.push_back({ti, ci, optionsOf(t.clips[ci].text)});
+		for (int ci : order) {
+			const TlClip &c = t.clips[ci];
+			if (c.type == TlClip::Type::Text) {
+				out.push_back({ti, ci, optionsOf(c.text), {}});
+				continue;
+			}
+			Slot s{ti, ci, {}, {}};
+			for (int k = 0; k < c.clipOptions.size(); ++k) {
+				const TlClipOption o = c.clipOptionAt(k);
+				s.clips << o;
+				const QString file = nameOf ? nameOf(o.sourceId) : QString();
+				s.options << QStringLiteral("%1 @ %2s")
+						     .arg(file.isEmpty() ? QStringLiteral("clip %1").arg(k + 1) : file)
+						     .arg(o.srcStartMs / 1000.0, 0, 'f', 1);
+			}
+			out.push_back(s);
+		}
 	}
 	return out;
 }
@@ -122,6 +152,19 @@ inline TimelineModel applyCombination(const TimelineModel &m, const QVector<Slot
 			continue;
 		const int k = std::clamp(pick[i], 0, int(s.options.size()) - 1);
 		TlClip &c = out.tracks[s.track].clips[s.clip];
+		if (s.isClip()) {
+			// The slot plays this choice: its file from its start, for the
+			// slot's own length. Picture and sound come from it alike.
+			const qint64 len = c.srcLenMs();
+			if (c.clipShown >= 0 && c.clipShown < c.clipOptions.size())
+				c.clipOptions[c.clipShown] = {c.sourceId, c.srcStartMs}; // the list stays whole
+			c.sourceId = s.clips[k].sourceId;
+			c.srcStartMs = s.clips[k].srcStartMs;
+			c.srcEndMs = c.srcStartMs + len;
+			c.clipShown = k;
+			c.peaks.clear();
+			continue;
+		}
 		c.text.text = s.options[k];
 		// Word timings belong to the text they were made for.
 		if (k != 0)

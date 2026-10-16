@@ -293,6 +293,18 @@ inline QJsonObject clipToJson(const TlClip &c)
 		co[QStringLiteral("link")] = c.link;
 	if (!c.tts.isEmpty())
 		co[QStringLiteral("tts")] = c.tts;
+	if (c.isRandomClip()) {
+		QJsonArray opts;
+		for (int k = 0; k < c.clipOptions.size(); ++k) {
+			const TlClipOption o = c.clipOptionAt(k); // the shown one as it plays now
+			QJsonObject oo;
+			oo[QStringLiteral("source")] = o.sourceId;
+			oo[QStringLiteral("srcStart")] = double(o.srcStartMs);
+			opts.append(oo);
+		}
+		co[QStringLiteral("clipOptions")] = opts;
+		co[QStringLiteral("clipShown")] = c.clipShown;
+	}
 	if (!c.tags.isEmpty()) {
 		QJsonArray ta;
 		for (int id : c.tags)
@@ -320,6 +332,14 @@ inline TlClip clipFromJson(const QJsonObject &co)
 	c.soundRule = co.value(QStringLiteral("soundRule")).toInt(0);
 	c.link = std::max(0, co.value(QStringLiteral("link")).toInt(0));
 	c.tts = co.value(QStringLiteral("tts")).toString();
+	for (const QJsonValue &ov : co.value(QStringLiteral("clipOptions")).toArray()) {
+		const QJsonObject oo = ov.toObject();
+		c.clipOptions.append({oo.value(QStringLiteral("source")).toInt(0),
+				      qint64(oo.value(QStringLiteral("srcStart")).toDouble())});
+	}
+	c.clipShown = c.clipOptions.isEmpty()
+			      ? 0
+			      : std::clamp(co.value(QStringLiteral("clipShown")).toInt(0), 0, int(c.clipOptions.size()) - 1);
 	for (const QJsonValue &tv : co.value(QStringLiteral("tags")).toArray())
 		if (const int id = tv.toInt(0); id > 0 && !c.tags.contains(id))
 			c.tags.append(id);

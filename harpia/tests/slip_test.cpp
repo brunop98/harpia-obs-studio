@@ -203,6 +203,58 @@ int main(int argc, char **argv)
 		ok(!v.slipping(), "a replaced model (undo, load) ends it");
 	}
 
+	std::printf("\n-- a Random clip on the timeline --\n");
+	{
+		// A 4 s slot of source 7 (30 s, from 5 s); its other clip is source 9
+		// (8 s long), slipped to 2 s.
+		TimelineModel rm;
+		TlTrack rv;
+		rv.kind = TlTrack::Kind::Video;
+		rv.name = QStringLiteral("V1");
+		TlClip slotClip = media(7, 2000, 5000, 9000);
+		slotClip.clipOptions = {{7, 5000}, {9, 2000}};
+		rv.clips = {slotClip};
+		rm.tracks = {rv};
+		TimelineView w;
+		w.resize(1100, 320);
+		w.setModel(rm);
+		w.setSourceThumbs(7, {}, 30000);
+		w.setSourceThumbs(9, {}, 8000);
+		w.show();
+		QApplication::processEvents();
+		const auto rc = [&w]() { return w.model().tracks[0].clips[0]; };
+
+		// Grow its end as far as it goes: clip 2 has 8 - 2 - 4 = 2 s to spare.
+		QRect r = w.clipRectForTest(0, 0);
+		drag(&w, QPoint(r.right() - 2, r.center().y()), 600);
+		ok(rc().srcEndMs == 11000 && rc().srcLenMs() == 6000,
+		   "its end grows only as far as its shortest clip allows (2 s more)");
+		// Its head: clip 2 starts 2 s in, so 2 s back at most.
+		r = w.clipRectForTest(0, 0);
+		drag(&w, QPoint(r.left() + 2, r.center().y()), -800);
+		ok(rc().srcStartMs == 3000 && rc().clipOptions[1].srcStartMs == 0,
+		   "its head grows back 2 s, and clip 2's head with it");
+		r = w.clipRectForTest(0, 0);
+		drag(&w, QPoint(r.left() + 2, r.center().y()), 60);
+		const qint64 cut = rc().srcStartMs - 3000;
+		ok(cut > 0 && rc().clipOptions[1].srcStartMs == cut, "trimming the head trims clip 2 the same way");
+
+		// Split in the middle: the second half of every clip.
+		TimelineModel sm = rm;
+		w.setModel(sm);
+		w.setSourceThumbs(7, {}, 30000);
+		w.setSourceThumbs(9, {}, 8000);
+		w.setPlayhead(4000);
+		w.splitAtPlayhead();
+		const TlTrack &st = w.model().tracks[0];
+		ok(st.clips.size() == 2, "split in two");
+		if (st.clips.size() == 2) {
+			const TlClip &b = st.clips[0].outStartMs > st.clips[1].outStartMs ? st.clips[0] : st.clips[1];
+			ok(b.srcStartMs == 7000 && b.clipOptions[1].srcStartMs == 4000,
+			   "the second half starts 2 s into each clip, its own and clip 2");
+		}
+	}
+
 	std::printf("\n%s (%d failures)\n", failures ? "FAILURES" : "ALL PASSED", failures);
 	return failures ? 1 : 0;
 }

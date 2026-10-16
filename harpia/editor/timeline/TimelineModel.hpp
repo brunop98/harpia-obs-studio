@@ -280,6 +280,15 @@ inline QVector<TlScript> reorderScriptsByLabel(const QStringList &labels,
 // TlClip::soundRule on a clip placed by a Sound component rather than a rule.
 inline constexpr int kSoundFromComponent = -1;
 
+// One footage choice of a Random clip: which file, and where in it to start.
+// Its length is the clip's own, so every choice fills exactly the same slot.
+struct TlClipOption {
+	int sourceId = 0;
+	qint64 srcStartMs = 0;
+	bool operator==(const TlClipOption &o) const { return sourceId == o.sourceId && srcStartMs == o.srcStartMs; }
+	bool operator!=(const TlClipOption &o) const { return !(*this == o); }
+};
+
 struct TlClip {
 	// Video = a decoded media clip (also used for audio-track clips); Image = a
 	// still whose duration is free; Text = a rendered caption; Effect = a grade
@@ -386,6 +395,25 @@ struct TlClip {
 	// compact JSON), so "Re-speak this sentence" can make a new take of one
 	// sentence in the same voice. Empty on every other clip.
 	QString tts;
+
+	// A Random clip: the footage choices for this slot, one per version of the
+	// video (Export > Variations), the way a Random text has its texts. Empty
+	// on an ordinary clip. Entry `clipShown` is the one the clip plays now, and
+	// for THAT entry the clip's own sourceId and srcStartMs are the truth -- the
+	// entry is refreshed from them when another is shown -- so slipping,
+	// trimming and previewing the shown footage need nothing special.
+	// Everything else (place, length, framing, effects, keys, fades, speed) is
+	// one setting shared by every choice.
+	QVector<TlClipOption> clipOptions;
+	int clipShown = 0;
+	bool isRandomClip() const { return !clipOptions.isEmpty(); }
+	// Choice `k` as it stands: the shown one read from the clip itself.
+	TlClipOption clipOptionAt(int k) const
+	{
+		if (k == clipShown)
+			return {sourceId, srcStartMs};
+		return k >= 0 && k < clipOptions.size() ? clipOptions[k] : TlClipOption{};
+	}
 
 	// Tags (TlTag ids, see TimelineModel::tags): what this clip IS to you --
 	// "intro", "callout", "b-roll". A sound rule can fire on a tag, and
@@ -683,6 +711,7 @@ struct TlClip {
 		       crop == o.crop && keys == o.keys && text == o.text && words == o.words &&
 		       scripts == o.scripts && fx == o.fx && components == o.components &&
 		       transition == o.transition && soundRule == o.soundRule && link == o.link && tts == o.tts && tags == o.tags &&
+		       clipOptions == o.clipOptions && clipShown == o.clipShown &&
 		       volume == o.volume && fadeInMs == o.fadeInMs &&
 		       fadeOutMs == o.fadeOutMs && fadeInCurve == o.fadeInCurve &&
 		       fadeOutCurve == o.fadeOutCurve;

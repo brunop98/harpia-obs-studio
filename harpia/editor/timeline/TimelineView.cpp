@@ -211,6 +211,12 @@ void TimelineView::editSoundRules(const std::function<void(QVector<TlSoundRule> 
 void TimelineView::setModel(const TimelineModel &m)
 {
 	model_ = m;
+	// A slip points at a clip by index, and a replaced model may not have it
+	// there any more.
+	slipTrack_ = slipClip_ = -1;
+	slipPartners_.clear();
+	if (mode_ == Mode::Slip)
+		mode_ = Mode::None;
 	selTrack_ = selClip_ = -1;
 	// The extras are indices into the OLD model; a new one makes them meaningless
 	// and possibly out of range. Clearing the primary without them was how undo
@@ -221,6 +227,162 @@ void TimelineView::setModel(const TimelineModel &m)
 	clampView();
 	update();
 	updateGeometry();
+}
+
+// ---- Slip ---------------------------------------------------------------------
+
+qint64 TimelineView::slipSourceMs(const TlClip &c) const
+{
+	return srcThumbDur_.value(c.sourceId, 0);
+}
+
+bool TimelineView::canSlip(int track, int clip, QString *why) const
+{
+	const auto no = [why](const QString &reason) {
+		if (why)
+			*why = reason;
+		return false;
+	};
+	if (track < 0 || track >= model_.tracks.size() || clip < 0 || clip >= model_.tracks[track].clips.size())
+		return no(QString());
+	const TlTrack &t = model_.tracks[track];
+	const TlClip &c = t.clips[clip];
+	if (t.locked)
+		return no(QStringLiteral("This lane is locked, so its clips cannot change. Right-click the lane "
+					 "header and choose Unlock track."));
+	if (c.freeDuration())
+		return no(QStringLiteral("Only video and audio clips have footage to slip through."));
+	if (c.soundRule != 0)
+		return no(QStringLiteral("A sound rule places this sound. Choose Convert to normal clips on the "
+					 "Sounds lane to make it yours first."));
+	if (!c.tts.isEmpty())
+		return no(QStringLiteral("A narration's captions are timed to its words: slipping the speech "
+					 "would leave them saying something else. Re-speak or trim it instead."));
+	const qint64 total = slipSourceMs(c);
+	if (c.srcStartMs <= 0 && (total <= 0 || c.srcEndMs >= total))
+		return no(QStringLiteral("This clip already shows all of its footage: there is nothing before or "
+					 "after it to slip to. Trim it shorter first."));
+	if (why)
+		why->clear();
+	return true;
+}
+
+bool TimelineView::slipValid() const
+{
+	if (slipTrack_ < 0 || slipTrack_ >= model_.tracks.size() || slipClip_ < 0 ||
+	    slipClip_ >= model_.tracks[slipTrack_].clips.size())
+		return false;
+	const TlClip &c = model_.tracks[slipTrack_].clips[slipClip_];
+	return !model_.tracks[slipTrack_].locked && !c.freeDuration();
+}
+
+void TimelineView::beginSlip(int track, int clip)
+{
+	if (!canSlip(track, clip))
+		return;
+	slipTrack_ = track;
+	slipClip_ = clip;
+	// The clip being slipped is the selection, alone: the Inspector shows it,
+	// and nothing else is carried along by accident.
+	selTrack_ = track;
+	selClip_ = clip;
+	selHeaderTrack_ = -1;
+	extraSel_.clear();
+	emit selectionChanged(selTrack_, selClip_);
+	setFocus(); // Enter and Esc finish
+	const TlClip &c = model_.tracks[track].clips[clip];
+	// Show the moment being chosen: the playhead's frame when it is over the
+	// clip, the clip's first frame otherwise.
+	if (playheadMs_ < c.outStartMs || playheadMs_ >= c.outEndMs()) {
+		playheadMs_ = c.outStartMs;
+		emitScrubAt(playheadMs_);
+	}
+	update();
+}
+
+void TimelineView::endSlip()
+{
+	if (slipTrack_ < 0)
+		return;
+	slipTrack_ = slipClip_ = -1;
+	slipPartners_.clear();
+	if (mode_ == Mode::Slip)
+		mode_ = Mode::None;
+	unsetCursor();
+	update();
+}
+
+void TimelineView::drawSlip(QPainter &p) const
+{
+	if (!slipValid())
+		return;
+	const TlClip &c = model_.tracks[slipTrack_].clips[slipClip_];
+	const QRect r = clipRect(slipTrack_, slipClip_);
+	const QRect content = contentRect();
+	const double sp = c.speed > 0.01 ? c.speed : 1.0;
+	const qint64 total = std::max<qint64>(c.srcEndMs, slipSourceMs(c));
+	// The whole source, laid along the lane where it would play: the clip is
+	// a window onto it, and the footage either side is what a slip can reach.
+	const qint64 fromMs = c.outStartMs - qint64(std::llround(double(c.srcStartMs) / sp));
+	const qint64 toMs = c.outStartMs + qint64(std::llround(double(total - c.srcStartMs) / sp));
+	const QRect whole(QPoint(msToX(fromMs), r.top()), QPoint(msToX(toMs), r.bottom()));
+	p.save();
+	p.setClipRegion(QRegion(content.intersected(whole)) - QRegion(r));
+	p.fillRect(whole, QColor(0x0b, 0x0d, 0x10, 215));
+	const auto it = srcThumbs_.constFind(c.sourceId);
+	const qint64 sdur = srcThumbDur_.value(c.sourceId, 0);
+	if (it != srcThumbs_.constEnd() && !it.value().isEmpty() && sdur > 0 && whole.width() > 2) {
+		const double aspect = srcAspect_.value(c.sourceId, 16.0 / 9.0);
+		const int th = r.height() - 2;
+		const int tileW = std::max(8, int(th * aspect));
+		const QVector<QPixmap> &pix = scaledStrip(c.sourceId, it.value(), tileW, th);
+		p.setOpacity(0.42);
+		for (const StripTile &t : filmstripTiles(int(it.value().size()), sdur, 0, sdur, whole.x() + 1,
+							 std::max(1, whole.width()), tileW, 1, content.x(),
+							 content.right() + tileW + 1))
+			if (t.index < pix.size() && !pix[t.index].isNull())
+				p.drawPixmap(QPoint(t.x, r.y() + 1), pix[t.index]);
+		p.setOpacity(1.0);
+	}
+	p.setPen(QPen(QColor(0x55, 0x5b, 0x66), 1, Qt::DashLine));
+	p.setBrush(Qt::NoBrush);
+	p.drawRect(whole.adjusted(0, 0, -1, -1));
+	p.restore();
+
+	// The window itself, in green, and what it shows.
+	p.save();
+	p.setClipRect(content);
+	p.setRenderHint(QPainter::Antialiasing, true);
+	const QColor green(0x22, 0xc5, 0x5e);
+	p.setPen(QPen(green, 3));
+	p.setBrush(Qt::NoBrush);
+	p.drawRoundedRect(QRectF(r).adjusted(1.5, 1.5, -1.5, -1.5), 4, 4);
+	const auto secs = [](qint64 ms) { return QString::number(ms / 1000.0, 'f', 1) + QLatin1Char('s'); };
+	const QString shown = QStringLiteral("%1 – %2 of %3").arg(secs(c.srcStartMs), secs(c.srcEndMs), secs(total));
+	p.setFont(clipFont_);
+	const QFontMetrics fm(clipFont_);
+	const QRect pill(r.x() + 6, r.y() + 5, fm.horizontalAdvance(shown) + 12, fm.height() + 4);
+	p.setPen(Qt::NoPen);
+	p.setBrush(QColor(0x0f, 0x5a, 0x2c, 235));
+	p.drawRoundedRect(pill, 4, 4);
+	p.setPen(QColor(0xe9, 0xff, 0xef));
+	p.drawText(pill, Qt::AlignCenter, shown);
+	p.restore();
+
+	// How to use it, and how to stop.
+	const QString hint = QStringLiteral("Slip: drag the clip to pick another moment  ·  Enter or Esc when done");
+	const QFontMetrics hm(clipFont_);
+	const QRect hr(content.right() - hm.horizontalAdvance(hint) - 18, lp_.margin + 2,
+		       hm.horizontalAdvance(hint) + 14, std::max(14, lp_.rulerH - 4));
+	p.save();
+	p.setRenderHint(QPainter::Antialiasing, true);
+	p.setPen(Qt::NoPen);
+	p.setBrush(QColor(0x0f, 0x5a, 0x2c, 235));
+	p.drawRoundedRect(hr, 4, 4);
+	p.setPen(QColor(0xe9, 0xff, 0xef));
+	p.setFont(clipFont_);
+	p.drawText(hr, Qt::AlignCenter, hint);
+	p.restore();
 }
 
 void TimelineView::setSourceThumbs(int sourceId, const QVector<QImage> &thumbs, qint64 durationMs)
@@ -2515,6 +2677,10 @@ void TimelineView::paintEvent(QPaintEvent *)
 		}
 	}
 
+	// Slip: the whole source around the clip, the window in green, the hint.
+	if (slipping())
+		drawSlip(p);
+
 	// Playhead across all lanes.
 	// The selection box, under the playhead.
 	if (mode_ == Mode::Marquee && marqueeRect_.width() + marqueeRect_.height() > 0) {
@@ -2574,6 +2740,36 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 		panStartView_ = viewStart_;
 		setCursor(Qt::ClosedHandCursor);
 		return;
+	}
+
+	// Slip mode: a press on the clip grabs its footage; anywhere else, the
+	// slip is over and the press does what it always does.
+	if (slipping()) {
+		if (slipValid() && e->button() == Qt::LeftButton && clipRect(slipTrack_, slipClip_).contains(pos)) {
+			mode_ = Mode::Slip;
+			pressPos_ = pos;
+			dragMoved_ = false;
+			dragTrack_ = slipTrack_;
+			dragClip_ = slipClip_;
+			dragOrig_ = model_.tracks[slipTrack_].clips[slipClip_];
+			// Source ms per pixel, as a trim measures it: the footage moves
+			// exactly as fast as the pointer does.
+			dragSrcPerPx_ = double(dragOrig_.srcLenMs()) /
+					double(std::max(1, clipRect(slipTrack_, slipClip_).width()));
+			// Its detached sound (linked, same file) slips with it.
+			slipPartners_.clear();
+			if (dragOrig_.link != 0)
+				for (const auto &lp : model_.linkedClips(dragOrig_.link)) {
+					if (lp == qMakePair(slipTrack_, slipClip_) || model_.tracks[lp.first].locked)
+						continue;
+					const TlClip &o = model_.tracks[lp.first].clips[lp.second];
+					if (o.type == TlClip::Type::Video && o.sourceId == dragOrig_.sourceId)
+						slipPartners_.append({lp, o});
+				}
+			setCursor(Qt::ClosedHandCursor);
+			return;
+		}
+		endSlip();
 	}
 
 	// Ruler or gutter → scrub / nothing.
@@ -3140,6 +3336,29 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 				? std::numeric_limits<qint64>::max() / 4
 				: srcThumbDur_.value(dragOrig_.sourceId, dragOrig_.srcEndMs + (1 << 30));
 
+		if (mode_ == Mode::Slip) {
+			// The footage follows the pointer: drag right and earlier footage
+			// slides into the window, drag left and later footage does. Only
+			// the source window moves -- place, length, neighbours, keys and
+			// fades all stay as they were.
+			qint64 d = qint64(std::llround(-(pos.x() - pressPos_.x()) * dragSrcPerPx_));
+			d = tlSlipFit(dragOrig_.srcStartMs, dragOrig_.srcEndMs, slipSourceMs(dragOrig_), d);
+			for (const auto &pp : slipPartners_)
+				d = tlSlipFit(pp.second.srcStartMs, pp.second.srcEndMs, slipSourceMs(pp.second), d);
+			c.srcStartMs = dragOrig_.srcStartMs + d;
+			c.srcEndMs = dragOrig_.srcEndMs + d;
+			for (const auto &pp : slipPartners_) {
+				TlClip &o = model_.tracks[pp.first.first].clips[pp.first.second];
+				o.srcStartMs = pp.second.srcStartMs + d;
+				o.srcEndMs = pp.second.srcEndMs + d;
+			}
+			// The preview follows: the frame under the playhead when it is
+			// over the clip, the clip's first frame otherwise.
+			const bool over = playheadMs_ >= c.outStartMs && playheadMs_ < c.outEndMs();
+			emitScrubAt(over ? playheadMs_ : c.outStartMs);
+			update();
+			return;
+		}
 		if (mode_ == Mode::Move) {
 			qint64 ns = std::max<qint64>(0, xToMs(pos.x()) - dragGrabOffsetMs_);
 			const qint64 dur = c.outDurationMs();
@@ -3269,7 +3488,9 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 	if (clip >= 0) {
 		const QRect r = clipRect(track, clip);
 		const int edge = std::min(8, r.width() / 3);
-		if (vh.valid())
+		if (slipping() && track == slipTrack_ && clip == slipClip_)
+			setCursor(Qt::SizeHorCursor); // the whole clip slips; no edges, no grips
+		else if (vh.valid())
 			setCursor(Qt::SizeVerCursor); // it moves up and down, not along
 		else if (kh.valid())
 			setCursor(Qt::SizeHorCursor);
@@ -3425,6 +3646,20 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 			commitEdit(); // one undo step for the whole drag
 		return;
 	}
+	if (mode_ == Mode::Slip) {
+		const bool changed = dragMoved_ && dragTrack_ >= 0 && dragTrack_ < model_.tracks.size() &&
+				     dragClip_ >= 0 && dragClip_ < model_.tracks[dragTrack_].clips.size() &&
+				     model_.tracks[dragTrack_].clips[dragClip_].srcStartMs != dragOrig_.srcStartMs;
+		mode_ = Mode::None;
+		dragTrack_ = dragClip_ = -1;
+		dragMoved_ = false;
+		slipPartners_.clear();
+		setCursor(Qt::SizeHorCursor);
+		update();
+		if (changed)
+			commitEdit(); // one undo step per drag; the slip mode stays on
+		return;
+	}
 	if (mode_ == Mode::Fade) {
 		const bool changed = dragMoved_;
 		mode_ = Mode::None;
@@ -3551,6 +3786,13 @@ void TimelineView::wheelEvent(QWheelEvent *e)
 
 void TimelineView::keyPressEvent(QKeyEvent *e)
 {
+	// Enter or Esc finishes a slip -- and is taken here, so the editor window
+	// does not read Esc as "close" or Enter as its default button.
+	if (slipping() && (e->key() == Qt::Key_Escape || e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter)) {
+		endSlip();
+		e->accept();
+		return;
+	}
 	if (e->key() == Qt::Key_Delete || e->key() == Qt::Key_Backspace) {
 		deleteSelected();
 		return;
@@ -4229,6 +4471,16 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 					       "close to the clip's edge (each half needs at least %1 ms). "
 					       "Right-click further inside the clip.")
 					.arg(kMinClipMs));
+	// Slip: another moment of the same footage, without trimming or moving.
+	QAction *slip = menu.addAction(QStringLiteral("Slip"));
+	{
+		QString why;
+		const bool can = canSlip(track, clip, &why);
+		slip->setToolTip(QStringLiteral("Keep this clip where it is and as long as it is, and drag "
+						"it to show a different moment of its video. Enter or Esc "
+						"when done."));
+		disableBecause(slip, can, why);
+	}
 	QAction *dup = menu.addAction(QStringLiteral("Duplicate"));
 	disableBecause(dup, !locked, lockedWhy);
 	// Linked clips (TlClip::link) move as one. A linked clip offers to let its
@@ -4388,6 +4640,10 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	disableBecause(del, !locked, lockedWhy);
 	explainDisabled(&menu);
 	QAction *chosen = menu.exec(globalPos);
+	if (chosen == slip) {
+		beginSlip(track, clip);
+		return;
+	}
 	if (respeak && chosen == respeak) {
 		emit respeakRequested(track, clip, atOutMs);
 		return;

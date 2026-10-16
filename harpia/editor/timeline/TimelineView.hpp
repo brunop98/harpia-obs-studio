@@ -301,6 +301,16 @@ public:
 	// and a test that recomputed the margins itself would drift from the layout
 	// it is meant to be checking.
 	QRect contentRectForTest() const { return contentRect(); }
+
+	// Slip (a media clip's right-click menu): the clip keeps its place and its
+	// length, and dragging it moves the footage inside -- a different moment
+	// of the same video, nothing else touched. A mode rather than a gesture:
+	// it stays on for as many drags as it takes, until Enter or Esc or a click
+	// anywhere else. Each drag is one undo step. Public so a test can drive it.
+	bool canSlip(int track, int clip, QString *why = nullptr) const;
+	void beginSlip(int track, int clip);
+	void endSlip();
+	bool slipping() const { return slipTrack_ >= 0; }
 	// Slot 0/1/2/3 = lock/hide/mute/solo (logical slots: where a kind lacks one
 	// the later ones move up). For tests: the invariant being checked is "this
 	// rect is inside the gutter", and a test computing the rect itself would be
@@ -710,7 +720,7 @@ private:
 	// drags the playhead across a still view. Both are "navigating", and mixing
 	// them up is why it needs its own mode rather than a flag on Scrub.
 	// TrackDrag is a header being dragged up or down to reorder the lanes.
-	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan, KeyDrag, Volume, TrackDrag, Marquee };
+	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan, KeyDrag, Volume, TrackDrag, Marquee, Slip };
 	Mode mode_ = Mode::None;
 	// The lane whose header is being dragged, and the slot (an insertion index,
 	// "before lane N", clamped into the lane's own kind group) it would land in
@@ -735,6 +745,14 @@ private:
 	TlClip dragOrig_;
 	int dragTrack_ = -1, dragClip_ = -1;
 	double dragSrcPerPx_ = 0.0;
+	// Slip: the clip in slip mode, and -- during a drag -- the clips linked to
+	// it that play the same file (its detached sound), as they were at the
+	// press. They slip by the same amount, so picture and sound stay together.
+	int slipTrack_ = -1, slipClip_ = -1;
+	QVector<QPair<QPair<int, int>, TlClip>> slipPartners_;
+	qint64 slipSourceMs(const TlClip &c) const; // the whole source's length; 0 = unknown
+	bool slipValid() const;                     // still points at a clip that can slip
+	void drawSlip(QPainter &p) const;
 	qint64 dragGrabOffsetMs_ = 0; // cursor->clip-start at grab
 	DropTarget drop_;             // live drop target while moving a clip
 	bool snap_ = true;            // magnet

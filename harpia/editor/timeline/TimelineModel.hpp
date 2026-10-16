@@ -214,6 +214,19 @@ inline QString tlApplyTextCase(const QString &s, int textCase)
 	}
 }
 
+// Slip: the footage window [srcStart, srcEnd) moved through a source `srcTotal`
+// long by `wantMs` of SOURCE time, its length unchanged. Returns the part of
+// `wantMs` that fits -- never before the source's first frame, never past its
+// last -- so a slip that runs out of footage stops at the end instead of
+// showing frames that are not there. srcTotal <= 0 means unknown: only the
+// footage before the window is known to exist.
+inline qint64 tlSlipFit(qint64 srcStart, qint64 srcEnd, qint64 srcTotal, qint64 wantMs)
+{
+	const qint64 lo = -std::max<qint64>(0, srcStart);
+	const qint64 hi = srcTotal > 0 ? std::max<qint64>(0, srcTotal - srcEnd) : 0;
+	return std::clamp(wantMs, lo, hi);
+}
+
 // What a caption actually draws: its words, with its case style applied.
 inline QString tlDisplayText(const TlText &t)
 {

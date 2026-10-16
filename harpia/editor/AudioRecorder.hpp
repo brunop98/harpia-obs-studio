@@ -9,8 +9,11 @@
 class QAudioSource;
 class QIODevice;
 class QFile;
+class QTimer;
 
 namespace harpia {
+
+class SystemAudioCapture;
 
 // One selectable microphone/input device (id is opaque, name is human-facing).
 struct AudioInputDevice {
@@ -27,6 +30,11 @@ struct AudioInputDevice {
 // The editor is otherwise a libav module with no audio capture — this is the
 // one place that touches the OS mic. Playback/mixing of the recorded takes is
 // handled elsewhere (the voiceover track + ClipExporter).
+//
+// The device id may also name the computer's own sound instead of a
+// microphone (system_audio::sourceId(): everything Windows plays, or one app).
+// Those takes come from SystemAudioCapture, always stereo at the rate Windows
+// plays, and are otherwise the same: the same WAV, the same level signal.
 class AudioRecorder : public QObject {
 	Q_OBJECT
 public:
@@ -47,7 +55,13 @@ public:
 	int sampleRate() const { return sampleRate_; }
 	int channelCount() const { return channels_; }
 
-	bool isRecording() const { return source_ != nullptr; }
+	bool isRecording() const { return source_ != nullptr || sys_ != nullptr; }
+
+	// The last take started was the computer's sound, not a microphone.
+	bool isSystemSource() const { return systemTake_; }
+	// ...and Harpia's own sound was kept out of it (Windows 11), so the
+	// timeline may play out loud while it records.
+	bool systemExcludesSelf() const { return systemExcludesSelf_; }
 
 	// Begin capturing to a fresh temp WAV (created under `dir`, or the system
 	// temp dir if empty). Returns false and emits error() on failure.
@@ -68,8 +82,10 @@ signals:
 
 private slots:
 	void onReadyRead();
+	void onSystemAudio();
 
 private:
+	bool openTakeFile(const QString &dir); // the temp WAV, header placeholder written
 	void writeWavHeaderPlaceholder();
 	void patchWavHeader();
 	void emitLevel(const char *data, qint64 bytes);
@@ -79,6 +95,11 @@ private:
 	int channels_ = 1;
 
 	QAudioSource *source_ = nullptr; // owns the capture; null when idle
+	SystemAudioCapture *sys_ = nullptr; // or this, for the computer's sound
+	QTimer *sysTimer_ = nullptr;        // collects what its thread captured
+	bool systemTake_ = false;
+	bool systemExcludesSelf_ = false;
+	bool sysFailureShown_ = false;
 	QIODevice *pull_ = nullptr;      // QAudioSource::start() stream (not owned)
 	QFile *file_ = nullptr;          // the WAV being written
 	QString path_;

@@ -23,6 +23,8 @@
 #include "TimeText.hpp"
 
 #include "AudioRecorder.hpp"
+#include "SystemAudioCapture.hpp"
+#include "WavSilence.hpp"
 #include "ClipExporter.hpp"
 #include "DevPanel.hpp"
 #include "EditorWidgets.hpp"
@@ -132,6 +134,7 @@
 #include <QTextEdit>
 #include <QProcess>
 #include <QSpinBox>
+#include <QStandardItemModel>
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QImageReader>
@@ -1033,7 +1036,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		}
 	});
 	connect(voRecorder_, &AudioRecorder::error, this, [this](const QString &msg) {
-		warnAndLog(this, QStringLiteral("Microphone"), msg);
+		warnAndLog(this, voRecorder_->isSystemSource() ? QStringLiteral("Windows audio")
+							       : QStringLiteral("Microphone"),
+			   msg);
 	});
 	voCountdownTimer_ = new QTimer(this);
 	voCountdownTimer_->setInterval(1000);
@@ -11132,8 +11137,11 @@ void VideoEditorWindow::startVoiceoverCapture()
 		else if (multiCut() && tracks_)
 			tracks_->setPlayhead(startMs);
 		// The timeline's own sound would be picked up by the microphone
-		// unless you wear headphones, so it is off unless asked for.
-		if (audioPreview_ && !(voTimelineSound_ && voTimelineSound_->isChecked()) &&
+		// unless you wear headphones, so it is off unless asked for. And
+		// recording all of Windows' sound where Harpia cannot be left out of
+		// it (Windows 10), it would go straight into the take: always off.
+		const bool hearsItself = voRecorder_->isSystemSource() && !voRecorder_->systemExcludesSelf();
+		if (audioPreview_ && (hearsItself || !(voTimelineSound_ && voTimelineSound_->isChecked())) &&
 		    !audioPreview_->isMuted()) {
 			audioPreview_->setMuted(true);
 			voMutedPreview_ = true;
@@ -11152,19 +11160,40 @@ void VideoEditorWindow::finishVoiceover()
 		voOpenBtn_->setText(QStringLiteral("Voiceover"));
 		voOpenBtn_->setStyleSheet(QString());
 	}
-	const QString path = voRecorder_->stop();
-	const qint64 durMs = voRecorder_->capturedMs();
+	QString path = voRecorder_->stop();
+	qint64 durMs = voRecorder_->capturedMs();
+	const bool playedAlong = voPlayedAlong_;
 	stopPlayback();
 	if (voMutedPreview_ && audioPreview_)
 		audioPreview_->setMuted(false);
 	voMutedPreview_ = false;
 	voPlayedAlong_ = false;
+	// A grab from Windows: off with the wait before the video started and
+	// after it ended. The sound then starts where the take is placed -- unless
+	// the timeline played along, where it keeps its place in time instead.
+	const bool sysTake = voRecorder_->isSystemSource();
+	bool heardNothing = false;
+	if (sysTake && !path.isEmpty() && durMs > 0 && voTrimSilence_ && voTrimSilence_->isChecked()) {
+		const WavTrim t = trimWavSilence(path);
+		if (t.ok && t.silent) {
+			QFile::remove(path);
+			path.clear();
+			durMs = 0;
+			heardNothing = true;
+		} else if (t.ok) {
+			durMs = t.durationMs;
+			if (playedAlong)
+				voClipStartMs_ += t.leadMs;
+		}
+	}
 	voMeter_->reset();
 	voStatus_->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 	voRecordBtn_->setText(QStringLiteral("Record"));
 	voRecordBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
 	if (path.isEmpty() || durMs <= 0) {
-		voStatus_->setText(QStringLiteral("Nothing was captured. Check the microphone above."));
+		voStatus_->setText(heardNothing ? QStringLiteral("Nothing was heard. Was the video playing, and not muted?")
+				   : sysTake    ? QStringLiteral("Nothing was captured from Windows audio.")
+						: QStringLiteral("Nothing was captured. Check the microphone above."));
 		if (fullEdit() && timelineView_) {
 			TimelineModel m = timelineView_->model();
 			const int ti = liveTakeTrack(m);
@@ -11241,14 +11270,39 @@ void VideoEditorWindow::refreshVoiceoverDevices()
 		if (d.isDefault)
 			def = voDevice_->count() - 1;
 	}
-	if (voDevice_->count() == 0) {
+	const bool mics = voDevice_->count() > 0;
+	if (!mics) {
 		voDevice_->addItem(QStringLiteral("No microphone found"), QString());
-		voDevice_->setEnabled(false);
-		return;
+		if (auto *model = qobject_cast<QStandardItemModel *>(voDevice_->model()))
+			model->item(0)->setEnabled(!system_audio::available());
 	}
-	voDevice_->setEnabled(true);
+	// The computer's own sound, after the microphones: everything it plays,
+	// and -- where Windows can single one out -- each app with sound open.
+	if (system_audio::available()) {
+		voDevice_->insertSeparator(voDevice_->count());
+		const int everything = voDevice_->count();
+		voDevice_->addItem(QStringLiteral("Windows audio (everything)"), system_audio::sourceId());
+		if (!mics)
+			def = everything;
+		if (system_audio::perAppAvailable()) {
+			QStringList listed;
+			for (const SystemAudioApp &a : system_audio::apps()) {
+				voDevice_->addItem(a.playing ? QStringLiteral("Only %1  (playing)").arg(a.name)
+							     : QStringLiteral("Only %1").arg(a.name),
+						   system_audio::sourceId(a.exe));
+				listed << a.exe.toLower();
+			}
+			// The app chosen last time, even with nothing playing in it now.
+			QString wantExe;
+			if (system_audio::isSourceId(want, &wantExe) && !wantExe.isEmpty() &&
+			    !listed.contains(wantExe.toLower()))
+				voDevice_->addItem(QStringLiteral("Only %1  (not playing now)").arg(wantExe), want);
+		}
+	}
+	voDevice_->setEnabled(mics || system_audio::available());
 	const int i = voDevice_->findData(want);
-	voDevice_->setCurrentIndex(i >= 0 ? i : def);
+	voDevice_->setCurrentIndex(i >= 0 && !want.isEmpty() ? i : def);
+	syncVoiceoverSource();
 }
 
 void VideoEditorWindow::saveVoiceoverSettings()
@@ -11270,6 +11324,27 @@ void VideoEditorWindow::saveVoiceoverSettings()
 		st.setValue(QStringLiteral("editor/vo/timelineSound"), voTimelineSound_->isChecked());
 	if (voStopAtEnd_)
 		st.setValue(QStringLiteral("editor/vo/stopAtEnd"), voStopAtEnd_->isChecked());
+	if (voTrimSilence_)
+		st.setValue(QStringLiteral("editor/vo/trimSystem"), voTrimSilence_->isChecked());
+}
+
+void VideoEditorWindow::syncVoiceoverSource()
+{
+	if (!voDevice_)
+		return;
+	const bool sys = system_audio::isSourceId(voDevice_->currentData().toString());
+	// Windows audio is taken as Windows plays it: stereo, at its own rate.
+	const QString asPlayed = QStringLiteral("Windows audio is recorded in stereo, at the rate Windows plays it.");
+	if (voChannels_) {
+		voChannels_->setEnabled(!sys);
+		voChannels_->setToolTip(sys ? asPlayed : QStringLiteral("Mono suits a single voice and a single microphone."));
+	}
+	if (voRate_) {
+		voRate_->setEnabled(!sys);
+		voRate_->setToolTip(sys ? asPlayed : QString());
+	}
+	if (voTrimSilence_)
+		voTrimSilence_->setVisible(sys);
 }
 
 void VideoEditorWindow::buildVoiceoverPanel()
@@ -11289,14 +11364,19 @@ void VideoEditorWindow::buildVoiceoverPanel()
 	auto *devRow = new QHBoxLayout;
 	voDevice_ = new QComboBox(voPanel_);
 	voDevice_->setMinimumWidth(220);
-	voDevice_->setToolTip(QStringLiteral("The microphone to record from."));
+	voDevice_->setToolTip(system_audio::available()
+				      ? QStringLiteral("A microphone, or the sound Windows is playing: play a video and "
+						       "grab its sound onto the timeline.")
+				      : QStringLiteral("The microphone to record from."));
 	devRow->addWidget(voDevice_, 1);
 	auto *refresh = new QPushButton(QStringLiteral("↻"), voPanel_);
 	refresh->setFixedWidth(28);
-	refresh->setToolTip(QStringLiteral("Look for microphones again (after plugging one in)."));
+	refresh->setToolTip(system_audio::available()
+				    ? QStringLiteral("Look again for microphones, and for apps playing sound.")
+				    : QStringLiteral("Look for microphones again (after plugging one in)."));
 	connect(refresh, &QPushButton::clicked, this, &VideoEditorWindow::refreshVoiceoverDevices);
 	devRow->addWidget(refresh);
-	form->addRow(QStringLiteral("Microphone"), devRow);
+	form->addRow(QStringLiteral("Record from"), devRow);
 	refreshVoiceoverDevices();
 
 	voCountdownSec_ = new QSpinBox(voPanel_);
@@ -11330,6 +11410,13 @@ void VideoEditorWindow::buildVoiceoverPanel()
 	}
 	form->addRow(QStringLiteral("Sample rate"), voRate_);
 	v->addLayout(form);
+
+	voTrimSilence_ = new QCheckBox(QStringLiteral("Trim the silence at both ends"), voPanel_);
+	voTrimSilence_->setChecked(st.value(QStringLiteral("editor/vo/trimSystem"), true).toBool());
+	voTrimSilence_->setToolTip(QStringLiteral(
+		"Cuts the wait while you switch to the video and press play, and after it ends, so the "
+		"sound starts right where the take is placed."));
+	v->addWidget(voTrimSilence_);
 
 	voTalkAlong_ = new QCheckBox(QStringLiteral("Play the video while recording"), voPanel_);
 	voTalkAlong_->setChecked(st.value(QStringLiteral("editor/vo/playAlong"), true).toBool());
@@ -11373,8 +11460,10 @@ void VideoEditorWindow::buildVoiceoverPanel()
 
 	for (QComboBox *cb : {voDevice_, voStartAt_, voChannels_, voRate_})
 		connect(cb, &QComboBox::currentIndexChanged, this, [this](int) { saveVoiceoverSettings(); });
-	for (QCheckBox *cb : {voTalkAlong_, voTimelineSound_, voStopAtEnd_})
+	for (QCheckBox *cb : {voTalkAlong_, voTimelineSound_, voStopAtEnd_, voTrimSilence_})
 		connect(cb, &QCheckBox::toggled, this, [this](bool) { saveVoiceoverSettings(); });
+	connect(voDevice_, &QComboBox::currentIndexChanged, this, [this](int) { syncVoiceoverSource(); });
+	syncVoiceoverSource();
 	connect(voCountdownSec_, &QSpinBox::valueChanged, this, [this](int) { saveVoiceoverSettings(); });
 	// Closing the panel mid-take would leave the microphone running with no
 	// way to stop it: finish the take instead.

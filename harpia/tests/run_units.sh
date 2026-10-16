@@ -171,6 +171,12 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/guides_test.cpp" "$H/ui/GuidesOverlay.cpp" "$H/model/Preset.cpp" \
 	-o "$WORK/guides_test" $LF
 
+# Recording Windows audio in the voiceover panel: the source ids beside the
+# microphones', the capture where there is no Windows, and the silence trim.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/systemaudio_test.cpp" "$H/editor/SystemAudioCapture.cpp" "$H/editor/WavSilence.cpp" \
+	-o "$WORK/systemaudio_test" $LF -lpthread
+
 # Two actions on one key: nothing reports it and the second feature just never
 # fires, so the rule is that it cannot be saved at all.
 "$MOC" -I"$H" "$H/ui/ShortcutConflictDialog.hpp" -o "$WORK/moc_ShortcutConflictDialog.cpp"
@@ -940,6 +946,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/spotlight_fx_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/audioextract_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/modecapabilities_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/guides_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/systemaudio_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/preset_equality_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/audiotap_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/shortcutconflict_test" || rc=1

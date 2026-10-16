@@ -272,6 +272,10 @@ target_sources(
     editor/AudioExtractDialog.hpp
     editor/AudioRecorder.cpp
     editor/AudioRecorder.hpp
+    editor/SystemAudioCapture.cpp
+    editor/SystemAudioCapture.hpp
+    editor/WavSilence.cpp
+    editor/WavSilence.hpp
     editor/LevelMeter.cpp
     editor/LevelMeter.hpp
     editor/VoiceoverTrack.cpp
@@ -415,7 +419,9 @@ if(OS_WINDOWS)
   # DPAPI (CryptProtectData) seals the transcription API key -- SecretStore.cpp.
   # dbghelp: the stack and the minidump in a crash report -- CrashGuard.cpp.
   # shell32: the taskbar id (SetCurrentProcessExplicitAppUserModelID).
-  target_link_libraries(harpia-recorder PRIVATE crypt32 dbghelp dwmapi shell32)
+  # ole32 + version: recording Windows audio in the voiceover panel -- COM for
+  # WASAPI, and an app's own name ("Google Chrome") from its version resource.
+  target_link_libraries(harpia-recorder PRIVATE crypt32 dbghelp dwmapi shell32 ole32 version)
 elseif(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
   target_sources(harpia-recorder PRIVATE
     platform/nix/NixIdleMonitor.cpp

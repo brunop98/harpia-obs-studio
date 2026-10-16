@@ -1319,6 +1319,11 @@ private:
 	QComboBox *voRate_ = nullptr;          // 48000 / 44100
 	QCheckBox *voTimelineSound_ = nullptr; // hear the timeline while recording (headphones)
 	QCheckBox *voStopAtEnd_ = nullptr;     // the take ends when playback reaches the end
+	// "Windows audio" sources (SystemAudioCapture): cut the wait before the
+	// video starts and after it ends.
+	QCheckBox *voTrimSilence_ = nullptr;
+	// Mic or Windows audio: what the format rows and the trim mean change with it.
+	void syncVoiceoverSource();
 	bool voPlayedAlong_ = false;           // this take started playback
 	bool voMutedPreview_ = false;          // ...and muted the preview sound for it
 	void buildVoiceoverPanel();

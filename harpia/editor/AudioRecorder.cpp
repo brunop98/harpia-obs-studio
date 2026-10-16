@@ -1,4 +1,5 @@
 #include "AudioRecorder.hpp"
+#include "SystemAudioCapture.hpp"
 
 #include <QAudioDevice>
 #include <QAudioFormat>
@@ -8,6 +9,7 @@
 #include <QFile>
 #include <QIODevice>
 #include <QMediaDevices>
+#include <QTimer>
 
 #include <algorithm>
 #include <cmath>
@@ -79,6 +81,35 @@ bool AudioRecorder::start(const QString &dir)
 	if (isRecording())
 		return false;
 
+	QString appExe;
+	systemTake_ = system_audio::isSourceId(deviceId_, &appExe);
+	systemExcludesSelf_ = false;
+	if (systemTake_) {
+		auto *cap = new SystemAudioCapture;
+		QString why;
+		if (!cap->start(appExe, &why)) {
+			delete cap;
+			emit error(why);
+			return false;
+		}
+		sampleRate_ = cap->sampleRate();
+		channels_ = SystemAudioCapture::kChannels;
+		systemExcludesSelf_ = cap->excludesSelf();
+		if (!openTakeFile(dir)) {
+			delete cap;
+			return false;
+		}
+		sys_ = cap;
+		sysFailureShown_ = false;
+		if (!sysTimer_) {
+			sysTimer_ = new QTimer(this);
+			sysTimer_->setInterval(20);
+			connect(sysTimer_, &QTimer::timeout, this, &AudioRecorder::onSystemAudio);
+		}
+		sysTimer_->start();
+		return true;
+	}
+
 	// Resolve the requested device (fall back to the system default).
 	QAudioDevice device = QMediaDevices::defaultAudioInput();
 	if (!deviceId_.isEmpty()) {
@@ -107,21 +138,8 @@ bool AudioRecorder::start(const QString &dir)
 		channels_ = fmt.channelCount();
 	}
 
-	const QString folder = dir.isEmpty() ? QDir::tempPath() : dir;
-	QDir().mkpath(folder);
-	path_ = QDir(folder).filePath(
-		QStringLiteral("harpia_voiceover_%1.wav")
-			.arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss_zzz"))));
-
-	file_ = new QFile(path_, this);
-	if (!file_->open(QIODevice::WriteOnly)) {
-		emit error(QStringLiteral("Could not create the voiceover file."));
-		delete file_;
-		file_ = nullptr;
+	if (!openTakeFile(dir))
 		return false;
-	}
-	dataBytes_ = 0;
-	writeWavHeaderPlaceholder();
 
 	source_ = new QAudioSource(device, fmt, this);
 	pull_ = source_->start(); // pull mode: read from this device on readyRead
@@ -139,18 +157,48 @@ bool AudioRecorder::start(const QString &dir)
 	return true;
 }
 
+bool AudioRecorder::openTakeFile(const QString &dir)
+{
+	const QString folder = dir.isEmpty() ? QDir::tempPath() : dir;
+	QDir().mkpath(folder);
+	path_ = QDir(folder).filePath(
+		QStringLiteral("harpia_voiceover_%1.wav")
+			.arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss_zzz"))));
+
+	file_ = new QFile(path_, this);
+	if (!file_->open(QIODevice::WriteOnly)) {
+		emit error(QStringLiteral("Could not create the voiceover file."));
+		delete file_;
+		file_ = nullptr;
+		return false;
+	}
+	dataBytes_ = 0;
+	writeWavHeaderPlaceholder();
+	return true;
+}
+
 QString AudioRecorder::stop()
 {
 	if (!isRecording())
 		return QString();
 
-	// Drain anything still buffered before tearing down.
-	onReadyRead();
-	source_->stop();
-	disconnect(pull_, nullptr, this, nullptr);
-	delete source_;
-	source_ = nullptr;
-	pull_ = nullptr;
+	if (sys_) {
+		// Everything the thread captured up to now, then let it go.
+		sysTimer_->stop();
+		onSystemAudio();
+		sys_->stop();
+		onSystemAudio(); // anything handed over while it wound down
+		delete sys_;
+		sys_ = nullptr;
+	} else {
+		// Drain anything still buffered before tearing down.
+		onReadyRead();
+		source_->stop();
+		disconnect(pull_, nullptr, this, nullptr);
+		delete source_;
+		source_ = nullptr;
+		pull_ = nullptr;
+	}
 
 	patchWavHeader();
 	file_->close();
@@ -181,6 +229,25 @@ void AudioRecorder::onReadyRead()
 	file_->write(chunk);
 	dataBytes_ += chunk.size();
 	emitLevel(chunk.constData(), chunk.size());
+}
+
+void AudioRecorder::onSystemAudio()
+{
+	if (!sys_ || !file_)
+		return;
+	const QByteArray chunk = sys_->take();
+	if (!chunk.isEmpty()) {
+		file_->write(chunk);
+		dataBytes_ += chunk.size();
+		emitLevel(chunk.constData(), chunk.size());
+	}
+	// The stream died (the output device went away): say so once. What was
+	// recorded up to there stays in the take.
+	const QString why = sys_->failure();
+	if (!why.isEmpty() && !sysFailureShown_) {
+		sysFailureShown_ = true;
+		emit error(why);
+	}
 }
 
 void AudioRecorder::emitLevel(const char *data, qint64 bytes)

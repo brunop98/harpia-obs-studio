@@ -76,6 +76,9 @@ build "$HERE/avsync_test.cpp" avsync_test
 build "$HERE/exportpaths_test.cpp" exportpaths_test
 build "$HERE/exportcolor_test.cpp" exportcolor_test
 build "$HERE/batchexport_test.cpp" batchexport_test
+# Every frame once: sources that number their frames, read the way an export
+# reads them and exported from a two-track 60 fps timeline.
+build "$HERE/exportcadence_test.cpp" exportcadence_test
 # HDR (HLG/PQ) to SDR: the curve, the colours, and a real 10-bit HLG clip.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/hdrtosdr_test.cpp" "$H/editor/HdrToSdr.cpp" -o "$WORK/hdrtosdr_test" $LF -lpthread
@@ -228,6 +231,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/avsync_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportpaths_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportcolor_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/batchexport_test" "$WORK" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/exportcadence_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportprogress_test" "$WORK" || rc=1
 "$WORK/hdrtosdr_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewdecoder_test" "$WORK" || rc=1

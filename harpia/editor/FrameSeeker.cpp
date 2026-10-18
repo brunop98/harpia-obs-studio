@@ -2,6 +2,7 @@
 #include "SwsColor.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -29,6 +30,10 @@ void FrameSeeker::close()
 		av_frame_free(&rndFrame_);
 	if (rndBest_)
 		av_frame_free(&rndBest_);
+	if (cur_)
+		av_frame_free(&cur_);
+	if (ahead_)
+		av_frame_free(&ahead_);
 	if (sws_) {
 		sws_freeContext(sws_);
 		sws_ = nullptr;
@@ -41,9 +46,11 @@ void FrameSeeker::close()
 	vIdx_ = -1;
 	flushed_ = false;
 	posMs_ = -1;
+	haveCur_ = haveAhead_ = false;
 	cacheImg_ = QImage();
-	cacheMs_ = -1;
 	cacheW_ = cacheH_ = 0;
+	frameDurMs_ = 0.0;
+	lastPtsMs_ = -1.0;
 }
 
 bool FrameSeeker::open(const QString &path, bool fastThumbnails)
@@ -95,6 +102,8 @@ bool FrameSeeker::open(const QString &path, bool fastThumbnails)
 	rndPkt_ = av_packet_alloc();
 	rndFrame_ = av_frame_alloc();
 	rndBest_ = av_frame_alloc();
+	cur_ = av_frame_alloc();
+	ahead_ = av_frame_alloc();
 
 	width_ = dec_->width;
 	height_ = dec_->height;
@@ -183,89 +192,142 @@ QImage FrameSeeker::frameAt(qint64 ms, int maxW, int maxH)
 		return {};
 
 	AVStream *st = fmt_->streams[vIdx_];
-	const int64_t target = av_rescale_q(ms, {1, 1000}, st->time_base);
+	const double tbMs = av_q2d(st->time_base) * 1000.0;
 
-	// Same frame as last time (at the same preview size)? Answer from cache so
-	// slow drags inside one frame cost nothing.
-	const qint64 frameMs = fps_ > 1.0 ? qint64(1000.0 / fps_) : 33;
-	if (!cacheImg_.isNull() && cacheW_ == maxW && cacheH_ == maxH && ms >= cacheMs_ &&
-	    ms < cacheMs_ + frameMs)
+	// The frame on screen at `ms`: the last one at or before it, as a player
+	// shows it -- give or take a millisecond, because callers ask in whole
+	// milliseconds (an export's 60 fps is 0, 17, 33, 50, ...) and 33 means the
+	// frame at 33.3. This used to be the first frame AT OR AFTER `ms`: 17 then
+	// fell just past the frame at 16.7 and got the one at 33.3, and 33 got it
+	// again -- a frame lost and a frame doubled, one in three, in every export.
+	// The frame spacing is measured from the frames themselves, so a file
+	// whose header guesses its rate wrong (a phone's variable rate) still
+	// reads frame by frame.
+	const double dur = frameDurMs_ > 0.5 ? frameDurMs_ : (fps_ > 1.0 ? 1000.0 / fps_ : 1000.0 / 30.0);
+	const double limit = double(ms) + std::min(1.0, dur / 4.0);
+
+	// Still the frame on screen (at the same size)? Answer from cache, so slow
+	// drags inside one frame -- and an export at more frames per second than
+	// the clip has -- cost nothing.
+	// (Before a file's first frame, that first frame is what shows.)
+	const bool atOrPastCur = haveCur_ && (limit >= curPtsMs_ || curIsFirst_);
+	if (atOrPastCur && !cacheImg_.isNull() && cacheW_ == maxW && cacheH_ == maxH &&
+	    limit < (haveAhead_ ? aheadPtsMs_ : curPtsMs_ + dur))
 		return cacheImg_;
 
-	// Slightly ahead of the decoder's position? Roll forward without seeking —
-	// a rightward handle drag then decodes only the few frames in between,
-	// instead of everything since the previous keyframe.
-	const bool roll = posMs_ >= 0 && !flushed_ && ms > posMs_ && (ms - posMs_) <= 2000;
-	if (!roll) {
-		av_seek_frame(fmt_, vIdx_, target, AVSEEK_FLAG_BACKWARD);
-		avcodec_flush_buffers(dec_);
-		flushed_ = false;
-	}
-
-	// Reused scratch (members) — no per-call libav alloc/free during drags.
-	AVPacket *pkt = rndPkt_;
-	AVFrame *frame = rndFrame_;
 	AVFrame *best = rndBest_;
 	av_frame_unref(best);
 	bool haveBest = false;
+	double bestMs = 0.0;
 
-	auto keep = [&]() {
+	// At or past the frame on screen, and not far: decode on from it -- the
+	// next frame of an export, or a rightward handle drag, costs only the
+	// frames in between instead of everything since the previous keyframe.
+	// Anything else seeks.
+	bool first = false; // the answer is the file's first frame, which comes after `ms`
+	if (atOrPastCur && double(ms) - curPtsMs_ <= 2000.0) {
+		first = curIsFirst_;
+		av_frame_ref(best, cur_);
+		haveBest = true;
+		bestMs = curPtsMs_;
+	} else {
+		++seeks_;
+		const int64_t target = av_rescale_q_rnd(int64_t(std::floor(limit * 1000.0)), AVRational{1, 1000000},
+							st->time_base, AV_ROUND_DOWN);
+		av_seek_frame(fmt_, vIdx_, target, AVSEEK_FLAG_BACKWARD);
+		avcodec_flush_buffers(dec_);
+		flushed_ = false;
+		av_frame_unref(ahead_);
+		haveAhead_ = false;
+		dropCurrent();
+		lastPtsMs_ = -1.0;
+	}
+
+	// Frames in order until one comes after `limit`: the one before it is the
+	// answer, and that one goes back for the next call -- it is the next frame.
+	AVFrame *frame = rndFrame_;
+	while (pullFrame(frame, rndPkt_)) {
+		const double at = frame->best_effort_timestamp != AV_NOPTS_VALUE
+					  ? double(frame->best_effort_timestamp) * tbMs
+					  : (haveBest ? bestMs + dur : limit);
+		if (lastPtsMs_ >= 0.0 && at - lastPtsMs_ > 0.5 && at - lastPtsMs_ < 1000.0)
+			frameDurMs_ = at - lastPtsMs_;
+		lastPtsMs_ = at;
+		if (haveBest && at > limit) {
+			av_frame_unref(ahead_);
+			av_frame_move_ref(ahead_, frame);
+			haveAhead_ = true;
+			aheadPtsMs_ = at;
+			break;
+		}
 		av_frame_unref(best);
 		av_frame_move_ref(best, frame);
+		first = !haveBest && at > limit;
 		haveBest = true;
-	};
+		bestMs = at;
+		if (first)
+			break; // the file's first frame comes after `ms`: it is what shows
+	}
+	// Out of frames (the end of the file): the last one stays on screen.
+	av_frame_unref(frame);
+	av_packet_unref(rndPkt_);
+	if (!haveBest)
+		return {};
 
-	bool done = false;
-	int64_t bestPts = AV_NOPTS_VALUE;
-	// When rolling forward, frames buffered in the decoder come out first.
-	while (!done) {
-		int r = avcodec_receive_frame(dec_, frame);
-		if (r == 0) {
-			const int64_t pts = frame->best_effort_timestamp;
-			bestPts = pts;
-			keep();
-			if (pts != AV_NOPTS_VALUE && pts >= target) {
-				done = true;
+	QImage img = toImage(best, maxW, maxH);
+	av_frame_unref(cur_);
+	av_frame_move_ref(cur_, best);
+	haveCur_ = true;
+	curIsFirst_ = first;
+	curPtsMs_ = bestMs;
+	posMs_ = qint64(std::llround(bestMs));
+	cacheImg_ = img;
+	cacheW_ = maxW;
+	cacheH_ = maxH;
+	return img;
+}
+
+void FrameSeeker::dropCurrent()
+{
+	if (cur_)
+		av_frame_unref(cur_);
+	haveCur_ = false;
+}
+
+bool FrameSeeker::pullFrame(AVFrame *into, AVPacket *pkt)
+{
+	// The frame frameAt looked at and put back comes first: it is the next one.
+	if (haveAhead_) {
+		av_frame_unref(into);
+		av_frame_move_ref(into, ahead_);
+		haveAhead_ = false;
+		return true;
+	}
+	while (true) {
+		const int r = avcodec_receive_frame(dec_, into);
+		if (r == 0)
+			return true;
+		if (r != AVERROR(EAGAIN))
+			return false; // the end of the stream, or an error
+
+		// Need more input: feed the next video packet, or flush at EOF.
+		bool fed = false;
+		while (av_read_frame(fmt_, pkt) >= 0) {
+			if (pkt->stream_index == vIdx_) {
+				avcodec_send_packet(dec_, pkt);
+				av_packet_unref(pkt);
+				fed = true;
 				break;
 			}
-			av_frame_unref(frame);
-			continue;
+			av_packet_unref(pkt);
 		}
-		if (r != AVERROR(EAGAIN))
-			break; // EOF or error — fall through to the drain below
-		if (av_read_frame(fmt_, pkt) < 0)
-			break;
-		if (pkt->stream_index == vIdx_)
-			avcodec_send_packet(dec_, pkt);
-		av_packet_unref(pkt);
-	}
-	if (!done) {
-		avcodec_send_packet(dec_, nullptr);
-		while (avcodec_receive_frame(dec_, frame) >= 0) {
-			bestPts = frame->best_effort_timestamp;
-			keep();
-			av_frame_unref(frame);
+		if (!fed) {
+			if (flushed_)
+				return false;
+			avcodec_send_packet(dec_, nullptr);
+			flushed_ = true;
 		}
-		avcodec_flush_buffers(dec_);
-		posMs_ = -1; // read position is at EOF — no rolling from here
 	}
-
-	QImage img = haveBest ? toImage(best, maxW, maxH) : QImage();
-	if (haveBest) {
-		const qint64 shownMs = bestPts != AV_NOPTS_VALUE
-					       ? qint64(bestPts * av_q2d(st->time_base) * 1000.0)
-					       : ms;
-		if (done)
-			posMs_ = shownMs;
-		cacheImg_ = img;
-		cacheMs_ = shownMs;
-		cacheW_ = maxW;
-		cacheH_ = maxH;
-	}
-	av_frame_unref(best);
-	av_frame_unref(frame);
-	av_packet_unref(pkt);
-	return img;
 }
 
 bool FrameSeeker::seekTo(qint64 ms)
@@ -278,48 +340,27 @@ bool FrameSeeker::seekTo(qint64 ms)
 	avcodec_flush_buffers(dec_);
 	flushed_ = false;
 	posMs_ = -1; // at the keyframe before ms — exact position unknown until decode
+	av_frame_unref(ahead_);
+	haveAhead_ = false;
+	dropCurrent();
+	lastPtsMs_ = -1.0;
 	return true;
 }
 
 bool FrameSeeker::decodeNextInto(qint64 *ptsMs)
 {
 	AVStream *st = fmt_->streams[vIdx_];
-
-	while (true) {
-		int r = avcodec_receive_frame(dec_, seqFrame_);
-		if (r == 0) {
-			const int64_t pts = seqFrame_->best_effort_timestamp != AV_NOPTS_VALUE
-						    ? seqFrame_->best_effort_timestamp
-						    : 0;
-			if (ptsMs)
-				*ptsMs = (qint64)(pts * av_q2d(st->time_base) * 1000.0);
-			return true;
-		}
-		if (r == AVERROR_EOF)
-			return false;
-		if (r != AVERROR(EAGAIN))
-			return false;
-
-		// Need more input: feed the next video packet, or flush at EOF.
-		bool fed = false;
-		while (av_read_frame(fmt_, seqPkt_) >= 0) {
-			if (seqPkt_->stream_index == vIdx_) {
-				avcodec_send_packet(dec_, seqPkt_);
-				av_packet_unref(seqPkt_);
-				fed = true;
-				break;
-			}
-			av_packet_unref(seqPkt_);
-		}
-		if (!fed) {
-			if (!flushed_) {
-				avcodec_send_packet(dec_, nullptr);
-				flushed_ = true;
-			} else {
-				return false;
-			}
-		}
-	}
+	if (!pullFrame(seqFrame_, seqPkt_))
+		return false;
+	const int64_t pts =
+		seqFrame_->best_effort_timestamp != AV_NOPTS_VALUE ? seqFrame_->best_effort_timestamp : 0;
+	if (ptsMs)
+		*ptsMs = (qint64)(pts * av_q2d(st->time_base) * 1000.0);
+	// The reader has moved on: frameAt's frame on screen is no longer the one
+	// just before the decoder's position.
+	dropCurrent();
+	lastPtsMs_ = -1.0;
+	return true;
 }
 
 QImage FrameSeeker::nextFrame(qint64 *outMs, int maxW, int maxH)
@@ -331,7 +372,7 @@ QImage FrameSeeker::nextFrame(qint64 *outMs, int maxW, int maxH)
 		return {};
 	if (outMs)
 		*outMs = ptsMs;
-	posMs_ = ptsMs; // keep frameAt's roll-forward anchor in sync
+	posMs_ = ptsMs;
 	QImage img = toImage(seqFrame_, maxW, maxH);
 	av_frame_unref(seqFrame_);
 	return img;

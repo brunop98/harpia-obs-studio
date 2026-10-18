@@ -48,12 +48,18 @@ public:
 	// clock has to know when NOT to ask. See nextFrameAt.
 	qint64 positionMs() const { return posMs_; }
 
-	// Decode the frame nearest to `ms` and return it as an ARGB32 image scaled to
-	// fit within maxW x maxH (aspect preserved). Empty QImage on failure.
-	// Optimized for live handle-scrubbing: requests within the currently shown
-	// frame return a cached image, and requests slightly ahead roll the decoder
-	// forward without seeking — only backward/far jumps pay for a full seek.
+	// Decode the frame on screen at `ms` -- the last one at or before it, with a
+	// millisecond of slack for callers that round -- and return it as an
+	// ARGB32 image scaled to fit within maxW x maxH (aspect preserved). Empty
+	// QImage on failure.
+	// Optimized for live handle-scrubbing and for an export's frame-by-frame
+	// walk: requests within the frame on screen return a cached image, and
+	// requests ahead roll the decoder forward without seeking — only
+	// backward/far jumps pay for a full seek.
 	QImage frameAt(qint64 ms, int maxW, int maxH);
+	// How many times frameAt has had to seek. A linear walk -- an export --
+	// should seek once and then roll forward; the tests hold it to that.
+	int seekCount() const { return seeks_; }
 
 	// Sequential playback: seek once, then pull frames in order (efficient — no
 	// per-frame seeking). nextFrame returns the next decoded frame and its
@@ -70,6 +76,10 @@ private:
 	QImage toImage(AVFrame *f, int maxW, int maxH);
 	// Decode the next video frame into seqFrame_ (caller unrefs); false at EOF.
 	bool decodeNextInto(qint64 *ptsMs);
+	// The next frame in order -- the one frameAt put back first, else the
+	// decoder's next -- into `into`; false at the end of the stream.
+	bool pullFrame(AVFrame *into, AVPacket *pkt);
+	void dropCurrent(); // forget frameAt's frame on screen
 
 	AVFormatContext *fmt_ = nullptr;
 	AVCodecContext *dec_ = nullptr;
@@ -90,14 +100,28 @@ private:
 	AVFrame *rndFrame_ = nullptr;
 	AVFrame *rndBest_ = nullptr;
 
-	// Scrub acceleration: the decoder's current position (pts of the last frame
-	// consumed, -1 = unknown, e.g. right after a seek) and the last image
-	// returned by frameAt (same-frame requests are answered from cache).
+	// Scrub acceleration: the position (pts of the last frame handed out, -1 =
+	// unknown, e.g. right after a seek) and the last image returned by frameAt
+	// (same-frame requests are answered from cache).
 	qint64 posMs_ = -1;
 	QImage cacheImg_;
-	qint64 cacheMs_ = -1;
 	int cacheW_ = 0;
 	int cacheH_ = 0;
+	// frameAt's frame on screen, kept so a request at another size or a little
+	// later can still be answered with it, and the frame after it, decoded to
+	// learn that it IS after and put back for the next call.
+	AVFrame *cur_ = nullptr;
+	AVFrame *ahead_ = nullptr;
+	bool haveCur_ = false;
+	bool curIsFirst_ = false; // the file's first frame, shown for a time before it
+	bool haveAhead_ = false;
+	double curPtsMs_ = 0.0;
+	double aheadPtsMs_ = 0.0;
+	// The spacing of the last two frames frameAt decoded in a row (0 = not
+	// seen yet), and the time of the last one (-1 = none since a seek).
+	double frameDurMs_ = 0.0;
+	double lastPtsMs_ = -1.0;
+	int seeks_ = 0;
 
 	qint64 durationMs_ = 0;
 	int width_ = 0;

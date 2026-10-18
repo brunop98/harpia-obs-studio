@@ -1754,11 +1754,16 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 	VideoState s;
 	const QByteArray out = outPath.toUtf8();
 	// The timeline sets its own frame rate, so the GOP comes from that rather
-	// than from any source file.
-	if (const QString e = openVideoEncoder(s, opts, out, cw, ch, AVRational{1, 90000},
-					       av_d2q(fps, 1000000), std::max(1, int(fps * 2.0)));
+	// than from any source file. One tick per frame: frame i is at pts i, so
+	// the file is constant frame rate. Timestamps from the millisecond clock
+	// the frames are composed on came out 16, 17, 17, 16 ms apart at 60 fps --
+	// a variable rate the file then reported as 60.6.
+	const AVRational frameRate = av_d2q(fps, 1000000);
+	if (const QString e = openVideoEncoder(s, opts, out, cw, ch, av_inv_q(frameRate), frameRate,
+					       std::max(1, int(fps * 2.0)));
 	    !e.isEmpty())
 		return e;
+	s.vOut->avg_frame_rate = frameRate;
 	// This path used to write its header by hand, and was the only one that did
 	// not ask for +faststart. Going through the shared helper fixes that.
 	if (const QString e = openOutputFile(s, opts, out); !e.isEmpty())
@@ -1825,7 +1830,7 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 		const uint8_t *src[4] = {composed.constBits(), nullptr, nullptr, nullptr};
 		int srcStride[4] = {int(composed.bytesPerLine()), 0, 0, 0};
 		sws_scale(toYuv, src, srcStride, 0, ch, yuv->data, yuv->linesize);
-		yuv->pts = av_rescale_q(tMs, AVRational{1, 1000}, s.venc->time_base);
+		yuv->pts = i;
 		if (!encode(yuv)) {
 			cleanup();
 			return QStringLiteral("Encoding failed.");

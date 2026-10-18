@@ -15,7 +15,12 @@
 //     one, and its style controls -- size, bold, colour -- reach every
 //     selected caption, as one change; their words stay their own, and the
 //     words box edits the clicked one only. A note says which is which.
+//   * And they move, scale and turn together: a drag in the preview, a scale
+//     grip, or the Transform row gives each the clicked one's change -- the
+//     same offset, the same factor -- so the group keeps its layout.
+#include "editor/EditorWidgets.hpp"
 #include "editor/VideoEditorWindow.hpp"
+#include "editor/component/ComponentPanel.hpp"
 #include "editor/timeline/TimelineView.hpp"
 #include "editor/tts/TtsAudio.hpp"
 
@@ -256,6 +261,61 @@ int main(int argc, char **argv)
 		const QStringList now = captionsOn(tv, lane);
 		ok(now[2] == QStringLiteral("Changed words") && now[0] == words[0] && now[1] == words[1],
 		   "and edits that caption's words only");
+
+		std::printf("\n-- several captions, moved and scaled together --\n");
+		{
+			// Apart first: the first high, the third low.
+			TimelineModel m = tv->model();
+			m.tracks[lane].clips[0].posY = 0.2;
+			m.tracks[lane].clips[2].posY = 0.8;
+			tv->setModel(m);
+			settle(100);
+			click(tv, tv->clipRectForTest(lane, 0).center());
+			settle(150);
+			click(tv, tv->clipRectForTest(lane, 2).center(), Qt::ControlModifier);
+			settle(200);
+			tv->setPlayhead(tv->model().tracks[lane].clips[2].outStartMs + 50);
+			settle(100);
+		}
+		PreviewCanvas *canvas = w.findChild<PreviewCanvas *>();
+		ok(canvas != nullptr, "the preview");
+		if (canvas) {
+			const double x1 = tv->model().tracks[lane].clips[1].posX;
+			const double y1 = tv->model().tracks[lane].clips[1].posY;
+			emit canvas->transformDragged(0.0, -0.05); // the clicked one, dragged up
+			emit canvas->transformEditFinished();
+			settle(150);
+			const auto &mc = tv->model().tracks[lane].clips;
+			std::printf("     after the drag: %.3f  (%.3f)  %.3f\n", mc[0].posY, mc[1].posY, mc[2].posY);
+			ok(std::abs(mc[2].posY - 0.75) < 1e-6 && std::abs(mc[0].posY - 0.15) < 1e-6,
+			   "a drag in the preview moves both by the same amount: still apart");
+			ok(mc[1].posY == y1 && mc[1].posX == x1, "the one not selected stays put");
+
+			const double s0 = mc[0].scale, s2 = mc[2].scale;
+			emit canvas->transformScaled(1.5, 0.5, 0.5);
+			emit canvas->transformEditFinished();
+			settle(150);
+			const auto &ms = tv->model().tracks[lane].clips;
+			ok(std::abs(ms[2].scale - s2 * 1.5) < 1e-6 && std::abs(ms[0].scale - s0 * 1.5) < 1e-6,
+			   "a scale grip: both grow by the same factor");
+		}
+		ComponentPanel *panel = w.findChild<ComponentPanel *>();
+		ok(panel != nullptr, "the component list");
+		if (panel) {
+			const double y0 = tv->model().tracks[lane].clips[0].posY;
+			const double y2 = tv->model().tracks[lane].clips[2].posY;
+			emit panel->pinnedEdited(QStringLiteral("harpia.transform"), QStringLiteral("posY"), y2 + 0.1);
+			settle(150);
+			const auto &mp = tv->model().tracks[lane].clips;
+			ok(std::abs(mp[2].posY - (y2 + 0.1)) < 1e-6 && std::abs(mp[0].posY - (y0 + 0.1)) < 1e-6,
+			   "Transform > Position: the clicked one takes the value, the other the same change");
+			const double sc0 = mp[0].scale, sc2 = mp[2].scale;
+			emit panel->pinnedEdited(QStringLiteral("harpia.transform"), QStringLiteral("scale"), sc2 * 2.0);
+			settle(150);
+			const auto &mz = tv->model().tracks[lane].clips;
+			ok(std::abs(mz[2].scale - sc2 * 2.0) < 1e-6 && std::abs(mz[0].scale - sc0 * 2.0) < 1e-6,
+			   "Transform > Scale: twice as big, both");
+		}
 
 		click(tv, tv->clipRectForTest(lane, 1).center());
 		settle(200);

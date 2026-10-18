@@ -217,6 +217,9 @@ public:
 	// The same edit on each of these clips (those on locked lanes are left
 	// alone), as one change. Returns how many were edited.
 	int editClips(const QVector<QPair<int, int>> &which, const std::function<void(TlClip &)> &fn);
+	// The same, told which clip (track, index) each one is.
+	int editClipsAt(const QVector<QPair<int, int>> &which,
+			const std::function<void(const QPair<int, int> &, TlClip &)> &fn);
 	// Replace the model WITHOUT a signal and keep the selection where it still
 	// points at something. For the derived clips SoundRules::apply rebuilds
 	// inside the window's clipsChanged handler: a setModel() there would drop

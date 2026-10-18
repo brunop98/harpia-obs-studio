@@ -1676,6 +1676,33 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 				afterComponentEdit();
 				return;
 			}
+			// Several texts selected: they keep their layout. Each takes the
+			// clicked one's CHANGE -- the same offset, factor or turn -- as a
+			// drag in the preview does, rather than all landing on one value.
+			const QVector<QPair<int, int>> texts = selectedTextBatch();
+			const TlClip *clicked = timelineView_->selectedClipPtr();
+			if (texts.size() >= 2 && clicked && key != QStringLiteral("opacity")) {
+				const TlTransform was = clicked->transformAt(timelinePlayheadMs());
+				const double from = key == QStringLiteral("posX")   ? was.posX
+						    : key == QStringLiteral("posY") ? was.posY
+						    : key == QStringLiteral("scale")
+							    ? was.scale
+							    : was.rotation;
+				timelineView_->editClips(texts, [&](TlClip &c) {
+					TlTransform tf = c.transformAt(timelinePlayheadMs());
+					if (key == QStringLiteral("posX"))
+						tf.posX += v - from;
+					else if (key == QStringLiteral("posY"))
+						tf.posY += v - from;
+					else if (key == QStringLiteral("scale"))
+						tf.scale = std::clamp(tf.scale * v / std::max(0.0001, from), 0.05, 20.0);
+					else if (key == QStringLiteral("rotation"))
+						tf.rotation += v - from;
+					c.setBaseTransform(tf);
+				});
+				afterComponentEdit();
+				return;
+			}
 			timelineView_->applyToSelection([&](TlClip &c) {
 				TlTransform tf = c.transformAt(timelinePlayheadMs());
 				if (key == QStringLiteral("posX"))
@@ -9511,24 +9538,55 @@ void VideoEditorWindow::applySelectedClipTransform(const TlTransform &tf)
 	const TlClip *sel = timelineView_->selectedClipPtr();
 	if (!sel)
 		return;
-	TlClip c = *sel;
-	// Keyframed clips (or auto-key) record the pose at the playhead so the zoom
+	// Keyframed clips (or auto-key) record the pose at `at` so the zoom
 	// animates; otherwise the clip's static pose moves.
-	if (autoKeyframe_ || !c.keys.isEmpty()) {
-		const qint64 ph = timelineEditMs();
-		if (c.keys.isEmpty()) {
-			// Seed the animation with the current static pose at the clip start so
-			// the first recorded key doesn't snap the whole clip.
-			TlKeyframe seed;
-			seed.tMs = 0;
-			seed.tf = c.baseTransform();
-			c.keys.append(seed);
+	const auto pose = [this](TlClip &c, qint64 at, const TlTransform &t) {
+		if (autoKeyframe_ || !c.keys.isEmpty()) {
+			if (c.keys.isEmpty()) {
+				// Seed the animation with the current static pose at the clip start so
+				// the first recorded key doesn't snap the whole clip.
+				TlKeyframe seed;
+				seed.tMs = 0;
+				seed.tf = c.baseTransform();
+				c.keys.append(seed);
+			}
+			c.setKeyframeAt(at, t);
+		} else {
+			c.setBaseTransform(t);
 		}
-		c.setKeyframeAt(ph, tf);
+	};
+	TlClip c = *sel;
+	pose(c, timelineEditMs(), tf);
+	const QVector<QPair<int, int>> texts = selectedTextBatch();
+	if (texts.size() < 2) {
+		timelineView_->updateSelectedClip(c);
 	} else {
-		c.setBaseTransform(tf);
+		// Several texts selected: they move, scale and turn together. Each
+		// takes the same CHANGE the clicked one did -- the same offset, the
+		// same factor, the same turn -- so the group keeps its layout rather
+		// than piling onto one spot.
+		const TlTransform was = sel->transformAt(timelinePlayheadMs());
+		const double dx = tf.posX - was.posX, dy = tf.posY - was.posY;
+		const double k = tf.scale / std::max(0.0001, was.scale);
+		const double turn = tf.rotation - was.rotation;
+		const QPair<int, int> clicked(timelineView_->selectedTrack(), timelineView_->selectedClip());
+		const qint64 ph = timelinePlayheadMs();
+		timelineView_->editClipsAt(texts, [&](const QPair<int, int> &at, TlClip &o) {
+			if (at == clicked) {
+				o = c;
+				return;
+			}
+			// Its own pose where it is: at the playhead when that is over
+			// it, else at its nearest end.
+			const qint64 when = std::clamp<qint64>(ph, o.outStartMs, std::max(o.outStartMs, o.outEndMs() - 1));
+			TlTransform t = o.transformAt(when);
+			t.posX += dx;
+			t.posY += dy;
+			t.scale = std::clamp(t.scale * k, 0.05, 20.0);
+			t.rotation += turn;
+			pose(o, when, t);
+		});
 	}
-	timelineView_->updateSelectedClip(c);
 	syncPreviewTransformTarget();
 	const qint64 at = timelineEditMs();
 	timelineView_->setPlayhead(at);

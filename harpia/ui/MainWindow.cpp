@@ -226,25 +226,27 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// Before this it was only in the combo's right-click menu, easy to miss.
 	deletePresetButton_ = presetButton(QStringLiteral("Delete"), QString()); // tip: updateButtons()
 
+	// ---- Where it goes, and whether it will fit --------------------------
+	// Both halves of "the recording was lost" are silent otherwise: running out
+	// of disk, and writing to a folder you did not mean. Stating them costs one
+	// line and removes the need to go and check. It ends the preset row, at
+	// the right: it is that preset's folder.
 	row1->addStretch(1);
+	diskLabel_ = new QLabel(central);
+	diskLabel_->setObjectName(QStringLiteral("diskLabel"));
+	// Left-aligned inside, and allowed to shrink: when the row is short of
+	// room a long folder is cut at its end, while the free space -- the part
+	// that matters -- stays. The tooltip carries the whole line.
+	diskLabel_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+	diskLabel_->setMinimumWidth(80);
+	diskLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+	diskLabel_->setCursor(Qt::PointingHandCursor);
+	diskLabel_->installEventFilter(this);
+	row1->addWidget(diskLabel_);
 	root->addLayout(row1);
 
 	// Capture, Display, the countdown and the guides switch used to share this
 	// row; they live in the middle section's columns now, created there, below.
-
-	// ---- Where it goes, and whether it will fit --------------------------
-	// Both halves of "the recording was lost" are silent otherwise: running out
-	// of disk, and writing to a folder you did not mean. Stating them costs one
-	// line and removes the need to go and check.
-	diskLabel_ = new QLabel(central);
-	diskLabel_->setObjectName(QStringLiteral("diskLabel"));
-	diskLabel_->setAlignment(Qt::AlignHCenter);
-	diskLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-	diskLabel_->setCursor(Qt::PointingHandCursor);
-	diskLabel_->setToolTip(
-		QStringLiteral("Free space, and where recordings go. Click to open."));
-	diskLabel_->installEventFilter(this);
-	root->addWidget(diskLabel_);
 
 	// ---- Recording readiness --------------------------------------------
 	warningsBox_ = new QWidget(central);
@@ -255,9 +257,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	root->addWidget(warningsBox_);
 
 	// ---- Middle: three columns ------------------------------------------
-	//   Capture   [combo] | Pause off-region [combo] | [ ● Record ] [ ■ Stop ]
-	//   Display   [combo] | Pause when idle  [combo] |       00:00:00
-	//   Focus app [combo] | Min length       [combo] |
+	//   Capture   [combo] | Pause off-region [combo] |  [ ● Record ]
+	//   Display   [combo] | Pause when idle  [combo] |  [ ■ Stop   ]
+	//   Focus app [combo] | Min length       [combo] |    00:00:00
 	//   Webcam    [combo] | Countdown        [combo] |
 	//                     |                  [x] Guides
 	// What to record, when, and the controls that do it. One labelled dropdown
@@ -427,40 +429,35 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	btnFont.setPointSize(btnFont.pointSize() + 2);
 	btnFont.setBold(true);
 
-	auto *recordCol = new QVBoxLayout;
-	recordColLayout_ = recordCol;
-	recordCol->setSpacing(10);
-
+	// Column 3, top to bottom: Record/Pause, Stop, the timer. One stack, as
+	// wide as its widest button so the two line up (a longer label such as
+	// "Starting in 10…" widens both). The webcam preview sits beside it.
 	auto *controls = new QHBoxLayout;
 	controlsLayout_ = controls;
 	controls->setSpacing(14);
 	controls->addStretch(1);
+	auto *recordCol = new QVBoxLayout;
+	recordColLayout_ = recordCol;
+	recordCol->setSpacing(10);
 
 	// One button for the whole take: Record when idle, then Pause/Resume while
-	// recording (updateButtons). Stop has a button of its own beside it, so
+	// recording (updateButtons). Stop has a button of its own below it, so
 	// the big one is never the thing that ends a take by accident.
 	primaryButton_ = new QPushButton(QStringLiteral("\xE2\x97\x8F  Record"), central);
 	primaryButton_->setObjectName(QStringLiteral("primaryButton"));
 	primaryButton_->setMinimumSize(130, 46);
 	primaryButton_->setFont(btnFont);
-	controls->addWidget(primaryButton_, 0, Qt::AlignVCenter);
+	recordCol->addWidget(primaryButton_);
 
 	// Always visible, enabled only while there is something to stop — the row
 	// never rearranges and there's no reserved hole where the button would be.
 	stopButton_ = new QPushButton(QStringLiteral("Stop"), central);
 	stopButton_->setObjectName(QStringLiteral("stopButton"));
 	stopButton_->setIcon(uiIcon(Glyph::Stop, 14));
-	stopButton_->setMinimumSize(104, 46);
+	stopButton_->setMinimumSize(130, 46);
 	stopButton_->setFont(btnFont);
 	stopButton_->setEnabled(false);
-	controls->addWidget(stopButton_, 0, Qt::AlignVCenter);
-	controls->addStretch(1);
-	recordCol->addLayout(controls);
-
-	auto *timerRow = new QHBoxLayout;
-	timerRowLayout_ = timerRow;
-	timerRow->setSpacing(14);
-	timerRow->addStretch(1);
+	recordCol->addWidget(stopButton_);
 
 	// Elapsed time — monospaced, readable, but not oversized.
 	timerLabel_ = new QLabel(QStringLiteral("00:00:00"), central);
@@ -471,9 +468,11 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	timerFont.setStyleHint(QFont::Monospace);
 	timerFont.setPointSize(btnFont.pointSize() + 6);
 	timerLabel_->setFont(timerFont);
-	timerRow->addWidget(timerLabel_, 0, Qt::AlignVCenter);
+	recordCol->addWidget(timerLabel_);
+	recordCol->addStretch(1);
+	controls->addLayout(recordCol);
 
-	// Inline live webcam preview beside the timer, shown only when the active
+	// Inline live webcam preview beside the stack, shown only when the active
 	// preset records a webcam. The device picker is the Webcam row.
 	webcamBox_ = new QWidget(central);
 	auto *wcLayout = new QHBoxLayout(webcamBox_);
@@ -520,12 +519,10 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	webcamWarn_->setWordWrap(true);
 	wcLayout->addWidget(webcamWarn_, 1);
 	webcamBox_->setVisible(false);
-	timerRow->addWidget(webcamBox_);
-	timerRow->addStretch(1);
-	recordCol->addLayout(timerRow);
-	recordCol->addStretch(1);
+	controls->addWidget(webcamBox_, 0, Qt::AlignVCenter);
+	controls->addStretch(1);
 
-	middle->addLayout(recordCol, 1); // the record column takes the remaining width
+	middle->addLayout(controls, 1); // the record column takes the remaining width
 	root->addLayout(middle);
 
 	root->addStretch(3);
@@ -1156,10 +1153,8 @@ void MainWindow::setLayoutParams(const MainLayoutParams &p)
 		if (col)
 			col->setSpacing(p.behaviorColSpacing);
 	}
-	for (QHBoxLayout *row : {controlsLayout_, timerRowLayout_}) {
-		if (row)
-			row->setSpacing(p.controlsSpacing);
-	}
+	if (controlsLayout_)
+		controlsLayout_->setSpacing(p.controlsSpacing);
 	if (presetCombo_)
 		presetCombo_->setMinimumWidth(p.presetComboW);
 	for (QComboBox *c : {captureModeCombo_, monitorCombo_, appCombo_, webcamCombo_}) {
@@ -1244,7 +1239,7 @@ void MainWindow::applyResponsiveLayout(int width)
 	// timer always stay visible and aligned.
 	//   >= 880 : everything
 	//   <  880 : hide the recent-recordings gallery
-	//   too narrow for all three columns (timeColumnNeedW, about 840):
+	//   too narrow for all three columns (timeColumnNeedW, about 720):
 	//            also the time column (pauses, minimum length, countdown,
 	//            guides) -- each is in the preset editor too, and the
 	//            guides have their shortcut
@@ -1893,6 +1888,9 @@ void MainWindow::updateDiskLabel()
 	// folder alone -- honest, and never a stall.
 	const DiskStatus st = (folder == diskLabelFolder_) ? diskLabelStatus_ : DiskStatus{};
 	diskLabel_->setText(diskLine(folder, st));
+	const QString tip = diskLabel_->text() + QStringLiteral("\nClick to open the folder.");
+	if (diskLabel_->toolTip() != tip)
+		diskLabel_->setToolTip(tip);
 	const char *colour = st.level == DiskLevel::Critical ? "#e5484d"
 			     : st.level == DiskLevel::Low   ? "#f5a524"
 							    : "#7d838f";

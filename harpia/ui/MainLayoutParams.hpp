@@ -32,7 +32,7 @@ struct MainLayoutParams {
 	int controlsSpacing = 14;    // gap between record controls
 	int recordBtnW = 130;        // the Record / Pause / Resume button
 	int recordBtnH = 46;
-	int stopBtnW = 104;
+	int stopBtnW = 130;
 	int stopBtnH = 46;
 	int webcamPreviewW = 100;
 	int webcamPreviewH = 56;

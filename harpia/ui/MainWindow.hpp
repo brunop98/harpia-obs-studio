@@ -579,9 +579,8 @@ private:
 	QVBoxLayout *timeColLayout_ = nullptr;
 	QFrame *timeColSep_ = nullptr;             // the divider after it
 	int timeColumnNeedW() const;               // window width that fits all three
-	QVBoxLayout *recordColLayout_ = nullptr;   // column 3: the buttons + timer
-	QHBoxLayout *controlsLayout_ = nullptr;    // Record/Pause + Stop
-	QHBoxLayout *timerRowLayout_ = nullptr;    // timer + webcam preview
+	QVBoxLayout *recordColLayout_ = nullptr;   // column 3: Record/Pause, Stop, timer
+	QHBoxLayout *controlsLayout_ = nullptr;    // that stack + the webcam preview
 	std::vector<QWidget *> behaviorRows_;
 	MainDevPanel *devPanel_ = nullptr;
 

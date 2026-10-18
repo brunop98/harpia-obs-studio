@@ -190,6 +190,25 @@ int TimelineView::editLaneCaptions(int track, const std::function<void(TlClip &)
 	return n;
 }
 
+int TimelineView::editClips(const QVector<QPair<int, int>> &which, const std::function<void(TlClip &)> &fn)
+{
+	if (!fn)
+		return 0;
+	int n = 0;
+	for (const auto &p : which) {
+		if (p.first < 0 || p.first >= model_.tracks.size() || model_.tracks[p.first].locked || p.second < 0 ||
+		    p.second >= model_.tracks[p.first].clips.size())
+			continue;
+		fn(model_.tracks[p.first].clips[p.second]);
+		++n;
+	}
+	if (n) {
+		update();
+		emit clipsChanged();
+	}
+	return n;
+}
+
 int TimelineView::laneCaptionCount(int track) const
 {
 	if (track < 0 || track >= model_.tracks.size())

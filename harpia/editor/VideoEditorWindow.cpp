@@ -7012,6 +7012,12 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	textOuter->addWidget(textSection_);
 	auto *tv = textSection_->bodyLayout();
 	tv->setSpacing(4);
+	textBatchNote_ = new QLabel(textBox_);
+	textBatchNote_->setObjectName(QStringLiteral("textBatchNote"));
+	textBatchNote_->setWordWrap(true);
+	textBatchNote_->setStyleSheet(QStringLiteral("color:#7dd3fc;"));
+	textBatchNote_->setVisible(false);
+	tv->addWidget(textBatchNote_);
 
 	// Style presets: save the look you settled on, apply it to any other caption.
 	auto *presetRow = new QHBoxLayout;
@@ -7227,7 +7233,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(fontCombo_, &QFontComboBox::currentFontChanged, this, [this](const QFont &f) {
 		if (syncingClip_)
 			return;
-		editSelectedClip([&f](TlClip &c) { c.text.fontFamily = f.family(); });
+		editTextStyle([&f](TlClip &c) { c.text.fontFamily = f.family(); });
 	});
 
 	auto *tForm = new QFormLayout;
@@ -7243,7 +7249,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(fontSizeSpin_, &QSpinBox::valueChanged, this, [this](int v) {
 		if (syncingClip_)
 			return;
-		editSelectedClip([v](TlClip &c) { c.text.fontPx = v; });
+		editTextStyle([v](TlClip &c) { c.text.fontPx = v; });
 	});
 
 	auto *styleRow = new FlowLayout(nullptr, 10, 2); // wraps in a narrow panel
@@ -7266,19 +7272,19 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(boldChk_, &QCheckBox::toggled, this, [this](bool on) {
 		if (syncingClip_)
 			return;
-		editSelectedClip([on](TlClip &c) { c.text.bold = on; });
+		editTextStyle([on](TlClip &c) { c.text.bold = on; });
 	});
 	connect(italicChk_, &QCheckBox::toggled, this, [this](bool on) {
 		if (syncingClip_)
 			return;
-		editSelectedClip([on](TlClip &c) { c.text.italic = on; });
+		editTextStyle([on](TlClip &c) { c.text.italic = on; });
 	});
 	connect(titleCaseChk_, &QCheckBox::toggled, this, [this](bool on) {
 		if (syncingClip_)
 			return;
 		// On: Title Case. Off: back to As typed -- not to whichever other case
 		// was set, since a switch has two states and "off" has to mean one thing.
-		editSelectedClip([on](TlClip &c) { c.text.textCase = on ? TlCaseTitle : TlCaseAsTyped; });
+		editTextStyle([on](TlClip &c) { c.text.textCase = on ? TlCaseTitle : TlCaseAsTyped; });
 		if (caseCombo_) {
 			QSignalBlocker b(caseCombo_);
 			caseCombo_->setCurrentIndex(on ? TlCaseTitle : TlCaseAsTyped);
@@ -7291,7 +7297,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(alignCombo_, &QComboBox::currentIndexChanged, this, [this](int i) {
 		if (syncingClip_)
 			return;
-		editSelectedClip([i](TlClip &c) { c.text.align = i; });
+		editTextStyle([i](TlClip &c) { c.text.align = i; });
 	});
 
 	// Case is a STYLE, not an edit: the box above keeps the words as typed and
@@ -7307,7 +7313,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(caseCombo_, &QComboBox::currentIndexChanged, this, [this](int i) {
 		if (syncingClip_)
 			return;
-		editSelectedClip([i](TlClip &c) { c.text.textCase = i; });
+		editTextStyle([i](TlClip &c) { c.text.textCase = i; });
 		if (titleCaseChk_) {
 			QSignalBlocker b(titleCaseChk_);
 			titleCaseChk_->setChecked(i == TlCaseTitle);
@@ -7328,7 +7334,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(outlineWSpin_, &QDoubleSpinBox::valueChanged, this, [this](double w) {
 		if (syncingClip_)
 			return;
-		editSelectedClip([w](TlClip &c) { c.text.outlineWidth = w; });
+		editTextStyle([w](TlClip &c) { c.text.outlineWidth = w; });
 	});
 
 	outlineColorBtn_ = new QPushButton(textBox_);
@@ -7345,7 +7351,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		syncTextBoxRows();
 		if (syncingClip_)
 			return;
-		editSelectedClip([on](TlClip &c) { c.text.boxEnabled = on; });
+		editTextStyle([on](TlClip &c) { c.text.boxEnabled = on; });
 	});
 
 	boxColorBtn_ = new QPushButton(textBox_);
@@ -7364,7 +7370,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(boxOpacitySpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
 		if (syncingClip_)
 			return;
-		editSelectedClip([v](TlClip &c) { c.text.boxOpacity = v; });
+		editTextStyle([v](TlClip &c) { c.text.boxOpacity = v; });
 	});
 
 	// Horizontal and vertical padding separately: a caption usually wants more
@@ -7379,7 +7385,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(boxPadXSpin_, &QSpinBox::valueChanged, this, [this](int v) {
 		if (syncingClip_)
 			return;
-		editSelectedClip([v](TlClip &c) { c.text.boxPadX = v; });
+		editTextStyle([v](TlClip &c) { c.text.boxPadX = v; });
 	});
 	boxPadYSpin_ = new QSpinBox(textBox_);
 	boxPadYSpin_->setRange(0, 200);
@@ -7388,7 +7394,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(boxPadYSpin_, &QSpinBox::valueChanged, this, [this](int v) {
 		if (syncingClip_)
 			return;
-		editSelectedClip([v](TlClip &c) { c.text.boxPadY = v; });
+		editTextStyle([v](TlClip &c) { c.text.boxPadY = v; });
 	});
 
 	boxRadiusSpin_ = new QSpinBox(textBox_);
@@ -7401,7 +7407,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(boxRadiusSpin_, &QSpinBox::valueChanged, this, [this](int v) {
 		if (syncingClip_)
 			return;
-		editSelectedClip([v](TlClip &c) { c.text.boxRadius = v; });
+		editTextStyle([v](TlClip &c) { c.text.boxRadius = v; });
 	});
 
 	tv->addLayout(tForm);
@@ -7421,12 +7427,12 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		captionLaneTitle_->setWordWrap(true);
 		captionLaneTitle_->setStyleSheet(QStringLiteral("font-weight:bold; color:#e8eaed;"));
 		lv->addWidget(captionLaneTitle_);
-		auto *note = new QLabel(QStringLiteral(
+		captionLaneNote_ = new QLabel(QStringLiteral(
 			"Every change below applies to all the captions on this lane at once; their words "
 			"stay their own. Click one caption to edit just that one."), captionLaneBox_);
-		note->setWordWrap(true);
-		note->setStyleSheet(QStringLiteral("color:#9aa0a6;"));
-		lv->addWidget(note);
+		captionLaneNote_->setWordWrap(true);
+		captionLaneNote_->setStyleSheet(QStringLiteral("color:#9aa0a6;"));
+		lv->addWidget(captionLaneNote_);
 		auto *pf = new QFormLayout;
 		pf->setContentsMargins(0, 4, 0, 0);
 		pf->setHorizontalSpacing(8);
@@ -7455,7 +7461,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		// animated): all of them move together so an animated caption does not
 		// snap back to where it was on its next key.
 		const auto setPos = [this](bool horizontal, double frac) {
-			editSelectedClip([horizontal, frac](TlClip &c) {
+			editTextStyle([horizontal, frac](TlClip &c) {
 				(horizontal ? c.posX : c.posY) = frac;
 				for (TlKeyframe &k : c.keys)
 					(horizontal ? k.tf.posX : k.tf.posY) = frac;
@@ -7609,8 +7615,61 @@ void VideoEditorWindow::pickTextColor(const QString &title, QColor TlText::*fiel
 	pickColorLive(this, title, original, [this, field](const QColor &c) {
 		const TlClip *now = inspectedClip();
 		if (now && now->text.*field != c)
-			editSelectedClip([c, field](TlClip &cl) { cl.text.*field = c; });
+			editTextStyle([c, field](TlClip &cl) { cl.text.*field = c; });
 	});
+}
+
+namespace {
+// A batch edit is STYLE only. Every caption keeps its own words whatever the
+// edit was: the Inspector's text fields hold one caption's text in a batch,
+// and anything that reached them (a quick-tag button did) used to write that
+// one caption's words into all of them.
+std::function<void(TlClip &)> styleOnly(const std::function<void(TlClip &)> &fn)
+{
+	return [&fn](TlClip &c) {
+		const QString words = c.text.text;
+		const QStringList variations = c.text.variations;
+		const bool random = c.text.random;
+		const QVector<ClipWordTime> times = c.words;
+		fn(c);
+		c.text.text = words;
+		c.text.variations = variations;
+		c.text.random = random;
+		c.words = times;
+	};
+}
+} // namespace
+
+QVector<QPair<int, int>> VideoEditorWindow::selectedTextBatch() const
+{
+	QVector<QPair<int, int>> out;
+	if (!timelineView_ || !fullEdit() || timelineView_->transitionSelected())
+		return out;
+	const TlClip *primary = timelineView_->selectedClipPtr();
+	if (!primary || primary->type != TlClip::Type::Text)
+		return out;
+	const TimelineModel &m = timelineView_->model();
+	for (const auto &p : timelineView_->selectedPairs())
+		if (m.tracks[p.first].clips[p.second].type == TlClip::Type::Text)
+			out.append(p);
+	if (out.size() < 2)
+		out.clear();
+	return out;
+}
+
+void VideoEditorWindow::editTextStyle(const std::function<void(TlClip &)> &fn)
+{
+	const QVector<QPair<int, int>> texts = selectedTextBatch();
+	if (texts.isEmpty()) {
+		editSelectedClip(fn); // one clip, or a whole caption lane
+		return;
+	}
+	// Several texts selected: the same look on each, as one undo step.
+	if (timelineView_->editClips(texts, styleOnly(fn)) == 0)
+		return;
+	showTimelineFrame(timelineEditMs());
+	syncClipInspector();
+	scheduleSnapshot();
 }
 
 void VideoEditorWindow::editSelectedClip(const std::function<void(TlClip &)> &fn)
@@ -7620,22 +7679,7 @@ void VideoEditorWindow::editSelectedClip(const std::function<void(TlClip &)> &fn
 	const TlClip *sel = timelineView_->selectedClipPtr();
 	if (!sel && captionLaneTrack_ >= 0) {
 		// Batch style: the same edit on every caption of the selected lane.
-		// STYLE only. Every caption keeps its own words whatever the edit
-		// was: the Inspector's text fields hold the first caption's text in
-		// this mode, and anything that reached them (a quick-tag button did)
-		// used to write that one caption's words into all of them.
-		const auto styleOnly = [&fn](TlClip &c) {
-			const QString words = c.text.text;
-			const QStringList variations = c.text.variations;
-			const bool random = c.text.random;
-			const QVector<ClipWordTime> times = c.words;
-			fn(c);
-			c.text.text = words;
-			c.text.variations = variations;
-			c.text.random = random;
-			c.words = times;
-		};
-		if (timelineView_->editLaneCaptions(captionLaneTrack_, styleOnly) == 0)
+		if (timelineView_->editLaneCaptions(captionLaneTrack_, styleOnly(fn)) == 0)
 			return;
 		showTimelineFrame(timelinePlayheadMs());
 		syncClipInspector();
@@ -7844,6 +7888,17 @@ void VideoEditorWindow::syncClipInspector()
 	const bool batch = captionLaneTrack_ >= 0;
 	if (batch)
 		c = inspectedClip();
+	// Several texts selected: the clicked one is shown, and its style
+	// controls reach all of them -- said at the top of its Text section.
+	if (textBatchNote_) {
+		const int texts = batch ? 0 : int(selectedTextBatch().size());
+		textBatchNote_->setVisible(texts >= 2);
+		if (texts >= 2)
+			textBatchNote_->setText(
+				QStringLiteral("%1 texts selected: the style below applies to all of them. The words "
+					       "box edits this one only.")
+					.arg(texts));
+	}
 	if (captionLaneBox_)
 		captionLaneBox_->setVisible(batch);
 	if (clipTagsBox_)
@@ -10412,7 +10467,7 @@ void VideoEditorWindow::applyTextPreset(const QString &name)
 	// Style only: the clip keeps its own words, which is the whole point of a
 	// preset — apply the look you settled on to whatever this caption says.
 	const TlText style = it.value();
-	editSelectedClip([&style](TlClip &c) {
+	editTextStyle([&style](TlClip &c) {
 		// Content stays: the words, a Random text's other texts and its kind.
 		const QString words = c.text.text;
 		const QStringList variations = c.text.variations;
@@ -14117,6 +14172,8 @@ void VideoEditorWindow::onSave()
 	o.gifDither = dlg.gifDither();
 	o.gifLoop = dlg.gifLoop();
 	const QSize outSize = dlg.outputSize();
+	if (fmt != ClipExporter::Format::Gif)
+		o.outFps = dlg.frameRate(); // 0 = the original
 	o.outWidth = outSize.width();
 	o.outHeight = outSize.height();
 	o.speed = speed_;   // from the editor's speed slider

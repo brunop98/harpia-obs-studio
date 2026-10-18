@@ -100,6 +100,10 @@ public:
 	bool chroma444() const;
 	// 0x0 = keep the source/canvas size. Always even; see encodeSize().
 	QSize outputSize() const;
+	// The video frame rate chosen; 0 = the original (Context::fps). Only
+	// ever lower than the original: an export leaves frames out, it does not
+	// make them up. GIF has its own (gifFps).
+	double frameRate() const;
 	// True when the user chose the sub-range rather than the whole thing.
 	// Always false when the Context offered no range.
 	bool exportRange() const;
@@ -143,6 +147,8 @@ private:
 	QSpinBox *customW_ = nullptr;
 	QSpinBox *customH_ = nullptr;
 	QWidget *customRow_ = nullptr;
+
+	QComboBox *fpsCombo_ = nullptr;
 
 	QSlider *qualitySlider_ = nullptr;
 	QLabel *qualityLabel_ = nullptr;

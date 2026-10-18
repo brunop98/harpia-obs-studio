@@ -841,8 +841,14 @@ private:
 	// Batch style: with a caption lane's header selected (and no clip), the
 	// text controls edit EVERY caption on that lane. -1 = not in batch mode.
 	int captionLaneTrack_ = -1;
+	// Several text clips selected: the Text section's style controls style
+	// all of them; the Inspector still shows the clicked one, whose words the
+	// text box edits alone. textBatchNote_ says so.
+	QVector<QPair<int, int>> selectedTextBatch() const; // >= 2 selected texts, else empty
+	QLabel *textBatchNote_ = nullptr;
 	QWidget *captionLaneBox_ = nullptr;
 	QLabel *captionLaneTitle_ = nullptr;
+	QLabel *captionLaneNote_ = nullptr;
 	QComboBox *captionLanePos_ = nullptr;
 	QDoubleSpinBox *captionLaneX_ = nullptr;
 	QDoubleSpinBox *captionLaneY_ = nullptr;
@@ -1194,6 +1200,9 @@ private:
 	bool syncingSpot_ = false;
 	void syncClipInspector();                       // selected clip -> controls
 	void editSelectedClip(const std::function<void(TlClip &)> &fn); // controls -> clip
+	// A Text-section style edit: every selected text clip at once when several
+	// are selected (their words untouched), else what editSelectedClip does.
+	void editTextStyle(const std::function<void(TlClip &)> &fn);
 	void addRandomTextClip();                       // the same, with several texts to export
 	void addTextClip();                             // new text clip at the playhead
 	void addKeyframeAtPlayhead();

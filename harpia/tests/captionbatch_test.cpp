@@ -11,13 +11,19 @@
 //   * Even a tag pressed anyway leaves every caption its own words.
 //   * Lane styling still reaches every caption.
 //   * One caption selected: the quick tags are back and edit that one only.
+//   * Several captions selected (Ctrl+click): the Inspector shows the clicked
+//     one, and its style controls -- size, bold, colour -- reach every
+//     selected caption, as one change; their words stay their own, and the
+//     words box edits the clicked one only. A note says which is which.
 #include "editor/VideoEditorWindow.hpp"
 #include "editor/timeline/TimelineView.hpp"
 #include "editor/tts/TtsAudio.hpp"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QLabel>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -48,13 +54,13 @@ static void settle(int ms)
 	}
 }
 
-static void click(QWidget *w, QPoint p)
+static void click(QWidget *w, QPoint p, Qt::KeyboardModifiers mods = Qt::NoModifier)
 {
 	QMouseEvent press(QEvent::MouseButtonPress, QPointF(p), w->mapToGlobal(QPointF(p)), Qt::LeftButton,
-			  Qt::LeftButton, Qt::NoModifier);
+			  Qt::LeftButton, mods);
 	QApplication::sendEvent(w, &press);
 	QMouseEvent release(QEvent::MouseButtonRelease, QPointF(p), w->mapToGlobal(QPointF(p)), Qt::LeftButton,
-			    Qt::NoButton, Qt::NoModifier);
+			    Qt::NoButton, mods);
 	QApplication::sendEvent(w, &release);
 }
 
@@ -206,6 +212,54 @@ int main(int argc, char **argv)
 		std::printf("     after B: %s\n", qPrintable(after.join(QStringLiteral(" | "))));
 		ok(after[1] == QStringLiteral("<b>%1</b>").arg(before[1]), "B bolds that caption");
 		ok(after[0] == before[0] && after[2] == before[2], "and only that one");
+	}
+
+	std::printf("\n-- several captions selected --\n");
+	{
+		const QStringList words = captionsOn(tv, lane);
+		click(tv, tv->clipRectForTest(lane, 0).center());
+		settle(150);
+		click(tv, tv->clipRectForTest(lane, 2).center(), Qt::ControlModifier);
+		settle(200);
+		ok(tv->selectedPairs().size() == 2 && tv->selectedTrack() == lane && tv->selectedClip() == 2,
+		   "the first and third captions are selected, the third clicked last");
+		QLabel *note = w.findChild<QLabel *>(QStringLiteral("textBatchNote"));
+		ok(note && !note->isHidden() && note->text().startsWith(QStringLiteral("2 texts selected")),
+		   "the Text section says its style reaches both");
+
+		const int sizeOfSecond = tv->model().tracks[lane].clips[1].text.fontPx;
+		size->setValue(55);
+		settle(100);
+		const auto &cs = tv->model().tracks[lane].clips;
+		ok(cs[0].text.fontPx == 55 && cs[2].text.fontPx == 55, "a new size: both selected captions take it");
+		ok(cs[1].text.fontPx == sizeOfSecond, "the one not selected keeps its own");
+		QCheckBox *boldBox = nullptr;
+		for (QCheckBox *b : w.findChildren<QCheckBox *>())
+			if (b->text() == QStringLiteral("Bold"))
+				boldBox = b;
+		if (boldBox)
+			boldBox->click();
+		settle(100);
+		const auto &cb = tv->model().tracks[lane].clips;
+		ok(boldBox && cb[0].text.bold == cb[2].text.bold && cb[0].text.bold != cb[1].text.bold,
+		   "Bold: both selected, not the other");
+		ok(captionsOn(tv, lane) == words, "and every caption still says what it said");
+
+		QPlainTextEdit *box = nullptr;
+		for (QPlainTextEdit *e : w.findChildren<QPlainTextEdit *>())
+			if (!e->isHidden() && e->toPlainText() == words[2])
+				box = e;
+		ok(box != nullptr, "the words box holds the clicked caption's words");
+		if (box)
+			box->setPlainText(QStringLiteral("Changed words"));
+		settle(100);
+		const QStringList now = captionsOn(tv, lane);
+		ok(now[2] == QStringLiteral("Changed words") && now[0] == words[0] && now[1] == words[1],
+		   "and edits that caption's words only");
+
+		click(tv, tv->clipRectForTest(lane, 1).center());
+		settle(200);
+		ok(note && note->isHidden(), "one caption clicked on its own: the note goes");
 	}
 
 	std::printf("\n%s (%d failures)\n", failures ? "FAILURES" : "ALL PASSED", failures);

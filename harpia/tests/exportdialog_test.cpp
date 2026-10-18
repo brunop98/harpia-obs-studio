@@ -233,7 +233,8 @@ int main(int argc, char **argv)
 
 		QComboBox *res = nullptr;
 		for (QComboBox *c : dlg.findChildren<QComboBox *>())
-			if (c->count() && c->itemText(0).startsWith(QStringLiteral("Original")))
+			if (c->count() && c->itemText(0).startsWith(QStringLiteral("Original")) &&
+			    c->objectName() != QStringLiteral("exportFps"))
 				res = c;
 		ok(res != nullptr, "there is a resolution combo built from the source size");
 		if (!res) {
@@ -302,7 +303,8 @@ int main(int argc, char **argv)
 
 		QComboBox *res = nullptr;
 		for (QComboBox *c : dlg.findChildren<QComboBox *>())
-			if (c->count() && c->itemText(0).startsWith(QStringLiteral("Original")))
+			if (c->count() && c->itemText(0).startsWith(QStringLiteral("Original")) &&
+			    c->objectName() != QStringLiteral("exportFps"))
 				res = c;
 		if (res) {
 			res->setCurrentIndex(res->findData(480));
@@ -381,7 +383,8 @@ int main(int argc, char **argv)
 			dlg.show();
 			QApplication::processEvents();
 			for (QComboBox *c : dlg.findChildren<QComboBox *>())
-				if (c->count() && c->itemText(0).startsWith(QStringLiteral("Original")))
+				if (c->count() && c->itemText(0).startsWith(QStringLiteral("Original")) &&
+			    c->objectName() != QStringLiteral("exportFps"))
 					c->setCurrentIndex(c->findData(720));
 			for (QSlider *sl : dlg.findChildren<QSlider *>())
 				sl->setValue(100); // best quality end
@@ -412,6 +415,55 @@ int main(int argc, char **argv)
 				    : "Original");
 		ok(!other.outputSize().isValid(),
 		   "a source that cannot do the remembered size falls back to Original");
+	}
+
+	QSettings().clear();
+
+	std::printf("\n-- the frame rate --\n");
+	{
+		ExportOptionsDialog::Context c = ctx1080();
+		c.fps = 60.0;
+		ExportOptionsDialog dlg(c);
+		dlg.show();
+		QApplication::processEvents();
+		// A video format: GIF has a frame rate of its own, and hides this one.
+		for (QComboBox *f : dlg.findChildren<QComboBox *>()) {
+			const int mp4 = f->findData(int(ClipExporter::Format::Mp4));
+			if (mp4 >= 0 && f->itemText(mp4).startsWith(QStringLiteral("MP4")))
+				f->setCurrentIndex(mp4);
+		}
+		QApplication::processEvents();
+		ok(dlg.format() == ClipExporter::Format::Mp4, "an MP4");
+		QComboBox *fps = dlg.findChild<QComboBox *>(QStringLiteral("exportFps"));
+		ok(fps != nullptr && fps->itemText(0) == QStringLiteral("Original (60 fps)"),
+		   "a Frame rate choice, starting at the original");
+		ok(dlg.frameRate() == 0.0, "which asks the exporter for no change");
+		bool higher = false;
+		for (int i = 1; fps && i < fps->count(); ++i)
+			higher = higher || fps->itemData(i).toDouble() >= 60.0;
+		ok(fps && !higher && fps->findText(QStringLiteral("30 fps")) > 0 && fps->findText(QStringLiteral("24 fps")) > 0,
+		   "then the usual rates below it -- none above, which would only repeat frames");
+		const qint64 at60 = dlg.estimatedBytes();
+		if (fps)
+			fps->setCurrentIndex(fps->findText(QStringLiteral("30 fps")));
+		QApplication::processEvents();
+		ok(dlg.frameRate() == 30.0, "30 fps chosen");
+		QLabel *sum = labelStartingWith(&dlg, QStringLiteral("Format:"));
+		ok(sum && sum->text().contains(QStringLiteral("Frame rate:  30 fps")), "the summary says 30 fps");
+		ok(dlg.estimatedBytes() < at60, "and the estimate shrinks");
+		dlg.accept();
+		QApplication::processEvents();
+
+		ExportOptionsDialog again(c);
+		again.show();
+		QApplication::processEvents();
+		ok(again.frameRate() == 30.0, "it reopens at the frame rate last used");
+		ExportOptionsDialog::Context slow = c;
+		slow.fps = 25.0;
+		ExportOptionsDialog other(slow);
+		other.show();
+		QApplication::processEvents();
+		ok(other.frameRate() == 0.0, "a 25 fps project cannot do 30: back to the original");
 	}
 
 	QSettings().clear();

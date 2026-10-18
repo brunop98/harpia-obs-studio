@@ -79,6 +79,26 @@ build "$HERE/batchexport_test.cpp" batchexport_test
 # Every frame once: sources that number their frames, read the way an export
 # reads them and exported from a two-track 60 fps timeline.
 build "$HERE/exportcadence_test.cpp" exportcadence_test
+# The export window: what it says is what it asks for -- resolution, frame
+# rate, the remembered choices -- and a size estimate that moves the right way.
+"$MOC" -I"$H" "$H/editor/ExportOptionsDialog.hpp" -o "$WORK/moc_ExportOptionsDialog.cpp"
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
+	"$HERE/exportdialog_test.cpp" "$H/editor/ExportOptionsDialog.cpp" "$H/editor/ExportEstimate.cpp" \
+	"$H/ui/UiText.cpp" \
+	"$H/editor/ClipExporter.cpp" "$H/editor/CoverArt.cpp" "$H/editor/BatchExport.cpp" "$H/editor/TimelineAudio.cpp" \
+	"$H/editor/VoiceoverMixer.cpp" "$H/editor/AudioRetimer.cpp" \
+	"$H/editor/GifEncoder.cpp" "$H/editor/FrameSeeker.cpp" "$H/editor/HdrToSdr.cpp" \
+	"$H/editor/StillImage.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" \
+	"$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
+	"$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/ShaderRenderer.cpp" \
+	"$H/editor/component/ShaderComponent.cpp" \
+	"$WORK/moc_ClipExporter.cpp" "$WORK/moc_BatchExport.cpp" "$WORK/moc_ExportOptionsDialog.cpp" \
+	-o "$WORK/exportdialog_test" $LF
 # HDR (HLG/PQ) to SDR: the curve, the colours, and a real 10-bit HLG clip.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/hdrtosdr_test.cpp" "$H/editor/HdrToSdr.cpp" -o "$WORK/hdrtosdr_test" $LF -lpthread
@@ -238,6 +258,8 @@ QT_QPA_PLATFORM=offscreen "$WORK/exportpaths_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportcolor_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/batchexport_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportcadence_test" || rc=1
+HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
+	"$WORK/exportdialog_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportprogress_test" "$WORK" || rc=1
 "$WORK/hdrtosdr_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewdecoder_test" "$WORK" || rc=1

@@ -220,6 +220,23 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	videoRow_ = new QWidget(this);
 	auto *vform = new QFormLayout(videoRow_);
 	vform->setContentsMargins(0, 0, 0, 0);
+
+	// Frame rate, like the resolution: the original first, then the usual
+	// rates BELOW it. A higher one would only repeat frames, so it is left
+	// out rather than offered and quietly made of duplicates.
+	fpsCombo_ = new QComboBox(videoRow_);
+	fpsCombo_->setObjectName(QStringLiteral("exportFps"));
+	fpsCombo_->addItem(QStringLiteral("Original (%1 fps)").arg(ctx_.fps, 0, 'g', 4), 0.0);
+	for (const double r : {120.0, 60.0, 60000.0 / 1001.0, 50.0, 30.0, 30000.0 / 1001.0, 25.0, 24.0,
+			       24000.0 / 1001.0, 15.0}) {
+		if (r >= ctx_.fps - 0.01)
+			continue;
+		fpsCombo_->addItem(QStringLiteral("%1 fps").arg(r, 0, 'g', 4), r);
+	}
+	fpsCombo_->setToolTip(QStringLiteral(
+		"Frames per second in the file. Lower than the original leaves frames out evenly: "
+		"smaller files, less smooth motion. 30 or 60 suit most platforms."));
+	vform->addRow(QStringLiteral("Frame rate"), fpsCombo_);
 	auto *qrow = new QWidget(videoRow_);
 	auto *ql = new QHBoxLayout(qrow);
 	ql->setContentsMargins(0, 0, 0, 0);
@@ -360,6 +377,7 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 		connect(scopeCombo_, &QComboBox::currentIndexChanged, this,
 			&ExportOptionsDialog::onScopeChanged);
 	connect(resCombo_, &QComboBox::currentIndexChanged, this, &ExportOptionsDialog::refresh);
+	connect(fpsCombo_, &QComboBox::currentIndexChanged, this, &ExportOptionsDialog::refresh);
 	connect(customW_, &QSpinBox::valueChanged, this, &ExportOptionsDialog::refresh);
 	connect(customH_, &QSpinBox::valueChanged, this, &ExportOptionsDialog::refresh);
 	connect(qualitySlider_, &QSlider::valueChanged, this, &ExportOptionsDialog::refresh);
@@ -560,9 +578,16 @@ void ExportOptionsDialog::onScopeChanged()
 	refresh();
 }
 
+double ExportOptionsDialog::frameRate() const
+{
+	return fpsCombo_ ? fpsCombo_->currentData().toDouble() : 0.0;
+}
+
 double ExportOptionsDialog::effectiveFps() const
 {
-	return format() == ClipExporter::Format::Gif ? double(gifFpsSpin_->value()) : ctx_.fps;
+	if (format() == ClipExporter::Format::Gif)
+		return double(gifFpsSpin_->value());
+	return frameRate() > 0.0 ? frameRate() : ctx_.fps;
 }
 
 QSize ExportOptionsDialog::outputSize() const
@@ -672,6 +697,15 @@ void ExportOptionsDialog::loadRemembered()
 	if (ri >= 0)
 		resCombo_->setCurrentIndex(ri);
 
+	// The frame rate by VALUE, like the resolution by height: the list depends
+	// on the original. One the original does not reach falls back to it.
+	const double fps = s.value(QLatin1String(kGroup) + QStringLiteral("fps"), 0.0).toDouble();
+	for (int i = 0; i < fpsCombo_->count(); ++i)
+		if (std::abs(fpsCombo_->itemData(i).toDouble() - fps) < 0.001) {
+			fpsCombo_->setCurrentIndex(i);
+			break;
+		}
+
 	qualitySlider_->setValue(sliderForCrf(
 		s.value(QLatin1String(kGroup) + QStringLiteral("crf"), kDefaultCrf).toInt()));
 	gifFpsSpin_->setValue(
@@ -706,6 +740,7 @@ void ExportOptionsDialog::saveRemembered() const
 		s.setValue(QLatin1String(kGroup) + QStringLiteral("batchOpenFolder"), batchOpen_->isChecked());
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("resHeight"),
 		   resCombo_->currentData().toInt());
+	s.setValue(QLatin1String(kGroup) + QStringLiteral("fps"), frameRate());
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("crf"), videoCrf());
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("gifFps"), gifFps());
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("gifColors"), gifColors());

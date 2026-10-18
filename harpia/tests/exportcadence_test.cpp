@@ -75,7 +75,8 @@ static int counterOf(const QImage &img)
 	return n;
 }
 
-static bool runExport(const QString &out, const ClipExporter::Options &o, QString *err)
+static bool runExport(const QString &out, const ClipExporter::Options &o, QString *err,
+		      const QString &in = QString())
 {
 	ClipExporter ex;
 	bool done = false, good = false;
@@ -85,7 +86,7 @@ static bool runExport(const QString &out, const ClipExporter::Options &o, QStrin
 			*err = e;
 		done = true;
 	});
-	ex.run(QString(), out, o);
+	ex.run(in, out, o);
 	QElapsedTimer t;
 	t.start();
 	while (!done && t.elapsed() < 120000) {
@@ -280,6 +281,76 @@ int main(int argc, char **argv)
 		std::printf("     frames %.3f to %.3f ms apart\n", shortest * 1000.0, longest * 1000.0);
 		ok(pts.size() == 96 && longest - shortest < 0.0005,
 		   "every frame lasts the same: a constant frame rate");
+	}
+
+	std::printf("\n-- a lower frame rate, chosen in the export window --\n");
+	{
+		// Every frame of a file, in order, by its number.
+		const auto framesOf = [](const QString &file) {
+			FrameSeeker fs;
+			QVector<int> got;
+			if (fs.open(file)) {
+				fs.seekTo(0);
+				qint64 ms = 0;
+				for (QImage img = fs.nextFrame(&ms, 64, 64); !img.isNull(); img = fs.nextFrame(&ms, 64, 64))
+					got.append(counterOf(img));
+			}
+			return got;
+		};
+		const auto steady = [](const QString &file) {
+			QVector<double> pts;
+			for (const QString &p : probe(file, QStringLiteral("frame=pts_time")))
+				pts.append(p.trimmed().toDouble());
+			std::sort(pts.begin(), pts.end());
+			double lo = 1e9, hi = 0;
+			for (int i = 1; i < pts.size(); ++i) {
+				lo = std::min(lo, pts[i] - pts[i - 1]);
+				hi = std::max(hi, pts[i] - pts[i - 1]);
+			}
+			return pts.size() > 1 && hi - lo < 0.0005 && std::abs(lo - 1.0 / 30.0) < 0.0005;
+		};
+		const auto everyOther = [](const QVector<int> &got) {
+			bool all = got.size() == 48;
+			for (int i = 0; all && i < got.size(); ++i)
+				all = got[i] == 2 * i;
+			return all;
+		};
+		ClipExporter::Options base;
+		base.format = ClipExporter::Format::Mp4;
+		base.keepAudio = false;
+		base.videoCrf = 8;
+		base.effort = ClipExporter::Options::Effort::Fast;
+		base.outFps = 30.0;
+		QString err;
+
+		const QString single = dir.filePath(QStringLiteral("single30.mp4"));
+		ok(runExport(single, base, &err, c60), qPrintable(QStringLiteral("a 60 fps clip, exported at 30 (%1)").arg(err)));
+		const QVector<int> a = framesOf(single);
+		std::printf("     %d frames: %d %d %d %d ...\n", int(a.size()), a.value(0), a.value(1), a.value(2), a.value(3));
+		ok(everyOther(a), "every other frame, in order: none doubled, none missing");
+		ok(probe(single, QStringLiteral("stream=avg_frame_rate")).value(0) == QStringLiteral("30/1") && steady(single),
+		   "the file says 30 fps, and is: frames 1/30 s apart");
+
+		ClipExporter::Options cuts = base;
+		cuts.cuts = {{0, 800, 1.0, 0}, {800, 1600, 1.0, 0}};
+		const QString multi = dir.filePath(QStringLiteral("cuts30.mp4"));
+		ok(runExport(multi, cuts, &err, c60), qPrintable(QStringLiteral("Multi-Cut at 30 (%1)").arg(err)));
+		ok(everyOther(framesOf(multi)) && steady(multi), "Multi-Cut: the same, across the cut");
+
+		ClipExporter::Options tl = base;
+		TlTrack only;
+		only.kind = TlTrack::Kind::Video;
+		only.clips = {video(1, 0, 0, 1600)};
+		tl.timeline.tracks = {only};
+		tl.timelineSources = {{1, c60.toStdString()}};
+		tl.canvasW = 64;
+		tl.canvasH = 64;
+		tl.timelineFps = 60.0;
+		const QString timeline = dir.filePath(QStringLiteral("timeline30.mp4"));
+		ok(runExport(timeline, tl, &err), qPrintable(QStringLiteral("a 60 fps timeline at 30 (%1)").arg(err)));
+		ok(everyOther(framesOf(timeline)) && steady(timeline) &&
+			   probe(timeline, QStringLiteral("stream=avg_frame_rate")).value(0) == QStringLiteral("30/1"),
+		   "Full editing: composed at 30, every other frame, steady");
 	}
 
 	std::printf("\n%s (%d failures)\n", failures ? "FAILURES" : "ALL PASSED", failures);

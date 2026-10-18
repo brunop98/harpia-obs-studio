@@ -24,6 +24,7 @@
 #include <QThread>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -109,6 +110,11 @@ struct VideoState {
 	hdr::Converter hdr;           // HDR (HLG/PQ) or BT.2020 source frames -> SDR BT.709
 	AVStream *vOut = nullptr;
 	AVStream *aOut = nullptr; // audio stream-copy (optional)
+	// A chosen output frame rate (Options::outFps), applied where every path
+	// meets the encoder: one frame per tick of it, the first to arrive in
+	// each, stamped on the tick. 0 = every frame, as it comes.
+	double outFps = 0.0;
+	int64_t lastTick = std::numeric_limits<int64_t>::min();
 	// The file's cover picture (MP4/MOV; CoverArt.hpp): the stream, made with
 	// the header, and the frames it may come from.
 	AVStream *coverOut = nullptr;
@@ -281,6 +287,13 @@ QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const
 	s.venc->width = enc.width();
 	s.venc->height = enc.height();
 	s.venc->pix_fmt = encodePixFmt(opts);
+	// A chosen frame rate replaces the path's own: the stream says it, the
+	// GOP follows it, and VideoSink leaves out the frames in between.
+	if (opts.outFps > 0.0 && opts.format != ClipExporter::Format::Gif) {
+		frameRate = av_d2q(opts.outFps, 1000000);
+		gopSize = std::max(1, int(opts.outFps * 2.0));
+		s.outFps = opts.outFps;
+	}
 	s.venc->time_base = timeBase;
 	s.venc->framerate = frameRate;
 	s.venc->gop_size = gopSize;
@@ -366,6 +379,8 @@ QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const
 	if (!s.vOut || avcodec_parameters_from_context(s.vOut->codecpar, s.venc) < 0)
 		return QStringLiteral("Could not create the output video stream.");
 	s.vOut->time_base = s.venc->time_base;
+	if (s.outFps > 0.0)
+		s.vOut->avg_frame_rate = frameRate;
 	return {};
 }
 
@@ -523,6 +538,17 @@ struct VideoSink {
 
 	bool operator()(AVFrame *f)
 	{
+		// A lower frame rate: the first frame in each tick goes on, stamped
+		// on the tick; the others in it are left out. Before the scale and
+		// the shader, so a frame that is dropped costs neither.
+		if (f && s.outFps > 0.0 && f->pts != AV_NOPTS_VALUE) {
+			const double sec = double(f->pts) * av_q2d(s.venc->time_base);
+			const int64_t tick = int64_t(std::floor(sec * s.outFps + 1e-6));
+			if (tick <= s.lastTick)
+				return true;
+			s.lastTick = tick;
+			f->pts = av_rescale_q(tick, av_inv_q(s.venc->framerate), s.venc->time_base);
+		}
 		// Downscale FIRST, then shade. The effects are resolution-independent
 		// (they read normalized coordinates), so shading a 4K frame that is
 		// about to become 1080p ran the whole chain on four times the pixels
@@ -1603,7 +1629,11 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 
 	const int cw = evenDown(std::max(2, opts.canvasW));
 	const int ch = evenDown(std::max(2, opts.canvasH));
-	const double fps = std::clamp(opts.timelineFps > 0.1 ? opts.timelineFps : 30.0, 1.0, 240.0);
+	// The project's frame rate, or the one chosen for this export: the frames
+	// are composed at it, so nothing needs leaving out afterwards.
+	const double fps = std::clamp(opts.outFps > 0.0 ? opts.outFps
+						: (opts.timelineFps > 0.1 ? opts.timelineFps : 30.0),
+				      1.0, 240.0);
 	const QSize canvas(cw, ch);
 
 	// One decoder per source PER TRACK the timeline references. FrameSeeker's
@@ -1764,6 +1794,7 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 	    !e.isEmpty())
 		return e;
 	s.vOut->avg_frame_rate = frameRate;
+	s.outFps = 0.0; // composed at the rate already: one frame per tick, none to leave out
 	// This path used to write its header by hand, and was the only one that did
 	// not ask for +faststart. Going through the shared helper fixes that.
 	if (const QString e = openOutputFile(s, opts, out); !e.isEmpty())

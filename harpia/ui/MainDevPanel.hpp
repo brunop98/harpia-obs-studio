@@ -73,11 +73,9 @@ private:
 	// Toolbar
 	QSpinBox *row1Spacing_ = nullptr;
 	QSpinBox *presetComboW_ = nullptr;
-	QSpinBox *monitorMinW_ = nullptr;
-	QSpinBox *monitorMaxW_ = nullptr;
-	// Behavior column
+	// Setting columns
 	QSpinBox *behaviorComboW_ = nullptr;
-	QSpinBox *behaviorLabelW_ = nullptr;
+	QSpinBox *timeComboW_ = nullptr;
 	QSpinBox *behaviorColSpacing_ = nullptr;
 	QSpinBox *behaviorRowSpacing_ = nullptr;
 	QSpinBox *middleSpacing_ = nullptr;
@@ -85,9 +83,8 @@ private:
 	QSpinBox *controlsSpacing_ = nullptr;
 	QSpinBox *recordBtnW_ = nullptr;
 	QSpinBox *recordBtnH_ = nullptr;
-	QSpinBox *pauseBtnW_ = nullptr;
-	QSpinBox *pauseBtnH_ = nullptr;
-	QSpinBox *separatorH_ = nullptr;
+	QSpinBox *stopBtnW_ = nullptr;
+	QSpinBox *stopBtnH_ = nullptr;
 	QSpinBox *webcamPreviewW_ = nullptr;
 	QSpinBox *webcamPreviewH_ = nullptr;
 	// Recent strip

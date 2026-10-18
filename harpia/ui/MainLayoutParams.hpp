@@ -24,19 +24,16 @@ struct MainLayoutParams {
 	int rootSpacing = 12;       // gap between the stacked sections
 	int row1Spacing = 8;        // toolbar row base item spacing
 	int presetComboW = 160;     // preset combo min width
-	int monitorComboMinW = 140; // display combo min width
-	int monitorComboMaxW = 200; // display combo max width
-	int behaviorComboW = 200;   // Focus/Webcam/Idle combo fixed width
-	int behaviorLabelW = 110;   // right-aligned behavior label width
-	int behaviorColSpacing = 10; // gap between behavior rows
-	int behaviorRowSpacing = 8;  // gap between a behavior label and its combo
-	int middleSpacing = 18;      // gap between the behavior column and controls
+	int behaviorComboW = 200;   // Capture/Display/Focus/Webcam combo fixed width
+	int timeComboW = 100;       // Pause/Min length/Countdown combo fixed width
+	int behaviorColSpacing = 10; // gap between the rows of a setting column
+	int behaviorRowSpacing = 8;  // gap between a label and its combo
+	int middleSpacing = 18;      // gap either side of a column divider
 	int controlsSpacing = 14;    // gap between record controls
-	int recordBtnW = 130;
+	int recordBtnW = 130;        // the Record / Pause / Resume button
 	int recordBtnH = 46;
-	int pauseBtnW = 104;
-	int pauseBtnH = 46;
-	int separatorH = 28;         // controls-row vertical separator height
+	int stopBtnW = 104;
+	int stopBtnH = 46;
 	int webcamPreviewW = 100;
 	int webcamPreviewH = 56;
 	int stripThumbW = 160;       // recent-recording card thumbnail size
@@ -59,19 +56,16 @@ inline const QVector<MainLayoutField> &mainLayoutFields()
 		{"rootSpacing", &MainLayoutParams::rootSpacing},
 		{"row1Spacing", &MainLayoutParams::row1Spacing},
 		{"presetComboW", &MainLayoutParams::presetComboW},
-		{"monitorComboMinW", &MainLayoutParams::monitorComboMinW},
-		{"monitorComboMaxW", &MainLayoutParams::monitorComboMaxW},
 		{"behaviorComboW", &MainLayoutParams::behaviorComboW},
-		{"behaviorLabelW", &MainLayoutParams::behaviorLabelW},
+		{"timeComboW", &MainLayoutParams::timeComboW},
 		{"behaviorColSpacing", &MainLayoutParams::behaviorColSpacing},
 		{"behaviorRowSpacing", &MainLayoutParams::behaviorRowSpacing},
 		{"middleSpacing", &MainLayoutParams::middleSpacing},
 		{"controlsSpacing", &MainLayoutParams::controlsSpacing},
 		{"recordBtnW", &MainLayoutParams::recordBtnW},
 		{"recordBtnH", &MainLayoutParams::recordBtnH},
-		{"pauseBtnW", &MainLayoutParams::pauseBtnW},
-		{"pauseBtnH", &MainLayoutParams::pauseBtnH},
-		{"separatorH", &MainLayoutParams::separatorH},
+		{"stopBtnW", &MainLayoutParams::stopBtnW},
+		{"stopBtnH", &MainLayoutParams::stopBtnH},
 		{"webcamPreviewW", &MainLayoutParams::webcamPreviewW},
 		{"webcamPreviewH", &MainLayoutParams::webcamPreviewH},
 		{"stripThumbW", &MainLayoutParams::stripThumbW},

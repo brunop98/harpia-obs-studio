@@ -118,21 +118,19 @@ MainDevPanel::MainDevPanel(MainWindow *win, QWidget *parent) : QDialog(parent), 
 	tbForm->addRow(QStringLiteral("Row item spacing"), row1Spacing_ = mk(0, 48, cur.row1Spacing));
 	tbForm->addRow(QStringLiteral("Preset combo min width"),
 		       presetComboW_ = mk(60, 500, cur.presetComboW));
-	tbForm->addRow(QStringLiteral("Display combo min width"),
-		       monitorMinW_ = mk(60, 500, cur.monitorComboMinW));
-	tbForm->addRow(QStringLiteral("Display combo max width"),
-		       monitorMaxW_ = mk(60, 600, cur.monitorComboMaxW));
 	root->addWidget(tbBox);
 
-	auto *behBox = new QGroupBox(QStringLiteral("Behavior column"), inner);
+	auto *behBox = new QGroupBox(QStringLiteral("Setting columns"), inner);
 	auto *behForm = new QFormLayout(behBox);
-	behForm->addRow(QStringLiteral("Combo width"), behaviorComboW_ = mk(80, 500, cur.behaviorComboW));
-	behForm->addRow(QStringLiteral("Label width"), behaviorLabelW_ = mk(40, 300, cur.behaviorLabelW));
+	behForm->addRow(QStringLiteral("Capture column combo width"),
+			behaviorComboW_ = mk(80, 500, cur.behaviorComboW));
+	behForm->addRow(QStringLiteral("Time column combo width"),
+			timeComboW_ = mk(60, 400, cur.timeComboW));
 	behForm->addRow(QStringLiteral("Row spacing"),
 			behaviorColSpacing_ = mk(0, 48, cur.behaviorColSpacing));
 	behForm->addRow(QStringLiteral("Label↔combo gap"),
 			behaviorRowSpacing_ = mk(0, 40, cur.behaviorRowSpacing));
-	behForm->addRow(QStringLiteral("Column↔controls gap"),
+	behForm->addRow(QStringLiteral("Column divider gap"),
 			middleSpacing_ = mk(0, 64, cur.middleSpacing));
 	root->addWidget(behBox);
 
@@ -140,11 +138,12 @@ MainDevPanel::MainDevPanel(MainWindow *win, QWidget *parent) : QDialog(parent), 
 	auto *ctlForm = new QFormLayout(ctlBox);
 	ctlForm->addRow(QStringLiteral("Controls spacing"),
 			controlsSpacing_ = mk(0, 64, cur.controlsSpacing));
-	ctlForm->addRow(QStringLiteral("Record button width"), recordBtnW_ = mk(80, 400, cur.recordBtnW));
-	ctlForm->addRow(QStringLiteral("Record button height"), recordBtnH_ = mk(24, 120, cur.recordBtnH));
-	ctlForm->addRow(QStringLiteral("Pause button width"), pauseBtnW_ = mk(60, 400, cur.pauseBtnW));
-	ctlForm->addRow(QStringLiteral("Pause button height"), pauseBtnH_ = mk(24, 120, cur.pauseBtnH));
-	ctlForm->addRow(QStringLiteral("Separator height"), separatorH_ = mk(8, 96, cur.separatorH));
+	ctlForm->addRow(QStringLiteral("Record/Pause button width"),
+			recordBtnW_ = mk(80, 400, cur.recordBtnW));
+	ctlForm->addRow(QStringLiteral("Record/Pause button height"),
+			recordBtnH_ = mk(24, 120, cur.recordBtnH));
+	ctlForm->addRow(QStringLiteral("Stop button width"), stopBtnW_ = mk(60, 400, cur.stopBtnW));
+	ctlForm->addRow(QStringLiteral("Stop button height"), stopBtnH_ = mk(24, 120, cur.stopBtnH));
 	ctlForm->addRow(QStringLiteral("Webcam preview width"),
 			webcamPreviewW_ = mk(40, 400, cur.webcamPreviewW));
 	ctlForm->addRow(QStringLiteral("Webcam preview height"),
@@ -167,16 +166,14 @@ MainDevPanel::MainDevPanel(MainWindow *win, QWidget *parent) : QDialog(parent), 
 	// Which box edits which size -- what apply, Reset and Paste JSON walk.
 	spins_ = {{rootMarginH_, &MainLayoutParams::rootMarginH}, {rootMarginV_, &MainLayoutParams::rootMarginV},
 		  {rootSpacing_, &MainLayoutParams::rootSpacing}, {row1Spacing_, &MainLayoutParams::row1Spacing},
-		  {presetComboW_, &MainLayoutParams::presetComboW}, {monitorMinW_, &MainLayoutParams::monitorComboMinW},
-		  {monitorMaxW_, &MainLayoutParams::monitorComboMaxW},
-		  {behaviorComboW_, &MainLayoutParams::behaviorComboW},
-		  {behaviorLabelW_, &MainLayoutParams::behaviorLabelW},
+		  {presetComboW_, &MainLayoutParams::presetComboW},
+		  {behaviorComboW_, &MainLayoutParams::behaviorComboW}, {timeComboW_, &MainLayoutParams::timeComboW},
 		  {behaviorColSpacing_, &MainLayoutParams::behaviorColSpacing},
 		  {behaviorRowSpacing_, &MainLayoutParams::behaviorRowSpacing},
 		  {middleSpacing_, &MainLayoutParams::middleSpacing},
 		  {controlsSpacing_, &MainLayoutParams::controlsSpacing}, {recordBtnW_, &MainLayoutParams::recordBtnW},
-		  {recordBtnH_, &MainLayoutParams::recordBtnH}, {pauseBtnW_, &MainLayoutParams::pauseBtnW},
-		  {pauseBtnH_, &MainLayoutParams::pauseBtnH}, {separatorH_, &MainLayoutParams::separatorH},
+		  {recordBtnH_, &MainLayoutParams::recordBtnH}, {stopBtnW_, &MainLayoutParams::stopBtnW},
+		  {stopBtnH_, &MainLayoutParams::stopBtnH},
 		  {webcamPreviewW_, &MainLayoutParams::webcamPreviewW},
 		  {webcamPreviewH_, &MainLayoutParams::webcamPreviewH}, {stripThumbW_, &MainLayoutParams::stripThumbW},
 		  {stripThumbH_, &MainLayoutParams::stripThumbH}, {stripCardExtraW_, &MainLayoutParams::stripCardExtraW},

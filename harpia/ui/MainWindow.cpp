@@ -135,6 +135,14 @@ QIcon cardIcon(const QImage &img)
 			 kStripThumb.height());
 	return QIcon(QPixmap::fromImage(scaled.copy(crop)));
 }
+
+// "5 s", or "1 min" once it is whole minutes: the time column's dropdowns.
+QString durationLabel(int seconds)
+{
+	if (seconds >= 60 && seconds % 60 == 0)
+		return QStringLiteral("%1 min").arg(seconds / 60);
+	return QStringLiteral("%1 s").arg(seconds);
+}
 } // namespace
 
 MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFolder, QWidget *parent)
@@ -187,7 +195,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// One spacing rule everywhere: 8px inside a group, 18px between groups.
 	constexpr int kGroupGap = 18;
 
-	// ---- Toolbar row 1: preset + capture + idle -------------------------
+	// ---- Toolbar row: the preset ---------------------------------------
 	auto *row1 = new QHBoxLayout;
 	row1Layout_ = row1;
 	row1->setSpacing(8);
@@ -218,65 +226,11 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// Before this it was only in the combo's right-click menu, easy to miss.
 	deletePresetButton_ = presetButton(QStringLiteral("Delete"), QString()); // tip: updateButtons()
 
-	row1->addSpacing(kGroupGap);
-	row1->addWidget(fieldLabel(
-		QStringLiteral("Capture"),
-		QStringLiteral("The whole monitor, a region you drag, or a saved region.")));
-	captureModeCombo_ = new QComboBox(central);
-	// Items carry a string tag in their data: "monitor", "region", "audio",
-	// "saved:<id>" or "manage". The three modes come from the capability table
-	// so their labels and tags cannot drift from what reads them back. Saved
-	// regions are appended by reloadCaptureModeCombo().
-	for (RecordMode m : {RecordMode::Monitor, RecordMode::Region, RecordMode::AudioOnly})
-		captureModeCombo_->addItem(recordModeLabel(m), QString::fromLatin1(recordModeTag(m)));
-	captureModeCombo_->setToolTip(
-		QStringLiteral("What to record. Right-click a region to save it."));
-	row1->addWidget(captureModeCombo_);
-
-	row1->addSpacing(kGroupGap);
-	row1->addWidget(fieldLabel(
-		QStringLiteral("Display"),
-		QStringLiteral("Which monitor to record — also where the region overlay opens.")));
-	monitorCombo_ = new QComboBox(central);
-	monitorCombo_->setMinimumWidth(140); // without this the adjust policy collapses it
-	monitorCombo_->setMaximumWidth(200);
-	monitorCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-	monitorCombo_->setToolTip(
-		QStringLiteral("Which display to record. The region opens on it too."));
-	// The display list refreshes right before the popup opens (eventFilter).
-	monitorCombo_->installEventFilter(this);
-	row1->addWidget(monitorCombo_);
-
-	row1->addSpacing(kGroupGap);
-	// Countdown label + combo as one unit, so the whole thing can be hidden when
-	// the window is too narrow (it's a nice-to-have, not an essential control).
-	countdownGroup_ = new QWidget(central);
-	auto *countdownLayout = new QHBoxLayout(countdownGroup_);
-	countdownLayout->setContentsMargins(0, 0, 0, 0);
-	countdownLayout->setSpacing(8);
-	countdownLayout->addWidget(fieldLabel(
-		QStringLiteral("Countdown"),
-		QStringLiteral("On-screen countdown before recording starts, so you can get ready.")));
-	countdownCombo_ = new QComboBox(countdownGroup_);
-	countdownCombo_->addItem(QStringLiteral("Off"), 0);
-	for (int s = 1; s <= 10; ++s)
-		countdownCombo_->addItem(QStringLiteral("%1s").arg(s), s);
-	countdownCombo_->setMaximumWidth(80);
-	countdownCombo_->setToolTip(
-		QStringLiteral("A countdown before recording starts. Never part of it."));
-	countdownLayout->addWidget(countdownCombo_);
-	// The composition guides switch rides in the same group: both are about
-	// getting ready to record, and both can go when the window is narrow --
-	// the shortcut still works then. Synced from the preset (syncIdleControls).
-	countdownLayout->addSpacing(kGroupGap);
-	guidesCheck_ = new QCheckBox(QStringLiteral("Guides"), countdownGroup_);
-	countdownLayout->addWidget(guidesCheck_);
-	row1->addWidget(countdownGroup_);
 	row1->addStretch(1);
 	root->addLayout(row1);
 
-	// The behavior dropdowns (Focus app / Webcam / Pause when idle) live in the
-	// middle section's LEFT column — created there, below.
+	// Capture, Display, the countdown and the guides switch used to share this
+	// row; they live in the middle section's columns now, created there, below.
 
 	// ---- Where it goes, and whether it will fit --------------------------
 	// Both halves of "the recording was lost" are silent otherwise: running out
@@ -300,14 +254,18 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	warningsBox_->setVisible(false);
 	root->addWidget(warningsBox_);
 
-	// ---- Middle: two columns --------------------------------------------
-	//   Focus app       [combo]      |
-	//   Webcam          [combo]      |   [ ⬤ Record ] [ ⏸ Pause ]  00:00:00
-	//   Pause when idle [combo]      |
-	// Left: one labelled behavior dropdown per row (first item = off; labels
-	// right-aligned so the controls line up). Right: the record controls,
-	// centered in the remaining space. Weighted stretches (2 above / 3 below)
-	// keep the section at a natural height when the Audio foldout is collapsed.
+	// ---- Middle: three columns ------------------------------------------
+	//   Capture   [combo] | Pause off-region [combo] | [ ● Record ] [ ■ Stop ]
+	//   Display   [combo] | Pause when idle  [combo] |       00:00:00
+	//   Focus app [combo] | Min length       [combo] |
+	//   Webcam    [combo] | Countdown        [combo] |
+	//                     |                  [x] Guides
+	// What to record, when, and the controls that do it. One labelled dropdown
+	// per row (first item = off; labels right-aligned so a column's controls
+	// line up). The time column is the one that goes when the window is narrow
+	// (applyResponsiveLayout); the record column never does. Weighted
+	// stretches (2 above / 3 below) keep the section at a natural height when
+	// the Audio foldout is collapsed.
 	root->addStretch(2);
 
 	auto *middle = new QHBoxLayout;
@@ -318,9 +276,37 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	behaviorColLayout_ = behaviorCol;
 	behaviorCol->setSpacing(10);
 
-	// All three behavior dropdowns share one fixed width so the column reads
-	// as a justified block; long names elide (full text in the tooltip/popup).
+	timeCol_ = new QWidget(central);
+	auto *timeCol = new QVBoxLayout(timeCol_);
+	timeColLayout_ = timeCol;
+	timeCol->setContentsMargins(0, 0, 0, 0);
+	timeCol->setSpacing(10);
+
+	// A column's dropdowns share one fixed width so it reads as a justified
+	// block; long names elide (full text in the tooltip/popup). The time
+	// column only ever holds a few characters ("10 s"), so it is narrower.
 	constexpr int kBehaviorComboW = 200;
+	constexpr int kTimeComboW = 100;
+
+	captureModeCombo_ = new QComboBox(central);
+	// Items carry a string tag in their data: "monitor", "region", "audio",
+	// "saved:<id>" or "manage". The three modes come from the capability table
+	// so their labels and tags cannot drift from what reads them back. Saved
+	// regions are appended by reloadCaptureModeCombo().
+	for (RecordMode m : {RecordMode::Monitor, RecordMode::Region, RecordMode::AudioOnly})
+		captureModeCombo_->addItem(recordModeLabel(m), QString::fromLatin1(recordModeTag(m)));
+	captureModeCombo_->setFixedWidth(kBehaviorComboW);
+	captureModeCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+	captureModeCombo_->setToolTip(
+		QStringLiteral("What to record. Right-click a region to save it."));
+
+	monitorCombo_ = new QComboBox(central);
+	monitorCombo_->setFixedWidth(kBehaviorComboW);
+	monitorCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+	monitorCombo_->setToolTip(
+		QStringLiteral("Which display to record. The region opens on it too."));
+	// The display list refreshes right before the popup opens (eventFilter).
+	monitorCombo_->installEventFilter(this);
 
 	appCombo_ = new QComboBox(central);
 	appCombo_->setFixedWidth(kBehaviorComboW);
@@ -340,14 +326,6 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// The camera list is filled just before the popup opens; see eventFilter.
 	webcamCombo_->installEventFilter(this);
 
-	idleCombo_ = new QComboBox(central);
-	idleCombo_->addItem(QStringLiteral("Off"), 0);
-	for (int s : {1, 2, 3, 5, 10})
-		idleCombo_->addItem(QStringLiteral("%1 s").arg(s), s);
-	idleCombo_->setFixedWidth(kBehaviorComboW);
-	idleCombo_->setToolTip(
-		QStringLiteral("Pauses after this long with no input. Resumes on input."));
-
 	// Region recording only: pause once the pointer has been outside the region
 	// long enough, and resume when it returns. "Off" is -1 rather than 0 because
 	// 0 is a real choice here meaning "the moment it leaves".
@@ -355,88 +333,148 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	regionLeaveCombo_->addItem(QStringLiteral("Off"), kRegionWatchOff);
 	for (int s : kRegionWatchSeconds)
 		regionLeaveCombo_->addItem(QStringLiteral("%1 s").arg(s), s);
-	regionLeaveCombo_->setFixedWidth(kBehaviorComboW);
+	regionLeaveCombo_->setFixedWidth(kTimeComboW);
 	regionLeaveCombo_->setToolTip(
 		QStringLiteral("Pauses once the pointer has left the region this long."));
 
-	auto behaviorRow = [&](const QString &text, QWidget *control) -> QWidget * {
+	idleCombo_ = new QComboBox(central);
+	idleCombo_->addItem(QStringLiteral("Off"), 0);
+	for (int s : {1, 2, 3, 5, 10})
+		idleCombo_->addItem(QStringLiteral("%1 s").arg(s), s);
+	idleCombo_->setFixedWidth(kTimeComboW);
+	idleCombo_->setToolTip(
+		QStringLiteral("Pauses after this long with no input. Resumes on input."));
+
+	// The preset's minimum length: a take shorter than this asks before it is
+	// kept. Until now it was only in the preset editor, as a spin box.
+	minLengthCombo_ = new QComboBox(central);
+	minLengthCombo_->addItem(QStringLiteral("Off"), 0);
+	for (int s : {2, 3, 5, 10, 30, 60})
+		minLengthCombo_->addItem(durationLabel(s), s);
+	minLengthCombo_->setFixedWidth(kTimeComboW);
+	minLengthCombo_->setToolTip(
+		QStringLiteral("A take shorter than this asks before it is kept. Catches accidental clips."));
+
+	countdownCombo_ = new QComboBox(central);
+	countdownCombo_->addItem(QStringLiteral("Off"), 0);
+	for (int s = 1; s <= 10; ++s)
+		countdownCombo_->addItem(QStringLiteral("%1 s").arg(s), s);
+	countdownCombo_->setFixedWidth(kTimeComboW);
+	countdownCombo_->setToolTip(
+		QStringLiteral("A countdown before recording starts. Never part of it."));
+
+	// The composition guides switch sits with the countdown: both are about
+	// getting ready to record. Synced from the preset (syncIdleControls).
+	guidesCheck_ = new QCheckBox(QStringLiteral("Guides"), central);
+
+	std::vector<QLabel *> captureLabels, timeLabels;
+	auto behaviorRow = [&](QVBoxLayout *col, std::vector<QLabel *> &labels, const QString &text,
+			       QWidget *control) -> QWidget * {
 		auto *roww = new QWidget(central);
 		auto *h = new QHBoxLayout(roww);
 		h->setContentsMargins(0, 0, 0, 0);
 		h->setSpacing(8);
 		auto *l = fieldLabel(text);
 		l->setToolTip(control->toolTip()); // label mirrors the control's help
-		l->setFixedWidth(110);
 		l->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 		h->addWidget(l);
 		h->addWidget(control);
 		h->addStretch(1);
-		behaviorCol->addWidget(roww);
-		// Tracked so the Developer Panel can retune the label width + row spacing.
-		behaviorLabels_.push_back(l);
+		col->addWidget(roww);
+		labels.push_back(l);
+		// Tracked so the Developer Panel can retune the row spacing.
 		behaviorRows_.push_back(roww);
 		return roww;
 	};
-	behaviorRow(QStringLiteral("Focus app"), appCombo_);
-	behaviorRow(QStringLiteral("Webcam"), webcamCombo_);
-	idleGroup_ = behaviorRow(QStringLiteral("Pause when idle"), idleCombo_);
-	regionLeaveGroup_ = behaviorRow(QStringLiteral("Pause off-region"), regionLeaveCombo_);
+	behaviorRow(behaviorCol, captureLabels, QStringLiteral("Capture"), captureModeCombo_);
+	behaviorRow(behaviorCol, captureLabels, QStringLiteral("Display"), monitorCombo_);
+	behaviorRow(behaviorCol, captureLabels, QStringLiteral("Focus app"), appCombo_);
+	behaviorRow(behaviorCol, captureLabels, QStringLiteral("Webcam"), webcamCombo_);
 	behaviorCol->addStretch(1);
+	regionLeaveGroup_ =
+		behaviorRow(timeCol, timeLabels, QStringLiteral("Pause off-region"), regionLeaveCombo_);
+	behaviorRow(timeCol, timeLabels, QStringLiteral("Pause when idle"), idleCombo_);
+	behaviorRow(timeCol, timeLabels, QStringLiteral("Min length"), minLengthCombo_);
+	behaviorRow(timeCol, timeLabels, QStringLiteral("Countdown"), countdownCombo_);
+	// A checkbox names itself; the empty label keeps it under the dropdowns.
+	behaviorRow(timeCol, timeLabels, QString(), guidesCheck_);
+	timeCol->addStretch(1);
+	// A column's labels all take its longest one's width, so the dropdowns
+	// line up -- measured, so a larger system font widens them instead of
+	// clipping them, and a short column does not carry a long one's margin.
+	for (const std::vector<QLabel *> *labels : {&captureLabels, &timeLabels}) {
+		int w = 0;
+		for (QLabel *l : *labels)
+			w = std::max(w, l->sizeHint().width());
+		for (QLabel *l : *labels)
+			l->setFixedWidth(w);
+	}
+
+	const auto columnDivider = [central]() {
+		auto *line = new QFrame(central);
+		line->setFrameShape(QFrame::VLine);
+		line->setStyleSheet(QStringLiteral("color:#33373f;"));
+		return line;
+	};
 	middle->addLayout(behaviorCol);
+	middle->addWidget(columnDivider());
+	middle->addWidget(timeCol_);
+	timeColSep_ = columnDivider();
+	middle->addWidget(timeColSep_);
 
 	// Button label font — modest, not oversized.
 	QFont btnFont;
 	btnFont.setPointSize(btnFont.pointSize() + 2);
 	btnFont.setBold(true);
 
-	auto makeSep = [central]() {
-		auto *line = new QFrame(central);
-		line->setFrameShape(QFrame::VLine);
-		line->setStyleSheet(QStringLiteral("color:#33373f;"));
-		line->setFixedHeight(28);
-		return line;
-	};
+	auto *recordCol = new QVBoxLayout;
+	recordColLayout_ = recordCol;
+	recordCol->setSpacing(10);
 
 	auto *controls = new QHBoxLayout;
 	controlsLayout_ = controls;
 	controls->setSpacing(14);
 	controls->addStretch(1);
 
-	// Single Record/Stop toggle: Record when idle, Stop while recording.
+	// One button for the whole take: Record when idle, then Pause/Resume while
+	// recording (updateButtons). Stop has a button of its own beside it, so
+	// the big one is never the thing that ends a take by accident.
 	primaryButton_ = new QPushButton(QStringLiteral("\xE2\x97\x8F  Record"), central);
 	primaryButton_->setObjectName(QStringLiteral("primaryButton"));
 	primaryButton_->setMinimumSize(130, 46);
 	primaryButton_->setFont(btnFont);
-	primaryButton_->setToolTip(QStringLiteral("Start/stop recording (F9)"));
 	controls->addWidget(primaryButton_, 0, Qt::AlignVCenter);
 
-	// Pause/Resume: only shown while recording.
-	pauseButton_ = new QPushButton(QStringLiteral("\xE2\x8F\xB8  Pause"), central);
-	pauseButton_->setObjectName(QStringLiteral("pauseButton"));
-	pauseButton_->setMinimumSize(104, 46);
-	pauseButton_->setFont(btnFont);
-	// Always visible, enabled only while recording — the row never rearranges
-	// and there's no reserved hole where the button would be.
-	pauseButton_->setEnabled(false);
-	pauseButton_->setToolTip(QStringLiteral("Pause/resume the recording (F10)"));
-	controls->addWidget(pauseButton_, 0, Qt::AlignVCenter);
+	// Always visible, enabled only while there is something to stop — the row
+	// never rearranges and there's no reserved hole where the button would be.
+	stopButton_ = new QPushButton(QStringLiteral("Stop"), central);
+	stopButton_->setObjectName(QStringLiteral("stopButton"));
+	stopButton_->setIcon(uiIcon(Glyph::Stop, 14));
+	stopButton_->setMinimumSize(104, 46);
+	stopButton_->setFont(btnFont);
+	stopButton_->setEnabled(false);
+	controls->addWidget(stopButton_, 0, Qt::AlignVCenter);
+	controls->addStretch(1);
+	recordCol->addLayout(controls);
 
-	ctrlSeparator_ = makeSep();
-	controls->addWidget(ctrlSeparator_, 0, Qt::AlignVCenter);
+	auto *timerRow = new QHBoxLayout;
+	timerRowLayout_ = timerRow;
+	timerRow->setSpacing(14);
+	timerRow->addStretch(1);
 
 	// Elapsed time — monospaced, readable, but not oversized.
 	timerLabel_ = new QLabel(QStringLiteral("00:00:00"), central);
 	timerLabel_->setObjectName(QStringLiteral("timerLabel"));
-	timerLabel_->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+	timerLabel_->setAlignment(Qt::AlignCenter);
 	timerLabel_->setToolTip(QStringLiteral("Elapsed recording time (paused spans are not counted)."));
 	QFont timerFont(QStringLiteral("monospace"));
 	timerFont.setStyleHint(QFont::Monospace);
 	timerFont.setPointSize(btnFont.pointSize() + 6);
 	timerLabel_->setFont(timerFont);
-	controls->addWidget(timerLabel_, 0, Qt::AlignVCenter);
+	timerRow->addWidget(timerLabel_, 0, Qt::AlignVCenter);
 
-	// Inline live webcam preview, shown only when the active preset records a
-	// webcam. The enable toggle + device picker live in toolbar row 2.
+	// Inline live webcam preview beside the timer, shown only when the active
+	// preset records a webcam. The device picker is the Webcam row.
 	webcamBox_ = new QWidget(central);
 	auto *wcLayout = new QHBoxLayout(webcamBox_);
 	wcLayout->setContentsMargins(0, 0, 0, 0);
@@ -482,10 +520,12 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	webcamWarn_->setWordWrap(true);
 	wcLayout->addWidget(webcamWarn_, 1);
 	webcamBox_->setVisible(false);
-	controls->addWidget(webcamBox_);
+	timerRow->addWidget(webcamBox_);
+	timerRow->addStretch(1);
+	recordCol->addLayout(timerRow);
+	recordCol->addStretch(1);
 
-	controls->addStretch(1);
-	middle->addLayout(controls, 1); // the record column takes the remaining width
+	middle->addLayout(recordCol, 1); // the record column takes the remaining width
 	root->addLayout(middle);
 
 	root->addStretch(3);
@@ -645,8 +685,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	resize(940, 470);
 
 	// ---- Wiring ---------------------------------------------------------
-	connect(primaryButton_, &QPushButton::clicked, this, &MainWindow::onPrimaryButton);
-	connect(pauseButton_, &QPushButton::clicked, this, &MainWindow::onPauseButton);
+	connect(primaryButton_, &QPushButton::clicked, this, &MainWindow::onRecordPauseButton);
+	connect(stopButton_, &QPushButton::clicked, this, &MainWindow::onStopButton);
 
 	// Recording hotkeys. The window-scoped QShortcuts are the FALLBACK; on
 	// Windows the same keys are registered system-wide (rebindHotkeys), which
@@ -714,6 +754,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(regionLeaveCombo_, &QComboBox::currentIndexChanged, this,
 		&MainWindow::onRegionLeaveSettingChanged);
 	connect(countdownCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onCountdownSettingChanged);
+	connect(minLengthCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onMinLengthSettingChanged);
 	connect(presetCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onPresetChanged);
 	connect(presetCombo_, &QComboBox::customContextMenuRequested, this, &MainWindow::showPresetMenu);
 	// Single click only selects; double-click opens the recording.
@@ -1111,23 +1152,23 @@ void MainWindow::setLayoutParams(const MainLayoutParams &p)
 		row1Layout_->setSpacing(p.row1Spacing);
 	if (middleLayout_)
 		middleLayout_->setSpacing(p.middleSpacing);
-	if (behaviorColLayout_)
-		behaviorColLayout_->setSpacing(p.behaviorColSpacing);
-	if (controlsLayout_)
-		controlsLayout_->setSpacing(p.controlsSpacing);
+	for (QVBoxLayout *col : {behaviorColLayout_, timeColLayout_, recordColLayout_}) {
+		if (col)
+			col->setSpacing(p.behaviorColSpacing);
+	}
+	for (QHBoxLayout *row : {controlsLayout_, timerRowLayout_}) {
+		if (row)
+			row->setSpacing(p.controlsSpacing);
+	}
 	if (presetCombo_)
 		presetCombo_->setMinimumWidth(p.presetComboW);
-	if (monitorCombo_) {
-		monitorCombo_->setMinimumWidth(p.monitorComboMinW);
-		monitorCombo_->setMaximumWidth(p.monitorComboMaxW);
-	}
-	for (QComboBox *c : {appCombo_, webcamCombo_, idleCombo_, regionLeaveCombo_}) {
+	for (QComboBox *c : {captureModeCombo_, monitorCombo_, appCombo_, webcamCombo_}) {
 		if (c)
 			c->setFixedWidth(p.behaviorComboW);
 	}
-	for (QLabel *l : behaviorLabels_) {
-		if (l)
-			l->setFixedWidth(p.behaviorLabelW);
+	for (QComboBox *c : {regionLeaveCombo_, idleCombo_, minLengthCombo_, countdownCombo_}) {
+		if (c)
+			c->setFixedWidth(p.timeComboW);
 	}
 	for (QWidget *row : behaviorRows_) {
 		if (row && row->layout())
@@ -1135,13 +1176,16 @@ void MainWindow::setLayoutParams(const MainLayoutParams &p)
 	}
 	if (primaryButton_)
 		primaryButton_->setMinimumSize(p.recordBtnW, p.recordBtnH);
-	if (pauseButton_)
-		pauseButton_->setMinimumSize(p.pauseBtnW, p.pauseBtnH);
-	if (ctrlSeparator_)
-		ctrlSeparator_->setFixedHeight(p.separatorH);
+	if (stopButton_)
+		stopButton_->setMinimumSize(p.stopBtnW, p.stopBtnH);
 	if (webcamPreview_)
 		webcamPreview_->setFixedSize(p.webcamPreviewW, p.webcamPreviewH);
 	applyStripMetrics();
+	// New widths can change whether all three columns fit. They reach the
+	// layouts as posted layout requests, so those go first and the
+	// measurement is of the new sizes.
+	QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+	applyResponsiveLayout(width());
 }
 
 void MainWindow::refreshDriveLink()
@@ -1177,8 +1221,8 @@ void MainWindow::applyDarkTheme()
 		QPushButton#primaryButton:hover { background: #f05a5f; }
 		QPushButton#primaryButton:focus { border: 1px solid #ffd9da; }
 		QPushButton#primaryButton:disabled { background: #5a3a3b; color: #9a7a7b; }
-		QPushButton#pauseButton { border-radius: 10px; }
-		QPushButton#pauseButton:disabled { background: #24262b; color: #565b63; border: 1px solid #2b2f35; }
+		QPushButton#stopButton { border-radius: 10px; }
+		QPushButton#stopButton:disabled { background: #24262b; color: #565b63; border: 1px solid #2b2f35; }
 		QComboBox, QSpinBox { background: #2b2d31; border: 1px solid #3a3d42; border-radius: 6px; padding: 4px 8px; }
 		QComboBox:focus, QSpinBox:focus { border: 1px solid #00aeef; }
 		QListWidget { background: #202225; border: 1px solid #303338; border-radius: 8px; }
@@ -1196,24 +1240,36 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 void MainWindow::applyResponsiveLayout(int width)
 {
 	// Progressive disclosure: hide the least essential sections first as the
-	// window narrows, so controls never overlap and the record button, timer
-	// and pause always stay visible and aligned.
+	// window narrows, so controls never overlap and the record buttons and
+	// timer always stay visible and aligned.
 	//   >= 880 : everything
-	//   >= 700 : hide the recent-recordings gallery
-	//   <  640 : also hide the countdown picker and the idle auto-pause group
+	//   <  880 : hide the recent-recordings gallery
+	//   too narrow for all three columns (timeColumnNeedW, about 840):
+	//            also the time column (pauses, minimum length, countdown,
+	//            guides) -- each is in the preset editor too, and the
+	//            guides have their shortcut
 	// The status badge lives in the bottom status bar and always stays visible.
 	if (recentSection_)
 		recentSection_->setVisible(width >= 880);
-	if (countdownGroup_)
-		countdownGroup_->setVisible(width >= 700);
-	if (idleGroup_)
-		idleGroup_->setVisible(width >= 640);
-	// This row has two reasons to be hidden — the window is narrow, or we are
-	// not in Region mode — and they arrive from different places. Record the
-	// width verdict and let one function combine them, so whichever fires last
-	// cannot undo the other.
-	regionLeaveNarrow_ = width < 640;
-	updateRegionLeaveVisibility();
+	if (timeCol_ && timeColSep_ && middleLayout_ && rootLayout_) {
+		const bool timeColumn = width >= timeColumnNeedW();
+		timeCol_->setVisible(timeColumn);
+		timeColSep_->setVisible(timeColumn);
+	}
+}
+
+int MainWindow::timeColumnNeedW() const
+{
+	// The narrowest the window can be with all three columns showing. The
+	// middle layout's minimum leaves out a hidden column, so it is added back
+	// then -- the answer must not depend on whether it is showing right now,
+	// or the column would flicker at the edge.
+	int need = middleLayout_->minimumSize().width();
+	if (timeCol_->isHidden())
+		need += timeCol_->minimumSizeHint().width() + timeColSep_->sizeHint().width() +
+			2 * middleLayout_->spacing();
+	const QMargins m = rootLayout_->contentsMargins();
+	return need + m.left() + m.right();
 }
 
 const Preset &MainWindow::activePreset() const
@@ -1886,11 +1942,12 @@ void MainWindow::rebindHotkeys()
 	blog(LOG_INFO, "[harpia] hotkeys: record=%s (%s)  pause=%s (%s)",
 	     qUtf8Printable(rec.toString()), recGlobal ? "global" : "window-only",
 	     qUtf8Printable(pause.toString()), pauseGlobal ? "global" : "window-only");
-	if (primaryButton_)
-		primaryButton_->setToolTip(QStringLiteral("Start/stop recording (%1%2)")
-						   .arg(rec.toString())
-						   .arg(recGlobal ? QString()
-								  : QStringLiteral(", when Harpia is focused")));
+	// The buttons name the keys in their tooltips; updateButtons re-applies
+	// them on its next pass.
+	const QString focusedOnly = QStringLiteral(", when Harpia is focused");
+	recordKeyHint_ = rec.toString() + (recGlobal ? QString() : focusedOnly);
+	pauseKeyHint_ = pause.toString() + (pauseGlobal ? QString() : focusedOnly);
+	lastPrimaryUiState_ = -1;
 }
 
 void MainWindow::finalizeAfterStop()
@@ -2138,6 +2195,27 @@ void MainWindow::logRecordingStart(const Preset &p, const QString &recordedPath,
 	     (appCaptureEnabled_ && !appWindowValue_.isEmpty()) ? "on" : "off",
 	     p.showScreenBorder ? "on" : "off");
 	blog(LOG_INFO, "========================================");
+}
+
+void MainWindow::onRecordPauseButton()
+{
+	if (recorder_.isRecording())
+		onPauseButton();
+	else
+		onPrimaryButton(); // starts: the readiness gate, disk check and countdown
+}
+
+void MainWindow::onStopButton()
+{
+	if (countingDown_ && countdownOverlay_) {
+		// The same as Esc on the countdown: nothing has started yet.
+		countdownOverlay_->stop();
+		countingDown_ = false;
+		updateButtons();
+		return;
+	}
+	if (recorder_.isRecording())
+		onPrimaryButton(); // stops (and ignores a click mid-transition)
 }
 
 void MainWindow::onPauseButton()
@@ -3927,8 +4005,7 @@ void MainWindow::onRegionLeaveSettingChanged()
 void MainWindow::updateRegionLeaveVisibility()
 {
 	if (regionLeaveGroup_)
-		regionLeaveGroup_->setVisible(captureMode_ == CaptureMode::Region &&
-					      (!regionLeaveNarrow_));
+		regionLeaveGroup_->setVisible(captureMode_ == CaptureMode::Region);
 	// Follow Mouse suspends the leave-pause (the region chases the pointer, so
 	// "the pointer left" stops meaning anything). The WHOLE row disables --
 	// label and combo together, so it reads as a deliberate statement rather
@@ -3953,6 +4030,18 @@ void MainWindow::onCountdownSettingChanged()
 	Preset updated = *cur;
 	updated.countdownSeconds = countdownCombo_->currentData().toInt();
 	if (updated.countdownSeconds != cur->countdownSeconds)
+		presets_.upsert(updated);
+}
+
+void MainWindow::onMinLengthSettingChanged()
+{
+	// Persist onto the active preset; startRecording reads it per take.
+	const Preset *cur = presets_.find(activePresetId_);
+	if (!cur)
+		return;
+	Preset updated = *cur;
+	updated.minRecordingSeconds = minLengthCombo_->currentData().toInt();
+	if (updated.minRecordingSeconds != cur->minRecordingSeconds)
 		presets_.upsert(updated);
 }
 
@@ -4073,6 +4162,16 @@ void MainWindow::syncIdleControls()
 	QSignalBlocker b3(countdownCombo_);
 	const int ci = countdownCombo_->findData(p.countdownSeconds);
 	countdownCombo_->setCurrentIndex(ci >= 0 ? ci : 0);
+
+	// The preset editor takes any length up to an hour; one the list does not
+	// have is added rather than shown as something it is not.
+	QSignalBlocker b5(minLengthCombo_);
+	int mi = minLengthCombo_->findData(p.minRecordingSeconds);
+	if (mi < 0 && p.minRecordingSeconds > 0) {
+		minLengthCombo_->addItem(durationLabel(p.minRecordingSeconds), p.minRecordingSeconds);
+		mi = minLengthCombo_->count() - 1;
+	}
+	minLengthCombo_->setCurrentIndex(mi >= 0 ? mi : 0);
 
 	if (guidesCheck_) {
 		QSignalBlocker b4(guidesCheck_);
@@ -4466,8 +4565,8 @@ void MainWindow::updateButtons()
 	if (regionTool_)
 		regionTool_->setPaused(recording && paused);
 
-	// Pause-dependent styling (pause button + monitor border color) runs every
-	// tick — only re-apply the stylesheets/colors when the state actually flips.
+	// Pause-dependent styling (the monitor border colour) runs every tick —
+	// only re-apply the colours when the state actually flips.
 	const int pauseUiState = !recording ? 0 : (paused ? 2 : 1);
 	const bool pauseUiChanged = (pauseUiState != lastPauseUiState_);
 	lastPauseUiState_ = pauseUiState;
@@ -4497,20 +4596,31 @@ void MainWindow::updateButtons()
 	// setIcon never compares, so calling it four times a second repaints and
 	// re-lays-out a button that looks exactly the same. The transitional
 	// states still update per tick -- their text IS the animation.
+	const bool canPause = recording && recorder_.canPause();
 	const int primaryState = countingDown_ ? 0
 				 : starting_  ? 1
 				 : stopping_  ? 2
-				 : recording  ? 3
+				 : recording  ? (!canPause ? 6 : paused ? 7 : 3)
 					      : (recordingBlocked_ ? 5 : 4);
 	const bool primaryChanged = primaryState != lastPrimaryUiState_;
 	lastPrimaryUiState_ = primaryState;
 
-	// Single Record/Stop toggle, with transitional Starting…/Stopping… states.
+	// Its own colour while recording -- amber to pause, green to resume --
+	// and the theme's red Record look otherwise.
+	const auto primaryLook = [this](const QString &css) {
+		if (primaryButton_->styleSheet() != css)
+			primaryButton_->setStyleSheet(css);
+	};
+
+	// One button for the take: Record, then Pause/Resume, with the
+	// transitional Starting…/Stopping… states in between. Stop is beside it.
 	if (countingDown_) {
+		primaryLook(QString());
 		primaryButton_->setText(QStringLiteral("Starting in %1…").arg(countdownRemaining_));
 		primaryButton_->setEnabled(false);
-		primaryButton_->setToolTip(QStringLiteral("Press Esc on the countdown to cancel"));
+		primaryButton_->setToolTip(QStringLiteral("Stop or Esc on the countdown calls it off"));
 	} else if (starting_) {
+		primaryLook(QString());
 		primaryButton_->setText(QStringLiteral("%1  Starting…").arg(spin));
 		primaryButton_->setEnabled(false);
 		primaryButton_->setToolTip(QString());
@@ -4518,6 +4628,7 @@ void MainWindow::updateButtons()
 		// "Encoding" rather than "Stopping" once the tap has closed: on a long
 		// Audio Only take this is the part that takes a moment, and a button
 		// that says Stopping for ten seconds reads as a hang.
+		primaryLook(QString());
 		primaryButton_->setText(recorder_.isFinishing()
 						? QStringLiteral("%1  Encoding…").arg(spin)
 						: QStringLiteral("%1  Stopping…").arg(spin));
@@ -4525,56 +4636,48 @@ void MainWindow::updateButtons()
 		primaryButton_->setToolTip(QString());
 	} else if (recording) {
 		if (primaryChanged) {
-			primaryButton_->setText(QStringLiteral("Stop"));
-			primaryButton_->setIcon(uiIcon(Glyph::Stop, 14));
-			primaryButton_->setEnabled(true);
-			primaryButton_->setToolTip(QString());
+			// GIF's ffmpeg output cannot pause, and an enabled button that
+			// silently does nothing is worse than a disabled one that says why.
+			primaryButton_->setText(paused ? QStringLiteral("Resume") : QStringLiteral("Pause"));
+			primaryButton_->setIcon(uiIcon(paused ? Glyph::Play : Glyph::Pause, 14));
+			primaryButton_->setEnabled(canPause);
+			if (!canPause) {
+				primaryLook(QStringLiteral("background:#24262b;color:#565b63;"
+							   "border:1px solid #2b2f35;border-radius:10px;"));
+				primaryButton_->setToolTip(
+					QStringLiteral("This format can't pause (GIF records straight through)"));
+			} else {
+				primaryLook(paused ? QStringLiteral("background:#3fb950;border:none;color:white;"
+								    "border-radius:10px;")
+						   : QStringLiteral("background:#d29922;border:none;color:white;"
+								    "border-radius:10px;"));
+				primaryButton_->setToolTip(
+					QStringLiteral("%1 the recording (%2)")
+						.arg(paused ? QStringLiteral("Resume") : QStringLiteral("Pause"),
+						     pauseKeyHint_));
+			}
 		}
 	} else if (primaryChanged) {
+		primaryLook(QString());
 		primaryButton_->setText(QStringLiteral("Record"));
 		primaryButton_->setIcon(uiIcon(Glyph::Record, 14, QColor(0xe5, 0x48, 0x4d)));
 		primaryButton_->setEnabled(!recordingBlocked_);
 		primaryButton_->setToolTip(recordingBlocked_
 						   ? QStringLiteral("Resolve the warnings above before recording")
-						   : QString());
+						   : QStringLiteral("Start recording (%1)").arg(recordKeyHint_));
 	}
 
-	// Pause/Resume: always visible; enabled only while actively recording AND
-	// the output can actually pause -- GIF's ffmpeg output cannot, and an
-	// enabled button that silently does nothing is worse than a disabled one
-	// that says why.
+	// Stop: always visible, enabled while there is something to stop -- the
+	// take, or the countdown before it.
+	const bool stoppable = countingDown_ || (recording && !starting_ && !stopping_);
+	stopButton_->setEnabled(stoppable);
+	const QString stopTip = countingDown_ ? QStringLiteral("Call off the countdown")
+					      : QStringLiteral("Stop recording (%1)").arg(recordKeyHint_);
+	if (stopButton_->toolTip() != stopTip)
+		stopButton_->setToolTip(stopTip);
+
 	// Whose sound PC Audio is: chosen between recordings, not during one.
 	audioPanel_->setPcAudioFromEnabled(!recording && !transitioning);
-
-	const bool pausable = recording && !stopping_ && recorder_.canPause();
-	pauseButton_->setEnabled(pausable);
-	if (recording && !recorder_.canPause())
-		pauseButton_->setToolTip(QStringLiteral("This format can't pause (GIF records straight "
-							"through)"));
-	else if (primaryChanged || pauseUiChanged)
-		pauseButton_->setToolTip(QStringLiteral("Pause/resume the recording (F10)"));
-	if (stopping_ && !pauseButton_->styleSheet().isEmpty()) {
-		pauseButton_->setText(QStringLiteral("Pause"));
-		pauseButton_->setIcon(uiIcon(Glyph::Pause, 14));
-		pauseButton_->setStyleSheet(QString());
-	} else if (recording && pauseUiChanged) {
-		if (paused) {
-			pauseButton_->setText(QStringLiteral("Resume"));
-		pauseButton_->setIcon(uiIcon(Glyph::Play, 14));
-			pauseButton_->setStyleSheet(QStringLiteral(
-				"background:#3fb950;border:none;color:white;border-radius:10px;"));
-		} else {
-			pauseButton_->setText(QStringLiteral("Pause"));
-		pauseButton_->setIcon(uiIcon(Glyph::Pause, 14));
-			pauseButton_->setStyleSheet(QStringLiteral(
-				"background:#d29922;border:none;color:white;border-radius:10px;"));
-		}
-	} else if (!recording && !pauseButton_->styleSheet().isEmpty()) {
-		// Back to the idle look (theme's default disabled button).
-		pauseButton_->setText(QStringLiteral("Pause"));
-		pauseButton_->setIcon(uiIcon(Glyph::Pause, 14));
-		pauseButton_->setStyleSheet(QString());
-	}
 
 	const bool locked = recording || transitioning;
 	presetCombo_->setEnabled(!locked);
@@ -4602,6 +4705,8 @@ void MainWindow::updateButtons()
 	idleCombo_->setEnabled(!locked);
 	regionLeaveCombo_->setEnabled(!locked);
 	countdownCombo_->setEnabled(!locked);
+	// Read once when the take starts, so a change mid-take would only mislead.
+	minLengthCombo_->setEnabled(!locked);
 
 	updateFloatingControls();
 	updateStatusChip();

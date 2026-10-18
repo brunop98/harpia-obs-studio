@@ -95,8 +95,12 @@ public:
 	friend class MainDevPanel;
 
 private slots:
-	void onPrimaryButton(); // Record/Stop toggle
-	void onPauseButton();   // pause/resume while recording
+	void onPrimaryButton(); // start/stop toggle: F9, the floating HUD, the region frame
+	void onPauseButton();   // pause/resume while recording (F10)
+	// The big button: Record when idle, then Pause/Resume for the take.
+	void onRecordPauseButton();
+	// Stop beside it: ends the take, or calls off the countdown before one.
+	void onStopButton();
 	void onNewPreset();
 	void showPresetMenu(const QPoint &pos); // right-click combo: edit/delete
 	// Delete, from the button or the combo's menu: asks first (saying what
@@ -121,6 +125,7 @@ private slots:
 	void onIdleSettingChanged();
 	void onRegionLeaveSettingChanged();
 	void onCountdownSettingChanged();
+	void onMinLengthSettingChanged();
 	void onAudioChanged();
 	// "PC audio from": whose sound PC Audio records (one choice, every preset).
 	void choosePcAudioApps();
@@ -304,7 +309,6 @@ private:
 	// Region-mode-only auto-stop. See RegionWatch.
 	QComboBox *regionLeaveCombo_ = nullptr;
 	QWidget *regionLeaveGroup_ = nullptr;
-	bool regionLeaveNarrow_ = false; // the window is too narrow for this row
 	RegionWatch regionWatch_;
 	// Screen geometry resolved once when the watch arms; see tickRegionWatch.
 	bool regionWatchArmed_ = false;
@@ -334,6 +338,10 @@ private:
 	QShortcut *recordShortcut_ = nullptr;
 	QShortcut *pauseShortcut_ = nullptr;
 	void rebindHotkeys();
+	// The keys as the buttons' tooltips name them ("F9", or "F9, when Harpia
+	// is focused"), kept by rebindHotkeys for updateButtons.
+	QString recordKeyHint_ = QStringLiteral("F9");
+	QString pauseKeyHint_ = QStringLiteral("F10");
 	// Release every global hotkey while a shortcut is being typed, and take
 	// them back afterwards. A registered key never reaches the focused widget,
 	// so without this a key field cannot be given any key already in use --
@@ -491,18 +499,18 @@ private:
 	void hideZoomBorder();
 	bool zoomBorderShown_ = false;
 	void syncZoom(); // arm/disarm to match the current recording state
-	QWidget *idleGroup_ = nullptr;   // label + combo, hidden when very narrow
 	QComboBox *countdownCombo_ = nullptr;
-	QWidget *countdownGroup_ = nullptr; // label + combo, hidden when narrow
+	// The preset's minimum length, on the window like the countdown.
+	QComboBox *minLengthCombo_ = nullptr;
 
-	// Toolbar row 2: single-application capture + webcam device. Dropdown-only —
+	// The capture column: single-application capture + webcam device. Dropdown-only —
 	// each combo's first item means "off", so nothing toggles/jumps.
 	QComboBox *appCombo_ = nullptr;
 	void reloadAppCombo(); // refresh the window list (called as the popup opens)
 
-	// Center controls
-	QPushButton *primaryButton_ = nullptr; // Record/Stop toggle
-	QPushButton *pauseButton_ = nullptr;
+	// The record column
+	QPushButton *primaryButton_ = nullptr; // Record, then Pause/Resume
+	QPushButton *stopButton_ = nullptr;
 	QLabel *timerLabel_ = nullptr;
 
 	// Inline webcam controls (shown only when the active preset uses a webcam)
@@ -566,11 +574,15 @@ private:
 	QVBoxLayout *rootLayout_ = nullptr;
 	QHBoxLayout *row1Layout_ = nullptr;
 	QHBoxLayout *middleLayout_ = nullptr;
-	QVBoxLayout *behaviorColLayout_ = nullptr;
-	QHBoxLayout *controlsLayout_ = nullptr;
-	QFrame *ctrlSeparator_ = nullptr;
+	QVBoxLayout *behaviorColLayout_ = nullptr; // column 1: what to record
+	QWidget *timeCol_ = nullptr;               // column 2: when; goes when narrow
+	QVBoxLayout *timeColLayout_ = nullptr;
+	QFrame *timeColSep_ = nullptr;             // the divider after it
+	int timeColumnNeedW() const;               // window width that fits all three
+	QVBoxLayout *recordColLayout_ = nullptr;   // column 3: the buttons + timer
+	QHBoxLayout *controlsLayout_ = nullptr;    // Record/Pause + Stop
+	QHBoxLayout *timerRowLayout_ = nullptr;    // timer + webcam preview
 	std::vector<QWidget *> behaviorRows_;
-	std::vector<QLabel *> behaviorLabels_;
 	MainDevPanel *devPanel_ = nullptr;
 
 	QTimer *stateTimer_ = nullptr;

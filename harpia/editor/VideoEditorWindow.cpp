@@ -23,6 +23,7 @@
 #include "TimeText.hpp"
 
 #include "AudioRecorder.hpp"
+#include "SlipDialog.hpp"
 #include "SystemAudioCapture.hpp"
 #include "WavSilence.hpp"
 #include "ClipExporter.hpp"
@@ -697,6 +698,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(timelineView_, &TimelineView::soundRulesRequested, this, &VideoEditorWindow::showSoundsTab);
 	connect(timelineView_, &TimelineView::subtitlesRequested, this, &VideoEditorWindow::openSubtitles);
 	connect(timelineView_, &TimelineView::respeakRequested, this, &VideoEditorWindow::respeakSentence);
+	connect(timelineView_, &TimelineView::slipRequested, this, &VideoEditorWindow::openSlip);
 	// Fit to selection (Text to speech) follows what is selected.
 	connect(timelineView_, &TimelineView::selectionChanged, this, [this]() { updateTtsFitTarget(); });
 	connect(timelineView_, &TimelineView::freezeSoundsRequested, this, &VideoEditorWindow::freezeSounds);
@@ -8056,7 +8058,7 @@ void VideoEditorWindow::buildRandomClipSection(QVBoxLayout *clipOuter)
 	v->setSpacing(5);
 	auto *intro = new QLabel(QStringLiteral("Each clip is one version of the video (Export \u2192 Variations). "
 						"They share this slot's place, length and look. Show one, then "
-						"right-click the clip \u203A Slip to pick its moment."),
+						"right-click the clip \u203A Slip\u2026 to pick its moment."),
 				 randomClipBox_);
 	intro->setWordWrap(true);
 	intro->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
@@ -8160,7 +8162,7 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 		pick->setText(full.size() > 38 ? full.left(36) + QStringLiteral("\u2026") : full);
 		pick->setChecked(k == c.clipShown);
 		pick->setToolTip(k == c.clipShown
-					 ? full + QStringLiteral("\nShowing now. Right-click the clip \u203A Slip to pick "
+					 ? full + QStringLiteral("\nShowing now. Right-click the clip \u203A Slip\u2026 to pick "
 								 "its moment.")
 					 : full + QStringLiteral("\nShow this clip in the slot."));
 		QPushButton *del = randomClipDels_[k];
@@ -13117,6 +13119,53 @@ void VideoEditorWindow::startPlayback()
 	seeker_->seekTo(playAnchorMs_);
 	playClock_.restart();
 	playTimer_->start();
+}
+
+void VideoEditorWindow::openSlip(int track, int clip)
+{
+	if (!timelineView_ || !timelineView_->canSlip(track, clip))
+		return;
+	const TimelineModel &m = timelineView_->model();
+	const TlClip c = m.tracks[track].clips[clip];
+	const EditorSource *s = sourceById(c.sourceId);
+	if (!s)
+		return;
+	// The window plays the clip on its own; the timeline must not play under it.
+	if (playing_)
+		stopPlayback();
+
+	SlipDialog::Input in;
+	in.clip = c;
+	for (const auto &lp : timelineView_->slipPartners(track, clip))
+		in.partners.append(m.tracks[lp.first].clips[lp.second]);
+	in.soundOnly = m.tracks[track].kind == TlTrack::Kind::Audio;
+	in.title = s->name.isEmpty() ? QFileInfo(s->path).fileName() : s->name;
+	in.decodePath = playbackPath_.value(c.sourceId, s->path); // the proxy, where there is one
+	in.sourceSize = QSize(s->width, s->height);
+	in.sourceMs = timelineView_->sourceDurationMs(c.sourceId) > 0 ? timelineView_->sourceDurationMs(c.sourceId)
+								       : s->durationMs;
+	timelineView_->slipRange(track, clip, &in.loMs, &in.hiMs);
+	in.thumbs = timelineView_->sourceThumbs(c.sourceId);
+	if (in.soundOnly && in.clip.peaks.isEmpty())
+		in.clip.peaks = randomClipPeaks(s->path); // the waveform, for a sound
+	in.fps = timelineFps();
+	// The same mix the timeline plays, from a snapshot of the files: the
+	// window mixes off the GUI thread and must not read editor state.
+	QMap<int, QString> paths;
+	for (const EditorSource &es : sources_)
+		paths.insert(es.id, es.path);
+	in.mixAudio = [paths](const TimelineModel &mm) {
+		return TimelineAudio::mixToBuffer(mm, [&paths](int id) { return paths.value(id); });
+	};
+
+	SlipDialog dlg(in, this);
+	if (dlg.exec() != QDialog::Accepted || dlg.deltaMs() == 0)
+		return;
+	const qint64 moved = timelineView_->applySlip(track, clip, dlg.deltaMs());
+	if (moved != 0 && infoLabel_)
+		infoLabel_->setText((moved > 0 ? QStringLiteral("Slipped: the clip now shows footage %1 s later.")
+					       : QStringLiteral("Slipped: the clip now shows footage %1 s earlier."))
+					    .arg(std::abs(moved) / 1000.0, 0, 'f', 1));
 }
 
 void VideoEditorWindow::stopPlayback()

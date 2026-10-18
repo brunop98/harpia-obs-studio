@@ -1,20 +1,18 @@
-// Slip: a clip keeps its place and its length, and dragging it moves the
-// footage inside -- a different moment of the same video.
+// Slip: a clip keeps its place and its length, and shows another moment of the
+// same footage. The timeline's half of it -- the Slip window itself is
+// slipwindow_test.
 //
 //   * Only the source window moves: the clip's position, its length and every
 //     other clip stay exactly where they were.
-//   * The footage follows the pointer (drag left: later footage), and stops at
-//     either end of the source rather than running past it.
+//   * It stops at either end of the source rather than running past it.
 //   * Its detached sound (linked, same file) slips with it; a linked caption
 //     does not.
-//   * The preview follows the drag; one drag is one undo step.
+//   * One slip is one undo step; a slip of nothing is none.
 //   * Slip is offered where it means something: a media clip with footage to
 //     spare, on an unlocked lane -- and says why where it does not.
-//   * Esc, Enter or a click elsewhere ends it; so does a replaced model.
 #include "editor/timeline/TimelineView.hpp"
 
 #include <QApplication>
-#include <QKeyEvent>
 #include <QMouseEvent>
 
 #include <cstdio>
@@ -53,11 +51,6 @@ static void drag(QWidget *w, QPoint from, int dx)
 	moveTo(w, from + QPoint(dx / 2, 0));
 	moveTo(w, from + QPoint(dx, 0));
 	release(w, from + QPoint(dx, 0));
-}
-static void key(QWidget *w, int k)
-{
-	QKeyEvent e(QEvent::KeyPress, k, Qt::NoModifier);
-	QApplication::sendEvent(w, &e);
 }
 
 static TlClip media(int source, qint64 out, qint64 from, qint64 to, int link = 0)
@@ -143,64 +136,50 @@ int main(int argc, char **argv)
 		   "nor a narration, whose captions are timed to its words");
 	}
 
+	std::printf("\n-- how far, and with what --\n");
+	{
+		const QVector<QPair<int, int>> partners = v.slipPartners(V, 0);
+		ok(partners.size() == 1 && partners[0] == qMakePair(A, 0),
+		   "its detached sound slips with it; the linked caption does not");
+		qint64 lo = 0, hi = 0;
+		v.slipRange(V, 0, &lo, &hi);
+		ok(lo == -5000 && hi == 20000, "back to the first frame, on to the last (5-10 s of 30 s)");
+		TimelineModel n = m;
+		n.tracks[A].clips[0].srcStartMs = 4000; // its sound starts a second earlier
+		n.tracks[A].clips[0].srcEndMs = 9000;
+		TimelineView w;
+		w.setModel(n);
+		w.setSourceThumbs(7, {}, 30000);
+		w.slipRange(V, 0, &lo, &hi);
+		ok(lo == -4000 && hi == 20000, "the tighter of the two limits is the slip's");
+	}
+
 	std::printf("\n-- slipping --\n");
 	{
-		v.beginSlip(V, 0);
-		ok(v.slipping() && v.selectedTrack() == V, "Slip is on, with the clip selected");
-		const QRect r = v.clipRectForTest(V, 0);
-		const double msPerPx = 5000.0 / r.width();
+		commits = 0;
 		scrubs = 0;
-		drag(&v, r.center(), -100);
+		ok(v.applySlip(V, 0, 3000) == 3000, "slipped 3 s");
 		const TlClip c = clip(V, 0);
-		std::printf("     source now %lld-%lld ms (%.1f ms per px)\n", (long long)c.srcStartMs,
-			    (long long)c.srcEndMs, msPerPx);
-		ok(c.srcStartMs > 5000 && std::abs(double(c.srcStartMs - 5000) - 100 * msPerPx) <= msPerPx + 1,
-		   "dragged left: later footage, as far as the pointer went");
+		ok(c.srcStartMs == 8000 && c.srcEndMs == 13000, "later footage, as far as asked");
 		ok(c.srcLenMs() == 5000 && c.outStartMs == 2000, "the clip's place and length are unchanged");
 		const TlClip n = clip(V, 1);
 		ok(n.outStartMs == 7000 && n.srcStartMs == 0 && n.srcEndMs == 3000, "the neighbour is untouched");
-		ok(clip(A, 0).srcStartMs == c.srcStartMs && clip(A, 0).srcEndMs == c.srcEndMs &&
-			   clip(A, 0).outStartMs == 2000,
+		ok(clip(A, 0).srcStartMs == 8000 && clip(A, 0).srcEndMs == 13000 && clip(A, 0).outStartMs == 2000,
 		   "its sound slipped with it: still in sync");
 		ok(clip(T, 0).outStartMs == 2000 && clip(T, 0).text.text == QStringLiteral("hello"),
 		   "the linked caption stayed as it was");
-		ok(commits == 1, "one drag, one undo step");
-		ok(scrubs > 0, "the preview followed the drag");
-		ok(v.slipping(), "and Slip stays on for the next drag");
+		ok(commits == 1, "one slip, one undo step");
+		ok(scrubs > 0, "the preview follows it");
 
-		drag(&v, v.clipRectForTest(V, 0).center(), 900);
-		ok(clip(V, 0).srcStartMs == 0 && clip(V, 0).srcLenMs() == 5000,
-		   "dragged far right: stops at the first frame");
-		drag(&v, v.clipRectForTest(V, 0).center(), -1000);
-		drag(&v, v.clipRectForTest(V, 0).center(), -1000);
-		drag(&v, v.clipRectForTest(V, 0).center(), -1000);
-		ok(clip(V, 0).srcEndMs == 30000 && clip(V, 0).srcLenMs() == 5000,
-		   "dragged far left: stops at the last frame");
+		ok(v.applySlip(V, 0, -99999) == -8000 && clip(V, 0).srcStartMs == 0 && clip(V, 0).srcLenMs() == 5000,
+		   "far back: stops at the first frame");
+		ok(v.applySlip(V, 0, 99999) == 25000 && clip(V, 0).srcEndMs == 30000 && clip(V, 0).srcLenMs() == 5000,
+		   "far on: stops at the last frame");
+		commits = 0;
+		ok(v.applySlip(V, 0, 500) == 0 && commits == 0, "at the end already: nothing, and no undo step");
 		ok(clip(V, 0).outStartMs == 2000 && clip(V, 1).outStartMs == 7000, "and nothing moved along the timeline");
-	}
-
-	std::printf("\n-- ending it --\n");
-	{
-		key(&v, Qt::Key_Escape);
-		ok(!v.slipping(), "Esc ends Slip");
-		const qint64 before = clip(V, 0).srcStartMs;
-		const QRect r = v.clipRectForTest(V, 0);
-		drag(&v, r.center(), -60);
-		ok(clip(V, 0).srcStartMs == before, "after which a drag moves the clip again, not its footage");
-
-		v.setModel(m);
-		v.setSourceThumbs(7, {}, 30000);
-		v.beginSlip(V, 0);
-		key(&v, Qt::Key_Return);
-		ok(!v.slipping(), "Enter ends it too");
-		v.beginSlip(V, 0);
-		const QRect other = v.clipRectForTest(V, 1);
-		press(&v, other.center());
-		release(&v, other.center());
-		ok(!v.slipping() && clip(V, 0).srcStartMs == 5000, "a click elsewhere ends it, footage untouched");
-		v.beginSlip(V, 0);
-		v.setModel(m);
-		ok(!v.slipping(), "a replaced model (undo, load) ends it");
+		ok(v.applySlip(T, 0, 1000) == 0 && v.applySlip(V, 1, 1000) == 0,
+		   "a caption, or a clip showing all its footage, does not slip");
 	}
 
 	std::printf("\n-- a Random clip on the timeline --\n");

@@ -302,15 +302,24 @@ public:
 	// it is meant to be checking.
 	QRect contentRectForTest() const { return contentRect(); }
 
-	// Slip (a media clip's right-click menu): the clip keeps its place and its
-	// length, and dragging it moves the footage inside -- a different moment
-	// of the same video, nothing else touched. A mode rather than a gesture:
-	// it stays on for as many drags as it takes, until Enter or Esc or a click
-	// anywhere else. Each drag is one undo step. Public so a test can drive it.
+	// Slip (a media clip's right-click menu > Slip...): the clip keeps its place
+	// and its length and shows a different moment of the same footage. The menu
+	// asks the editor for the Slip window (slipRequested); the window chooses
+	// how far, and applySlip makes the change -- to the clip and to the sound
+	// linked to it, as one undo step.
 	bool canSlip(int track, int clip, QString *why = nullptr) const;
-	void beginSlip(int track, int clip);
-	void endSlip();
-	bool slipping() const { return slipTrack_ >= 0; }
+	// The clips that slip with it: linked to it and playing the same file (its
+	// detached sound), on unlocked lanes.
+	QVector<QPair<int, int>> slipPartners(int track, int clip) const;
+	// How far the footage can move, the clip and its partners together, in
+	// source ms: *lo <= 0 <= *hi.
+	void slipRange(int track, int clip, qint64 *lo, qint64 *hi) const;
+	// Move the footage by `deltaMs` (clamped to slipRange). Returns the move
+	// made; 0 changes nothing and adds no undo step.
+	qint64 applySlip(int track, int clip, qint64 deltaMs);
+	// A source's filmstrip and length, as the timeline has them.
+	QVector<QImage> sourceThumbs(int sourceId) const { return srcThumbs_.value(sourceId); }
+	qint64 sourceDurationMs(int sourceId) const { return srcThumbDur_.value(sourceId, 0); }
 	// Slot 0/1/2/3 = lock/hide/mute/solo (logical slots: where a kind lacks one
 	// the later ones move up). For tests: the invariant being checked is "this
 	// rect is inside the gutter", and a test computing the rect itself would be
@@ -426,6 +435,8 @@ signals:
 	// "Re-speak this sentence" on a text-to-speech narration's caption (or its
 	// audio, at atOutMs): the editor makes a new take of that sentence.
 	void respeakRequested(int track, int clip, qint64 atOutMs);
+	// "Slip..." from a clip's menu: the editor opens the Slip window for it.
+	void slipRequested(int track, int clip);
 	void freezeSoundsRequested();
 	// "Export this clip…" / "Export selection…". The window owns the export
 	// dialog and the media pool, so the view only says which slice of output
@@ -720,7 +731,7 @@ private:
 	// drags the playhead across a still view. Both are "navigating", and mixing
 	// them up is why it needs its own mode rather than a flag on Scrub.
 	// TrackDrag is a header being dragged up or down to reorder the lanes.
-	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan, KeyDrag, Volume, TrackDrag, Marquee, Slip };
+	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan, KeyDrag, Volume, TrackDrag, Marquee };
 	Mode mode_ = Mode::None;
 	// The lane whose header is being dragged, and the slot (an insertion index,
 	// "before lane N", clamped into the lane's own kind group) it would land in
@@ -748,17 +759,7 @@ private:
 	// A Random clip's room to grow, its head and its tail, as its other
 	// choices allow (clip_variations::roomOfOthers): fixed for the drag.
 	qint64 dragRoomHeadMs_ = 0, dragRoomTailMs_ = 0;
-	// How far a slip can move the footage, the clip and its partners together
-	// (lowest <= 0 <= highest): fixed for the drag.
-	qint64 slipLoMs_ = 0, slipHiMs_ = 0;
-	// Slip: the clip in slip mode, and -- during a drag -- the clips linked to
-	// it that play the same file (its detached sound), as they were at the
-	// press. They slip by the same amount, so picture and sound stay together.
-	int slipTrack_ = -1, slipClip_ = -1;
-	QVector<QPair<QPair<int, int>, TlClip>> slipPartners_;
 	qint64 slipSourceMs(const TlClip &c) const; // the whole source's length; 0 = unknown
-	bool slipValid() const;                     // still points at a clip that can slip
-	void drawSlip(QPainter &p) const;
 	qint64 dragGrabOffsetMs_ = 0; // cursor->clip-start at grab
 	DropTarget drop_;             // live drop target while moving a clip
 	bool snap_ = true;            // magnet

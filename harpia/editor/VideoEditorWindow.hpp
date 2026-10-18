@@ -249,6 +249,8 @@ public:
 	// Make a new take of it (the service, the key and the voice the narration
 	// was made with); applyRespoken() follows when it arrives.
 	void respeakSentence(int track, int clip, qint64 atOutMs);
+	// Slip... from a clip's menu: the Slip window for it, applied on OK.
+	void openSlip(int track, int clip);
 	// The new take in place of the old: the narration's audio spliced (a new
 	// file beside the old one), the sentence's captions rebuilt in their own
 	// style, everything after it in the narration moved by the difference.

@@ -277,6 +277,9 @@ target_sources(
     editor/AudioExtractDialog.hpp
     editor/AudioRecorder.cpp
     editor/AudioRecorder.hpp
+    # Slip, in a window of its own: one clip, its preview, its source's strip.
+    editor/SlipDialog.cpp
+    editor/SlipDialog.hpp
     editor/SystemAudioCapture.cpp
     editor/SystemAudioCapture.hpp
     editor/WavSilence.cpp

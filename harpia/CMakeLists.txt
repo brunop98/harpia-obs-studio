@@ -148,6 +148,9 @@ target_sources(
     ui/MainWindow.hpp
     ui/AudioPanel.cpp
     ui/AudioPanel.hpp
+    # "PC audio from": the picker beside the PC Audio checkbox.
+    ui/PcAudioAppsDialog.cpp
+    ui/PcAudioAppsDialog.hpp
     ui/RecentListWidget.hpp
     ui/PresetEditorDialog.cpp
     ui/PresetEditorDialog.hpp

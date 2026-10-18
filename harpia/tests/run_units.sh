@@ -944,6 +944,25 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$WORK/moc_RecorderControlsOverlay.cpp" -o "$WORK/recordercontrols_test" $LF
 
 rc=0
+
+# Every source file of the app is in its build. These checks compile the files
+# they test by name, so a .cpp left out of CMakeLists.txt passes here and then
+# fails to link in the real build -- which is how v0.1.426's PC audio picker
+# reached a Windows build as six unresolved externals.
+echo "-- every source file is in CMakeLists.txt --"
+missing=0
+for f in $(cd "$H" && ls core/*.cpp ui/*.cpp editor/*.cpp editor/*/*.cpp library/*.cpp model/*.cpp \
+		platform/*.cpp platform/*/*.cpp *.cpp 2>/dev/null); do
+	if ! grep -qF "$f" "$H/CMakeLists.txt" "$H"/cmake/*.cmake 2>/dev/null; then
+		echo "  FAIL $f is not in CMakeLists.txt"
+		missing=1
+	fi
+done
+if [ "$missing" = 0 ]; then
+	echo "  PASS all of them"
+else
+	rc=1
+fi
 # obs_get_output_source() returns a NEW reference: asked anywhere but the one
 # helper that releases it, it leaks the channel's source -- which is how a
 # capture scene outlived its capture and crashed obs_shutdown().

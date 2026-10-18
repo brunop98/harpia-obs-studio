@@ -5,7 +5,8 @@
 // grab its sound straight onto the timeline.
 //
 // Two ways to listen, both WASAPI:
-//   - Process loopback (Windows 10 build 20348 and newer, so Windows 11):
+//   - Process loopback (Windows 10 version 2004 and newer; see
+//     platform/ProcessLoopback.hpp):
 //     either every app EXCEPT Harpia -- the timeline playing along is never
 //     recorded back into itself -- or ONE app and its child processes (only
 //     the browser: no Discord pings, no music player in the background).
@@ -33,6 +34,7 @@ struct SystemAudioApp {
 	QString exe;  // file name, "chrome.exe": what is remembered between launches
 	QString name; // what people call it, "Google Chrome"
 	bool playing = false;
+	bool hasSound = true; // sound open on the output now (not only a window)
 };
 
 namespace system_audio {
@@ -43,6 +45,11 @@ bool available();
 bool perAppAvailable();
 // Apps with sound open now, playing ones first; never Harpia itself.
 QVector<SystemAudioApp> apps();
+// Running apps a person would pick from: those with sound open (playing ones
+// first), then those with a window on screen and no sound yet -- a game
+// before it makes a noise. Never Harpia itself, nor the Windows shell (whose
+// process tree is every app started from the taskbar).
+QVector<SystemAudioApp> runningApps();
 
 // The voiceover source ids for these, beside the microphones' own ids:
 // "harpia:system" for everything, "harpia:system:app:<exe>" for one app.

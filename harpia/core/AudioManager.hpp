@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PcAudioApps.hpp"
+
 #include <atomic>
 #include <cstdint>
 #include <map>
@@ -11,6 +13,7 @@ struct obs_source;
 typedef struct obs_source obs_source_t;
 struct obs_volmeter;
 typedef struct obs_volmeter obs_volmeter_t;
+struct obs_data;
 
 namespace harpia {
 
@@ -21,9 +24,10 @@ struct AudioDevice {
 	std::string name;
 };
 
-// Manages the recorder's audio capture: desktop/system ("PC") audio on output
-// channel 1 and one microphone/input source per enabled device on channels
-// 3..6. Enabled sources are wired into libobs global audio channels, so they are
+// Manages the recorder's audio capture: desktop/system ("PC") audio -- the
+// whole mix on output channel 1, or one capture per app (PcAudioChoice, on
+// channels 1, 2 and 7..12) -- and one microphone/input source per enabled
+// device on channels 3..6. Enabled sources are wired into libobs global audio channels, so they are
 // both **live** (metered immediately, before recording) and automatically mixed
 // into the recording. Each active source carries an obs_volmeter so the UI can
 // show a live level bar.
@@ -43,8 +47,18 @@ public:
 
 	// Desktop/system audio.
 	void setDesktopEnabled(bool on);
-	bool desktopEnabled() const { return desktop_ != nullptr; }
+	bool desktopEnabled() const { return pcOn_; }
 	float desktopPeakDb() const; // latest peak in dB (-60..0); -60 if inactive
+
+	// Which apps' sound it is (PcAudioApps.hpp). Applied at once, or -- while
+	// a recording holds the sources -- when it ends: a capture made after the
+	// output started would not be heard (see beginHold).
+	void setPcAudioChoice(const PcAudioChoice &choice);
+	const PcAudioChoice &pcAudioChoice() const { return pcChoice_; }
+	// Whether this system can single apps out (the app capture is registered).
+	static bool appCaptureAvailable();
+	// What PC audio is being recorded from right now: one entry per capture.
+	std::vector<PcAudioCapture> pcCaptures() const;
 
 	// Microphones by device id.
 	void setMicEnabled(const std::string &deviceId, bool on);
@@ -93,10 +107,19 @@ private:
 
 	std::unique_ptr<Meter> makeMeter(const char *sourceId, const char *name, const char *deviceId,
 					 uint32_t channel);
+	// The same, for a source whose settings are not a device.
+	std::unique_ptr<Meter> makeMeter(const char *sourceId, const char *name, obs_data *settings,
+					 uint32_t channel);
 	void destroyMeter(std::unique_ptr<Meter> &m);
 	uint32_t allocMicChannel() const; // first free channel in 3..6, or 0
+	void rebuildPc(); // the PC captures, from pcOn_ and pcChoice_
 
-	std::unique_ptr<Meter> desktop_;
+	// The PC captures and what each one is, side by side.
+	std::vector<std::unique_ptr<Meter>> pc_;
+	std::vector<PcAudioCapture> pcPlan_;
+	bool pcOn_ = false;
+	PcAudioChoice pcChoice_;
+	bool pcPending_ = false; // a choice made mid-recording, applied when it ends
 	std::map<std::string, std::unique_ptr<Meter>> mics_;
 	float desktopVol_ = 1.f;
 	std::map<std::string, float> micVols_;

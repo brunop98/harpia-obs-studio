@@ -177,6 +177,12 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/systemaudio_test.cpp" "$H/editor/SystemAudioCapture.cpp" "$H/editor/WavSilence.cpp" \
 	-o "$WORK/systemaudio_test" $LF -lpthread
 
+# PC audio from: all apps, only some, or all but one -- what is captured for
+# each, the saved choice, and the picker.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/pcaudioapps_test.cpp" "$H/ui/PcAudioAppsDialog.cpp" \
+	-o "$WORK/pcaudioapps_test" $LF
+
 # Two actions on one key: nothing reports it and the second feature just never
 # fires, so the rule is that it cannot be saved at all.
 "$MOC" -I"$H" "$H/ui/ShortcutConflictDialog.hpp" -o "$WORK/moc_ShortcutConflictDialog.cpp"
@@ -963,6 +969,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/audioextract_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/modecapabilities_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/guides_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/systemaudio_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/pcaudioapps_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/preset_equality_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/audiotap_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/shortcutconflict_test" || rc=1

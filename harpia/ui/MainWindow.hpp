@@ -122,6 +122,9 @@ private slots:
 	void onRegionLeaveSettingChanged();
 	void onCountdownSettingChanged();
 	void onAudioChanged();
+	// "PC audio from": whose sound PC Audio records (one choice, every preset).
+	void choosePcAudioApps();
+	void updatePcAudioFrom();
 	void onPresetChanged();
 	void refreshRecentList();
 	void refreshClipViews(); // recent strip + open Clip Library window
@@ -551,6 +554,8 @@ private:
 	QStringList lastRecentSig_; // last strip contents (path|mtime|size per clip)
 
 	AudioPanel *audioPanel_ = nullptr;
+	// The apps' own names, for the PC audio button ("spotify.exe" -> "Spotify").
+	QHash<QString, QString> pcAudioNames_;
 	// Collapsible Audio foldout: a header toggle over the audio body.
 	QToolButton *audioToggleButton_ = nullptr;
 	QWidget *audioBody_ = nullptr;

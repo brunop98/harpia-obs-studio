@@ -8,6 +8,7 @@
 class QCheckBox;
 class QGridLayout;
 class QProgressBar;
+class QPushButton;
 class QSlider;
 class QVBoxLayout;
 
@@ -44,8 +45,18 @@ public:
 	double desktopVolume() const;                    // linear 0..1
 	std::map<std::string, double> micVolumes() const; // every row, keyed by id
 
+	// The "PC audio from" button beside the PC Audio checkbox ("All apps",
+	// "All but Spotify"): hidden unless the owner shows it -- the choice is
+	// one for every preset, so the preset editor's copy of this panel has none.
+	void setPcAudioFromShown(bool shown);
+	void setPcAudioFrom(const QString &summary, const QString &tooltip);
+	// Off while a recording runs: a new choice would only apply after it.
+	void setPcAudioFromEnabled(bool enabled);
+	QPushButton *pcAudioFromButton() const { return pcFrom_; }
+
 signals:
 	void changed();
+	void pcAudioFromClicked();
 
 public slots:
 	void updateMeters(); // poll AudioManager peak levels into the bars
@@ -60,6 +71,7 @@ private:
 	AudioManager &audio_;
 	QGridLayout *grid_ = nullptr;
 	QCheckBox *pcCheck_ = nullptr;
+	QPushButton *pcFrom_ = nullptr;
 	QSlider *pcSlider_ = nullptr;
 	QProgressBar *pcMeter_ = nullptr;
 

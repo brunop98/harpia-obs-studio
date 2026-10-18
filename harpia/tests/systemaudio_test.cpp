@@ -114,6 +114,7 @@ int main(int argc, char **argv)
 	{
 		ok(!system_audio::available() && !system_audio::perAppAvailable() && system_audio::apps().isEmpty(),
 		   "nothing to offer: the panel lists microphones only");
+		ok(system_audio::runningApps().isEmpty(), "and no running apps to pick for PC audio");
 		SystemAudioCapture cap;
 		QString why;
 		ok(!cap.start(QString(), &why) && !cap.running(), "starting fails cleanly");

@@ -9,6 +9,7 @@
 #include "UiText.hpp"
 
 #include "AudioPanel.hpp"
+#include "PcAudioAppsDialog.hpp"
 #include "ClipLibraryWindow.hpp"
 #include "CrashReportDialog.hpp"
 #include "ErrorLogsPanel.hpp"
@@ -730,6 +731,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 					   [this](const QStringList &paths) { deleteRecordings(paths); });
 	connect(&thumbnails_, &ThumbnailCache::ready, this, &MainWindow::onThumbnailReady);
 	connect(audioPanel_, &AudioPanel::changed, this, &MainWindow::onAudioChanged);
+	connect(audioPanel_, &AudioPanel::pcAudioFromClicked, this, &MainWindow::choosePcAudioApps);
 
 	recorder_.onFinished = [this](const std::string &writtenPath) {
 		// Fires on the obs signal thread when the output has FULLY stopped --
@@ -914,6 +916,14 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	reloadPresetCombo();
 	syncIdleControls();
+	// Whose sound PC Audio is, before it first starts: the captures are made
+	// once, for the right apps.
+	{
+		QSettings settings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		audio_.setPcAudioChoice(pc_audio_settings::load(settings, &pcAudioNames_));
+	}
+	audioPanel_->setPcAudioFromShown(true);
+	updatePcAudioFrom();
 	audioPanel_->load(activePreset().recordDesktopAudio, activePreset().micDeviceIds,
 			  activePreset().desktopVolume, activePreset().micVolumes);
 	refreshDriveLink();
@@ -3960,6 +3970,45 @@ void MainWindow::onAudioChanged()
 	refreshReadiness();
 }
 
+void MainWindow::updatePcAudioFrom()
+{
+	const bool available = AudioManager::appCaptureAvailable();
+	const PcAudioChoice &c = audio_.pcAudioChoice();
+	QString tip;
+	if (!available)
+		tip = QStringLiteral("PC Audio records everything you hear. Picking apps needs Windows 10 "
+				     "version 2004 or newer.");
+	else if (c.from == PcAudioFrom::OnlyApps)
+		tip = QStringLiteral("PC Audio records only %1. Music and everything else stays out.")
+			      .arg(pcAudioAppNames(c, pcAudioNames_).join(QStringLiteral(", ")));
+	else if (c.from == PcAudioFrom::AllExceptApp && !c.exceptApp.empty())
+		tip = QStringLiteral("PC Audio records every app but %1.")
+			      .arg(pcAudioAppNames(c, pcAudioNames_).join(QStringLiteral(", ")));
+	else
+		tip = QStringLiteral("PC Audio records every app, music included.");
+	tip += QStringLiteral("\nClick to choose: all apps, only some, or all but one. For every preset.");
+	audioPanel_->setPcAudioFrom(pcAudioSummary(c, available, pcAudioNames_), tip);
+}
+
+void MainWindow::choosePcAudioApps()
+{
+	if (recorder_.isRecording() || starting_ || stopping_ || countingDown_)
+		return; // the button is off then; a stray click changes nothing mid-take
+	PcAudioAppsDialog dlg(
+		audio_.pcAudioChoice(), AudioManager::appCaptureAvailable(),
+		[]() { return system_audio::runningApps(); }, pcAudioNames_, this);
+	if (dlg.exec() != QDialog::Accepted)
+		return;
+	pcAudioNames_ = dlg.names();
+	const PcAudioChoice c = dlg.choice();
+	{
+		QSettings settings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		pc_audio_settings::save(settings, c, pcAudioNames_);
+	}
+	audio_.setPcAudioChoice(c);
+	updatePcAudioFrom();
+}
+
 void MainWindow::onPresetChanged()
 {
 	const QString id = presetCombo_->currentData().toString();
@@ -4494,6 +4543,9 @@ void MainWindow::updateButtons()
 	// the output can actually pause -- GIF's ffmpeg output cannot, and an
 	// enabled button that silently does nothing is worse than a disabled one
 	// that says why.
+	// Whose sound PC Audio is: chosen between recordings, not during one.
+	audioPanel_->setPcAudioFromEnabled(!recording && !transitioning);
+
 	const bool pausable = recording && !stopping_ && recorder_.canPause();
 	pauseButton_->setEnabled(pausable);
 	if (recording && !recorder_.canPause())

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 
 namespace harpia {
 
@@ -14,6 +15,12 @@ namespace harpia {
 static constexpr uint32_t kDesktopChannel = 1;
 static constexpr uint32_t kMicChannelFirst = 3;
 static constexpr uint32_t kMicChannelLast = 6;
+// One per PC capture: the whole mix takes the first; "Only these apps" one
+// each, up to kMaxPcAudioApps. Channel 2 is libobs' second desktop device,
+// which nothing else here uses; 7.. are past the microphones.
+static constexpr uint32_t kPcChannels[] = {kDesktopChannel, 2, 7, 8, 9, 10, 11, 12};
+static_assert(sizeof(kPcChannels) / sizeof(kPcChannels[0]) == size_t(kMaxPcAudioApps),
+	      "a channel for every app");
 static constexpr float kFloorDb = -60.f;
 
 const char *AudioManager::outputCaptureId()
@@ -81,17 +88,23 @@ void AudioManager::volmeterCallback(void *param, const float *, const float *pea
 std::unique_ptr<AudioManager::Meter> AudioManager::makeMeter(const char *sourceId, const char *name,
 							    const char *deviceId, uint32_t channel)
 {
-	auto m = std::make_unique<Meter>();
-
 	obs_data_t *settings = obs_data_create();
 	obs_data_set_string(settings, "device_id", deviceId);
-	m->source = obs_source_create(sourceId, name, settings, nullptr);
+	auto m = makeMeter(sourceId, name, settings, channel);
 	obs_data_release(settings);
-	if (!m->source) {
+	if (!m)
 		blog(LOG_WARNING, "[harpia] failed to create audio source '%s' (device '%s')", sourceId,
 		     deviceId);
+	return m;
+}
+
+std::unique_ptr<AudioManager::Meter> AudioManager::makeMeter(const char *sourceId, const char *name,
+							    obs_data_t *settings, uint32_t channel)
+{
+	auto m = std::make_unique<Meter>();
+	m->source = obs_source_create(sourceId, name, settings, nullptr);
+	if (!m->source)
 		return nullptr;
-	}
 
 	m->channel = channel;
 	obs_set_output_source(channel, m->source);
@@ -141,22 +154,85 @@ uint32_t AudioManager::allocMicChannel() const
 	return 0; // no free channel
 }
 
+bool AudioManager::appCaptureAvailable()
+{
+	// Registered by core/AppAudioSource where Windows can single apps out.
+	return obs_source_get_display_name(kAppAudioSourceId) != nullptr;
+}
+
+std::vector<PcAudioCapture> AudioManager::pcCaptures() const
+{
+	return pcOn_ ? pcPlan_ : std::vector<PcAudioCapture>();
+}
+
+void AudioManager::rebuildPc()
+{
+	const std::vector<PcAudioCapture> plan =
+		pcOn_ ? pcAudioCaptures(pcChoice_, appCaptureAvailable()) : std::vector<PcAudioCapture>();
+	if (plan == pcPlan_ && pc_.size() == plan.size())
+		return; // already exactly this
+	for (auto &m : pc_)
+		destroyMeter(m);
+	pc_.clear();
+	pcPlan_.clear();
+	for (size_t i = 0; i < plan.size() && i < std::size(kPcChannels); ++i) {
+		const PcAudioCapture &c = plan[i];
+		const std::string name = "harpia_pc_audio" + (i ? "_" + std::to_string(i + 1) : std::string());
+		std::unique_ptr<Meter> m;
+		if (c.wholeMix()) {
+			m = makeMeter(outputCaptureId(), name.c_str(), "default", kPcChannels[i]);
+		} else {
+			obs_data_t *settings = obs_data_create();
+			obs_data_set_string(settings, "exe", c.exe.c_str());
+			obs_data_set_bool(settings, "exclude", c.exclude);
+			m = makeMeter(kAppAudioSourceId, name.c_str(), settings, kPcChannels[i]);
+			obs_data_release(settings);
+			if (!m)
+				blog(LOG_WARNING, "[harpia] failed to create the app audio capture for '%s'",
+				     c.exe.c_str());
+		}
+		if (!m)
+			continue;
+		if (m->source)
+			obs_source_set_volume(m->source, desktopVol_);
+		pc_.push_back(std::move(m));
+		pcPlan_.push_back(c);
+	}
+	if (pcOn_) {
+		std::string what;
+		for (const PcAudioCapture &c : pcPlan_)
+			what += (what.empty() ? "" : ", ") +
+				(c.wholeMix() ? std::string("everything") : (c.exclude ? "all but " : "only ") + c.exe);
+		blog(LOG_INFO, "[harpia] PC audio from: %s", what.empty() ? "nothing" : what.c_str());
+	}
+}
+
 void AudioManager::setDesktopEnabled(bool on)
 {
-	if (on && !desktop_) {
-		desktop_ = makeMeter(outputCaptureId(), "harpia_pc_audio", "default", kDesktopChannel);
-		if (desktop_ && desktop_->source)
-			obs_source_set_volume(desktop_->source, desktopVol_);
-	} else if (!on && desktop_) {
-		destroyMeter(desktop_);
+	if (on == pcOn_)
+		return;
+	pcOn_ = on;
+	rebuildPc();
+}
+
+void AudioManager::setPcAudioChoice(const PcAudioChoice &choice)
+{
+	if (choice == pcChoice_)
+		return;
+	pcChoice_ = choice;
+	if (hold_) {
+		pcPending_ = true;
+		return;
 	}
+	rebuildPc();
 }
 
 void AudioManager::setDesktopVolume(float v)
 {
 	desktopVol_ = std::clamp(v, 0.f, 1.f);
-	if (desktop_ && desktop_->source)
-		obs_source_set_volume(desktop_->source, desktopVol_);
+	for (const auto &m : pc_)
+		if (m && m->source)
+			obs_source_set_volume(m->source, desktopVol_);
 }
 
 void AudioManager::setMicVolume(const std::string &deviceId, float v)
@@ -170,7 +246,12 @@ void AudioManager::setMicVolume(const std::string &deviceId, float v)
 
 float AudioManager::desktopPeakDb() const
 {
-	return desktop_ ? desktop_->peakDb.load(std::memory_order_relaxed) : kFloorDb;
+	// Several apps: the loudest of them, which is what the one bar can show.
+	float db = kFloorDb;
+	for (const auto &m : pc_)
+		if (m)
+			db = std::max(db, m->peakDb.load(std::memory_order_relaxed));
+	return db;
 }
 
 void AudioManager::beginHold(const std::vector<std::string> &micDeviceIds)
@@ -205,6 +286,10 @@ void AudioManager::beginHold(const std::vector<std::string> &micDeviceIds)
 void AudioManager::endHold()
 {
 	hold_ = false;
+	if (pcPending_) {
+		pcPending_ = false;
+		rebuildPc();
+	}
 	// Whatever is still muted was only being held for the recording; drop it so
 	// an idle app is not holding microphones open.
 	for (auto it = mics_.begin(); it != mics_.end();) {
@@ -275,7 +360,11 @@ float AudioManager::micPeakDb(const std::string &deviceId) const
 
 void AudioManager::clear()
 {
-	destroyMeter(desktop_);
+	for (auto &m : pc_)
+		destroyMeter(m);
+	pc_.clear();
+	pcPlan_.clear();
+	pcOn_ = false;
 	for (auto &kv : mics_)
 		destroyMeter(kv.second);
 	mics_.clear();

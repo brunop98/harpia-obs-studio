@@ -1,7 +1,8 @@
 #include "SystemAudioCapture.hpp"
 
 #include <QFileInfo>
-#include <QOperatingSystemVersion>
+#include <QSet>
+#include <QStringList>
 
 #include <algorithm>
 #include <atomic>
@@ -22,7 +23,8 @@
 #include <audioclient.h>
 #include <audiopolicy.h>
 #include <mmdeviceapi.h>
-#include <tlhelp32.h>
+
+#include "platform/ProcessLoopback.hpp"
 #endif
 
 namespace harpia {
@@ -106,129 +108,6 @@ struct SystemAudioCapture::Impl {
 
 namespace {
 
-// ---- process loopback, declared here rather than taken from the SDK --------
-// audioclientactivationparams.h only ships with SDK 10.0.20348 and newer; the
-// layout is fixed ABI, so a copy keeps the build working on an older SDK.
-enum HarpiaActivationType { kActivationDefault = 0, kActivationProcessLoopback = 1 };
-enum HarpiaLoopbackMode { kIncludeTargetTree = 0, kExcludeTargetTree = 1 };
-struct HarpiaLoopbackParams {
-	DWORD targetProcessId;
-	HarpiaLoopbackMode mode;
-};
-struct HarpiaActivationParams {
-	HarpiaActivationType type;
-	HarpiaLoopbackParams loopback;
-};
-const wchar_t kProcessLoopbackDevice[] = L"VAD\\Process_Loopback";
-// IAgileObject: the completion handler must be callable from any thread.
-const IID kIidAgileObject = {0x94ea2b94, 0xe9cc, 0x49e0, {0xc0, 0xff, 0xee, 0x64, 0xca, 0x8f, 0x5b, 0x90}};
-
-using ActivateAsyncFn = HRESULT(WINAPI *)(LPCWSTR, REFIID, PROPVARIANT *,
-					  IActivateAudioInterfaceCompletionHandler *,
-					  IActivateAudioInterfaceAsyncOperation **);
-
-class ActivationHandler final : public IActivateAudioInterfaceCompletionHandler {
-public:
-	ActivationHandler() { done_ = CreateEventW(nullptr, TRUE, FALSE, nullptr); }
-
-	ULONG STDMETHODCALLTYPE AddRef() override { return ULONG(InterlockedIncrement(&refs_)); }
-	ULONG STDMETHODCALLTYPE Release() override
-	{
-		const ULONG n = ULONG(InterlockedDecrement(&refs_));
-		if (n == 0)
-			delete this;
-		return n;
-	}
-	HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
-	{
-		if (!out)
-			return E_POINTER;
-		if (IsEqualIID(riid, __uuidof(IUnknown)) ||
-		    IsEqualIID(riid, __uuidof(IActivateAudioInterfaceCompletionHandler)) ||
-		    IsEqualIID(riid, kIidAgileObject)) {
-			*out = static_cast<IActivateAudioInterfaceCompletionHandler *>(this);
-			AddRef();
-			return S_OK;
-		}
-		*out = nullptr;
-		return E_NOINTERFACE;
-	}
-	HRESULT STDMETHODCALLTYPE ActivateCompleted(IActivateAudioInterfaceAsyncOperation *op) override
-	{
-		HRESULT activated = E_FAIL;
-		IUnknown *unk = nullptr;
-		const HRESULT r = op->GetActivateResult(&activated, &unk);
-		if (SUCCEEDED(r) && SUCCEEDED(activated) && unk)
-			result_ = unk->QueryInterface(__uuidof(IAudioClient), reinterpret_cast<void **>(&client_));
-		else
-			result_ = FAILED(r) ? r : activated;
-		if (unk)
-			unk->Release();
-		SetEvent(done_);
-		return S_OK;
-	}
-
-	// The activated client (the caller owns the reference), or null.
-	IAudioClient *wait(DWORD ms, HRESULT *hr)
-	{
-		if (WaitForSingleObject(done_, ms) != WAIT_OBJECT_0) {
-			*hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
-			return nullptr;
-		}
-		*hr = result_;
-		IAudioClient *c = client_;
-		client_ = nullptr;
-		return c;
-	}
-
-private:
-	~ActivationHandler()
-	{
-		if (client_)
-			client_->Release();
-		if (done_)
-			CloseHandle(done_);
-	}
-	LONG refs_ = 1;
-	HANDLE done_ = nullptr;
-	HRESULT result_ = E_FAIL;
-	IAudioClient *client_ = nullptr;
-};
-
-IAudioClient *activateProcessLoopback(DWORD pid, HarpiaLoopbackMode mode, HRESULT *hr)
-{
-	static const ActivateAsyncFn activate = []() -> ActivateAsyncFn {
-		HMODULE mm = LoadLibraryW(L"Mmdevapi.dll");
-		return mm ? reinterpret_cast<ActivateAsyncFn>(
-				    reinterpret_cast<void *>(GetProcAddress(mm, "ActivateAudioInterfaceAsync")))
-			  : nullptr;
-	}();
-	if (!activate) {
-		*hr = E_NOTIMPL;
-		return nullptr;
-	}
-	HarpiaActivationParams params = {};
-	params.type = kActivationProcessLoopback;
-	params.loopback.targetProcessId = pid;
-	params.loopback.mode = mode;
-	PROPVARIANT pv;
-	PropVariantInit(&pv);
-	pv.vt = VT_BLOB;
-	pv.blob.cbSize = ULONG(sizeof(params));
-	pv.blob.pBlobData = reinterpret_cast<BYTE *>(&params);
-
-	auto *handler = new ActivationHandler;
-	IActivateAudioInterfaceAsyncOperation *op = nullptr;
-	*hr = activate(kProcessLoopbackDevice, __uuidof(IAudioClient), &pv, handler, &op);
-	IAudioClient *client = nullptr;
-	if (SUCCEEDED(*hr))
-		client = handler->wait(5000, hr);
-	if (op)
-		op->Release();
-	handler->Release();
-	return client;
-}
-
 QString exePathOf(DWORD pid)
 {
 	HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
@@ -272,56 +151,6 @@ QString friendlyName(const QString &exePath)
 		return fallback;
 	const QString name = QString::fromWCharArray(desc).trimmed();
 	return name.isEmpty() ? fallback : name;
-}
-
-struct ProcEntry {
-	DWORD pid;
-	DWORD parent;
-	QString exe; // lower case
-};
-
-QVector<ProcEntry> processes()
-{
-	QVector<ProcEntry> out;
-	HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-	if (snap == INVALID_HANDLE_VALUE)
-		return out;
-	PROCESSENTRY32W e;
-	e.dwSize = DWORD(sizeof(e));
-	if (Process32FirstW(snap, &e)) {
-		do {
-			out.append({e.th32ProcessID, e.th32ParentProcessID, QString::fromWCharArray(e.szExeFile).toLower()});
-		} while (Process32NextW(snap, &e));
-	}
-	CloseHandle(snap);
-	return out;
-}
-
-// The top of `exe`'s own process tree: a browser's main process, whose tree
-// holds the audio service that actually plays the sound. 0 when not running.
-DWORD rootProcessOf(const QString &exe)
-{
-	const QString want = exe.toLower();
-	const QVector<ProcEntry> all = processes();
-	const auto find = [&all](DWORD pid) -> const ProcEntry * {
-		for (const ProcEntry &p : all)
-			if (p.pid == pid)
-				return &p;
-		return nullptr;
-	};
-	for (const ProcEntry &p : all) {
-		if (p.exe != want)
-			continue;
-		const ProcEntry *at = &p;
-		for (int guard = 0; guard < 64; ++guard) {
-			const ProcEntry *up = find(at->parent);
-			if (!up || up->exe != want || up->pid == at->pid)
-				break;
-			at = up;
-		}
-		return at->pid;
-	}
-	return 0;
 }
 
 // COM for the calling thread, released only if this call was the one that
@@ -450,8 +279,10 @@ void SystemAudioCapture::Impl::run(DWORD pid, bool appOnly)
 
 	// Process loopback first: one app, or everything but Harpia.
 	if (appOnly || system_audio::perAppAvailable()) {
-		client = activateProcessLoopback(appOnly ? pid : GetCurrentProcessId(),
-						 appOnly ? kIncludeTargetTree : kExcludeTargetTree, &hr);
+		client = process_loopback::activate(appOnly ? pid : GetCurrentProcessId(),
+						    appOnly ? process_loopback::Mode::IncludeTree
+							    : process_loopback::Mode::ExcludeTree,
+						    &hr);
 		if (client) {
 			WAVEFORMATEX want = {};
 			want.wFormatTag = WAVE_FORMAT_PCM;
@@ -591,9 +422,7 @@ bool system_audio::available()
 
 bool system_audio::perAppAvailable()
 {
-	// Process loopback arrived in build 20348 (Windows 11 and Server 2022).
-	const QOperatingSystemVersion v = QOperatingSystemVersion::current();
-	return v.type() == QOperatingSystemVersion::Windows && v.majorVersion() >= 10 && v.microVersion() >= 20348;
+	return process_loopback::available();
 }
 
 QVector<SystemAudioApp> system_audio::apps()
@@ -657,6 +486,76 @@ QVector<SystemAudioApp> system_audio::apps()
 	return out;
 }
 
+namespace {
+
+// The shell, and the hosts Store apps and system panels run in: a window of
+// theirs is not an app anyone means, and explorer.exe's process tree holds
+// every app started from the taskbar.
+bool isShellProcess(const QString &exeLower)
+{
+	static const QStringList shell = {
+		QStringLiteral("explorer.exe"),         QStringLiteral("applicationframehost.exe"),
+		QStringLiteral("textinputhost.exe"),    QStringLiteral("shellexperiencehost.exe"),
+		QStringLiteral("startmenuexperiencehost.exe"), QStringLiteral("searchhost.exe"),
+		QStringLiteral("searchapp.exe"),        QStringLiteral("lockapp.exe"),
+		QStringLiteral("systemsettings.exe"),
+	};
+	return shell.contains(exeLower);
+}
+
+BOOL CALLBACK collectWindowPid(HWND h, LPARAM param)
+{
+	if (!IsWindowVisible(h) || GetWindow(h, GW_OWNER) || GetWindowTextLengthW(h) == 0 ||
+	    (GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0)
+		return TRUE;
+	DWORD pid = 0;
+	GetWindowThreadProcessId(h, &pid);
+	auto *pids = reinterpret_cast<QVector<DWORD> *>(param);
+	if (pid != 0 && !pids->contains(pid))
+		pids->append(pid);
+	return TRUE;
+}
+
+} // namespace
+
+QVector<SystemAudioApp> system_audio::runningApps()
+{
+	QVector<SystemAudioApp> out;
+	const DWORD self = GetCurrentProcessId();
+	const QString selfExe = QFileInfo(exePathOf(self)).fileName().toLower();
+	QSet<QString> seen; // lower-case exe names already listed
+	for (const SystemAudioApp &a : apps()) {
+		const QString key = a.exe.toLower();
+		if (isShellProcess(key) || seen.contains(key))
+			continue;
+		seen.insert(key);
+		out.append(a);
+	}
+	QVector<DWORD> pids;
+	EnumWindows(collectWindowPid, reinterpret_cast<LPARAM>(&pids));
+	QVector<SystemAudioApp> windowed;
+	for (const DWORD pid : pids) {
+		if (pid == self)
+			continue;
+		const QString path = exePathOf(pid);
+		const QString exe = QFileInfo(path).fileName();
+		const QString key = exe.toLower();
+		if (exe.isEmpty() || key == selfExe || isShellProcess(key) || seen.contains(key))
+			continue;
+		seen.insert(key);
+		SystemAudioApp a;
+		a.exe = exe;
+		a.name = friendlyName(path);
+		a.hasSound = false;
+		windowed.append(a);
+	}
+	std::sort(windowed.begin(), windowed.end(), [](const SystemAudioApp &a, const SystemAudioApp &b) {
+		return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+	});
+	out += windowed;
+	return out;
+}
+
 #else // not Windows
 
 bool system_audio::available()
@@ -670,6 +569,11 @@ bool system_audio::perAppAvailable()
 }
 
 QVector<SystemAudioApp> system_audio::apps()
+{
+	return {};
+}
+
+QVector<SystemAudioApp> system_audio::runningApps()
 {
 	return {};
 }
@@ -692,9 +596,9 @@ bool SystemAudioCapture::start(const QString &appExe, QString *error)
 	DWORD pid = 0;
 	if (!appExe.isEmpty()) {
 		if (!system_audio::perAppAvailable())
-			err = QStringLiteral("Recording one app on its own needs Windows 11. Choose \"Windows audio "
-					     "(everything)\" instead.");
-		else if ((pid = rootProcessOf(appExe)) == 0)
+			err = QStringLiteral("Recording one app on its own needs Windows 10 version 2004 or newer. "
+					     "Choose \"Windows audio (everything)\" instead.");
+		else if ((pid = process_loopback::rootProcessOf(appExe.toStdWString())) == 0)
 			err = QStringLiteral("%1 isn't running. Start it (and the video) first.").arg(appExe);
 	}
 	if (err.isEmpty()) {

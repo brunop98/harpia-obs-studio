@@ -1,4 +1,6 @@
 #include "ObsContext.hpp"
+
+#include "AppAudioSource.hpp"
 #include "VideoStatus.hpp"
 
 #include <obs.h>
@@ -130,6 +132,8 @@ void ObsContext::loadModules()
 	obs_log_loaded_modules();
 	obs_post_load_modules();
 	obs_module_failure_info_free(&mfi);
+	// Harpia's own: the per-app PC audio capture, where Windows has it.
+	app_audio::registerSource();
 
 	modulesLoaded_ = true;
 }

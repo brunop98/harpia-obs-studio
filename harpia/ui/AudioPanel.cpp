@@ -4,7 +4,9 @@
 
 #include <QCheckBox>
 #include <QGridLayout>
+#include <QHBoxLayout>
 #include <QProgressBar>
+#include <QPushButton>
 #include <QSignalBlocker>
 #include <QSlider>
 
@@ -84,11 +86,28 @@ AudioPanel::AudioPanel(AudioManager &audio, QWidget *parent) : QWidget(parent), 
 	// PC (desktop/system) audio row. Always row 0; the mic rows follow and are
 	// rebuilt from scratch on a rescan.
 	pcCheck_ = new QCheckBox(QStringLiteral("PC Audio"), this);
-	pcCheck_->setFixedWidth(kLabelColumn);
 	pcCheck_->setToolTip(QStringLiteral("System / desktop audio"));
+	// Beside it, whose sound that is. Same column, so the meters still line up.
+	pcFrom_ = new QPushButton(QStringLiteral("All apps"), this);
+	pcFrom_->setObjectName(QStringLiteral("pcAudioFromButton"));
+	pcFrom_->setCursor(Qt::PointingHandCursor);
+	pcFrom_->setVisible(false);
+	pcFrom_->setStyleSheet(QStringLiteral(
+		"QPushButton { padding:1px 8px; border:1px solid #3a3f47; border-radius:9px; color:#cfd6de;"
+		" background:#24272c; }"
+		"QPushButton:hover { border-color:#5a6270; color:#ffffff; }"
+		"QPushButton:disabled { color:#6b717a; border-color:#2c3036; }"));
+	auto *pcLabel = new QWidget(this);
+	pcLabel->setFixedWidth(kLabelColumn);
+	auto *pcLabelRow = new QHBoxLayout(pcLabel);
+	pcLabelRow->setContentsMargins(0, 0, 0, 0);
+	pcLabelRow->setSpacing(8);
+	pcLabelRow->addWidget(pcCheck_);
+	pcLabelRow->addWidget(pcFrom_);
+	pcLabelRow->addStretch(1);
 	pcSlider_ = makeVolumeSlider(this);
 	pcMeter_ = makeMeter(this);
-	grid_->addWidget(pcCheck_, 0, 0);
+	grid_->addWidget(pcLabel, 0, 0);
 	grid_->addWidget(pcSlider_, 0, 1);
 	grid_->addWidget(pcMeter_, 0, 2);
 
@@ -103,8 +122,33 @@ AudioPanel::AudioPanel(AudioManager &audio, QWidget *parent) : QWidget(parent), 
 			emit changed(); // keyboard/wheel change — persist now
 	});
 	connect(pcSlider_, &QSlider::sliderReleased, this, [this]() { emit changed(); });
+	connect(pcFrom_, &QPushButton::clicked, this, &AudioPanel::pcAudioFromClicked);
 
 	buildMicRows();
+}
+
+void AudioPanel::setPcAudioFromShown(bool shown)
+{
+	pcFrom_->setVisible(shown);
+}
+
+void AudioPanel::setPcAudioFrom(const QString &summary, const QString &tooltip)
+{
+	// It shares the label column with the checkbox, which keeps every meter
+	// starting at the same x: a long "All but Google Chrome Canary" is cut to fit,
+	// and said in full on hover.
+	const int room = kLabelColumn - pcCheck_->sizeHint().width() - 8;
+	const int pad = 2 * 8 + 2 + 4; // the style's padding and border, and a little air
+	pcFrom_->setMaximumWidth(std::max(60, room));
+	const QString text = pcFrom_->fontMetrics().elidedText(summary, Qt::ElideRight, std::max(40, room - pad));
+	pcFrom_->setText(text);
+	pcFrom_->setToolTip(text == summary ? tooltip : summary + QStringLiteral("\n") + tooltip);
+}
+
+void AudioPanel::setPcAudioFromEnabled(bool enabled)
+{
+	if (pcFrom_->isEnabled() != enabled)
+		pcFrom_->setEnabled(enabled);
 }
 
 // One row per detected input (mic) device — excluding the synthetic "Default"

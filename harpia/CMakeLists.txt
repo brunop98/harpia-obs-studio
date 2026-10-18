@@ -86,6 +86,10 @@ target_sources(
     core/ObsContext.hpp
     core/AudioManager.cpp
     core/AudioManager.hpp
+    # "PC audio from": only these apps, or all but one (Windows process loopback).
+    core/AppAudioSource.cpp
+    core/AppAudioSource.hpp
+    core/PcAudioApps.hpp
     core/AudioFileWriter.cpp
     core/AudioFileWriter.hpp
     core/AudioOnlyRecorder.cpp
@@ -133,6 +137,7 @@ target_sources(
     platform/IdleMonitor.hpp
     platform/WindowList.hpp
     platform/OsIntegration.hpp
+    platform/ProcessLoopback.hpp
     library/AudioCard.cpp
     library/AudioCard.hpp
     library/ClipLibrary.cpp
@@ -398,6 +403,9 @@ if(OS_WINDOWS)
     platform/win/WinForegroundWatcher.cpp
     platform/win/WinWindowList.cpp
     platform/win/WinCameraAccess.cpp
+    # One app's sound, or all but one app's: the recorder's PC audio choice and
+    # the voiceover panel's Windows audio.
+    platform/win/WinProcessLoopback.cpp
     # Taskbar id, out of power throttling, the graphics-card choice.
     platform/win/WinOsIntegration.cpp
     # Compiled into the .exe: the icon, and the name and version Windows shows
@@ -420,8 +428,9 @@ if(OS_WINDOWS)
   # DPAPI (CryptProtectData) seals the transcription API key -- SecretStore.cpp.
   # dbghelp: the stack and the minidump in a crash report -- CrashGuard.cpp.
   # shell32: the taskbar id (SetCurrentProcessExplicitAppUserModelID).
-  # ole32 + version: recording Windows audio in the voiceover panel -- COM for
-  # WASAPI, and an app's own name ("Google Chrome") from its version resource.
+  # ole32 + version: recording Windows audio (the voiceover panel, the PC audio
+  # app choice) -- COM for WASAPI, and an app's own name ("Google Chrome") from
+  # its version resource.
   target_link_libraries(harpia-recorder PRIVATE crypt32 dbghelp dwmapi shell32 ole32 version)
 elseif(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
   target_sources(harpia-recorder PRIVATE

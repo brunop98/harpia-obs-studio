@@ -1303,6 +1303,13 @@ private:
 	void invalidateAudioMix();             // an edit changed what it should sound like
 	void onAudioMixReady();                // worker finished
 	QString audioMixKey() const;           // what the cached mix was built from
+	// Starts (or re-aims) the background mix for `key`. Does not play.
+	void mixAudioFor(const QString &key);
+	// Mixes ahead, shortly after the timeline settles, so Play finds the sound
+	// ready instead of starting the picture alone and the sound seconds later.
+	void schedulePremix();
+	void premixAudio();
+	QTimer *audioPremixTimer_ = nullptr;
 
 	AudioPreview *audioPreview_ = nullptr;
 	QPushButton *muteBtn_ = nullptr;

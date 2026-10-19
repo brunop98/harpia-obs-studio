@@ -44,6 +44,12 @@ if [ ! -f "$WORK/hlg_ramp.mp4" ] && ffmpeg -hide_banner -encoders 2>/dev/null | 
 fi
 gen green 0x00A000 700
 gen blue 0x0000C0 1500
+# Ten minutes of sound and nothing else: the long recording a timeline's short
+# clips are cut from, for timing the preview mix (timelinemix_test).
+[ -f "$WORK/long_tone.m4a" ] || ffmpeg -y -loglevel error \
+	-f lavfi -i "sine=frequency=440:sample_rate=48000:duration=600" \
+	-f lavfi -i "sine=frequency=660:sample_rate=48000:duration=600" \
+	-filter_complex "[0][1]amerge=inputs=2" -c:a aac -b:a 128k "$WORK/long_tone.m4a"
 
 # --- build ------------------------------------------------------------------
 MOC="$(command -v moc || ls /usr/lib/qt6/libexec/moc /usr/lib/x86_64-linux-gnu/qt6/libexec/moc 2>/dev/null | head -1)"
@@ -79,6 +85,7 @@ build "$HERE/batchexport_test.cpp" batchexport_test
 # Every frame once: sources that number their frames, read the way an export
 # reads them and exported from a two-track 60 fps timeline.
 build "$HERE/exportcadence_test.cpp" exportcadence_test
+build "$HERE/timelinemix_test.cpp" timelinemix_test
 # The export window: what it says is what it asks for -- resolution, frame
 # rate, the remembered choices -- and a size estimate that moves the right way.
 "$MOC" -I"$H" "$H/editor/ExportOptionsDialog.hpp" -o "$WORK/moc_ExportOptionsDialog.cpp"
@@ -216,6 +223,12 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	"$HERE/randomclip_test.cpp" \
 	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
 	-o "$WORK/randomclip_test" $WLF
+# The preview/editing divider moves in Full editing however many lanes there
+# are: the lanes scroll under the ruler instead of setting a minimum height.
+g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
+	"$HERE/editorsplit_test.cpp" \
+	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
+	-o "$WORK/editorsplit_test" $WLF
 # Slip in its own window: the clip alone in its preview, the strip under a
 # fixed window, keys, Play, and OK / Cancel from the clip's real menu.
 g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
@@ -258,6 +271,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/exportpaths_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportcolor_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/batchexport_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportcadence_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/timelinemix_test" "$WORK" || rc=1
 HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
 	"$WORK/exportdialog_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportprogress_test" "$WORK" || rc=1
@@ -289,6 +303,8 @@ HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen
 	"$WORK/randomclip_test" "$WORK" || rc=1
 HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
 	"$WORK/slipwindow_test" || rc=1
+HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
+	"$WORK/editorsplit_test" "$WORK" || rc=1
 HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
 	"$WORK/editorlayout_test" "$WORK" || rc=1
 HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \

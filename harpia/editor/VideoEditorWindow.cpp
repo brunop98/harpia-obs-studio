@@ -324,15 +324,18 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	modeGroup->addButton(trimModeBtn_);
 	modeGroup->addButton(cutModeBtn_);
 	modeGroup->addButton(fullModeBtn_);
-	// Segmented look: shared fill, joined borders, accent on the active segment.
+	// Three buttons a little apart, each with its own border, sharing a fill,
+	// with the accent on the active one. (They used to touch, as one segmented
+	// control, and read as a single cramped block.)
 	const QString segBase = QStringLiteral(
-		"QPushButton{background:#2b2f36;color:#c8ccd4;border:1px solid #3a3f47;padding:5px 14px;}"
+		"QPushButton{background:#2b2f36;color:#c8ccd4;border:1px solid #3a3f47;border-radius:6px;"
+		"padding:5px 14px;}"
 		"QPushButton:checked{background:#3d7eff;color:#ffffff;border-color:#3d7eff;}");
-	trimModeBtn_->setStyleSheet(segBase + QStringLiteral("QPushButton{border-right:none;}"));
-	cutModeBtn_->setStyleSheet(segBase + QStringLiteral("QPushButton{border-right:none;}"));
+	trimModeBtn_->setStyleSheet(segBase);
+	cutModeBtn_->setStyleSheet(segBase);
 	fullModeBtn_->setStyleSheet(segBase);
 	auto *segBox = new QHBoxLayout;
-	segBox->setSpacing(0); // no gap — the segments read as one control
+	segBox->setSpacing(6);
 	segBox->setContentsMargins(0, 0, 0, 0);
 	segBox->addWidget(trimModeBtn_);
 	segBox->addWidget(cutModeBtn_);
@@ -424,6 +427,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// Monitor toggle. Preview audio is Full-editing only for now, so it hides
 	// with the other Full-only controls.
 	audioPreview_ = new AudioPreview(this);
+	// Debounced: a dragged slider or a run of edits mixes once, after it stops.
+	audioPremixTimer_ = new QTimer(this);
+	audioPremixTimer_->setSingleShot(true);
+	audioPremixTimer_->setInterval(300);
+	connect(audioPremixTimer_, &QTimer::timeout, this, &VideoEditorWindow::premixAudio);
 	muteBtn_ = new QPushButton(this);
 	muteBtn_->setIcon(uiIcon(Glyph::Speaker));
 	muteBtn_->setCheckable(true);
@@ -437,6 +445,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		audioPreview_->setMuted(off);
 		if (!off && playing_ && fullEdit())
 			startPreviewAudio(timelinePlayheadMs()); // catch up to the picture
+		else if (!off)
+			schedulePremix(); // muted, nothing was mixing: be ready for Play
 	});
 	bar->addWidget(muteBtn_, Zone::Right);
 	// Voiceover: one button, in every mode, opening the voiceover window.
@@ -11128,6 +11138,8 @@ void VideoEditorWindow::setEditMode(EditMode m)
 		muteBtn_->setVisible(full); // only Full editing has a timeline to mix
 	if (!full && audioPreview_)
 		audioPreview_->stop();
+	if (full)
+		schedulePremix(); // edits made in another mode left the mix behind
 	syncPreviewTransformTarget();
 	if (full)
 		showTimelineFrame(timelinePlayheadMs());
@@ -13107,6 +13119,25 @@ void VideoEditorWindow::invalidateAudioMix()
 	// once it unwinds, so a slider being dragged queues one re-mix, not thirty.
 	if (playing_ && fullEdit())
 		startPreviewAudio(timelinePlayheadMs());
+	else
+		schedulePremix();
+}
+
+void VideoEditorWindow::schedulePremix()
+{
+	if (audioPremixTimer_)
+		audioPremixTimer_->start(); // restarts: the last edit of a run decides
+}
+
+void VideoEditorWindow::premixAudio()
+{
+	// While playing, startPreviewAudio already keeps the sound current.
+	if (playing_ || !audioPreview_ || !fullEdit() || audioPreview_->isMuted())
+		return;
+	const QString key = audioMixKey();
+	if (key.isEmpty() || (audioMixValid_ && key == audioMixKeyBuilt_))
+		return; // nothing audible, or already mixed
+	mixAudioFor(key);
 }
 
 void VideoEditorWindow::startPreviewAudio(qint64 fromMs)
@@ -13123,9 +13154,16 @@ void VideoEditorWindow::startPreviewAudio(qint64 fromMs)
 	}
 
 	// Needs (re)mixing: decoding every source is far too slow for the GUI thread,
-	// so the picture starts now and the sound joins when the mix lands.
+	// so the picture starts now and the sound joins when the mix lands. With
+	// the premix that is rare: only Play pressed within moments of an edit, or
+	// before a new source's first decode has finished.
 	audioStartMs_ = fromMs;
 	startAudioWhenReady_ = true;
+	mixAudioFor(key);
+}
+
+void VideoEditorWindow::mixAudioFor(const QString &key)
+{
 	if (audioMixRunning_.load()) {
 		if (key != audioMixKeyWanted_)
 			audioMixCancel_.store(true); // stale: restart when it unwinds
@@ -13167,6 +13205,8 @@ void VideoEditorWindow::onAudioMixReady()
 		pendingMix_.clear();
 		if (startAudioWhenReady_ && playing_)
 			startPreviewAudio(audioStartMs_);
+		else
+			schedulePremix();
 		return;
 	}
 

@@ -34,6 +34,8 @@
 #include <QPolygonF>
 #include <QToolTip>
 #include <QRandomGenerator>
+#include <QResizeEvent>
+#include <QScrollBar>
 #include <QTimer>
 #include <QWheelEvent>
 
@@ -70,10 +72,28 @@ TimelineView::TimelineView(QWidget *parent) : QWidget(parent)
 	setAcceptDrops(true);
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 	setToolTip(QStringLiteral("Drag clips to move · drag an edge to trim · right-click to split · "
-				  "scroll to zoom, Shift+scroll to pan"));
+				  "scroll to zoom, Shift+scroll to pan, Alt+scroll to move the lanes"));
 	anim_ = new QTimer(this);
 	anim_->setInterval(16);
 	connect(anim_, &QTimer::timeout, this, &TimelineView::animateStep);
+
+	// Shown only when the lanes are taller than the view; see syncLaneBar.
+	laneBar_ = new QScrollBar(Qt::Vertical, this);
+	laneBar_->setCursor(Qt::ArrowCursor);
+	laneBar_->setToolTip(QStringLiteral("More lanes below. Alt+scroll over the lanes moves them too."));
+	laneBar_->setStyleSheet(QStringLiteral(
+		"QScrollBar:vertical{background:transparent;width:10px;margin:0;}"
+		"QScrollBar::handle:vertical{background:rgba(255,255,255,70);border-radius:4px;min-height:24px;}"
+		"QScrollBar::handle:vertical:hover{background:rgba(255,255,255,110);}"
+		"QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
+		"QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}"));
+	laneBar_->hide();
+	connect(laneBar_, &QScrollBar::valueChanged, this, [this](int v) {
+		if (v != laneScroll_) {
+			laneScroll_ = v;
+			update();
+		}
+	});
 }
 
 void TimelineView::animateStep()
@@ -957,6 +977,7 @@ void TimelineView::setLayoutParams(const TimelineViewParams &p)
 	lp_ = p;
 	zoom_ = std::clamp(zoom_, 1.0, lp_.maxZoom);
 	clampView();
+	syncLaneBar(); // lane heights changed
 	updateGeometry();
 	update();
 }
@@ -1007,10 +1028,63 @@ int TimelineView::laneHeight(int track) const
 	return lp_.audioLaneH;
 }
 
+int TimelineView::lanesHeight() const
+{
+	int h = 0;
+	for (int i = 0; i < model_.tracks.size(); ++i)
+		h += laneHeight(i) + lp_.laneGap;
+	return h;
+}
+
+int TimelineView::maxLaneScroll() const
+{
+	return std::max(0, lanesHeight() - contentRect().height());
+}
+
+int TimelineView::laneScroll() const
+{
+	// Clamped on read rather than on every edit that can shorten the stack:
+	// a deleted lane or a taller view simply scrolls less, from everywhere.
+	return std::clamp(laneScroll_, 0, maxLaneScroll());
+}
+
+void TimelineView::setLaneScroll(int px)
+{
+	const int v = std::clamp(px, 0, maxLaneScroll());
+	if (v == laneScroll_)
+		return;
+	laneScroll_ = v;
+	if (laneBar_)
+		laneBar_->setValue(v);
+	update();
+}
+
+void TimelineView::syncLaneBar()
+{
+	if (!laneBar_)
+		return;
+	const QRect c = contentRect();
+	const int max = maxLaneScroll();
+	laneScroll_ = std::clamp(laneScroll_, 0, max);
+	const QSignalBlocker block(laneBar_);
+	laneBar_->setRange(0, max);
+	laneBar_->setPageStep(c.height());
+	laneBar_->setSingleStep(std::max(8, lp_.audioLaneH / 2));
+	laneBar_->setValue(laneScroll_);
+	laneBar_->setGeometry(width() - lp_.margin - 10, c.y(), 10, c.height());
+	laneBar_->setVisible(max > 0);
+}
+
+void TimelineView::resizeEvent(QResizeEvent *e)
+{
+	QWidget::resizeEvent(e);
+	syncLaneBar();
+}
+
 QRect TimelineView::laneRect(int track) const
 {
 	const QRect c = contentRect();
-	int y = c.y();
+	int y = c.y() - laneScroll();
 	for (int i = 0; i < track; ++i)
 		y += laneHeight(i) + lp_.laneGap;
 	return QRect(c.x(), y, c.width(), laneHeight(track));
@@ -1024,6 +1098,9 @@ QRect TimelineView::trackHeaderRect(int track) const
 
 int TimelineView::laneAtY(int y) const
 {
+	// A lane scrolled up under the ruler is out of sight, so out of reach.
+	if (y < contentRect().y())
+		return -1;
 	for (int i = 0; i < model_.tracks.size(); ++i) {
 		const QRect l = laneRect(i);
 		if (y >= l.y() && y < l.y() + l.height())
@@ -1716,16 +1793,20 @@ void TimelineView::emitScrubAt(qint64 outMs)
 
 QSize TimelineView::sizeHint() const
 {
-	return QSize(680, minimumSizeHint().height());
-}
-
-QSize TimelineView::minimumSizeHint() const
-{
+	// Every lane, so a fresh layout shows the whole stack when there is room.
 	int h = 2 * lp_.margin + lp_.rulerH;
 	const int n = std::max(2, int(model_.tracks.size()));
 	for (int i = 0; i < n; ++i)
 		h += (i < model_.tracks.size() ? laneHeight(i) : lp_.videoLaneH) + lp_.laneGap;
-	return QSize(320, h);
+	return QSize(680, h);
+}
+
+QSize TimelineView::minimumSizeHint() const
+{
+	// The ruler and one lane: the rest scrolls (laneScroll). This used to be the
+	// whole stack, which pinned the editing area's height and left the divider
+	// above it nothing to move.
+	return QSize(320, 2 * lp_.margin + lp_.rulerH + lp_.videoLaneH + lp_.laneGap);
 }
 
 void TimelineView::drawRuler(QPainter &p) const
@@ -2417,8 +2498,16 @@ void TimelineView::paintEvent(QPaintEvent *)
 	clampView();
 	viewTarget_ = viewStart_;
 	ensureFonts();
+	// Any edit can change the stack's height; catch the scrollbar up after this
+	// paint rather than chase every path that adds, removes or resizes a lane.
+	if (laneBar_ && (laneBar_->maximum() != maxLaneScroll() || laneBar_->isHidden() != (maxLaneScroll() == 0)))
+		QTimer::singleShot(0, this, &TimelineView::syncLaneBar);
 
 	const bool dragging = (mode_ == Mode::Move && dragMoved_) || fileDrag_;
+
+	// Everything lane-bound is kept below the ruler: scrolled lanes slide under
+	// it, headers included. The ruler and what follows it draw unclipped.
+	p.setClipRect(QRect(0, contentRect().y(), width(), height() - contentRect().y()));
 
 	// Lanes + headers.
 	for (int i = 0; i < model_.tracks.size(); ++i) {
@@ -2602,6 +2691,7 @@ void TimelineView::paintEvent(QPaintEvent *)
 			   QStringLiteral("Add a source to the timeline to start editing."));
 	}
 
+	p.setClipping(false);
 	drawRuler(p);
 
 	// Project markers: a flag on the ruler and a faint line down the lanes, so a
@@ -3668,6 +3758,14 @@ void TimelineView::wheelEvent(QWheelEvent *e)
 {
 	const QPoint pos = e->position().toPoint();
 	const QPoint ad = e->angleDelta();
+	// Alt+wheel moves the lanes up and down when there are more than fit. Qt
+	// turns Alt+wheel into a sideways delta on Windows and X11, so either axis.
+	if ((e->modifiers() & Qt::AltModifier) && maxLaneScroll() > 0) {
+		const int d = ad.y() != 0 ? ad.y() : ad.x();
+		setLaneScroll(laneScroll() - int(std::lround(d / 120.0 * 40.0)));
+		e->accept();
+		return;
+	}
 	// Ctrl+wheel over a sound lane's header is its gain. Ctrl only: a plain
 	// wheel over the gutter has to keep scrolling the view like anywhere else,
 	// or the gutter becomes a strip you cannot scroll across.

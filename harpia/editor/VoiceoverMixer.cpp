@@ -17,6 +17,8 @@ extern "C" {
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <map>
+#include <optional>
 
 namespace harpia {
 
@@ -105,6 +107,56 @@ std::vector<float> decodeToFloat(const QString &path)
 	swr_free(&swr);
 	avcodec_free_context(&dc);
 	avformat_close_input(&fmt);
+	return out;
+}
+
+// Which frames of a source of `totalFrames` a take plays: from srcStartMs, for
+// playMs (0 = to the end), clamped to what the source has. len <= 0 = none.
+std::pair<long long, long long> takeSpan(long long totalFrames, qint64 srcStartMs, qint64 playMs)
+{
+	const long long s0 = std::clamp<long long>(srcStartMs * kRate / 1000, 0, totalFrames);
+	const long long len = playMs > 0 ? playMs * kRate / 1000 : totalFrames - s0;
+	return {s0, std::clamp<long long>(len, 0, totalFrames - s0)};
+}
+
+// The frames a take plays, read straight off the disk when the file is one of
+// decodeToWav's own -- 16-bit PCM, 48 kHz stereo, samples from byte 44 -- and
+// nullopt when it is anything else (the caller decodes it the general way).
+//
+// A Full-editing timeline is many short clips cut from a few long recordings.
+// Decoding a clip's whole source to use a second of it, once per clip and on
+// every mix, made a re-mix take seconds -- and the preview's sound waits for
+// it. The samples convert exactly as libswresample converts s16 to float, so
+// the result is the same to the sample, only without the decode.
+std::optional<std::vector<float>> canonicalWavSpan(const QString &path, qint64 srcStartMs, qint64 playMs)
+{
+	constexpr int kHeader = 44, kFrameBytes = kCh * 2;
+	QFile f(path);
+	if (!f.open(QIODevice::ReadOnly))
+		return std::nullopt;
+	const QByteArray h = f.read(kHeader);
+	if (h.size() < kHeader)
+		return std::nullopt;
+	const auto u16 = [&h](int o) { return quint32(uchar(h[o])) | quint32(uchar(h[o + 1])) << 8; };
+	const auto u32 = [&u16](int o) { return u16(o) | u16(o + 2) << 16; };
+	if (!h.startsWith("RIFF") || h.mid(8, 8) != "WAVEfmt " || u32(16) != 16 || u16(20) != 1 ||
+	    u16(22) != quint32(kCh) || u32(24) != quint32(kRate) || u16(34) != 16 || h.mid(36, 4) != "data")
+		return std::nullopt;
+	// The data size field, unless the file is past what 32 bits can say (over
+	// six hours): decodeToWav's field wraps then, and the file size is right.
+	qint64 bytes = f.size() - kHeader;
+	if (bytes <= 0xffffffffLL)
+		bytes = std::min<qint64>(bytes, qint64(u32(40)));
+	const auto [s0, len] = takeSpan(bytes / kFrameBytes, srcStartMs, playMs);
+	std::vector<float> out;
+	if (len <= 0 || !f.seek(kHeader + s0 * kFrameBytes))
+		return out;
+	const QByteArray raw = f.read(len * kFrameBytes);
+	const qsizetype n = raw.size() / 2;
+	out.resize(size_t(n));
+	const auto *in = reinterpret_cast<const uchar *>(raw.constData());
+	for (qsizetype i = 0; i < n; ++i)
+		out[size_t(i)] = float(qint16(quint16(in[2 * i] | in[2 * i + 1] << 8))) * (1.0f / 32768.0f);
 	return out;
 }
 } // namespace
@@ -337,21 +389,28 @@ std::vector<float> VoiceoverMixer::renderTakes(const std::vector<Take> &takes,
 	rendered.reserve(takes.size());
 	long long totalFrames = 0;
 
+	// Files the fast path cannot read, decoded once per mix however many
+	// takes cut from them.
+	std::map<QString, std::vector<float>> decoded;
 	for (const Take &t : takes) {
 		if (canceled())
 			return {};
-		const std::vector<float> full = decodeToFloat(t.path);
-		if (full.empty())
-			continue;
+		Rendered r;
 		// Honor trim/split: take only [srcStart, srcStart+play] of the source.
-		const long long totalF = (long long)full.size() / kCh;
-		const long long s0 = std::clamp<long long>(t.srcStartMs * kRate / 1000, 0, totalF);
-		long long len = t.playMs > 0 ? t.playMs * kRate / 1000 : totalF - s0;
-		len = std::clamp<long long>(len, 0, totalF - s0);
+		if (std::optional<std::vector<float>> span = canonicalWavSpan(t.path, t.srcStartMs, t.playMs)) {
+			r.samples = std::move(*span);
+		} else {
+			auto it = decoded.find(t.path);
+			if (it == decoded.end())
+				it = decoded.emplace(t.path, decodeToFloat(t.path)).first;
+			const std::vector<float> &full = it->second;
+			const auto [s0, len] = takeSpan((long long)full.size() / kCh, t.srcStartMs, t.playMs);
+			if (len > 0)
+				r.samples.assign(full.begin() + s0 * kCh, full.begin() + (s0 + len) * kCh);
+		}
+		const long long len = (long long)r.samples.size() / kCh;
 		if (len <= 0)
 			continue;
-		Rendered r;
-		r.samples.assign(full.begin() + s0 * kCh, full.begin() + (s0 + len) * kCh);
 		r.startFrame = t.outStartMs * kRate / 1000;
 		r.volume = t.volume;
 		r.fadeIn = std::max(0, t.fadeInMs) * kRate / 1000;

@@ -19,6 +19,7 @@
 class QMimeData;
 class QMouseEvent;
 class QPainter;
+class QScrollBar;
 class QTimer;
 
 namespace harpia {
@@ -462,8 +463,9 @@ protected:
 	void wheelEvent(QWheelEvent *) override;
 	void keyPressEvent(QKeyEvent *) override;
 	void leaveEvent(QEvent *) override;
-	QSize sizeHint() const override;
-	QSize minimumSizeHint() const override;
+	void resizeEvent(QResizeEvent *) override;
+	QSize sizeHint() const override;   // tall enough for every lane
+	QSize minimumSizeHint() const override; // the ruler and one lane; the rest scrolls
 
 private:
 	// ---- geometry / axis ----
@@ -476,6 +478,17 @@ private:
 	QRect laneRect(int track) const;       // full-width lane row (content x-range)
 	QRect trackHeaderRect(int track) const;
 	int laneAtY(int y) const;              // track index for a y, else -1
+	// The lanes scroll vertically under a fixed ruler when there are more than
+	// fit. Without this the view was always as tall as every lane, so the
+	// editing area could never be shorter than its track stack -- and the
+	// divider above it could not give the preview any more room.
+	int lanesHeight() const;               // every lane, with its gap
+	int maxLaneScroll() const;             // how far the lanes can scroll
+	int laneScroll() const;                // pixels scrolled, within range
+	void setLaneScroll(int px);
+	void syncLaneBar();                    // the scrollbar: range, place, shown
+	int laneScroll_ = 0;
+	QScrollBar *laneBar_ = nullptr;
 	qint64 spanMs() const;                 // total axis length (duration + tail)
 	qint64 visibleMs() const;              // spanMs / zoom
 

@@ -301,7 +301,7 @@ public:
 	// audio lanes, which is the ordering the compositor relies on.
 	int pasteTrack(const TlTrack &t, int above);
 
-	// Fit the whole timeline in the view (zoom out to 1:1 on the full span).
+	// Fit the edit in the view: its last clip near the right edge.
 	void zoomToFit();
 
 	// The content area, for tests: everything left of it is the track gutter,

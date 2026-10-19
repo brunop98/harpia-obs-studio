@@ -438,11 +438,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	layoutCombo_->addItem(QStringLiteral("Layout: Vertical"), int(EditorLayout::Vertical));
 	layoutCombo_->setToolTip(QStringLiteral(
 		"Standard: the preview above the timeline. Vertical: the timeline, the Inspector and a "
-		"tall preview side by side, for vertical videos. Each mode remembers its own."));
+		"tall preview side by side, for vertical videos. For every mode."));
 	connect(layoutCombo_, &QComboBox::activated, this, [this](int i) {
 		const auto l = EditorLayout(layoutCombo_->itemData(i).toInt());
 		QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
-			.setValue(QStringLiteral("editor/layout/%1").arg(int(mode())), int(l));
+			.setValue(QStringLiteral("editor/layout"), int(l));
 		setEditorLayout(l);
 	});
 	bar->addWidget(layoutCombo_, Zone::Right);
@@ -596,6 +596,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	bottomPane_ = bottomPane;
 	auto *bottomLayout = new QVBoxLayout(bottomPane);
 	bottomLayout->setContentsMargins(0, 0, 0, 0);
+	bottomLayout_ = bottomLayout;
 
 	timeline_ = new Timeline(this);
 	tracks_ = new TrackEditor(this);
@@ -1025,6 +1026,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	audioLayout->addLayout(voMixRow);
 
 	bottomLayout->addWidget(audioBody);
+	// Nothing until the Vertical layout's tall column needs it (adaptEditingArea).
+	bottomFill_ = new QSpacerItem(0, 0, QSizePolicy::Minimum, QSizePolicy::Fixed);
+	bottomLayout->addSpacerItem(bottomFill_);
 
 	// Wire the disclosure header: toggle the body, swap the arrow, persist state.
 	{
@@ -1929,17 +1933,17 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	hsplit->setStretchFactor(1, 1); // inspector
 	hsplit->setSizes({820, 190});
 	root->addWidget(hsplit, 1);
-	// In Vertical, where the preview column is dragged to is remembered per
-	// mode. (Standard's divider is vsplit_'s, saved by its own handler.)
+	// In Vertical, where the preview column is dragged to is remembered.
+	// (Standard's divider is vsplit_'s, saved per mode by its own handler.)
 	connect(hsplit, &QSplitter::splitterMoved, this, [this]() {
 		if (editorLayout_ != EditorLayout::Vertical || !hsplit_ || !topPane_)
 			return;
 		const int w = hsplit_->sizes().value(hsplit_->indexOf(topPane_));
 		if (w > 0)
 			QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
-				.setValue(QStringLiteral("editor/verticalPreviewW/%1").arg(int(mode())), w);
+				.setValue(QStringLiteral("editor/verticalPreviewW"), w);
 	});
-	setEditorLayout(savedLayoutFor(mode()));
+	setEditorLayout(savedEditorLayout());
 
 	playTimer_ = new QTimer(this);
 	playTimer_->setInterval(33); // ~30 fps preview
@@ -11032,12 +11036,38 @@ void VideoEditorWindow::setInspectorWidth(int want)
 	hsplit_->setSizes(sizes);
 }
 
-VideoEditorWindow::EditorLayout VideoEditorWindow::savedLayoutFor(EditMode m) const
+VideoEditorWindow::EditorLayout VideoEditorWindow::savedEditorLayout() const
 {
-	const int v = QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
-			      .value(QStringLiteral("editor/layout/%1").arg(int(m)), 0)
-			      .toInt();
+	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	// v0.1.438 kept one per mode; Full editing's (where vertical work is
+	// done) carries over as the choice for all of them.
+	const QVariant fullsOwn = st.value(QStringLiteral("editor/layout/%1").arg(int(EditMode::Full)), 0);
+	const int v = st.value(QStringLiteral("editor/layout"), fullsOwn).toInt();
 	return v == int(EditorLayout::Vertical) ? EditorLayout::Vertical : EditorLayout::Standard;
+}
+
+void VideoEditorWindow::adaptEditingArea()
+{
+	if (!stack_ || !bottomLayout_ || !bottomFill_)
+		return;
+	const bool tall = editorLayout_ == EditorLayout::Vertical;
+	timeline_->setTallBar(tall);
+	tracks_->setTallTracks(tall);
+	// The stack would otherwise stretch Trim's one bar over the whole column
+	// (and a stack is as tall as its TALLEST page, Full editing's timeline):
+	// pin it to the current page, and let the spacer under the audio section
+	// take what is left.
+	const bool pack = tall && !fullEdit();
+	QWidget *page = stack_->currentWidget();
+	if (pack && page) {
+		const int h = std::max({page->sizeHint().height(), page->minimumSizeHint().height(), page->minimumHeight()});
+		stack_->setFixedHeight(h);
+	} else {
+		stack_->setMinimumHeight(0);
+		stack_->setMaximumHeight(QWIDGETSIZE_MAX);
+	}
+	bottomFill_->changeSize(0, 0, QSizePolicy::Minimum, pack ? QSizePolicy::Expanding : QSizePolicy::Fixed);
+	bottomLayout_->invalidate();
 }
 
 void VideoEditorWindow::setEditorLayout(EditorLayout l)
@@ -11074,6 +11104,7 @@ void VideoEditorWindow::setEditorLayout(EditorLayout l)
 		vsplit_->show();
 		canvas_->setLayoutParams(canvas_->layoutParams()); // its own minimum size again
 	}
+	adaptEditingArea();
 	setUpdatesEnabled(true);
 	// Sized once the splitters have laid the new arrangement out.
 	QTimer::singleShot(0, this, [this]() {
@@ -11102,7 +11133,7 @@ void VideoEditorWindow::sizeVerticalLayout()
 	// Where it was last dragged to in this mode; else as wide as the picture
 	// needs at the column's full height, so a 9:16 video fills it top to bottom.
 	int want = QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
-			   .value(QStringLiteral("editor/verticalPreviewW/%1").arg(int(mode())), 0)
+			   .value(QStringLiteral("editor/verticalPreviewW"), 0)
 			   .toInt();
 	if (want <= 0) {
 		QSize pic = fullEdit() ? timelineCanvasSize() : multiCut() ? multiCutCanvasSize() : QSize();
@@ -11181,11 +11212,9 @@ void VideoEditorWindow::setEditMode(EditMode m)
 	cutModeBtn_->setChecked(m == EditMode::MultiCut);
 	fullModeBtn_->setChecked(m == EditMode::Full);
 	stack_->setCurrentIndex(int(m));
-	// Each mode keeps its own layout; a mode staying Vertical still gets its
-	// own preview width (the deferred applyModeSplit below covers Standard).
-	setEditorLayout(savedLayoutFor(m));
-	if (editorLayout_ == EditorLayout::Vertical)
-		QTimer::singleShot(0, this, [this]() { sizeVerticalLayout(); });
+	// The layout is the same in every mode, but in Vertical the editing area
+	// fits the mode just entered.
+	adaptEditingArea();
 	if (shortcuts_)
 		shortcuts_->refreshEnabled(); // mode-gated commands (Up / Down in Multi-Cut)
 	// Nothing to send FROM Full editing -- it is the destination.

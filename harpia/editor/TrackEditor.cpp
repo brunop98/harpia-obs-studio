@@ -130,7 +130,15 @@ QSize TrackEditor::sizeHint() const
 
 QSize TrackEditor::minimumSizeHint() const
 {
-	return QSize(240, 2 * lp_.margin + 2 * lp_.captionH + lp_.srcH + lp_.trackGap + lp_.outH);
+	return QSize(240, 2 * lp_.margin + 2 * lp_.captionH + srcH() + lp_.trackGap + outH());
+}
+
+void TrackEditor::setTallTracks(bool on)
+{
+	if (on == tallTracks_)
+		return;
+	tallTracks_ = on;
+	setLayoutParams(lp_); // the same re-layout and filmstrip rebuild a params change gets
 }
 
 void TrackEditor::setLayoutParams(const TrackLayoutParams &p)
@@ -596,13 +604,13 @@ void TrackEditor::clearPlayhead()
 
 QRect TrackEditor::sourceRect() const
 {
-	return QRect(lp_.margin, lp_.margin + lp_.captionH, width() - 2 * lp_.margin, lp_.srcH);
+	return QRect(lp_.margin, lp_.margin + lp_.captionH, width() - 2 * lp_.margin, srcH());
 }
 
 QRect TrackEditor::outputRect() const
 {
-	return QRect(lp_.margin, lp_.margin + lp_.captionH + lp_.srcH + lp_.trackGap + lp_.captionH,
-		     width() - 2 * lp_.margin, lp_.outH);
+	return QRect(lp_.margin, lp_.margin + lp_.captionH + srcH() + lp_.trackGap + lp_.captionH,
+		     width() - 2 * lp_.margin, outH());
 }
 
 int TrackEditor::msToX(qint64 ms) const

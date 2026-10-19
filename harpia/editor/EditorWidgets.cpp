@@ -1441,7 +1441,7 @@ void PreviewCanvas::applyWidgetCrop(const QRect &widgetRect)
 
 Timeline::Timeline(QWidget *parent) : QWidget(parent)
 {
-	setMinimumHeight(lp_.barTop + lp_.barH + 22);
+	setMinimumHeight(lp_.barTop + barH() + 22);
 	setMouseTracking(true);
 	setToolTip(QStringLiteral("Scroll to zoom, Shift+scroll to pan"));
 }
@@ -1452,8 +1452,19 @@ void Timeline::setLayoutParams(const TimelineLayoutParams &p)
 	zoom_ = std::clamp(zoom_, 1.0, lp_.maxZoom);
 	if (duration_ > 0)
 		clampView();
-	setMinimumHeight(lp_.barTop + lp_.barH + 22);
+	setMinimumHeight(lp_.barTop + barH() + 22);
 	stripCache_ = QPixmap(); // geometry changed — rebuild the filmstrip
+	updateGeometry();
+	update();
+}
+
+void Timeline::setTallBar(bool on)
+{
+	if (on == tallBar_)
+		return;
+	tallBar_ = on;
+	setMinimumHeight(lp_.barTop + barH() + 22);
+	stripCache_ = QPixmap(); // a taller filmstrip
 	updateGeometry();
 	update();
 }
@@ -1615,7 +1626,7 @@ void Timeline::paintEvent(QPaintEvent *)
 	QPainter p(this);
 	p.setRenderHint(QPainter::Antialiasing, true);
 
-	const QRect bar(lp_.pad, lp_.barTop, width() - 2 * lp_.pad, lp_.barH);
+	const QRect bar(lp_.pad, lp_.barTop, width() - 2 * lp_.pad, barH());
 	// Background + filmstrip come from the render cache (rebuilt only when the
 	// view/zoom/thumbs change) — repaints are a blit, not 20+ image rescales.
 	ensureStripCache(bar);

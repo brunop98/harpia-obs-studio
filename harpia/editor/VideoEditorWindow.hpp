@@ -50,6 +50,7 @@ class QPushButton;
 class QSlider;
 class QTabWidget;
 class QSplitter;
+class QSpacerItem;
 class QStackedWidget;
 class QTimer;
 class QFileSystemWatcher;
@@ -493,7 +494,7 @@ private:
 	bool multiCut() const;   // mode() == MultiCut
 	bool fullEdit() const;   // mode() == Full
 
-	// ---- Layouts (the Layout dropdown), remembered per mode ----
+	// ---- Layouts (the Layout dropdown): one choice for every mode ----
 	//   Standard  the preview over the editing area, the Inspector on the right
 	//   Vertical  editing area | Inspector | a tall preview column, with the
 	//             toolbar across the top -- made for vertical (9:16) videos,
@@ -507,9 +508,16 @@ private:
 	QWidget *topPane_ = nullptr;      // the preview, and in Standard the toolbar under it
 	QVBoxLayout *topLayout_ = nullptr;
 	QWidget *barHost_ = nullptr;      // the toolbar
-	EditorLayout savedLayoutFor(EditMode m) const;
+	EditorLayout savedEditorLayout() const;
 	void setEditorLayout(EditorLayout l); // rearranges and syncs the dropdown; saves nothing
-	void sizeVerticalLayout();             // the three columns' widths, for this mode
+	void sizeVerticalLayout();             // the three columns' widths
+	// The editing area for the mode and layout: in Vertical, Trim's bar and
+	// Multi-Cut's tracks are drawn twice as tall, and they keep their own
+	// height with the spare room under everything rather than between them
+	// and the audio section. Full editing's timeline fills the column.
+	void adaptEditingArea();
+	QVBoxLayout *bottomLayout_ = nullptr;
+	QSpacerItem *bottomFill_ = nullptr; // takes the spare room, in Vertical only
 	// The pane holding the editing area in hsplit_: the preview/editing split
 	// in Standard, the editing area itself in Vertical.
 	QWidget *editingAreaPane() const;

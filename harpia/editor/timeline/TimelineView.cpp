@@ -637,10 +637,18 @@ void TimelineView::setSnapEnabled(bool on)
 
 void TimelineView::zoomToFit()
 {
-	zoom_ = zoomTarget_ = 1.0; // zoom 1 == the whole span across the view
+	// The edit across the whole width, with a sliver to spare after its last
+	// clip. This used to be zoom 1, the whole SPAN -- which includes the
+	// draggable tail past the end and is never under kMinSpanMs -- so on a
+	// short edit Fit left half the view empty, and from the default zoom it
+	// changed nothing at all.
+	const qint64 dur = model_.durationMs();
+	const qint64 want = dur > 0 ? dur + std::max<qint64>(200, dur / 40) : spanMs();
+	zoom_ = zoomTarget_ = std::clamp(double(spanMs()) / double(want), 1.0, lp_.maxZoom);
 	viewStart_ = viewTarget_ = 0;
 	if (anim_)
 		anim_->stop();
+	notifyView();
 	update();
 }
 

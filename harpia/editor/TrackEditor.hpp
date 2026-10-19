@@ -137,6 +137,12 @@ public:
 	// Developer Panel: tweak the layout live (invalidates the strip cache).
 	const TrackLayoutParams &layoutParams() const { return lp_; }
 	void setLayoutParams(const TrackLayoutParams &p);
+	// Both tracks twice as tall, for the editor's Vertical layout (see
+	// Timeline::setTallBar: the layout params, and the Developer Panel, keep
+	// the normal heights).
+	void setTallTracks(bool on);
+	QRect sourceRectForTest() const { return sourceRect(); }
+	QRect outputRectForTest() const { return outputRect(); }
 
 signals:
 	// The window being LOOKED AT moved on one of the two lanes -- a zoom, a
@@ -210,6 +216,9 @@ private:
 	}
 
 	TrackLayoutParams lp_;
+	bool tallTracks_ = false;
+	int srcH() const { return tallTracks_ ? lp_.srcH * 2 : lp_.srcH; }
+	int outH() const { return tallTracks_ ? lp_.outH * 2 : lp_.outH; }
 	EditorColors cl_;
 	QVector<CutSegment> segs_;
 	qint64 duration_ = 0;

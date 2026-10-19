@@ -333,6 +333,10 @@ public:
 	// Developer Panel: tweak the layout live (invalidates the strip cache).
 	const TimelineLayoutParams &layoutParams() const { return lp_; }
 	void setLayoutParams(const TimelineLayoutParams &p);
+	// A bar twice as tall, for the editor's Vertical layout, where this sits
+	// in a tall column with room to spare. Apart from the layout params, so
+	// the Developer Panel never sees (or saves) the doubled height.
+	void setTallBar(bool on);
 
 signals:
 	void startChanged(qint64 ms);
@@ -364,6 +368,8 @@ private:
 	Grab grab_ = Grab::None;
 
 	TimelineLayoutParams lp_;
+	bool tallBar_ = false;
+	int barH() const { return tallBar_ ? lp_.barH * 2 : lp_.barH; }
 
 	qint64 duration_ = 0;
 	qint64 start_ = 0;

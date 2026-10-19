@@ -10,10 +10,14 @@
 // ruler and one lane.
 //
 // The Vertical layout (the Layout dropdown): editing area | Inspector | a tall
-// preview, with the toolbar across the top, for vertical videos. Each mode
-// remembers its own, across windows.
+// preview, with the toolbar across the top, for vertical videos. One choice
+// for every mode, remembered across windows; in it, Simple Trim's bar and
+// Multi-Cut's tracks are drawn twice as tall, with the audio section right
+// under them. And Fit makes the edit fill the timeline's width.
 //
 //   editorsplit_test <workdir>   (run_avsync.sh generates av_red.mp4, av_tall.mp4)
+#include "editor/EditorWidgets.hpp"
+#include "editor/TrackEditor.hpp"
 #include "editor/VideoEditorWindow.hpp"
 #include "editor/timeline/TimelineView.hpp"
 
@@ -156,6 +160,39 @@ int main(int argc, char **argv)
 	settle(50);
 	ok(tv->clipRectForTest(0, 0).top() == topBefore, "and back to the top puts them where they were");
 
+	std::printf("\n-- Fit --\n");
+	{
+		QPushButton *fit = nullptr;
+		for (QPushButton *b : w.findChildren<QPushButton *>())
+			if (b->text() == QStringLiteral("Fit"))
+				fit = b;
+		const QRect c = tv->contentRectForTest();
+		const int before = tv->clipRectForTest(0, 0).right();
+		ok(fit && fit->isVisible(), "a Fit button in Full editing");
+		if (fit)
+			fit->click();
+		settle(100);
+		const int after = tv->clipRectForTest(0, 0).right();
+		std::printf("     the 4 s clip ends at x %d of %d..%d before, %d after\n", before, c.left(), c.right(),
+			    after);
+		ok(after > c.right() - c.width() / 10 && after <= c.right(),
+		   "the edit fills the width, its end just inside the right edge");
+		// Zoomed right in, then Fit again: the same view.
+		const QPointF mid(c.center());
+		for (int i = 0; i < 4; ++i) {
+			QWheelEvent in(mid, tv->mapToGlobal(mid), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+				       Qt::NoScrollPhase, false);
+			QApplication::sendEvent(tv, &in);
+			settle(150);
+		}
+		const int zoomed = tv->clipRectForTest(0, 0).right();
+		if (fit)
+			fit->click();
+		settle(100);
+		ok(zoomed > c.right() + 50 && tv->clipRectForTest(0, 0).right() == after,
+		   "and from zoomed in, Fit comes back to it");
+	}
+
 	std::printf("\n-- the Vertical layout --\n");
 	{
 		const QString tall = QString::fromLocal8Bit(argc > 1 ? argv[1] : ".") + QStringLiteral("/av_tall.mp4");
@@ -211,9 +248,38 @@ int main(int argc, char **argv)
 		ok(at(play).y() < at(vt).y() && at(play).y() < at(canvas).y(), "and the toolbar across the top");
 		v.grab().save(QString::fromLocal8Bit(argc > 1 ? argv[1] : ".") + QStringLiteral("/layout_vertical.png"));
 
+		// The other modes follow, and fit the tall column.
+		QPushButton *audioHeader = nullptr;
+		for (QPushButton *b : v.findChildren<QPushButton *>())
+			if (b->text().contains(QStringLiteral("Audio")) && b->text().contains(QStringLiteral("voiceover")))
+				audioHeader = b;
 		modeButton("Multi-Cut");
-		ok(combo->currentText().contains(QStringLiteral("Standard")) && at(canvas).y() < at(play).y(),
-		   "Multi-Cut keeps its own layout: Standard, toolbar under the preview");
+		auto *cuts = v.findChild<TrackEditor *>();
+		ok(combo->currentText().contains(QStringLiteral("Vertical")) && cuts && at(canvas).x() > at(cuts).x() &&
+			   at(play).y() < at(canvas).y(),
+		   "Multi-Cut is Vertical too: tracks left, the tall preview right");
+		if (cuts && audioHeader) {
+			const QRect src = cuts->sourceRectForTest(), out = cuts->outputRectForTest();
+			std::printf("     Multi-Cut tracks %d and %d tall; the editor ends at y %d, the audio header is at %d\n",
+				    src.height(), out.height(), at(cuts).y() + cuts->height(), at(audioHeader).y());
+			ok(src.height() == 2 * cuts->layoutParams().srcH && out.height() == 2 * cuts->layoutParams().outH,
+			   "its tracks drawn twice as tall");
+			ok(at(audioHeader).y() - (at(cuts).y() + cuts->height()) < 30,
+			   "and the audio section right under them, not at the foot of the column");
+		}
+		modeButton("Simple Trim");
+		auto *trim = v.findChild<Timeline *>();
+		ok(combo->currentText().contains(QStringLiteral("Vertical")) && trim && at(canvas).x() > at(trim).x(),
+		   "Simple Trim is Vertical too");
+		if (trim && audioHeader) {
+			std::printf("     the trim bar is %d tall; the audio header %d below it\n", trim->height(),
+				    at(audioHeader).y() - (at(trim).y() + trim->height()));
+			ok(trim->minimumHeight() >= 2 * trim->layoutParams().barH && at(audioHeader).y() - (at(trim).y() + trim->height()) < 30,
+			   "its bar twice as tall, the audio section right under it");
+		}
+		v.grab().save(QString::fromLocal8Bit(argc > 1 ? argv[1] : ".") + QStringLiteral("/layout_vertical_trim.png"));
+		modeButton("Multi-Cut");
+		v.grab().save(QString::fromLocal8Bit(argc > 1 ? argv[1] : ".") + QStringLiteral("/layout_vertical_multicut.png"));
 		modeButton("Full Editing");
 		ok(combo->currentText().contains(QStringLiteral("Vertical")) && at(canvas).x() > at(vt).x(),
 		   "back in Full editing, Vertical again");
@@ -238,7 +304,7 @@ int main(int argc, char **argv)
 				canvas = c;
 		ok(combo && combo->currentText().contains(QStringLiteral("Vertical")) && canvas && vt &&
 			   canvas->mapTo(&v, QPoint()).x() > vt->mapTo(&v, QPoint()).x(),
-		   "a new editor window remembers Full editing's Vertical layout");
+		   "a new editor window remembers the Vertical layout");
 		combo->setCurrentIndex(combo->findData(0));
 		emit combo->activated(combo->currentIndex());
 		settle(400);

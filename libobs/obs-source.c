@@ -1334,6 +1334,35 @@ static void async_tick(obs_source_t *source)
 	pthread_mutex_unlock(&source->async_mutex);
 }
 
+/* Harpia: runs `fn` on each of the source's filters, last to first, from a
+ * referenced copy taken under filter_mutex. obs_source_video_tick used to walk
+ * the live array unlocked on the graphics thread, while filters can be added or
+ * removed from any thread -- and da_insert raises num before the new slot
+ * exists (and may free the old array), so that walk could read a filter that
+ * was not there. A crop filter added to a capture source in the same moment it
+ * was first shown crashed in show_source() this way. */
+static void call_filters(obs_source_t *source, void (*fn)(obs_source_t *))
+{
+	DARRAY(obs_source_t *) filters;
+
+	da_init(filters);
+
+	pthread_mutex_lock(&source->filter_mutex);
+	da_reserve(filters, source->filters.num);
+	for (size_t i = source->filters.num; i > 0; i--) {
+		obs_source_t *filter = obs_source_get_ref(source->filters.array[i - 1]);
+		if (filter)
+			da_push_back(filters, &filter);
+	}
+	pthread_mutex_unlock(&source->filter_mutex);
+
+	for (size_t i = 0; i < filters.num; i++) {
+		fn(filters.array[i]);
+		obs_source_release(filters.array[i]);
+	}
+	da_free(filters);
+}
+
 void obs_source_video_tick(obs_source_t *source, float seconds)
 {
 	bool now_showing, now_active;
@@ -1366,16 +1395,8 @@ void obs_source_video_tick(obs_source_t *source, float seconds)
 			hide_source(source);
 		}
 
-		if (source->filters.num) {
-			for (size_t i = source->filters.num; i > 0; i--) {
-				obs_source_t *filter = source->filters.array[i - 1];
-				if (now_showing) {
-					show_source(filter);
-				} else {
-					hide_source(filter);
-				}
-			}
-		}
+		if (source->filters.num)
+			call_filters(source, now_showing ? show_source : hide_source);
 
 		source->showing = now_showing;
 	}
@@ -1389,16 +1410,8 @@ void obs_source_video_tick(obs_source_t *source, float seconds)
 			deactivate_source(source);
 		}
 
-		if (source->filters.num) {
-			for (size_t i = source->filters.num; i > 0; i--) {
-				obs_source_t *filter = source->filters.array[i - 1];
-				if (now_active) {
-					activate_source(filter);
-				} else {
-					deactivate_source(filter);
-				}
-			}
-		}
+		if (source->filters.num)
+			call_filters(source, now_active ? activate_source : deactivate_source);
 
 		source->active = now_active;
 	}

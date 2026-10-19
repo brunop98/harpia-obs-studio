@@ -44,6 +44,11 @@ if [ ! -f "$WORK/hlg_ramp.mp4" ] && ffmpeg -hide_banner -encoders 2>/dev/null | 
 fi
 gen green 0x00A000 700
 gen blue 0x0000C0 1500
+# A vertical (9:16) clip, for the editor's Vertical layout (editorsplit_test).
+[ -f "$WORK/av_tall.mp4" ] || ffmpeg -y -loglevel error \
+	-f lavfi -i "testsrc2=s=360x640:r=30:d=4" \
+	-f lavfi -i "sine=frequency=500:sample_rate=48000:duration=4" \
+	-c:v libx264 -pix_fmt yuv420p -c:a aac -shortest "$WORK/av_tall.mp4"
 # Ten minutes of sound and nothing else: the long recording a timeline's short
 # clips are cut from, for timing the preview mix (timelinemix_test).
 [ -f "$WORK/long_tone.m4a" ] || ffmpeg -y -loglevel error \
@@ -86,6 +91,7 @@ build "$HERE/batchexport_test.cpp" batchexport_test
 # reads them and exported from a two-track 60 fps timeline.
 build "$HERE/exportcadence_test.cpp" exportcadence_test
 build "$HERE/timelinemix_test.cpp" timelinemix_test
+build "$HERE/swsoverrun_test.cpp" swsoverrun_test
 # The export window: what it says is what it asks for -- resolution, frame
 # rate, the remembered choices -- and a size estimate that moves the right way.
 "$MOC" -I"$H" "$H/editor/ExportOptionsDialog.hpp" -o "$WORK/moc_ExportOptionsDialog.cpp"
@@ -272,6 +278,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/exportcolor_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/batchexport_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportcadence_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinemix_test" "$WORK" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/swsoverrun_test" "$WORK" || rc=1
 HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
 	"$WORK/exportdialog_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportprogress_test" "$WORK" || rc=1

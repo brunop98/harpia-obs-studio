@@ -259,6 +259,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	setAcceptDrops(true); // drop video files to add them as sources
 
 	auto *root = new QVBoxLayout(this);
+	rootLayout_ = root;
 
 	// A draggable vertical splitter lets you trade preview height for timeline
 	// height: more preview when reviewing, more timeline for detailed cut work.
@@ -270,6 +271,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	auto *topPane = new QWidget(this);
 	auto *topLayout = new QVBoxLayout(topPane);
 	topLayout->setContentsMargins(0, 0, 0, 0);
+	topPane_ = topPane;
+	topLayout_ = topLayout;
 	canvas_ = new PreviewCanvas(this);
 	// A child of the preview, so it floats over the picture and is clipped to
 	// it, and it occupies no layout space -- layOutOverview() places it by hand
@@ -288,6 +291,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// and in a narrow window the first squeezed its buttons until their labels
 	// were cut off. Now it is one line when there is room and wraps when not.
 	auto *barHost = new QWidget(this);
+	barHost_ = barHost;
 	toolbar_ = new ToolbarLayout(barHost, 6, 18, 4);
 	auto *bar = toolbar_;
 	// A group of controls that belong together, wrapped as one item so it
@@ -382,6 +386,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	transport->setSpacing(4);
 	transport->addWidget(resetBtn);
 	playBtn_ = new QPushButton(this);
+	playBtn_->setObjectName(QStringLiteral("playButton"));
 	playBtn_->setIcon(uiIcon(Glyph::Play));
 	playBtn_->setToolTip(QStringLiteral("Play from the marker at the current speed"));
 	playBtn_->setFixedWidth(40);
@@ -423,6 +428,24 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		refreshPreviewAtPlayhead();
 	});
 	bar->addWidget(previewQualityCombo_, Zone::Right);
+
+	// Where the preview sits. A vertical video in a wide preview is a thin
+	// strip of picture between two black bars, so one layout gives it a tall
+	// column of its own. Remembered per mode (setEditMode applies it).
+	layoutCombo_ = new QComboBox(this);
+	layoutCombo_->setObjectName(QStringLiteral("editorLayout"));
+	layoutCombo_->addItem(QStringLiteral("Layout: Standard"), int(EditorLayout::Standard));
+	layoutCombo_->addItem(QStringLiteral("Layout: Vertical"), int(EditorLayout::Vertical));
+	layoutCombo_->setToolTip(QStringLiteral(
+		"Standard: the preview above the timeline. Vertical: the timeline, the Inspector and a "
+		"tall preview side by side, for vertical videos. Each mode remembers its own."));
+	connect(layoutCombo_, &QComboBox::activated, this, [this](int i) {
+		const auto l = EditorLayout(layoutCombo_->itemData(i).toInt());
+		QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+			.setValue(QStringLiteral("editor/layout/%1").arg(int(mode())), int(l));
+		setEditorLayout(l);
+	});
+	bar->addWidget(layoutCombo_, Zone::Right);
 
 	// Monitor toggle. Preview audio is Full-editing only for now, so it hides
 	// with the other Full-only controls.
@@ -1906,6 +1929,17 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	hsplit->setStretchFactor(1, 1); // inspector
 	hsplit->setSizes({820, 190});
 	root->addWidget(hsplit, 1);
+	// In Vertical, where the preview column is dragged to is remembered per
+	// mode. (Standard's divider is vsplit_'s, saved by its own handler.)
+	connect(hsplit, &QSplitter::splitterMoved, this, [this]() {
+		if (editorLayout_ != EditorLayout::Vertical || !hsplit_ || !topPane_)
+			return;
+		const int w = hsplit_->sizes().value(hsplit_->indexOf(topPane_));
+		if (w > 0)
+			QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+				.setValue(QStringLiteral("editor/verticalPreviewW/%1").arg(int(mode())), w);
+	});
+	setEditorLayout(savedLayoutFor(mode()));
 
 	playTimer_ = new QTimer(this);
 	playTimer_->setInterval(33); // ~30 fps preview
@@ -2334,13 +2368,8 @@ void VideoEditorWindow::applyInspectorParams(const EditorInspectorParams &p)
 	if (scriptList_)
 		scriptList_->setMaximumHeight(std::max(48, p.scriptListH));
 	// If it is already open and now narrower than its own minimum, widen it.
-	if (inspector_->isVisible() && hsplit_) {
-		const QList<int> sizes = hsplit_->sizes();
-		if (sizes.size() == 2 && sizes[1] < p.minWidth) {
-			const int total = sizes[0] + sizes[1];
-			hsplit_->setSizes({total - p.minWidth, p.minWidth});
-		}
-	}
+	if (inspector_->isVisible() && hsplit_ && inspectorWidth() < p.minWidth)
+		setInspectorWidth(p.minWidth);
 }
 
 void VideoEditorWindow::applyChrome(const EditorChromeParams &p)
@@ -10896,6 +10925,8 @@ void VideoEditorWindow::pasteFromClipboard()
 
 void VideoEditorWindow::applyModeSplit()
 {
+	if (editorLayout_ != EditorLayout::Standard)
+		return; // the preview is a column of its own: see sizeVerticalLayout
 	// The three modes need very different amounts of room below the preview:
 	// Simple Trim is one short bar, Full editing a whole track stack. Without
 	// this the split stayed wherever the tallest mode left it, and Simple Trim
@@ -10967,15 +10998,131 @@ void VideoEditorWindow::showInspector(bool on)
 	QTimer::singleShot(0, this, [this]() {
 		if (!hsplit_ || !inspector_ || !inspector_->isVisible())
 			return;
-		const QList<int> sizes = hsplit_->sizes();
-		if (sizes.size() != 2)
-			return;
-		const int total = sizes[0] + sizes[1];
+		int total = 0;
+		for (int w : hsplit_->sizes())
+			total += w;
 		const int want = std::clamp(inspectorParams_.openWidth, inspector_->minimumWidth(),
 					    std::max(inspector_->minimumWidth(), total / 3));
-		if (sizes[1] < want)
-			hsplit_->setSizes({total - want, want});
+		if (inspectorWidth() < want)
+			setInspectorWidth(want);
 	});
+}
+
+QWidget *VideoEditorWindow::editingAreaPane() const
+{
+	return editorLayout_ == EditorLayout::Vertical ? bottomPane_ : static_cast<QWidget *>(vsplit_);
+}
+
+int VideoEditorWindow::inspectorWidth() const
+{
+	return hsplit_ ? hsplit_->sizes().value(hsplit_->indexOf(inspector_)) : 0;
+}
+
+void VideoEditorWindow::setInspectorWidth(int want)
+{
+	if (!hsplit_)
+		return;
+	QList<int> sizes = hsplit_->sizes();
+	const int ins = hsplit_->indexOf(inspector_), area = hsplit_->indexOf(editingAreaPane());
+	if (ins < 0 || area < 0 || ins >= sizes.size() || area >= sizes.size())
+		return;
+	const int delta = want - sizes[ins];
+	sizes[ins] = want;
+	sizes[area] = std::max(0, sizes[area] - delta);
+	hsplit_->setSizes(sizes);
+}
+
+VideoEditorWindow::EditorLayout VideoEditorWindow::savedLayoutFor(EditMode m) const
+{
+	const int v = QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+			      .value(QStringLiteral("editor/layout/%1").arg(int(m)), 0)
+			      .toInt();
+	return v == int(EditorLayout::Vertical) ? EditorLayout::Vertical : EditorLayout::Standard;
+}
+
+void VideoEditorWindow::setEditorLayout(EditorLayout l)
+{
+	if (layoutCombo_) {
+		const QSignalBlocker block(layoutCombo_);
+		layoutCombo_->setCurrentIndex(std::max(0, layoutCombo_->findData(int(l))));
+	}
+	if (!hsplit_ || !vsplit_ || !topPane_ || !topLayout_ || !bottomPane_ || !barHost_ || !rootLayout_ ||
+	    l == editorLayout_)
+		return;
+	editorLayout_ = l;
+	setUpdatesEnabled(false);
+	if (l == EditorLayout::Vertical) {
+		// The toolbar goes across the top of the window: a preview column is
+		// too narrow to hold it, and it belongs to all three columns anyway.
+		topLayout_->removeWidget(barHost_);
+		rootLayout_->insertWidget(0, barHost_);
+		// [preview/editing split, Inspector] -> [(empty, hidden) split,
+		// editing area, Inspector, preview].
+		hsplit_->insertWidget(1, bottomPane_);
+		hsplit_->addWidget(topPane_);
+		vsplit_->hide();
+		hsplit_->setStretchFactor(hsplit_->indexOf(bottomPane_), 5);
+		hsplit_->setStretchFactor(hsplit_->indexOf(topPane_), 2);
+		// A tall column is narrow: let the preview go below the minimum width
+		// a wide preview keeps (it still keeps its minimum height).
+		canvas_->setMinimumWidth(std::min(canvas_->layoutParams().minW, 180));
+	} else {
+		vsplit_->insertWidget(0, topPane_);
+		vsplit_->insertWidget(1, bottomPane_);
+		rootLayout_->removeWidget(barHost_);
+		topLayout_->addWidget(barHost_);
+		vsplit_->show();
+		canvas_->setLayoutParams(canvas_->layoutParams()); // its own minimum size again
+	}
+	setUpdatesEnabled(true);
+	// Sized once the splitters have laid the new arrangement out.
+	QTimer::singleShot(0, this, [this]() {
+		if (editorLayout_ == EditorLayout::Vertical)
+			sizeVerticalLayout();
+		else
+			applyModeSplit();
+	});
+}
+
+void VideoEditorWindow::sizeVerticalLayout()
+{
+	if (editorLayout_ != EditorLayout::Vertical || !hsplit_)
+		return;
+	QList<int> sizes = hsplit_->sizes();
+	const int edit = hsplit_->indexOf(bottomPane_), ins = hsplit_->indexOf(inspector_),
+		  pre = hsplit_->indexOf(topPane_);
+	if (edit < 0 || ins < 0 || pre < 0 || pre >= sizes.size())
+		return;
+	int total = 0;
+	for (int w : sizes)
+		total += w;
+	if (total <= 0)
+		return;
+	const int insW = inspector_->isVisible() ? sizes[ins] : 0;
+	// Where it was last dragged to in this mode; else as wide as the picture
+	// needs at the column's full height, so a 9:16 video fills it top to bottom.
+	int want = QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+			   .value(QStringLiteral("editor/verticalPreviewW/%1").arg(int(mode())), 0)
+			   .toInt();
+	if (want <= 0) {
+		QSize pic = fullEdit() ? timelineCanvasSize() : multiCut() ? multiCutCanvasSize() : QSize();
+		if (!pic.isValid() || pic.isEmpty()) {
+			const EditorSource *s = activeSource();
+			pic = s ? QSize(s->width, s->height) : QSize(9, 16);
+		}
+		if (pic.isEmpty())
+			pic = QSize(9, 16);
+		want = int(std::lround(double(topPane_->height()) * pic.width() / pic.height()));
+	}
+	const int floor = std::max(canvas_->minimumWidth(), 120);
+	want = std::clamp(want, floor, std::max(floor, (total - insW) / 2));
+	sizes[pre] = want;
+	sizes[edit] = std::max(0, total - insW - want);
+	sizes[ins] = insW;
+	for (int i = 0; i < sizes.size(); ++i)
+		if (i != pre && i != edit && i != ins)
+			sizes[i] = 0; // the empty, hidden preview/editing split
+	hsplit_->setSizes(sizes);
 }
 
 void VideoEditorWindow::sendToFullEditing()
@@ -11034,6 +11181,11 @@ void VideoEditorWindow::setEditMode(EditMode m)
 	cutModeBtn_->setChecked(m == EditMode::MultiCut);
 	fullModeBtn_->setChecked(m == EditMode::Full);
 	stack_->setCurrentIndex(int(m));
+	// Each mode keeps its own layout; a mode staying Vertical still gets its
+	// own preview width (the deferred applyModeSplit below covers Standard).
+	setEditorLayout(savedLayoutFor(m));
+	if (editorLayout_ == EditorLayout::Vertical)
+		QTimer::singleShot(0, this, [this]() { sizeVerticalLayout(); });
 	if (shortcuts_)
 		shortcuts_->refreshEnabled(); // mode-gated commands (Up / Down in Multi-Cut)
 	// Nothing to send FROM Full editing -- it is the destination.

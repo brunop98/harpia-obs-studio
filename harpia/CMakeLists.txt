@@ -231,6 +231,7 @@ target_sources(
     editor/FrameSeeker.cpp
     editor/HdrToSdr.cpp
     editor/HdrToSdr.hpp
+    editor/SwsImage.hpp
     editor/PreviewDecoder.cpp
     editor/PreviewDecoder.hpp
     editor/ProxyMedia.cpp

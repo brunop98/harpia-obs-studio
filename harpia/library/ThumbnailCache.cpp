@@ -1,6 +1,7 @@
 #include "ThumbnailCache.hpp"
 
 #include "../editor/HdrToSdr.hpp"
+#include "../editor/SwsImage.hpp"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -62,7 +63,11 @@ QImage frameToImage(AVFrame *frame, const QSize &target)
 	if (out.width() < 1 || out.height() < 1)
 		out = QSize(std::max(1, out.width()), std::max(1, out.height()));
 
-	QImage img(out.width(), out.height(), QImage::Format_RGB888);
+	// Room past the last row: a source no bigger than the thumbnail converts
+	// at its own size, and swscale overruns that (see SwsImage.hpp).
+	QImage img = swsTargetImage(out.width(), out.height(), QImage::Format_RGB888);
+	if (img.isNull())
+		return {};
 	// HDR (an iPhone's HLG, HDR10): tone mapped to SDR, as the editor shows it.
 	if (harpia::hdr::kindOf(frame).needsConversion()) {
 		harpia::hdr::Converter conv;

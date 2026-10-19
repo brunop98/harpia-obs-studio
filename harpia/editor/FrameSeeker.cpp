@@ -1,5 +1,6 @@
 #include "FrameSeeker.hpp"
 #include "SwsColor.hpp"
+#include "SwsImage.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -179,7 +180,11 @@ QImage FrameSeeker::toImage(AVFrame *f, int maxW, int maxH)
 	// stay RGBA8888. Components retag before touching a frame (renderClip).
 	const AVPixFmtDescriptor *pd = av_pix_fmt_desc_get((AVPixelFormat)f->format);
 	const bool mayHaveAlpha = pd && (pd->flags & (AV_PIX_FMT_FLAG_ALPHA | AV_PIX_FMT_FLAG_PAL));
-	QImage img(dw, dh, mayHaveAlpha ? QImage::Format_RGBA8888 : QImage::Format_RGBX8888);
+	// Spare bytes past the end: at its own size a frame goes through swscale's
+	// block-wise converter, which overruns the last row (see SwsImage.hpp).
+	QImage img = swsTargetImage(dw, dh, mayHaveAlpha ? QImage::Format_RGBA8888 : QImage::Format_RGBX8888);
+	if (img.isNull())
+		return {};
 	uint8_t *dst[4] = {img.bits(), nullptr, nullptr, nullptr};
 	int dstStride[4] = {(int)img.bytesPerLine(), 0, 0, 0};
 	sws_scale(sws_, f->data, f->linesize, 0, f->height, dst, dstStride);

@@ -1,5 +1,6 @@
-// The divider between the preview and the editing area moves, in Full editing,
-// however many lanes the project has.
+// The editor's layout: the divider between the preview and the editing area
+// moves in Full editing however many lanes the project has, and the Vertical
+// layout puts the preview in a tall column of its own.
 //
 // The timeline used to be exactly as tall as all its lanes, as a MINIMUM, so
 // the editing area could never be shorter than its track stack: with a few
@@ -8,12 +9,18 @@
 // fixed ruler instead (a scrollbar, and Alt+wheel), so the minimum is the
 // ruler and one lane.
 //
-//   editorsplit_test <workdir>   (run_avsync.sh generates av_red.mp4)
+// The Vertical layout (the Layout dropdown): editing area | Inspector | a tall
+// preview, with the toolbar across the top, for vertical videos. Each mode
+// remembers its own, across windows.
+//
+//   editorsplit_test <workdir>   (run_avsync.sh generates av_red.mp4, av_tall.mp4)
 #include "editor/VideoEditorWindow.hpp"
 #include "editor/timeline/TimelineView.hpp"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QElapsedTimer>
+#include <QLabel>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSplitter>
@@ -148,6 +155,95 @@ int main(int argc, char **argv)
 	bar->setValue(0);
 	settle(50);
 	ok(tv->clipRectForTest(0, 0).top() == topBefore, "and back to the top puts them where they were");
+
+	std::printf("\n-- the Vertical layout --\n");
+	{
+		const QString tall = QString::fromLocal8Bit(argc > 1 ? argv[1] : ".") + QStringLiteral("/av_tall.mp4");
+		VideoEditorWindow v(tall);
+		v.setWindowState(Qt::WindowNoState);
+		v.resize(1400, 800);
+		v.show();
+		settle(400);
+		const auto modeButton = [&v](const char *text) {
+			for (QPushButton *b : v.findChildren<QPushButton *>())
+				if (b->text() == QString::fromLatin1(text)) {
+					b->click();
+					settle(300);
+					return;
+				}
+		};
+		modeButton("Full Editing");
+		auto *combo = v.findChild<QComboBox *>(QStringLiteral("editorLayout"));
+		TimelineView *vt = v.findChild<TimelineView *>();
+		QWidget *canvas = nullptr;
+		for (QWidget *c : v.findChildren<QWidget *>())
+			if (QString::fromLatin1(c->metaObject()->className()) == QStringLiteral("harpia::PreviewCanvas"))
+				canvas = c;
+		QPushButton *play = v.findChild<QPushButton *>(QStringLiteral("playButton")), *inspectorBtn = nullptr;
+		for (QPushButton *b : v.findChildren<QPushButton *>())
+			if (b->text() == QStringLiteral("Inspector"))
+				inspectorBtn = b;
+		ok(combo && vt && canvas && play, "a Layout dropdown, a timeline, a preview, a Play button");
+		if (!combo || !vt || !canvas || !play)
+			return 1;
+		const auto at = [&v](QWidget *w) { return w->mapTo(&v, QPoint(0, 0)); };
+		ok(combo->currentText().contains(QStringLiteral("Standard")) && at(canvas).y() < at(vt).y(),
+		   "it starts Standard: the preview above the timeline");
+
+		combo->setCurrentIndex(combo->findData(1));
+		emit combo->activated(combo->currentIndex());
+		settle(400);
+		if (inspectorBtn && !inspectorBtn->isChecked()) {
+			inspectorBtn->click();
+			settle(300);
+		}
+		QLabel *insHeader = nullptr;
+		for (QLabel *l : v.findChildren<QLabel *>())
+			if (l->text() == QStringLiteral("Inspector") && l->isVisible())
+				insHeader = l;
+		std::printf("     timeline x %d w %d | inspector x %d | preview x %d, %dx%d | play y %d\n", at(vt).x(),
+			    vt->width(), insHeader ? at(insHeader).x() : -1, at(canvas).x(), canvas->width(),
+			    canvas->height(), at(play).y());
+		ok(at(canvas).x() > at(vt).x() + vt->width(), "Vertical: the preview is a column right of the timeline");
+		ok(insHeader && at(insHeader).x() > at(vt).x() + vt->width() - 1 && at(insHeader).x() < at(canvas).x(),
+		   "with the Inspector between them");
+		ok(canvas->height() > canvas->width(), "a tall column, for a 9:16 picture");
+		ok(at(play).y() < at(vt).y() && at(play).y() < at(canvas).y(), "and the toolbar across the top");
+		v.grab().save(QString::fromLocal8Bit(argc > 1 ? argv[1] : ".") + QStringLiteral("/layout_vertical.png"));
+
+		modeButton("Multi-Cut");
+		ok(combo->currentText().contains(QStringLiteral("Standard")) && at(canvas).y() < at(play).y(),
+		   "Multi-Cut keeps its own layout: Standard, toolbar under the preview");
+		modeButton("Full Editing");
+		ok(combo->currentText().contains(QStringLiteral("Vertical")) && at(canvas).x() > at(vt).x(),
+		   "back in Full editing, Vertical again");
+	} // destroyed, not closed: close() asks about unsaved changes
+	{
+		const QString tall = QString::fromLocal8Bit(argc > 1 ? argv[1] : ".") + QStringLiteral("/av_tall.mp4");
+		VideoEditorWindow v(tall);
+		v.setWindowState(Qt::WindowNoState);
+		v.resize(1400, 800);
+		v.show();
+		settle(400);
+		for (QPushButton *b : v.findChildren<QPushButton *>())
+			if (b->text() == QStringLiteral("Full Editing")) {
+				b->click();
+				settle(400);
+			}
+		auto *combo = v.findChild<QComboBox *>(QStringLiteral("editorLayout"));
+		TimelineView *vt = v.findChild<TimelineView *>();
+		QWidget *canvas = nullptr;
+		for (QWidget *c : v.findChildren<QWidget *>())
+			if (QString::fromLatin1(c->metaObject()->className()) == QStringLiteral("harpia::PreviewCanvas"))
+				canvas = c;
+		ok(combo && combo->currentText().contains(QStringLiteral("Vertical")) && canvas && vt &&
+			   canvas->mapTo(&v, QPoint()).x() > vt->mapTo(&v, QPoint()).x(),
+		   "a new editor window remembers Full editing's Vertical layout");
+		combo->setCurrentIndex(combo->findData(0));
+		emit combo->activated(combo->currentIndex());
+		settle(400);
+		ok(canvas->mapTo(&v, QPoint()).y() < vt->mapTo(&v, QPoint()).y(), "and Standard puts it all back");
+	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;

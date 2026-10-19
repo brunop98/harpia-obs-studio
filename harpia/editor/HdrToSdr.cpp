@@ -1,6 +1,7 @@
 #include "HdrToSdr.hpp"
 
 #include "SwsColor.hpp"
+#include "SwsImage.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -176,7 +177,9 @@ bool Converter::toRgb(const uint8_t *const data[4], const int linesize[4], AVPix
 	swsDecodeColors(toRgb48_, fmt, cs, range, sh);
 	if (!tm_ || tm_->kind().transfer != kind.transfer || tm_->kind().bt2020 != kind.bt2020)
 		tm_ = std::make_unique<ToneMapper>(kind);
-	rgb48_.resize(size_t(dw) * size_t(dh) * 3);
+	// Plus spare samples: swscale overruns the last row of an unscaled
+	// conversion (see SwsImage.hpp).
+	rgb48_.resize(size_t(dw) * size_t(dh) * 3 + kSwsTailPad / sizeof(uint16_t));
 	uint8_t *mid[4] = {reinterpret_cast<uint8_t *>(rgb48_.data()), nullptr, nullptr, nullptr};
 	int midStride[4] = {dw * 6, 0, 0, 0};
 	sws_scale(toRgb48_, data, linesize, 0, sh, mid, midStride);

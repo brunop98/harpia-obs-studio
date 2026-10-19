@@ -1,4 +1,5 @@
 #include "Emoji.hpp"
+#include "../SwsImage.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -117,10 +118,14 @@ QImage decodeWebp(const QByteArray &bytes)
 	    av_new_packet(pkt, int(bytes.size())) >= 0) {
 		std::memcpy(pkt->data, bytes.constData(), size_t(bytes.size()));
 		if (avcodec_send_packet(ctx, pkt) >= 0 && avcodec_receive_frame(ctx, frame) >= 0) {
-			QImage img(frame->width, frame->height, QImage::Format_RGBA8888);
-			SwsContext *sws = sws_getContext(frame->width, frame->height, AVPixelFormat(frame->format),
-							 frame->width, frame->height, AV_PIX_FMT_RGBA, SWS_BILINEAR,
-							 nullptr, nullptr, nullptr);
+			// Same size in and out: the converter that overruns the last
+			// row, so the image has room past it (see SwsImage.hpp).
+			QImage img = swsTargetImage(frame->width, frame->height, QImage::Format_RGBA8888);
+			SwsContext *sws = img.isNull() ? nullptr
+						       : sws_getContext(frame->width, frame->height,
+									AVPixelFormat(frame->format), frame->width,
+									frame->height, AV_PIX_FMT_RGBA, SWS_BILINEAR,
+									nullptr, nullptr, nullptr);
 			if (sws) {
 				uint8_t *dst[4] = {img.bits(), nullptr, nullptr, nullptr};
 				int stride[4] = {int(img.bytesPerLine()), 0, 0, 0};

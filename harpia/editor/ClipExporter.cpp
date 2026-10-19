@@ -14,6 +14,7 @@
 #include "script/TransformScript.hpp"
 #include "shader/ShaderRenderer.hpp"
 #include "timeline/TimelineCompositor.hpp"
+#include "SwsImage.hpp"
 
 #include <QImage>
 #include <QSize>
@@ -491,7 +492,11 @@ struct ShaderPass {
 		if (!toRgba || !toYuv)
 			return false;
 
-		QImage img(W, H, QImage::Format_RGBA8888);
+		// W x H to W x H: swscale's block-wise converter, which overruns the
+		// last row -- hence the spare bytes (see SwsImage.hpp).
+		QImage img = swsTargetImage(W, H, QImage::Format_RGBA8888);
+		if (img.isNull())
+			return false;
 		uint8_t *dst[4] = {img.bits(), nullptr, nullptr, nullptr};
 		int dstStride[4] = {(int)img.bytesPerLine(), 0, 0, 0};
 		sws_scale(toRgba, f->data, f->linesize, 0, H, dst, dstStride);

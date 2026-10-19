@@ -480,6 +480,7 @@ private:
 	QSplitter *vsplit_ = nullptr;   // preview / editing area
 	QWidget *bottomPane_ = nullptr; // mode bar + mode stack + audio + buttons
 
+
 	void refreshPreviewAtPlayhead(); // re-render at the current position
 	void showFrame(int sourceId, qint64 ms);
 	void joinExport();
@@ -491,6 +492,29 @@ private:
 	EditMode mode() const;
 	bool multiCut() const;   // mode() == MultiCut
 	bool fullEdit() const;   // mode() == Full
+
+	// ---- Layouts (the Layout dropdown), remembered per mode ----
+	//   Standard  the preview over the editing area, the Inspector on the right
+	//   Vertical  editing area | Inspector | a tall preview column, with the
+	//             toolbar across the top -- made for vertical (9:16) videos,
+	//             which leave most of a wide preview black
+	// Switching moves the same widgets between the splitters; nothing is
+	// rebuilt, so every connection and every bit of state survives it.
+	enum class EditorLayout { Standard = 0, Vertical = 1 };
+	EditorLayout editorLayout_ = EditorLayout::Standard;
+	QComboBox *layoutCombo_ = nullptr;
+	QVBoxLayout *rootLayout_ = nullptr;
+	QWidget *topPane_ = nullptr;      // the preview, and in Standard the toolbar under it
+	QVBoxLayout *topLayout_ = nullptr;
+	QWidget *barHost_ = nullptr;      // the toolbar
+	EditorLayout savedLayoutFor(EditMode m) const;
+	void setEditorLayout(EditorLayout l); // rearranges and syncs the dropdown; saves nothing
+	void sizeVerticalLayout();             // the three columns' widths, for this mode
+	// The pane holding the editing area in hsplit_: the preview/editing split
+	// in Standard, the editing area itself in Vertical.
+	QWidget *editingAreaPane() const;
+	int inspectorWidth() const;
+	void setInspectorWidth(int want); // the difference comes out of the editing area
 	// Full-mode timeline preview: composite every visible track at an output time
 	// and push the result (through the effect chain) into the preview canvas.
 	void onTimelineScrub(qint64 outMs);

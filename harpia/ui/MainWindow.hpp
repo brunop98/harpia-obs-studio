@@ -528,9 +528,11 @@ private:
 
 	// Recording readiness
 	QLabel *diskLabel_ = nullptr; // "12.4 GB free  ·  D:\\Recordings"
+	QPushButton *openFolderButton_ = nullptr; // beside it: opens that folder
 	QWidget *warningsBox_ = nullptr;
 	QVBoxLayout *warningsLayout_ = nullptr;
 	StatusBadge *statusBadge_ = nullptr; // passive Ready/Recording/Paused/Error dot
+	QHBoxLayout *statusBadgeLayout_ = nullptr; // its margins off the window's corner
 	QTimer *readinessTimer_ = nullptr;
 	bool recordingBlocked_ = false;
 	QString firstIssue_; // headline warning/error message shown in the chip

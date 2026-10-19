@@ -136,6 +136,10 @@ QIcon cardIcon(const QImage &img)
 	return QIcon(QPixmap::fromImage(scaled.copy(crop)));
 }
 
+// The gap under the status badge, so the pill is not flush with the window's
+// bottom edge.
+constexpr int kStatusBadgeBottomGap = 6;
+
 // "5 s", or "1 min" once it is whole minutes: the time column's dropdowns.
 QString durationLabel(int seconds)
 {
@@ -244,6 +248,13 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	diskLabel_->setCursor(Qt::PointingHandCursor);
 	diskLabel_->installEventFilter(this);
 	row1->addWidget(diskLabel_);
+	// The line opens the folder on a click too, but nothing about plain text
+	// says so; a button does.
+	openFolderButton_ = new QPushButton(QStringLiteral("Open Folder"), central);
+	openFolderButton_->setObjectName(QStringLiteral("openFolderButton"));
+	openFolderButton_->setCursor(Qt::PointingHandCursor);
+	openFolderButton_->setToolTip(QStringLiteral("Open the folder this preset records to"));
+	row1->addWidget(openFolderButton_);
 	root->addLayout(row1);
 
 	// Capture, Display, the countdown and the guides switch used to share this
@@ -604,8 +615,15 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// Bottom status bar:  [● status]  ————————  [Error Logs] [version]
 	// The passive status badge (Ready/Recording/Paused/Error) anchors the left;
 	// diagnostics + version sit quietly on the right.
-	statusBadge_ = new StatusBadge(this);
-	statusBar()->addWidget(statusBadge_);
+	// Held off the window's corner: its left edge lines up with the content
+	// above (the window's side margin, see setLayoutParams), with a small gap
+	// under it.
+	auto *badgeBox = new QWidget(this);
+	statusBadgeLayout_ = new QHBoxLayout(badgeBox);
+	statusBadgeLayout_->setContentsMargins(lp.rootMarginH, 0, 0, kStatusBadgeBottomGap);
+	statusBadge_ = new StatusBadge(badgeBox);
+	statusBadgeLayout_->addWidget(statusBadge_);
+	statusBar()->addWidget(badgeBox);
 	// Quick "Google Drive" shortcut: shown only when the active preset carries a
 	// share link; clicking it opens that link in the browser.
 	driveLinkButton_ = new QPushButton(QStringLiteral("Google Drive"), this);
@@ -675,6 +693,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// ---- Wiring ---------------------------------------------------------
 	connect(primaryButton_, &QPushButton::clicked, this, &MainWindow::onRecordPauseButton);
 	connect(stopButton_, &QPushButton::clicked, this, &MainWindow::onStopButton);
+	connect(openFolderButton_, &QPushButton::clicked, this, &MainWindow::openOutputFolder);
 
 	// Recording hotkeys. The window-scoped QShortcuts are the FALLBACK; on
 	// Windows the same keys are registered system-wide (rebindHotkeys), which
@@ -1136,6 +1155,8 @@ void MainWindow::setLayoutParams(const MainLayoutParams &p)
 		rootLayout_->setContentsMargins(p.rootMarginH, p.rootMarginV, p.rootMarginH, p.rootMarginV);
 		rootLayout_->setSpacing(p.rootSpacing);
 	}
+	if (statusBadgeLayout_)
+		statusBadgeLayout_->setContentsMargins(p.rootMarginH, 0, 0, kStatusBadgeBottomGap);
 	if (row1Layout_)
 		row1Layout_->setSpacing(p.row1Spacing);
 	if (middleLayout_)
@@ -1208,6 +1229,7 @@ void MainWindow::applyDarkTheme()
 		QPushButton#primaryButton:focus { border: 1px solid #ffd9da; }
 		QPushButton#primaryButton:disabled { background: #5a3a3b; color: #9a7a7b; }
 		QPushButton#stopButton { border-radius: 10px; }
+		QPushButton#openFolderButton { padding: 2px 8px; }
 		QPushButton#stopButton:disabled { background: #24262b; color: #565b63; border: 1px solid #2b2f35; }
 		QComboBox, QSpinBox { background: #2b2d31; border: 1px solid #3a3d42; border-radius: 6px; padding: 4px 8px; }
 		QComboBox:focus, QSpinBox:focus { border: 1px solid #00aeef; }
@@ -1838,8 +1860,13 @@ bool MainWindow::confirmDiskSpace()
 void MainWindow::openOutputFolder()
 {
 	const QString folder = QString::fromStdString(activePreset().outputFolder);
-	if (!folder.isEmpty())
-		QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+	if (folder.isEmpty())
+		return;
+	// Before the first recording the folder may not exist yet, and opening
+	// one that does not is a click that silently does nothing. Recording
+	// would create it anyway.
+	QDir().mkpath(folder);
+	QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
 }
 
 // Refreshed on the readiness tick, which already runs at a sensible rate and
@@ -1879,6 +1906,8 @@ void MainWindow::updateDiskLabel()
 	// folder alone -- honest, and never a stall.
 	const DiskStatus st = (folder == diskLabelFolder_) ? diskLabelStatus_ : DiskStatus{};
 	diskLabel_->setText(diskLine(folder, st));
+	if (openFolderButton_)
+		openFolderButton_->setEnabled(!folder.isEmpty()); // "No output folder set"
 	const QString tip = diskLabel_->text() + QStringLiteral("\nClick to open the folder.");
 	if (diskLabel_->toolTip() != tip)
 		diskLabel_->setToolTip(tip);

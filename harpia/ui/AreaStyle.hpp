@@ -20,15 +20,15 @@ namespace harpia {
 
 struct AreaStyle {
 	QColor lineColor{0x3d, 0xd6, 0x8c}; // outline (the region frame's green)
-	int lineWidth = 2;                  // px, 1..12
-	int lineStyle = 1;                  // 0 solid, 1 dash, 2 dot, 3 dash-dot
+	int lineWidth = 1;                  // px, 1..12
+	int lineStyle = 2;                  // 0 solid, 1 dash, 2 dot, 3 dash-dot
 	int cornerRadius = 0;               // px, 0..40
-	int idleOpacity = 85;               // % the outlines show at when idle
-	int recordingOpacity = 35;          // % while recording (a guide, not a frame)
-	int badgeSize = 26;                 // number badge, px across; 0 hides it
+	int idleOpacity = 40;               // % the outlines show at when idle
+	int recordingOpacity = 40;          // % while recording (a guide, not a frame)
+	int badgeSize = 20;                 // number badge, px across; 0 hides it
 	QColor badgeColor{0x3d, 0xd6, 0x8c};
 	QColor badgeTextColor{0, 0, 0};
-	int arrangeDimPct = 35;             // Arrange: how dark the rest of the screen goes
+	int arrangeDimPct = 38;             // Arrange: how dark the rest of the screen goes
 	int hoverFillPct = 16;              // Arrange: fill of the area under the mouse
 	QColor ghostColor{255, 255, 255};   // Arrange: where a click would stamp the next
 	int ghostOpacity = 67;              // %

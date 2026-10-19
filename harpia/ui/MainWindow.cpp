@@ -180,8 +180,11 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	auto *central = new QWidget(this);
 	auto *root = new QVBoxLayout(central);
 	rootLayout_ = root;
-	root->setContentsMargins(18, 14, 18, 14);
-	root->setSpacing(12);
+	// Every size below starts at layout_'s defaults (MainLayoutParams) -- the
+	// Developer Panel's saved values are applied over them once it is built.
+	const MainLayoutParams &lp = layout_;
+	root->setContentsMargins(lp.rootMarginH, lp.rootMarginV, lp.rootMarginH, lp.rootMarginV);
+	root->setSpacing(lp.rootSpacing);
 
 	// Muted field labels: quiet hierarchy so control groups scan instantly. An
 	// optional tooltip mirrors the control's, so hovering the label helps too.
@@ -192,19 +195,17 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 			l->setToolTip(tip);
 		return l;
 	};
-	// One spacing rule everywhere: 8px inside a group, 18px between groups.
-	constexpr int kGroupGap = 18;
 
 	// ---- Toolbar row: the preset ---------------------------------------
 	auto *row1 = new QHBoxLayout;
 	row1Layout_ = row1;
-	row1->setSpacing(8);
+	row1->setSpacing(lp.row1Spacing);
 
 	row1->addWidget(fieldLabel(
 		QStringLiteral("Preset"),
 		QStringLiteral("Recording preset: output folder, format, quality and filename pattern.")));
 	presetCombo_ = new QComboBox(central);
-	presetCombo_->setMinimumWidth(160);
+	presetCombo_->setMinimumWidth(lp.presetComboW);
 	presetCombo_->setContextMenuPolicy(Qt::CustomContextMenu);
 	presetCombo_->setToolTip(QStringLiteral("Right-click for more: duplicate, open its folder, delete"));
 	row1->addWidget(presetCombo_);
@@ -272,23 +273,22 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	auto *middle = new QHBoxLayout;
 	middleLayout_ = middle;
-	middle->setSpacing(kGroupGap);
+	middle->setSpacing(lp.middleSpacing);
 
 	auto *behaviorCol = new QVBoxLayout;
 	behaviorColLayout_ = behaviorCol;
-	behaviorCol->setSpacing(10);
+	behaviorCol->setSpacing(lp.behaviorColSpacing);
 
 	timeCol_ = new QWidget(central);
 	auto *timeCol = new QVBoxLayout(timeCol_);
 	timeColLayout_ = timeCol;
 	timeCol->setContentsMargins(0, 0, 0, 0);
-	timeCol->setSpacing(10);
+	timeCol->setSpacing(lp.behaviorColSpacing);
 
 	// A column's dropdowns share one fixed width so it reads as a justified
-	// block; long names elide (full text in the tooltip/popup). The time
-	// column only ever holds a few characters ("10 s"), so it is narrower.
-	constexpr int kBehaviorComboW = 200;
-	constexpr int kTimeComboW = 100;
+	// block; long names elide (full text in the tooltip/popup).
+	const int kBehaviorComboW = lp.behaviorComboW;
+	const int kTimeComboW = lp.timeComboW;
 
 	captureModeCombo_ = new QComboBox(central);
 	// Items carry a string tag in their data: "monitor", "region", "audio",
@@ -375,7 +375,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		auto *roww = new QWidget(central);
 		auto *h = new QHBoxLayout(roww);
 		h->setContentsMargins(0, 0, 0, 0);
-		h->setSpacing(8);
+		h->setSpacing(lp.behaviorRowSpacing);
 		auto *l = fieldLabel(text);
 		l->setToolTip(control->toolTip()); // label mirrors the control's help
 		l->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -434,18 +434,18 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// "Starting in 10…" widens both). The webcam preview sits beside it.
 	auto *controls = new QHBoxLayout;
 	controlsLayout_ = controls;
-	controls->setSpacing(14);
+	controls->setSpacing(lp.controlsSpacing);
 	controls->addStretch(1);
 	auto *recordCol = new QVBoxLayout;
 	recordColLayout_ = recordCol;
-	recordCol->setSpacing(10);
+	recordCol->setSpacing(lp.behaviorColSpacing);
 
 	// One button for the whole take: Record when idle, then Pause/Resume while
 	// recording (updateButtons). Stop has a button of its own below it, so
 	// the big one is never the thing that ends a take by accident.
 	primaryButton_ = new QPushButton(QStringLiteral("\xE2\x97\x8F  Record"), central);
 	primaryButton_->setObjectName(QStringLiteral("primaryButton"));
-	primaryButton_->setMinimumSize(130, 46);
+	primaryButton_->setMinimumSize(lp.recordBtnW, lp.recordBtnH);
 	primaryButton_->setFont(btnFont);
 	recordCol->addWidget(primaryButton_);
 
@@ -454,7 +454,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	stopButton_ = new QPushButton(QStringLiteral("Stop"), central);
 	stopButton_->setObjectName(QStringLiteral("stopButton"));
 	stopButton_->setIcon(uiIcon(Glyph::Stop, 14));
-	stopButton_->setMinimumSize(130, 46);
+	stopButton_->setMinimumSize(lp.stopBtnW, lp.stopBtnH);
 	stopButton_->setFont(btnFont);
 	stopButton_->setEnabled(false);
 	recordCol->addWidget(stopButton_);
@@ -479,7 +479,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	wcLayout->setContentsMargins(0, 0, 0, 0);
 	wcLayout->setSpacing(8);
 	webcamPreview_ = new WebcamPreview(webcamBox_);
-	webcamPreview_->setFixedSize(100, 56);
+	webcamPreview_->setFixedSize(lp.webcamPreviewW, lp.webcamPreviewH);
 	webcamPreview_->setToolTip(QStringLiteral("Live preview of the webcam being recorded to its own file."));
 	wcLayout->addWidget(webcamPreview_);
 
@@ -587,24 +587,14 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	recentStrip_->setFlow(QListView::LeftToRight);
 	recentStrip_->setWrapping(false);
 	recentStrip_->setMovement(QListView::Static);
-	recentStrip_->setIconSize(kStripThumb);
-	// Card height derived from the REAL font metrics (two caption lines: name,
-	// then date · size) instead of hand-tuned pixels — survives DPI/font
-	// scaling without clipping the text.
-	const int captionH = 2 * recentStrip_->fontMetrics().height() + 8;
-	recentStrip_->setGridSize(QSize(kStripThumb.width() + 24,
-					kStripThumb.height() + captionH + 12));
 	recentStrip_->setUniformItemSizes(true); // every card is one grid cell
 	recentStrip_->setResizeMode(QListView::Adjust);
-	// Widget height = one full card + frame + PERMANENTLY reserved scrollbar
-	// space; when the scrollbar appeared on demand it stole viewport height
-	// and clipped the bottom caption line.
-	recentStrip_->setFixedHeight(recentStrip_->gridSize().height() +
-				     recentStrip_->style()->pixelMetric(QStyle::PM_ScrollBarExtent) + 8);
+	// Icon and card size, and the strip's height, from layout_ -- one card
+	// tall, with the scrollbar's room reserved for good.
+	applyStripMetrics();
 	recentStrip_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 	recentStrip_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	recentStrip_->setContextMenuPolicy(Qt::CustomContextMenu);
-	recentStrip_->setSpacing(6);
 	recentLayout->addWidget(recentStrip_);
 
 	root->addWidget(recentSection_);
@@ -679,7 +669,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// layout can drop non-essential sections while the record controls stay
 	// usable (see applyResponsiveLayout).
 	setMinimumSize(560, 400);
-	resize(940, 470);
+	// The size it was tuned at: 1072 x 553 px of window on a 115% display.
+	resize(932, 481);
 
 	// ---- Wiring ---------------------------------------------------------
 	connect(primaryButton_, &QPushButton::clicked, this, &MainWindow::onRecordPauseButton);

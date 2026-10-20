@@ -529,6 +529,14 @@ void RegionTool::contextMenuEvent(QContextMenuEvent *e)
 	// Right-click the region to save it as a reusable named region, or manage
 	// the saved list. Owner (MainWindow) handles the actual save/manage.
 	QMenu menu;
+	// Start over by dragging across the screen. Not while recording: the frame
+	// only moves then, and a new area could be any size.
+	QAction *drawAct = nullptr;
+	if (mode_ != Mode::Recording) {
+		drawAct = menu.addAction(QStringLiteral("Draw a new area"));
+		drawAct->setToolTip(QStringLiteral("Drag over what you want to record"));
+		menu.addSeparator();
+	}
 	// The area from a window: point at one, and optionally keep the area on it.
 	QAction *pickAct = nullptr;
 	QAction *followAct = nullptr;
@@ -558,7 +566,9 @@ void RegionTool::contextMenuEvent(QContextMenuEvent *e)
 		clearAct->setEnabled(extraAreas_ > 0);
 	}
 	QAction *chosen = menu.exec(e->globalPos());
-	if (chosen && chosen == pickAct)
+	if (chosen && chosen == drawAct)
+		emit drawRequested();
+	else if (chosen && chosen == pickAct)
 		emit pickWindowRequested();
 	else if (chosen && chosen == followAct)
 		emit followWindowToggled(followAct->isChecked());

@@ -723,6 +723,13 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/windowpicker_test.cpp" "$H/ui/WindowPicker.cpp" "$H/platform/nix/NixWindowList.cpp" \
 	"$WORK/moc_WindowPicker.cpp" -o "$WORK/windowpicker_test" $LF
 
+# Custom Region by dragging over it: the rectangle a drag makes (snapped,
+# clamped, at 2x), and the layer with real mouse and key events.
+"$MOC" -I"$H" "$H/ui/RegionDraw.hpp" -o "$WORK/moc_RegionDraw.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/regiondraw_test.cpp" "$H/ui/RegionDraw.cpp" \
+	"$WORK/moc_RegionDraw.cpp" -o "$WORK/regiondraw_test" $LF
+
 # Curved motion paths: Bezier segments, automatic and dragged handles, an even
 # pace along the curve, and the line the preview draws.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -1036,6 +1043,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/crashreportdialog_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/osintegration_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/windowregion_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/windowpicker_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/regiondraw_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/stillweight_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewcache_test" || rc=1
 if command -v xvfb-run >/dev/null 2>&1; then

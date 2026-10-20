@@ -205,9 +205,11 @@ target_sources(
 	ui/UiText.hpp
     ui/MainDevPanel.hpp
     ui/RegionTool.cpp
+    ui/RegionDraw.cpp
     ui/WindowPicker.cpp
     ui/WindowPicker.hpp
     ui/RegionTool.hpp
+    ui/RegionDraw.hpp
     ui/MultiAreaOverlay.cpp
     ui/MultiAreaOverlay.hpp
     ui/AreaStyle.hpp

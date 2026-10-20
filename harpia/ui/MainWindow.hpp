@@ -19,6 +19,7 @@
 #include "model/RegionStore.hpp"
 #include "platform/IdleMonitor.hpp"
 #include "platform/WindowList.hpp"
+#include "ui/RegionDraw.hpp"
 #include "ui/WindowPicker.hpp"
 
 #include <QElapsedTimer>
@@ -436,6 +437,10 @@ private:
 	void startWindowPick();
 	void applyPickedWindow(const harpia::DesktopWindow &w);
 	void setRegionFromDevicePx(const QRect &deviceRect); // a region on the active display
+	// The area by dragging over it (RegionDraw): on choosing Custom Region,
+	// and from the frame's "Draw a new area". Esc keeps the region there was.
+	void startRegionDraw();
+	void applyDrawnRegion(const QRect &deviceRect);
 	void setFollowWindow(bool on);
 	void followWindowTick();
 	void forgetPickedWindow();
@@ -595,6 +600,7 @@ private:
 	std::unique_ptr<ErrorLogsPanel> errorLogsPanel_;
 	std::unique_ptr<RegionTool> regionTool_;
 	std::unique_ptr<WindowPicker> windowPicker_;
+	std::unique_ptr<RegionDraw> regionDraw_;
 	quintptr pickedWindow_ = 0;      // the window the area was set from (0 = none)
 	QString pickedWindowTitle_;
 	bool followWindowOn_ = false;    // keep the area on it (off unless asked)

@@ -757,6 +757,14 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(libraryButton_, &QPushButton::clicked, this, &MainWindow::onOpenClipLibrary);
 	connect(errorLogsButton_, &QPushButton::clicked, this, &MainWindow::onOpenErrorLogs);
 	connect(captureModeCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onCaptureModeChanged);
+	// Choosing Custom Region -- by hand, not a preset restoring it -- goes
+	// straight to drawing it. activated, not currentIndexChanged: it also
+	// fires when Custom Region is chosen again, which redraws it, and never
+	// for a programmatic switch (startup, a preset change).
+	connect(captureModeCombo_, &QComboBox::activated, this, [this](int i) {
+		if (captureModeCombo_->itemData(i).toString() == QString::fromLatin1(recordModeTag(RecordMode::Region)))
+			QTimer::singleShot(0, this, &MainWindow::startRegionDraw); // after the popup has closed
+	});
 	connect(idleCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onIdleSettingChanged);
 	connect(regionLeaveCombo_, &QComboBox::currentIndexChanged, this,
 		&MainWindow::onRegionLeaveSettingChanged);
@@ -872,6 +880,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(regionTool_.get(), &RegionTool::arrangeAreasRequested, this, &MainWindow::onArrangeAreas);
 	connect(regionTool_.get(), &RegionTool::clearAreasRequested, this, [this]() { clearAllAreas(true); });
 	connect(regionTool_.get(), &RegionTool::pickWindowRequested, this, &MainWindow::startWindowPick);
+	connect(regionTool_.get(), &RegionTool::drawRequested, this, &MainWindow::startRegionDraw);
 	connect(regionTool_.get(), &RegionTool::followWindowToggled, this, &MainWindow::setFollowWindow);
 	// Dragging the frame by hand means "this framing, not the window's": stop
 	// following, or the next tick would snap it back.
@@ -2992,6 +3001,32 @@ void MainWindow::applyPickedWindow(const DesktopWindow &w)
 	syncWindowMenu();
 }
 
+void MainWindow::startRegionDraw()
+{
+	// The size is fixed for the length of a take: the frame only moves then.
+	if (recorder_.isRecording() || starting_ || stopping_ || countingDown_)
+		return;
+	if (!regionDraw_) {
+		regionDraw_ = std::make_unique<RegionDraw>();
+		connect(regionDraw_.get(), &RegionDraw::drawn, this, &MainWindow::applyDrawnRegion);
+		connect(regionDraw_.get(), &RegionDraw::cancelled, this, &MainWindow::updateRegionToolVisibility);
+	}
+	// The frame would sit over the very area being drawn.
+	if (regionTool_)
+		regionTool_->hide();
+	updateGuides(); // they go with the frame
+	regionDraw_->start(screenForActivePreset());
+}
+
+void MainWindow::applyDrawnRegion(const QRect &r)
+{
+	// A drawn area is nobody's window: stop following one.
+	forgetPickedWindow();
+	syncWindowMenu();
+	blog(LOG_INFO, "[harpia] area drawn: %dx%d at %d,%d", r.width(), r.height(), r.x(), r.y());
+	setRegionFromDevicePx(r);
+}
+
 void MainWindow::setRegionFromDevicePx(const QRect &r)
 {
 	currentRegion_ = CaptureRegion{true, r.x(), r.y(), r.width(), r.height()};
@@ -3779,6 +3814,15 @@ void MainWindow::updateRegionToolVisibility()
 	// this is checked before anything is decided.
 	if (regionTool_->isInteracting())
 		return;
+	// Drawing a new area, or pointing at a window: the frame would sit over
+	// the very thing being chosen. Checked here because the 250 ms tick comes
+	// through here too, and with focus on those layers it would otherwise
+	// bring the frame back mid-choice.
+	if ((regionDraw_ && regionDraw_->active()) || (windowPicker_ && windowPicker_->active())) {
+		regionTool_->setVisible(false);
+		updateGuides();
+		return;
+	}
 	// Arranging Multi-Area: the Arrange overlay draws area 1 itself, and a
 	// second always-on-top frame on the same spot would take its clicks.
 	if (areaArranging_) {

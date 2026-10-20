@@ -152,6 +152,7 @@ signals:
 	void arrangeAreasRequested();  // "Arrange areas…" chosen (Multi-Area)
 	void clearAreasRequested();    // "Remove all areas" chosen (Multi-Area)
 	void pickWindowRequested();    // "Snap to a window…" chosen
+	void drawRequested();          // "Draw a new area" chosen (see RegionDraw)
 	void followWindowToggled(bool on); // "Follow <window>" toggled
 	// A move or resize finished. The owner defers mode changes while a drag is
 	// in flight (see isInteracting), so it needs telling when to look again --

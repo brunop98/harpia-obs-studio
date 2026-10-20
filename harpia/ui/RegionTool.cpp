@@ -705,7 +705,7 @@ void RegionTool::paintEvent(QPaintEvent *)
 }
 
 RegionOverlayState regionOverlayState(bool regionCaptureMode, bool recording, bool harpiaFocused,
-				      bool editorOpen, bool lingering)
+				      bool editorOpen, bool lingering, bool minimized)
 {
 	RegionOverlayState st;
 	// Only Custom Region has a region to show. Entire Monitor has nothing to
@@ -723,6 +723,10 @@ RegionOverlayState regionOverlayState(bool regionCaptureMode, bool recording, bo
 	// going into the file", which is worth more than the nuisance -- and
 	// hiding it would be hiding a recording in progress.
 	if (editorOpen && !recording)
+		return st;
+	// Minimized and nothing recording: Harpia has been put away, and the frame
+	// goes with it. While recording it stays, as above: it marks the take.
+	if (minimized && !recording)
 		return st;
 
 	st.visible = true;

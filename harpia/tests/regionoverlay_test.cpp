@@ -113,6 +113,16 @@ int main(int argc, char **argv)
 		// frame is saying "this is what is going into the file".
 		ok(st(true, true, true, true).visible, "unless a recording is running");
 		ok(st(true, true, true, true).mode == M::Recording, "still in the recording state");
+
+		// Minimized and idle: put away with Harpia, whatever the focus says
+		// (minimizing can make the frame itself the active window).
+		const auto minimized = [](bool rec, bool focus, bool linger) {
+			return regionOverlayState(true, rec, focus, false, linger, /*minimized=*/true);
+		};
+		ok(!minimized(false, true, false).visible, "minimized and idle: no frame, even 'focused'");
+		ok(!minimized(false, false, true).visible, "and no linger either");
+		ok(minimized(true, false, false).visible && minimized(true, false, false).mode == M::Recording,
+		   "minimized while recording: still there, marking the take");
 	}
 
 	std::printf("\n-- Editing: the whole rectangle is grabbable --\n");

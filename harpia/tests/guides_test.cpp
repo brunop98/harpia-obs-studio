@@ -203,6 +203,10 @@ int main(int argc, char **argv)
 		   "even recording");
 		ok(guidesVisible(true, GuideThirds, true, false, true, false, false, true),
 		   "and come back when it does");
+		ok(!guidesVisible(true, GuideThirds, true, false, true, false, false, true, /*minimized=*/true),
+		   "Harpia minimized and idle: put away with it");
+		ok(guidesVisible(true, GuideThirds, true, true, true, false, false, true, true),
+		   "minimized while recording (and kept out of the capture): still shown");
 	}
 
 	std::printf("\n-- the preset --\n");

@@ -229,17 +229,18 @@ inline GuidePaths guidePaths(int kinds, const QRectF &f, double crisp = -1.0)
 // read as a leftover, not as a tool. Entire Monitor has no frame: pass true.
 //
 // Otherwise they stay up whenever they are switched on, Harpia in front or not:
-// lining up a shot happens with the game in front. The exception is the
-// editor, a window you work inside, with nothing being recorded -- the same rule
-// the region frame follows.
+// lining up a shot happens with the game in front. The exceptions, with nothing
+// being recorded: the editor, a window you work inside -- the same rule the
+// region frame follows -- and Harpia minimized (`appMinimized`), put away along
+// with everything it draws on the desktop.
 inline bool guidesVisible(bool on, int kinds, bool hasVideo, bool recording, bool hiddenFromCapture,
-			  bool editorOpen, bool arrangingAreas, bool areaShown = true)
+			  bool editorOpen, bool arrangingAreas, bool areaShown = true, bool appMinimized = false)
 {
 	if (!on || (kinds & kGuideKindsAll) == 0 || !hasVideo || arrangingAreas || !areaShown)
 		return false;
 	if (recording)
 		return hiddenFromCapture;
-	return !editorOpen;
+	return !editorOpen && !appMinimized;
 }
 
 } // namespace harpia

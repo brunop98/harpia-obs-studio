@@ -236,7 +236,12 @@ struct RegionOverlayState {
 // for that moment so it can be checked against the app just clicked, and is
 // hidden once the moment has passed. Idle and in the background, there is
 // nothing to show.
+//
+// `minimized`: Harpia's window is minimized, with no take underway (the owner
+// passes false during a countdown or a start). Hidden then, outright -- not
+// after a linger, and whatever the focus says: minimizing can hand activation
+// to the frame itself, which made Harpia look focused and kept the frame up.
 RegionOverlayState regionOverlayState(bool regionCaptureMode, bool recording, bool harpiaFocused,
-				      bool editorOpen, bool lingering = false);
+				      bool editorOpen, bool lingering = false, bool minimized = false);
 
 } // namespace harpia

@@ -3479,9 +3479,11 @@ void MainWindow::updateGuides()
 	// (Harpia in the background past the linger, the editor open, picking a
 	// window, arranging areas).
 	const bool areaShown = captureMode_ != CaptureMode::Region || (regionTool_ && regionTool_->isVisible());
+	// A countdown counts as underway: it is lining up the take about to start.
 	const bool show = guidesVisible(p.showGuides, p.guideKinds, modeSupportsGuides(recordMode()),
 					recorder_.isRecording() || starting_, guides_->hiddenFromCapture(),
-					VideoEditorWindow::anyOpen(), areaArranging_, areaShown);
+					VideoEditorWindow::anyOpen(), areaArranging_, areaShown,
+					isMinimized() && !countingDown_);
 	const QRect r = show ? recordedRectLogical() : QRect();
 	if (r.isEmpty()) {
 		guides_->hideGuides();
@@ -3848,9 +3850,12 @@ void MainWindow::updateRegionToolVisibility()
 		}
 		lingering = regionUnfocusedSince_.elapsed() < kRegionLingerMs;
 	}
+	// Minimized with a take starting (a countdown, F9 from the game) still
+	// shows the frame: it marks what is about to be recorded.
 	const RegionOverlayState st = regionOverlayState(captureMode_ == CaptureMode::Region,
 							 recorder_.isRecording(), focused,
-							 VideoEditorWindow::anyOpen(), lingering);
+							 VideoEditorWindow::anyOpen(), lingering,
+							 isMinimized() && !starting_ && !countingDown_);
 	// The one place the preset's move-handle flag needs applying: every path that
 	// could change it -- editing the preset, switching preset, switching capture
 	// mode, startup, the 250 ms tick -- ends up here. The setter early-returns
@@ -3900,6 +3905,10 @@ void MainWindow::changeEvent(QEvent *event)
 	// frame into a window nobody can see; children get no hideEvent for it.
 	if (event->type() == QEvent::WindowStateChange && webcamPreview_)
 		webcamPreview_->setDisplayEnabled(!(windowState() & Qt::WindowMinimized));
+	// Minimized and idle, the region frame and the guides go too -- at once,
+	// not on the next state tick -- and come back on restore.
+	if (event->type() == QEvent::WindowStateChange)
+		updateRegionToolVisibility();
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)

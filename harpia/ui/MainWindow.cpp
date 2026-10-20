@@ -508,7 +508,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 			"QProgressBar::chunk{background:#3fb950;border-radius:3px;}");
 		const auto bar = [&](const QString &caption) {
 			auto *cap = new QLabel(caption, audioMeterBox_);
-			cap->setStyleSheet(QStringLiteral("color:#8a8f98; font-size:10px;"));
+			cap->setStyleSheet(QStringLiteral("color:#8a8f98; font-size:%1px;").arg(uiCaptionPx()));
 			auto *b = new QProgressBar(audioMeterBox_);
 			b->setRange(0, 100);
 			b->setTextVisible(false);
@@ -687,8 +687,11 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// layout can drop non-essential sections while the record controls stay
 	// usable (see applyResponsiveLayout).
 	setMinimumSize(560, 400);
-	// The size it was tuned at: 1072 x 553 px of window on a 115% display.
-	resize(932, 481);
+	// The size it was tuned at: 1072 x 553 px of window on a 115% display --
+	// or more, if the text (UiText's scale, a larger system font) now needs
+	// it: opening too narrow would drop the time column, too short would
+	// squeeze the rows.
+	resize(std::max(932, timeColumnNeedW() + 16), std::max(481, minimumSizeHint().height()));
 
 	// ---- Wiring ---------------------------------------------------------
 	connect(primaryButton_, &QPushButton::clicked, this, &MainWindow::onRecordPauseButton);

@@ -242,20 +242,17 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	setWindowFlags(Qt::Window | Qt::WindowTitleHint | Qt::WindowSystemMenuHint |
 		       Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint);
 	setSizeGripEnabled(true);
-	// The size it RESTORES to when taken out of full screen twice (F11 to a
-	// maximised window, then the title bar's restore button); the editor itself
-	// opens MAXIMISED (below), because every part of it wants the room -- the
-	// preview, the track stack and the Inspector are all things you immediately
-	// drag bigger otherwise.
+	// The size it RESTORES to (the title bar's restore button); the editor
+	// itself opens MAXIMISED (see showEvent), because every part of it wants
+	// the room -- the preview, the track stack and the Inspector are all things
+	// you immediately drag bigger otherwise.
 	resize(1040, 680);
-	// Maximised, with the title bar and the taskbar. Full screen was tried
-	// (v0.1.311) and on Windows an owned dialog handed a screen-sized geometry
-	// came up as a plain window LARGER than the screen -- its frame past every
-	// edge and its maximise button out of reach. Maximised is what the window
-	// manager does right on its own. F11 still goes full screen, Escape comes
-	// back. Set again in showEvent, since a state set before the native window
-	// exists is not honoured on every platform.
-	setWindowState(windowState() | Qt::WindowMaximized);
+	// NOT maximised here. Asked for before the window is on screen, Windows
+	// could come up with the window maximised in its own books but drawn at
+	// this restore size: the title bar showed Restore, so the first click on
+	// it moved the window to the middle and only the second one maximised it
+	// (v0.1.443). showEvent maximises once the window is showing -- the same
+	// thing as that second click, which always worked.
 	setAcceptDrops(true); // drop video files to add them as sources
 
 	auto *root = new QVBoxLayout(this);
@@ -9768,13 +9765,15 @@ void VideoEditorWindow::showEvent(QShowEvent *e)
 	// The Sources panel stays closed until the user opens it with the toolbar
 	// "Sources" button — it never opens on its own.
 
-	// The editor opens maximised. The constructor asks for it, but QDialog's
-	// own show path can re-place the window over its parent and, on some
-	// platforms, drop a state set before the native window existed -- which is
-	// how "opens maximised" was true in the code and not on the screen. Asking
-	// again here, once the window is real, is what makes it stick. Only on the
-	// first show: a later show (after a modal child, say) must not yank a window
-	// the user has resized back to maximised.
+	// The editor opens maximised: shown at its restore size (centred over the
+	// main window by QDialog), then maximised from the next turn of the event
+	// loop, once the window is really on screen. A maximised state set before
+	// that is the one Windows got wrong (see the constructor). Maximised, not
+	// full screen: full screen was tried (v0.1.311) and on Windows an owned
+	// dialog handed a screen-sized geometry came up LARGER than the screen,
+	// its maximise button out of reach; F11 still goes full screen. Only on
+	// the first show: a later show (after a modal child, say) must not yank a
+	// window the user has resized back to maximised.
 	if (!shownOnce_) {
 		shownOnce_ = true;
 		QTimer::singleShot(0, this, [this]() {

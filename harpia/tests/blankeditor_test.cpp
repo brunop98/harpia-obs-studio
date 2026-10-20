@@ -53,8 +53,18 @@ int main(int argc, char **argv)
 	std::printf("\n-- blank and untouched --\n");
 	{
 		auto *w = new VideoEditorWindow(QString());
+		// Opening maximised: nothing asked of the window system before the
+		// window is on screen (a maximised state set that early is what Windows
+		// drew at the restore size, Restore on its title bar), then maximised
+		// once it is showing.
+		ok(!(w->windowState() & Qt::WindowMaximized) && !w->testAttribute(Qt::WA_WState_Created),
+		   "before it is shown: no native window yet, and not asked to be maximised");
 		w->show();
+		ok(!w->isMaximized() && w->size() == QSize(1040, 680), "shown at its restore size first");
 		settle(300);
+		std::printf("     then %s, %d x %d\n", w->isMaximized() ? "maximised" : "NOT maximised", w->width(),
+			    w->height());
+		ok(w->isMaximized(), "and maximised once it is on screen");
 		ok(w->isVisible(), "a blank editor opens");
 		const bool closed = w->close();
 		settle(100);

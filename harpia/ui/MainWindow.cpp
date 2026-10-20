@@ -3025,6 +3025,21 @@ void MainWindow::applyDrawnRegion(const QRect &r)
 	syncWindowMenu();
 	blog(LOG_INFO, "[harpia] area drawn: %dx%d at %d,%d", r.width(), r.height(), r.x(), r.y());
 	setRegionFromDevicePx(r);
+	// The frame comes back at once, ready for its handles, with the guides in
+	// it (when they are on) -- the moment the button is released. Left to the
+	// usual focus rule, it depended on which window Windows activated when the
+	// drawing layer closed: not Harpia, and the frame came back only to linger
+	// and vanish, taking the guides with it; and until it came back, no guides
+	// at all. Drawing was a turn spent with the frame, so it takes the focus.
+	if (regionTool_ && captureMode_ == CaptureMode::Region) {
+		regionUnfocusedSince_.invalidate();
+		regionTool_->setMode(RegionTool::Mode::Editing);
+		regionTool_->setAttribute(Qt::WA_ShowWithoutActivating, false);
+		regionTool_->show();
+		regionTool_->raise();
+		regionTool_->activateWindow();
+	}
+	updateGuides();
 }
 
 void MainWindow::setRegionFromDevicePx(const QRect &r)

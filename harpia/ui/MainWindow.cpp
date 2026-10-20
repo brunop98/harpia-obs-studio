@@ -687,11 +687,11 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// layout can drop non-essential sections while the record controls stay
 	// usable (see applyResponsiveLayout).
 	setMinimumSize(560, 400);
-	// The size it was tuned at: 1072 x 553 px of window on a 115% display --
-	// or more, if the text (UiText's scale, a larger system font) now needs
-	// it: opening too narrow would drop the time column, too short would
-	// squeeze the rows.
-	resize(std::max(932, timeColumnNeedW() + 16), std::max(481, minimumSizeHint().height()));
+	// The size it was tuned at (v0.1.443's screenshot: 932 x 536 of window
+	// inside the frame) -- or more, if the text (UiText's scale, a larger
+	// system font) needs it: opening too narrow would drop the time column,
+	// too short would squeeze the rows.
+	resize(std::max(932, timeColumnNeedW() + 16), std::max(536, minimumSizeHint().height()));
 
 	// ---- Wiring ---------------------------------------------------------
 	connect(primaryButton_, &QPushButton::clicked, this, &MainWindow::onRecordPauseButton);

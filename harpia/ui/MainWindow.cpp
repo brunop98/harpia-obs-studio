@@ -865,6 +865,14 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 
 	regionTool_ = std::make_unique<RegionTool>();
 	connect(regionTool_.get(), &RegionTool::regionChanged, this, &MainWindow::onRegionChanged);
+	connect(regionTool_.get(), &RegionTool::placementMismatch, this, [](const QRect &asked, const QRect &landed) {
+		// Moved back by the frame itself; logged because "it recorded a
+		// different part than the frame showed" starts here.
+		blog(LOG_WARNING,
+		     "[harpia] region frame: Windows put it at %d,%d %dx%d instead of %d,%d %dx%d -- moved back",
+		     landed.x(), landed.y(), landed.width(), landed.height(), asked.x(), asked.y(), asked.width(),
+		     asked.height());
+	});
 	connect(regionTool_.get(), &RegionTool::cancelled, this, [this]() {
 		// Esc: revert to full-monitor capture.
 		captureModeCombo_->setCurrentIndex(int(CaptureMode::Monitor));
@@ -2198,10 +2206,19 @@ void MainWindow::logRecordingStart(const Preset &p, const QString &recordedPath,
 	blog(LOG_INFO, "[harpia] capture: %s  monitor#%d", recordModeTag(recordMode()), p.monitorIndex);
 	if (appCaptureEnabled_ && !appWindowValue_.isEmpty())
 		blog(LOG_INFO, "[harpia] focus-pause app: %s", appWindowValue_.toUtf8().constData());
-	if (captureMode_ == CaptureMode::Region && currentRegion_.enabled)
+	if (captureMode_ == CaptureMode::Region && currentRegion_.enabled) {
 		blog(LOG_INFO, "[harpia] region: %dx%d at (%d,%d)  move-handle: %s", currentRegion_.width,
 		     currentRegion_.height, currentRegion_.x, currentRegion_.y,
 		     p.regionMoveHandle ? "on" : "off");
+		// Where the frame is, and the display it is measured from: a region
+		// that records a shifted picture is a disagreement between these.
+		if (const QScreen *scr = screenForActivePreset()) {
+			const CaptureRegion f = regionTool_ ? regionTool_->region() : CaptureRegion{};
+			blog(LOG_INFO, "[harpia] region frame: %dx%d at (%d,%d) on '%s' at %d,%d, scale %.2f",
+			     f.width, f.height, f.x, f.y, scr->name().toUtf8().constData(), scr->geometry().x(),
+			     scr->geometry().y(), scr->devicePixelRatio());
+		}
+	}
 	if (captureMode_ == CaptureMode::Region && p.followMouse)
 		blog(LOG_INFO, "[harpia] follow mouse: padding %d%%  smoothness %d  axis %d",
 		     p.followPaddingPct, p.followSmoothness, p.followAxis);

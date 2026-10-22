@@ -5,6 +5,8 @@
 #include <QRect>
 #include <QWidget>
 
+#include <optional>
+
 class QScreen;
 class QTimer;
 
@@ -34,7 +36,9 @@ public:
 	void setScreen(QScreen *screen);
 	void setRegionDevicePx(const QRect &deviceRect);
 
-	// Current region as a CaptureRegion (device px rel. to screen).
+	// Current region as a CaptureRegion (device px rel. to screen): what the
+	// frame visibly surrounds, which on Windows is checked against where the
+	// window really is (see drawnRegion).
 	CaptureRegion region() const;
 
 	// How the overlay behaves right now. Three states, not two, because
@@ -159,6 +163,11 @@ signals:
 	// grabbing the overlay makes IT the active window, which usually means the
 	// mode that was right before the drag is not the right one after it.
 	void interactionFinished();
+	// Windows put the frame somewhere other than asked (device px rel. to the
+	// display: where it was asked to go, and where it landed). It is moved back;
+	// this is for the log, which is how a report of "it recorded the wrong
+	// part" can be told apart from a crop that was simply set wrong.
+	void placementMismatch(const QRect &asked, const QRect &landed);
 
 protected:
 	void paintEvent(QPaintEvent *) override;
@@ -170,12 +179,23 @@ protected:
 	void showEvent(QShowEvent *) override;
 	void contextMenuEvent(QContextMenuEvent *) override;
 	void keyPressEvent(QKeyEvent *) override;
+	void moveEvent(QMoveEvent *) override;
+	void resizeEvent(QResizeEvent *) override;
 
 private:
 	Zone zoneAt(const QPoint &localPos) const;
 	void applyGeometry(const QRect &globalRect); // clamp to screen, set geometry, emit
 	void rebuildMask();
 	void emitRegion();
+	// The region from Qt's own coordinates -- where Qt works out the window is.
+	CaptureRegion arithmeticRegion() const;
+	// The region from where the window really is (Windows), in device px rel.
+	// to the display; nullopt where that cannot be asked (see NativeWindowOps).
+	std::optional<QRect> drawnRegion() const;
+	// After a placement asked for in device px: if Windows put the window
+	// elsewhere, move it to `want` and say so (placementMismatch).
+	void matchPlacement(const QRect &want);
+	void queueResync();
 	QRect innerRectLocal() const; // the region rect within the widget (handle margin inset)
 	// The widget's top inset. Larger than the side margin when the move handle is
 	// on, since the tab sits above the frame. innerRectLocal() and applyGeometry()
@@ -195,6 +215,9 @@ private:
 
 	QScreen *screen_ = nullptr;
 	qreal dpr_ = 1.0;
+	CaptureRegion lastEmitted_;  // what the owner was last told (the crop)
+	bool placing_ = false;       // setRegionDevicePx: one report, after the check
+	bool resyncQueued_ = false;
 	Mode mode_ = Mode::Editing;
 	bool paused_ = false;
 	bool moveHandle_ = false;

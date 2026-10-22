@@ -60,7 +60,11 @@ protected:
 
 private:
 	QRect current() const; // the rectangle being dragged, or null
+	// A rectangle on the layer as device px of the display, from where the
+	// layer really is (see NativeWindowOps.hpp).
+	QRect devicePxOnScreen(const QRect &logical) const;
 	qreal dpr_ = 1.0;
+	QPoint origin_; // the display's top-left (physical px)
 	QPoint anchor_;          // where the drag started (local)
 	QPoint pointer_{-1, -1}; // where the pointer is (local), for the guides
 	bool dragging_ = false;

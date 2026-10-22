@@ -1,5 +1,7 @@
 #include "RegionTool.hpp"
 
+#include "NativeWindowOps.hpp"
+
 #include <QContextMenuEvent>
 #include <QGuiApplication>
 #include <QKeyEvent>
@@ -11,6 +13,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <cmath>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -47,6 +50,16 @@ const QColor kAccent(0, 174, 239);
 
 // Common capture resolutions to snap to (device pixels).
 const QSize kSnapSizes[] = {{1280, 720}, {1920, 1080}, {2560, 1440}, {3840, 2160}};
+// Where Windows has the frame and where Qt's arithmetic puts it may differ by
+// a pixel of rounding at a fractional scale (a 10 px margin is 12.5 px at
+// 125%). Up to this much is rounding, not a frame in the wrong place.
+constexpr int kNativeSlack = 2;
+
+bool farApart(const QRect &a, const QRect &b)
+{
+	return std::abs(a.x() - b.x()) > kNativeSlack || std::abs(a.y() - b.y()) > kNativeSlack ||
+	       std::abs(a.width() - b.width()) > kNativeSlack || std::abs(a.height() - b.height()) > kNativeSlack;
+}
 } // namespace
 
 RegionTool::RegionTool(QWidget *parent) : QWidget(parent)
@@ -173,10 +186,26 @@ void RegionTool::setRegionDevicePx(const QRect &deviceRect)
 	const QRect regionGlobal(origin.x() + int(deviceRect.x() / dpr_), origin.y() + int(deviceRect.y() / dpr_),
 				 std::max(kMinSize, int(deviceRect.width() / dpr_)),
 				 std::max(kMinSize, int(deviceRect.height() / dpr_)));
+	// One regionChanged, after the placement has been checked, rather than one
+	// for wherever the window first landed and another for the correction.
+	placing_ = true;
 	applyGeometry(regionGlobal);
+	placing_ = false;
+	// Asked for in device pixels, so that is where it has to be: the same
+	// rectangle, clamped onto the display the way applyGeometry clamps it.
+	const QSize screenDev(int(std::lround(screen_->geometry().width() * dpr_)),
+			      int(std::lround(screen_->geometry().height() * dpr_)));
+	QRect want = deviceRect;
+	want.setWidth(std::min(want.width(), screenDev.width()));
+	want.setHeight(std::min(want.height(), screenDev.height()));
+	want.moveLeft(std::clamp(want.x(), 0, screenDev.width() - want.width()));
+	want.moveTop(std::clamp(want.y(), 0, screenDev.height() - want.height()));
+	matchPlacement(want);
+	rebuildMask();
+	emitRegion();
 }
 
-CaptureRegion RegionTool::region() const
+CaptureRegion RegionTool::arithmeticRegion() const
 {
 	CaptureRegion r;
 	if (!screen_)
@@ -192,9 +221,88 @@ CaptureRegion RegionTool::region() const
 	return r;
 }
 
+std::optional<QRect> RegionTool::drawnRegion() const
+{
+	if (!screen_)
+		return std::nullopt;
+	const std::optional<QRect> win = native_window::rect(this);
+	if (!win)
+		return std::nullopt;
+	// The frame is painted at the window's own scale, from the window's real
+	// top-left: that is where its pixels are on the display.
+	const qreal k = devicePixelRatioF();
+	const QRect in = innerRectLocal();
+	const QPoint origin = screen_->geometry().topLeft(); // physical: Qt keeps each display's origin unscaled
+	return QRect(win->x() + int(std::lround(in.x() * k)) - origin.x(),
+		     win->y() + int(std::lround(in.y() * k)) - origin.y(), int(std::lround(in.width() * k)),
+		     int(std::lround(in.height() * k)));
+}
+
+CaptureRegion RegionTool::region() const
+{
+	CaptureRegion r = arithmeticRegion();
+	// What is recorded is what the frame visibly surrounds. Normally that IS
+	// the arithmetic above; when Windows has the window somewhere else (a
+	// display at another scale, see NativeWindowOps.hpp), believing the
+	// arithmetic is what recorded a different part of the screen than the
+	// frame showed.
+	if (const std::optional<QRect> d = drawnRegion(); d && r.enabled && farApart(QRect(r.x, r.y, r.width, r.height), *d)) {
+		r.x = d->x();
+		r.y = d->y();
+		r.width = d->width();
+		r.height = d->height();
+	}
+	return r;
+}
+
+void RegionTool::matchPlacement(const QRect &want)
+{
+	const std::optional<QRect> d = drawnRegion();
+	if (!d)
+		return;
+	const QPoint off = d->topLeft() - want.topLeft();
+	if (std::abs(off.x()) <= kNativeSlack && std::abs(off.y()) <= kNativeSlack)
+		return;
+	emit placementMismatch(want, *d);
+	if (const std::optional<QRect> win = native_window::rect(this))
+		native_window::moveTo(this, win->topLeft() - off);
+}
+
 void RegionTool::emitRegion()
 {
-	emit regionChanged(region());
+	lastEmitted_ = region();
+	emit regionChanged(lastEmitted_);
+}
+
+void RegionTool::moveEvent(QMoveEvent *e)
+{
+	QWidget::moveEvent(e);
+	queueResync();
+}
+
+void RegionTool::resizeEvent(QResizeEvent *e)
+{
+	QWidget::resizeEvent(e);
+	queueResync();
+}
+
+void RegionTool::queueResync()
+{
+	// Windows moves a window on its own too -- onto a display at another scale
+	// it can land somewhere other than asked, after the placement has already
+	// been reported. Look again once things settle, and if the frame is not
+	// where the crop is, the crop goes to the frame. Our own moves come back
+	// here as well and find nothing to do.
+	if (resyncQueued_)
+		return;
+	resyncQueued_ = true;
+	QTimer::singleShot(0, this, [this]() {
+		resyncQueued_ = false;
+		if (dragZone_ != Zone::None || placing_ || !isVisible() || !lastEmitted_.enabled)
+			return;
+		if (!(region() == lastEmitted_))
+			emitRegion();
+	});
 }
 
 void RegionTool::rebuildMask()
@@ -264,7 +372,7 @@ void RegionTool::applyGeometry(const QRect &globalRect)
 		}
 		if (!dragSync_->isActive())
 			dragSync_->start();
-	} else {
+	} else if (!placing_) {
 		rebuildMask();
 		emitRegion();
 	}

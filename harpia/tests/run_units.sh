@@ -727,7 +727,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # clamped, at 2x), and the layer with real mouse and key events.
 "$MOC" -I"$H" "$H/ui/RegionDraw.hpp" -o "$WORK/moc_RegionDraw.cpp"
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
-	"$HERE/regiondraw_test.cpp" "$H/ui/RegionDraw.cpp" \
+	"$HERE/regiondraw_test.cpp" "$H/ui/RegionDraw.cpp" "$H/ui/NativeWindowOps.cpp" \
 	"$WORK/moc_RegionDraw.cpp" -o "$WORK/regiondraw_test" $LF
 
 # Curved motion paths: Bezier segments, automatic and dragged handles, an even
@@ -939,8 +939,22 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # lining the region up against another app is the whole point of it.
 "$MOC" -I"$H" "$H/ui/RegionTool.hpp" -o "$WORK/moc_RegionTool.cpp"
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" -I"$ROOT/libobs" $CF \
-	"$HERE/regionoverlay_test.cpp" "$H/ui/RegionTool.cpp" \
+	"$HERE/regionoverlay_test.cpp" "$H/ui/RegionTool.cpp" "$H/ui/NativeWindowOps.cpp" \
 	"$WORK/moc_RegionTool.cpp" -o "$WORK/regionoverlay_test" $LF
+
+# The Custom Region on a second display at another scale, to the left of the
+# main one: the crop is what the frame visibly surrounds, a frame Windows put
+# in the wrong place is moved back, and the draw layer measures from where it
+# really is. Two offscreen displays, 125% beside 100%.
+cat > "$WORK/twoscreens.json" <<'JSON'
+{ "screens": [
+  { "name": "MAIN", "x": 0, "y": 0, "width": 1920, "height": 1080, "logicalDpi": 96, "logicalBaseDpi": 96, "dpr": 1 },
+  { "name": "LEFT", "x": -1920, "y": 0, "width": 1920, "height": 1080, "logicalDpi": 120, "logicalBaseDpi": 96, "dpr": 1 }
+] }
+JSON
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" -I"$ROOT/libobs" $CF \
+	"$HERE/regionnative_test.cpp" "$H/ui/RegionTool.cpp" "$H/ui/RegionDraw.cpp" "$H/ui/NativeWindowOps.cpp" \
+	"$WORK/moc_RegionTool.cpp" "$WORK/moc_RegionDraw.cpp" -o "$WORK/regionnative_test" $LF
 
 # The floating desktop controls are on screen while idle now, holding the green
 # Record button -- so the red "recording" dot and the two dead buttons that used
@@ -987,6 +1001,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/paramslider_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/colorfield_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionwatch_test" || rc=1
+QT_QPA_PLATFORM="offscreen:configfile=$WORK/twoscreens.json" "$WORK/regionnative_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/followmouse_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/multiarea_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/zoommode_test" || rc=1

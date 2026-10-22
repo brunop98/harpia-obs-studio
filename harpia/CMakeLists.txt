@@ -206,6 +206,7 @@ target_sources(
     ui/MainDevPanel.hpp
     ui/RegionTool.cpp
     ui/RegionDraw.cpp
+    ui/NativeWindowOps.cpp
     ui/WindowPicker.cpp
     ui/WindowPicker.hpp
     ui/RegionTool.hpp

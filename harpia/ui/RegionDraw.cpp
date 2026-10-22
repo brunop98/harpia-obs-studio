@@ -1,5 +1,7 @@
 #include "RegionDraw.hpp"
 
+#include "NativeWindowOps.hpp"
+
 #include <QCursor>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -55,6 +57,7 @@ void RegionDraw::start(QScreen *screen)
 		setScreen(screen);
 		setGeometry(screen->geometry());
 		dpr_ = screen->devicePixelRatio();
+		origin_ = screen->geometry().topLeft();
 	}
 	dragging_ = false;
 	pointer_ = mapFromGlobal(QCursor::pos());
@@ -98,6 +101,21 @@ QRect RegionDraw::toDevicePx(const QRect &r, qreal dpr)
 {
 	return QRect(int(std::lround(r.x() * dpr)), int(std::lround(r.y() * dpr)), int(std::lround(r.width() * dpr)),
 		     int(std::lround(r.height() * dpr)));
+}
+
+QRect RegionDraw::devicePxOnScreen(const QRect &sel) const
+{
+	// The layer is meant to cover the display exactly, and then this is plain
+	// toDevicePx. Windows can put it elsewhere on a display at another scale
+	// (see NativeWindowOps.hpp); what was dragged over is then where the layer
+	// really is plus the drag, not where Qt's arithmetic puts the layer.
+	const std::optional<QRect> win = native_window::rect(this);
+	if (!win)
+		return toDevicePx(sel, dpr_);
+	const qreal k = devicePixelRatioF();
+	return QRect(win->x() + int(std::lround(sel.x() * k)) - origin_.x(),
+		     win->y() + int(std::lround(sel.y() * k)) - origin_.y(), int(std::lround(sel.width() * k)),
+		     int(std::lround(sel.height() * k)));
 }
 
 QRect RegionDraw::current() const
@@ -198,8 +216,9 @@ void RegionDraw::mouseReleaseEvent(QMouseEvent *e)
 		update(); // a click: keep waiting for a real drag
 		return;
 	}
+	const QRect dev = devicePxOnScreen(sel); // before hide(): asked while the window is where it was dragged on
 	hide();
-	emit drawn(toDevicePx(sel, dpr_));
+	emit drawn(dev);
 }
 
 void RegionDraw::keyPressEvent(QKeyEvent *e)

@@ -17,23 +17,32 @@
 #include <QStringList>
 #include <QVector>
 
+#include <algorithm>
+#include <cmath>
+
 namespace harpia {
 
 // One tunable uniform surfaced in the Inspector, declared in a shader via:
-//   //@param <uniform> float <min> <max> <default> <Label...>
-//   //@param <uniform> bool  <default(0|1)> <Label...>
+//   //@param <uniform> float  <min> <max> <default> <Label...>
+//   //@param <uniform> bool   <default(0|1)> <Label...>
+//   //@param <uniform> color  <#RRGGBB|#AARRGGBB> <Label...>
+//   //@param <uniform> choice <default> <Option|Option|...> <Label...>
+// A choice is a dropdown of named options; the shader gets the chosen one's
+// index as a float (0, 1, 2...). An underscore in an option name shows as a
+// space ("Soft_light" reads "Soft light"), since a space ends the token.
 struct ShaderParam {
 	// Color travels in `def` (and in the params map) as a packed 0xAARRGGBB in
 	// a double, exactly as PropType::Color does in the component model: 32 bits
 	// are exact in a double, so one number carries every parameter kind and the
 	// persistence, the keyframes and the uniforms all stay uniform.
-	enum class Type { Float, Bool, Color };
+	enum class Type { Float, Bool, Color, Choice };
 	QString uniform;      // GLSL uniform name (also the JSON/persistence key)
 	Type type = Type::Float;
 	double min = 0.0;
 	double max = 1.0;
 	double def = 0.0;     // default value
 	QString label;        // human label for the control (falls back to `uniform`)
+	QStringList choices;  // Choice only: the option names, in index order
 };
 
 // The active effect: which shader (file stem; empty == none) and the current
@@ -91,6 +100,21 @@ inline QVector<ShaderParam> parseShaderParams(const QString &glsl)
 			p.max = 0.0; // no range: a colour is not a scalar
 			p.def = double(quint32(c.rgba()));
 			p.label = QStringList(t.mid(3)).join(QLatin1Char(' '));
+		} else if (kind == QLatin1String("choice")) {
+			// uniform choice default Option|Option|... [label...]
+			if (t.size() < 4)
+				continue;
+			p.type = ShaderParam::Type::Choice;
+			for (QString o : t[3].split(QLatin1Char('|'), Qt::SkipEmptyParts))
+				p.choices << o.replace(QLatin1Char('_'), QLatin1Char(' '));
+			if (p.choices.isEmpty())
+				continue;
+			// A slider's range too, so anything that has no dropdown still
+			// offers exactly the options and nothing between them.
+			p.min = 0.0;
+			p.max = double(p.choices.size() - 1);
+			p.def = std::clamp(std::round(t[2].toDouble()), p.min, p.max);
+			p.label = QStringList(t.mid(4)).join(QLatin1Char(' '));
 		} else if (kind == QLatin1String("bool")) {
 			// uniform bool default [label...]
 			if (t.size() < 3)
@@ -131,6 +155,10 @@ inline QString wrapShaderToy(const QString &userGlsl, const QVector<ShaderParam>
 		// parameter someone immediately wants an opacity slider beside.
 		case ShaderParam::Type::Color: head += QStringLiteral("uniform vec4 "); break;
 		case ShaderParam::Type::Float: head += QStringLiteral("uniform float "); break;
+		// The option's index. A float rather than an int: it travels as the
+		// same one double every other parameter does, and int(u + 0.5) in the
+		// shader is all it takes to switch on it.
+		case ShaderParam::Type::Choice: head += QStringLiteral("uniform float "); break;
 		}
 		head += p.uniform;
 		head += QStringLiteral(";\n");

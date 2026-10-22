@@ -380,6 +380,17 @@ QImage ShaderRenderer::apply(const QImage &src, float iTime, int iFrame,
 
 	QImage out = fbo_[lastTarget]->toImage(); // flips back to top-down, upright
 	ctx_->doneCurrent();
+	// The shader wrote straight colour -- the kind it was handed above -- but
+	// toImage() labels what it reads as PREMULTIPLIED, and converting from
+	// that divides every pixel by its alpha: a clip's soft edge (a logo's
+	// antialiasing, a PNG's fade) came back up to twice as bright, under any
+	// shader at all, even one set to change nothing. Relabel, don't convert:
+	// the bytes are already the right ones. (The GPU effect chain reads its
+	// pixels back as straight RGBA, so this is also what makes the two agree.)
+	if (out.format() == QImage::Format_ARGB32_Premultiplied)
+		out.reinterpretAsFormat(QImage::Format_ARGB32);
+	else if (out.format() == QImage::Format_RGBA8888_Premultiplied)
+		out.reinterpretAsFormat(QImage::Format_RGBA8888);
 	return out.convertToFormat(QImage::Format_RGBA8888);
 }
 

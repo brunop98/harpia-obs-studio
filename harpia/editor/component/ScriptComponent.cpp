@@ -50,9 +50,11 @@ QVector<PropDef> propsFrom(const QString &src)
 		PropDef d;
 		d.key = p.uniform;
 		d.label = p.label.isEmpty() ? p.uniform : p.label;
-		d.type = p.type == ShaderParam::Type::Bool    ? PropType::Bool
-			 : p.type == ShaderParam::Type::Color ? PropType::Color
-							      : PropType::Float;
+		d.type = p.type == ShaderParam::Type::Bool     ? PropType::Bool
+			 : p.type == ShaderParam::Type::Color  ? PropType::Color
+			 : p.type == ShaderParam::Type::Choice ? PropType::Choice
+								       : PropType::Float;
+		d.choices = p.choices;
 		d.min = p.min;
 		d.max = p.max;
 		d.def = p.def;

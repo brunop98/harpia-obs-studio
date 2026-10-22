@@ -1,4 +1,4 @@
-// Pasting a picture from the clipboard onto the timeline.
+// Pasting from the clipboard onto the timeline: Add > Paste and Ctrl+V.
 //
 // The trap here is not the paste. It is that a source is identified by its
 // PATH: the project writes sources[].path and relinks by it on open, and the
@@ -16,10 +16,15 @@
 //   - the EXPORTER's own reader gets the picture back, not a null image;
 //   - Ctrl+V still pastes clips when clips are what was copied last, and
 //     pastes the image when the image was -- in both orders, because a
-//     dispatch rule that always picks one branch passes a one-way test.
+//     dispatch rule that always picks one branch passes a one-way test;
+//   - Add > Paste puts it on the best-fit lane: the first lane free for it,
+//     or a new one on top -- never over a clip already there;
+//   - sound copied as data, a link to a picture (from a web server inside the
+//     test) and plain words each become the right kind of clip.
 #include "editor/StillImage.hpp"
 #include "editor/VideoEditorWindow.hpp"
 #include "editor/timeline/TimelineView.hpp"
+#include "support/TinyHttpServer.hpp"
 
 #include <QApplication>
 #include <QClipboard>
@@ -29,7 +34,11 @@
 #include <QImage>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QBuffer>
+#include <QMenu>
+#include <QMenuBar>
 #include <QMimeData>
+#include <QNetworkProxy>
 #include <QProcess>
 #include <QPushButton>
 #include <QTemporaryDir>
@@ -75,6 +84,72 @@ static QImage marker(int w = 240, int h = 120)
 	return img;
 }
 
+// The Add menu's Paste entry, as the menu bar shows it.
+static QAction *addPasteAction(QWidget *w)
+{
+	for (QMenuBar *bar : w->findChildren<QMenuBar *>())
+		for (QAction *top : bar->actions())
+			if (top->menu() && top->text().remove(QLatin1Char('&')) == QLatin1String("Add"))
+				for (QAction *a : top->menu()->actions())
+					if (a->text() == QLatin1String("Paste"))
+						return a;
+	return nullptr;
+}
+
+// The selected clip -- the one just pasted -- overlaps nothing else on its
+// lane. (Not every lane: Ctrl+V of copied clips pastes where it is told to,
+// over whatever is there, and earlier sections do that on purpose.)
+static bool pastedCoversNothing(TimelineView *tv)
+{
+	const int t = tv->selectedTrack(), c = tv->selectedClip();
+	if (t < 0 || t >= tv->model().tracks.size() || c < 0 || c >= tv->model().tracks[t].clips.size())
+		return false;
+	const QVector<TlClip> &clips = tv->model().tracks[t].clips;
+	for (int i = 0; i < clips.size(); ++i)
+		if (i != c && clips[i].outStartMs < clips[c].outEndMs() && clips[c].outStartMs < clips[i].outEndMs())
+			return false;
+	return true;
+}
+
+// The lane and index of the clip that is selected after a paste.
+static const TlClip *selectedClip(TimelineView *tv, int *lane = nullptr)
+{
+	const int t = tv->selectedTrack(), c = tv->selectedClip();
+	if (lane)
+		*lane = t;
+	if (t < 0 || t >= tv->model().tracks.size() || c < 0 || c >= tv->model().tracks[t].clips.size())
+		return nullptr;
+	return &tv->model().tracks[t].clips[c];
+}
+
+static QByteArray wavBytes(int ms)
+{
+	const int frames = 48 * ms;
+	QByteArray data(frames * 4, '\0');
+	QByteArray b;
+	auto u32 = [&b](quint32 v) {
+		for (int i = 0; i < 4; ++i)
+			b.append(char((v >> (8 * i)) & 0xff));
+	};
+	auto u16 = [&b](quint16 v) {
+		b.append(char(v & 0xff));
+		b.append(char(v >> 8));
+	};
+	b += "RIFF";
+	u32(36 + quint32(data.size()));
+	b += "WAVEfmt ";
+	u32(16);
+	u16(1);
+	u16(2);
+	u32(48000);
+	u32(48000 * 4);
+	u16(4);
+	u16(16);
+	b += "data";
+	u32(quint32(data.size()));
+	return b + data;
+}
+
 static int clipCount(TimelineView *tv)
 {
 	int n = 0;
@@ -96,6 +171,9 @@ int main(int argc, char **argv)
 {
 	std::setvbuf(stdout, nullptr, _IONBF, 0);
 	QApplication app(argc, argv);
+	// The link test's server is on this machine; no proxy is to be asked.
+	QNetworkProxyFactory::setUseSystemConfiguration(false);
+	QNetworkProxy::setApplicationProxy(QNetworkProxy::NoProxy);
 
 	VideoEditorWindow w(QStringLiteral(SRC_MEDIA));
 	w.resize(1300, 900);
@@ -212,12 +290,12 @@ int main(int argc, char **argv)
 		   "and the image clip still resolves to a file");
 	}
 
-	// Deliberately BEFORE anything copies clips: with clips in hand, text on the
-	// clipboard falling through to a clip paste is the correct answer, and that
-	// case is checked below. This is the empty-handed one.
+	// Deliberately BEFORE anything copies clips: with clips in hand, words
+	// copied inside Harpia falling through to a clip paste is the correct
+	// answer, and that case is checked below. These are the empty-handed ones.
 	std::printf("\n-- with nothing to paste, Ctrl+V says so rather than going quiet --\n");
 	{
-		cb->setText(QStringLiteral("just some words"));
+		cb->clear();
 		settle(200);
 		const int before = clipCount(tv);
 		QMetaObject::invokeMethod(&w, "pasteFromClipboard");
@@ -227,8 +305,24 @@ int main(int argc, char **argv)
 		// Silence would read as a broken shortcut; the message is the feature.
 		const QString msg = w.infoTextForTest();
 		std::printf("     said: %s\n", qPrintable(msg));
-		ok(msg.contains(QStringLiteral("text"), Qt::CaseInsensitive),
-		   "and it said the clipboard holds text rather than saying nothing");
+		ok(msg.contains(QStringLiteral("nothing"), Qt::CaseInsensitive),
+		   "and it said there is nothing on the clipboard");
+	}
+
+	std::printf("\n-- words become a text clip --\n");
+	{
+		cb->setText(QStringLiteral("Hello from the clipboard"));
+		settle(200);
+		const int before = clipCount(tv);
+		QMetaObject::invokeMethod(&w, "pasteFromClipboard");
+		settle(400);
+		const TlClip *c = selectedClip(tv);
+		std::printf("     clips %d -> %d, selected: %s\n", before, clipCount(tv),
+			    c && c->type == TlClip::Type::Text ? qPrintable(c->text.text) : "(not a text clip)");
+		ok(clipCount(tv) == before + 1 && c && c->type == TlClip::Type::Text &&
+			   c->text.text == QLatin1String("Hello from the clipboard"),
+		   "a text clip, with those words");
+		ok(pastedCoversNothing(tv), "on a lane where it covers nothing");
 	}
 
 	std::printf("\n-- Ctrl+V picks whichever was copied LAST --\n");
@@ -246,7 +340,7 @@ int main(int argc, char **argv)
 		int before = clipCount(tv);
 		QMetaObject::invokeMethod(&w, "pasteFromClipboard");
 		settle(500);
-		const TlClip *c = lastImageClip(tv);
+		const TlClip *c = selectedClip(tv); // a paste selects what it placed
 		std::printf("     image last: clips %d -> %d, newest image is %s\n", before,
 			    clipCount(tv),
 			    c ? qPrintable(QFileInfo(w.sourcePathForTest(c->sourceId)).fileName())
@@ -265,25 +359,37 @@ int main(int argc, char **argv)
 		before = clipCount(tv);
 		QMetaObject::invokeMethod(&w, "pasteFromClipboard");
 		settle(500);
-		const TlClip *c2 = lastImageClip(tv);
-		const bool newImage =
-			c2 && readStillImage(w.sourcePathForTest(c2->sourceId)).size() == QSize(64, 64);
+		bool newImage = false; // any 64x64 picture on the timeline at all
+		for (const TlTrack &t : tv->model().tracks)
+			for (const TlClip &k : t.clips)
+				newImage |= k.type == TlClip::Type::Image &&
+					    readStillImage(w.sourcePathForTest(k.sourceId)).size() == QSize(64, 64);
 		std::printf("     clips last: clips %d -> %d, a 64x64 image appeared: %s\n", before,
 			    clipCount(tv), newImage ? "YES (wrong)" : "no");
 		ok(clipCount(tv) == before + 1, "something was pasted");
 		ok(!newImage, "and it was the CLIPS, because the clips were copied last");
 
-		// Text arriving on the clipboard is not a reason to stop pasting clips.
-		// It is newer than the copy, but it is not something that can be placed,
-		// so the rule has to skip it rather than treat it as the winner.
+		// Words copied inside Harpia (a clip name, a line of the Inspector) are
+		// newer than the copy, but they were a side effect of editing, not a
+		// thing to place -- so they do not take the place of the clips. (This
+		// test is Harpia: its clipboard writes are Harpia's own.)
 		cb->setText(QStringLiteral("copied some words by accident"));
 		settle(200);
 		before = clipCount(tv);
+		int textClipsBefore = 0;
+		for (const TlTrack &t : tv->model().tracks)
+			for (const TlClip &k : t.clips)
+				textClipsBefore += k.type == TlClip::Type::Text;
 		QMetaObject::invokeMethod(&w, "pasteFromClipboard");
 		settle(500);
-		std::printf("     then text arrives: clips %d -> %d\n", before, clipCount(tv));
-		ok(clipCount(tv) == before + 1,
-		   "unpasteable text does not cancel the clips you copied");
+		int textClipsAfter = 0;
+		for (const TlTrack &t : tv->model().tracks)
+			for (const TlClip &k : t.clips)
+				textClipsAfter += k.type == TlClip::Type::Text;
+		std::printf("     then words copied in Harpia: clips %d -> %d, text clips %d -> %d\n", before,
+			    clipCount(tv), textClipsBefore, textClipsAfter);
+		ok(clipCount(tv) == before + 1 && textClipsAfter == textClipsBefore,
+		   "words copied inside Harpia do not replace the clips you copied");
 	}
 
 	std::printf("\n-- a file copied in the file manager pastes too --\n");
@@ -299,7 +405,7 @@ int main(int argc, char **argv)
 		const int before = clipCount(tv);
 		QMetaObject::invokeMethod(&w, "pasteFromClipboard");
 		settle(600);
-		const TlClip *c = lastImageClip(tv);
+		const TlClip *c = selectedClip(tv);
 		std::printf("     clips %d -> %d, source %s\n", before, clipCount(tv),
 			    c ? qPrintable(QFileInfo(w.sourcePathForTest(c->sourceId)).fileName())
 			      : "(none)");
@@ -311,20 +417,139 @@ int main(int argc, char **argv)
 		   "and it points at the original file, not a copy");
 	}
 
-	std::printf("\n-- the button follows the clipboard --\n");
+	std::printf("\n-- Add > Paste: the best-fit lane --\n");
 	{
-		QPushButton *b = button(&w, QStringLiteral("Paste image"));
-		ok(b != nullptr, "there is a Paste image button");
-		if (b) {
-			cb->setText(QStringLiteral("still words"));
+		// A clip sitting at the playhead on the top picture lane: a paste
+		// there has to go somewhere it covers nothing.
+		tv->setPlayhead(500);
+		settle(100);
+		int topLane = -1;
+		for (int i = 0; i < tv->model().tracks.size() && topLane < 0; ++i)
+			if (tv->model().tracks[i].kind == TlTrack::Kind::Video)
+				topLane = i;
+		bool topBusy = false;
+		for (const TlClip &k : tv->model().tracks[topLane].clips)
+			topBusy |= k.outStartMs < 5500 && k.outEndMs() > 500;
+		const int lanesBefore = tv->model().tracks.size();
+		cb->setImage(marker(50, 40));
+		settle(200);
+		QMetaObject::invokeMethod(&w, "pasteSystemClipboardForTest");
+		settle(500);
+		int lane = -1;
+		const TlClip *c = selectedClip(tv, &lane);
+		std::printf("     top picture lane busy at the playhead: %s; landed on lane %d (lanes %d -> %d)\n",
+			    topBusy ? "yes" : "no", lane, lanesBefore, int(tv->model().tracks.size()));
+		ok(c && c->type == TlClip::Type::Image && c->outStartMs == 500, "an image clip, at the playhead");
+		ok(pastedCoversNothing(tv), "covering nothing on its lane");
+		bool firstFree = true;
+		for (int i = 0; c && i < lane; ++i) {
+			const TlTrack &t = tv->model().tracks[i];
+			if (t.kind != TlTrack::Kind::Video || t.locked || t.name == QLatin1String("Subtitles"))
+				continue;
+			bool free = true;
+			for (const TlClip &k : t.clips)
+				free &= !(k.outStartMs < c->outEndMs() && k.outEndMs() > c->outStartMs);
+			firstFree &= !free;
+		}
+		ok(firstFree, "and no free picture lane above the one it took");
+
+		// Every picture lane busy there: a new lane, on top.
+		cb->setImage(marker(52, 40));
+		settle(200);
+		TimelineModel m = tv->model();
+		for (TlTrack &t : m.tracks)
+			if (t.kind == TlTrack::Kind::Video) {
+				TlClip blocker;
+				blocker.type = TlClip::Type::Text;
+				blocker.srcStartMs = 0;
+				blocker.srcEndMs = 60000;
+				blocker.outStartMs = 400000;
+				blocker.text.text = QStringLiteral("blocker");
+				t.clips.append(blocker);
+			}
+		tv->setModelAndCommit(m);
+		tv->setPlayhead(410000);
+		settle(100);
+		const int before = tv->model().tracks.size();
+		QMetaObject::invokeMethod(&w, "pasteSystemClipboardForTest");
+		settle(500);
+		const TlClip *c2 = selectedClip(tv, &lane);
+		std::printf("     every picture lane busy: lanes %d -> %d, landed on lane %d\n", before,
+			    int(tv->model().tracks.size()), lane);
+		ok(c2 && tv->model().tracks.size() == before + 1 && lane == 0,
+		   "every lane busy: a new picture lane, on top");
+		ok(pastedCoversNothing(tv), "still covering nothing");
+		tv->setPlayhead(0);
+	}
+
+	std::printf("\n-- Add > Paste: sound copied as data --\n");
+	{
+		auto *mime = new QMimeData;
+		mime->setData(QStringLiteral("audio/wav"), wavBytes(1500));
+		cb->setMimeData(mime);
+		settle(200);
+		tv->setPlayhead(2000);
+		settle(100);
+		QMetaObject::invokeMethod(&w, "pasteSystemClipboardForTest");
+		settle(800);
+		int lane = -1;
+		const TlClip *c = selectedClip(tv, &lane);
+		const bool onAudio = lane >= 0 && tv->model().tracks[lane].kind == TlTrack::Kind::Audio;
+		std::printf("     landed on lane %d (%s), %lld ms long at %lld\n", lane, onAudio ? "audio" : "NOT audio",
+			    c ? (long long)c->outDurationMs() : -1LL, c ? (long long)c->outStartMs : -1LL);
+		ok(c && onAudio && c->outStartMs == 2000, "an audio clip, at the playhead, on an audio lane");
+		ok(c && std::abs(c->outDurationMs() - 1500) < 50, "as long as the sound copied");
+		ok(c && QFileInfo::exists(w.sourceFileForTest(c->sourceId)), "kept as a file, like a pasted picture");
+		ok(pastedCoversNothing(tv), "covering nothing");
+		tv->setPlayhead(0);
+	}
+
+	std::printf("\n-- Add > Paste: a link to a picture --\n");
+	{
+		TinyHttpServer web;
+		QByteArray png;
+		{
+			QBuffer buf(&png);
+			buf.open(QIODevice::WriteOnly);
+			marker(64, 32).save(&buf, "PNG");
+		}
+		web.routes["/shot.png"] = TinyRoute{200, "image/png", png, {}, false, -1};
+		cb->setText(web.url("/shot.png"));
+		settle(200);
+		tv->setPlayhead(3000);
+		settle(100);
+		const int before = clipCount(tv);
+		QMetaObject::invokeMethod(&w, "pasteSystemClipboardForTest");
+		QElapsedTimer t;
+		t.start();
+		while (clipCount(tv) == before && t.elapsed() < 5000)
+			settle(50);
+		const TlClip *c = selectedClip(tv);
+		const QString path = c ? w.sourcePathForTest(c->sourceId) : QString();
+		std::printf("     clips %d -> %d, source %s\n", before, clipCount(tv), qPrintable(QFileInfo(path).fileName()));
+		ok(c && c->type == TlClip::Type::Image && c->outStartMs == 3000,
+		   "downloaded, and an image clip at the playhead it was pasted at");
+		ok(readStillImage(path).size() == QSize(64, 32), "of the picture the link pointed to");
+		tv->setPlayhead(0);
+	}
+
+	std::printf("\n-- the menu entry follows the clipboard --\n");
+	{
+		QAction *a = addPasteAction(&w);
+		ok(a != nullptr, "there is Add > Paste");
+		if (a) {
+			cb->clear();
 			settle(250);
-			const bool offWithText = !b->isEnabled();
+			const bool offEmpty = !a->isEnabled();
+			cb->setText(QStringLiteral("words are pasteable now"));
+			settle(250);
+			const bool onText = a->isEnabled();
 			cb->setImage(marker(30, 30));
 			settle(250);
-			std::printf("     enabled with text: %s, with an image: %s\n",
-				    offWithText ? "no" : "YES", b->isEnabled() ? "yes" : "NO");
-			ok(offWithText, "greyed out when there is nothing to paste");
-			ok(b->isEnabled(), "and live when there is");
+			std::printf("     empty: %s, words: %s, an image: %s\n", offEmpty ? "off" : "ON",
+				    onText ? "on" : "OFF", a->isEnabled() ? "on" : "OFF");
+			ok(offEmpty, "greyed out when there is nothing to paste");
+			ok(onText && a->isEnabled(), "and live when there is: words, a picture");
 		}
 	}
 

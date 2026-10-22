@@ -53,6 +53,8 @@
 #include "VoiceoverMixer.hpp"
 #include "VoiceoverTrack.hpp"
 #include "MediaFiles.hpp"
+#include "ClipboardPaste.hpp"
+#include "LinkDownload.hpp"
 #include "../ui/WheelGuard.hpp"
 #include "script/TransformScript.hpp"
 #include "component/ShaderComponent.hpp"
@@ -1151,20 +1153,20 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			"timeline at the playhead."));
 		connect(addUrlAct_, &QAction::triggered, this, &VideoEditorWindow::openUrlDownload);
 	}
-	// Ctrl+V does this too, but a screenshot pasted straight onto the timeline is
-	// not something anyone tries unprompted -- so it gets an entry, greyed out
-	// when there is nothing on the clipboard to place.
-	pasteImageAct_ = addMenu->addAction(QStringLiteral("Paste image"));
-	pasteImageAct_->setToolTip(QStringLiteral(
-		"Place the image on the clipboard \u2014 a screenshot, or a picture copied "
-		"from a browser \u2014 on the timeline (Ctrl+V)"));
-	connect(pasteImageAct_, &QAction::triggered, this,
-		[this]() { pasteImageFromClipboard(timelinePlayheadMs()); });
+	// Ctrl+V does this too, but pasting a screenshot, a song or a link straight
+	// onto the timeline is not something anyone tries unprompted -- so it gets
+	// an entry, greyed out when there is nothing on the clipboard to place.
+	pasteAct_ = addMenu->addAction(QStringLiteral("Paste"));
+	pasteAct_->setToolTip(QStringLiteral(
+		"Put what you copied on the timeline at the playhead \u2014 a picture or "
+		"screenshot, a sound, files from Explorer, a link to a video, picture or "
+		"sound, or text \u2014 on the first track free for it, or a new one on top"));
+	connect(pasteAct_, &QAction::triggered, this, [this]() { pasteSystemClipboard(timelinePlayheadMs()); });
 	connect(QApplication::clipboard(), &QClipboard::dataChanged, this, [this]() {
-		if (pasteImageAct_)
-			pasteImageAct_->setEnabled(systemClipboardHasMedia());
+		if (pasteAct_)
+			pasteAct_->setEnabled(systemClipboardHasPaste());
 	});
-	pasteImageAct_->setEnabled(systemClipboardHasMedia());
+	pasteAct_->setEnabled(systemClipboardHasPaste());
 	addMenu->addSeparator();
 	// Empty lanes, for laying out a project before there is anything to
 	// put on it. A new picture lane goes at the top of the picture group, a
@@ -2010,8 +2012,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// Which of the two clipboards is the fresher one. Watched rather than polled
 	// on Ctrl+V, because "did this change since I copied clips?" is an ordering
 	// question and only the signal knows the order.
-	connect(QApplication::clipboard(), &QClipboard::dataChanged, this,
-		[this]() { systemCopySeq_ = ++seqCounter_; });
+	connect(QApplication::clipboard(), &QClipboard::dataChanged, this, [this]() {
+		systemCopySeq_ = ++seqCounter_;
+		// The clipboard cannot change in front of Harpia unless Harpia did
+		// it; ownsClipboard() says the same where the platform can tell.
+		systemCopyHere_ = QApplication::activeWindow() != nullptr || QApplication::clipboard()->ownsClipboard();
+	});
 	auto onTimeline = [this]() { return fullEdit() && timelineView_; };
 	auto frameMs = [this]() {
 		const double fps = timelineFps();
@@ -2091,7 +2097,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	      [this]() { copySelectedClips(true); });
 	// Not tlCmd: pasting a picture is meaningful from any mode (it switches to
 	// Full editing to place it), so this one must not no-op outside the timeline.
-	cmd("edit.paste", "Paste clips or image", "Editing", {QKeySequence::Paste},
+	cmd("edit.paste", "Paste clips, or what you copied elsewhere", "Editing", {QKeySequence::Paste},
 	    [this]() { pasteFromClipboard(); });
 	// NOT tlCmd: Delete has to work on whatever is selected in whatever mode you
 	// are in. It was bound to the Full-editing timeline alone, and because a
@@ -3100,27 +3106,12 @@ void VideoEditorWindow::onFilesDroppedOnTimeline(const QStringList &paths, int t
 	int audLanded = -1; // ...and the audio one
 	bool any = false;
 	for (const QString &f : paths) {
-		TlClip c;
-		// A GIF is both, and the video reader is what people mean by dropping
-		// one -- so the video test goes first, matching MediaFiles.hpp.
-		if (isAudioFile(f)) {
-			// An audio-only file has no video stream for FrameSeeker to open,
-			// so this decodes it to a session WAV and registers THAT. Before
-			// this it fell through to the image branch and produced "could not
-			// be decoded", which was true of the still reader and useless.
-			// A row dragged from the Sources panel is a file already loaded:
-			// reuse it rather than decode a second copy.
-			const EditorSource *have = sourceByPath(f);
-			const int id = have ? have->id : addAudioSource(f);
-			if (id < 0)
-				continue; // addAudioSource already said why
-			const EditorSource *src = sourceById(id);
-			const QString wav = audioProxyFor(id);
-			c.type = TlClip::Type::Video; // "media clip"; the LANE makes it audio
-			c.sourceId = id;
-			c.srcStartMs = 0;
-			c.srcEndMs = src ? src->durationMs : 0;
-			c.peaks = VoiceoverTrack::loadPeaks(wav, 600); // so it draws a waveform
+		bool audio = false;
+		const std::optional<TlClip> made = mediaClipForFile(f, &audio);
+		if (!made)
+			continue; // mediaClipForFile already said why
+		TlClip c = *made;
+		if (audio) {
 			c.outStartMs = atAud;
 			atAud += std::max<qint64>(1, c.outDurationMs());
 			// The drop's target lane is only usable when the WHOLE drag was
@@ -3137,26 +3128,6 @@ void VideoEditorWindow::onFilesDroppedOnTimeline(const QStringList &paths, int t
 			any = true;
 			continue;
 		}
-		if (isVideoFile(f)) {
-			const EditorSource *have = sourceByPath(f);
-			const int id = have ? have->id : addSource(f);
-			if (id < 0)
-				continue; // addSource already said why
-			const EditorSource *src = sourceById(id);
-			c.type = TlClip::Type::Video;
-			c.sourceId = id;
-			c.srcStartMs = 0;
-			c.srcEndMs = src ? src->durationMs : 0;
-		} else {
-			const EditorSource *have = sourceByPath(f);
-			const int id = have ? have->id : addImageSource(f);
-			if (id < 0)
-				continue;
-			c.type = TlClip::Type::Image;
-			c.sourceId = id;
-			c.srcStartMs = 0;
-			c.srcEndMs = 5000; // a still has no length of its own
-		}
 		c.outStartMs = atPic;
 		atPic += std::max<qint64>(1, c.outDurationMs());
 		// Only the FIRST clip makes a track; the rest join it, or the drop of
@@ -3169,6 +3140,89 @@ void VideoEditorWindow::onFilesDroppedOnTimeline(const QStringList &paths, int t
 		return;
 	updateInfoLabel();
 	showTimelineFrame(timelinePlayheadMs());
+}
+
+std::optional<TlClip> VideoEditorWindow::mediaClipForFile(const QString &f, bool *isAudio)
+{
+	if (isAudio)
+		*isAudio = false;
+	TlClip c;
+	// A GIF is both, and the video reader is what people mean by one -- so
+	// only the audio test goes ahead of the video one, matching MediaFiles.hpp.
+	if (isAudioFile(f)) {
+		// An audio-only file has no video stream for FrameSeeker to open, so
+		// this decodes it to a session WAV and registers THAT. Before this it
+		// fell through to the image branch and produced "could not be
+		// decoded", which was true of the still reader and useless. A file
+		// already loaded (a row dragged from the Sources panel, the same file
+		// pasted twice) is reused rather than decoded a second time.
+		const EditorSource *have = sourceByPath(f);
+		const int id = have ? have->id : addAudioSource(f);
+		if (id < 0)
+			return std::nullopt; // addAudioSource already said why
+		const EditorSource *src = sourceById(id);
+		const QString wav = audioProxyFor(id);
+		c.type = TlClip::Type::Video; // "media clip"; the LANE makes it audio
+		c.sourceId = id;
+		c.srcStartMs = 0;
+		c.srcEndMs = src ? src->durationMs : 0;
+		c.peaks = VoiceoverTrack::loadPeaks(wav, 600); // so it draws a waveform
+		if (isAudio)
+			*isAudio = true;
+		return c;
+	}
+	if (isVideoFile(f)) {
+		const EditorSource *have = sourceByPath(f);
+		const int id = have ? have->id : addSource(f);
+		if (id < 0)
+			return std::nullopt; // addSource already said why
+		const EditorSource *src = sourceById(id);
+		c.type = TlClip::Type::Video;
+		c.sourceId = id;
+		c.srcStartMs = 0;
+		c.srcEndMs = src ? src->durationMs : 0;
+		return c;
+	}
+	const EditorSource *have = sourceByPath(f);
+	const int id = have ? have->id : addImageSource(f);
+	if (id < 0)
+		return std::nullopt;
+	c.type = TlClip::Type::Image;
+	c.sourceId = id;
+	c.srcStartMs = 0;
+	c.srcEndMs = 5000; // a still has no length of its own
+	return c;
+}
+
+bool VideoEditorWindow::pasteMediaFiles(const QStringList &paths, qint64 atMs)
+{
+	if (!timelineView_ || paths.isEmpty())
+		return false;
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	// Pictures and sound each run on from the paste point, as a drop does: a
+	// video and its music pasted together put the music UNDER the video.
+	qint64 atPic = std::max<qint64>(0, atMs);
+	qint64 atAud = atPic;
+	QVector<TlClip> pictures, sounds;
+	for (const QString &f : paths) {
+		bool audio = false;
+		std::optional<TlClip> c = mediaClipForFile(f, &audio);
+		if (!c)
+			continue; // mediaClipForFile already said why
+		qint64 &at = audio ? atAud : atPic;
+		c->outStartMs = at;
+		at += std::max<qint64>(1, c->outDurationMs());
+		(audio ? sounds : pictures).append(*c);
+	}
+	if (pictures.isEmpty() && sounds.isEmpty())
+		return false;
+	timelineView_->placePasted({{TlTrack::Kind::Video, pictures}, {TlTrack::Kind::Audio, sounds}});
+	updateInfoLabel();
+	syncPreviewTransformTarget();
+	syncClipInspector();
+	showTimelineFrame(timelinePlayheadMs());
+	return true;
 }
 
 // Drop an effect clip at the playhead, on its own Effect track. An effect
@@ -8825,12 +8879,13 @@ void VideoEditorWindow::openUrlDownload()
 		setEditMode(EditMode::Full);
 	if (!urlDialog_) {
 		urlDialog_ = new UrlDownloadDialog(this);
-		// The finished file goes through the same path as a file dropped on
-		// the timeline: a source is made (or reused), the clip lands on the
-		// last video lane at the playhead, and it is one undo step.
+		// The finished file goes through the same path as a pasted file: a
+		// source is made (or reused), the clip lands at the playhead on the
+		// first picture lane free for it -- or a new one on top -- and it is
+		// one undo step.
 		connect(urlDialog_, &UrlDownloadDialog::downloaded, this,
 			[this](const QString &path, const YtVideoInfo &) {
-				onFilesDroppedOnTimeline({path}, -1, -1, timelinePlayheadMs());
+				pasteMediaFiles({path}, timelinePlayheadMs());
 				commitSnapshot();
 			});
 	}
@@ -10764,6 +10819,29 @@ void VideoEditorWindow::pasteClips()
 //
 // The app's own config folder rather than a temp dir, because "still there
 // tomorrow" is the whole requirement.
+QString VideoEditorWindow::pastedFilePath(const QString &ext, QString *why)
+{
+	const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) +
+			    QStringLiteral("/pasted");
+	if (!QDir().mkpath(dir)) {
+		if (why)
+			*why = QStringLiteral("Could not create the folder for pasted files:\n%1")
+				       .arg(QDir::toNativeSeparators(dir));
+		return QString();
+	}
+	// Timestamped so the folder stays browsable, plus a counter because two
+	// pastes inside one second is normal and losing the first would be silent.
+	const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss"));
+	QString path;
+	for (int n = 0; n < 10000; ++n) {
+		path = n == 0 ? QStringLiteral("%1/pasted-%2.%3").arg(dir, stamp, ext)
+			      : QStringLiteral("%1/pasted-%2-%3.%4").arg(dir, stamp).arg(n).arg(ext);
+		if (!QFileInfo::exists(path))
+			break;
+	}
+	return path;
+}
+
 QString VideoEditorWindow::writePastedImage(const QImage &img, QString *why)
 {
 	const auto fail = [why](const QString &msg) {
@@ -10773,24 +10851,9 @@ QString VideoEditorWindow::writePastedImage(const QImage &img, QString *why)
 	};
 	if (img.isNull())
 		return fail(QStringLiteral("The clipboard image was empty."));
-
-	const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) +
-			    QStringLiteral("/pasted");
-	if (!QDir().mkpath(dir))
-		return fail(QStringLiteral("Could not create the folder for pasted images:\n%1")
-				    .arg(QDir::toNativeSeparators(dir)));
-
-	// Timestamped so the folder stays browsable, plus a counter because two
-	// pastes inside one second is normal and losing the first would be silent.
-	const QString stamp =
-		QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss"));
-	QString path;
-	for (int n = 0; n < 10000; ++n) {
-		path = n == 0 ? QStringLiteral("%1/pasted-%2.png").arg(dir, stamp)
-			      : QStringLiteral("%1/pasted-%2-%3.png").arg(dir, stamp).arg(n);
-		if (!QFileInfo::exists(path))
-			break;
-	}
+	const QString path = pastedFilePath(QStringLiteral("png"), why);
+	if (path.isEmpty())
+		return QString();
 	// PNG, not the clipboard's original format: lossless, alpha-preserving, and
 	// readable by the plain QImage(path) the export worker uses.
 	if (!img.save(path, "PNG"))
@@ -10820,71 +10883,148 @@ QString VideoEditorWindow::infoTextForTest() const
 	return infoLabel_ ? infoLabel_->text() : QString();
 }
 
-bool VideoEditorWindow::systemClipboardHasMedia() const
+bool VideoEditorWindow::systemClipboardHasPaste() const
 {
-	const QMimeData *mime = QApplication::clipboard()->mimeData();
-	if (!mime)
-		return false;
-	if (mime->hasImage() && !qvariant_cast<QImage>(mime->imageData()).isNull())
-		return true;
-	// A file copied in Explorer or Finder arrives as a URL list, not a picture.
-	// The timeline already knows which of those it can take.
-	return !TimelineView::droppableFiles(mime).isEmpty();
+	// The menu entry greys from the same reading the paste acts on, so the
+	// two cannot disagree about what is there.
+	return clipboardHasWave() ||
+	       readPaste(QApplication::clipboard()->mimeData()).kind != PasteContent::Kind::Nothing;
 }
 
-bool VideoEditorWindow::pasteImageFromClipboard(qint64 atMs)
+bool VideoEditorWindow::pasteSystemClipboard(qint64 atMs)
 {
+	if (!timelineView_)
+		return false;
 	if (!fullEdit())
 		setEditMode(EditMode::Full);
-	const QMimeData *mime = QApplication::clipboard()->mimeData();
-	if (!mime) {
+	const PasteContent c = readPaste(QApplication::clipboard()->mimeData(), clipboardWave());
+	switch (c.kind) {
+	case PasteContent::Kind::Nothing:
+		// Not silence: a paste that does nothing at all reads as broken.
 		if (infoLabel_)
-			infoLabel_->setText(QStringLiteral("There is nothing on the clipboard."));
+			infoLabel_->setText(QStringLiteral("There is nothing on the clipboard to paste."));
 		return false;
+	case PasteContent::Kind::Files:
+		// Used where they lie: a file already has a path, which is all the
+		// project and the exporter need.
+		return pasteMediaFiles(c.files, atMs);
+	case PasteContent::Kind::Image: {
+		QString why;
+		const QString path = writePastedImage(c.image, &why);
+		if (path.isEmpty()) {
+			warnAndLog(this, QStringLiteral("Paste"), why);
+			return false;
+		}
+		return pasteMediaFiles({path}, atMs);
 	}
-
-	// Files first: copying a file in the file manager also puts a thumbnail on
-	// some clipboards, and the file is unambiguously what was meant.
-	const QStringList files = TimelineView::droppableFiles(mime);
-	if (!files.isEmpty()) {
-		onFilesDroppedOnTimeline(files, -1, -1, atMs);
+	case PasteContent::Kind::Audio: {
+		// Sound copied in an audio app has no file either; it is given one
+		// in the same folder as pasted pictures, for the same reason.
+		QString why;
+		const QString path = pastedFilePath(c.audioExt, &why);
+		QFile f(path);
+		if (path.isEmpty() || !f.open(QIODevice::WriteOnly) || f.write(c.audio) != c.audio.size()) {
+			warnAndLog(this, QStringLiteral("Paste"),
+				   why.isEmpty() ? QStringLiteral("Could not write the pasted sound to:\n%1")
+							   .arg(QDir::toNativeSeparators(path))
+						 : why);
+			return false;
+		}
+		f.close();
+		return pasteMediaFiles({path}, atMs);
+	}
+	case PasteContent::Kind::Link:
+		pasteLink(c.link, atMs);
+		return true;
+	case PasteContent::Kind::Text:
+		pasteText(c.text, atMs);
 		return true;
 	}
+	return false;
+}
 
-	const QImage img = qvariant_cast<QImage>(mime->imageData());
-	if (img.isNull()) {
-		// Say which of the two ways it can be unusable it was: an empty
-		// clipboard and a clipboard full of text are different mistakes.
-		if (infoLabel_)
-			infoLabel_->setText(
-				mime->hasText()
-					? QStringLiteral("The clipboard holds text, not an image.")
-					: QStringLiteral("The clipboard holds no image."));
-		return false;
-	}
-
-	QString why;
-	const QString path = writePastedImage(img, &why);
-	if (path.isEmpty()) {
-		warnAndLog(this, QStringLiteral("Paste image"), why);
-		return false;
-	}
-	const int id = addImageSource(path);
-	if (id < 0)
-		return false; // addImageSource already said why
-
-	if (!fullEdit())
-		setEditMode(EditMode::Full);
+void VideoEditorWindow::pasteText(const QString &text, qint64 atMs)
+{
+	if (!timelineView_)
+		return;
 	TlClip c;
-	c.type = TlClip::Type::Image;
-	c.sourceId = id;
+	c.type = TlClip::Type::Text;
 	c.srcStartMs = 0;
-	c.srcEndMs = 5000; // a still has no length of its own, like Add image
+	c.srcEndMs = 4000; // as long as Add > Text's
 	c.outStartMs = std::max<qint64>(0, atMs);
-	timelineView_->addClipOnFreeLane(TlTrack::Kind::Video, c);
-	updateInfoLabel();
+	// A page of text pasted by accident is still the user's text; past this
+	// it stops being a caption and starts being a hang in the text layout.
+	c.text.text = text.left(5000);
+	timelineView_->placePasted({{TlTrack::Kind::Video, {c}}});
+	syncPreviewTransformTarget();
+	syncClipInspector();
 	showTimelineFrame(timelinePlayheadMs());
-	return true;
+}
+
+void VideoEditorWindow::pasteLink(const QUrl &url, qint64 atMs)
+{
+	if (!linkDownload_) {
+		linkDownload_ = new LinkDownload(this);
+		linkProgress_ = new QProgressDialog(this);
+		linkProgress_->setWindowTitle(QStringLiteral("Paste"));
+		linkProgress_->setAutoReset(false); // reset() -- and hiding -- is done()'s
+		linkProgress_->setMinimumDuration(400); // a small picture never shows it
+		linkProgress_->reset(); // or it shows itself, empty, a moment from now
+		connect(linkProgress_, &QProgressDialog::canceled, linkDownload_, &LinkDownload::cancel);
+		connect(linkDownload_, &LinkDownload::progress, this, [this](qint64 got, qint64 total) {
+			if (total > 0) {
+				linkProgress_->setMaximum(1000);
+				linkProgress_->setValue(int(got * 1000 / total));
+			} else {
+				linkProgress_->setMaximum(0); // busy, size unknown
+				linkProgress_->setValue(0);
+			}
+		});
+	}
+	if (linkDownload_->running()) {
+		if (infoLabel_)
+			infoLabel_->setText(QStringLiteral("Still downloading the last link you pasted."));
+		return;
+	}
+	// One connection per paste, so each download lands at the playhead it was
+	// pasted at, not wherever the playhead has moved to since.
+	auto *ctx = new QObject(this);
+	const auto done = [this, ctx]() {
+		linkProgress_->reset();
+		ctx->deleteLater();
+	};
+	connect(linkDownload_, &LinkDownload::fileReady, ctx, [this, atMs, done](const QString &path) {
+		done();
+		if (pasteMediaFiles({path}, atMs) && infoLabel_)
+			infoLabel_->setText(QStringLiteral("Pasted %1.").arg(QFileInfo(path).fileName()));
+	});
+	connect(linkDownload_, &LinkDownload::failed, ctx, [this, done](const QString &why) {
+		done();
+		warnAndLog(this, QStringLiteral("Paste"), QStringLiteral("The link could not be downloaded.\n\n%1").arg(why));
+	});
+	// Cancelled: nothing more will arrive for this paste, and a later one must
+	// not find these connections still listening.
+	connect(linkProgress_, &QProgressDialog::canceled, ctx, done);
+	connect(linkDownload_, &LinkDownload::notMedia, ctx, [this, done](const QUrl &page, const QString &) {
+		done();
+		// A page, not the file itself: a video page is what yt-dlp is for, and
+		// its dialog picks the quality and lands the video when it is done.
+		if (YtDlp::available()) {
+			openUrlDownload();
+			if (urlDialog_)
+				urlDialog_->setUrl(page.toString());
+			return;
+		}
+		warnAndLog(this, QStringLiteral("Paste"),
+			   QStringLiteral("That link is a web page, not a picture, sound or video file.\n\n"
+					  "To download videos from pages, install yt-dlp and point Harpia at it "
+					  "(Settings \u2192 Downloads)."));
+	});
+	linkProgress_->setLabelText(QStringLiteral("Downloading %1\u2026").arg(url.host()));
+	linkProgress_->setMaximum(0);
+	linkProgress_->setValue(0); // starts the clock on showing it
+	linkDownload_->start(url, QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) +
+					  QStringLiteral("/pasted"));
 }
 
 // One key, two plausible meanings, newest wins.
@@ -10913,14 +11053,21 @@ void VideoEditorWindow::pasteFromClipboard()
 		return;
 	}
 	const bool haveClips = timelineView_ && fullEdit() && !clipboard_.isEmpty();
-	const bool haveMedia = systemClipboardHasMedia();
+	bool haveMedia = systemClipboardHasPaste();
+	// Words copied inside Harpia's own boxes -- a clip name, a line of the
+	// Inspector -- never take the place of clips you copied: that copy was
+	// a side effect of editing, not a thing to put on the timeline. Words
+	// from another app follow the newest-wins rule like a picture does.
+	if (haveMedia && haveClips && systemCopyHere_ &&
+	    readPaste(QApplication::clipboard()->mimeData()).kind == PasteContent::Kind::Text)
+		haveMedia = false;
 	if (!haveClips && !haveMedia) {
 		// Not silence: Ctrl+V doing nothing at all reads as a broken shortcut.
-		pasteImageFromClipboard(timelinePlayheadMs()); // says which kind of nothing
+		pasteSystemClipboard(timelinePlayheadMs()); // says there is nothing
 		return;
 	}
 	if (haveMedia && (!haveClips || systemCopySeq_ > copySeq_)) {
-		pasteImageFromClipboard(timelinePlayheadMs());
+		pasteSystemClipboard(timelinePlayheadMs());
 		return;
 	}
 	pasteClips();

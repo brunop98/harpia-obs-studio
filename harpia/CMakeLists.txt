@@ -315,6 +315,10 @@ target_sources(
     editor/ExportOptionsDialog.hpp
     editor/VideoEditorWindow.cpp
     editor/VideoEditorWindow.hpp
+    editor/ClipboardPaste.cpp
+    editor/ClipboardPaste.hpp
+    editor/LinkDownload.cpp
+    editor/LinkDownload.hpp
     # Component runtime: every clip feature is a component, built-in or scripted.
     editor/component/Component.cpp
     editor/component/Component.hpp
@@ -377,6 +381,7 @@ target_sources(
     editor/timeline/PathCurve.hpp
     editor/timeline/VariationPresets.hpp
     editor/timeline/TimelineView.cpp
+    editor/timeline/PastePlacement.hpp
     editor/timeline/SoundRules.cpp
     editor/timeline/SoundRules.hpp
     editor/timeline/SoundLibrary.cpp

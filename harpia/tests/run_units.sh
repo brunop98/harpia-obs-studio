@@ -942,6 +942,14 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" -I"$ROOT/libobs" $CF \
 	"$HERE/regionoverlay_test.cpp" "$H/ui/RegionTool.cpp" "$H/ui/NativeWindowOps.cpp" \
 	"$WORK/moc_RegionTool.cpp" -o "$WORK/regionoverlay_test" $LF
 
+# Add > Paste below the window: what the clipboard is read as (files, sound,
+# a picture, a link, words), the best-fit lane, and a pasted link fetched
+# from a web server inside the test.
+"$MOC" -I"$H" "$H/editor/LinkDownload.hpp" -o "$WORK/moc_LinkDownload.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/clipboardread_test.cpp" "$H/editor/ClipboardPaste.cpp" "$H/editor/LinkDownload.cpp" \
+	"$WORK/moc_LinkDownload.cpp" -o "$WORK/clipboardread_test" $LF
+
 # The Custom Region on a second display at another scale, to the left of the
 # main one: the crop is what the frame visibly surrounds, a frame Windows put
 # in the wrong place is moved back, and the draw layer measures from where it
@@ -1002,6 +1010,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/colorfield_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionwatch_test" || rc=1
 QT_QPA_PLATFORM="offscreen:configfile=$WORK/twoscreens.json" "$WORK/regionnative_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/clipboardread_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/followmouse_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/multiarea_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/zoommode_test" || rc=1

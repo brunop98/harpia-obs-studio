@@ -32,6 +32,7 @@
 #include <QSet>
 
 #include <memory>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -46,6 +47,7 @@ class QLabel;
 class QListWidget;
 class QListWidgetItem;
 class QProgressDialog;
+class QUrl;
 class QPushButton;
 class QSlider;
 class QTabWidget;
@@ -71,6 +73,7 @@ class InspectorSection;
 class ToolbarLayout;
 class SubtitleDialog;
 class UrlDownloadDialog;
+class LinkDownload;
 }
 class QResizeEvent;
 class QJsonObject;
@@ -289,6 +292,8 @@ private slots:
 	// A slot so a test can reach it the way the shortcut does, rather than
 	// through a second code path that might not match.
 	void pasteFromClipboard();
+	// Add > Paste, as the menu entry does it.
+	void pasteSystemClipboardForTest() { pasteSystemClipboard(timelinePlayheadMs()); }
 	void copySelectedClipsForTest() { copySelectedClips(false); }
 	void onScrub(qint64 ms);
 	void onHoverScrub(qint64 ms); // hover preview — never interrupts playback
@@ -456,16 +461,32 @@ private:
 	void copySelectedClips(bool cut);
 	void pasteClips();
 	QVector<TimelineView::ClipboardEntry> clipboard_;
-	// True if the system clipboard holds something this editor could place.
-	bool systemClipboardHasMedia() const;
-	// Put whatever picture (or file list) the system clipboard holds on the
-	// timeline. Returns false, having said why, if it holds nothing usable.
-	bool pasteImageFromClipboard(qint64 atMs);
-	// An image that arrived without a file behind it has to be given one: the
+	// True if the system clipboard holds something this editor could place
+	// (ClipboardPaste.hpp: files, sound, a picture, a link or words).
+	bool systemClipboardHasPaste() const;
+	// Add > Paste: what the system clipboard holds, at `atMs`, on the best-fit
+	// lane (PastePlacement.hpp) -- the first lane free for it, or a new one on
+	// top. False, having said why, when it holds nothing usable. A link ends
+	// later, once its download has; a video PAGE goes to yt-dlp.
+	bool pasteSystemClipboard(qint64 atMs);
+	// Media files at `atMs`: pictures one after another on one lane, sounds on
+	// an audio lane from the same point, each lane the best fit; one undo step.
+	bool pasteMediaFiles(const QStringList &paths, qint64 atMs);
+	void pasteLink(const QUrl &url, qint64 atMs);
+	void pasteText(const QString &text, qint64 atMs);
+	// The clip a media file makes -- its source added, or reused when it is
+	// already loaded -- with outStartMs at 0, and whether it is a sound (which
+	// goes on an audio lane). nullopt when it could not be read; already said.
+	std::optional<TlClip> mediaClipForFile(const QString &path, bool *isAudio);
+	// Something pasted without a file behind it has to be given one: the
 	// project stores sources by PATH, and the exporter re-reads that path on a
-	// worker thread. Written to the app's own folder rather than a temp dir, so
-	// a project saved today still opens tomorrow. Empty on failure, with *why.
+	// worker thread. In the app's own folder rather than a temp dir, so a
+	// project saved today still opens tomorrow. A free name ending in `ext`;
+	// empty on failure, with *why.
+	static QString pastedFilePath(const QString &ext, QString *why);
 	static QString writePastedImage(const QImage &img, QString *why);
+	LinkDownload *linkDownload_ = nullptr; // a pasted link being fetched
+	QProgressDialog *linkProgress_ = nullptr;
 	// A whole track on the clipboard, from Ctrl+C with a track header selected.
 	// Its own slot rather than a list of clips: a track carries its name, colour,
 	// lock/hide/mute and ripple setting too, and pasting it as loose clips would
@@ -476,6 +497,9 @@ private:
 	quint64 copySeq_ = 0;       // bumped when clips are copied inside Harpia
 	quint64 trackCopySeq_ = 0;  // ...and when a whole track is
 	quint64 systemCopySeq_ = 0; // bumped when the system clipboard changes
+	// ...and whether Harpia was the app in front when it did: a copy made
+	// inside Harpia (a clip name, a line of the Inspector), not elsewhere.
+	bool systemCopyHere_ = false;
 	quint64 seqCounter_ = 0;    // the tick all of the above are stamped from
 	QSplitter *hsplit_ = nullptr;   // preview+editing | inspector
 	QSplitter *vsplit_ = nullptr;   // preview / editing area
@@ -620,7 +644,7 @@ private:
 	QAction *subtitleAct_ = nullptr;
 	QAction *addAudioAct_ = nullptr;
 	QAction *addImageAct_ = nullptr;
-	QAction *pasteImageAct_ = nullptr;  // greyed when the clipboard has no picture
+	QAction *pasteAct_ = nullptr;       // Add > Paste; greyed when nothing on the clipboard can be placed
 	QAction *addFxClipAct_ = nullptr;   // "Effect clip" -> an effect CLIP
 	QAction *addUrlAct_ = nullptr;      // "Video from URL…", only when yt-dlp was found
 	UrlDownloadDialog *urlDialog_ = nullptr;

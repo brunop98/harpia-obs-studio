@@ -1,4 +1,5 @@
 #include "TimelineView.hpp"
+#include "PastePlacement.hpp"
 
 #include "SoundRules.hpp"
 #include "TextVariations.hpp"
@@ -731,6 +732,43 @@ int TimelineView::addClipOnFreeLane(TlTrack::Kind kind, const TlClip &clip)
 // addClip() appends to the LAST lane of a kind, which is fine for a menu action
 // but wrong for a drop: the pointer was over a particular lane, or between two
 // of them. This takes the answer dropTargetAt() already worked out.
+int TimelineView::placePasted(const QVector<QPair<TlTrack::Kind, QVector<TlClip>>> &groups)
+{
+	// Pictures first: a new picture lane goes in above the audio group, so
+	// placing it later would shift the audio lane just chosen.
+	QVector<QPair<TlTrack::Kind, QVector<TlClip>>> ordered;
+	for (const auto &g : groups)
+		if (TimelineModel::isPictureKind(g.first) && !g.second.isEmpty())
+			ordered.append(g);
+	for (const auto &g : groups)
+		if (!TimelineModel::isPictureKind(g.first) && !g.second.isEmpty())
+			ordered.append(g);
+	if (ordered.isEmpty())
+		return -1;
+	int firstLane = -1, firstClip = -1;
+	for (const auto &g : ordered) {
+		const int before = model_.tracks.size();
+		const int lane = paste_placement::place(model_, g.first, g.second, randomPastel());
+		if (firstLane < 0) {
+			firstLane = lane;
+			firstClip = model_.tracks[lane].clips.size() - g.second.size();
+		} else if (model_.tracks.size() > before && lane <= firstLane) {
+			++firstLane; // a lane made above the first one moved it down
+		}
+	}
+	renumberTracks();
+	selTrack_ = firstLane;
+	selClip_ = firstClip;
+	extraSel_.clear();
+	selTransition_ = false;
+	clampView();
+	updateGeometry();
+	update();
+	commitEdit();
+	emit selectionChanged(selTrack_, selClip_);
+	return firstLane;
+}
+
 int TimelineView::addClipAt(TlTrack::Kind kind, const TlClip &clip, int track, int newTrackAt)
 {
 	int target = -1;

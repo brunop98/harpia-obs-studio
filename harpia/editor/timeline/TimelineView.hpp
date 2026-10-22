@@ -98,6 +98,12 @@ public:
 	// lane is busy. Captions and stills use this: they never cover a clip.
 	// Returns the track it landed on.
 	int addClipOnFreeLane(TlTrack::Kind kind, const TlClip &clip);
+	// A paste: each group of clips on its kind's best-fit lane
+	// (PastePlacement.hpp) -- the first lane free for the group's whole span,
+	// else a new one on top of the kind's group -- as ONE undo step. Picture
+	// groups are placed before sound, and the first clip placed is selected.
+	// Returns that clip's lane, or -1 when there was nothing to place.
+	int placePasted(const QVector<QPair<TlTrack::Kind, QVector<TlClip>>> &groups);
 	int trackCount() const { return model_.tracks.size(); }
 
 	void setPlayhead(qint64 outMs);

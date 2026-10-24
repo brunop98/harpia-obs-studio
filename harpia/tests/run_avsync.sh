@@ -183,6 +183,13 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	"$HERE/shareexportdialog_test.cpp" \
 	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
 	-o "$WORK/shareexportdialog_test" $WLF
+# Render-stage error codes and the complete, copyable failure dialog.
+for name in rendererrors exporterrorwindow; do
+	g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
+		"$HERE/${name}_test.cpp" \
+		-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
+		-o "$WORK/${name}_test" $WLF
+done
 # Preview grips and body drags must transform the whole selection, including
 # video/image clips and keyframed clips, with one undo step per gesture.
 g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
@@ -316,6 +323,9 @@ QT_QPA_PLATFORM=offscreen "$WORK/previewdecoder_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/proxymedia_test" "$WORK" || rc=1
 "$WORK/shareparts_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/shareexportdialog_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/rendererrors_test" || rc=1
+XDG_CONFIG_HOME="$WORK/error-test-config" XDG_DATA_HOME="$WORK/error-test-data" QT_QPA_PLATFORM=offscreen \
+	"$WORK/exporterrorwindow_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/multicutplay_test" "$WORK" || rc=1
 # Settings go to a scratch home, so the test never touches real ones.
 mkdir -p "$WORK/home"

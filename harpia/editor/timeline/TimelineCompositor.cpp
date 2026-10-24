@@ -694,16 +694,30 @@ void TimelineCompositor::drawClip(QPainter &p, const TlClip &c, const TlTransfor
 }
 
 QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize canvas, FrameProvider &fp,
-				   TransformEvaluator *eval, double fps, QSize logicalCanvas)
+				   TransformEvaluator *eval, double fps, QSize logicalCanvas,
+				   RenderError *error)
 {
-	if (canvas.width() <= 0 || canvas.height() <= 0)
+	if (error)
+		*error = {};
+	const auto fail = [error](const char *code, const QString &message, int track = -1, int clip = -1) {
+		if (error)
+			*error = {QString::fromLatin1(code), message, track, clip};
 		return QImage();
+	};
+	if (canvas.width() <= 0 || canvas.height() <= 0)
+		return fail("TL-CANVAS-SIZE", QStringLiteral("The render canvas has invalid dimensions."));
 	if (!logicalCanvas.isValid() || logicalCanvas.isEmpty())
 		logicalCanvas = canvas;
 	QImage out(canvas, QImage::Format_RGBA8888);
+	if (out.isNull())
+		return fail("TL-CANVAS-ALLOC", QStringLiteral(
+			"Qt could not allocate the RGBA image for the timeline canvas. "
+			"Available memory may be insufficient, or the dimensions may exceed image limits."));
 	out.fill(Qt::black); // gaps and letterbox areas read as black
 
 	QPainter p(&out);
+	if (!p.isActive())
+		return fail("TL-PAINTER-INIT", QStringLiteral("Qt could not start drawing on the timeline canvas."));
 	p.setRenderHint(QPainter::Antialiasing, true);
 	// Index order is display order (0 = top lane) and the HIGHER lane renders in
 	// FRONT, so walk the tracks back-to-front: the last index is drawn first and
@@ -794,19 +808,32 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 
 			QImage graded;   // the whole frame, when a sub-rect will not do
 			QImage patch;    // just the area's box, when it will
+			QString pixelError;
 			if (!sub.isEmpty()) {
 				patch = out.copy(sub);
-				stack->evaluatePixels(ectx, patch);
+				if (patch.isNull())
+					return fail("TL-EFFECT-ALLOC", QStringLiteral(
+						"Qt could not allocate the image copy needed for this effect area."), ti, ei);
+				stack->evaluatePixels(ectx, patch, &pixelError);
 			} else {
-				if (!whole)
+				if (!whole) {
 					graded = out.copy();
+					if (graded.isNull())
+						return fail("TL-EFFECT-ALLOC", QStringLiteral(
+							"Qt could not allocate the image copy needed for this effect."), ti, ei);
+				}
 				QImage &target = whole ? out : graded;
 				if (stack)
-					stack->evaluatePixels(ectx, target);
+					stack->evaluatePixels(ectx, target, &pixelError);
 				else // not yet migrated: a project still carrying the old fx
 					Effects::apply(target, ec.fx, outMs - ec.outStartMs);
 			}
-			p.begin(&out);
+			if (!pixelError.isEmpty() || (!sub.isEmpty() ? patch.isNull() : (whole ? out : graded).isNull()))
+				return fail("TL-EFFECT-FRAME", pixelError.isEmpty()
+					? QStringLiteral("The effect returned an empty image.") : pixelError, ti, ei);
+			if (!p.begin(&out))
+				return fail("TL-PAINTER-INIT", QStringLiteral(
+					"Qt could not resume drawing after processing the effect."), ti, ei);
 			p.setRenderHint(QPainter::Antialiasing, true);
 			// One paint-back for both routes: the sub-rect goes at its own
 			// offset, the whole-frame copy at the origin. `whole` graded in
@@ -834,7 +861,7 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 		// so an overlap can render its two clips into their own layers and blend
 		// them, using exactly the same decode/script/transform path a lone clip
 		// takes -- a transition must not be a second, subtly different renderer.
-		auto renderClip = [&](QPainter &into, int ci) {
+		auto renderClip = [&](QPainter &into, int ci) -> bool {
 			const TlClip &c = t.clips[ci];
 
 			// The clip's components, in resolved order. Built once per clip per
@@ -973,7 +1000,13 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 				// fourth byte is 255 throughout, so nothing else changes.
 				if (frame.format() == QImage::Format_RGBX8888)
 					frame.reinterpretAsFormat(QImage::Format_RGBA8888);
-				stack->evaluatePixels(ectx, frame);
+				QString pixelError;
+				stack->evaluatePixels(ectx, frame, &pixelError);
+				if (!pixelError.isEmpty() || frame.isNull()) {
+					fail("TL-EFFECT-FRAME", pixelError.isEmpty()
+						? QStringLiteral("A clip effect returned an empty image.") : pixelError, ti, ci);
+					return false;
+				}
 			}
 
 			// A caption a component rewrote is drawn as the component left
@@ -985,9 +1018,10 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 				TlClip shown = c;
 				shown.text.text = cstate.text + cstate.caret;
 				drawClip(into, shown, tf, canvas, frame);
-				return;
+				return true;
 			}
 			drawClip(into, *drawn, tf, canvas, frame);
+			return true;
 		};
 
 		// Two clips covering the same instant on one track IS a transition --
@@ -1000,21 +1034,36 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 			if (span > 0) {
 				QImage layerA(canvas, QImage::Format_RGBA8888);
 				QImage layerB(canvas, QImage::Format_RGBA8888);
+				if (layerA.isNull() || layerB.isNull())
+					return fail("TL-TRANSITION-ALLOC", QStringLiteral(
+						"Qt could not allocate the two image layers needed for the transition."), ti, ii);
 				layerA.fill(Qt::transparent);
 				layerB.fill(Qt::transparent);
 				{
 					QPainter pa(&layerA);
+					if (!pa.isActive())
+						return fail("TL-PAINTER-INIT", QStringLiteral(
+							"Qt could not draw the outgoing transition layer."), ti, oi);
 					pa.setRenderHint(QPainter::Antialiasing, true);
-					renderClip(pa, oi);
+					if (!renderClip(pa, oi))
+						return QImage();
 				}
 				{
 					QPainter pb(&layerB);
+					if (!pb.isActive())
+						return fail("TL-PAINTER-INIT", QStringLiteral(
+							"Qt could not draw the incoming transition layer."), ti, ii);
 					pb.setRenderHint(QPainter::Antialiasing, true);
-					renderClip(pb, ii);
+					if (!renderClip(pb, ii))
+						return QImage();
 				}
 				const double u = std::clamp(
 					double(outMs - inc.outStartMs) / double(span), 0.0, 1.0);
-				p.drawImage(0, 0, Transitions::blend(layerA, layerB, u, inc.transition));
+				const QImage blended = Transitions::blend(layerA, layerB, u, inc.transition);
+				if (blended.isNull())
+					return fail("TL-TRANSITION-FRAME", QStringLiteral(
+						"The transition returned an empty blended image."), ti, ii);
+				p.drawImage(0, 0, blended);
 				continue;
 			}
 		}
@@ -1022,7 +1071,8 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 		const int ci = t.clipAt(outMs);
 		if (ci < 0)
 			continue;
-		renderClip(p, ci);
+		if (!renderClip(p, ci))
+			return QImage();
 	}
 	p.end();
 

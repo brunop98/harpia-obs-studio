@@ -15002,9 +15002,27 @@ void VideoEditorWindow::onExportFinished(bool ok, bool canceled, const QString &
 
 	if (canceled || !ok) {
 		QFile::remove(outPath_); // never leave a partial file
-		if (!canceled)
-			warnAndLog(this, QStringLiteral("Export failed"),
-					     err.isEmpty() ? QStringLiteral("Could not export the clip.") : err);
+		if (!canceled) {
+			const QString report = err.isEmpty() ? QStringLiteral("Could not export the clip.") : err;
+			editorLog(EditorLogLevel::Error, QStringLiteral("Export failed"), report);
+			QMessageBox box(QMessageBox::Critical, QStringLiteral("Export failed"),
+				       report.section(QLatin1Char('\n'), 0, 0), QMessageBox::Close, this);
+			box.setTextFormat(Qt::PlainText);
+			box.setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+			QString reason;
+			for (const QString &line : report.split(QLatin1Char('\n')))
+				if (line.startsWith(QStringLiteral("Reason: "))) {
+					reason = line + QStringLiteral("\n\n");
+					break;
+				}
+			box.setInformativeText(reason + QStringLiteral("View or copy the details when reporting this problem."));
+			box.setDetailedText(report);
+			QPushButton *copy = box.addButton(QStringLiteral("Copy details"), QMessageBox::ActionRole);
+			copy->setAutoDefault(false);
+			box.exec();
+			if (box.clickedButton() == copy)
+				QApplication::clipboard()->setText(report);
+		}
 		return;
 	}
 

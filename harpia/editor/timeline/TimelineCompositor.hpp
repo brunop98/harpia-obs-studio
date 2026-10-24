@@ -21,6 +21,13 @@ namespace harpia {
 
 class TimelineCompositor {
 public:
+	struct RenderError {
+		QString code;
+		QString message;
+		int track = -1;
+		int clip = -1;
+	};
+
 	// Supplies decoded source frames. The preview implementation seeks the
 	// window's FrameSeekers; the exporter uses its own worker-side decoders.
 	class FrameProvider {
@@ -61,9 +68,11 @@ public:
 	// real output size, reported to scripts as ctx.canvasW/H — pass it when
 	// rendering a reduced-size preview so a script doing pixel maths behaves the
 	// same on screen as it will in the export. Defaults to `canvas`.
+	// On failure, `error` identifies the render stage and affected clip. It is
+	// cleared on every call, including successful renders.
 	static QImage compose(const TimelineModel &m, qint64 outMs, QSize canvas, FrameProvider &fp,
 			      class TransformEvaluator *eval = nullptr, double fps = 30.0,
-			      QSize logicalCanvas = QSize());
+			      QSize logicalCanvas = QSize(), RenderError *error = nullptr);
 
 	// Where a clip is drawn on the canvas at this pose, in canvas pixels. Used by
 	// the preview to hit-test and drag the selected clip. `srcSize` is the clip's

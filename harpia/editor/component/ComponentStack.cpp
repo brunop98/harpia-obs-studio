@@ -45,14 +45,19 @@ bool ComponentStack::pixelStageIsPointOp() const
 	return true;
 }
 
-void ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io) const
+bool ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io, QString *error) const
 {
+	const bool pixels = stage == Stage::Pixel || stage == Stage::Composite;
+	const auto outputMissing = [&]() { return pixels && (!io.frame || io.frame->isNull()); };
+	const QString missingOutput = QStringLiteral(
+		"The component returned an empty image. A render-buffer allocation or image conversion may have failed.");
+
 	// Pixel and Composite stages on the GPU: the frame is uploaded at the
 	// first component that can run there, stays there through every one after
 	// it that can, and comes back once -- before a component that cannot, and
 	// at the end. See shader/GpuFx.hpp.
 	GpuFx *gpu = nullptr;
-	if ((stage == Stage::Pixel || stage == Stage::Composite) && io.frame && !io.frame->isNull() &&
+	if (pixels && io.frame && !io.frame->isNull() &&
 	    qint64(io.frame->width()) * io.frame->height() >= kGpuFxMinPixels) {
 		for (const Entry &e : entries_)
 			if (e.stage == stage && e.inst->enabled && e.impl->hasGpu()) {
@@ -70,6 +75,18 @@ void ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io) co
 		const QImage out = gpu->end();
 		if (!out.isNull())
 			*io.frame = out;
+	};
+	const auto fail = [&](const Entry &e, const QString &reason) {
+		// CPU evaluation already brought the frame back. Keep the failure
+		// path responsible for ending any GPU session as well.
+		bringBack();
+		if (error) {
+			const QString instance = e.inst->instanceId.isEmpty() ? QStringLiteral("unnamed")
+									     : e.inst->instanceId;
+			*error = QStringLiteral("%1 component \"%2\" (instance \"%3\"): %4")
+					 .arg(QString::fromLatin1(stageName(stage)), e.inst->typeId, instance, reason);
+		}
+		return false;
 	};
 
 	for (const Entry &e : entries_) {
@@ -111,6 +128,8 @@ void ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io) co
 
 		if (envelopeIsFull(w)) {
 			e.impl->evaluate(ctx, io); // the hold: no ramp work at all
+			if (outputMissing())
+				return fail(e, missingOutput);
 			continue;
 		}
 
@@ -144,8 +163,14 @@ void ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io) co
 			// rest it is the sensible reading of "half applied". The copy
 			// costs only during the ramp, never on the hold.
 			const QImage input = io.frame->copy();
+			if (input.isNull())
+				return fail(e, QStringLiteral("Could not allocate the input image for the component's fade."));
 			e.impl->evaluate(ctx, io);
+			if (outputMissing())
+				return fail(e, missingOutput);
 			QPainter p(io.frame);
+			if (!p.isActive())
+				return fail(e, QStringLiteral("Could not initialize the image painter for the component's fade."));
 			p.setOpacity(1.0 - w);
 			p.setCompositionMode(QPainter::CompositionMode_SourceOver);
 			p.drawImage(0, 0, input); // paint the ORIGINAL back over, at 1-w
@@ -153,8 +178,11 @@ void ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io) co
 		}
 
 		e.impl->evaluate(ctx, io); // Audio and anything with no frame yet
+		if (outputMissing())
+			return fail(e, missingOutput);
 	}
 	bringBack();
+	return true;
 }
 
 ClipState ComponentStack::evaluatePose(const EvalContext &base, const TlTransform &seed,
@@ -175,12 +203,19 @@ ClipState ComponentStack::evaluatePose(const EvalContext &base, const TlTransfor
 	return st;
 }
 
-void ComponentStack::evaluatePixels(const EvalContext &base, QImage &frame) const
+void ComponentStack::evaluatePixels(const EvalContext &base, QImage &frame, QString *error) const
 {
+	if (error)
+		error->clear();
+	if (frame.isNull()) {
+		if (error)
+			*error = QStringLiteral("Cannot evaluate pixel components: the input image is empty.");
+		return;
+	}
 	ClipState st;
 	st.frame = &frame;
-	run(Stage::Pixel, base, st);
-	run(Stage::Composite, base, st);
+	if (!run(Stage::Pixel, base, st, error) || !run(Stage::Composite, base, st, error))
+		frame = QImage();
 }
 
 } // namespace harpia

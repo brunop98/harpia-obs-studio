@@ -67,7 +67,8 @@ Three modes, each one step up from the last:
 - **Projects** save and open with every setting, and autosave. The opening
   screen offers the three most recent projects to continue with one click.
 - **Export:** MP4, MKV, MOV, WebM or GIF; size, quality, 4:4:4 chroma, a
-  selected range only, batch export of cuts, and text variations.
+  selected range only, batch export of cuts, and text variations. Render
+  failures include [error codes and copyable diagnostic details](EXPORT_ERRORS.md).
 
 ### Library and sharing
 

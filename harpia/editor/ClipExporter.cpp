@@ -17,6 +17,7 @@
 #include "SwsImage.hpp"
 
 #include <QImage>
+#include <QDebug>
 #include <QSize>
 #include <QTemporaryDir>
 
@@ -1640,6 +1641,7 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 						: (opts.timelineFps > 0.1 ? opts.timelineFps : 30.0),
 				      1.0, 240.0);
 	const QSize canvas(cw, ch);
+	const int64_t frames = std::max<int64_t>(1, int64_t(std::llround(totalMs / 1000.0 * fps)));
 
 	// One decoder per source PER TRACK the timeline references. FrameSeeker's
 	// frameAt rolls forward without seeking for near-future requests, which is
@@ -1680,6 +1682,49 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 			return it->second->frameAt(srcMs, b.width(), b.height());
 		}
 	} provider;
+	const auto renderFailure = [&](const TimelineCompositor::RenderError &error, int64_t frame, qint64 timeMs) {
+		const QString code = error.code.isEmpty() ? QStringLiteral("TL-FRAME-EMPTY") : error.code;
+		const quint64 rgbaBytes = quint64(cw) * quint64(ch) * 4;
+		const QString timestamp = QStringLiteral("%1:%2:%3.%4")
+			.arg(timeMs / 3600000, 2, 10, QLatin1Char('0'))
+			.arg(timeMs / 60000 % 60, 2, 10, QLatin1Char('0'))
+			.arg(timeMs / 1000 % 60, 2, 10, QLatin1Char('0'))
+			.arg(timeMs % 1000, 3, 10, QLatin1Char('0'));
+		QString report = QStringLiteral("Timeline rendering failed [%1].\n\nReason: %2\n")
+			.arg(code, error.message.isEmpty() ? QStringLiteral("The renderer returned an empty image.") : error.message);
+		if (frame >= 0)
+			report += QStringLiteral("Frame: %1 of %2 (index %3)\nTimeline time: %4 (%5 ms)\n")
+				.arg(frame + 1).arg(frames).arg(frame).arg(timestamp).arg(timeMs);
+		else
+			report += QStringLiteral("Stage: preparing render buffers\n");
+		report += QStringLiteral("Render canvas: %1 × %2 at %3 fps\n"
+					 "RGBA memory for one canvas: %4 MiB (%5 bytes)\n"
+					 "Open video decoders: %6; loaded still images: %7\n")
+			.arg(cw).arg(ch).arg(fps, 0, 'f', 3)
+			.arg(double(rgbaBytes) / (1024.0 * 1024.0), 0, 'f', 2).arg(rgbaBytes)
+			.arg(qulonglong(provider.seekers.size())).arg(qulonglong(provider.stills.size()));
+		if (error.track >= 0 && error.track < tl.tracks.size()) {
+			const TlTrack &track = tl.tracks[error.track];
+			report += QStringLiteral("Track: %1 (%2)\n").arg(error.track + 1).arg(track.name);
+			if (error.clip >= 0 && error.clip < track.clips.size()) {
+				const TlClip &clip = track.clips[error.clip];
+				report += QStringLiteral("Clip: %1; starts at %2 ms\n").arg(error.clip + 1).arg(clip.outStartMs);
+				if (clip.type == TlClip::Type::Video || clip.type == TlClip::Type::Image) {
+					const auto source = opts.timelineSources.find(clip.sourceId);
+					if (source != opts.timelineSources.end())
+						report += QStringLiteral("Source: %1\n").arg(QString::fromStdString(source->second));
+				}
+			}
+		}
+		if (code.contains(QStringLiteral("ALLOC")) || code == QLatin1String("TL-RGBA-CONVERT"))
+			report += QStringLiteral("\nTry reducing the project canvas resolution or closing other memory-heavy applications. "
+				"Effects, transitions, source decoders and the encoder require additional buffers.");
+		else if (code.startsWith(QStringLiteral("TL-EFFECT")))
+			report += QStringLiteral("\nTry disabling the reported effect and exporting again. "
+				"An empty effect image can indicate a failed allocation or a component problem.");
+		qWarning().noquote() << report;
+		return report;
+	};
 	provider.w = cw;
 	provider.h = ch;
 	for (int ti = 0; ti < tl.tracks.size(); ++ti) {
@@ -1824,40 +1869,60 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 			av_frame_free(&yuv);
 		if (pkt)
 			av_packet_free(&pkt);
-		return QStringLiteral("Could not allocate the render buffers.");
+		return renderFailure({QStringLiteral("TL-RENDER-ALLOC"),
+			QStringLiteral("Could not allocate the color-conversion context, encoder frame or packet.")}, -1, 0);
 	}
 	yuv->format = encodePixFmt(opts);
 	yuv->width = cw;
 	yuv->height = ch;
-	av_frame_get_buffer(yuv, 0);
+	const int bufferResult = av_frame_get_buffer(yuv, 0);
 
 	auto cleanup = [&]() {
 		sws_freeContext(toYuv);
 		av_frame_free(&yuv);
 		av_packet_free(&pkt);
 	};
+	if (bufferResult < 0) {
+		char why[AV_ERROR_MAX_STRING_SIZE] = {};
+		av_strerror(bufferResult, why, sizeof(why));
+		cleanup();
+		return renderFailure({QStringLiteral("TL-ENCODER-ALLOC"),
+			QStringLiteral("Could not allocate the encoder image: %1 (FFmpeg %2).")
+				.arg(QString::fromUtf8(why)).arg(bufferResult)}, -1, 0);
+	}
 	// No initShader(): the timeline composites effects as components, so there
 	// is nothing to bake here and the pass stays inactive.
 	VideoSink encode(s, pkt);
 
 	// ---- Render every frame -----------------------------------------------
 	const auto t0 = std::chrono::steady_clock::now();
-	const int64_t frames = std::max<int64_t>(1, int64_t(std::llround(totalMs / 1000.0 * fps)));
 	for (int64_t i = 0; i < frames; ++i) {
 		if (cancel_.load())
 			break;
 		const qint64 tMs = qint64(std::llround(double(i) * 1000.0 / fps));
 
-		QImage composed =
-			TimelineCompositor::compose(tl, tMs, canvas, provider, &scriptEval, fps);
+		TimelineCompositor::RenderError renderError;
+		QImage composed = TimelineCompositor::compose(tl, tMs, canvas, provider, &scriptEval,
+							    fps, QSize(), &renderError);
 		if (composed.isNull()) {
 			cleanup();
-			return QStringLiteral("Could not compose the timeline frame.");
+			return renderFailure(renderError, i, tMs);
 		}
-		if (shaderOn)
+		if (shaderOn) {
 			composed = shader.apply(composed, float(tMs) / 1000.0f, int(i), shaderParams);
+			if (composed.isNull()) {
+				cleanup();
+				return renderFailure({QStringLiteral("TL-SHADER-FRAME"),
+					QStringLiteral("The post-processing shader returned an empty image. %1").arg(shader.lastError())}, i, tMs);
+			}
+		}
 		if (composed.format() != QImage::Format_RGBA8888)
 			composed = composed.convertToFormat(QImage::Format_RGBA8888);
+		if (composed.isNull()) {
+			cleanup();
+			return renderFailure({QStringLiteral("TL-RGBA-CONVERT"),
+				QStringLiteral("Qt could not convert the rendered image to RGBA pixels for encoding.")}, i, tMs);
+		}
 
 		if (av_frame_make_writable(yuv) < 0) {
 			cleanup();

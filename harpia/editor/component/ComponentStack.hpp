@@ -57,8 +57,10 @@ public:
 			       const QString *text = nullptr,
 			       const QVector<ClipWordTime> *words = nullptr) const;
 
-	// The Pixel stage, over a frame that now exists.
-	void evaluatePixels(const EvalContext &base, QImage &frame) const;
+	// The Pixel and Composite stages, over a frame that now exists. A failed
+	// component stops both stages and leaves `frame` null. When supplied,
+	// `error` names the component and stage; it is cleared before evaluation.
+	void evaluatePixels(const EvalContext &base, QImage &frame, QString *error = nullptr) const;
 
 	// Reasons the Inspector should show: missing types, cycles, conflicts.
 	const QStringList &warnings() const { return warnings_; }
@@ -81,7 +83,7 @@ private:
 		const ComponentInstance *inst = nullptr;
 		std::shared_ptr<IComponent> impl;
 	};
-	void run(Stage stage, const EvalContext &base, ClipState &io) const;
+	bool run(Stage stage, const EvalContext &base, ClipState &io, QString *error = nullptr) const;
 
 	QVector<ComponentInstance> owned_; // a stack outlives the caller's vector
 	QVector<Entry> entries_;

@@ -183,8 +183,8 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	"$HERE/shareexportdialog_test.cpp" \
 	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
 	-o "$WORK/shareexportdialog_test" $WLF
-# Render-stage error codes and the complete, copyable failure dialog.
-for name in rendererrors exporterrorwindow; do
+# Render diagnostics and regressions from the preview audit.
+for name in rendererrors exporterrorwindow audioaudit previewgeometry previewinterval previewcontrols previewtransition previewlegacypacing; do
 	g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 		"$HERE/${name}_test.cpp" \
 		-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
@@ -330,6 +330,13 @@ QT_QPA_PLATFORM=offscreen "$WORK/proxymedia_test" "$WORK" || rc=1
 "$WORK/shareparts_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/shareexportdialog_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/rendererrors_test" || rc=1
+for name in audioaudit previewgeometry previewinterval previewtransition; do
+	QT_QPA_PLATFORM=offscreen "$WORK/${name}_test" || rc=1
+done
+XDG_CONFIG_HOME="$WORK/preview-audit-config" XDG_DATA_HOME="$WORK/preview-audit-data" QT_QPA_PLATFORM=offscreen \
+	"$WORK/previewcontrols_test" || rc=1
+XDG_CONFIG_HOME="$WORK/legacy-pacing-config" XDG_DATA_HOME="$WORK/legacy-pacing-data" QT_QPA_PLATFORM=offscreen \
+	"$WORK/previewlegacypacing_test" || rc=1
 XDG_CONFIG_HOME="$WORK/error-test-config" XDG_DATA_HOME="$WORK/error-test-data" QT_QPA_PLATFORM=offscreen \
 	"$WORK/exporterrorwindow_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/multicutplay_test" "$WORK" || rc=1

@@ -11,6 +11,8 @@
 #include <QFileInfo>
 #include <QMap>
 
+#include <algorithm>
+
 namespace harpia {
 
 namespace {
@@ -84,6 +86,9 @@ public:
 					 ctx.f(p.uniform.toLatin1().constData(), p.def));
 
 		ScriptContext sctx;
+		const QSize natural = !ctx.scriptSize.isEmpty() ? ctx.scriptSize : ctx.srcSize;
+		sctx.clipW = std::max(0, natural.width());
+		sctx.clipH = std::max(0, natural.height());
 		sctx.canvasW = ctx.canvas.width();
 		sctx.canvasH = ctx.canvas.height();
 		sctx.fps = ctx.fps;

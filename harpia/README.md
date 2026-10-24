@@ -271,6 +271,9 @@ other call. Outputs are stopped *and waited for* before they are released
 The editor does not use libobs: it decodes, composites and encodes with FFmpeg
 and Qt directly.
 
+The [preview audit](PREVIEW_AUDIT.md) records preview fixes, regression coverage
+and the limits of automated audio/GPU validation.
+
 ## The OBS tree
 
 The repository root is OBS Studio trimmed to the recorder's needs: `libobs`,

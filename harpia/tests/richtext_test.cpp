@@ -81,6 +81,17 @@ static int differing(const QImage &a, const QImage &b)
 	return n;
 }
 
+// Thin antialiased decorations need not contain any nearly-white pixels in
+// every font. Measure the actual added coverage on the black background.
+static qint64 coverage(const QImage &image)
+{
+	qint64 total = 0;
+	for (int y = 0; y < image.height(); ++y)
+		for (int x = 0; x < image.width(); ++x)
+			total += qGray(image.pixel(x, y));
+	return total;
+}
+
 int main(int argc, char **argv)
 {
 	std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -142,7 +153,7 @@ int main(int argc, char **argv)
 		const QImage tagged = render(caption(QStringLiteral("<b></b>Hello <i></i>there")));
 		const int d = differing(plain, tagged);
 		std::printf("     empty tags vs none: %d pixels differ\n", d);
-		ok(d < 40, "empty tags draw what no tags draw (same layout)");
+		ok(d == 0, "empty tags draw what no tags draw (same layout)");
 
 		const QSize w0 = TimelineCompositor::textNaturalSize(caption(QStringLiteral("WWWW")).text, kCanvas);
 		const QSize wb = TimelineCompositor::textNaturalSize(caption(QStringLiteral("<b>WWWW</b>")).text, kCanvas);
@@ -160,9 +171,9 @@ int main(int argc, char **argv)
 		ok(count(mk, qRgb(0, 0, 255)) > 1000 && count(mk, qRgb(255, 255, 255)) > 200,
 		   "<mark> paints behind, the words on top");
 
-		const QImage u = render(caption(QStringLiteral("<u>____</u>"), 80));
-		const QImage uNo = render(caption(QStringLiteral("<i></i>____"), 80));
-		ok(count(u, qRgb(255, 255, 255)) > count(uNo, qRgb(255, 255, 255)), "underline adds a line");
+		const QImage u = render(caption(QStringLiteral("<u>TEST</u>"), 80));
+		const QImage uNo = render(caption(QStringLiteral("<i></i>TEST"), 80));
+		ok(coverage(u) > coverage(uNo), "underline adds a line");
 
 		TlClip longOne = caption(QStringLiteral("<b>This</b> is a <color=yellow>long caption</color> that "
 							"<i>cannot</i> fit on one line of the picture"),

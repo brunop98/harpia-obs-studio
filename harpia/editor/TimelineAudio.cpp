@@ -1,16 +1,20 @@
 #include "TimelineAudio.hpp"
 
 #include <QDir>
+#include <QCryptographicHash>
+#include <QDataStream>
 #include <QTemporaryDir>
 
 #include <QFileInfo>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QSet>
 
 #include <algorithm>
 #include <cmath>
 #include <list>
 #include <map>
+#include <memory>
 #include <optional>
 #include <utility>
 
@@ -24,10 +28,20 @@ namespace {
 // Keyed by path+size+mtime so a re-recorded file can never be served stale,
 // and capped: decoded WAVs are big (~700 MB per hour of source), so at most a
 // handful live at once, evicted least-recently-used with their files deleted.
+struct CachedWav {
+	QString path;
+	explicit CachedWav(QString p) : path(std::move(p)) {}
+	~CachedWav()
+	{
+		if (!path.isEmpty())
+			QFile::remove(path);
+	}
+};
+
 struct WavSessionCache {
 	QMutex mu;
 	QTemporaryDir dir;
-	std::map<QString, QString> map; // identity key -> wav path
+	std::map<QString, std::shared_ptr<const CachedWav>> map; // identity -> owned WAV
 	std::list<QString> lru;         // front = most recent
 	int counter = 0;
 	static constexpr int kMaxEntries = 12;
@@ -43,14 +57,14 @@ QString wavIdentityKey(const QString &src, double speed)
 	const QFileInfo fi(src);
 	return fi.absoluteFilePath() + QLatin1Char('|') + QString::number(fi.size()) +
 	       QLatin1Char('|') + QString::number(fi.lastModified().toMSecsSinceEpoch()) +
-	       QLatin1Char('|') + QString::number(qint64(std::llround(speed * 1000.0)));
+	       QLatin1Char('|') + QString::number(speed, 'g', 17);
 }
 
 // The decoded WAV for (src, speed), decoding at most once per session. An
 // empty VALUE means "this source has no usable audio" -- cached too, so a
 // silent source is not re-probed on every edit. nullopt means the cache itself
 // is unavailable and the caller should decode into its own directory.
-std::optional<QString> sessionWavFor(const QString &src, double speed)
+std::optional<std::shared_ptr<const CachedWav>> sessionWavFor(const QString &src, double speed)
 {
 	WavSessionCache &c = wavSession();
 	if (!c.dir.isValid())
@@ -76,17 +90,19 @@ std::optional<QString> sessionWavFor(const QString &src, double speed)
 	}
 	if (VoiceoverMixer::decodeToWav(src, cand, speed))
 		wav = cand;
+	else
+		QFile::remove(cand); // a failed decode can leave an incomplete WAV
+	const auto decoded = std::make_shared<const CachedWav>(std::move(wav));
 	QMutexLocker lock(&c.mu);
-	c.map[key] = wav;
+	c.map[key] = decoded;
+	c.lru.remove(key); // another worker may have inserted this key meanwhile
 	c.lru.push_front(key);
-	return wav;
+	return decoded;
 }
 
-// Eviction happens BETWEEN mixes, never during one: buildTakes hands out file
-// paths that renderTakes reads afterwards, so evicting inside sessionWavFor
-// could delete a WAV this very mix is about to read (any timeline with more
-// sources than the cap would sabotage itself). Called at the top of
-// buildTakes, where nothing holds paths yet.
+// Drop the cache's ownership between builds. Returned takes retain a lease,
+// so concurrent preview/export mixes can continue reading evicted WAVs until
+// their last take is destroyed.
 void pruneSessionWavs()
 {
 	WavSessionCache &c = wavSession();
@@ -96,23 +112,58 @@ void pruneSessionWavs()
 		c.lru.pop_back();
 		auto it = c.map.find(victim);
 		if (it != c.map.end()) {
-			if (!it->second.isEmpty())
-				QFile::remove(it->second);
 			c.map.erase(it);
 		}
 	}
 }
 } // namespace
 
+QString TimelineAudio::mixKey(const TimelineModel &m, const SourceLookup &pathFor)
+{
+	QByteArray bytes;
+	QDataStream out(&bytes, QIODevice::WriteOnly);
+	out.setVersion(QDataStream::Qt_6_0);
+	bool hasAudioClip = false;
+	QSet<int> sourceIdentities;
+	for (const TlTrack &track : m.tracks) {
+		if (!m.trackAudible(track))
+			continue;
+		out << qint32(track.kind) << track.gain << qint64(track.clips.size());
+		for (const TlClip &clip : track.clips) {
+			// Even a silent clip can change an adjacent clip's overlap fade.
+			out << qint32(clip.type) << clip.srcStartMs << clip.srcEndMs
+			    << clip.outStartMs << clip.speed << clip.transition.enabled;
+			if (clip.type != TlClip::Type::Video)
+				continue;
+			hasAudioClip = true;
+			out << qint32(clip.sourceId) << clip.volume << qint32(clip.fadeInMs)
+			    << qint32(clip.fadeOutMs) << qint32(clip.fadeInCurve) << qint32(clip.fadeOutCurve);
+			if (pathFor && !sourceIdentities.contains(clip.sourceId)) {
+				sourceIdentities.insert(clip.sourceId);
+				const QString path = pathFor(clip.sourceId);
+				const QFileInfo file(path);
+				out << qint32(clip.sourceId) << (path.isEmpty() ? QString() : file.absoluteFilePath())
+				    << file.size() << file.lastModified().toMSecsSinceEpoch();
+			}
+		}
+	}
+	return hasAudioClip ? QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex())
+			    : QString();
+}
+
 std::vector<VoiceoverMixer::Take> TimelineAudio::buildTakes(const TimelineModel &m,
 							    const SourceLookup &pathFor,
 							    const QString &workDir)
 {
-	pruneSessionWavs(); // safe here: no paths from this mix are held yet
+	pruneSessionWavs();
 
 	// Cached per (source, speed): a clip played at 1.5x needs its own atempo'd
 	// render, but every 1x clip of the same source shares one decode.
-	std::map<std::pair<int, int>, QString> wavCache; // (sourceId, speed*1000) -> WAV
+	struct WavInput {
+		QString path;
+		std::shared_ptr<const void> lease;
+	};
+	std::map<std::pair<int, double>, WavInput> wavCache; // (sourceId, exact speed) -> WAV
 	std::vector<VoiceoverMixer::Take> takes;
 	int nextWav = 0;
 
@@ -124,32 +175,34 @@ std::vector<VoiceoverMixer::Take> TimelineAudio::buildTakes(const TimelineModel 
 			    c.type == TlClip::Type::Effect)
 				continue; // captions, stills and effects have no audio
 			const double speed = (c.speed > 0.01) ? c.speed : 1.0;
-			const auto key = std::make_pair(c.sourceId, int(std::lround(speed * 1000.0)));
+			const auto key = std::make_pair(c.sourceId, speed);
 			auto it = wavCache.find(key);
 			if (it == wavCache.end()) {
 				const QString src = pathFor(c.sourceId);
-				QString wav;
+				WavInput wav;
 				if (!src.isEmpty()) {
 					// Session cache first: a (file, speed) decode never
 					// changes, so surviving one edit-to-play cycle to the
 					// next is pure win. Time-stretched (pitch preserved) so
 					// sped-up clips stay locked to the picture.
 					if (const auto cached = sessionWavFor(src, speed)) {
-						wav = *cached; // authoritative, even when empty
+						wav.path = (*cached)->path; // authoritative, even when empty
+						wav.lease = *cached;
 					} else {
 						const QString cand = QDir(workDir).filePath(
 							QStringLiteral("a%1.wav").arg(nextWav++));
 						if (VoiceoverMixer::decodeToWav(src, cand, speed))
-							wav = cand;
+							wav.path = cand;
 					}
 				}
 				it = wavCache.emplace(key, wav).first;
 			}
-			if (it->second.isEmpty())
+			if (it->second.path.isEmpty())
 				continue; // that source has no usable audio
 
 			VoiceoverMixer::Take tk;
-			tk.path = it->second;
+			tk.path = it->second.path;
+			tk.sourceLease = it->second.lease;
 			tk.outStartMs = c.outStartMs;
 			// The cached WAV is already in OUTPUT time, so the clip's source
 			// offsets scale by the same factor.

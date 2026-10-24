@@ -50,14 +50,20 @@ public:
 		// single roll-forward decoder cannot serve two positions: whichever
 		// clip asks second drags it past the first, and the first is then
 		// answered forever with the second one's frame. Keying the decoder by
-		// (source, track) gives each stack its own position. At most one clip
-		// per track is composited at a time, so the track index is exactly the
-		// right granularity, and it is stable across frames.
+		// (source, track) gives each stack its own position. During an overlap,
+		// decoderSlot() distinguishes the two clips sharing that track. Both
+		// identifiers are stable across frames.
 		int track() const { return track_; }
 		void setTrack(int index) { track_ = index; }
+		// An overlap needs two independent positions even when both clips use
+		// the same source on one track. Ordinary/outgoing clips use slot zero;
+		// the incoming transition layer uses slot one.
+		int decoderSlot() const { return decoderSlot_; }
+		void setDecoderSlot(int slot) { decoderSlot_ = slot; }
 
 	private:
 		int track_ = 0;
+		int decoderSlot_ = 0;
 	};
 
 	// Compose every visible track at `outMs` onto a `canvas`-sized RGBA image.

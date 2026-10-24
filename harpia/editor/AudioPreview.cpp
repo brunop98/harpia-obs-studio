@@ -104,7 +104,7 @@ void AudioPreview::start(qint64 fromMs)
 	if (startFrame * TimelineAudio::kChannels >= qint64(pcm_.size()))
 		return;
 
-	startMs_ = fromMs;
+	startMs_ = startFrame * 1000 / TimelineAudio::kRate;
 	reader_ = std::make_unique<Reader>(pcm_, startFrame);
 	reader_->open(QIODevice::ReadOnly);
 

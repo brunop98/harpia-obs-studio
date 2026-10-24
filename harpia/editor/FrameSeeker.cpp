@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -191,8 +192,10 @@ QImage FrameSeeker::toImage(AVFrame *f, int maxW, int maxH)
 	return img;
 }
 
-QImage FrameSeeker::frameAt(qint64 ms, int maxW, int maxH)
+QImage FrameSeeker::frameAt(qint64 ms, int maxW, int maxH, FrameInterval *interval)
 {
+	if (interval)
+		*interval = {};
 	if (!fmt_ || !dec_ || vIdx_ < 0)
 		return {};
 
@@ -209,7 +212,14 @@ QImage FrameSeeker::frameAt(qint64 ms, int maxW, int maxH)
 	// whose header guesses its rate wrong (a phone's variable rate) still
 	// reads frame by frame.
 	const double dur = frameDurMs_ > 0.5 ? frameDurMs_ : (fps_ > 1.0 ? 1000.0 / fps_ : 1000.0 / 30.0);
-	const double limit = double(ms) + std::min(1.0, dur / 4.0);
+	const double slack = std::min(1.0, dur / 4.0);
+	const double limit = double(ms) + slack;
+	const auto describeFrame = [&]() {
+		if (interval && haveCur_ && (haveAhead_ || curIsLast_))
+			*interval = {curIsFirst_ ? -std::numeric_limits<double>::infinity() : curPtsMs_,
+				     curIsLast_ ? std::numeric_limits<double>::infinity() : aheadPtsMs_,
+				     slack, true};
+	};
 
 	// Still the frame on screen (at the same size)? Answer from cache, so slow
 	// drags inside one frame -- and an export at more frames per second than
@@ -217,8 +227,10 @@ QImage FrameSeeker::frameAt(qint64 ms, int maxW, int maxH)
 	// (Before a file's first frame, that first frame is what shows.)
 	const bool atOrPastCur = haveCur_ && (limit >= curPtsMs_ || curIsFirst_);
 	if (atOrPastCur && !cacheImg_.isNull() && cacheW_ == maxW && cacheH_ == maxH &&
-	    limit < (haveAhead_ ? aheadPtsMs_ : curPtsMs_ + dur))
+	    ((haveAhead_ && limit < aheadPtsMs_) || curIsLast_)) {
+		describeFrame();
 		return cacheImg_;
+	}
 
 	AVFrame *best = rndBest_;
 	av_frame_unref(best);
@@ -251,7 +263,12 @@ QImage FrameSeeker::frameAt(qint64 ms, int maxW, int maxH)
 	// Frames in order until one comes after `limit`: the one before it is the
 	// answer, and that one goes back for the next call -- it is the next frame.
 	AVFrame *frame = rndFrame_;
-	while (pullFrame(frame, rndPkt_)) {
+	bool last = false;
+	while (true) {
+		if (!pullFrame(frame, rndPkt_)) {
+			last = true;
+			break;
+		}
 		const double at = frame->best_effort_timestamp != AV_NOPTS_VALUE
 					  ? double(frame->best_effort_timestamp) * tbMs
 					  : (haveBest ? bestMs + dur : limit);
@@ -284,11 +301,13 @@ QImage FrameSeeker::frameAt(qint64 ms, int maxW, int maxH)
 	av_frame_move_ref(cur_, best);
 	haveCur_ = true;
 	curIsFirst_ = first;
+	curIsLast_ = last;
 	curPtsMs_ = bestMs;
 	posMs_ = qint64(std::llround(bestMs));
 	cacheImg_ = img;
 	cacheW_ = maxW;
 	cacheH_ = maxH;
+	describeFrame();
 	return img;
 }
 
@@ -297,6 +316,7 @@ void FrameSeeker::dropCurrent()
 	if (cur_)
 		av_frame_unref(cur_);
 	haveCur_ = false;
+	curIsLast_ = false;
 }
 
 bool FrameSeeker::pullFrame(AVFrame *into, AVPacket *pkt)

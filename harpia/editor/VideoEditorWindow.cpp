@@ -2447,14 +2447,14 @@ FrameSeeker *VideoEditorWindow::seekerFor(int id)
 	return s ? s->seeker.get() : nullptr;
 }
 
-FrameSeeker *VideoEditorWindow::playSeekerFor(int sourceId, int track)
+FrameSeeker *VideoEditorWindow::playSeekerFor(int sourceId, int track, int decoderSlot)
 {
 	// Track 0 keeps using the source's own seeker: the overwhelmingly common
 	// single-video-track project then behaves exactly as it did, with no extra
 	// decoder and no extra memory.
-	if (track <= 0)
+	if (track <= 0 && decoderSlot == 0)
 		return seekerFor(sourceId);
-	const quint64 key = playKey(sourceId, track);
+	const quint64 key = playKey(sourceId, track * 2 + decoderSlot);
 	if (const auto it = playSeekers_.find(key); it != playSeekers_.end())
 		return it->second.get();
 	const EditorSource *s = sourceById(sourceId);
@@ -4776,7 +4776,7 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 				const int lane = std::max(0, track());
 				// Playback uses the seeker's own frame cache.
 				w->frameCacheable_ = false;
-				if (FrameSeeker *sk = w->playSeekerFor(sourceId, lane)) {
+				if (FrameSeeker *sk = w->playSeekerFor(sourceId, lane, decoderSlot())) {
 					const QImage img = sk->frameAt(srcMs, decodeW, decodeH);
 					if (!img.isNull())
 						return img;
@@ -9406,7 +9406,7 @@ QSize VideoEditorWindow::clipNaturalSize(const TlClip &c)
 	return QSize();
 }
 
-void VideoEditorWindow::syncPreviewTransformTarget()
+void VideoEditorWindow::syncPreviewTransformTarget(bool refreshPath)
 {
 	if (!canvas_ || !timelineView_)
 		return;
@@ -9415,7 +9415,8 @@ void VideoEditorWindow::syncPreviewTransformTarget()
 	if (!c) {
 		canvas_->setTransformBox(QRectF(), 0.0);
 		canvas_->setMaskEdit(PreviewCanvas::MaskEdit{});
-		refreshMotionPath();
+		if (refreshPath)
+			refreshMotionPath();
 		return;
 	}
 	// Outline the clip where it currently sits on the canvas.
@@ -9461,7 +9462,8 @@ void VideoEditorWindow::syncPreviewTransformTarget()
 		}
 	}
 	canvas_->setMaskEdit(me);
-	refreshMotionPath();
+	if (refreshPath)
+		refreshMotionPath();
 }
 
 void VideoEditorWindow::refreshMotionPath()
@@ -11391,6 +11393,10 @@ void VideoEditorWindow::sendToFullEditing()
 void VideoEditorWindow::setEditMode(EditMode m)
 {
 	stopPlayback();
+	if (previewTimer_)
+		previewTimer_->stop();
+	pendingMs_ = -1;
+	setHoverInspect(-1);
 	// The strip describes the timeline you were on; leaving it makes it a lie.
 	if (overview_)
 		overview_->hideNow();
@@ -11509,8 +11515,9 @@ void VideoEditorWindow::setEditMode(EditMode m)
 	if (full)
 		schedulePremix(); // edits made in another mode left the mix behind
 	syncPreviewTransformTarget();
-	if (full)
-		showTimelineFrame(timelinePlayheadMs());
+	const QSize previewSize = previewCanvasSize();
+	canvas_->setVideoSize(previewSize.width(), previewSize.height());
+	showPlayheadFrame(); // the picture must describe the mode just entered
 
 	// Deferred: during construction, and immediately after a mode switch, the
 	// splitter has not laid out yet and its sizes() mean nothing.
@@ -13243,7 +13250,15 @@ void VideoEditorWindow::onResetMarker()
 	if (!valid_)
 		return;
 	stopPlayback();
-	if (multiCut()) {
+	previewTimer_->stop();
+	pendingMs_ = -1;
+	setHoverInspect(-1);
+	if (fullEdit()) {
+		timelineView_->setPlayhead(0);
+		cursorTimeLabel_->setText(previewTimeText(0));
+		syncPreviewTransformTarget();
+		requestPreview(-1, 0);
+	} else if (multiCut()) {
 		tracks_->setPlayhead(0);
 		if (voTrack_)
 			voTrack_->setPlayhead(0);
@@ -13455,30 +13470,12 @@ void VideoEditorWindow::setPowerSaving(bool on)
 // so a cached mix is reused across plays but thrown away after a real edit.
 QString VideoEditorWindow::audioMixKey() const
 {
-	if (!timelineView_)
+	return timelineView_ ? TimelineAudio::mixKey(timelineView_->model(), [this](int id) {
+		for (const EditorSource &source : sources_)
+			if (source.id == id)
+				return source.path;
 		return QString();
-	QString k;
-	const TimelineModel &m = timelineView_->model();
-	for (const TlTrack &t : m.tracks) {
-		if (!m.trackAudible(t)) // the same test buildTakes applies: mute AND solo
-			continue;
-		k += (t.kind == TlTrack::Kind::Audio) ? QLatin1Char('A') : QLatin1Char('V');
-		k += QStringLiteral("g%1").arg(t.gain, 0, 'f', 4);
-		for (const TlClip &c : t.clips) {
-			if (c.type == TlClip::Type::Text || c.type == TlClip::Type::Image)
-				continue;
-			k += QStringLiteral("|%1,%2,%3,%4,%5,%6,%7,%8")
-				     .arg(c.sourceId)
-				     .arg(c.srcStartMs)
-				     .arg(c.srcEndMs)
-				     .arg(c.outStartMs)
-				     .arg(c.speed, 0, 'f', 4)
-				     .arg(c.volume, 0, 'f', 4)
-				     .arg(c.fadeInMs)
-				     .arg(c.fadeOutMs);
-		}
-	}
-	return k;
+	}) : QString();
 }
 
 void VideoEditorWindow::invalidateAudioMix()
@@ -13609,12 +13606,13 @@ void VideoEditorWindow::startPlayback()
 {
 	if (!valid_)
 		return;
+	// Playback owns the picture; discard a prior mode's queued hover/scrub.
+	previewTimer_->stop();
+	pendingMs_ = -1;
+	setHoverInspect(-1);
 	if (fullEdit()) {
 		if (timelineView_->durationMs() <= 0)
 			return; // empty timeline
-		// A queued hover/scrub must not replace the first playback frame.
-		previewTimer_->stop();
-		pendingMs_ = -1;
 		playing_ = true;
 		playBtn_->setIcon(uiIcon(Glyph::Pause));
 		const qint64 total = timelineView_->durationMs();
@@ -13624,6 +13622,8 @@ void VideoEditorWindow::startPlayback()
 		playAnchorMs_ = pos; // output-time
 		showTimelineFrame(pos); // warm the exact first frame before starting the clock
 		timelineView_->setPlayhead(pos);
+		syncPreviewTransformTarget(false);
+		syncComponentPanel();
 		cursorTimeLabel_->setText(previewTimeText(pos));
 		playClock_.restart();
 		playTimer_->start();
@@ -13642,7 +13642,11 @@ void VideoEditorWindow::startPlayback()
 		if (pos < 0 || pos >= total)
 			pos = 0;
 		playAnchorMs_ = pos;
-		playSeg_ = -1; // force the first segment seek
+		playSeg_ = -1;
+		playClock_.restart();
+		onPlayTick(); // resolve the first source in-point before starting time
+		if (!playing_)
+			return;
 		playClock_.restart();
 		playTimer_->start();
 		return;
@@ -13657,7 +13661,10 @@ void VideoEditorWindow::startPlayback()
 	if (pos < start || pos >= end)
 		pos = start;
 	playAnchorMs_ = pos;
-	seeker_->seekTo(playAnchorMs_);
+	playClock_.restart();
+	onPlayTick();
+	if (!playing_)
+		return;
 	playClock_.restart();
 	playTimer_->start();
 }
@@ -13752,8 +13759,14 @@ void VideoEditorWindow::onPlayTick()
 		qint64 outPos = playAnchorMs_ + playClock_.elapsed();
 		if (audioPreview_ && audioPreview_->isPlaying()) {
 			const qint64 apos = audioPreview_->positionMs();
-			if (apos >= 0)
+			if (apos >= 0) {
 				outPos = apos;
+				// Mute, remix or a device pause hands timing back to the wall
+				// clock. Continue from the last audible position, not an older
+				// wall clock that may have run ahead during device buffering.
+				playAnchorMs_ = apos;
+				playClock_.restart();
+			}
 		}
 		if (outPos >= total) { // loop
 			playAnchorMs_ = 0;
@@ -13764,6 +13777,8 @@ void VideoEditorWindow::onPlayTick()
 		}
 		timelineView_->setPlayhead(outPos);
 		cursorTimeLabel_->setText(previewTimeText(outPos));
+		syncPreviewTransformTarget(false); // keyframed transform/mask grips follow the picture
+		syncComponentPanel();
 		showTimelineFrame(outPos); // composites every visible track + text
 		return;
 	}
@@ -13788,36 +13803,19 @@ void VideoEditorWindow::onPlayTick()
 			return;
 		}
 		const QVector<CutSegment> &segs = tracks_->segments();
-		// Each cut may come from a different source — decode from that source's
-		// seeker, seeking on any segment OR source change.
+		// Each source owns its sequential frameAt cache. It resolves a new
+		// in-point exactly and holds low-rate frames without visible catch-up.
 		FrameSeeker *segSeeker = seekerFor(segs[seg].sourceId);
 		if (!segSeeker) {
 			stopPlayback();
 			return;
 		}
 		if (seg != playSeg_ || segs[seg].sourceId != playSourceId_) {
-			segSeeker->seekTo(segs[seg].srcStartMs);
 			playSeg_ = seg;
 			playSourceId_ = segs[seg].sourceId;
 		}
-		// nextFrameAt cannot hold position: it always advances at least one
-		// frame. So when the clock has not yet moved past the frame already on
-		// screen, asking again runs the PICTURE ahead of the TIMELINE -- and
-		// since it is the picture that decides what you see, it sails straight
-		// past the cut's end handle and keeps playing the rest of the source.
-		// It bites whenever a frame lasts longer than a tick: a 15 fps source
-		// against the 30 fps preview timer advanced twice as fast as the output
-		// clock and overran a one-second cut by a full second, as did any cut
-		// slowed below 1x. Hold the frame instead; the clock catches up.
-		if (segSeeker->positionMs() >= 0 && segSeeker->positionMs() >= srcTarget) {
-			tracks_->setPlayhead(outPos);
-			voTrack_->setPlayhead(outPos);
-			cursorTimeLabel_->setText(previewTimeText(srcTarget));
-			return;
-		}
-		// Decode forward to the target source time; only the shown frame is
-		// converted (skipped catch-up frames stay in YUV — see nextFrameAt).
-		const QImage img = segSeeker->nextFrameAt(srcTarget, nullptr, 1280, 720, 240);
+		const QSize render = previewRenderSize(multiCutCanvasSize());
+		const QImage img = segSeeker->frameAt(srcTarget, render.width(), render.height());
 		if (img.isNull()) {
 			// Source ended inside this cut — skip to the next segment.
 			playAnchorMs_ = tracks_->outputStartOf(seg) + segs[seg].outDurationMs();
@@ -13825,7 +13823,7 @@ void VideoEditorWindow::onPlayTick()
 			playSeg_ = -1;
 			return;
 		}
-		setPreviewFrame(img, outPos);
+		setPreviewFrame(fitIntoCanvas(img, render), outPos);
 		tracks_->setPlayhead(outPos);
 		voTrack_->setPlayhead(outPos);
 		cursorTimeLabel_->setText(previewTimeText(srcTarget));
@@ -13844,27 +13842,18 @@ void VideoEditorWindow::onPlayTick()
 		// Loop back to the start of the trimmed region.
 		playAnchorMs_ = start;
 		playClock_.restart();
-		seeker_->seekTo(start);
 		target = start;
 	}
 
-	// The same rule as Multi-Cut above: do not ask for a frame the clock has
-	// not reached, or the picture outruns the trimmed region and plays past the
-	// end handle. Most visible at speeds below 1x and on low-frame-rate sources.
-	if (seeker_->positionMs() >= 0 && seeker_->positionMs() >= target) {
-		timeline_->setPlayhead(seeker_->positionMs());
-		return;
-	}
-	// Decode forward to the target time; only the shown frame is converted
-	// (skipped catch-up frames stay in YUV — see nextFrameAt).
-	qint64 ts = -1;
-	const QImage img = seeker_->nextFrameAt(target, &ts, 1280, 720, 240);
+	const QSize render = previewRenderSize(QSize(1280, 720));
+	const QImage img = seeker_->frameAt(target, render.width(), render.height());
 	if (img.isNull()) { // reached end of file inside the region — loop
 		seeker_->seekTo(start);
 		playAnchorMs_ = start;
 		playClock_.restart();
 		return;
 	}
+	const qint64 ts = seeker_->positionMs();
 	setPreviewFrame(img, ts);
 	timeline_->setPlayhead(ts);
 	{

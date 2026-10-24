@@ -25,6 +25,7 @@ protected:
 			int sourceId = -1;
 			Request req;
 			QString path;
+			quint64 generation = 0;
 			{
 				QMutexLocker lock(&d_->mutex_);
 				while (!d_->quit_ && d_->queue_.isEmpty())
@@ -36,6 +37,7 @@ protected:
 				// is at the moment it comes off the queue is the one decoded.
 				req = d_->pending_.take(sourceId);
 				path = d_->decodePathLocked(sourceId);
+				generation = d_->generations_.value(sourceId);
 			}
 			if (req.ms < 0 || path.isEmpty())
 				continue;
@@ -43,16 +45,17 @@ protected:
 			FrameSeeker *fs = seekerFor(sourceId, path);
 			if (!fs)
 				continue;
-			const QImage img = fs->frameAt(req.ms, req.w, req.h);
+			FrameSeeker::FrameInterval interval;
+			const QImage img = fs->frameAt(req.ms, req.w, req.h, &interval);
 			if (img.isNull())
 				continue;
 
 			{
 				QMutexLocker lock(&d_->mutex_);
 				// The file may have been dropped while this was decoding.
-				if (!d_->paths_.contains(sourceId))
+				if (!d_->paths_.contains(sourceId) || d_->generations_.value(sourceId) != generation)
 					continue;
-				d_->store(sourceId, req, img);
+				d_->store(sourceId, req, img, interval);
 			}
 			emit d_->frameReady(sourceId, req.ms);
 		}
@@ -68,13 +71,6 @@ private:
 		auto fs = std::make_unique<FrameSeeker>();
 		if (!fs->open(path))
 			return nullptr;
-		// Now that the rate is known, requests a frame apart can share a
-		// decode instead of each paying for a seek.
-		{
-			QMutexLocker lock(&d_->mutex_);
-			const double fps = fs->fps();
-			d_->frameMs_[sourceId] = fps > 1.0 ? qint64(1000.0 / fps) : 33;
-		}
 		FrameSeeker *raw = fs.get();
 		seekers_[sourceId] = std::move(fs);
 		openPaths_[sourceId] = path;
@@ -86,7 +82,8 @@ private:
 	QHash<int, QString> openPaths_;
 };
 
-PreviewDecoder::PreviewDecoder(QObject *parent) : QObject(parent)
+PreviewDecoder::PreviewDecoder(QObject *parent, qint64 cacheBytesTotal)
+	: QObject(parent), cacheBytesTotal_(std::max<qint64>(1, cacheBytesTotal))
 {
 	worker_ = new Worker(this);
 	worker_->start(QThread::LowPriority); // the GUI must always win
@@ -111,8 +108,8 @@ void PreviewDecoder::setSource(int sourceId, const QString &path)
 	if (paths_.value(sourceId) == path)
 		return;
 	paths_[sourceId] = path;
-	cache_.remove(sourceId); // a different file: nothing cached applies
-	frameMs_.remove(sourceId);
+	clearSourceCacheLocked(sourceId); // a different file: nothing cached applies
+	generations_[sourceId] = ++nextGeneration_;
 }
 
 void PreviewDecoder::setProxy(int sourceId, const QString &proxyPath)
@@ -124,8 +121,8 @@ void PreviewDecoder::setProxy(int sourceId, const QString &proxyPath)
 		proxies_.remove(sourceId);
 	else
 		proxies_[sourceId] = proxyPath;
-	cache_.remove(sourceId);
-	frameMs_.remove(sourceId);
+	clearSourceCacheLocked(sourceId);
+	generations_[sourceId] = ++nextGeneration_;
 	// Anything queued was for the old file; it would decode the right time from
 	// the wrong place. The next render asks again.
 	pending_.remove(sourceId);
@@ -150,8 +147,8 @@ void PreviewDecoder::removeSource(int sourceId)
 	QMutexLocker lock(&mutex_);
 	paths_.remove(sourceId);
 	proxies_.remove(sourceId);
-	cache_.remove(sourceId);
-	frameMs_.remove(sourceId);
+	clearSourceCacheLocked(sourceId);
+	generations_.remove(sourceId);
 	pending_.remove(sourceId);
 	queue_.removeAll(sourceId);
 }
@@ -162,7 +159,9 @@ void PreviewDecoder::clear()
 	paths_.clear();
 	proxies_.clear();
 	cache_.clear();
-	frameMs_.clear();
+	cachedBytes_ = 0;
+	cachedFrames_ = 0;
+	generations_.clear();
 	pending_.clear();
 	queue_.clear();
 }
@@ -172,12 +171,6 @@ void PreviewDecoder::cancelPending()
 	QMutexLocker lock(&mutex_);
 	pending_.clear();
 	queue_.clear();
-}
-
-bool PreviewDecoder::sameFrame(int sourceId, qint64 a, qint64 b) const
-{
-	const qint64 fm = std::max<qint64>(1, frameMs_.value(sourceId, 33));
-	return a / fm == b / fm;
 }
 
 // Caller holds the lock.
@@ -193,7 +186,7 @@ QImage PreviewDecoder::lookupLocked(int sourceId, qint64 ms, int w, int h, bool 
 	for (const Cached &c : v) {
 		if (c.w != w || c.h != h)
 			continue; // a different preview size is a different picture
-		if (sameFrame(sourceId, c.ms, ms)) {
+		if (c.contains(ms)) {
 			if (exact)
 				*exact = true;
 			const_cast<Cached &>(c).useSeq = ++useSeq_;
@@ -242,14 +235,18 @@ QImage PreviewDecoder::frame(int sourceId, qint64 ms, int w, int h, bool *exact)
 }
 
 // Caller holds the lock. Worker side.
-void PreviewDecoder::store(int sourceId, const Request &req, const QImage &img)
+void PreviewDecoder::store(int sourceId, const Request &req, const QImage &img,
+			   const FrameSeeker::FrameInterval &interval)
 {
 	QVector<Cached> &v = cache_[sourceId];
 	for (Cached &c : v) {
-		if (c.w == req.w && c.h == req.h && sameFrame(sourceId, c.ms, req.ms)) {
+		if (c.w == req.w && c.h == req.h && c.contains(req.ms)) {
+			cachedBytes_ += img.sizeInBytes() - c.img.sizeInBytes();
 			c.img = img;
 			c.ms = req.ms;
 			c.useSeq = ++useSeq_;
+			c.interval = interval;
+			pruneCacheLocked();
 			return;
 		}
 	}
@@ -265,10 +262,50 @@ void PreviewDecoder::store(int sourceId, const Request &req, const QImage &img)
 		for (int i = 1; i < v.size(); ++i)
 			if (v[i].useSeq < v[worst].useSeq)
 				worst = i;
-		bytes -= v[worst].img.sizeInBytes();
+		const qint64 removed = v[worst].img.sizeInBytes();
+		bytes -= removed;
+		cachedBytes_ -= removed;
+		--cachedFrames_;
 		v.removeAt(worst);
 	}
-	v.push_back(Cached{req.ms, req.w, req.h, ++useSeq_, img});
+	v.push_back(Cached{req.ms, req.w, req.h, ++useSeq_, img, interval});
+	cachedBytes_ += img.sizeInBytes();
+	++cachedFrames_;
+	pruneCacheLocked();
+}
+
+void PreviewDecoder::clearSourceCacheLocked(int sourceId)
+{
+	auto it = cache_.find(sourceId);
+	if (it == cache_.end())
+		return;
+	for (const Cached &frame : it.value())
+		cachedBytes_ -= frame.img.sizeInBytes();
+	cachedFrames_ -= it.value().size();
+	cache_.erase(it);
+}
+
+void PreviewDecoder::pruneCacheLocked()
+{
+	// Keep the newest frame even when it alone exceeds the configured budget;
+	// refusing to cache it would make has() stay false and reschedule forever.
+	while (cachedBytes_ > cacheBytesTotal_ && cachedFrames_ > 1) {
+		auto source = cache_.end();
+		int index = -1;
+		qint64 oldest = 0;
+		for (auto it = cache_.begin(); it != cache_.end(); ++it)
+			for (int i = 0; i < it.value().size(); ++i)
+				if (index < 0 || it.value()[i].useSeq < oldest) {
+					source = it;
+					index = i;
+					oldest = it.value()[i].useSeq;
+				}
+		if (source == cache_.end())
+			break;
+		cachedBytes_ -= source.value()[index].img.sizeInBytes();
+		--cachedFrames_;
+		source.value().removeAt(index);
+	}
 }
 
 } // namespace harpia

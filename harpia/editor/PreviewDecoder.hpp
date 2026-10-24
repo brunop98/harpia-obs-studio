@@ -1,5 +1,7 @@
 #pragma once
 
+#include "FrameSeeker.hpp"
+
 // Preview frames decoded off the GUI thread.
 //
 // FrameSeeker::frameAt is fast for the ordinary case and slow for the one that
@@ -33,7 +35,8 @@ namespace harpia {
 class PreviewDecoder : public QObject {
 	Q_OBJECT
 public:
-	explicit PreviewDecoder(QObject *parent = nullptr);
+	static constexpr qint64 kCacheBytesTotal = qint64(512) << 20;
+	explicit PreviewDecoder(QObject *parent = nullptr, qint64 cacheBytesTotal = kCacheBytesTotal);
 	~PreviewDecoder() override;
 
 	// Register the file behind a source id. Re-registering the same id with a
@@ -65,11 +68,10 @@ public:
 	// somewhere unrelated and the queued positions are no longer interesting.
 	void cancelPending();
 
-	// How many decoded frames are kept per source, bounded by memory as well
-	// as count. It used to be 4, which made a scrub back over the last second
-	// decode every frame again; RAM is the cheap resource here and decoding is
-	// the expensive one, so a source keeps up to 512 MB of recent frames
-	// (about 250 at a 960x540 preview) and drops the least recently used.
+	// Per-source limits and a shared global ceiling keep scrubbing useful
+	// without multiplying memory use by the number of imported recordings.
+	// The least recently used frames are discarded first. A single frame
+	// larger than the budget is retained so its request can still converge.
 	static constexpr int kCachePerSource = 400;
 	static constexpr qint64 kCacheBytesPerSource = qint64(512) << 20;
 
@@ -89,21 +91,23 @@ private:
 		int h = 0;
 		qint64 useSeq = 0; // for the LRU eviction
 		QImage img;
+		FrameSeeker::FrameInterval interval;
+		bool contains(qint64 requestedMs) const
+		{
+			return ms == requestedMs || interval.contains(requestedMs);
+		}
 	};
 
 	class Worker;
 	friend class Worker;
 
-	// Two requests land on the same decoded frame when they fall in the same
-	// frame interval; without that a 1 ms mouse movement would be a cache miss
-	// and another 300 ms of decoding. frameMs is per source (its own rate), and
-	// defaults until the worker has opened the file and knows better.
-	bool sameFrame(int sourceId, qint64 a, qint64 b) const;
-
 	QImage lookupLocked(int sourceId, qint64 ms, int w, int h, bool *exact) const;
 	QString decodePathLocked(int sourceId) const;
 	// Worker side; caller holds the lock.
-	void store(int sourceId, const Request &req, const QImage &img);
+	void store(int sourceId, const Request &req, const QImage &img,
+		   const FrameSeeker::FrameInterval &interval);
+	void clearSourceCacheLocked(int sourceId);
+	void pruneCacheLocked();
 
 	mutable QMutex mutex_;
 	QWaitCondition wake_;
@@ -112,7 +116,11 @@ private:
 	QHash<int, Request> pending_; // latest request per source
 	QVector<int> queue_;          // source ids with work, in arrival order
 	QHash<int, QVector<Cached>> cache_;
-	QHash<int, qint64> frameMs_; // per-source frame duration, once known
+	QHash<int, quint64> generations_; // reject results from an invalidated source/proxy
+	quint64 nextGeneration_ = 0;
+	const qint64 cacheBytesTotal_;
+	qint64 cachedBytes_ = 0;
+	qsizetype cachedFrames_ = 0;
 	mutable qint64 useSeq_ = 0;
 	bool quit_ = false;
 

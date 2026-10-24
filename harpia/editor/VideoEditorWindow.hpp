@@ -591,9 +591,9 @@ private:
 	const QImage &stillForPreview(int sourceId, QSize render);
 	QSize stillSize(int sourceId) const; // original size, or empty when not a still
 	void warnHeavyStill(const QString &path, QSize px, qint64 bytes);
-	// Playback decode state, keyed by (sourceId, track) rather than by source
-	// alone -- see TimelineCompositor::FrameProvider::track(). Track 0 of each
-	// source uses the source's own seeker; the extra stacks get their own,
+	// Playback decode state, keyed by source and (track * 2 + transition slot)
+	// -- see TimelineCompositor::FrameProvider. Track 0 / slot 0 of each
+	// source uses the source's own seeker; the other stacks get their own,
 	// opened lazily on the same file, because a roll-forward decoder can only
 	// be in one place at a time.
 	std::map<quint64, std::unique_ptr<FrameSeeker>> playSeekers_;
@@ -607,7 +607,7 @@ private:
 	}
 	// The decoder for one stack, creating it on first use. Null if the source
 	// is gone or the file will not open.
-	FrameSeeker *playSeekerFor(int sourceId, int track);
+	FrameSeeker *playSeekerFor(int sourceId, int track, int decoderSlot = 0);
 	void addImageClip();
 	// A video or image dropped from the desktop onto the timeline lanes.
 	void onFilesDroppedOnTimeline(const QStringList &paths, int track, int newTrackAt,
@@ -648,7 +648,7 @@ private:
 	bool xfGestureActive_ = false;
 	void onPreviewTransformZoom(double factor, double cursorXNorm, double cursorYNorm);
 	void applySelectedClipTransform(const TlTransform &tf);
-	void syncPreviewTransformTarget(); // arm/disarm + refresh the outline
+	void syncPreviewTransformTarget(bool refreshPath = true); // arm/disarm + refresh the outline
 	// The selected clip's position keys drawn on the preview, to click, drag,
 	// add to and delete from. Refreshed with the outline above.
 	void refreshMotionPath();

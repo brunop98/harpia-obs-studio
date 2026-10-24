@@ -189,6 +189,20 @@ void buildRichText(const TlText &t, const QFont &base, QSize canvas, double wrap
 	using namespace rich_text;
 	const double k = textScale(canvas);
 	const QVector<Line> lines = parse(tlDisplayText(t), t.fontPx);
+	bool styled = false;
+	for (const Line &line : lines)
+		for (const Run &run : line)
+			styled = styled || run.style != Style();
+	if (!styled) {
+		// Empty formatting tags and bare line breaks must retain the plain
+		// layout's shaping and kerning. Shaping each word separately below
+		// can shift fractional advances even though no style changed.
+		TlText plain = t;
+		plain.text = plainText(tlDisplayText(t));
+		plain.textCase = TlCaseAsTyped; // the displayed text was already cased
+		ct.path = buildTextPath(plain, base, wrapW, &ct.block, &ct.emoji);
+		return;
+	}
 	const auto fontFor = [&](const Style &st) {
 		QFont f = base;
 		if (st.sizePx > 0)
@@ -692,6 +706,27 @@ void TimelineCompositor::drawClip(QPainter &p, const TlClip &c, const TlTransfor
 	p.drawImage(dst, drawn, srcRect);
 	p.restore();
 }
+namespace {
+
+QSize logicalScriptSize(const TlClip &clip, QSize original, QSize canvas)
+{
+	if (clip.type == TlClip::Type::Text)
+		return TimelineCompositor::textNaturalSize(clip.text, canvas);
+	if (original.isEmpty())
+		return QSize(0, 0);
+	QRect sourceRect(QPoint(0, 0), original);
+	if (!clip.crop.isNull() && clip.crop.width() > 1 && clip.crop.height() > 1) {
+		const QRect cropped = clip.crop.intersected(sourceRect);
+		if (cropped.width() > 1 && cropped.height() > 1)
+			sourceRect = cropped;
+	}
+	const double fit = std::min(1.0, std::min(double(canvas.width()) / original.width(),
+					       double(canvas.height()) / original.height()));
+	return QSize(std::max(1, int(std::lround(sourceRect.width() * fit))),
+		     std::max(1, int(std::lround(sourceRect.height() * fit))));
+}
+
+} // namespace
 
 QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize canvas, FrameProvider &fp,
 				   TransformEvaluator *eval, double fps, QSize logicalCanvas,
@@ -765,6 +800,7 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 				// The project's size, not the render size: a half-resolution
 				// preview must not change what a component computes.
 				ectx.canvas = logicalCanvas;
+				ectx.scriptSize = logicalCanvas;
 			}
 
 			// An effect clip has a transform like any other clip, and it
@@ -861,7 +897,7 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 		// so an overlap can render its two clips into their own layers and blend
 		// them, using exactly the same decode/script/transform path a lone clip
 		// takes -- a transition must not be a second, subtly different renderer.
-		auto renderClip = [&](QPainter &into, int ci) -> bool {
+		auto renderClip = [&](QPainter &into, int ci, int decoderSlot = 0) -> bool {
 			const TlClip &c = t.clips[ci];
 
 			// The clip's components, in resolved order. Built once per clip per
@@ -887,6 +923,7 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 					ectx.srcSize = c.crop.size();
 				else if (c.type == TlClip::Type::Video || c.type == TlClip::Type::Image)
 					ectx.srcSize = fp.sourceSize(c.sourceId);
+				ectx.scriptSize = logicalScriptSize(c, fp.sourceSize(c.sourceId), logicalCanvas);
 			}
 
 			// Time stage FIRST, because which source instant to decode is its
@@ -926,6 +963,7 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 				// Which track is asking, so a sequential provider can keep
 				// one decoder per stack rather than one per source.
 				fp.setTrack(ti);
+				fp.setDecoderSlot(decoderSlot);
 				frame = fp.frameFor(c.sourceId, srcMs);
 				if (!frame.isNull() && !c.crop.isNull() && c.crop.width() > 1 && c.crop.height() > 1) {
 					const QSize original = fp.sourceSize(c.sourceId);
@@ -948,34 +986,15 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 				// resolution must not change what a script computes.
 				sctx.canvasW = logicalCanvas.width();
 				sctx.canvasH = logicalCanvas.height();
-				QSize natural = frame.size();
-				if (c.type == TlClip::Type::Text)
-					natural = textNaturalSize(c.text, canvas);
-				if (!drawn->crop.isNull() && drawn->crop.width() > 1 && drawn->crop.height() > 1 &&
-				    !frame.isNull())
-					natural = drawn->crop.intersected(QRect(QPoint(0, 0), frame.size()))
-							  .size();
-				// A picture's size as the preview decodes it -- the source fitted
-				// down into the render canvas -- whatever size the frame really
-				// is. The export decodes zoomed/cropped clips and stills larger
-				// than that to keep their detail, and a script must not compute
-				// a different answer because of it.
-				if (c.type != TlClip::Type::Text && !frame.isNull() && !natural.isEmpty()) {
-					QSize full = fp.sourceSize(c.sourceId);
-					if (full.isEmpty())
-						full = frame.size();
-					const double fit = std::min(
-						1.0, std::min(double(canvas.width()) / std::max(1, full.width()),
-							      double(canvas.height()) / std::max(1, full.height())));
-					const double kf = double(full.width()) * fit / std::max(1, frame.width());
-					if (kf < 0.995) // not a one-pixel rounding of the same size
-						natural = QSize(std::max(1, int(natural.width() * kf)),
-								std::max(1, int(natural.height() * kf)));
-				}
-				const double k =
-					double(logicalCanvas.width()) / std::max(1, canvas.width());
-				sctx.clipW = int(std::lround(natural.width() * k));
-				sctx.clipH = int(std::lround(natural.height() * k));
+				// Use project geometry directly, including text measurement.
+				// Scaling decoded pixels or rounded half-size glyph bounds back
+				// up changes the context on small sources and wrapped captions.
+				QSize original = fp.sourceSize(c.sourceId);
+				if (original.isEmpty())
+					original = frame.size();
+				const QSize natural = logicalScriptSize(c, original, logicalCanvas);
+				sctx.clipW = natural.width();
+				sctx.clipH = natural.height();
 				sctx.fps = fps;
 				sctx.index = ci;
 				sctx.globalTime = double(outMs) / 1000.0;
@@ -1054,7 +1073,7 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 						return fail("TL-PAINTER-INIT", QStringLiteral(
 							"Qt could not draw the incoming transition layer."), ti, ii);
 					pb.setRenderHint(QPainter::Antialiasing, true);
-					if (!renderClip(pb, ii))
+					if (!renderClip(pb, ii, 1))
 						return QImage();
 				}
 				const double u = std::clamp(

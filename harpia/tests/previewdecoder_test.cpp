@@ -91,7 +91,8 @@ int main(int argc, char **argv)
 		ok(!syncImg.isNull(), "and the blocking decoder produces a frame to compare against");
 	}
 
-	PreviewDecoder dec;
+	constexpr int kCachedFrames = 4;
+	PreviewDecoder dec(nullptr, qint64(kCachedFrames) * W * H * 4);
 	int ready = 0;
 	QObject::connect(&dec, &PreviewDecoder::frameReady, &app, [&](int, qint64) { ++ready; });
 	dec.setSource(1, media);
@@ -163,22 +164,25 @@ int main(int argc, char **argv)
 
 	std::printf("\n-- the cache is bounded, and a miss falls back to the nearest --\n");
 	{
-		// More distinct positions than the cache can hold, each awaited so each
-		// is really stored.
+		// Distinct frames inside the source, each awaited so each is really
+		// stored. Requests beyond EOF all alias the same final frame and cannot
+		// establish how many images the byte budget retains.
 		QVector<qint64> pos;
-		for (int i = 0; i < PreviewDecoder::kCachePerSource + 3; ++i) {
+		bool arrived = true;
+		for (int i = 0; i < kCachedFrames + 3; ++i) {
 			const qint64 ms = 1000 + i * 700;
 			pos.push_back(ms);
 			dec.frame(1, ms, W, H);
-			pump([&] { return dec.has(1, ms, W, H); });
+			arrived = pump([&] { return dec.has(1, ms, W, H); }) && arrived;
 		}
+		ok(arrived, "all distinct in-range frames were decoded before checking eviction");
 		int held = 0;
 		for (qint64 ms : pos)
 			if (dec.has(1, ms, W, H))
 				++held;
 		std::printf("     %d positions requested, %d still cached (limit %d)\n", int(pos.size()),
-			    held, PreviewDecoder::kCachePerSource);
-		ok(held <= PreviewDecoder::kCachePerSource, "no more than the limit is kept");
+			    held, kCachedFrames);
+		ok(held <= kCachedFrames, "the byte budget keeps no more than four decoded frames");
 		ok(held > 0, "CONTROL: and it is not simply keeping nothing");
 
 		// A position nowhere near anything cached: answered with the closest

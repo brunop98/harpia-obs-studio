@@ -5,6 +5,7 @@
 #include <QString>
 
 #include <atomic>
+#include <memory>
 #include <vector>
 
 namespace harpia {
@@ -27,6 +28,9 @@ public:
 		// Shape of those fades. Straight lines unless the clip says otherwise.
 		FadeCurve fadeInCurve = FadeCurve::Linear;
 		FadeCurve fadeOutCurve = FadeCurve::Linear;
+		// Keeps a session-cached decoded file alive until every mix using this
+		// take has finished. Eviction must not delete another worker's input.
+		std::shared_ptr<const void> sourceLease;
 	};
 
 	// Mix `takes` over `videoPath`'s audio, replacing `videoPath` in place.

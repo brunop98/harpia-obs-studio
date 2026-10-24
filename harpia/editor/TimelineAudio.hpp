@@ -37,6 +37,13 @@ public:
 							    const SourceLookup &pathFor,
 							    const QString &workDir);
 
+	// Identity of the model inputs used by buildTakes(), including overlap
+	// geometry, fade shapes and transition toggles. Empty when nothing can
+	// contribute audio. When supplied, pathFor also identifies each source by
+	// path, size and modification time. A worker mixing an older identity must
+	// be discarded.
+	static QString mixKey(const TimelineModel &m, const SourceLookup &pathFor = {});
+
 	// The gain a clip's take is mixed at: the clip's own volume times its
 	// lane's. The clip's volume counts on a VIDEO lane too. It used to be pinned
 	// to unity there, which left footage the one kind of sound you could not

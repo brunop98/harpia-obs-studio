@@ -23,6 +23,21 @@ namespace harpia {
 // per user (call from the same thread).
 class FrameSeeker {
 public:
+	// Exact source-time span represented by a decoded frame. The rounding
+	// slack is the same allowance frameAt uses for whole-millisecond requests.
+	// Unknown spans deliberately match no other request.
+	struct FrameInterval {
+		double fromMs = 0.0;
+		double untilMs = 0.0;
+		double slackMs = 0.0;
+		bool known = false;
+		bool contains(qint64 ms) const
+		{
+			const double at = double(ms) + slackMs;
+			return known && at >= fromMs && at < untilMs;
+		}
+	};
+
 	FrameSeeker() = default;
 	~FrameSeeker();
 
@@ -56,7 +71,7 @@ public:
 	// walk: requests within the frame on screen return a cached image, and
 	// requests ahead roll the decoder forward without seeking — only
 	// backward/far jumps pay for a full seek.
-	QImage frameAt(qint64 ms, int maxW, int maxH);
+	QImage frameAt(qint64 ms, int maxW, int maxH, FrameInterval *interval = nullptr);
 	// How many times frameAt has had to seek. A linear walk -- an export --
 	// should seek once and then roll forward; the tests hold it to that.
 	int seekCount() const { return seeks_; }
@@ -114,6 +129,7 @@ private:
 	AVFrame *ahead_ = nullptr;
 	bool haveCur_ = false;
 	bool curIsFirst_ = false; // the file's first frame, shown for a time before it
+	bool curIsLast_ = false; // decoder exhausted after this frame
 	bool haveAhead_ = false;
 	double curPtsMs_ = 0.0;
 	double aheadPtsMs_ = 0.0;

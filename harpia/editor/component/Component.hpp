@@ -168,6 +168,10 @@ struct EvalContext {
 	// (a component that needs it must have a fallback). A pose component
 	// cannot see the decoded frame, which does not exist yet at that stage.
 	QSize srcSize;
+	// The logical dimensions per-channel transform scripts expose as clipW/H.
+	// Separate from the raw source size used by pose components, and unaffected
+	// by preview resolution or the size of the decoded image copy.
+	QSize scriptSize;
 	PropBag p; // this component's properties, already resolved at tMs
 
 	double tSec() const { return double(tMs) / 1000.0; }

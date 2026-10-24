@@ -50,6 +50,7 @@
 #include "TimelineOverview.hpp"
 #include "TimelineThumbs.hpp"
 #include "timeline/TextStyleJson.hpp"
+#include "timeline/TextStylePresets.hpp"
 #include "timeline/FrameSignature.hpp"
 #include "TrackEditor.hpp"
 #include "VoiceoverMixer.hpp"
@@ -7180,27 +7181,34 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	textBatchNote_->setVisible(false);
 	tv->addWidget(textBatchNote_);
 
-	// Style presets: save the look you settled on, apply it to any other caption.
+	// Built-in social styles and the user's own saved looks share one picker.
 	auto *presetRow = new QHBoxLayout;
 	textPresetCombo_ = new QComboBox(textBox_);
+	textPresetCombo_->setObjectName(QStringLiteral("textStylePreset"));
 	textPresetCombo_->setToolTip(
-		QStringLiteral("Apply a saved text style. The caption keeps its own words."));
+		QStringLiteral("Choose a social media style or one of your saved styles. Applies to selected captions and keeps their words."));
 	auto *presetSave = new QPushButton(QStringLiteral("Save…"), textBox_);
+	presetSave->setObjectName(QStringLiteral("saveTextStylePreset"));
 	presetSave->setToolTip(QStringLiteral("Save this caption's style under a name"));
 	// Fusion's 80 px floor for a text button, not the label, set this row's
 	// width; it may give way when the panel is narrow (see the Key button).
 	presetSave->setMinimumWidth(56);
 	auto *presetDel = new QPushButton(textBox_);
+	textPresetDelete_ = presetDel;
+	presetDel->setObjectName(QStringLiteral("deleteTextStylePreset"));
 	presetDel->setIcon(uiIcon(Glyph::Cross, 13));
 	presetDel->setFixedWidth(28);
-	presetDel->setToolTip(QStringLiteral("Delete the selected style"));
+	presetDel->setToolTip(QStringLiteral("Delete the selected saved style. Built-in styles are always available."));
 	presetRow->addWidget(textPresetCombo_, 1);
 	presetRow->addWidget(presetSave);
 	presetRow->addWidget(presetDel);
 	tv->addLayout(presetRow);
 	connect(textPresetCombo_, &QComboBox::activated, this, [this](int i) {
 		if (i > 0 && !syncingClip_)
-			applyTextPreset(textPresetCombo_->currentText());
+			applyTextPreset(textPresetCombo_->itemData(i).toString());
+	});
+	connect(textPresetCombo_, &QComboBox::currentIndexChanged, this, [this](int i) {
+		textPresetDelete_->setEnabled(textPresetCombo_->itemData(i).toString().startsWith(QStringLiteral("saved/")));
 	});
 	connect(presetSave, &QPushButton::clicked, this,
 		&VideoEditorWindow::saveTextPresetFromSelection);
@@ -10647,35 +10655,54 @@ void VideoEditorWindow::refreshTextPresets()
 {
 	if (!textPresetCombo_)
 		return;
-	const QString keep = textPresetCombo_->currentIndex() > 0 ? textPresetCombo_->currentText()
-								  : QString();
+	const QString keep = textPresetCombo_->currentData().toString();
 	const QSignalBlocker b(textPresetCombo_);
 	textPresetCombo_->clear();
 	textPresetCombo_->addItem(QStringLiteral("Style preset…"));
-	textPresetCombo_->addItems(loadTextPresets().keys()); // QMap keys are sorted
-	const int i = keep.isEmpty() ? 0 : textPresetCombo_->findText(keep);
+	QStringList builtinNames;
+	for (const auto &preset : text_style_presets::builtins()) {
+		textPresetCombo_->addItem(preset.name, QStringLiteral("builtin/") + preset.id);
+		textPresetCombo_->setItemData(textPresetCombo_->count() - 1, preset.description, Qt::ToolTipRole);
+		builtinNames << preset.name;
+	}
+	const auto saved = loadTextPresets();
+	if (!saved.isEmpty())
+		textPresetCombo_->insertSeparator(textPresetCombo_->count());
+	for (auto it = saved.constBegin(); it != saved.constEnd(); ++it) {
+		const QString label = builtinNames.contains(it.key()) ? it.key() + QStringLiteral(" (Saved)") : it.key();
+		textPresetCombo_->addItem(label, QStringLiteral("saved/") + it.key());
+		textPresetCombo_->setItemData(textPresetCombo_->count() - 1, QStringLiteral("Your saved text style: %1").arg(it.key()), Qt::ToolTipRole);
+	}
+	const int i = keep.isEmpty() ? 0 : textPresetCombo_->findData(keep);
 	textPresetCombo_->setCurrentIndex(i >= 0 ? i : 0);
+	textPresetDelete_->setEnabled(textPresetCombo_->currentData().toString().startsWith(QStringLiteral("saved/")));
 }
 
-void VideoEditorWindow::applyTextPreset(const QString &name)
+void VideoEditorWindow::applyTextPreset(const QString &key)
 {
-	const auto presets = loadTextPresets();
-	const auto it = presets.constFind(name);
-	if (it == presets.constEnd())
+	TlText style;
+	if (key.startsWith(QStringLiteral("builtin/"))) {
+		const auto *preset = text_style_presets::find(key.mid(8));
+		if (!preset)
+			return;
+		style = preset->style;
+	} else if (key.startsWith(QStringLiteral("saved/"))) {
+		const auto presets = loadTextPresets();
+		const auto it = presets.constFind(key.mid(6));
+		if (it == presets.constEnd())
+			return;
+		style = it.value();
+	} else {
 		return;
+	}
 	// Style only: the clip keeps its own words, which is the whole point of a
 	// preset — apply the look you settled on to whatever this caption says.
-	const TlText style = it.value();
+	// Each menu choice is one complete undo action, including rapid choices.
+	commitSnapshot();
 	editTextStyle([&style](TlClip &c) {
-		// Content stays: the words, a Random text's other texts and its kind.
-		const QString words = c.text.text;
-		const QStringList variations = c.text.variations;
-		const bool random = c.text.random;
-		c.text = style;
-		c.text.text = words;
-		c.text.variations = variations;
-		c.text.random = random;
+		text_style_presets::applyStyle(style, c.text);
 	});
+	commitSnapshot();
 	syncClipInspector();
 }
 
@@ -10703,7 +10730,8 @@ void VideoEditorWindow::saveTextPresetFromSelection()
 	refreshTextPresets();
 	if (textPresetCombo_) {
 		const QSignalBlocker b(textPresetCombo_);
-		textPresetCombo_->setCurrentIndex(textPresetCombo_->findText(name));
+		textPresetCombo_->setCurrentIndex(textPresetCombo_->findData(QStringLiteral("saved/") + name));
+		textPresetDelete_->setEnabled(true);
 	}
 }
 
@@ -10711,7 +10739,10 @@ void VideoEditorWindow::deleteSelectedTextPreset()
 {
 	if (!textPresetCombo_ || textPresetCombo_->currentIndex() <= 0)
 		return;
-	const QString name = textPresetCombo_->currentText();
+	const QString key = textPresetCombo_->currentData().toString();
+	if (!key.startsWith(QStringLiteral("saved/")))
+		return;
+	const QString name = key.mid(6);
 	if (QMessageBox::question(this, QStringLiteral("Delete style"),
 				  QStringLiteral("Delete the text style \"%1\"?").arg(name)) !=
 	    QMessageBox::Yes)

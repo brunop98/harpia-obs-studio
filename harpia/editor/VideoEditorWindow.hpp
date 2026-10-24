@@ -1132,11 +1132,12 @@ private:
 	// Text style presets: a named TlText (style only — a preset never carries
 	// the caption's words), stored as readable JSON beside the other user files.
 	QComboBox *textPresetCombo_ = nullptr;
+	QPushButton *textPresetDelete_ = nullptr;
 	QString textPresetsPath() const;
 	QMap<QString, TlText> loadTextPresets() const;
 	void saveTextPresets(const QMap<QString, TlText> &presets) const;
 	void refreshTextPresets();
-	void applyTextPreset(const QString &name);
+	void applyTextPreset(const QString &key);
 	void saveTextPresetFromSelection();
 	void deleteSelectedTextPreset();
 

@@ -281,6 +281,11 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/richtext_test" "$QJSLIB/libqjs.a" $LF
 
+# Social media text styles use installed fonts and preserve caption content
+# when applied or saved through the existing style/project JSON format.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/textstylepresets_test.cpp" -o "$WORK/textstylepresets_test" $LF
+
 # Batch export names, folders and summaries (header-only helpers).
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/batchplan_test.cpp" -o "$WORK/batchplan_test" $LF
@@ -623,14 +628,17 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 
 # A caption wider than the picture wraps at a space and carries on below;
 # typed line breaks are kept and a single long word is left whole.
+# Outlines keep the same proportion in reduced previews and exports.
+for name in textwrap textstylescale; do
 g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
-	"$HERE/textwrap_test.cpp" \
+	"$HERE/${name}_test.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
-	-o "$WORK/textwrap_test" "$QJSLIB/libqjs.a" $LF
+	-o "$WORK/${name}_test" "$QJSLIB/libqjs.a" $LF
+done
 
 # Colour emoji in text clips: which characters are emoji, the pictures, and a
 # caption with an emoji in it drawn in colour rather than as a one-colour shape.
@@ -1100,6 +1108,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/batchplan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textvariations_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/clipvariations_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/richtext_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/textstylepresets_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/curvepath_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keyorder_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/recordingdelete_test" || rc=1
@@ -1152,6 +1161,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/propkeys_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/pixelbands_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/mask_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textwrap_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/textstylescale_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/coverart_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/emoji_test" "$H/resources/emoji/noto-emoji.pack" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineslice_test" || rc=1

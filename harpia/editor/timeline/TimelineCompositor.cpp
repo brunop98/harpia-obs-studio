@@ -515,20 +515,22 @@ void TimelineCompositor::drawTextClip(QPainter &p, const TlClip &c, const TlTran
 	CachedText &ct = cachedText(t, f, canvas);
 	const QPainterPath &path = ct.path;
 	const QRectF &block = ct.block;
+	const double k = textScale(canvas);
+	// Like the font and box, outline width is authored for a 1080-tall canvas.
+	const double outline = t.outlineWidth * k;
 
 	// The outline, built once per caption and width (see CachedText).
 	const auto ensureStroke = [&]() {
-		if (t.outlineWidth > 0.01 && ct.strokeWidth != t.outlineWidth) {
+		if (outline > 0.01 && ct.strokeWidth != outline) {
 			QPainterPathStroker stroker;
-			stroker.setWidth(t.outlineWidth * 2.0); // straddles the glyph edge
+			stroker.setWidth(outline * 2.0); // straddles the glyph edge
 			stroker.setJoinStyle(Qt::RoundJoin);
 			stroker.setCapStyle(Qt::RoundCap);
 			ct.stroke = stroker.createStroke(path);
-			ct.strokeWidth = t.outlineWidth;
+			ct.strokeWidth = outline;
 		}
 	};
 	// The box, in the caption's own (unscaled) space.
-	const double k = textScale(canvas);
 	const QRectF box = block.adjusted(-t.boxPadX * k, -t.boxPadY * k, t.boxPadX * k, t.boxPadY * k);
 	const double boxR = std::min(t.boxRadius * k, std::min(box.width(), box.height()) / 2.0);
 	const auto paintCaption = [&](QPainter &q) {
@@ -541,7 +543,7 @@ void TimelineCompositor::drawTextClip(QPainter &p, const TlClip &c, const TlTran
 		}
 		for (const auto &mk : ct.marks)
 			q.fillRect(mk.first, mk.second);
-		if (t.outlineWidth > 0.01) {
+		if (outline > 0.01) {
 			ensureStroke();
 			q.fillPath(ct.stroke, t.outlineColor);
 		}
@@ -594,9 +596,8 @@ void TimelineCompositor::drawTextClip(QPainter &p, const TlClip &c, const TlTran
 		auto it = sprites.find(key);
 		if (it == sprites.end()) {
 			// Everything the caption can paint, in its own space: the glyphs,
-			// their outline (which reaches outlineWidth past them) and the box.
-			QRectF local = path.boundingRect().adjusted(-t.outlineWidth, -t.outlineWidth,
-								     t.outlineWidth, t.outlineWidth);
+			// their scaled outline and the box.
+			QRectF local = path.boundingRect().adjusted(-outline, -outline, outline, outline);
 			if (t.boxEnabled)
 				local = local.united(box);
 			for (const auto &mk : ct.marks)

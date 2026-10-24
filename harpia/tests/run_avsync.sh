@@ -185,7 +185,7 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
 	-o "$WORK/shareexportdialog_test" $WLF
 # Render diagnostics and regressions from the preview audit.
-for name in rendererrors exporterrorwindow audioaudit previewgeometry previewinterval previewcontrols previewtransition previewlegacypacing; do
+for name in textstylepresetswindow rendererrors exporterrorwindow audioaudit previewgeometry previewinterval previewcontrols previewtransition previewlegacypacing; do
 	g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 		"$HERE/${name}_test.cpp" \
 		-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
@@ -332,6 +332,8 @@ QT_QPA_PLATFORM=offscreen "$WORK/proxymedia_test" "$WORK" || rc=1
 "$WORK/shareparts_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/shareexportdialog_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/rendererrors_test" || rc=1
+XDG_CONFIG_HOME="$WORK/text-styles-config" XDG_DATA_HOME="$WORK/text-styles-data" QT_QPA_PLATFORM=offscreen \
+	"$WORK/textstylepresetswindow_test" || rc=1
 for name in audioaudit previewgeometry previewinterval previewtransition; do
 	QT_QPA_PLATFORM=offscreen "$WORK/${name}_test" || rc=1
 done

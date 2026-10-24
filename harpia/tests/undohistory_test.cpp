@@ -256,6 +256,24 @@ int main(int argc, char **argv)
 		ok(tv->selectedClip() == 0 && tv->selectedCountForTest() == 1, "and brings back what was selected");
 	}
 
+	std::printf("\n-- setting every selected video's duration is one undo step --\n");
+	{
+		tv->setModelAndCommit(m);
+		tv->selectClip(0, 0);
+		tv->addToSelection(0, 1);
+		tv->addToSelection(0, 2);
+		settle(60);
+		const TimelineModel before = tv->model();
+		ok(tv->trimSelectedVideosToDuration(500) == 3, "all three videos were trimmed to half a second");
+		settle(60);
+		const TimelineModel trimmed = tv->model();
+		undo();
+		ok(tv->model() == before, "one Ctrl+Z restores every duration and original start time");
+		ok(tv->selectedCountForTest() == 3, "and keeps the whole selection");
+		redo();
+		ok(tv->model() == trimmed, "one Ctrl+Y reapplies the complete batch trim");
+	}
+
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
 }

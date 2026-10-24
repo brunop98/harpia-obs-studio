@@ -159,6 +159,12 @@ public:
 	void selectClip(int track, int clip);
 	// Add a clip to the selection without making it primary (what Ctrl-click does).
 	void addToSelection(int track, int clip);
+	// Trim selected videos from the right without moving or re-timing them.
+	// The shortest unlocked video is the upper limit; 0 when none is selected.
+	qint64 selectedVideoDurationLimitMs() const;
+	// Output milliseconds, at least 100 and no longer than that limit. Returns
+	// the number changed and commits the whole edit as one undo step.
+	int trimSelectedVideosToDuration(qint64 durationMs);
 	// Shift every selected clip in time (arrow-key nudge). Locked tracks ignore it.
 	void nudgeSelection(qint64 deltaMs);
 	// Cut every unlocked clip the playhead runs through, on every track.
@@ -801,6 +807,7 @@ private:
 	EditorColors cl_;
 
 	void showClipMenu(int track, int clip, const QPoint &globalPos, qint64 atOutMs);
+	QVector<QPair<int, int>> selectedVideoClips() const;
 	// The right-click menu on a keyframe pip: go to it, or delete it. Its own
 	// menu rather than entries on the clip's, because what is under the cursor
 	// is one MOMENT of one clip, and half the clip menu (split, export, make a

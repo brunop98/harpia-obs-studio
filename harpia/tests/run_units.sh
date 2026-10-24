@@ -453,6 +453,17 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
 	-o "$WORK/slip_test" $LF
 
+# One duration for selected videos: trim at each clip's speed, cap at the
+# shortest clip, preserve the selection, and accept/cancel through the menu.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/clipduration_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
+	-o "$WORK/clipduration_test" $LF
+
 # Sounds for events: a rule per kind of thing ("every crossfade plays this
 # whoosh"), its clips derived and rebuilt on every change on a locked Sounds
 # lane; freeze hands them over; the JSON round trip; the built-in sounds.
@@ -1103,6 +1114,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/clipvolume_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/captionlane_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/tracks_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/slip_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/clipduration_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/soundrules_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/soundlibrary_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/clipshuffle_test" || rc=1

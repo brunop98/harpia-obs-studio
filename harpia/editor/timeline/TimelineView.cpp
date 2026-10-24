@@ -2926,8 +2926,18 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 			return;
 		}
 		if (clip >= 0) {
+			// Make the clicked member primary without dropping the old primary
+			// from a multi-selection. A click outside it starts a new selection.
+			if (isSelected(track, clip)) {
+				if (selTrack_ >= 0 && selClip_ >= 0 && (selTrack_ != track || selClip_ != clip))
+					extraSel_.insert({selTrack_, selClip_});
+				extraSel_.remove({track, clip});
+			} else {
+				extraSel_.clear();
+			}
 			selTrack_ = track;
 			selClip_ = clip;
+			selTransition_ = false;
 			emit selectionChanged(selTrack_, selClip_);
 			update();
 			showClipMenu(track, clip, e->globalPosition().toPoint(), xToMs(pos.x()));
@@ -3985,6 +3995,53 @@ void TimelineView::applyToSelection(const std::function<void(TlClip &)> &fn)
 	emit clipsChanged();
 }
 
+QVector<QPair<int, int>> TimelineView::selectedVideoClips() const
+{
+	QVector<QPair<int, int>> videos;
+	for (const auto &p : selectedPairs()) {
+		const TlTrack &track = model_.tracks[p.first];
+		const TlClip &c = track.clips[p.second];
+		// Detached audio uses Type::Video too, but has no video to trim here.
+		if (!track.locked && track.kind == TlTrack::Kind::Video && c.type == TlClip::Type::Video &&
+		    c.srcLenMs() > 0)
+			videos.append(p);
+	}
+	return videos;
+}
+
+qint64 TimelineView::selectedVideoDurationLimitMs() const
+{
+	qint64 limit = 0;
+	for (const auto &p : selectedVideoClips()) {
+		const qint64 duration = model_.tracks[p.first].clips[p.second].outDurationMs();
+		limit = limit == 0 ? duration : std::min(limit, duration);
+	}
+	return limit;
+}
+
+int TimelineView::trimSelectedVideosToDuration(qint64 durationMs)
+{
+	if (durationMs < kMinClipMs || durationMs > selectedVideoDurationLimitMs())
+		return 0;
+	int changed = 0;
+	for (const auto &p : selectedVideoClips()) {
+		TlClip &c = model_.tracks[p.first].clips[p.second];
+		// The dialog speaks in timeline time. Convert through each clip's own
+		// speed, retaining its source in-point and never extending its footage.
+		const qint64 end = std::min(c.srcEndMs, c.srcAtOutput(c.outStartMs + durationMs));
+		if (end == c.srcEndMs)
+			continue;
+		c.srcEndMs = end;
+		c.clampFades();
+		++changed;
+	}
+	if (changed) {
+		update();
+		commitEdit();
+	}
+	return changed;
+}
+
 QVector<QPair<int, int>> TimelineView::selectedPairs() const
 {
 	// A selection can outlive the clips it names -- undo swaps the whole model
@@ -4497,6 +4554,19 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 			"Ctrl+Z brings the previous order back."));
 		disableBecause(randomSel, !locked, lockedWhy);
 	}
+	QAction *setDuration = nullptr;
+	const auto videos = selectedVideoClips();
+	const qint64 durationLimit = selectedVideoDurationLimitMs();
+	if (inSel && menuClip.type == TlClip::Type::Video &&
+	    model_.tracks[track].kind == TlTrack::Kind::Video && videos.size() > 1) {
+		setDuration = menu.addAction(QStringLiteral("Set duration…  (%1 video clips)").arg(videos.size()));
+		setDuration->setToolTip(QStringLiteral(
+			"Trim the selected videos to the same duration, up to the shortest selected clip. "
+			"Their start times and playback speeds stay the same. Locked tracks are not changed."));
+		disableBecause(setDuration, !locked && durationLimit >= kMinClipMs,
+			       locked ? lockedWhy
+				      : QStringLiteral("The shortest selected video is already shorter than 0.1 seconds."));
+	}
 	// An effect clip animates its own parameters, not a transform, so the
 	// transform keyframe editor would be empty and misleading.
 	disableBecause(keys, !locked && !isFx,
@@ -4724,6 +4794,26 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	disableBecause(del, !locked, lockedWhy);
 	explainDisabled(&menu);
 	QAction *chosen = menu.exec(globalPos);
+	if (setDuration && chosen == setDuration) {
+		QInputDialog dialog(this);
+		dialog.setObjectName(QStringLiteral("setClipDurationDialog"));
+		dialog.setWindowTitle(QStringLiteral("Set selected clips' duration"));
+		dialog.setInputMode(QInputDialog::DoubleInput);
+		dialog.setLabelText(QStringLiteral(
+			"Duration in seconds for %1 video clips:\n"
+			"Maximum: %2 s (the shortest selected clip).\n"
+			"Trim from the end; keep start times and playback speeds.")
+					    .arg(videos.size())
+					    .arg(durationLimit / 1000.0, 0, 'f', 3));
+		dialog.setDoubleDecimals(3);
+		dialog.setDoubleRange(kMinClipMs / 1000.0, durationLimit / 1000.0);
+		dialog.setDoubleStep(0.1);
+		dialog.setDoubleValue(durationLimit / 1000.0);
+		dialog.setOkButtonText(QStringLiteral("Trim clips"));
+		if (dialog.exec() == QDialog::Accepted)
+			trimSelectedVideosToDuration(qint64(std::llround(dialog.doubleValue() * 1000.0)));
+		return;
+	}
 	if (chosen == slip) {
 		// The clip is the selection, alone: the Inspector shows what is being
 		// slipped, and nothing else is carried along.

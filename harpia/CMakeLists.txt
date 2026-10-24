@@ -295,6 +295,11 @@ target_sources(
     editor/SystemAudioCapture.hpp
     editor/WavSilence.cpp
     editor/WavSilence.hpp
+    editor/SilenceTrim.cpp
+    editor/SilenceTrim.hpp
+    editor/SilenceTrimDialog.cpp
+    editor/SilenceTrimDialog.hpp
+    editor/SocialSafeAreas.hpp
     editor/LevelMeter.cpp
     editor/LevelMeter.hpp
     editor/VoiceoverTrack.cpp

@@ -51,6 +51,8 @@
 #include "TimelineThumbs.hpp"
 #include "timeline/TextStyleJson.hpp"
 #include "timeline/TextStylePresets.hpp"
+#include "SilenceTrim.hpp"
+#include "SilenceTrimDialog.hpp"
 #include "timeline/FrameSignature.hpp"
 #include "TrackEditor.hpp"
 #include "VoiceoverMixer.hpp"
@@ -130,6 +132,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QAction>
+#include <QActionGroup>
+#include <QColorDialog>
 #include <QColorDialog>
 #include <QFontComboBox>
 #include <QInputDialog>
@@ -7184,6 +7188,8 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	// Built-in social styles and the user's own saved looks share one picker.
 	auto *presetRow = new QHBoxLayout;
 	textPresetCombo_ = new QComboBox(textBox_);
+	textPresetCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+	textPresetCombo_->setMinimumContentsLength(8);
 	textPresetCombo_->setObjectName(QStringLiteral("textStylePreset"));
 	textPresetCombo_->setToolTip(
 		QStringLiteral("Choose a social media style or one of your saved styles. Applies to selected captions and keeps their words."));
@@ -7396,6 +7402,40 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		refreshVariationPresets();
 	}
 	tv->addWidget(variationsBox_);
+
+	auto *animationForm = new QFormLayout;
+	animationForm->setContentsMargins(0, 0, 0, 0);
+	animationForm->setHorizontalSpacing(8);
+	animationForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
+	captionAnimationCombo_ = new QComboBox(textBox_);
+	captionAnimationCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+	captionAnimationCombo_->setMinimumContentsLength(8);
+	captionAnimationCombo_->setObjectName(QStringLiteral("captionAnimation"));
+	captionAnimationCombo_->addItems({QStringLiteral("Whole phrase"), QStringLiteral("One word at a time"),
+		QStringLiteral("Build up word by word"), QStringLiteral("Highlight current word"),
+		QStringLiteral("Highlight spoken words")});
+	captionAnimationCombo_->setToolTip(QStringLiteral(
+		"Animate the selected captions using spoken word timings. Typed captions use an even pace. "
+		"Use the text colour button to give individual keywords their own colour."));
+	animationForm->addRow(QStringLiteral("Animation"), captionAnimationCombo_);
+	connect(captionAnimationCombo_, &QComboBox::currentIndexChanged, this, [this](int mode) {
+		if (!syncingClip_ && mode >= 0)
+			setCaptionAnimationMode(mode);
+	});
+	captionHighlightColor_ = new QPushButton(textBox_);
+	captionHighlightColor_->setObjectName(QStringLiteral("captionHighlightColor"));
+	captionHighlightColor_->setToolTip(QStringLiteral("Colour of the highlighted spoken word or words"));
+	animationForm->addRow(QStringLiteral("Highlight colour"), captionHighlightColor_);
+	connect(captionHighlightColor_, &QPushButton::clicked, this, &VideoEditorWindow::pickCaptionHighlightColor);
+	captionPopCheck_ = new QCheckBox(QStringLiteral("Subtle pop on each word"), textBox_);
+	captionPopCheck_->setObjectName(QStringLiteral("captionWordPop"));
+	captionPopCheck_->setToolTip(QStringLiteral("Give each spoken word a short, gentle zoom, then return to the caption's normal size."));
+	animationForm->addRow(captionPopCheck_);
+	connect(captionPopCheck_, &QCheckBox::toggled, this, [this](bool enabled) {
+		if (!syncingClip_)
+			setCaptionPopEnabled(enabled);
+	});
+	tv->addLayout(animationForm);
 
 	fontCombo_ = new QFontComboBox(textBox_);
 	tv->addWidget(fontCombo_);
@@ -7789,6 +7829,18 @@ void VideoEditorWindow::pickTextColor(const QString &title, QColor TlText::*fiel
 }
 
 namespace {
+ComponentInstance &ensureCaptionControlComponent(TlClip &clip, const QString &typeId)
+{
+	for (ComponentInstance &component : clip.components)
+		if (component.typeId == typeId)
+			return component;
+	ComponentInstance component;
+	component.typeId = typeId;
+	component.instanceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+	clip.components.append(component);
+	return clip.components.last();
+}
+
 // A batch edit is STYLE only. Every caption keeps its own words whatever the
 // edit was: the Inspector's text fields hold one caption's text in a batch,
 // and anything that reached them (a quick-tag button did) used to write that
@@ -7808,6 +7860,62 @@ std::function<void(TlClip &)> styleOnly(const std::function<void(TlClip &)> &fn)
 	};
 }
 } // namespace
+
+void VideoEditorWindow::setCaptionAnimationMode(int mode)
+{
+	mode = std::clamp(mode, 0, 4);
+	commitSnapshot();
+	editTextStyle([mode](TlClip &clip) {
+		if (clip.type != TlClip::Type::Text)
+			return;
+		if (mode == 0 && std::none_of(clip.components.begin(), clip.components.end(), [](const ComponentInstance &ci) {
+			return ci.typeId == QStringLiteral("harpia.subtitle");
+		}))
+			return;
+		ComponentInstance &component = ensureCaptionControlComponent(clip, QStringLiteral("harpia.subtitle"));
+		component.enabled = true;
+		component.props.insert(QStringLiteral("mode"), mode);
+		component.keys.remove(QStringLiteral("mode"));
+	});
+	commitSnapshot();
+}
+
+void VideoEditorWindow::setCaptionPopEnabled(bool enabled)
+{
+	commitSnapshot();
+	editTextStyle([enabled](TlClip &clip) {
+		if (clip.type != TlClip::Type::Text)
+			return;
+		if (enabled) {
+			ensureCaptionControlComponent(clip, QStringLiteral("harpia.captionPop")).enabled = true;
+		} else {
+			for (ComponentInstance &component : clip.components)
+				if (component.typeId == QStringLiteral("harpia.captionPop"))
+					component.enabled = false;
+		}
+	});
+	commitSnapshot();
+}
+
+void VideoEditorWindow::pickCaptionHighlightColor()
+{
+	if (!inspectedClip())
+		return;
+	const QColor original = captionHighlightColor_->property("harpiaColor").value<QColor>();
+	const QColor chosen = QColorDialog::getColor(original.isValid() ? original : QColor(QStringLiteral("#ffe45e")),
+		this, QStringLiteral("Caption highlight colour"));
+	if (!chosen.isValid())
+		return;
+	commitSnapshot();
+	editTextStyle([chosen](TlClip &clip) {
+		if (clip.type != TlClip::Type::Text)
+			return;
+		ComponentInstance &component = ensureCaptionControlComponent(clip, QStringLiteral("harpia.subtitle"));
+		component.props.insert(QStringLiteral("activeColor"), chosen);
+		component.keys.remove(QStringLiteral("activeColor"));
+	});
+	commitSnapshot();
+}
 
 QVector<QPair<int, int>> VideoEditorWindow::selectedTextBatch() const
 {
@@ -8227,6 +8335,31 @@ void VideoEditorWindow::syncClipInspector()
 void VideoEditorWindow::syncTextInspector(const TlClip &c)
 {
 	refreshTextPresets();
+	const ComponentInstance *subtitle = nullptr;
+	bool popEnabled = false;
+	for (const ComponentInstance &component : c.components) {
+		if (component.typeId == QStringLiteral("harpia.subtitle") && !subtitle)
+			subtitle = &component;
+		if (component.typeId == QStringLiteral("harpia.captionPop") && component.enabled)
+			popEnabled = true;
+	}
+	int animationMode = 0;
+	QColor activeColor(QStringLiteral("#ffe45e"));
+	if (subtitle) {
+		const qint64 at = std::clamp<qint64>(timelinePlayheadMs() - c.outStartMs, 0, c.outDurationMs());
+		const ComponentType *type = ComponentRegistry::instance().find(subtitle->typeId);
+		const QVariant mode = type ? propAt(*type, *subtitle, QStringLiteral("mode"), at)
+					   : subtitle->props.value(QStringLiteral("mode"), 0);
+		animationMode = subtitle->enabled ? std::clamp(mode.toInt(), 0, 4) : 0;
+		const QVariant colour = type ? propAt(*type, *subtitle, QStringLiteral("activeColor"), at)
+					     : subtitle->props.value(QStringLiteral("activeColor"), activeColor);
+		activeColor = colour.canConvert<QColor>() ? colour.value<QColor>() : QColor::fromRgba(colour.toUInt());
+	}
+	captionAnimationCombo_->setCurrentIndex(animationMode);
+	captionPopCheck_->setChecked(popEnabled);
+	captionHighlightColor_->setEnabled(animationMode >= 3);
+	styleSwatch(captionHighlightColor_, activeColor);
+	captionHighlightColor_->setProperty("harpiaColor", activeColor);
 	if (textEdit_->toPlainText() != c.text.text)
 		textEdit_->setPlainText(c.text.text);
 	syncVariationsInspector(c);
@@ -8830,6 +8963,31 @@ void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
 	panelToggle(QStringLiteral("Sources"), sourcesBtn_, nullptr);
 	panelToggle(QStringLiteral("Effects"), effectsBtn_, nullptr);
 	panelToggle(QStringLiteral("Inspector"), inspectorBtn_, "view.inspector");
+	QMenu *safeAreas = view->addMenu(QStringLiteral("Social safe areas"));
+	safeAreas->setToolTipsVisible(true);
+	auto *safeAreaGroup = new QActionGroup(safeAreas);
+	safeAreaGroup->setExclusive(true);
+	QSettings viewSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	const int storedGuide = viewSettings.value(QStringLiteral("editor/socialSafeArea"), 0).toInt();
+	const int guide = storedGuide >= 0 && storedGuide <= 3 ? storedGuide : 0;
+	canvas_->setSocialSafeArea(SocialSafeArea(guide));
+	const QStringList safeNames{QStringLiteral("Off"), QStringLiteral("TikTok"),
+		QStringLiteral("Instagram Reels"), QStringLiteral("YouTube Shorts")};
+	const QStringList safeObjects{QStringLiteral("socialSafeAreaOff"), QStringLiteral("socialSafeAreaTikTok"),
+		QStringLiteral("socialSafeAreaReels"), QStringLiteral("socialSafeAreaShorts")};
+	for (int i = 0; i < safeNames.size(); ++i) {
+		QAction *action = safeAreas->addAction(safeNames[i]);
+		action->setObjectName(safeObjects[i]);
+		action->setCheckable(true);
+		action->setChecked(i == guide);
+		action->setToolTip(QStringLiteral("Approximate platform interface margins. Preview guide only; never included in exports."));
+		safeAreaGroup->addAction(action);
+		connect(action, &QAction::triggered, this, [this, i]() {
+			canvas_->setSocialSafeArea(SocialSafeArea(i));
+			QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+				.setValue(QStringLiteral("editor/socialSafeArea"), i);
+		});
+	}
 	view->addSeparator();
 	connect(keyed(fullOnly(view->addAction(QStringLiteral("Zoom timeline to fit"))), "timeline.fit"),
 		&QAction::triggered, this, run("timeline.fit"));
@@ -8841,6 +8999,11 @@ void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
 
 	// ---- Tools ----
 	QMenu *tools = menuBar_->addMenu(QStringLiteral("&Tools"));
+	QAction *silence = fullOnly(tools->addAction(QStringLiteral("Trim silence…")));
+	silence->setObjectName(QStringLiteral("trimSilenceAction"));
+	silence->setToolTip(QStringLiteral("Review long pauses, preview the trimmed result, then ripple-cut every track together as one undo action."));
+	connect(silence, &QAction::triggered, this, &VideoEditorWindow::openSilenceTrim);
+	tools->addSeparator();
 	connect(keyed(tools->addAction(QStringLiteral("Keyboard shortcuts…")), "view.shortcuts"), &QAction::triggered,
 		this, &VideoEditorWindow::openShortcutPanel);
 	connect(tools->addAction(QStringLiteral("Developer panel")), &QAction::triggered, this, [this]() {
@@ -8888,6 +9051,83 @@ void VideoEditorWindow::refreshMenuLabels()
 		const QString base = a->text().section(QLatin1Char('\t'), 0, 0);
 		a->setText(withShortcut(base, shortcuts_->displayText(pr.second)));
 	}
+}
+
+void VideoEditorWindow::openSilenceTrim()
+{
+	if (!fullEdit() || !timelineView_ || timelineView_->model().isEmpty()) {
+		QMessageBox::information(this, QStringLiteral("Trim silence"),
+			QStringLiteral("Add video or audio to the Full Editing timeline first."));
+		return;
+	}
+	stopPlayback();
+	commitSnapshot();
+	const TimelineModel original = timelineView_->model();
+	const TlSelection selection = timelineView_->selectionState();
+	const qint64 playhead = timelinePlayheadMs();
+	bool previewing = false;
+	auto restorePreview = [&]() {
+		if (!previewing)
+			return;
+		stopPlayback();
+		const bool wasRestoring = restoring_;
+		restoring_ = true;
+		timelineView_->setModelQuiet(original);
+		timelineView_->setSelectionState(selection);
+		timelineView_->setPlayhead(playhead);
+		restoring_ = wasRestoring;
+		previewing = false;
+		scriptScanDirty_ = true;
+		invalidateAudioMix();
+		updateInfoLabel();
+		syncPreviewTransformTarget();
+		syncClipInspector();
+		showTimelineFrame(playhead);
+	};
+	SilenceTrimDialog dialog(original, [this](int id) {
+		const EditorSource *source = sourceById(id);
+		return source ? source->path : QString();
+	}, timelineView_->selectedPairs(), this);
+	connect(&dialog, &SilenceTrimDialog::previewStopped, this, restorePreview);
+	connect(&dialog, &SilenceTrimDialog::previewRequested, this, [&](const QVector<TlSpan> &cuts) {
+		const auto result = silence_trim::apply(original, cuts);
+		if (!result.ok())
+			return; // the dialog presents the same validation before enabling Preview
+		stopPlayback();
+		const bool wasRestoring = restoring_;
+		restoring_ = true;
+		timelineView_->setModelQuiet(result.model);
+		timelineView_->setSelectionState(TlSelection{});
+		timelineView_->setPlayhead(0);
+		restoring_ = wasRestoring;
+		previewing = true;
+		scriptScanDirty_ = true;
+		invalidateAudioMix();
+		updateInfoLabel();
+		syncPreviewTransformTarget();
+		showTimelineFrame(0);
+		onPlayPause();
+	});
+	// Keep the picture visible while the review window controls its playback.
+	dialog.adjustSize();
+	dialog.move(mapToGlobal(QPoint(std::max(0, width() - dialog.width() - 16),
+		std::max(0, height() - dialog.height() - 24))));
+	const int answer = dialog.exec();
+	restorePreview();
+	if (answer != QDialog::Accepted)
+		return;
+	const auto result = silence_trim::apply(original, dialog.selectedCuts());
+	if (!result.ok()) {
+		warnAndLog(this, QStringLiteral("Trim silence"), result.error);
+		return;
+	}
+	if (result.removedMs <= 0)
+		return;
+	timelineView_->setModelAndCommit(result.model);
+	const qint64 at = silence_trim::mapTime(playhead, result.removed);
+	timelineView_->setPlayhead(at);
+	showTimelineFrame(at);
+	syncClipInspector();
 }
 
 void VideoEditorWindow::showAbout()

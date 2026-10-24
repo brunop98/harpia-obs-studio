@@ -438,7 +438,26 @@ public:
 		if (!io.textValid || io.text.isEmpty())
 			return;
 		const int mode = std::clamp(int(std::lround(ctx.f("mode", 0.0))), 0, kSubtitleModeCount - 1);
-		io.text = subtitleTextAt(io.text, io.words, ctx.tMs, SubtitleMode(mode), ctx.durMs);
+		const auto resolved = timedCaptionWords(io.text, io.words, ctx.durMs);
+		const QVariant color = ctx.p.value(QStringLiteral("activeColor"));
+		const QColor active = color.canConvert<QColor>() ? color.value<QColor>()
+							     : QColor::fromRgba(QRgb(color.toUInt()));
+		io.text = subtitleTextAt(io.text, io.words, ctx.tMs, SubtitleMode(mode), ctx.durMs,
+					active.isValid() && color.isValid() ? active : QColor(255, 228, 94));
+		// This is the frame's own state, never the stored clip: downstream
+		// caption motion needs the complete phrase's clock after a reveal.
+		io.words = resolved;
+	}
+};
+
+class CaptionPopComponent : public IComponent {
+public:
+	void evaluate(const EvalContext &ctx, ClipState &io) const override
+	{
+		if (!io.textValid)
+			return;
+		io.xf.scale *= captionPopScaleAt(io.text, io.words, ctx.tMs, ctx.durMs,
+			qint64(std::llround(ctx.f("durationMs", 120.0))), ctx.f("strength", 0.10));
 	}
 };
 
@@ -620,16 +639,39 @@ void registerBuiltinComponents(ComponentRegistry &reg)
 		t.clipKinds = ClipKindText;
 		t.help = QStringLiteral(
 			"How a generated subtitle appears: the whole phrase at once, one word at a "
-			"time as it is spoken, or the phrase building up word by word. Uses the "
+			"time, building up, or highlighting the words as they are spoken. Uses the "
 			"spoken times the transcription gave each word. Fix a typo in the caption "
-			"and the timing is kept; rewrite it and the words are paced evenly.");
+			"and the timing is kept; rewrite it and the words are paced evenly. "
+			"Existing inline word colours remain editable.");
 		t.props = {{QStringLiteral("mode"), QStringLiteral("Show"), PropType::Choice, 0.0,
 			    double(kSubtitleModeCount - 1), 0.0, true,
 			    QStringLiteral("One word at a time reads like the speaker; building up "
 					   "keeps the phrase for re-reading."),
 			    {QStringLiteral("Whole phrase"), QStringLiteral("One word at a time"),
-			     QStringLiteral("Build up word by word")}}};
+			     QStringLiteral("Build up word by word"), QStringLiteral("Highlight current word"),
+			     QStringLiteral("Highlight spoken words")}},
+			   {QStringLiteral("activeColor"), QStringLiteral("Highlight colour"), PropType::Color,
+			    0.0, double(0xffffffffu), double(0xffffe45eu), true,
+			    QStringLiteral("Colour of the current or already spoken words. Other words keep their own colour.")}};
 		t.make = [] { return std::unique_ptr<IComponent>(new TextSubtitleComponent); };
+		reg.add(t);
+	}
+	{
+		ComponentType t;
+		t.id = QStringLiteral("harpia.captionPop");
+		t.displayName = QStringLiteral("Caption Pop");
+		t.category = QStringLiteral("Text");
+		t.stage = Stage::Transform;
+		t.clipKinds = ClipKindText;
+		t.help = QStringLiteral("A subtle zoom pulse as each word begins. Uses spoken word times, or even pacing "
+					"for hand-typed captions. Combines with the caption's own position, zoom and keyframes.");
+		t.props = {
+			{QStringLiteral("durationMs"), QStringLiteral("Pop duration (ms)"), PropType::Int,
+			 40.0, 500.0, 120.0, true, QStringLiteral("How quickly each word's pulse settles. Shorter gaps finish the pulse sooner.")},
+			{QStringLiteral("strength"), QStringLiteral("Pop amount"), PropType::Float,
+			 0.0, 0.5, 0.10, true, QStringLiteral("Extra zoom at the peak: 0.10 is a subtle ten percent pulse.")},
+		};
+		t.make = [] { return std::unique_ptr<IComponent>(new CaptionPopComponent); };
 		reg.add(t);
 	}
 	{

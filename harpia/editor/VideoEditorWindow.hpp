@@ -331,6 +331,7 @@ private:
 
 private slots:
 	void onExportFinished(bool ok, bool canceled, const QString &err);
+	void openSilenceTrim();
 	void onPlayPause();
 	void onResetMarker(); // move the playhead back to the start
 	void onPlayTick();
@@ -1140,6 +1141,12 @@ private:
 	void applyTextPreset(const QString &key);
 	void saveTextPresetFromSelection();
 	void deleteSelectedTextPreset();
+	void setCaptionAnimationMode(int mode);
+	void setCaptionPopEnabled(bool enabled);
+	void pickCaptionHighlightColor();
+	QComboBox *captionAnimationCombo_ = nullptr;
+	QCheckBox *captionPopCheck_ = nullptr;
+	QPushButton *captionHighlightColor_ = nullptr;
 
 	QWidget *videoClipBox_ = nullptr;
 	QWidget *audioClipBox_ = nullptr;

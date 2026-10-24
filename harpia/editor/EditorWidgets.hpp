@@ -1,6 +1,7 @@
 #pragma once
 
 #include "timeline/Spotlight.hpp"
+#include "SocialSafeAreas.hpp"
 
 #include <QCursor>
 #include <QImage>
@@ -31,6 +32,9 @@ public:
 	void setFrame(const QImage &img);
 	// What is on screen right now (empty before the first frame).
 	const QImage &currentFrame() const { return frame_; }
+	// Preview-only platform interface guides, mapped to the output canvas.
+	void setSocialSafeArea(SocialSafeArea mode);
+	SocialSafeArea socialSafeArea() const { return socialSafeArea_; }
 
 	void setCropEnabled(bool on);
 	bool cropEnabled() const { return cropEnabled_; }
@@ -255,6 +259,7 @@ private:
 	double maskStartAngle_ = 0; // pointer angle at press, for the rotate grip
 
 	bool transformMode_ = false;
+	SocialSafeArea socialSafeArea_ = SocialSafeArea::Off;
 	// Centre guides, on only while a drag is actually snapped.
 	bool guideX_ = false;
 	bool guideY_ = false;

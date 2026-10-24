@@ -271,15 +271,21 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 
 # Rich text in captions (<b>, <color=...>, <size=...>): the parser, drawn
 # through the compositor, the typewriter and the tag-free labels.
+for name in richtext captionanimation; do
 g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
-	"$HERE/richtext_test.cpp" \
+	"$HERE/${name}_test.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/component/ScriptComponent.cpp" \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
-	-o "$WORK/richtext_test" "$QJSLIB/libqjs.a" $LF
+	-o "$WORK/${name}_test" "$QJSLIB/libqjs.a" $LF
+done
+
+# Silence detection and globally synchronized timeline cuts do not rewrite media.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/silencetrim_test.cpp" "$H/editor/SilenceTrim.cpp" -o "$WORK/silencetrim_test" $LF
 
 # Social media text styles use installed fonts and preserve caption content
 # when applied or saved through the existing style/project JSON format.
@@ -815,6 +821,14 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$WORK/moc_EditorWidgets.cpp" "$WORK/moc_ParamSlider2.cpp" \
 	-o "$WORK/gripcursor_test" $LF
 
+# Social interface margins only shade the widget; clean frames and drags remain unchanged.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/socialsafeareas_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/ParamSlider.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
+	"$WORK/moc_EditorWidgets.cpp" "$WORK/moc_ParamSlider2.cpp" \
+	-o "$WORK/socialsafeareas_test" $LF
+
 # The floating "where am I" overview for zoomed-in timelines: the mapping from
 # project time to the red viewport box, and the show/hide rules.
 "$MOC" -I"$H" "$H/editor/TimelineOverview.hpp" -o "$WORK/moc_TimelineOverview.cpp"
@@ -1108,6 +1122,9 @@ QT_QPA_PLATFORM=offscreen "$WORK/batchplan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textvariations_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/clipvariations_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/richtext_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/captionanimation_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/silencetrim_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/socialsafeareas_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textstylepresets_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/curvepath_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keyorder_test" || rc=1

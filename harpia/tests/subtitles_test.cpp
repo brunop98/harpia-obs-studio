@@ -204,9 +204,9 @@ int main(int argc, char **argv)
 		ComponentRegistry reg;
 		registerBuiltinComponents(reg);
 		const ComponentType *t = reg.find(QStringLiteral("harpia.subtitle"));
-		ok(t && t->stage == Stage::Source && t->clipKinds == unsigned(ClipKindText) && t->props.size() == 1 &&
-			   t->props[0].choices.size() == 3,
-		   "Subtitle is a Source component for captions with one three-way choice");
+		ok(t && t->stage == Stage::Source && t->clipKinds == unsigned(ClipKindText) && t->props.size() == 2 &&
+			   t->props[0].choices.size() == 5 && t->props[1].type == PropType::Color,
+		   "Subtitle is a Source component with five display modes and a highlight colour");
 		QVector<ComponentInstance> list;
 		ComponentInstance ci;
 		ci.typeId = QStringLiteral("harpia.subtitle");

@@ -52,6 +52,16 @@ void PreviewCanvas::setFrame(const QImage &img)
 	update();
 }
 
+void PreviewCanvas::setSocialSafeArea(SocialSafeArea mode)
+{
+	if (mode < SocialSafeArea::Off || mode > SocialSafeArea::YouTubeShorts)
+		mode = SocialSafeArea::Off;
+	if (socialSafeArea_ == mode)
+		return;
+	socialSafeArea_ = mode;
+	update();
+}
+
 void PreviewCanvas::setCropEnabled(bool on)
 {
 	cropEnabled_ = on;
@@ -152,6 +162,38 @@ void PreviewCanvas::paintEvent(QPaintEvent *)
 			scaledForKey_ = frame_.cacheKey();
 		}
 		p.drawPixmap(fr.topLeft(), scaledFrame_);
+	}
+
+	// Guides belong to this widget, not frame_: a thumbnail, clipboard copy
+	// or export always receives the clean video pixels. Paint before the edit
+	// handles so a shaded interface margin never obscures their controls.
+	if (socialSafeArea_ != SocialSafeArea::Off && !d.isEmpty() && vw_ > 0 && vh_ > 0) {
+		const SocialSafeAreaLayout layout = socialSafeAreaLayout(socialSafeArea_);
+		const QRectF safe = mapSocialSafeRect(layout.content, QRectF(d));
+		p.save();
+		p.setClipRect(d);
+		for (const QRectF &area : layout.interfaceAreas)
+			p.fillRect(mapSocialSafeRect(area, QRectF(d)), QColor(0, 0, 0, 72));
+		p.setRenderHint(QPainter::Antialiasing, true);
+		p.setPen(QPen(QColor(0xff, 0xd0, 0x68, 230), 1.2, Qt::DashLine));
+		p.setBrush(Qt::NoBrush);
+		p.drawRect(safe);
+		if (d.width() >= 160 && d.height() >= 100) {
+			QFont labelFont = font();
+			labelFont.setPixelSize(11);
+			p.setFont(labelFont);
+			const QString label = layout.label + QStringLiteral(" safe area (approx.)");
+			const int available = d.width() - 16;
+			const QString shown = p.fontMetrics().elidedText(label, Qt::ElideRight, available - 10);
+			const QRectF labelRect(d.x() + 8, d.y() + 7,
+					       std::min(available, p.fontMetrics().horizontalAdvance(shown) + 10), 20);
+			p.setPen(Qt::NoPen);
+			p.setBrush(QColor(0, 0, 0, 180));
+			p.drawRoundedRect(labelRect, 3, 3);
+			p.setPen(QColor(0xff, 0xe2, 0xa3));
+			p.drawText(labelRect, Qt::AlignCenter, shown);
+		}
+		p.restore();
 	}
 
 	// Full editing: dashed outline of the clip being manipulated (canvas px ->

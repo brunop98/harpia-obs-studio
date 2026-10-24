@@ -442,8 +442,16 @@ public:
 		const QVariant color = ctx.p.value(QStringLiteral("activeColor"));
 		const QColor active = color.canConvert<QColor>() ? color.value<QColor>()
 							     : QColor::fromRgba(QRgb(color.toUInt()));
-		io.text = subtitleTextAt(io.text, io.words, ctx.tMs, SubtitleMode(mode), ctx.durMs,
-					active.isValid() && color.isValid() ? active : QColor(255, 228, 94));
+		if (mode == int(SubtitleMode::HighlightCurrent) || mode == int(SubtitleMode::HighlightSpoken)) {
+			// The complete visible-word clock is already needed by downstream
+			// motion. Reuse it rather than parsing and reconciling this caption
+			// a second time just to choose the word's colour.
+			io.text = caption_animation::highlight(io.text, resolved, ctx.tMs,
+				mode == int(SubtitleMode::HighlightSpoken),
+				active.isValid() && color.isValid() ? active : QColor(255, 228, 94));
+		} else {
+			io.text = subtitleTextAt(io.text, io.words, ctx.tMs, SubtitleMode(mode), ctx.durMs);
+		}
 		// This is the frame's own state, never the stored clip: downstream
 		// caption motion needs the complete phrase's clock after a reveal.
 		io.words = resolved;

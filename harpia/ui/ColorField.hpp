@@ -65,10 +65,14 @@ inline void paintColorSwatch(QPushButton *b, const QColor &c, bool showHex = tru
 	// where a yellow is already blinding, and this label sits ON the colour.
 	const QString fg = (use.lightness() > 140) ? QStringLiteral("#101214")
 						   : QStringLiteral("#f0f0f0");
-	b->setStyleSheet(QStringLiteral("QPushButton{background:%1; color:%2; "
-					"border:1px solid #4a4f58; border-radius:4px; padding:4px 8px;}"
-					"QPushButton:hover{border:1px solid #6c9af5;}")
-				 .arg(use.name(QColor::HexRgb), fg));
+	const QString css = QStringLiteral("QPushButton{background:%1; color:%2; "
+					   "border:1px solid #4a4f58; border-radius:4px; padding:4px 8px;}"
+					   "QPushButton:hover{border:1px solid #6c9af5;}")
+				    .arg(use.name(QColor::HexRgb), fg);
+	// Playback refreshes property values even when they have not changed.
+	// Reapplying an identical stylesheet still makes Qt repolish the button.
+	if (b->styleSheet() != css)
+		b->setStyleSheet(css);
 }
 
 // A colour field standing for several selected things that do not agree. Shows
@@ -81,8 +85,10 @@ inline void paintMixedSwatch(QPushButton *b)
 	b->setProperty("harpiaColor", QColor());
 	b->setText(QStringLiteral("—"));
 	b->setToolTip(QStringLiteral("Different colours in this selection."));
-	b->setStyleSheet(QStringLiteral(
-		"QPushButton{border:1px solid #4a4f58; border-radius:4px; color:#8a8f98;}"));
+	const QString css = QStringLiteral(
+		"QPushButton{border:1px solid #4a4f58; border-radius:4px; color:#8a8f98;}");
+	if (b->styleSheet() != css)
+		b->setStyleSheet(css);
 }
 
 // Run a colour picker that previews live.

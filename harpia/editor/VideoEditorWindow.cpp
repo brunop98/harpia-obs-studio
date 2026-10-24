@@ -4843,15 +4843,19 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 	// clip's words swapped. Signed from the same copy, so a cached frame of the
 	// original text is never served for a variation, or the other way round.
 	const TimelineModel shownModel = previewModel();
-	const QByteArray sig = previewSignature(shownModel, outMs, renderSize, canvasSize);
+	QByteArray sig;
 	// Playback must also position its decoders, including when its first frame
 	// was already rendered by the scrub cache. Otherwise cold-start work is
 	// deferred until AFTER the playback clock has begun.
-	if (!playing_)
+	if (!playing_) {
+		// Playback neither reads nor writes this cache, so avoid serializing
+		// active clips and hashing a key that it would immediately discard.
+		sig = previewSignature(shownModel, outMs, renderSize, canvasSize);
 		if (const QImage *hit = previewFrames_.object(sig)) {
 			setPreviewFrame(*hit, outMs);
 			return;
 		}
+	}
 	frameCacheable_ = !playing_;
 	const QImage composed = TimelineCompositor::compose(shownModel, outMs, renderSize, fp, scriptEval_.get(),
 							    fps, canvasSize);
@@ -5478,9 +5482,10 @@ namespace {
 // A swatch button that opens a colour picker.
 void styleSwatch(QPushButton *b, const QColor &c)
 {
-	b->setStyleSheet(QStringLiteral("QPushButton{background:%1;border:1px solid #4a4f57;"
-					"min-width:36px;min-height:18px;}")
-				 .arg(c.name(QColor::HexRgb)));
+	const QString css = QStringLiteral("QPushButton{background:%1;border:1px solid #4a4f57;"
+					  "min-width:36px;min-height:18px;}").arg(c.name(QColor::HexRgb));
+	if (b->styleSheet() != css)
+		b->setStyleSheet(css);
 }
 } // namespace
 
@@ -10895,6 +10900,15 @@ void VideoEditorWindow::refreshTextPresets()
 {
 	if (!textPresetCombo_)
 		return;
+	// Read afresh so edits from another window or an external editor are seen.
+	// Only names affect these rows; applying a style still reads its current
+	// values from disk. Ordinary Inspector refreshes need not rebuild the list.
+	const auto saved = loadTextPresets();
+	const QStringList names = saved.keys();
+	if (textPresetListReady_ && displayedTextPresetNames_ == names)
+		return;
+	displayedTextPresetNames_ = names;
+	textPresetListReady_ = true;
 	const QString keep = textPresetCombo_->currentData().toString();
 	const QSignalBlocker b(textPresetCombo_);
 	textPresetCombo_->clear();
@@ -10905,7 +10919,6 @@ void VideoEditorWindow::refreshTextPresets()
 		textPresetCombo_->setItemData(textPresetCombo_->count() - 1, preset.description, Qt::ToolTipRole);
 		builtinNames << preset.name;
 	}
-	const auto saved = loadTextPresets();
 	if (!saved.isEmpty())
 		textPresetCombo_->insertSeparator(textPresetCombo_->count());
 	for (auto it = saved.constBegin(); it != saved.constEnd(); ++it) {
@@ -11840,7 +11853,6 @@ void VideoEditorWindow::updateInspector()
 	// The Spotlight panel's subject depends on what is selected, so it has to
 	// re-point on every selection change, not only when it is itself edited.
 	syncSpotlightInspector();
-	syncComponentPanel();
 	if (!inspector_)
 		return;
 	auto setRange = [this](qint64 inMs, qint64 outMs, double sp, qint64 outLen) {

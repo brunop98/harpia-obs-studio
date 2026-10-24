@@ -1134,6 +1134,8 @@ private:
 	// the caption's words), stored as readable JSON beside the other user files.
 	QComboBox *textPresetCombo_ = nullptr;
 	QPushButton *textPresetDelete_ = nullptr;
+	QStringList displayedTextPresetNames_;
+	bool textPresetListReady_ = false;
 	QString textPresetsPath() const;
 	QMap<QString, TlText> loadTextPresets() const;
 	void saveTextPresets(const QMap<QString, TlText> &presets) const;

@@ -34,7 +34,8 @@ constexpr int kSubtitleModeCount = 5;
 // The caption split into words, whitespace-separated, blanks dropped.
 inline QStringList subtitleWordsOf(const QString &caption)
 {
-	return caption.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+	static thread_local const QRegularExpression whitespace(QStringLiteral("\\s+"));
+	return caption.split(whitespace, Qt::SkipEmptyParts);
 }
 
 // The words with their times, reconciled with the caption as it stands now.
@@ -50,6 +51,14 @@ inline QVector<ClipWordTime> paceCaptionWords(const QStringList &words, const QV
 	if (words.isEmpty())
 		return out;
 	if (timed.size() == words.size()) {
+		bool sameText = true;
+		for (int i = 0; i < timed.size(); ++i)
+			if (timed.at(i).text != words.at(i)) {
+				sameText = false;
+				break;
+			}
+		if (sameText)
+			return timed; // keep the shared word clock when nothing needs rewriting
 		out = timed;
 		for (int i = 0; i < out.size(); ++i)
 			out[i].text = words[i];
@@ -89,9 +98,9 @@ inline QVector<ClipWordTime> timedCaptionWords(const QString &caption, const QVe
 					      qint64 fallbackSpanMs = 0)
 {
 	const QString plain = rich_text::plainText(caption);
-	const QStringList words = plain.split(
-		QRegularExpression(QStringLiteral("\\s+"), QRegularExpression::UseUnicodePropertiesOption),
-		Qt::SkipEmptyParts);
+	static thread_local const QRegularExpression whitespace(
+		QStringLiteral("\\s+"), QRegularExpression::UseUnicodePropertiesOption);
+	const QStringList words = plain.split(whitespace, Qt::SkipEmptyParts);
 	return paceCaptionWords(words, timed, fallbackSpanMs);
 }
 

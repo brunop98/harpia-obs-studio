@@ -283,6 +283,16 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	-o "$WORK/${name}_test" "$QJSLIB/libqjs.a" $LF
 done
 
+# Caption clock sharing and per-thread whitespace matching preserve edits and
+# concurrent preview/export evaluation without retaining stale caption content.
+g++ -std=c++17 -O1 -fPIC -pthread -I"$H" -I"$ROOT" $CF \
+	"$HERE/captionperf_test.cpp" -o "$WORK/captionperf_test" $LF
+
+# Repeated colour reads do not repolish widgets, while changed/mixed colours
+# still update their appearance and picker metadata.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/colorswatch_test.cpp" -o "$WORK/colorswatch_test" $LF
+
 # Silence detection and globally synchronized timeline cuts do not rewrite media.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/silencetrim_test.cpp" "$H/editor/SilenceTrim.cpp" -o "$WORK/silencetrim_test" $LF
@@ -1123,6 +1133,8 @@ QT_QPA_PLATFORM=offscreen "$WORK/textvariations_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/clipvariations_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/richtext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/captionanimation_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/captionperf_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/colorswatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/silencetrim_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/socialsafeareas_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textstylepresets_test" || rc=1

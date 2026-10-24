@@ -23,7 +23,8 @@ class ShareExportDialog : public QDialog {
 	Q_OBJECT
 public:
 	// Convenience: derive the `<name>_shared.mp4` path next to `inPath`, build the
-	// dialog and run it modally.
+	// dialog and run it modally. Discord instead creates a new `<name>_discord`
+	// folder (numbered if it already exists) containing all the MP4 parts.
 	static void runModal(const QString &inPath, ShareExporter::Level level, QWidget *parent);
 
 	ShareExportDialog(const QString &inPath, const QString &outPath, ShareExporter::Level level,
@@ -45,6 +46,7 @@ private:
 
 	QString inPath_;
 	QString outPath_;
+	QStringList outputFiles_;
 	ShareExporter::Level level_;
 	qint64 originalBytes_ = 0;
 	qint64 finalBytes_ = 0;

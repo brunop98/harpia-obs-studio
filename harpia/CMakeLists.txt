@@ -124,6 +124,8 @@ target_sources(
     core/Remuxer.hpp
     core/ShareExporter.cpp
     core/ShareExporter.hpp
+    core/ShareSplitter.cpp
+    core/ShareSplitter.hpp
     core/WebcamRecorder.cpp
     core/WebcamRecorder.hpp
     model/Preset.cpp

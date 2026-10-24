@@ -129,9 +129,15 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # preview decoder it hands the result to.
 "$MOC" -I"$H" "$H/editor/ProxyMedia.hpp" -o "$WORK/moc_ProxyMedia.cpp"
 "$MOC" -I"$H" "$H/core/ShareExporter.hpp" -o "$WORK/moc_ShareExporter.cpp"
+# Discord: real 49 MB files, independent playback, audio/video continuity,
+# smaller remainder, cancellation cleanup and existing-file protection.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/shareparts_test.cpp" "$H/core/ShareExporter.cpp" "$H/core/ShareSplitter.cpp" \
+	"$H/editor/HdrToSdr.cpp" "$WORK/moc_ShareExporter.cpp" \
+	-o "$WORK/shareparts_test" $LF
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/proxymedia_test.cpp" "$H/editor/ProxyMedia.cpp" "$H/editor/PreviewDecoder.cpp" \
-	"$H/editor/FrameSeeker.cpp" "$H/editor/HdrToSdr.cpp" "$H/core/ShareExporter.cpp" \
+	"$H/editor/FrameSeeker.cpp" "$H/editor/HdrToSdr.cpp" "$H/core/ShareExporter.cpp" "$H/core/ShareSplitter.cpp" \
 	"$WORK/moc_ProxyMedia.cpp" "$WORK/moc_ShareExporter.cpp" "$WORK/moc_PreviewDecoder.cpp" \
 	-o "$WORK/proxymedia_test" $LF
 
@@ -163,7 +169,7 @@ if [ ! -f "$QJSLIB/libqjs.a" ]; then # the same one-time build run_units.sh does
 fi
 mkdir -p "$WORK/win/obj" "$WORK/win/moc"
 ( cd "$H"
-  WSRCS=$(ls editor/*.cpp editor/*/*.cpp ui/*.cpp library/*.cpp core/ShareExporter.cpp core/AudioFileWriter.cpp platform/OsIntegrationStub.cpp tests/support/logger_stub.cpp | grep -v -E "ui/MainWindow.cpp|ui/WebcamPreview.cpp")
+  WSRCS=$(ls editor/*.cpp editor/*/*.cpp ui/*.cpp library/*.cpp core/ShareExporter.cpp core/ShareSplitter.cpp core/AudioFileWriter.cpp platform/OsIntegrationStub.cpp tests/support/logger_stub.cpp | grep -v -E "ui/MainWindow.cpp|ui/WebcamPreview.cpp")
   for h in $(grep -l Q_OBJECT editor/*.hpp editor/*/*.hpp ui/*.hpp library/*.hpp core/ShareExporter.hpp | grep -v -E "ui/MainWindow.hpp|ui/WebcamPreview.hpp"); do
 	"$MOC" -I"$H" "$h" -o "$WORK/win/moc/moc_$(echo "$h" | tr '/' '_' | sed 's/.hpp$//').cpp"
   done
@@ -172,6 +178,11 @@ mkdir -p "$WORK/win/obj" "$WORK/win/moc"
 	"$H" "$WCF" "$WORK" )
 rm -f "$WORK/win/libeditor.a"
 ar rcs "$WORK/win/libeditor.a" "$WORK"/win/obj/*.o
+# Discord's progress/summary, complete-file clipboard, and ordinary sharing.
+g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
+	"$HERE/shareexportdialog_test.cpp" \
+	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
+	-o "$WORK/shareexportdialog_test" $WLF
 # Preview grips and body drags must transform the whole selection, including
 # video/image clips and keyframed clips, with one undo step per gesture.
 g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
@@ -298,6 +309,8 @@ QT_QPA_PLATFORM=offscreen "$WORK/exportprogress_test" "$WORK" || rc=1
 "$WORK/hdrtosdr_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewdecoder_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/proxymedia_test" "$WORK" || rc=1
+"$WORK/shareparts_test" "$WORK" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/shareexportdialog_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/multicutplay_test" "$WORK" || rc=1
 # Settings go to a scratch home, so the test never touches real ones.
 mkdir -p "$WORK/home"

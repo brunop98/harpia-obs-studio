@@ -56,8 +56,15 @@ void ShareExportDialog::runModal(const QString &inPath, ShareExporter::Level lev
 {
 	const QFileInfo fi(inPath);
 	// Always MP4 for maximum compatibility; sit beside the source with _shared.
-	const QString outPath = fi.absolutePath() + QLatin1Char('/') + fi.completeBaseName() +
-				QStringLiteral("_shared.mp4");
+	QString outPath = fi.absolutePath() + QLatin1Char('/') + fi.completeBaseName() +
+			  QStringLiteral("_shared.mp4");
+	if (level == ShareExporter::Level::Discord) {
+		const QString base = fi.absolutePath() + QLatin1Char('/') + fi.completeBaseName() +
+				     QStringLiteral("_discord");
+		outPath = base;
+		for (int suffix = 2; QFileInfo::exists(outPath); ++suffix)
+			outPath = base + QStringLiteral("_%1").arg(suffix);
+	}
 	ShareExportDialog dlg(inPath, outPath, level, parent);
 	dlg.exec();
 }
@@ -85,7 +92,10 @@ ShareExportDialog::ShareExportDialog(const QString &inPath, const QString &outPa
 	titleLabel_->setStyleSheet(QStringLiteral("font-weight:bold;"));
 	pv->addWidget(titleLabel_);
 
-	auto *sub = new QLabel(QStringLiteral("Creating a compressed copy — the original is not changed."), prog);
+	auto *sub = new QLabel(level_ == ShareExporter::Level::Discord
+				     ? QStringLiteral("Creating numbered MP4 parts of at most 49 MB each. "
+						      "The original is not changed.")
+				     : QStringLiteral("Creating a compressed copy — the original is not changed."), prog);
 	sub->setStyleSheet(QStringLiteral("color:#8a8f98;"));
 	sub->setWordWrap(true);
 	pv->addWidget(sub);
@@ -127,6 +137,7 @@ ShareExportDialog::ShareExportDialog(const QString &inPath, const QString &outPa
 	exporter_ = new ShareExporter(this);
 	connect(exporter_, &ShareExporter::progress, this, &ShareExportDialog::onProgress);
 	connect(exporter_, &ShareExporter::finished, this, &ShareExportDialog::onFinished);
+	connect(exporter_, &ShareExporter::statusChanged, titleLabel_, &QLabel::setText);
 
 	// Kick off after the dialog is shown.
 	QMetaObject::invokeMethod(
@@ -172,7 +183,8 @@ void ShareExportDialog::onFinished(bool ok, bool canceled, const QString &error)
 
 	if (canceled || !ok) {
 		// Never leave a partial/failed file behind.
-		QFile::remove(outPath_);
+		if (level_ != ShareExporter::Level::Discord)
+			QFile::remove(outPath_);
 		if (!canceled) {
 			titleLabel_->setText(QStringLiteral("Could not create the sharing copy"));
 			titleLabel_->setStyleSheet(QStringLiteral("font-weight:bold; color:#e5484d;"));
@@ -187,7 +199,10 @@ void ShareExportDialog::onFinished(bool ok, bool canceled, const QString &error)
 		return;
 	}
 
-	finalBytes_ = QFileInfo(outPath_).size();
+	outputFiles_ = exporter_->outputFiles();
+	finalBytes_ = 0;
+	for (const QString &file : outputFiles_)
+		finalBytes_ += QFileInfo(file).size();
 	buildSummary();
 }
 
@@ -200,7 +215,9 @@ void ShareExportDialog::buildSummary()
 	v->setContentsMargins(18, 16, 18, 16);
 	v->setSpacing(10);
 
-	auto *title = new QLabel(QStringLiteral("Sharing copy ready"), page);
+	const bool discord = level_ == ShareExporter::Level::Discord;
+	auto *title = new QLabel(
+		discord ? QStringLiteral("Discord parts ready") : QStringLiteral("Sharing copy ready"), page);
 	title->setStyleSheet(QStringLiteral("font-weight:bold; color:#3fb950;"));
 	v->addWidget(title);
 
@@ -209,10 +226,18 @@ void ShareExportDialog::buildSummary()
 	summaryLabel_ = new QLabel(page);
 	summaryLabel_->setTextFormat(Qt::RichText);
 	summaryLabel_->setText(
-		QStringLiteral("Original: <b>%1</b><br>Optimized: <b>%2</b><br>Space saved: <b>%3%</b>")
+		(discord ? QStringLiteral("Original: <b>%1</b><br>All parts: <b>%2</b><br>Space saved: <b>%3%</b>")
+			 : QStringLiteral("Original: <b>%1</b><br>Optimized: <b>%2</b><br>Space saved: <b>%3%</b>"))
 			.arg(humanFileSize(originalBytes_), humanFileSize(finalBytes_))
 			.arg(savedPct, 0, 'f', 0));
 	v->addWidget(summaryLabel_);
+	if (discord) {
+		auto *partsLabel = new QLabel(
+			QStringLiteral("%1 numbered MP4 parts, each at most 49 MB. Send them in order; "
+				       "the last part contains the remaining video.").arg(outputFiles_.size()), page);
+		partsLabel->setWordWrap(true);
+		v->addWidget(partsLabel);
+	}
 
 	auto *pathLabel = new QLabel(QDir::toNativeSeparators(outPath_), page);
 	pathLabel->setStyleSheet(QStringLiteral("color:#8a8f98;"));
@@ -222,9 +247,12 @@ void ShareExportDialog::buildSummary()
 
 	auto *btns = new QHBoxLayout;
 	auto *openFolder = new QPushButton(QStringLiteral("Open Folder"), page);
-	auto *copyFile = new QPushButton(QStringLiteral("Copy File"), page);
-	copyFile->setToolTip(QStringLiteral("Copy the file so you can paste it into WhatsApp, Explorer, etc."));
-	auto *copyPath = new QPushButton(QStringLiteral("Copy Path"), page);
+	auto *copyFile = new QPushButton(
+		discord ? QStringLiteral("Copy All Parts") : QStringLiteral("Copy File"), page);
+	copyFile->setToolTip(discord ? QStringLiteral("Copy all numbered parts so you can paste them into Discord.")
+				     : QStringLiteral("Copy the file so you can paste it into WhatsApp, Explorer, etc."));
+	auto *copyPath = new QPushButton(
+		discord ? QStringLiteral("Copy Folder Path") : QStringLiteral("Copy Path"), page);
 	auto *closeBtn = new QPushButton(QStringLiteral("Close"), page);
 	btns->addWidget(openFolder);
 	btns->addWidget(copyFile);
@@ -233,10 +261,18 @@ void ShareExportDialog::buildSummary()
 	btns->addWidget(closeBtn);
 	v->addLayout(btns);
 
-	connect(openFolder, &QPushButton::clicked, this, [this]() { revealInFolder(outPath_); });
+	connect(openFolder, &QPushButton::clicked, this, [this, discord]() {
+		if (discord)
+			QDesktopServices::openUrl(QUrl::fromLocalFile(outPath_));
+		else
+			revealInFolder(outPath_);
+	});
 	connect(copyFile, &QPushButton::clicked, this, [this]() {
 		auto *mime = new QMimeData();
-		mime->setUrls({QUrl::fromLocalFile(outPath_)});
+		QList<QUrl> urls;
+		for (const QString &file : outputFiles_)
+			urls.append(QUrl::fromLocalFile(file));
+		mime->setUrls(urls);
 		QApplication::clipboard()->setMimeData(mime);
 	});
 	connect(copyPath, &QPushButton::clicked, this,

@@ -1,9 +1,14 @@
 #include "ShareExporter.hpp"
+#include "ShareSplitter.hpp"
 
 #include "editor/HdrToSdr.hpp"
 
 #include <algorithm>
 #include <chrono>
+
+#include <QDir>
+#include <QFileInfo>
+#include <QTemporaryDir>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -28,6 +33,11 @@ ShareExporter::Options ShareExporter::optionsFor(Level level)
 		// Best quality that still shrinks the file: 1080p cap, near-visually-
 		// lossless CRF, slower preset for efficiency.
 		return {1080, 22, "medium", 160};
+	case Level::Discord: {
+		Options opts = optionsFor(Level::Balanced);
+		opts.maxPartBytes = share::discordPartBytes;
+		return opts;
+	}
 	case Level::Balanced:
 	default:
 		// The WhatsApp/general-sharing sweet spot: 720p cap, balanced CRF.
@@ -42,6 +52,8 @@ QString ShareExporter::levelName(Level level)
 		return QStringLiteral("Low");
 	case Level::High:
 		return QStringLiteral("High");
+	case Level::Discord:
+		return QStringLiteral("Discord — 49 MB parts");
 	case Level::Balanced:
 	default:
 		return QStringLiteral("Balanced");
@@ -128,11 +140,63 @@ struct Transcoder {
 void ShareExporter::run(const QString &inPath, const QString &outPath, Options opts)
 {
 	cancel_.store(false);
+	outputFiles_.clear();
+	transcodeProgressMax_ = opts.maxPartBytes > 0 ? 75 : 100;
+	const Result result = opts.maxPartBytes > 0 ? splitForSharing(inPath, outPath, opts)
+						 : transcode(inPath, outPath, opts);
+	if (result.ok && opts.maxPartBytes == 0)
+		outputFiles_.append(outPath);
+	emit finished(result.ok, result.canceled, result.error);
+}
+
+ShareExporter::Result ShareExporter::splitForSharing(const QString &inPath, const QString &directory, Options opts)
+{
+	if (QFileInfo::exists(directory))
+		return {false, false, QStringLiteral("The Discord output folder already exists. Choose a new folder.")};
+	QTemporaryDir work(QFileInfo(directory).absolutePath() + QStringLiteral("/.harpia-discord-XXXXXX"));
+	if (!work.isValid())
+		return {false, false, QStringLiteral("Could not create a temporary sharing folder.")};
+	const QString optimized = work.filePath(QStringLiteral("optimized.mp4"));
+	const QString parts = work.filePath(QStringLiteral("parts"));
+	if (!QDir().mkdir(parts))
+		return {false, false, QStringLiteral("Could not create the Discord parts folder.")};
+	for (int attempt = 0; attempt < 2; ++attempt) {
+		emit statusChanged(attempt == 0 ? QStringLiteral("Optimizing video for Discord…")
+					: QStringLiteral("Preparing smaller video frame groups for Discord…"));
+		const Result encoded = transcode(inPath, optimized, opts);
+		if (!encoded.ok)
+			return encoded;
+		if (cancel_.load())
+			return {false, true, {}};
+		emit statusChanged(QStringLiteral("Splitting into parts of at most 49 MB…"));
+		const auto result = share::splitMp4(optimized, parts, opts.maxPartBytes, cancel_,
+			[this](int percent, qint64 bytes) { emit progress(75 + percent / 4, 0.0, 0, bytes); });
+		if (result.ok) {
+			if (cancel_.load())
+				return {false, true, {}};
+			// Publish the complete set together. A failed/canceled run leaves
+			// no partial parts, and an existing output folder is never replaced.
+			if (!QDir().rename(parts, directory))
+				return {false, false, QStringLiteral("Could not save the Discord parts folder.")};
+			for (const QString &file : result.files)
+				outputFiles_.append(QDir(directory).filePath(QFileInfo(file).fileName()));
+			return {true, false, {}};
+		}
+		if (!result.shorterGopNeeded || result.canceled || attempt != 0)
+			return {false, result.canceled, result.error};
+		// A very large GOP cannot be split without breaking decoding. Retry
+		// with independently decodable frames; never return an oversized part.
+		opts.gopFrames = 1;
+	}
+	return {false, false, QStringLiteral("Could not create Discord video parts.")};
+}
+
+ShareExporter::Result ShareExporter::transcode(const QString &inPath, const QString &outPath, Options opts)
+{
 	Transcoder t;
-	QString err;
 
 	auto fail = [&](const QString &m) {
-		emit finished(false, false, m);
+		return Result{false, false, m};
 	};
 
 	const QByteArray inUtf8 = inPath.toUtf8();
@@ -475,7 +539,7 @@ void ShareExporter::run(const QString &inPath, const QString &outPath, Options o
 						     ? qint64((totalSec - processedSec) / speed * 1000.0)
 						     : 0;
 			const qint64 bytes = t.ofmt->pb ? avio_tell(t.ofmt->pb) : 0;
-			emit progress(percent, speed, etaMs, bytes);
+			emit progress(percent * transcodeProgressMax_ / 100, speed, etaMs, bytes);
 		}
 	}
 
@@ -534,11 +598,11 @@ void ShareExporter::run(const QString &inPath, const QString &outPath, Options o
 		avio_closep(&t.ofmt->pb);
 
 	if (canceled)
-		emit finished(false, true, QString());
+		return {false, true, {}};
 	else if (errored)
-		emit finished(false, false, QStringLiteral("Encoding failed."));
+		return {false, false, QStringLiteral("Encoding failed.")};
 	else
-		emit finished(true, false, QString());
+		return {true, false, {}};
 }
 
 } // namespace harpia

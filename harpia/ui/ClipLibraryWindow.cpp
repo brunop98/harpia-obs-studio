@@ -549,6 +549,7 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 	QAction *optLowAct = nullptr;
 	QAction *optBalAct = nullptr;
 	QAction *optHighAct = nullptr;
+	QAction *optDiscordAct = nullptr;
 	QAction *extractAct = nullptr;
 	// One at a time: the trim is per file, so a multi-selection has no single
 	// answer for where to cut.
@@ -568,6 +569,8 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 		optLowAct = opt->addAction(QStringLiteral("Low — smallest file"));
 		optBalAct = opt->addAction(QStringLiteral("Balanced (Default)"));
 		optHighAct = opt->addAction(QStringLiteral("High — best quality"));
+		opt->addSeparator();
+		optDiscordAct = opt->addAction(QStringLiteral("Discord — 49 MB parts"));
 	}
 
 	menu.addSeparator();
@@ -599,10 +602,12 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 		connect(editor, &VideoEditorWindow::exported, this, [this]() { refresh(); });
 		editor->setAttribute(Qt::WA_DeleteOnClose);
 		editor->exec();
-	} else if (oneVideo && (chosen == optLowAct || chosen == optBalAct || chosen == optHighAct)) {
-		const auto level = chosen == optLowAct    ? ShareExporter::Level::Low
-				   : chosen == optHighAct ? ShareExporter::Level::High
-							  : ShareExporter::Level::Balanced;
+	} else if (oneVideo &&
+		   (chosen == optLowAct || chosen == optBalAct || chosen == optHighAct || chosen == optDiscordAct)) {
+		const auto level = chosen == optLowAct        ? ShareExporter::Level::Low
+				   : chosen == optHighAct    ? ShareExporter::Level::High
+				   : chosen == optDiscordAct ? ShareExporter::Level::Discord
+							      : ShareExporter::Level::Balanced;
 		ShareExportDialog::runModal(sel.front(), level, this);
 		refresh();
 	}

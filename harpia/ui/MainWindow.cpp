@@ -4514,6 +4514,7 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 	QAction *optLowAct = nullptr;
 	QAction *optBalAct = nullptr;
 	QAction *optHighAct = nullptr;
+	QAction *optDiscordAct = nullptr;
 	QAction *extractAct = nullptr;
 	if (ClipLibrary::isAudioPath(path)) {
 		// An Audio Only recording: nothing to crop and no video to re-encode
@@ -4528,6 +4529,8 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 		optLowAct = opt->addAction(QStringLiteral("Low — smallest file"));
 		optBalAct = opt->addAction(QStringLiteral("Balanced (Default)"));
 		optHighAct = opt->addAction(QStringLiteral("High — best quality"));
+		opt->addSeparator();
+		optDiscordAct = opt->addAction(QStringLiteral("Discord — 49 MB parts"));
 	}
 
 	menu.addSeparator();
@@ -4562,6 +4565,9 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 		refreshClipViews();
 	} else if (chosen == optHighAct) {
 		ShareExportDialog::runModal(path, ShareExporter::Level::High, this);
+		refreshClipViews();
+	} else if (optDiscordAct && chosen == optDiscordAct) {
+		ShareExportDialog::runModal(path, ShareExporter::Level::Discord, this);
 		refreshClipViews();
 	} else if (chosen == openAct) {
 		QDesktopServices::openUrl(QUrl::fromLocalFile(path));

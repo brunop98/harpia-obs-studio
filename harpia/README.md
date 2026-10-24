@@ -73,6 +73,8 @@ Three modes, each one step up from the last:
 - A strip of recent recordings and a **Clip Library** window, with
   thumbnails, rename, delete, drag-out to other apps, and audio extraction.
 - **Share copies:** a compressed, fast-start MP4 next to the original.
+- **Discord:** Optimize for sharing → Discord creates numbered MP4 parts of at
+  most 49 MB each in a new folder, with a smaller final part and Copy All Parts.
 
 ### Reliability
 

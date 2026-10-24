@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QStringList>
 
 #include <atomic>
 
@@ -18,8 +19,8 @@ class ShareExporter : public QObject {
 public:
 	// Quality/size trade-off. Low = smallest (mobile data / WhatsApp), Balanced
 	// = best quality-per-byte (default), High = better quality, still smaller
-	// than the original.
-	enum class Level { Low, Balanced, High };
+	// than the original. Discord uses Balanced quality and size-limited parts.
+	enum class Level { Low, Balanced, High, Discord };
 
 	struct Options {
 		int maxHeight;      // cap output height; source kept if already smaller (0 = no cap)
@@ -33,6 +34,8 @@ public:
 		// Skip the audio track entirely. For a proxy, which is only ever asked
 		// for pictures -- the real file still supplies the sound.
 		bool dropAudio = false;
+		// 0 = one file. Otherwise `outPath` is a NEW folder of numbered MP4s.
+		qint64 maxPartBytes = 0;
 	};
 
 	static Options optionsFor(Level level);
@@ -40,10 +43,14 @@ public:
 
 	explicit ShareExporter(QObject *parent = nullptr);
 
-	// Blocking transcode of `inPath` -> `outPath`. Emits progress() periodically
+	// Blocking transcode of `inPath` -> `outPath` (a new folder for Discord).
+	// Emits progress() periodically
 	// and finished() once. On failure/cancel no valid output remains (a partial
-	// file is removed by the caller/dialog). Safe to call from a worker thread.
+	// single file is removed by the caller/dialog; Discord cleans up its own
+	// temporary output). Safe to call from a worker thread.
 	void run(const QString &inPath, const QString &outPath, Options opts);
+	// Read after finished()/joining the worker. Empty on failure/cancel.
+	QStringList outputFiles() const { return outputFiles_; }
 
 	// Request cancellation from any thread; run() aborts at the next checkpoint.
 	void cancel() { cancel_.store(true); }
@@ -56,9 +63,18 @@ signals:
 	// ok=true on success. canceled=true if stopped via cancel(). error is a short
 	// human message when ok is false and not canceled.
 	void finished(bool ok, bool canceled, const QString &error);
+	void statusChanged(const QString &message);
 
 private:
+	struct Result {
+		bool ok = false, canceled = false;
+		QString error;
+	};
+	Result transcode(const QString &inPath, const QString &outPath, Options opts);
+	Result splitForSharing(const QString &inPath, const QString &directory, Options opts);
 	std::atomic<bool> cancel_{false};
+	QStringList outputFiles_;
+	int transcodeProgressMax_ = 100;
 };
 
 } // namespace harpia

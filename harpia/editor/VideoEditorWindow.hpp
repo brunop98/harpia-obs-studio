@@ -84,6 +84,8 @@ class PreviewDecoder;
 class TimelineOverview;
 class ProxyBuilder;
 class ExportProgressDialog;
+class LoadingDialog;
+struct TtsResult;
 
 // A full snapshot of the editor's undoable state. Undo/redo restores one of
 // these; snapshot-based history is simple and robust for this size of state.
@@ -566,7 +568,6 @@ private:
 	QHash<int, QString> audioProxy_;
 	// Sources whose audio proxy is being decoded on the pool right now, so a
 	// second click on "Audio from X" waits for the first instead of racing it.
-	QSet<int> audioProxyPending_;
 	// ---- Still images as clips ----
 	// Registered as sources with no decoder; the frame providers serve the cached
 	// QImage for every timestamp. -1 on failure.
@@ -743,6 +744,13 @@ private:
 	// True only while applyProjectJson is rebuilding the editor. Suppresses the
 	// per-file error box, which would otherwise run a nested event loop in the
 	// middle of a half-applied project, once per missing file.
+	class LoadingScope;
+	LoadingDialog *loadingDialog_ = nullptr; // owned by the outer loading scope
+	int loadingCompleted_ = 0;
+	int loadingTotal_ = 0;
+	quint64 projectLoadGeneration_ = 0;
+	QVector<std::function<void()>> afterLoading_;
+	bool deferUntilLoaded(std::function<void()> callback);
 	bool loadingProject_ = false;
 	QStringList loadFailures_; // files a load could not read, reported together
 	QString clipLabel(const TlClip &c) const;
@@ -994,6 +1002,7 @@ private:
 	class TtsEngine *respeakEngine_ = nullptr;
 	int respeakLink_ = 0;
 	QString respeakText_;
+	void finishRespeak(const TtsResult &result);
 	QPointer<class ErrorLogsPanel> errorLogs_; // Help > Error logs
 	void openSubtitles();
 	void addSubtitleClips(const QVector<TlClip> &clips, const QString &summary);

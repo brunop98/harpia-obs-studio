@@ -20,7 +20,8 @@ namespace harpia {
 // Opens a video file and decodes the frame at an arbitrary timestamp, returning
 // it as a QImage scaled to fit a preview box. Used by the trim editor to show
 // the frame under a timeline handle in real time. Single-threaded — one seeker
-// per user (call from the same thread).
+// per user. Ownership may be handed from a preparation worker to the GUI once
+// that worker has finished; never call it concurrently.
 class FrameSeeker {
 public:
 	// Exact source-time span represented by a decoded frame. The rounding

@@ -10,6 +10,9 @@
 
 #include "../ui/ExportDoneDialog.hpp"
 #include "../ui/ExportProgressDialog.hpp"
+#include "../ui/LoadingDialog.hpp"
+#include "LoadingTask.hpp"
+#include <QScopedValueRollback>
 #include "../ui/ColorField.hpp"
 #include "../ui/UiIcons.hpp"
 #include "component/BuiltinComponents.hpp"
@@ -232,6 +235,113 @@ void revealInFolder(const QString &path)
 }
 } // namespace
 
+
+// A top-level operation owns one dialog. Nested media imports reuse it, so a
+// project or a multi-file drop does not flash a separate window for each file.
+// Only independent preparation runs with an event loop; GUI registration and
+// applying a project snapshot stay on the GUI thread without event pumping.
+class VideoEditorWindow::LoadingScope {
+public:
+	LoadingScope(VideoEditorWindow &editor, const QString &title) : editor_(editor)
+	{
+		if (editor_.loadingDialog_)
+			return;
+		if (editor_.voCountdownTimer_ && editor_.voCountdownTimer_->isActive())
+			editor_.onVoiceoverRecordClicked();
+		if (editor_.voRecording_)
+			editor_.finishVoiceover();
+		if (editor_.playing_)
+			editor_.stopPlayback();
+		if (editor_.histTimer_ && editor_.histTimer_->isActive()) {
+			editor_.histTimer_->stop();
+			editor_.captureSnapshot();
+		}
+		if (editor_.previewTimer_)
+			editor_.previewTimer_->stop();
+		editor_.pendingMs_ = -1;
+		if (editor_.audioPremixTimer_)
+			editor_.audioPremixTimer_->stop();
+		if (editor_.autosaveTimer_ && editor_.autosaveTimer_->isActive()) {
+			autosaveActive_ = true;
+			editor_.autosaveTimer_->stop();
+		}
+		owned_ = std::make_unique<LoadingDialog>(title, &editor_);
+		editor_.loadingDialog_ = owned_.get();
+	}
+	~LoadingScope()
+	{
+		if (!owned_)
+			return;
+		owned_->finish();
+		editor_.loadingDialog_ = nullptr;
+		editor_.flushPendingPlaybackProxies();
+		if (autosaveActive_ && editor_.autosaveTimer_)
+			editor_.autosaveTimer_->start();
+		const auto callbacks = std::move(editor_.afterLoading_);
+		editor_.afterLoading_.clear();
+		for (const auto &callback : callbacks)
+			QTimer::singleShot(0, &editor_, callback);
+		editor_.schedulePremix();
+		editor_.scheduleSnapshot();
+		// A ready frame may have arrived while requests were paused.
+		if (editor_.valid_ && !editor_.shownExact_ && editor_.shownMs_ >= 0)
+			editor_.requestPreview(editor_.shownSource_, editor_.shownMs_);
+	}
+	void stage(const QString &message, const QString &detail = QString())
+	{
+		if (auto *dialog = editor_.loadingDialog_) {
+			dialog->setStage(message, detail);
+			if (editor_.loadingTotal_ > 0)
+				dialog->setItemProgress(editor_.loadingCompleted_, editor_.loadingTotal_);
+			dialog->show();
+			dialog->repaint();
+		}
+	}
+	void hide()
+	{
+		if (editor_.loadingDialog_)
+			editor_.loadingDialog_->hide();
+	}
+private:
+	VideoEditorWindow &editor_;
+	std::unique_ptr<LoadingDialog> owned_;
+	bool autosaveActive_ = false;
+};
+
+// Modeless tools can finish while a file is being prepared. Run their timeline
+// edits after loading completes; results for a replaced project are discarded.
+bool VideoEditorWindow::deferUntilLoaded(std::function<void()> callback)
+{
+	if (!loadingDialog_)
+		return false;
+	if (!loadingProject_) {
+		const quint64 generation = projectLoadGeneration_;
+		afterLoading_.append([this, generation, callback = std::move(callback)]() {
+			if (generation == projectLoadGeneration_)
+				callback();
+		});
+	}
+	return true;
+}
+
+namespace {
+struct ProjectRead {
+	QJsonObject root;
+	QString error;
+};
+ProjectRead readProjectFile(const QString &path)
+{
+	QFile file(path);
+	if (!file.open(QIODevice::ReadOnly))
+		return {{}, QStringLiteral("Could not read the project file.")};
+	QJsonParseError error;
+	const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &error);
+	if (error.error != QJsonParseError::NoError || !doc.isObject() ||
+	    !doc.object().contains(QStringLiteral("harpiaProject")))
+		return {{}, QStringLiteral("This is not a valid Harpia project file.")};
+	return {doc.object(), {}};
+}
+} // namespace
 
 int VideoEditorWindow::openCount_ = 0;
 
@@ -2262,7 +2372,6 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	buildEmptyPanel();
 	if (inPath_.isEmpty()) {
 		valid_ = true;
-	loadingProject_ = false;
 		history_.clear();
 		history_.push_back(snapshot());
 		histIndex_ = 0;
@@ -2488,8 +2597,16 @@ bool VideoEditorWindow::sourceInUse(int id) const
 
 int VideoEditorWindow::addSource(const QString &path)
 {
-	auto seeker = std::make_unique<FrameSeeker>();
-	if (!seeker->open(path)) {
+	LoadingScope loading(*this, QStringLiteral("Loading video"));
+	loading.stage(QStringLiteral("Opening video…"), path);
+	auto seeker = runLoadingTask([path]() {
+		auto opened = std::make_unique<FrameSeeker>();
+		if (!opened->open(path))
+			opened.reset();
+		return opened;
+	});
+	if (!seeker) {
+		loading.hide();
 		// While a project is being applied this is COLLECTED, not shown. A
 		// message box runs a nested event loop, and doing that half-way through
 		// rebuilding the editor -- once per missing file, so five missing files
@@ -3078,9 +3195,27 @@ void VideoEditorWindow::warnHeavyStill(const QString &path, QSize px, qint64 byt
 
 int VideoEditorWindow::addImageSource(const QString &path)
 {
-	QString why;
-	QImage img = readStillImage(path, &why);
+	LoadingScope loading(*this, QStringLiteral("Loading image"));
+	loading.stage(QStringLiteral("Reading image…"), path);
+	struct PreparedImage { QImage pixels; QSize fullSize; QString error; };
+	PreparedImage prepared = runLoadingTask([path]() {
+		PreparedImage result;
+		result.pixels = harpia::readStillImage(path, &result.error);
+		result.fullSize = result.pixels.size();
+		if (!result.pixels.isNull()) {
+			const QSize working = stillWorkingSize(result.fullSize);
+			if (working != result.fullSize)
+				result.pixels = result.pixels.scaled(working, Qt::IgnoreAspectRatio,
+								   Qt::SmoothTransformation);
+			result.pixels = result.pixels.convertToFormat(result.pixels.hasAlphaChannel()
+				? QImage::Format_RGBA8888 : QImage::Format_RGBX8888);
+		}
+		return result;
+	});
+	QImage img = std::move(prepared.pixels);
+	const QString why = prepared.error;
 	if (img.isNull()) {
+		loading.hide();
 		// The reason, not just the fact. "Could not read that image." left the
 		// user with nowhere to go -- most often it was a WebP and a Qt build
 		// with no WebP plugin, which is not something anyone could guess.
@@ -3096,15 +3231,8 @@ int VideoEditorWindow::addImageSource(const QString &path)
 	// The original's size is what every piece of geometry is measured in; the
 	// pixels kept are a working copy capped at kStillWorkingMax (the export
 	// re-reads the file whole). See StillWeight.hpp.
-	const QSize fullSize = img.size();
+	const QSize fullSize = prepared.fullSize;
 	const qint64 fileBytes = QFileInfo(path).size();
-	const QSize working = stillWorkingSize(fullSize);
-	if (working != fullSize)
-		img = img.scaled(working, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-	// Opaque (a JPEG, a PNG with no transparency) is tagged RGBX8888: the
-	// preview's copy inherits the tag and QPainter blits it without per-pixel
-	// alpha work. See FrameSeeker::toImage.
-	img = img.convertToFormat(img.hasAlphaChannel() ? QImage::Format_RGBA8888 : QImage::Format_RGBX8888);
 	EditorSource s;
 	s.id = nextSourceId_++;
 	s.path = path;
@@ -3116,6 +3244,7 @@ int VideoEditorWindow::addImageSource(const QString &path)
 	stillSizes_.insert(s.id, fullSize);
 	invalidatePreviewCache();
 	stillPreview_.remove(s.id);
+	loading.hide();
 	warnHeavyStill(path, fullSize, fileBytes);
 	// A still's filmstrip: one tile, at the same 128x72 bound the video strips
 	// use. That single tile is what lets the timeline draw an image clip with
@@ -3191,7 +3320,12 @@ void VideoEditorWindow::onFilesDroppedOnTimeline(const QStringList &paths, int t
 	int landed = -1;    // the picture lane the first clip made or joined
 	int audLanded = -1; // ...and the audio one
 	bool any = false;
-	for (const QString &f : paths) {
+	LoadingScope loading(*this, QStringLiteral("Adding media"));
+	QScopedValueRollback<int> totalLoading(loadingTotal_, int(paths.size()));
+	QScopedValueRollback<int> completedLoading(loadingCompleted_, 0);
+	for (int fileIndex = 0; fileIndex < paths.size(); ++fileIndex) {
+		loadingCompleted_ = fileIndex;
+		const QString f = paths[fileIndex];
 		bool audio = false;
 		const std::optional<TlClip> made = mediaClipForFile(f, &audio);
 		if (!made)
@@ -3247,12 +3381,15 @@ std::optional<TlClip> VideoEditorWindow::mediaClipForFile(const QString &f, bool
 		if (id < 0)
 			return std::nullopt; // addAudioSource already said why
 		const EditorSource *src = sourceById(id);
+		const qint64 duration = src ? src->durationMs : 0;
 		const QString wav = audioProxyFor(id);
 		c.type = TlClip::Type::Video; // "media clip"; the LANE makes it audio
 		c.sourceId = id;
 		c.srcStartMs = 0;
-		c.srcEndMs = src ? src->durationMs : 0;
-		c.peaks = VoiceoverTrack::loadPeaks(wav, 600); // so it draws a waveform
+		c.srcEndMs = duration;
+		LoadingScope loading(*this, QStringLiteral("Loading audio"));
+		loading.stage(QStringLiteral("Building audio waveforms…"), f);
+		c.peaks = runLoadingTask([wav]() { return VoiceoverTrack::loadPeaks(wav, 600); });
 		if (isAudio)
 			*isAudio = true;
 		return c;
@@ -3282,6 +3419,8 @@ std::optional<TlClip> VideoEditorWindow::mediaClipForFile(const QString &f, bool
 
 bool VideoEditorWindow::pasteMediaFiles(const QStringList &paths, qint64 atMs)
 {
+	if (deferUntilLoaded([this, paths, atMs]() { pasteMediaFiles(paths, atMs); }))
+		return true;
 	if (!timelineView_ || paths.isEmpty())
 		return false;
 	if (!fullEdit())
@@ -3291,7 +3430,12 @@ bool VideoEditorWindow::pasteMediaFiles(const QStringList &paths, qint64 atMs)
 	qint64 atPic = std::max<qint64>(0, atMs);
 	qint64 atAud = atPic;
 	QVector<TlClip> pictures, sounds;
-	for (const QString &f : paths) {
+	LoadingScope loading(*this, QStringLiteral("Adding media"));
+	QScopedValueRollback<int> totalLoading(loadingTotal_, int(paths.size()));
+	QScopedValueRollback<int> completedLoading(loadingCompleted_, 0);
+	for (int fileIndex = 0; fileIndex < paths.size(); ++fileIndex) {
+		loadingCompleted_ = fileIndex;
+		const QString f = paths[fileIndex];
 		bool audio = false;
 		std::optional<TlClip> c = mediaClipForFile(f, &audio);
 		if (!c)
@@ -3353,9 +3497,12 @@ QString VideoEditorWindow::audioProxyFor(int sourceId)
 		if (!dir.isEmpty()) {
 			const QString cand =
 				dir + QStringLiteral("/proxy_%1.wav").arg(sourceId);
-			QGuiApplication::setOverrideCursor(Qt::WaitCursor);
-			const bool ok = VoiceoverMixer::decodeToWav(s->path, cand);
-			QGuiApplication::restoreOverrideCursor();
+			const QString sourcePath = s->path;
+			LoadingScope loading(*this, QStringLiteral("Loading audio"));
+			loading.stage(QStringLiteral("Extracting audio…"), sourcePath);
+			const bool ok = runLoadingTask([sourcePath, cand]() {
+				return VoiceoverMixer::decodeToWav(sourcePath, cand);
+			});
 			if (ok)
 				wav = cand;
 		}
@@ -3374,11 +3521,14 @@ int VideoEditorWindow::addAudioSource(const QString &path)
 		return -1;
 	const int id = nextSourceId_++;
 	const QString wav = dir + QStringLiteral("/import_%1.wav").arg(id);
-	QGuiApplication::setOverrideCursor(Qt::WaitCursor);
-	const bool ok = VoiceoverMixer::decodeToWav(path, wav);
-	QGuiApplication::restoreOverrideCursor();
+	LoadingScope loading(*this, QStringLiteral("Loading audio"));
+	loading.stage(QStringLiteral("Preparing audio…"), path);
+	const bool ok = runLoadingTask([path, wav]() {
+		return VoiceoverMixer::decodeToWav(path, wav);
+	});
 	if (!ok) {
-		--nextSourceId_;
+		loading.hide();
+		QFile::remove(wav);
 		// Same rule as addSource: while a project is being applied this is
 		// collected and reported once at the end, not put up as a modal in the
 		// middle of a half-rebuilt editor.
@@ -3405,50 +3555,23 @@ int VideoEditorWindow::addAudioSource(const QString &path)
 
 void VideoEditorWindow::addAudioClipFromSource(int sourceId)
 {
+	if (deferUntilLoaded([this, sourceId]() { addAudioClipFromSource(sourceId); }))
+		return;
 	EditorSource *s = sourceById(sourceId);
 	if (!s || !timelineView_)
 		return;
-	// The decode can take a while for a long video, and it used to run right
-	// here with a wait cursor -- the whole editor frozen for the length of an
-	// ffmpeg pass. Cached answers proceed immediately; a fresh decode runs on
-	// the pool and finishes the clip-add when it lands.
-	if (const auto it = audioProxy_.constFind(sourceId); it == audioProxy_.constEnd()) {
-		if (audioProxyPending_.contains(sourceId))
-			return; // one decode is already on its way to this very call
-		audioProxyPending_.insert(sourceId);
-		if (infoLabel_)
-			infoLabel_->setText(
-				QStringLiteral("Extracting audio from \"%1\"…").arg(s->name));
-		const QString path = s->path;
-		const QString cand = sessionAudioDir().isEmpty()
-					     ? QString()
-					     : sessionAudioDir() +
-						       QStringLiteral("/proxy_%1.wav").arg(sourceId);
-		QPointer<VideoEditorWindow> guard(this);
-		QThreadPool::globalInstance()->start([guard, sourceId, path, cand]() {
-			const bool ok = !cand.isEmpty() && VoiceoverMixer::decodeToWav(path, cand);
-			QMetaObject::invokeMethod(
-				qApp,
-				[guard, sourceId, ok, cand]() {
-					if (!guard)
-						return;
-					guard->audioProxyPending_.remove(sourceId);
-					guard->audioProxy_.insert(sourceId,
-								  ok ? cand : QString());
-					guard->updateInfoLabel(); // clears the "extracting…" note
-					guard->addAudioClipFromSource(sourceId); // now cached
-				},
-				Qt::QueuedConnection);
-		});
-		return;
-	}
-	const QString wav = audioProxyFor(sourceId); // cache hit: no decode, no stall
-	if (wav.isEmpty()) {
-		QMessageBox::information(this, QStringLiteral("Add audio"),
-					 QStringLiteral("\"%1\" has no audio track.").arg(s->name));
-		return;
-	}
+	// Extract on a worker with the same loading feedback as an audio-file
+	// import. Keep one scope through waveform preparation and clip insertion.
+	const QString name = s->name;
 	qint64 dur = s->durationMs;
+	LoadingScope loading(*this, QStringLiteral("Loading audio"));
+	const QString wav = audioProxyFor(sourceId);
+	if (wav.isEmpty()) {
+		loading.hide();
+		QMessageBox::information(this, QStringLiteral("Add audio"),
+					 QStringLiteral("\"%1\" has no audio track.").arg(name));
+		return;
+	}
 	if (dur <= 0)
 		dur = VoiceoverTrack::wavDurationMs(wav);
 	if (dur <= 0)
@@ -3460,7 +3583,8 @@ void VideoEditorWindow::addAudioClipFromSource(int sourceId)
 	c.srcStartMs = 0;
 	c.srcEndMs = dur;
 	c.outStartMs = timelinePlayheadMs();
-	c.peaks = VoiceoverTrack::loadPeaks(wav, 600); // waveform
+	loading.stage(QStringLiteral("Building audio waveforms…"), wav);
+	c.peaks = runLoadingTask([wav]() { return VoiceoverTrack::loadPeaks(wav, 600); });
 	timelineView_->addClip(TlTrack::Kind::Audio, c);
 	if (!fullEdit())
 		setEditMode(EditMode::Full);
@@ -3508,10 +3632,11 @@ SoundInfo VideoEditorWindow::soundInfoFor(int sourceId)
 	EditorSource *s = sourceById(sourceId);
 	if (!s)
 		return si;
+	const qint64 duration = s->durationMs;
 	const QString wav = audioProxyFor(sourceId);
 	if (wav.isEmpty())
 		return si;
-	si.durationMs = s->durationMs > 0 ? s->durationMs : VoiceoverTrack::wavDurationMs(wav);
+	si.durationMs = duration > 0 ? duration : VoiceoverTrack::wavDurationMs(wav);
 	auto it = soundPeaks_.find(sourceId);
 	if (it == soundPeaks_.end())
 		it = soundPeaks_.insert(sourceId, VoiceoverTrack::loadPeaks(wav, 200));
@@ -6052,6 +6177,8 @@ void VideoEditorWindow::refreshProjectInspector()
 
 void VideoEditorWindow::doAutosave()
 {
+	if (loadingDialog_)
+		return;
 	// Only once we know where the project lives, and never onto that file itself.
 	if (!valid_ || projectPath_.isEmpty())
 		return;
@@ -9189,6 +9316,8 @@ void VideoEditorWindow::openUrlDownload()
 
 void VideoEditorWindow::addSubtitleClips(const QVector<TlClip> &clips, const QString &summary)
 {
+	if (deferUntilLoaded([this, clips, summary]() { addSubtitleClips(clips, summary); }))
+		return;
 	if (!timelineView_ || clips.isEmpty())
 		return;
 	// One "Subtitles" lane, reused across runs, at the top of the picture
@@ -9365,12 +9494,7 @@ void VideoEditorWindow::respeakSentence(int track, int clip, qint64 atOutMs)
 		connect(respeakEngine_, &TtsEngine::failed, this, [this](const QString &w) {
 			warnAndLog(this, QStringLiteral("Re-speak"), QStringLiteral("The sentence could not be spoken again: %1").arg(w));
 		});
-		connect(respeakEngine_, &TtsEngine::finished, this, [this](const TtsResult &r) {
-			QString w;
-			if (!applyRespoken(respeakLink_, respeakText_, r.wavPath, r.words, &w))
-				warnAndLog(this, QStringLiteral("Re-speak"), w);
-			QFile::remove(r.wavPath);
-		});
+		connect(respeakEngine_, &TtsEngine::finished, this, &VideoEditorWindow::finishRespeak);
 	}
 	respeakLink_ = link;
 	respeakText_ = sentence;
@@ -9384,6 +9508,28 @@ void VideoEditorWindow::respeakSentence(int track, int clip, qint64 atOutMs)
 	if (infoLabel_)
 		infoLabel_->setText(QStringLiteral("Re-speaking “%1”…").arg(sentence));
 	respeakEngine_->start(job);
+}
+
+void VideoEditorWindow::finishRespeak(const TtsResult &result)
+{
+	if (loadingDialog_) {
+		if (loadingProject_) {
+			QFile::remove(result.wavPath);
+		} else {
+			const quint64 generation = projectLoadGeneration_;
+			afterLoading_.append([this, generation, result]() {
+				if (generation == projectLoadGeneration_)
+					finishRespeak(result);
+				else
+					QFile::remove(result.wavPath);
+			});
+		}
+		return;
+	}
+	QString why;
+	if (!applyRespoken(respeakLink_, respeakText_, result.wavPath, result.words, &why))
+		warnAndLog(this, QStringLiteral("Re-speak"), why);
+	QFile::remove(result.wavPath);
 }
 
 bool VideoEditorWindow::applyRespoken(int link, const QString &sentence, const QString &takeWav,
@@ -9515,6 +9661,10 @@ bool VideoEditorWindow::applyRespoken(int link, const QString &sentence, const Q
 void VideoEditorWindow::addSpeechClips(const QString &wavPath, qint64 durationMs, const QVector<ClipWordTime> &words,
 				       const GroupRule &rule, const SubtitleLook &look, const QString &specJson, qint64 atMs)
 {
+	if (deferUntilLoaded([this, wavPath, durationMs, words, rule, look, specJson, atMs]() {
+		addSpeechClips(wavPath, durationMs, words, rule, look, specJson, atMs);
+	}))
+		return;
 	if (!timelineView_)
 		return;
 	if (!fullEdit())
@@ -10058,7 +10208,13 @@ void VideoEditorWindow::dropEvent(QDropEvent *e)
 {
 	int firstVideo = -1;
 	bool addedAny = false;
-	for (const QUrl &u : e->mimeData()->urls()) {
+	const QList<QUrl> urls = e->mimeData()->urls();
+	LoadingScope loading(*this, QStringLiteral("Adding media"));
+	QScopedValueRollback<int> totalLoading(loadingTotal_, int(urls.size()));
+	QScopedValueRollback<int> completedLoading(loadingCompleted_, 0);
+	for (int fileIndex = 0; fileIndex < urls.size(); ++fileIndex) {
+		loadingCompleted_ = fileIndex;
+		const QUrl &u = urls[fileIndex];
 		const QString f = u.toLocalFile();
 		if (f.isEmpty())
 			continue;
@@ -12936,38 +13092,27 @@ void VideoEditorWindow::onOpenProject()
 
 void VideoEditorWindow::openProjectWithDialogs(const QString &path, bool showSuccess)
 {
-	QFile f(path);
-	if (!f.open(QIODevice::ReadOnly)) {
-		warnAndLog(this, QStringLiteral("Open project"),
-				     QStringLiteral("Could not read the project file."));
+	LoadingScope loading(*this, QStringLiteral("Loading project"));
+	loading.stage(QStringLiteral("Reading project…"), path);
+	const ProjectRead project = runLoadingTask([path]() { return readProjectFile(path); });
+	if (!project.error.isEmpty()) {
+		loading.hide();
+		warnAndLog(this, QStringLiteral("Open project"), project.error);
 		return;
 	}
-	QJsonParseError perr;
-	const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &perr);
-	f.close();
-	if (perr.error != QJsonParseError::NoError || !doc.isObject() ||
-	    !doc.object().contains(QStringLiteral("harpiaProject"))) {
-		warnAndLog(this, QStringLiteral("Open project"),
-				     QStringLiteral("This is not a valid Harpia project file."));
-		return;
-	}
-	applyProjectJson(doc.object(), path, /*quiet=*/false, showSuccess);
+	applyProjectJson(project.root, path, /*quiet=*/false, showSuccess);
 }
 
 // Open a project from a known path. Same validation as the menu item, without
 // the dialog and without a message box on failure.
 bool VideoEditorWindow::openProjectAt(const QString &path)
 {
-	QFile f(path);
-	if (!f.open(QIODevice::ReadOnly))
+	LoadingScope loading(*this, QStringLiteral("Loading project"));
+	loading.stage(QStringLiteral("Reading project…"), path);
+	const ProjectRead project = runLoadingTask([path]() { return readProjectFile(path); });
+	if (!project.error.isEmpty())
 		return false;
-	QJsonParseError perr;
-	const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &perr);
-	f.close();
-	if (perr.error != QJsonParseError::NoError || !doc.isObject() ||
-	    !doc.object().contains(QStringLiteral("harpiaProject")))
-		return false;
-	applyProjectJson(doc.object(), path, /*quiet=*/true);
+	applyProjectJson(project.root, path, /*quiet=*/true);
 	return true;
 }
 
@@ -12983,8 +13128,8 @@ bool VideoEditorWindow::openProjectAt(const QString &path)
 //
 // blockingMapped, not a detached pool: the caller needs the answers before it
 // can build the model, and running them concurrently while still waiting for
-// all of them keeps the sequencing exactly as it was. The GUI thread is one of
-// the workers, so no core sits idle waiting for the others.
+// all of them keeps the sequencing exactly as it was. The preparation thread
+// handles one file itself while the GUI stays free to display loading feedback.
 QHash<QString, QVector<float>> VideoEditorWindow::decodePeaks(const QStringList &paths)
 {
 	QHash<QString, QVector<float>> out;
@@ -13019,7 +13164,11 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 
 	// Everything below runs with the editor half-rebuilt. The flag keeps the
 	// per-file error boxes out of that window -- see addSource.
-	loadingProject_ = true;
+	LoadingScope loading(*this, QStringLiteral("Loading project"));
+	QScopedValueRollback<bool> projectLoading(loadingProject_, true);
+	QScopedValueRollback<int> totalLoading(loadingTotal_, 0);
+	QScopedValueRollback<int> completedLoading(loadingCompleted_, 0);
+	++projectLoadGeneration_; // old async audio imports belong to the previous timeline
 	loadFailures_.clear();
 
 	const int ver = root.value(QStringLiteral("harpiaProject")).toInt(1);
@@ -13053,7 +13202,12 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 			used.insert(root.value(QStringLiteral("activeSource")).toInt());
 
 		bool first = true;
-		for (const QJsonValue &jv : root.value(QStringLiteral("sources")).toArray()) {
+		const QJsonArray projectSources = root.value(QStringLiteral("sources")).toArray();
+		loadingTotal_ = projectSources.size();
+		for (int sourceIndex = 0; sourceIndex < projectSources.size(); ++sourceIndex) {
+			loadingCompleted_ = sourceIndex;
+			loading.stage(QStringLiteral("Loading project media…"), path);
+			const QJsonValue jv = projectSources[sourceIndex];
 			const QJsonObject so = jv.toObject();
 			const int pid = so.value(QStringLiteral("id")).toInt();
 			QString spath = so.value(QStringLiteral("path")).toString();
@@ -13075,6 +13229,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 				// A quiet open never puts a dialog up: a missing file is
 				// left missing rather than stopping an automated caller.
 				if (!quiet && !QFileInfo::exists(spath)) {
+					loading.hide();
 					const QString picked = QFileDialog::getOpenFileName(
 						this,
 						QStringLiteral("Locate \"%1\"")
@@ -13130,6 +13285,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 		const QString projSourceName = root.value(QStringLiteral("sourceName")).toString();
 		if (!quiet && !projSourceName.isEmpty() &&
 		    projSourceName != QFileInfo(inPath_).fileName()) {
+			loading.hide();
 			const auto ret = QMessageBox::question(
 				this, QStringLiteral("Open project"),
 				QStringLiteral(
@@ -13141,6 +13297,8 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 		}
 	}
 
+	loadingTotal_ = 0;
+	loading.stage(QStringLiteral("Preparing timeline…"), path);
 	EditorSnapshot s;
 	s.trimStart = qint64(root.value(QStringLiteral("trimStart")).toDouble(0));
 	// A blank editor (opened with no file -- "Load project" on the empty
@@ -13216,7 +13374,10 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 					want << es->path;
 			}
 		}
-		const QHash<QString, QVector<float>> peaks = decodePeaks(want);
+		loading.stage(QStringLiteral("Building audio waveforms…"), path);
+		const QHash<QString, QVector<float>> peaks = runLoadingTask([want]() {
+			return decodePeaks(want);
+		});
 		for (VoiceoverClip &v : s.voiceClips)
 			v.peaks = peaks.value(v.path);
 		for (TlTrack &t : s.timeline.tracks) {
@@ -13338,6 +13499,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 		if (srcMap.contains(pid))
 			activeSrc = srcMap.value(pid);
 	}
+	loading.stage(QStringLiteral("Restoring timeline…"), path);
 	setActiveSource(activeSrc);
 	restoreSnapshot(s);
 	// Remember where this project lives + its metadata (Project inspector).
@@ -13413,6 +13575,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	updateInspector();
 	if (fullEdit())
 		showTimelineFrame(timelinePlayheadMs());
+	loading.hide();
 	if (!quiet) {
 		// One message, whatever went wrong, and only once the editor is whole
 		// again. A project whose media has moved still OPENS -- its timeline,
@@ -13583,7 +13746,7 @@ EditorSnapshot VideoEditorWindow::snapshot() const
 
 void VideoEditorWindow::scheduleSnapshot()
 {
-	if (restoring_ || !valid_)
+	if (loadingDialog_ || restoring_ || !valid_)
 		return;
 	histTimer_->start(); // (re)start the coalescing timer
 }
@@ -13788,7 +13951,7 @@ void VideoEditorWindow::invalidateAudioMix()
 
 void VideoEditorWindow::schedulePremix()
 {
-	if (audioPremixTimer_)
+	if (!loadingDialog_ && audioPremixTimer_)
 		audioPremixTimer_->start(); // restarts: the last edit of a run decides
 }
 
@@ -14626,7 +14789,8 @@ void VideoEditorWindow::onProxyReady(int sourceId, const QString &proxyPath)
 	// The frame on screen came out of the original file; ask for it again so
 	// what is shown is what the preview will keep serving from now on.
 	shownExact_ = false;
-	refreshPreviewAtPlayhead();
+	if (!loadingDialog_)
+		refreshPreviewAtPlayhead();
 }
 
 // Point a source's own FrameSeeker -- the one playback pulls frames from -- at
@@ -14641,7 +14805,7 @@ void VideoEditorWindow::onProxyReady(int sourceId, const QString &proxyPath)
 // only ever arrives once.
 void VideoEditorWindow::applyProxyToPlayback(int sourceId, const QString &proxyPath)
 {
-	if (playing_) {
+	if (playing_ || loadingDialog_) {
 		pendingPlaybackProxy_[sourceId] = proxyPath;
 		return;
 	}
@@ -14731,7 +14895,7 @@ void VideoEditorWindow::onPreviewFrameReady(int sourceId, qint64 ms)
 {
 	Q_UNUSED(sourceId);
 	Q_UNUSED(ms);
-	if (!valid_ || playing_ || shownExact_ || shownMs_ < 0)
+	if (loadingDialog_ || !valid_ || playing_ || shownExact_ || shownMs_ < 0)
 		return;
 	requestPreview(shownSource_, shownMs_);
 }

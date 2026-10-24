@@ -193,6 +193,8 @@ target_sources(
     ui/ExportDoneDialog.hpp
     ui/ExportProgressDialog.cpp
     ui/ExportProgressDialog.hpp
+    ui/LoadingDialog.cpp
+    ui/LoadingDialog.hpp
     ui/ErrorLogsPanel.cpp
     ui/ErrorLogsPanel.hpp
     ui/MainDevPanel.cpp
@@ -324,6 +326,7 @@ target_sources(
     editor/ExportOptionsDialog.hpp
     editor/VideoEditorWindow.cpp
     editor/VideoEditorWindow.hpp
+    editor/LoadingTask.hpp
     editor/ClipboardPaste.cpp
     editor/ClipboardPaste.hpp
     editor/LinkDownload.cpp

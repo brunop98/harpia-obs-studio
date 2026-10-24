@@ -293,6 +293,15 @@ g++ -std=c++17 -O1 -fPIC -pthread -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/colorswatch_test.cpp" -o "$WORK/colorswatch_test" $LF
 
+# Loading tasks keep GUI timers alive, transfer owned results and propagate errors.
+g++ -std=c++17 -O1 -fPIC -pthread -I"$H" -I"$ROOT" $CF \
+	"$HERE/loadingtask_test.cpp" -o "$WORK/loadingtask_test" $LF
+# Loading feedback reports real item counts and stays visible until completion.
+"$MOC" -I"$H" "$H/ui/LoadingDialog.hpp" -o "$WORK/moc_LoadingDialog.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/loadingdialog_test.cpp" "$H/ui/LoadingDialog.cpp" "$WORK/moc_LoadingDialog.cpp" \
+	-o "$WORK/loadingdialog_test" $LF
+
 # Silence detection and globally synchronized timeline cuts do not rewrite media.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/silencetrim_test.cpp" "$H/editor/SilenceTrim.cpp" -o "$WORK/silencetrim_test" $LF
@@ -1135,6 +1144,8 @@ QT_QPA_PLATFORM=offscreen "$WORK/richtext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/captionanimation_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/captionperf_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/colorswatch_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/loadingtask_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/loadingdialog_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/silencetrim_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/socialsafeareas_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textstylepresets_test" || rc=1

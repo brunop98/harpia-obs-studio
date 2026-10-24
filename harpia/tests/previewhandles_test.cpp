@@ -23,6 +23,7 @@
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QThread>
+#include <QWheelEvent>
 
 #include <cmath>
 #include <cstdio>
@@ -94,6 +95,86 @@ static const TlClip &clip(TimelineView *tv)
 	return tv->model().tracks[0].clips[0];
 }
 
+static const QVector<QPair<int, int>> editableSelection = {{0, 0}, {0, 1}, {1, 0}, {1, 1}};
+
+static void buildSelection(TimelineView *tv, int sourceId, bool keyed = false)
+{
+	TimelineModel m;
+	TlTrack video;
+	video.kind = TlTrack::Kind::Video;
+	for (int i = 0; i < 3; ++i) {
+		TlClip c;
+		c.type = TlClip::Type::Video;
+		c.sourceId = sourceId;
+		c.srcEndMs = 4000;
+		c.outStartMs = i * 4000;
+		c.posX = 0.4 + i * 0.1;
+		c.posY = 0.45 - i * 0.1;
+		c.scale = 0.6 + i * 0.3;
+		c.rotation = i * 15.0;
+		c.opacity = 0.8;
+		if (keyed && i == 1) {
+			c.setKeyframeAt(c.outStartMs, c.baseTransform());
+			TlTransform end = c.baseTransform();
+			end.posX += 0.1;
+			c.setKeyframeAt(c.outStartMs + 2000, end);
+		}
+		video.clips.append(c);
+	}
+	m.tracks.append(video);
+	TlTrack mixed;
+	mixed.kind = TlTrack::Kind::Video;
+	TlClip text;
+	text.type = TlClip::Type::Text;
+	text.srcEndMs = 4000;
+	text.outStartMs = 4000;
+	text.text.text = QStringLiteral("Move with the videos");
+	text.posX = 0.2;
+	text.posY = 0.7;
+	text.scale = 1.2;
+	mixed.clips.append(text);
+	TlClip image = text;
+	image.type = TlClip::Type::Image;
+	image.sourceId = sourceId;
+	image.outStartMs = 8000;
+	image.scale = 0.7;
+	mixed.clips.append(image);
+	m.tracks.append(mixed);
+	TlTrack locked = mixed;
+	locked.locked = true;
+	m.tracks.append(locked);
+	tv->setModel(m);
+	tv->setPlayhead(0);
+	emit tv->editCommitted();
+	tv->selectClip(0, 0);
+	for (const auto &p : editableSelection)
+		tv->addToSelection(p.first, p.second);
+	tv->addToSelection(2, 0);
+	settle(700);
+}
+
+static void checkSelectionDelta(TimelineView *tv, const TimelineModel &before)
+{
+	const TlTransform primary = clip(tv).transformAt(0);
+	const TlTransform start = before.tracks[0].clips[0].transformAt(0);
+	for (const auto &p : editableSelection) {
+		const TlClip &old = before.tracks[p.first].clips[p.second];
+		const TlClip &now = tv->model().tracks[p.first].clips[p.second];
+		const TlTransform a = old.transformAt(old.outStartMs);
+		const TlTransform b = now.transformAt(now.outStartMs);
+		ok(std::abs((b.posX - a.posX) - (primary.posX - start.posX)) < 1e-6 &&
+			   std::abs((b.posY - a.posY) - (primary.posY - start.posY)) < 1e-6,
+		   "each selected clip takes the same position change, preserving its offset");
+		ok(std::abs(b.scale / a.scale - primary.scale / start.scale) < 1e-6,
+		   "each selected clip takes the same scale factor, preserving its own size");
+		ok(std::abs((b.rotation - a.rotation) - (primary.rotation - start.rotation)) < 1e-6,
+		   "each selected clip takes the same rotation change");
+		ok(b.opacity == a.opacity, "the preview gesture preserves each clip's opacity");
+	}
+	ok(tv->model().tracks[0].clips[2] == before.tracks[0].clips[2], "an unselected clip is unchanged");
+	ok(tv->model().tracks[2] == before.tracks[2], "selected clips on a locked track are unchanged");
+}
+
 int main(int argc, char **argv)
 {
 	std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -112,6 +193,11 @@ int main(int argc, char **argv)
 	ok(tv && pc, "the editor came up with a preview canvas");
 	if (!tv || !pc)
 		return 1;
+	ok(!tv->model().tracks.isEmpty() && !tv->model().tracks[0].clips.isEmpty(),
+	   "the real media seeded a video clip");
+	if (tv->model().tracks.isEmpty() || tv->model().tracks[0].clips.isEmpty())
+		return 1;
+	const int videoSourceId = tv->model().tracks[0].clips[0].sourceId;
 
 	buildOneClip(tv);
 	tv->selectClip(0, 0);
@@ -233,6 +319,69 @@ int main(int argc, char **argv)
 			    clip(tv).posY);
 		ok(std::abs(clip(tv).posX - x0) < 1e-6 && std::abs(clip(tv).posY - y0) < 1e-6,
 		   "the clip stayed put — a drag has to start ON it");
+	}
+
+	std::printf("\n-- moving a mixed selection moves every unlocked clip --\n");
+	{
+		buildSelection(tv, videoSourceId);
+		const TimelineModel before = tv->model();
+		const QVector<QPointF> g = pc->handlePointsForTest();
+		ok(g.size() == 9, "the primary video's preview has transform grips");
+		if (g.size() == 9) {
+			const QPoint centre = ((g[0] + g[7]) / 2.0).toPoint();
+			dragMouse(pc, centre, centre + QPoint(35, 20));
+			settle(400);
+			ok(std::abs(clip(tv).posX - before.tracks[0].clips[0].posX) > 0.01,
+			   "the body drag moved the primary video");
+			checkSelectionDelta(tv, before);
+			QMetaObject::invokeMethod(&w, "undo");
+			settle(400);
+			ok(tv->model() == before, "one undo restores the entire selection's positions");
+			QMetaObject::invokeMethod(&w, "redo");
+			settle(400);
+			checkSelectionDelta(tv, before);
+		}
+	}
+
+	std::printf("\n-- resizing a mixed selection applies one factor across repeated mouse moves --\n");
+	{
+		buildSelection(tv, videoSourceId);
+		const TimelineModel before = tv->model();
+		const QVector<QPointF> g = pc->handlePointsForTest();
+		if (g.size() == 9) {
+			const QPoint corner = g[0].toPoint();
+			dragMouse(pc, corner, corner - QPoint(40, 22), 8);
+			settle(400);
+			ok(clip(tv).scale > before.tracks[0].clips[0].scale * 1.05,
+			   "the corner drag scaled the primary video");
+			checkSelectionDelta(tv, before);
+			QMetaObject::invokeMethod(&w, "undo");
+			settle(400);
+			ok(tv->model() == before, "one undo restores every clip's scale");
+		}
+	}
+
+	std::printf("\n-- wheel zoom updates selected clips beyond the playhead, including keyed clips --\n");
+	{
+		buildSelection(tv, videoSourceId, true);
+		const TimelineModel before = tv->model();
+		const QVector<QPointF> g = pc->handlePointsForTest();
+		if (g.size() == 9) {
+			const QPointF cursor = (g[0] + g[7]) / 2.0 + QPointF(25, 10);
+			QWheelEvent wheel(cursor, pc->mapToGlobal(cursor.toPoint()), QPoint(), QPoint(0, 120),
+					  Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+			QApplication::sendEvent(pc, &wheel);
+			settle(400);
+			ok(clip(tv).scale > before.tracks[0].clips[0].scale, "the wheel zoomed the primary video");
+			checkSelectionDelta(tv, before);
+			const TlClip &keyed = tv->model().tracks[0].clips[1];
+			ok(keyed.keys.size() == 2 && keyed.keys[0].tMs == 0 && keyed.keys[1].tMs == 2000,
+			   "the off-playhead video edits its nearest key without adding or moving keys");
+			ok(keyed.keys[1] == before.tracks[0].clips[1].keys[1], "its later animation key is preserved");
+			QMetaObject::invokeMethod(&w, "undo");
+			settle(400);
+			ok(tv->model() == before, "one undo restores static and keyed clips together");
+		}
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

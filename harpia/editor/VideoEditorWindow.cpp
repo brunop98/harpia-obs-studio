@@ -9652,11 +9652,11 @@ void VideoEditorWindow::applySelectedClipTransform(const TlTransform &tf)
 	};
 	TlClip c = *sel;
 	pose(c, timelineEditMs(), tf);
-	const QVector<QPair<int, int>> texts = selectedTextBatch();
-	if (texts.size() < 2) {
+	const QVector<QPair<int, int>> selection = timelineView_->selectedPairs();
+	if (selection.size() < 2) {
 		timelineView_->updateSelectedClip(c);
 	} else {
-		// Several texts selected: they move, scale and turn together. Each
+		// All selected clips move, scale and turn together. Each
 		// takes the same CHANGE the clicked one did -- the same offset, the
 		// same factor, the same turn -- so the group keeps its layout rather
 		// than piling onto one spot.
@@ -9666,7 +9666,7 @@ void VideoEditorWindow::applySelectedClipTransform(const TlTransform &tf)
 		const double turn = tf.rotation - was.rotation;
 		const QPair<int, int> clicked(timelineView_->selectedTrack(), timelineView_->selectedClip());
 		const qint64 ph = timelinePlayheadMs();
-		timelineView_->editClipsAt(texts, [&](const QPair<int, int> &at, TlClip &o) {
+		timelineView_->editClipsAt(selection, [&](const QPair<int, int> &at, TlClip &o) {
 			if (at == clicked) {
 				o = c;
 				return;

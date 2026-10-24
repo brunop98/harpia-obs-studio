@@ -163,7 +163,7 @@ if [ ! -f "$QJSLIB/libqjs.a" ]; then # the same one-time build run_units.sh does
 fi
 mkdir -p "$WORK/win/obj" "$WORK/win/moc"
 ( cd "$H"
-  WSRCS=$(ls editor/*.cpp editor/*/*.cpp ui/*.cpp library/*.cpp core/ShareExporter.cpp platform/OsIntegrationStub.cpp tests/support/logger_stub.cpp | grep -v -E "ui/MainWindow.cpp|ui/WebcamPreview.cpp")
+  WSRCS=$(ls editor/*.cpp editor/*/*.cpp ui/*.cpp library/*.cpp core/ShareExporter.cpp core/AudioFileWriter.cpp platform/OsIntegrationStub.cpp tests/support/logger_stub.cpp | grep -v -E "ui/MainWindow.cpp|ui/WebcamPreview.cpp")
   for h in $(grep -l Q_OBJECT editor/*.hpp editor/*/*.hpp ui/*.hpp library/*.hpp core/ShareExporter.hpp | grep -v -E "ui/MainWindow.hpp|ui/WebcamPreview.hpp"); do
 	"$MOC" -I"$H" "$h" -o "$WORK/win/moc/moc_$(echo "$h" | tr '/' '_' | sed 's/.hpp$//').cpp"
   done
@@ -172,6 +172,12 @@ mkdir -p "$WORK/win/obj" "$WORK/win/moc"
 	"$H" "$WCF" "$WORK" )
 rm -f "$WORK/win/libeditor.a"
 ar rcs "$WORK/win/libeditor.a" "$WORK"/win/obj/*.o
+# Preview grips and body drags must transform the whole selection, including
+# video/image clips and keyframed clips, with one undo step per gesture.
+g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
+	-DSRC_MEDIA="\"$WORK/av_red.mp4\"" "$HERE/previewhandles_test.cpp" \
+	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
+	-o "$WORK/previewhandles_test" $WLF
 g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	"$HERE/projectwindow_test.cpp" \
 	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
@@ -329,4 +335,6 @@ HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen
 	"$WORK/keylistwindow_test" "$WORK" || rc=1
 HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
 	"$WORK/cliplibrarydelete_test" "$WORK" || rc=1
+XDG_DATA_HOME="$WORK/home/.local/share" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
+	"$WORK/previewhandles_test" || rc=1
 exit $rc

@@ -66,16 +66,28 @@ bool writePart(const QString &input, const QString &path, const Boundary &start,
 	const AVRational videoBase = m.input->streams[video]->time_base;
 	if (!first && av_seek_frame(m.input, video, start.dts, AVSEEK_FLAG_BACKWARD) < 0)
 		return false;
-	std::vector<int> map(m.input->nb_streams, -1);
+	struct StreamMapping {
+		int output = -1;
+		int64_t lo = 0, hi = 0, offset = 0;
+	};
+	std::vector<StreamMapping> mappings(m.input->nb_streams);
 	for (int si : {video, audio}) {
 		if (si < 0)
 			continue;
+		AVStream *in = m.input->streams[si];
 		AVStream *out = avformat_new_stream(m.output, nullptr);
-		if (!out || avcodec_parameters_copy(out->codecpar, m.input->streams[si]->codecpar) < 0)
+		if (!out || avcodec_parameters_copy(out->codecpar, in->codecpar) < 0)
 			return false;
 		out->codecpar->codec_tag = 0;
-		out->time_base = m.input->streams[si]->time_base;
-		map[si] = out->index;
+		out->time_base = in->time_base;
+		StreamMapping &mapping = mappings[si];
+		mapping.output = out->index;
+		// Stream clocks and this part's boundaries stay fixed throughout the
+		// remux. Rescale once per stream instead of for every packet.
+		mapping.offset = av_rescale_q(start.pts, videoBase, in->time_base);
+		mapping.lo = si == video ? start.dts : mapping.offset;
+		mapping.hi = !end ? std::numeric_limits<int64_t>::max()
+				 : (si == video ? end->dts : av_rescale_q(end->pts, videoBase, in->time_base));
 	}
 	m.output->avoid_negative_ts = AVFMT_AVOID_NEG_TS_DISABLED;
 	if (avio_open(&m.output->pb, path.toUtf8().constData(), AVIO_FLAG_WRITE) < 0)
@@ -96,22 +108,20 @@ bool writePart(const QString &input, const QString &path, const Boundary &start,
 			continue;
 		}
 		AVStream *in = m.input->streams[si];
+		const StreamMapping &mapping = mappings[si];
 		const int64_t clock = si == video ? packet->dts : packet->pts;
 		if (clock == AV_NOPTS_VALUE)
 			return false;
 		// Video stays in its closed GOP; audio follows the presentation-time
 		// boundary. A common offset preserves their sync, including B-frames.
-		const int64_t lo = si == video ? start.dts : av_rescale_q(start.pts, videoBase, in->time_base);
-		const int64_t hi = !end ? std::numeric_limits<int64_t>::max()
-				       : (si == video ? end->dts : av_rescale_q(end->pts, videoBase, in->time_base));
-		if (clock >= hi) {
+		if (clock >= mapping.hi) {
 			(si == video ? videoDone : audioDone) = true;
 			av_packet_unref(packet);
 			if (videoDone && audioDone)
 				break;
 			continue;
 		}
-		if (clock < lo && !(first && si == audio)) {
+		if (clock < mapping.lo && !(first && si == audio)) {
 			av_packet_unref(packet);
 			continue;
 		}
@@ -120,12 +130,11 @@ bool writePart(const QString &input, const QString &path, const Boundary &start,
 				return false;
 			wroteVideo = true;
 		}
-		const int64_t offset = av_rescale_q(start.pts, videoBase, in->time_base);
 		if (packet->pts != AV_NOPTS_VALUE)
-			packet->pts -= offset;
+			packet->pts -= mapping.offset;
 		if (packet->dts != AV_NOPTS_VALUE)
-			packet->dts -= offset;
-		AVStream *out = m.output->streams[map[si]];
+			packet->dts -= mapping.offset;
+		AVStream *out = m.output->streams[mapping.output];
 		av_packet_rescale_ts(packet, in->time_base, out->time_base);
 		packet->stream_index = out->index;
 		packet->pos = -1;

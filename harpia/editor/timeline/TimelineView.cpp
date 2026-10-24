@@ -1921,7 +1921,7 @@ struct AaOn {
 };
 } // namespace
 
-void TimelineView::drawClip(QPainter &p, int track, int clip) const
+void TimelineView::drawClip(QPainter &p, int track, int clip, bool silent) const
 {
 	const TlTrack &t = model_.tracks[track];
 	const TlClip &c = t.clips[clip];
@@ -1937,8 +1937,6 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	const QRect content = contentRect();
 	if (r.right() < content.x() || r.x() > content.right())
 		return;
-	QPainterPath path;
-	path.addRoundedRect(r, lp_.clipRadius, lp_.clipRadius);
 	p.setPen(Qt::NoPen);
 	// Clips take their track's colour (selection brightens it); text clips get a
 	// slight violet lean so they still read as captions.
@@ -1959,7 +1957,6 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 	// A lane that is out of the picture or out of the mix -- muted, or soloed
 	// out by another lane -- paints dim. (An effect lane has no sound, and
 	// trackAudible says so; only its `hidden` counts there.)
-	const bool silent = TlTrack::kindHasSound(t.kind) && !model_.trackAudible(t);
 	if (t.hidden || silent)
 		fill = fill.darker(160);
 	p.setBrush(fill);
@@ -1991,6 +1988,8 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 		return;
 	}
 
+	QPainterPath path;
+	path.addRoundedRect(r, lp_.clipRadius, lp_.clipRadius);
 	{
 		AaOn aa(p);
 		p.drawPath(path);
@@ -2120,16 +2119,18 @@ void TimelineView::drawClip(QPainter &p, int track, int clip) const
 		p.fillRect(QRect(r.x(), r.bottom() - 12, r.width(), 13), QColor(0, 0, 0, 150));
 		p.setPen(QColor(0xe6, 0xe6, 0xe6));
 		QString what;
-		if (isText)
+		if (isText) {
 			// The cased text, so the strip's label reads the way the
 			// canvas does rather than showing what was typed.
 			// A Random text says how many texts it has: "T ×3".
+			const QString plain = tlPlainText(c.text);
+			const qsizetype newline = plain.indexOf(QLatin1Char('\n'));
+			const QString firstLine = plain.left(newline < 0 ? plain.size() : newline);
 			what = (c.text.random ? QStringLiteral("T \u00D7%2  %1")
-							.arg(tlPlainText(c.text).split(QLatin1Char('\n')).value(0))
+							.arg(firstLine)
 							.arg(text_variations::optionsOf(c.text).size())
-					      : QStringLiteral("T  %1").arg(
-							tlPlainText(c.text).split(QLatin1Char('\n')).value(0)));
-		else if (isImage)
+					      : QStringLiteral("T  %1").arg(firstLine));
+		} else if (isImage)
 			what = QStringLiteral("IMG #%1").arg(c.sourceId);
 		else if (c.isRandomClip())
 			// A Random clip says how many clips it has, and which one shows.
@@ -2640,7 +2641,7 @@ void TimelineView::paintEvent(QPaintEvent *)
 		p.save();
 		p.setClipRect(contentRect());
 		for (int ci = 0; ci < t.clips.size(); ++ci)
-			drawClip(p, i, ci);
+			drawClip(p, i, ci, silent);
 		drawSplitSeams(p, i);
 		p.restore();
 

@@ -568,7 +568,7 @@ private:
 	void commitEdit(); // clipsChanged + editCommitted, for a finished action
 
 	void drawRuler(QPainter &p) const;
-	void drawClip(QPainter &p, int track, int clip) const;
+	void drawClip(QPainter &p, int track, int clip, bool silent) const;
 
 	// ---- fade handles (audio clips) ----
 	// Two grips at the top corners of an audio clip: drag them inwards to set

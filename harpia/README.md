@@ -166,6 +166,10 @@ The recorder has Linux and macOS code paths (capture, audio, idle detection),
 but Windows is the platform it is developed and tested on. Some features are
 Windows-only for now — window picking, click ripples, global hotkeys.
 
+See [macOS readiness](MACOS_READINESS.md) for the confirmed recording and
+packaging gaps, implementation order and native validation needed for a Mac
+release.
+
 ## Tests
 
 The tests build with plain `g++` against Qt 6 and FFmpeg — no libobs, no

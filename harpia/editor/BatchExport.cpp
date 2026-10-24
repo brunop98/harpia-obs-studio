@@ -54,8 +54,9 @@ bool BatchExporter::start(const QString &primaryInput, const ClipExporter::Optio
 void BatchExporter::cancel()
 {
 	cancel_.store(true);
-	if (ClipExporter *ex = current_.load())
-		ex->cancel();
+	QMutexLocker lock(&currentMutex_);
+	if (current_)
+		current_->cancel();
 }
 
 void BatchExporter::run(QString primaryInput, ClipExporter::Options base, QVector<Item> items)
@@ -106,24 +107,37 @@ void BatchExporter::run(QString primaryInput, ClipExporter::Options base, QVecto
 			},
 			Qt::DirectConnection);
 		connect(&ex, &ClipExporter::progress, &ex,
-			[&](int pct, qint64, qint64) {
+			[&](int pct, qint64, qint64 bytes) {
 				const double done = (i + std::clamp(pct, 0, 100) / 100.0) / count;
 				const qint64 elapsed = clock.elapsed();
 				const qint64 eta = done > 0.02 ? qint64(elapsed / done - elapsed) : 0;
+				emit outputBytes(bytes);
 				emit progress(i, count, int(done * 100.0), eta);
 			},
 			Qt::DirectConnection);
-		current_.store(&ex);
+		connect(&ex, &ClipExporter::stageChanged, &ex,
+			[this](const QString &stage) { emit stageChanged(stage); }, Qt::DirectConnection);
+		connect(&ex, &ClipExporter::frameProgress, &ex,
+			[this](qint64 completed, qint64 total) { emit frameProgress(completed, total); },
+			Qt::DirectConnection);
+		{
+			QMutexLocker lock(&currentMutex_);
+			current_ = &ex;
+		}
+		emit itemStarted(i, count, path);
 		emit progress(i, count, int(100.0 * i / count), 0);
 		if (!cancel_.load())
 			ex.run(primaryInput, path, o);
 		else
 			itemCanceled = true;
-		current_.store(nullptr);
+		{
+			QMutexLocker lock(&currentMutex_);
+			current_ = nullptr;
+		}
 
 		if (!ok) // never leave a partial or empty file behind
 			QFile::remove(path);
-		if (itemCanceled || cancel_.load()) {
+		if (itemCanceled || (!ok && cancel_.load())) {
 			canceled = true;
 			// Not counted either way: it was neither written nor refused.
 			break;

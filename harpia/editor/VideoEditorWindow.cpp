@@ -9,6 +9,7 @@
 #include <QUuid>
 
 #include "../ui/ExportDoneDialog.hpp"
+#include "../ui/ExportProgressDialog.hpp"
 #include "../ui/ColorField.hpp"
 #include "../ui/UiIcons.hpp"
 #include "component/BuiltinComponents.hpp"
@@ -14601,7 +14602,8 @@ void VideoEditorWindow::onSave()
 		// Through the same answer the preview uses, so the dialog cannot quote
 		// one resolution while the picture shows another.
 		ec.sourceSize = multiCutCanvasSize();
-		ec.fps = seeker_ ? seeker_->fps() : 30.0;
+		ec.fps = !sources_.empty() && sources_.front().seeker
+			 ? sources_.front().seeker->fps() : 30.0;
 		ec.seconds = tracks_->totalOutputMs() / 1000.0;
 		ec.previewFrame = canvas_->currentFrame();
 		// The Batch tab: each cut to its own file.
@@ -14788,20 +14790,53 @@ void VideoEditorWindow::onSave()
 	connect(exporter_, &ClipExporter::progress, this, &VideoEditorWindow::onExportProgress);
 	connect(exporter_, &ClipExporter::finished, this, &VideoEditorWindow::onExportFinished);
 
-	progress_ = new QProgressDialog(QStringLiteral("Exporting %1…").arg(ClipExporter::extensionFor(fmt).toUpper()),
-					QStringLiteral("Cancel"), 0, 100, this);
-	progress_->setWindowModality(Qt::WindowModal);
-	progress_->setAutoClose(false);
-	progress_->setAutoReset(false);
-	progress_->setMinimumDuration(0);
-	connect(progress_, &QProgressDialog::canceled, this, [this]() {
+	progress_ = new ExportProgressDialog(outPath_, exportSettingsSummary(o), this);
+	connect(exporter_, &ClipExporter::stageChanged, progress_, &ExportProgressDialog::setStage);
+	connect(exporter_, &ClipExporter::frameProgress, progress_, &ExportProgressDialog::setFrameProgress);
+	connect(progress_, &ExportProgressDialog::cancelRequested, this, [this]() {
 		if (exporter_)
 			exporter_->cancel();
 	});
-	progress_->setValue(0);
 	progress_->show(); // ensure the modal progress is visible immediately
 
 	exportThread_ = std::thread([this, o]() { exporter_->run(inPath_, outPath_, o); });
+}
+
+QString VideoEditorWindow::exportSettingsSummary(const ClipExporter::Options &o) const
+{
+	const FrameSeeker *source = seeker_;
+	if (!o.cuts.empty() && !sources_.empty() && sources_.front().seeker)
+		source = sources_.front().seeker.get();
+	QSize size(o.outWidth, o.outHeight);
+	if (size.isEmpty()) {
+		if (o.canvasW > 0 && o.canvasH > 0)
+			size = QSize(o.canvasW, o.canvasH);
+		else if (o.crop && o.cropW > 0 && o.cropH > 0)
+			size = QSize(o.cropW, o.cropH);
+		else if (source)
+			size = QSize(source->width(), source->height());
+	}
+	const bool gif = o.format == ClipExporter::Format::Gif;
+	double fps = gif ? o.gifFps : o.outFps;
+	if (fps <= 0.0)
+		fps = o.canvasW > 0 ? o.timelineFps : (source ? source->fps() : 0.0);
+	QStringList parts{ClipExporter::extensionFor(o.format).toUpper()};
+	if (!size.isEmpty())
+		parts << QStringLiteral("%1 × %2").arg(std::max(2, size.width() & ~1))
+						.arg(std::max(2, size.height() & ~1));
+	if (fps > 0.0)
+		parts << QStringLiteral("%1 fps").arg(fps, 0, 'f', qFuzzyCompare(fps, std::round(fps)) ? 0 : 2);
+	if (gif) {
+		parts << QStringLiteral("%1 colors").arg(o.gifColors);
+	} else {
+		parts << (o.videoCrf == 0 ? QStringLiteral("Lossless") : QStringLiteral("Quality CRF %1").arg(o.videoCrf));
+		switch (o.effort) {
+		case ClipExporter::Options::Effort::Fast: parts << QStringLiteral("Fast encoding"); break;
+		case ClipExporter::Options::Effort::Balanced: parts << QStringLiteral("Balanced encoding"); break;
+		case ClipExporter::Options::Effort::Best: parts << QStringLiteral("Best compression"); break;
+		}
+	}
+	return parts.join(QStringLiteral("  ·  "));
 }
 
 void VideoEditorWindow::startBatchExport(const ClipExporter::Options &base, const QVector<int> &selection,
@@ -14835,23 +14870,26 @@ void VideoEditorWindow::startBatchItems(const ClipExporter::Options &base,
 	connect(batch_, &BatchExporter::progress, this, &VideoEditorWindow::onBatchProgress);
 	connect(batch_, &BatchExporter::finished, this, &VideoEditorWindow::onBatchFinished);
 
-	batchProgress_ = new QProgressDialog(QStringLiteral("Exporting %1 clips…").arg(items.size()),
-					     QStringLiteral("Cancel"), 0, 100, this);
-	batchProgress_->setWindowModality(Qt::WindowModal);
-	batchProgress_->setAutoClose(false);
-	batchProgress_->setAutoReset(false);
-	batchProgress_->setMinimumDuration(0);
-	connect(batchProgress_, &QProgressDialog::canceled, this, [this]() {
-		if (batch_) {
+	const QString firstPath = QDir(folder).filePath(items.front().name + QLatin1Char('.') +
+						      ClipExporter::extensionFor(base.format));
+	batchProgress_ = new ExportProgressDialog(firstPath, exportSettingsSummary(base), this);
+	batchProgress_->setItemProgress(0, items.size());
+	connect(batch_, &BatchExporter::stageChanged, batchProgress_, &ExportProgressDialog::setStage);
+	connect(batch_, &BatchExporter::frameProgress, batchProgress_, &ExportProgressDialog::setFrameProgress);
+	connect(batch_, &BatchExporter::outputBytes, batchProgress_, &ExportProgressDialog::setBytes);
+	connect(batch_, &BatchExporter::itemStarted, batchProgress_,
+		[panel = batchProgress_](int index, int count, const QString &path) {
+			panel->setItemProgress(index, count);
+			panel->setOutputPath(path);
+		});
+	connect(batchProgress_, &ExportProgressDialog::cancelRequested, this, [this]() {
+		if (batch_)
 			batch_->cancel();
-			if (batchProgress_)
-				batchProgress_->setLabelText(QStringLiteral("Stopping after this clip…"));
-		}
 	});
-	batchProgress_->setValue(0);
 	batchProgress_->show();
 
 	if (!batch_->start(inPath_, base, items, folder)) {
+		batchProgress_->finish(false);
 		batchProgress_->deleteLater();
 		batchProgress_ = nullptr;
 		batch_->deleteLater();
@@ -14874,24 +14912,16 @@ void VideoEditorWindow::startBatchForTest(const QString &folder)
 
 void VideoEditorWindow::onBatchProgress(int index, int count, int overallPct, qint64 etaMs)
 {
-	if (!batchProgress_ || batchProgress_->wasCanceled())
+	if (!batchProgress_)
 		return;
-	QString label = QStringLiteral("Exporting clip %1 of %2…   %3%").arg(index + 1).arg(count).arg(overallPct);
-	if (etaMs > 0)
-		label += QStringLiteral("   ~%1s left").arg((etaMs + 500) / 1000);
-	batchProgress_->setLabelText(label);
-	// Last, and nothing after it. On a modal dialog setValue() runs the event
-	// loop, which can deliver the batch's finished() right here --
-	// onBatchFinished then deletes the dialog and clears batchProgress_. The
-	// label used to be set after this, through the cleared pointer, and the
-	// editor crashed as the export ended (tests/exportprogress_test.cpp).
-	batchProgress_->setValue(overallPct);
+	batchProgress_->setItemProgress(index, count);
+	batchProgress_->setProgress(overallPct, etaMs, 0);
 }
 
 void VideoEditorWindow::onBatchFinished(int okCount, int failCount, bool canceled)
 {
 	if (batchProgress_) {
-		batchProgress_->reset();
+		batchProgress_->finish(!canceled && failCount == 0);
 		batchProgress_->deleteLater();
 		batchProgress_ = nullptr;
 	}
@@ -14925,25 +14955,17 @@ void VideoEditorWindow::onBatchFinished(int okCount, int failCount, bool cancele
 
 void VideoEditorWindow::onExportProgress(int pct, qint64 etaMs, qint64 bytes)
 {
-	if (!progress_)
-		return;
-	QString label = QStringLiteral("Exporting… %1%").arg(pct);
-	if (bytes > 0)
-		label += QStringLiteral("   %1 MB").arg(bytes / (1024.0 * 1024.0), 0, 'f', 1);
-	if (etaMs > 0)
-		label += QStringLiteral("   ~%1s left").arg((etaMs + 500) / 1000);
-	progress_->setLabelText(label);
-	// Last, and nothing after it: setValue() on a modal dialog runs the event
-	// loop, which can deliver finished() -- and onExportFinished deletes the
-	// dialog and clears progress_ (see onBatchProgress).
-	progress_->setValue(pct);
+	if (progress_)
+		progress_->setProgress(pct, etaMs, bytes);
 }
 
 void VideoEditorWindow::onExportFinished(bool ok, bool canceled, const QString &err)
 {
 	joinExport();
+	if (canceled || !ok)
+		QFile::remove(outPath_); // cleanup completes before the progress panel closes
 	if (progress_) {
-		progress_->reset();
+		progress_->finish(ok && !canceled);
 		progress_->deleteLater();
 		progress_ = nullptr;
 	}
@@ -14953,7 +14975,6 @@ void VideoEditorWindow::onExportFinished(bool ok, bool canceled, const QString &
 	}
 
 	if (canceled || !ok) {
-		QFile::remove(outPath_); // never leave a partial file
 		if (!canceled) {
 			const QString report = err.isEmpty() ? QStringLiteral("Could not export the clip.") : err;
 			editorLog(EditorLogLevel::Error, QStringLiteral("Export failed"), report);

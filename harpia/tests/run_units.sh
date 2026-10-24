@@ -830,6 +830,13 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/exportdone_test.cpp" "$H/ui/ExportDoneDialog.cpp" \
 	"$WORK/moc_ExportDoneDialog.cpp" -o "$WORK/exportdone_test" $LF
 
+# Export progress: cancellation remains visible until cleanup; final success
+# alone reaches 100, and rendering estimates cannot leak into audio/finalizing.
+"$MOC" -I"$H" "$H/ui/ExportProgressDialog.hpp" -o "$WORK/moc_ExportProgressDialog.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF $(pkg-config --cflags Qt6Test) \
+	"$HERE/exportpanel_test.cpp" "$H/ui/ExportProgressDialog.cpp" "$H/ui/UiText.cpp" \
+	"$WORK/moc_ExportProgressDialog.cpp" -o "$WORK/exportpanel_test" $LF $(pkg-config --libs Qt6Test)
+
 # Free disk space: the 2 GB threshold, the wording of the warning, and the line
 # the recording screen shows.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -1075,6 +1082,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/timelineoverview_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/filmstrip_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/deleterouting_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportdone_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/exportpanel_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/diskspace_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/devpanelreset_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/projectroundtrip_test" || rc=1

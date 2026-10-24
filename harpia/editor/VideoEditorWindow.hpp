@@ -83,6 +83,7 @@ namespace harpia {
 class PreviewDecoder;
 class TimelineOverview;
 class ProxyBuilder;
+class ExportProgressDialog;
 
 // A full snapshot of the editor's undoable state. Undo/redo restores one of
 // these; snapshot-based history is simple and robust for this size of state.
@@ -324,7 +325,7 @@ private slots:
 
 private:
 	BatchExporter *batch_ = nullptr;
-	QProgressDialog *batchProgress_ = nullptr;
+	ExportProgressDialog *batchProgress_ = nullptr;
 	bool batchOpenFolder_ = false;
 	int batchTotal_ = 0;
 
@@ -509,6 +510,7 @@ private:
 	void refreshPreviewAtPlayhead(); // re-render at the current position
 	void showFrame(int sourceId, qint64 ms);
 	void joinExport();
+	QString exportSettingsSummary(const ClipExporter::Options &options) const;
 	void startPlayback();
 	void stopPlayback();
 	// The three editor modes map 1:1 onto stack_ page indices.
@@ -1379,7 +1381,7 @@ private:
 
 	ClipExporter *exporter_ = nullptr;
 	std::thread exportThread_;
-	QProgressDialog *progress_ = nullptr;
+	ExportProgressDialog *progress_ = nullptr;
 	QString outPath_;
 	// Set by "Export this clip…" and consumed by the next onSave(), which is
 	// what makes that menu item open the ORDINARY export window rather than a

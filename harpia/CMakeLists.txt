@@ -191,6 +191,8 @@ target_sources(
     ui/SystemSettingsWidget.hpp
     ui/ExportDoneDialog.cpp
     ui/ExportDoneDialog.hpp
+    ui/ExportProgressDialog.cpp
+    ui/ExportProgressDialog.hpp
     ui/ErrorLogsPanel.cpp
     ui/ErrorLogsPanel.hpp
     ui/MainDevPanel.cpp

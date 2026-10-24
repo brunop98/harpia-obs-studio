@@ -17,6 +17,7 @@
 #include "SwsImage.hpp"
 
 #include <QImage>
+#include <QFileInfo>
 #include <QDebug>
 #include <QSize>
 #include <QTemporaryDir>
@@ -536,6 +537,7 @@ struct VideoSink {
 	AVPacket *pkt; // scratch for the drained packets; owned by the caller
 	ShaderPass shader;
 	int shaderFrame = 0;
+	qint64 framesSubmitted = 0;
 
 	// Compile the effect chain, if there is one. Callers that bake no shaders
 	// (the timeline composites them as components) simply do not call this, and
@@ -567,6 +569,8 @@ struct VideoSink {
 			s.cover->offer(f, double(f->pts) * av_q2d(s.venc->time_base));
 		if (avcodec_send_frame(s.venc, f) < 0)
 			return false;
+		if (f)
+			++framesSubmitted;
 		while (true) {
 			const int r = avcodec_receive_packet(s.venc, pkt);
 			if (r == AVERROR(EAGAIN) || r == AVERROR_EOF)
@@ -587,12 +591,47 @@ struct VideoSink {
 	}
 };
 
+QString finalizeOutput(VideoState &s, VideoSink &encode)
+{
+	if (!encode(nullptr))
+		return QStringLiteral("Could not flush the video encoder.");
+	const int trailerResult = av_write_trailer(s.ofmt);
+	int closeResult = 0;
+	if (s.ofmt->pb && !(s.ofmt->oformat->flags & AVFMT_NOFILE))
+		closeResult = avio_closep(&s.ofmt->pb);
+	const int result = trailerResult < 0 ? trailerResult : closeResult;
+	if (result < 0) {
+		char why[AV_ERROR_MAX_STRING_SIZE] = {};
+		av_strerror(result, why, sizeof(why));
+		return QStringLiteral("Could not finalize the output file: %1 (FFmpeg %2).")
+			.arg(QString::fromUtf8(why)).arg(result);
+	}
+	return QString();
+}
 
 } // namespace
 
+void ClipExporter::reportProgress(int percent, qint64 etaMs, qint64 outBytes)
+{
+	// Each pass owns part of the progress range: a timeline-to-GIF export and
+	// the audio pass must not move the overall bar backwards. Completion is
+	// reserved for finished(), after the output has been closed successfully.
+	emit progress(std::clamp(progressBase_ + std::clamp(percent, 0, 100) * progressSpan_ / 100, 0, 99),
+		      etaMs, reportOutputBytes_ ? outBytes : 0);
+}
+
 void ClipExporter::run(const QString &inPath, const QString &outPath, const Options &opts)
 {
-	cancel_.store(false);
+	if (cancel_.load()) {
+		emit finished(false, true, QString());
+		return;
+	}
+	progressBase_ = 0;
+	reportOutputBytes_ = true;
+	progressSpan_ = (!opts.timeline.isEmpty() || !opts.voiceovers.empty()) ? 95 : 99;
+	emit stageChanged(QStringLiteral("Preparing export"));
+	emit frameProgress(0, 0);
+	reportProgress(0, 0, 0);
 
 	// However this returns -- finished, cancelled, or any of the dozen early
 	// errors below -- give back the GL a shader component created on THIS
@@ -635,7 +674,10 @@ void ClipExporter::run(const QString &inPath, const QString &outPath, const Opti
 			gifIn = tlTmp.filePath(QStringLiteral("timeline.mp4"));
 			Options pre = opts;
 			pre.format = Format::Mp4;
+			progressSpan_ = 50;
+			reportOutputBytes_ = false; // the intermediate MP4 is not the destination GIF
 			const QString rerr = runTimeline(gifIn, pre);
+			reportOutputBytes_ = true;
 			if (cancel_.load()) {
 				emit finished(false, true, QString());
 				return;
@@ -670,9 +712,18 @@ void ClipExporter::run(const QString &inPath, const QString &outPath, const Opti
 		gp.loop = gifOpts.gifLoop;
 		gp.speed = gifOpts.speed;
 		QString err;
+		progressBase_ = opts.timeline.isEmpty() ? 0 : 50;
+		progressSpan_ = 99 - progressBase_;
+		emit stageChanged(QStringLiteral("Encoding GIF"));
+		emit frameProgress(0, 0);
+		reportProgress(0, 0, 0);
 		const bool ok = GifEncoder::encode(
 			gifIn, outPath, gp, [this]() { return cancel_.load(); },
-			[this](int pct, qint64 eta, qint64 bytes) { emit progress(pct, eta, bytes); }, &err);
+			[this](int pct, qint64 eta, qint64 bytes) { reportProgress(pct, eta, bytes); }, &err);
+		if (ok && !cancel_.load()) {
+			emit stageChanged(QStringLiteral("Finalizing file"));
+			emit progress(99, 0, QFileInfo(outPath).size());
+		}
 		if (cancel_.load())
 			emit finished(false, true, QString());
 		else
@@ -695,13 +746,19 @@ void ClipExporter::run(const QString &inPath, const QString &outPath, const Opti
 	// only; GIF returned above). The timeline mixes every clip at its own
 	// position; the other modes mix the voiceover takes over the source audio.
 	if (err.isEmpty() && timeline && !cancel_.load()) {
-		emit progress(97, 0, 0);
+		emit stageChanged(QStringLiteral("Mixing audio"));
+		emit progress(97, 0, QFileInfo(outPath).size());
 		err = mixTimelineAudio(outPath, opts);
 	} else if (err.isEmpty() && !opts.voiceovers.empty() && !cancel_.load()) {
-		emit progress(97, 0, 0);
+		emit stageChanged(QStringLiteral("Mixing audio"));
+		emit progress(97, 0, QFileInfo(outPath).size());
 		err = mixVoiceover(outPath, opts);
 	}
 
+	if (err.isEmpty() && !cancel_.load()) {
+		emit stageChanged(QStringLiteral("Finalizing file"));
+		emit progress(99, 0, QFileInfo(outPath).size());
+	}
 	if (cancel_.load())
 		emit finished(false, true, QString());
 	else
@@ -838,6 +895,7 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 	AVFrame *frame = av_frame_alloc();
 	AVPacket *outPkt = av_packet_alloc();
 	bool errored = false;
+	QString finalError;
 	bool videoDone = false;
 
 	// Encoder pts, rebased to the trim start and compressed by the speed factor
@@ -858,6 +916,8 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 	if (QString e = encodeVideo.initShader(opts); !e.isEmpty())
 		return e;
 
+	emit stageChanged(QStringLiteral("Rendering video"));
+	emit frameProgress(0, 0);
 	while (!errored && !videoDone) {
 		if (cancel_.load())
 			break;
@@ -938,7 +998,8 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 			const qint64 eta = (totalMs > 0 && speed > 0.01)
 						   ? qint64((totalMs - processedMs) / 1000.0 / speed * 1000.0)
 						   : 0;
-			emit progress(pct, eta, s.ofmt->pb ? avio_tell(s.ofmt->pb) : 0);
+			emit frameProgress(encodeVideo.framesSubmitted, 0);
+			reportProgress(pct, eta, s.ofmt->pb ? avio_tell(s.ofmt->pb) : 0);
 		}
 	}
 
@@ -974,8 +1035,11 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 			}
 			av_frame_unref(frame);
 		}
-		encodeVideo(nullptr); // flush encoder
-		av_write_trailer(s.ofmt);
+		emit frameProgress(encodeVideo.framesSubmitted, 0);
+		reportProgress(100, 0, s.ofmt->pb ? avio_tell(s.ofmt->pb) : 0);
+		emit stageChanged(QStringLiteral("Finalizing file"));
+		if (!cancel_.load())
+			finalError = finalizeOutput(s, encodeVideo);
 	}
 
 	av_packet_free(&pkt);
@@ -987,6 +1051,8 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 
 	if (cancel_.load())
 		return QString();
+	if (!finalError.isEmpty())
+		return finalError;
 	return errored ? QStringLiteral("Encoding failed.") : QString();
 }
 
@@ -1131,6 +1197,8 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 	auto lastEmit = startWall;
 	double processedMs = 0.0;
 
+	emit stageChanged(QStringLiteral("Rendering video"));
+	emit frameProgress(0, 0);
 	for (size_t ci = 0; ci < cuts.size() && !errored; ++ci) {
 		if (cancel_.load())
 			break;
@@ -1229,7 +1297,8 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 						? qint64((totalOutMs - processedMs) / 1000.0 / rate *
 							 1000.0)
 						: 0;
-				emit progress(pct, eta, s.ofmt->pb ? avio_tell(s.ofmt->pb) : 0);
+				emit frameProgress(encodeVideo.framesSubmitted, 0);
+				reportProgress(pct, eta, s.ofmt->pb ? avio_tell(s.ofmt->pb) : 0);
 			}
 		}
 
@@ -1262,8 +1331,13 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 		if (ain && !retimer.finish(writeAudio, &audioErr))
 			errored = true;
 		if (!errored) {
-			encodeVideo(nullptr); // flush the video encoder
-			av_write_trailer(s.ofmt);
+			emit frameProgress(encodeVideo.framesSubmitted, 0);
+			reportProgress(100, 0, s.ofmt->pb ? avio_tell(s.ofmt->pb) : 0);
+			emit stageChanged(QStringLiteral("Finalizing file"));
+			if (!cancel_.load()) {
+				audioErr = finalizeOutput(s, encodeVideo);
+				errored = !audioErr.isEmpty();
+			}
 		}
 	}
 
@@ -1470,6 +1544,8 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 	const auto startWall = std::chrono::steady_clock::now();
 	auto lastEmit = startWall;
 
+	emit stageChanged(QStringLiteral("Rendering video"));
+	emit frameProgress(0, 0);
 	for (size_t ci = 0; ci < cuts.size() && !errored; ++ci) {
 		if (cancel_.load())
 			break;
@@ -1575,7 +1651,8 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 					(totalOutMs > 0 && rate > 0.01)
 						? qint64((totalOutMs - processedMs) / 1000.0 / rate * 1000.0)
 						: 0;
-				emit progress(pct, eta, s.ofmt->pb ? avio_tell(s.ofmt->pb) : 0);
+				emit frameProgress(encodeVideo.framesSubmitted, 0);
+				reportProgress(pct, eta, s.ofmt->pb ? avio_tell(s.ofmt->pb) : 0);
 			}
 		}
 
@@ -1605,8 +1682,13 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 		if (wantAudio && !retimer.finish(writeAudio, &audioErr))
 			errored = true;
 		if (!errored) {
-			encodeVideo(nullptr);
-			av_write_trailer(s.ofmt);
+			emit frameProgress(encodeVideo.framesSubmitted, 0);
+			reportProgress(100, 0, s.ofmt->pb ? avio_tell(s.ofmt->pb) : 0);
+			emit stageChanged(QStringLiteral("Finalizing file"));
+			if (!cancel_.load()) {
+				audioErr = finalizeOutput(s, encodeVideo);
+				errored = !audioErr.isEmpty();
+			}
 		}
 	}
 
@@ -1896,6 +1978,9 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 
 	// ---- Render every frame -----------------------------------------------
 	const auto t0 = std::chrono::steady_clock::now();
+	auto lastEmit = t0;
+	emit stageChanged(QStringLiteral("Rendering video"));
+	emit frameProgress(0, frames);
 	for (int64_t i = 0; i < frames; ++i) {
 		if (cancel_.load())
 			break;
@@ -1937,23 +2022,28 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 			return QStringLiteral("Encoding failed.");
 		}
 
-		if ((i % 8) == 0) {
+		const auto now = std::chrono::steady_clock::now();
+		if (i == frames - 1 || std::chrono::duration_cast<std::chrono::milliseconds>(now - lastEmit).count() >= 200) {
+			lastEmit = now;
 			const double done = double(i + 1) / double(frames);
-			const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-						     std::chrono::steady_clock::now() - t0)
-						     .count();
+			const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
 			const qint64 eta = done > 0.01 ? qint64(elapsed / done - elapsed) : 0;
 			const qint64 bytes = s.ofmt->pb ? avio_tell(s.ofmt->pb) : 0;
-			emit progress(std::min(95, int(done * 95.0)), eta, bytes);
+			emit frameProgress(encode.framesSubmitted, frames);
+			reportProgress(std::min(100, int(done * 100.0)), eta, bytes);
 		}
 	}
 
-	encode(nullptr); // flush
-	av_write_trailer(s.ofmt);
+	QString finalError;
+	if (!cancel_.load()) {
+		emit stageChanged(QStringLiteral("Finalizing file"));
+		if (!cancel_.load())
+			finalError = finalizeOutput(s, encode);
+	}
 	cleanup();
 	if (cancel_.load())
 		return QString();
-	return QString();
+	return finalError;
 }
 
 QString ClipExporter::mixTimelineAudio(const QString &videoPath, const Options &opts)

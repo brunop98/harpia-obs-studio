@@ -234,10 +234,13 @@ bool GifEncoder::encode(const QString &inPath, const QString &outPath, const Par
 	AVFrame *filt = av_frame_alloc();
 	AVPacket *outPkt = av_packet_alloc();
 	bool errored = false;
+	int finalResult = 0;
 	bool done = false;
 
 	auto drainSink = [&]() -> bool {
 		while (true) {
+			if (canceled())
+				return false;
 			int r = av_buffersink_get_frame(s.sinkCtx, filt);
 			if (r == AVERROR(EAGAIN) || r == AVERROR_EOF)
 				break;
@@ -339,15 +342,28 @@ bool GifEncoder::encode(const QString &inPath, const QString &outPath, const Par
 
 	if (!errored && !canceled()) {
 		// Flush the graph: now palettegen emits the palette and paletteuse runs.
-		if (av_buffersrc_add_frame(s.srcCtx, nullptr) >= 0 && drainSink()) {
-			avcodec_send_frame(s.enc, nullptr);
-			while (avcodec_receive_packet(s.enc, outPkt) >= 0) {
+		if (av_buffersrc_add_frame(s.srcCtx, nullptr) >= 0 && drainSink() && !canceled()) {
+			finalResult = avcodec_send_frame(s.enc, nullptr);
+			errored = finalResult < 0;
+			while (!errored && !canceled()) {
+				const int result = avcodec_receive_packet(s.enc, outPkt);
+				if (result == AVERROR_EOF)
+					break;
+				if (result < 0) {
+					finalResult = result;
+					errored = true;
+					break;
+				}
 				av_packet_rescale_ts(outPkt, s.enc->time_base, st->time_base);
 				outPkt->stream_index = 0;
-				av_interleaved_write_frame(s.ofmt, outPkt);
+				finalResult = av_interleaved_write_frame(s.ofmt, outPkt);
 				av_packet_unref(outPkt);
+				errored = finalResult < 0;
 			}
-			av_write_trailer(s.ofmt);
+			if (!errored && !canceled()) {
+				finalResult = av_write_trailer(s.ofmt);
+				errored = finalResult < 0;
+			}
 		} else {
 			errored = true;
 		}
@@ -358,11 +374,24 @@ bool GifEncoder::encode(const QString &inPath, const QString &outPath, const Par
 	av_frame_free(&filt);
 	av_packet_free(&outPkt);
 
-	if (s.ofmt && s.ofmt->pb && !(s.ofmt->oformat->flags & AVFMT_NOFILE))
-		avio_closep(&s.ofmt->pb);
+	if (s.ofmt && s.ofmt->pb && !(s.ofmt->oformat->flags & AVFMT_NOFILE)) {
+		const int closeResult = avio_closep(&s.ofmt->pb);
+		if (!errored && closeResult < 0) {
+			finalResult = closeResult;
+			errored = true;
+		}
+	}
 
 	if (canceled())
 		return false;
+	if (finalResult < 0) {
+		char why[AV_ERROR_MAX_STRING_SIZE] = {};
+		av_strerror(finalResult, why, sizeof(why));
+		if (error)
+			*error = QStringLiteral("Could not finalize the GIF file: %1 (FFmpeg %2).")
+				.arg(QString::fromUtf8(why)).arg(finalResult);
+		return false;
+	}
 	if (errored)
 		return fail("GIF encoding failed.");
 	return true;

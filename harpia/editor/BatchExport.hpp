@@ -122,6 +122,11 @@ signals:
 	// `index` is the clip being written (0-based), `overallPct` the whole
 	// batch, `etaMs` for the rest of the batch (0 while unknown).
 	void progress(int index, int count, int overallPct, qint64 etaMs);
+	// Details for the file being written. Sent before its first stage/progress.
+	void itemStarted(int index, int count, const QString &path);
+	void stageChanged(const QString &stage);
+	void frameProgress(qint64 completed, qint64 total);
+	void outputBytes(qint64 bytes);
 	void itemFinished(int index, bool ok, const QString &path, const QString &error);
 	void finished(int okCount, int failCount, bool canceled);
 
@@ -132,7 +137,10 @@ private:
 	std::thread thread_;
 	std::atomic<bool> running_{false};
 	std::atomic<bool> cancel_{false};
-	std::atomic<ClipExporter *> current_{nullptr}; // the clip being written, for cancel()
+	// cancel() and the worker share this pointer. The lock keeps the exporter
+	// alive until an in-flight cancel has finished touching it.
+	QMutex currentMutex_;
+	ClipExporter *current_ = nullptr;
 	QString folder_;
 	mutable QMutex resultsMutex_;
 	QVector<Result> results_;

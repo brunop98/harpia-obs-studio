@@ -87,6 +87,7 @@ build "$HERE/avsync_test.cpp" avsync_test
 build "$HERE/exportpaths_test.cpp" exportpaths_test
 build "$HERE/exportcolor_test.cpp" exportcolor_test
 build "$HERE/batchexport_test.cpp" batchexport_test
+build "$HERE/exporttelemetry_test.cpp" exporttelemetry_test
 # Every frame once: sources that number their frames, read the way an export
 # reads them and exported from a two-track 60 fps timeline.
 build "$HERE/exportcadence_test.cpp" exportcadence_test
@@ -301,8 +302,8 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	"$HERE/keylistwindow_test.cpp" \
 	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
 	-o "$WORK/keylistwindow_test" $WLF
-# An export finishing in the middle of a progress update (the modal dialog's
-# setValue() runs the event loop): the crash in v0.1.406, reproduced exactly.
+# Export lifecycle: queued completion never interrupts a progress update;
+# real cancellation cleans up before dismissal and success keeps the file.
 g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	"$HERE/exportprogress_test.cpp" \
 	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
@@ -318,6 +319,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/avsync_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportpaths_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportcolor_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/batchexport_test" "$WORK" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/exporttelemetry_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportcadence_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinemix_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/swsoverrun_test" "$WORK" || rc=1

@@ -726,14 +726,26 @@ QString VoiceoverMixer::mix(const QString &videoPath, double originalVolume, boo
 		}
 	}
 
-	av_write_trailer(out);
+	if (canceled())
+		return fail(QStringLiteral("Canceled."));
+	const int trailerResult = av_write_trailer(out);
+	int closeResult = 0;
+	if (out->pb && !(out->oformat->flags & AVFMT_NOFILE))
+		closeResult = avio_closep(&out->pb);
+	const int finalResult = trailerResult < 0 ? trailerResult : closeResult;
+	if (finalResult < 0) {
+		char why[AV_ERROR_MAX_STRING_SIZE] = {};
+		av_strerror(finalResult, why, sizeof(why));
+		return fail(QStringLiteral("Voiceover mix: could not finalize the output file: %1 (FFmpeg %2).")
+			.arg(QString::fromUtf8(why)).arg(finalResult));
+	}
+	if (canceled())
+		return fail(QStringLiteral("Canceled."));
 
 	avcodec_free_context(&enc);
 	av_frame_free(&frame);
 	av_packet_free(&pkt);
 	av_packet_free(&vpkt);
-	if (out->pb && !(out->oformat->flags & AVFMT_NOFILE))
-		avio_closep(&out->pb);
 	avformat_free_context(out);
 	avformat_close_input(&in);
 

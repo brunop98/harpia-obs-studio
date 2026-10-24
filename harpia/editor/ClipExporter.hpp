@@ -157,9 +157,16 @@ public:
 
 	void run(const QString &inPath, const QString &outPath, const Options &opts);
 	void cancel() { cancel_.store(true); }
+	// Only needed when reusing a canceled instance; call before launching its
+	// next worker. run() must preserve a cancel requested before worker start.
+	void resetCancellation() { cancel_.store(false); }
 
 signals:
 	void progress(int percent, qint64 etaMs, qint64 outBytes);
+	// Stage changes invalidate the preceding stage's time/frame estimates.
+	void stageChanged(const QString &stage);
+	// total == 0 means the source has no exact output-frame count (e.g. VFR).
+	void frameProgress(qint64 completed, qint64 total);
 	void finished(bool ok, bool canceled, const QString &error);
 
 private:
@@ -180,6 +187,10 @@ private:
 	// position (video clips contribute their source audio too).
 	QString mixTimelineAudio(const QString &videoPath, const Options &opts);
 
+	void reportProgress(int percent, qint64 etaMs, qint64 outBytes);
+	int progressBase_ = 0;
+	int progressSpan_ = 99;
+	bool reportOutputBytes_ = true;
 	std::atomic<bool> cancel_{false};
 };
 

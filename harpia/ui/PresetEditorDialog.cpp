@@ -1,4 +1,5 @@
 #include "PresetEditorDialog.hpp"
+#include "RecordingBitrateGuide.hpp"
 
 #include "MousePreview.hpp"
 #include "ShortcutConflictDialog.hpp"
@@ -472,7 +473,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	codecCombo_->setCurrentIndex(codecIdx);
 	codecRow_ = addField(
 		v, QStringLiteral("Codec"),
-		QStringLiteral("H.264 plays everywhere. HEVC and AV1 are smaller, need newer players."),
+		QStringLiteral("H.264 is widely supported. HEVC/AV1 can match quality at a lower bitrate, but need compatible players."),
 		codecCombo_);
 
 	fpsCombo_ = new QComboBox(this);
@@ -482,7 +483,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 		fpsCombo_->addItem(QString::number(val));
 	fpsCombo_->setCurrentText(QString::number(preset.fps));
 	addField(v, QStringLiteral("Frame rate (fps)"),
-		 QStringLiteral("30 suits most screen capture. 60 is smoother, and larger."),
+		 QStringLiteral("30 suits most screen capture. 60 is smoother, but may need a higher bitrate for similar quality."),
 		 fpsCombo_);
 
 	gpuCheck_ = new QCheckBox(QStringLiteral("Use GPU compression while recording"), this);
@@ -1242,18 +1243,24 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	frameRateModeCombo_->setCurrentIndex(frameRateModeCombo_->findData(int(preset.frameRateMode)));
 	frameRateModeRow_ = addField(
 		v, QStringLiteral("Frame rate mode"),
-		QStringLiteral("CFR is safest for editing. VFR saves space, some editors struggle."),
+		QStringLiteral("CFR is safest for editing. VFR adapts frame timing, but some editors struggle with it."),
 		frameRateModeCombo_);
 
 	// Bitrate: a dropdown of common presets, plus Auto and a Custom escape hatch
 	// that reveals the numeric field below.
 	bitrateCombo_ = new QComboBox(this);
+	bitrateCombo_->setObjectName(QStringLiteral("recordingBitrate"));
 	bitrateCombo_->addItem(QStringLiteral("Auto (Recommended)"), 0); // 0 = let the encoder decide
 	for (int kbps : {4000, 6000, 8000, 10000, 12000, 16000, 20000, 30000, 40000, 50000, 80000, 100000})
 		bitrateCombo_->addItem(QStringLiteral("%L1 kbps").arg(kbps), kbps);
 	bitrateCombo_->addItem(QStringLiteral("Custom…"), -1);
+	for (int i = 0; i < bitrateCombo_->count() - 1; ++i)
+		bitrateCombo_->setItemData(i, recordingBitrateGuide(bitrateCombo_->itemData(i).toInt()), Qt::ToolTipRole);
+	bitrateCombo_->setItemData(bitrateCombo_->count() - 1,
+		QStringLiteral("Enter a bitrate to see its estimated size and recording guidance."), Qt::ToolTipRole);
 
 	bitrateSpin_ = new QSpinBox(this);
+	bitrateSpin_->setObjectName(QStringLiteral("customRecordingBitrate"));
 	bitrateSpin_->setRange(500, 500000);
 	bitrateSpin_->setSingleStep(500);
 	bitrateSpin_->setSuffix(QStringLiteral(" kbps"));
@@ -1285,10 +1292,18 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	connect(bitrateSpin_, &QSpinBox::valueChanged, this, &PresetEditorDialog::updateValidation);
 
 	bitrateRow_ = addField(v, QStringLiteral("Bitrate"),
-			       QStringLiteral("Higher means better quality and bigger files. Auto picks sensibly."),
+			       QStringLiteral("A numeric bitrate controls video size. Higher values leave more room for detail. Auto targets quality instead."),
 			       bitrateCombo_);
-	v->addWidget(bitrateSpin_);
-	v->addSpacing(12);
+	auto *bitrateLayout = qobject_cast<QVBoxLayout *>(bitrateRow_->layout());
+	bitrateLayout->addWidget(bitrateSpin_);
+	bitrateGuide_ = new QLabel(this);
+	bitrateGuide_->setObjectName(QStringLiteral("recordingBitrateGuide"));
+	bitrateGuide_->setTextFormat(Qt::PlainText);
+	bitrateGuide_->setWordWrap(true);
+	bitrateGuide_->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+	bitrateGuide_->setStyleSheet(QStringLiteral(
+		"QLabel{color:#c8ccd4; background:#22262d; border:1px solid #3a3f48; border-radius:6px; padding:10px;}"));
+	bitrateLayout->addWidget(bitrateGuide_);
 	syncBitrate();
 	v->addStretch(1);
 	addPage(QStringLiteral("Advanced"), advancedPage);
@@ -1902,6 +1917,10 @@ void PresetEditorDialog::updateValidation()
 {
 	const auto format = RecordingFormat(formatCombo_->currentData().toInt());
 	const auto codec = VideoCodec(codecCombo_->currentData().toInt());
+	const int kbps = bitrateCombo_->currentData().toInt() == -1
+			 ? bitrateSpin_->value() : bitrateCombo_->currentData().toInt();
+	if (bitrateGuide_)
+		bitrateGuide_->setText(recordingBitrateGuide(kbps));
 
 	// GIF quietly overrides half this dialog, so the dialog stops offering the
 	// parts it overrides. Hidden rather than greyed, which is what every other
@@ -1941,13 +1960,10 @@ void PresetEditorDialog::updateValidation()
 		if (fps > 0 && fps < 10)
 			notes << QStringLiteral("Below 10 fps the recording will look like a slideshow.");
 
-		const int kbps = bitrateCombo_->currentData().toInt() == -1
-					 ? bitrateSpin_->value()
-					 : bitrateCombo_->currentData().toInt();
 		if (kbps > 60000)
-			notes << QStringLiteral("Past 60 Mbps the file grows without looking better.");
+			notes << QStringLiteral("Above 60 Mbps creates very large files; reserve it for demanding high-resolution or high-frame-rate recordings.");
 		else if (kbps > 0 && kbps < 2000)
-			notes << QStringLiteral("Under 2 Mbps, text and fine detail will smear.");
+			notes << QStringLiteral("Under 2 Mbps, small text and fast motion may lose detail. Check a short sample recording.");
 	}
 	const QString msg = notes.join(QLatin1Char('\n'));
 	validationLabel_->setText(msg);

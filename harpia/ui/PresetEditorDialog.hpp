@@ -110,6 +110,7 @@ private:
 	QComboBox *bitrateCombo_ = nullptr;
 	QComboBox *audioBitrateCombo_ = nullptr;
 	QSpinBox *bitrateSpin_ = nullptr;
+	QLabel *bitrateGuide_ = nullptr;
 	QLineEdit *folderEdit_ = nullptr;
 	QCheckBox *gpuCheck_ = nullptr;
 	QSpinBox *idleSpin_ = nullptr;

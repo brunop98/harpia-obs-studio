@@ -905,6 +905,10 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" $(pkg-config --cflags Qt6Core) \
 	"$HERE/recentprojects_test.cpp" -o "$WORK/recentprojects_test" $(pkg-config --libs Qt6Core)
 
+# Numeric recording bitrates: decimal storage estimates, use cases and Auto.
+g++ -std=c++17 -O1 -fPIC -I"$H" $(pkg-config --cflags Qt6Core) \
+	"$HERE/recordingbitrate_test.cpp" -o "$WORK/recordingbitrate_test" $(pkg-config --libs Qt6Core)
+
 # The typewriter reveal: where the cut lands for characters / words / lines, the
 # caret's blink, the component through the stack, and a Choice holding between
 # keyframes like a Bool does.
@@ -1127,6 +1131,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/keyframetabs_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/hoverinspect_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/projectpaths_test" || rc=1
 "$WORK/recentprojects_test" || rc=1
+"$WORK/recordingbitrate_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/sourcekind_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/texttyping_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/slide_test" || rc=1

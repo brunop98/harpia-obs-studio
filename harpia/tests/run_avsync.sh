@@ -196,6 +196,12 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	-DSRC_MEDIA="\"$WORK/av_red.mp4\"" "$HERE/previewhandles_test.cpp" \
 	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
 	-o "$WORK/previewhandles_test" $WLF
+# Adjacent trimmed clips must start at their in-points without visible decode
+# catch-up, including on a fresh track decoder and after a backward cut.
+g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
+	"$HERE/previewpacing_test.cpp" \
+	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
+	-o "$WORK/previewpacing_test" $WLF
 g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	"$HERE/projectwindow_test.cpp" \
 	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
@@ -327,6 +333,8 @@ QT_QPA_PLATFORM=offscreen "$WORK/rendererrors_test" || rc=1
 XDG_CONFIG_HOME="$WORK/error-test-config" XDG_DATA_HOME="$WORK/error-test-data" QT_QPA_PLATFORM=offscreen \
 	"$WORK/exporterrorwindow_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/multicutplay_test" "$WORK" || rc=1
+XDG_CONFIG_HOME="$WORK/pacing-test-config" XDG_DATA_HOME="$WORK/pacing-test-data" QT_QPA_PLATFORM=offscreen \
+	"$WORK/previewpacing_test" || rc=1
 # Settings go to a scratch home, so the test never touches real ones.
 mkdir -p "$WORK/home"
 HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \

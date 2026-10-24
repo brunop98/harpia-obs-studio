@@ -4764,67 +4764,22 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 			if (w->stillImages_.contains(sourceId))
 				return w->stillForPreview(sourceId, QSize(decodeW, decodeH));
 
-			// PLAYBACK decodes sequentially, like Simple Trim and Multi-Cut
-			// always have. The async decoder below is a SCRUBBING cache --
-			// latest-wins, four frames per source, random seeks -- so during
-			// playback every tick was a miss serviced by a seek, and the
-			// late-frame convergence is deliberately off while playing. The
-			// source's own pool seeker (proxy-aware) just rolls forward.
+			// Playback owns a decoder per source/track. frameAt holds the frame
+			// on screen, rolls forward for nearby requests and seeks directly
+			// for a new in-point, matching the export's timing. Bounded catch-up
+			// via nextFrameAt used to SHOW footage before the in-point while
+			// racing through it eight frames per tick on a cold decoder.
 			if (w->playing_) {
-				// Per (source, TRACK), not per source. The same recording can
-				// be on screen from two tracks at once at two different
-				// timestamps, and one roll-forward decoder cannot be in both
-				// places: whichever track asked second used to drag the shared
-				// decoder past the first, and every later request from the
-				// first track then hit the "already past it" branch below and
-				// was answered with the other track's frame -- forever. The
-				// symptom is a lower track frozen while the top one plays.
+				// The same recording can play on two tracks at different
+				// source times. Independent decoders keep each track's cached
+				// frame and sequential position separate.
 				const int lane = std::max(0, track());
-				// A playback frame may be a held or catching-up one: shown,
-				// never kept (see previewFrames_).
+				// Playback uses the seeker's own frame cache.
 				w->frameCacheable_ = false;
 				if (FrameSeeker *sk = w->playSeekerFor(sourceId, lane)) {
-					if (w->playFrameCacheSize_ != QSize(decodeW, decodeH)) {
-						w->playFrameCache_.clear();
-						w->playFrameCacheSize_ = QSize(decodeW, decodeH);
-					}
-					QImage &held = w->playFrameCache_[playKey(sourceId, lane)];
-					const qint64 pos = sk->positionMs();
-					// Not due for a new source frame yet (timeline tick
-					// faster than the source's fps): reuse the held one
-					// instead of forcing nextFrameAt to over-advance.
-					//
-					// Only while the decoder is a WHISKER ahead, though.
-					// Unbounded, this branch swallows every backwards jump:
-					// a track that cuts to an earlier part of the same file
-					// asks for a moment the decoder is long past, gets the
-					// stale frame back, and never advances again -- the
-					// clip plays as a still for its whole length.
-					if (!held.isNull() && pos >= srcMs && pos - srcMs <= kPlayHoldMs)
-						return held;
-					// Rolling forward only works while the target is AHEAD
-					// and near. It is neither when a track cuts backwards,
-					// nor when a track's first clip starts an hour into the
-					// source: at eight frames a tick, a minute of catching
-					// up is a thousand ticks of frozen picture. Seek once
-					// instead, then go back to rolling.
-					bool seeked = false;
-					if (pos >= 0 && (srcMs < pos || srcMs > pos + kPlaySeekAheadMs)) {
-						seeked = sk->seekTo(srcMs);
-						if (seeked)
-							held = QImage();
-					}
-					qint64 got = -1;
-					// A seek lands on the keyframe at or before the target, so
-					// the catch-up after one is allowed a longer run than the
-					// steady-state eight -- otherwise a long GOP leaves the
-					// picture stuck several frames in the past.
-					const QImage img = sk->nextFrameAt(srcMs, &got, decodeW, decodeH,
-									   seeked ? 90 : 8);
-					if (!img.isNull()) {
-						held = img;
+					const QImage img = sk->frameAt(srcMs, decodeW, decodeH);
+					if (!img.isNull())
 						return img;
-					}
 					// Decode failed (e.g. past EOF): fall through to the
 					// scrub cache rather than compositing a hole.
 				}
@@ -4883,11 +4838,15 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 	// original text is never served for a variation, or the other way round.
 	const TimelineModel shownModel = previewModel();
 	const QByteArray sig = previewSignature(shownModel, outMs, renderSize, canvasSize);
-	if (const QImage *hit = previewFrames_.object(sig)) {
-		setPreviewFrame(*hit, outMs);
-		return;
-	}
-	frameCacheable_ = true;
+	// Playback must also position its decoders, including when its first frame
+	// was already rendered by the scrub cache. Otherwise cold-start work is
+	// deferred until AFTER the playback clock has begun.
+	if (!playing_)
+		if (const QImage *hit = previewFrames_.object(sig)) {
+			setPreviewFrame(*hit, outMs);
+			return;
+		}
+	frameCacheable_ = !playing_;
 	const QImage composed = TimelineCompositor::compose(shownModel, outMs, renderSize, fp, scriptEval_.get(),
 							    fps, canvasSize);
 	if (frameCacheable_ && shownExact_ && !composed.isNull())
@@ -13653,6 +13612,9 @@ void VideoEditorWindow::startPlayback()
 	if (fullEdit()) {
 		if (timelineView_->durationMs() <= 0)
 			return; // empty timeline
+		// A queued hover/scrub must not replace the first playback frame.
+		previewTimer_->stop();
+		pendingMs_ = -1;
 		playing_ = true;
 		playBtn_->setIcon(uiIcon(Glyph::Pause));
 		const qint64 total = timelineView_->durationMs();
@@ -13660,6 +13622,9 @@ void VideoEditorWindow::startPlayback()
 		if (pos < 0 || pos >= total)
 			pos = 0;
 		playAnchorMs_ = pos; // output-time
+		showTimelineFrame(pos); // warm the exact first frame before starting the clock
+		timelineView_->setPlayhead(pos);
+		cursorTimeLabel_->setText(previewTimeText(pos));
 		playClock_.restart();
 		playTimer_->start();
 		startPreviewAudio(pos);
@@ -13768,7 +13733,6 @@ void VideoEditorWindow::stopPlayback()
 	// open should not be carrying several of them around; they cost one seek to
 	// rebuild on the next Play.
 	playSeekers_.clear();
-	playFrameCache_.clear();
 }
 
 void VideoEditorWindow::onPlayTick()
@@ -14425,7 +14389,6 @@ void VideoEditorWindow::applyProxyToPlayback(int sourceId, const QString &proxyP
 	// original while track 0 sails along on the proxy.
 	playbackPath_[sourceId] = proxyPath;
 	playSeekers_.clear();
-	playFrameCache_.clear();
 }
 
 // Kick off the filmstrip for a source, reading from `fromPath`. TimelineThumbs

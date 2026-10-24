@@ -744,7 +744,11 @@ private:
 	// The "nothing loaded yet" panel: shown while there are no sources, hidden
 	// the moment one arrives, and kept centred over the preview.
 	QWidget *emptyPanel_ = nullptr;
+	QWidget *emptyPanelContent_ = nullptr;
+	QWidget *recentProjectsPanel_ = nullptr;
+	QVector<QPushButton *> recentProjectButtons_;
 	void buildEmptyPanel();
+	void refreshRecentProjects();
 	void layOutEmptyPanel();
 	void updateEmptyState();
 	bool projectIsEmpty() const;
@@ -1107,9 +1111,11 @@ private:
 	void syncProjectFormatControls(); // push the current values into the widgets
 	void applyProjectFormat();        // read the widgets, re-render, re-measure
 	void onSaveProjectAs();
+	void openProjectWithDialogs(const QString &path, bool showSuccess = true);
 	// `quiet` suppresses every dialog: the relink picker, the wrong-source
 	// question and the "Project loaded" confirmation. openProjectAt() is quiet.
-	void applyProjectJson(const QJsonObject &root, const QString &path, bool quiet);
+	void applyProjectJson(const QJsonObject &root, const QString &path, bool quiet,
+			      bool showSuccess = true);
 	// Waveform peaks for many files at once, on every core. See the .cpp:
 	// loadPeaks is a pure function of its path, so the calls are independent.
 	static QHash<QString, QVector<float>> decodePeaks(const QStringList &paths);

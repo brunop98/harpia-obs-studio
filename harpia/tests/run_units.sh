@@ -901,6 +901,10 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/projectpaths_test.cpp" -o "$WORK/projectpaths_test" $LF
 
+# Recent projects: persistent history and discovery without a GUI or media.
+g++ -std=c++17 -O1 -fPIC -I"$H" $(pkg-config --cflags Qt6Core) \
+	"$HERE/recentprojects_test.cpp" -o "$WORK/recentprojects_test" $(pkg-config --libs Qt6Core)
+
 # The typewriter reveal: where the cut lands for characters / words / lines, the
 # caret's blink, the component through the stack, and a Choice holding between
 # keyframes like a Bool does.
@@ -1122,6 +1126,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/marquee_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keyframetabs_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/hoverinspect_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/projectpaths_test" || rc=1
+"$WORK/recentprojects_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/sourcekind_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/texttyping_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/slide_test" || rc=1

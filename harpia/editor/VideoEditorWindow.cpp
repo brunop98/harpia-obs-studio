@@ -40,6 +40,7 @@
 #include "FrameSeeker.hpp"
 #include "PreviewDecoder.hpp"
 #include "ProjectPaths.hpp"
+#include "RecentProjects.hpp"
 #include "ProxyMedia.hpp"
 #include "LevelMeter.hpp"
 #include "SceneDetector.hpp"
@@ -2661,9 +2662,21 @@ void VideoEditorWindow::buildEmptyPanel()
 	// over the picture, takes no layout space, and is placed by hand whenever
 	// the preview resizes.
 	emptyPanel_ = new QWidget(canvas_);
+	emptyPanel_->setObjectName(QStringLiteral("emptyProjectPanel"));
 	emptyPanel_->setStyleSheet(QStringLiteral(
 		"QWidget{background:rgba(24,27,33,220); border:1px solid #3a3f48; border-radius:8px;}"));
-	auto *lay = new QVBoxLayout(emptyPanel_);
+	auto *outer = new QVBoxLayout(emptyPanel_);
+	outer->setContentsMargins(1, 1, 1, 1);
+	auto *scroll = new QScrollArea(emptyPanel_);
+	scroll->setObjectName(QStringLiteral("emptyProjectScroll"));
+	scroll->setWidgetResizable(true);
+	scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	scroll->setStyleSheet(QStringLiteral("QScrollArea{border:none; background:transparent;}"));
+	emptyPanelContent_ = new QWidget;
+	emptyPanelContent_->setStyleSheet(QStringLiteral("QWidget{border:none; background:transparent;}"));
+	scroll->setWidget(emptyPanelContent_);
+	outer->addWidget(scroll);
+	auto *lay = new QVBoxLayout(emptyPanelContent_);
 	lay->setContentsMargins(24, 20, 24, 20);
 	lay->setSpacing(10);
 
@@ -2686,6 +2699,10 @@ void VideoEditorWindow::buildEmptyPanel()
 		"QPushButton:hover{background:#4a97cf;}"));
 	connect(addBtn, &QPushButton::clicked, this, &VideoEditorWindow::onAddSource);
 	auto *projBtn = new QPushButton(QStringLiteral("Load project…"), emptyPanel_);
+	projBtn->setStyleSheet(QStringLiteral(
+		"QPushButton{background:#181b21; color:#e6e6e6; border:1px solid #3a3f48;"
+		"border-radius:4px; padding:6px 14px;}"
+		"QPushButton:hover{background:#2b313b;}"));
 	connect(projBtn, &QPushButton::clicked, this, &VideoEditorWindow::onOpenProject);
 	row->addStretch(1);
 	row->addWidget(addBtn);
@@ -2693,16 +2710,77 @@ void VideoEditorWindow::buildEmptyPanel()
 	row->addStretch(1);
 	lay->addLayout(row);
 
+	recentProjectsPanel_ = new QWidget(emptyPanel_);
+	recentProjectsPanel_->setObjectName(QStringLiteral("recentProjectsPanel"));
+	recentProjectsPanel_->setStyleSheet(QStringLiteral("QWidget{border:none; background:transparent;}"));
+	auto *recent = new QVBoxLayout(recentProjectsPanel_);
+	recent->setContentsMargins(0, 8, 0, 0);
+	recent->setSpacing(6);
+	auto *recentTitle = new QLabel(QStringLiteral("Recent projects"), recentProjectsPanel_);
+	recentTitle->setStyleSheet(QStringLiteral("color:#8a8f98;"));
+	recent->addWidget(recentTitle);
+	for (int i = 0; i < 3; ++i) {
+		auto *button = new QPushButton(recentProjectsPanel_);
+		button->setObjectName(QStringLiteral("recentProject%1").arg(i + 1));
+		button->setAutoDefault(false);
+		button->setCursor(Qt::PointingHandCursor);
+		button->setStyleSheet(QStringLiteral(
+			"QPushButton{background:#22262d; color:#dce2eb; border:1px solid #3a3f48;"
+			"border-radius:4px; padding:6px 10px; text-align:left;}"
+			"QPushButton:hover{background:#303946; border-color:#5286b2;}"));
+		connect(button, &QPushButton::clicked, this, [this, button]() {
+			// Keep the normal open path's validation and missing-media relinking,
+			// without a confirmation box after a successful one-click reopen.
+			const QString path = button->property("projectPath").toString();
+			if (!path.isEmpty())
+				openProjectWithDialogs(path, /*showSuccess=*/false);
+			refreshRecentProjects();
+		});
+		recentProjectButtons_.append(button);
+		recent->addWidget(button);
+	}
+	lay->addWidget(recentProjectsPanel_);
+	refreshRecentProjects();
 	emptyPanel_->hide();
+}
+
+void VideoEditorWindow::refreshRecentProjects()
+{
+	if (!recentProjectsPanel_)
+		return;
+	const QStringList paths = recentProjects();
+	for (int i = 0; i < recentProjectButtons_.size(); ++i) {
+		QPushButton *button = recentProjectButtons_[i];
+		const QString path = paths.value(i);
+		button->setProperty("projectPath", path);
+		button->setVisible(!path.isEmpty());
+		if (path.isEmpty())
+			continue;
+		const QFileInfo info(path);
+		// Bound both lines so a long filename or directory cannot widen the
+		// opening panel beyond the preview. The tooltip keeps the full path.
+		const auto elide = [button](const QString &text) {
+			return button->fontMetrics().elidedText(text, Qt::ElideMiddle, 280);
+		};
+		const QString name = elide(info.completeBaseName()).replace(QLatin1Char('&'), QStringLiteral("&&"));
+		const QString folder = elide(QDir::toNativeSeparators(info.absolutePath()))
+					       .replace(QLatin1Char('&'), QStringLiteral("&&"));
+		button->setText(name + QLatin1Char('\n') + folder);
+		button->setToolTip(QDir::toNativeSeparators(path));
+		button->setAccessibleName(info.completeBaseName());
+	}
+	recentProjectsPanel_->setVisible(!paths.isEmpty());
+	layOutEmptyPanel();
 }
 
 void VideoEditorWindow::layOutEmptyPanel()
 {
 	if (!emptyPanel_ || !canvas_ || !emptyPanel_->isVisible())
 		return;
-	const QSize hint = emptyPanel_->sizeHint();
-	const int w = std::min(hint.width(), canvas_->width() - 24);
-	const int h = hint.height();
+	const QSize hint = emptyPanelContent_->sizeHint() + QSize(2, 2);
+	const int h = std::min(hint.height(), std::max(1, canvas_->height() - 24));
+	const int scrollWidth = h < hint.height() ? style()->pixelMetric(QStyle::PM_ScrollBarExtent) : 0;
+	const int w = std::min(hint.width() + scrollWidth, std::max(1, canvas_->width() - 24));
 	emptyPanel_->setGeometry((canvas_->width() - w) / 2, (canvas_->height() - h) / 2, w, h);
 }
 
@@ -2726,6 +2804,8 @@ bool VideoEditorWindow::projectIsEmpty() const
 void VideoEditorWindow::updateEmptyState()
 {
 	const bool empty = projectIsEmpty();
+	if (empty)
+		refreshRecentProjects();
 	if (emptyPanel_) {
 		emptyPanel_->setVisible(empty);
 		layOutEmptyPanel();
@@ -9817,6 +9897,8 @@ void VideoEditorWindow::showSourcesPanel()
 void VideoEditorWindow::showEvent(QShowEvent *e)
 {
 	QDialog::showEvent(e);
+	if (projectIsEmpty())
+		refreshRecentProjects();
 	// The Sources panel stays closed until the user opens it with the toolbar
 	// "Sources" button — it never opens on its own.
 
@@ -12563,10 +12645,16 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 	f.close();
 
 	if (quiet) { // autosave sidecar — don't adopt it as the project file
+		// Save when closing also uses quiet mode, but writes the actual
+		// project rather than an autosave sidecar.
+		if (!projectPath_.isEmpty() &&
+		    QFileInfo(path).absoluteFilePath() == QFileInfo(projectPath_).absoluteFilePath())
+			rememberRecentProject(path);
 		lastAutosave_ = QDateTime::currentDateTime();
 		return QString();
 	}
 	projectPath_ = path;
+	rememberRecentProject(path);
 	if (!copyOk)
 		return QStringLiteral("Project saved, but some voiceover audio could not be copied.");
 	QMessageBox::information(this, QStringLiteral("Save project"), QStringLiteral("Project saved."));
@@ -12593,6 +12681,11 @@ void VideoEditorWindow::onOpenProject()
 							  QStringLiteral("Harpia project (*.harpiaproj)"));
 	if (path.isEmpty())
 		return;
+	openProjectWithDialogs(path);
+}
+
+void VideoEditorWindow::openProjectWithDialogs(const QString &path, bool showSuccess)
+{
 	QFile f(path);
 	if (!f.open(QIODevice::ReadOnly)) {
 		warnAndLog(this, QStringLiteral("Open project"),
@@ -12608,7 +12701,7 @@ void VideoEditorWindow::onOpenProject()
 				     QStringLiteral("This is not a valid Harpia project file."));
 		return;
 	}
-	applyProjectJson(doc.object(), path, /*quiet=*/false);
+	applyProjectJson(doc.object(), path, /*quiet=*/false, showSuccess);
 }
 
 // Open a project from a known path. Same validation as the menu item, without
@@ -12665,7 +12758,8 @@ QHash<QString, QVector<float>> VideoEditorWindow::decodePeaks(const QStringList 
 	return out;
 }
 
-void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString &path, bool quiet)
+void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString &path, bool quiet,
+					 bool showSuccess)
 {
 	// Playback owns the preview, the per-track decoders and its own idea of
 	// where it is; this is about to replace all three. Stopping first is the
@@ -13053,6 +13147,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	// A loaded project IS a working editor, whatever state this window was in
 	// before -- including the one where its launch file would not open.
 	valid_ = true;
+	rememberRecentProject(path);
 	// And the project may have brought in no SOURCES at all: a caption, a
 	// still or an effect needs none. updateEmptyState was only ever reached
 	// through addSource, so a text-only project loaded into a blank editor
@@ -13074,8 +13169,9 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 		// its captions and its edits are all there -- so this says what is
 		// missing rather than pretending the load failed.
 		if (loadFailures_.isEmpty()) {
-			QMessageBox::information(this, QStringLiteral("Open project"),
-						 QStringLiteral("Project loaded."));
+			if (showSuccess)
+				QMessageBox::information(this, QStringLiteral("Open project"),
+							 QStringLiteral("Project loaded."));
 		} else {
 			warnAndLog(
 				this, QStringLiteral("Open project"),

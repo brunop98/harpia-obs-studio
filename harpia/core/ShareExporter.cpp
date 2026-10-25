@@ -2,6 +2,8 @@
 #include "ShareSplitter.hpp"
 
 #include "editor/HdrToSdr.hpp"
+#include "editor/SwsColor.hpp"
+#include "ui/EditorLog.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -242,44 +244,47 @@ ShareExporter::Result ShareExporter::transcode(const QString &inPath, const QStr
 	outW = std::max(2, evenDown(outW));
 	outH = std::max(2, evenDown(outH));
 
-	// ---- Video encoder (libx264, constant quality) ---------------------
-	const AVCodec *x264 = avcodec_find_encoder_by_name("libx264");
-	if (!x264)
-		return fail(QStringLiteral("The H.264 encoder is not available in this build."));
-	t.venc = avcodec_alloc_context3(x264);
-	if (!t.venc)
-		return fail(QStringLiteral("Could not allocate the video encoder."));
+	// ---- H.264 encoder: Apple hardware on Mac, software fallback --------
+	export_video::Config config;
+	config.encoding = opts.encoding;
+	config.width = outW;
+	config.height = outH;
+	config.timeBase = vin->time_base; // decoded timestamps retain their clock
+	config.frameRate = av_guess_frame_rate(t.ifmt, vin, nullptr);
+	if (config.frameRate.num <= 0 || config.frameRate.den <= 0)
+		config.frameRate = AVRational{30, 1};
+	config.gopSize = opts.gopFrames > 0 ? opts.gopFrames
+		: std::max(1, int(av_q2d(config.frameRate) * 2.0));
+	config.sampleAspectRatio = t.vdec->sample_aspect_ratio;
+	config.crf = opts.crf;
+	config.preset = opts.preset;
 
-	const AVRational fr = av_guess_frame_rate(t.ifmt, vin, nullptr);
-	t.venc->width = outW;
-	t.venc->height = outH;
-	t.venc->pix_fmt = AV_PIX_FMT_YUV420P;
-	t.venc->time_base = vin->time_base; // frame pts pass through in this base
-	t.venc->framerate = fr;
-	t.venc->gop_size = opts.gopFrames > 0
-				   ? opts.gopFrames
-				   : ((fr.num > 0 && fr.den > 0) ? std::max(1, int(av_q2d(fr) * 2.0)) : 60);
-	t.venc->sample_aspect_ratio = t.vdec->sample_aspect_ratio;
-	// x264 knobs: quality-based encode, tuned preset, broadly-compatible profile.
-	av_opt_set(t.venc->priv_data, "preset", opts.preset, 0);
-	av_opt_set(t.venc->priv_data, "profile", "high", 0);
-	av_opt_set_int(t.venc->priv_data, "crf", opts.crf, 0);
-
-	// ---- Output container ---------------------------------------------
 	if (avformat_alloc_output_context2(&t.ofmt, nullptr, nullptr, outUtf8.constData()) < 0 || !t.ofmt)
 		return fail(QStringLiteral("Could not create the output file."));
-	if (t.ofmt->oformat->flags & AVFMT_GLOBALHEADER)
-		t.venc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-
+	config.globalHeader = t.ofmt->oformat->flags & AVFMT_GLOBALHEADER;
 	// An HDR source comes out SDR (scaleFrame): say BT.709, not its HLG/PQ.
 	if (harpia::hdr::kindOf(t.vdec->color_trc, t.vdec->color_primaries).needsConversion()) {
-		t.venc->colorspace = AVCOL_SPC_BT709;
-		t.venc->color_primaries = AVCOL_PRI_BT709;
-		t.venc->color_trc = AVCOL_TRC_BT709;
-		t.venc->color_range = AVCOL_RANGE_MPEG;
+		config.colorSpace = AVCOL_SPC_BT709;
+		config.colorPrimaries = AVCOL_PRI_BT709;
+		config.colorTransfer = AVCOL_TRC_BT709;
+		config.colorRange = AVCOL_RANGE_MPEG;
+	} else {
+		config.colorSpace = t.vdec->colorspace == AVCOL_SPC_UNSPECIFIED
+			? (t.vdec->height >= 720 ? AVCOL_SPC_BT709 : AVCOL_SPC_SMPTE170M)
+			: t.vdec->colorspace;
+		config.colorPrimaries = t.vdec->color_primaries;
+		config.colorTransfer = t.vdec->color_trc;
+		// swscale normalizes yuvj to limited range, while explicitly full-range
+		// plain YUV keeps its range. VT uses this to choose its NV12 buffer type.
+		config.colorRange = t.vdec->color_range == AVCOL_RANGE_JPEG &&
+			!isFullRange(AVCOL_RANGE_UNSPECIFIED, t.vdec->pix_fmt)
+			? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
 	}
-	if (avcodec_open2(t.venc, x264, nullptr) < 0)
-		return fail(QStringLiteral("Could not open the H.264 encoder."));
+	export_video::Result encoding;
+	if (const QString error = export_video::openH264(config, &t.venc, &encoding); !error.isEmpty())
+		return fail(error);
+	emit statusChanged(encoding.description);
+	editorLog(EditorLogLevel::Info, QStringLiteral("Sharing encoding"), encoding.description);
 
 	t.vOut = avformat_new_stream(t.ofmt, nullptr);
 	if (!t.vOut || avcodec_parameters_from_context(t.vOut->codecpar, t.venc) < 0)
@@ -287,14 +292,23 @@ ShareExporter::Result ShareExporter::transcode(const QString &inPath, const QStr
 	t.vOut->time_base = t.venc->time_base;
 
 	// ---- Scaler --------------------------------------------------------
-	t.sws = sws_getContext(t.vdec->width, t.vdec->height, t.vdec->pix_fmt, outW, outH, AV_PIX_FMT_YUV420P,
+	t.sws = sws_getContext(t.vdec->width, t.vdec->height, t.vdec->pix_fmt, outW, outH, t.venc->pix_fmt,
 			       SWS_BILINEAR, nullptr, nullptr, nullptr);
 	t.scaled = av_frame_alloc();
 	if (!t.sws || !t.scaled)
 		return fail(QStringLiteral("Could not set up video scaling."));
-	t.scaled->format = AV_PIX_FMT_YUV420P;
+	const int *coefficients = sws_getCoefficients(swsSpaceOf(config.colorSpace, outH));
+	sws_setColorspaceDetails(t.sws, coefficients,
+		isRgbFormat(t.vdec->pix_fmt) || isFullRange(t.vdec->color_range, t.vdec->pix_fmt),
+		coefficients, config.colorRange == AVCOL_RANGE_JPEG, 0, 1 << 16, 1 << 16);
+	t.scaled->format = t.venc->pix_fmt;
 	t.scaled->width = outW;
 	t.scaled->height = outH;
+	t.scaled->colorspace = t.venc->colorspace;
+	t.scaled->color_primaries = t.venc->color_primaries;
+	t.scaled->color_trc = t.venc->color_trc;
+	t.scaled->color_range = t.venc->color_range;
+	t.scaled->sample_aspect_ratio = t.venc->sample_aspect_ratio;
 	if (av_frame_get_buffer(t.scaled, 0) < 0)
 		return fail(QStringLiteral("Out of memory allocating a video frame."));
 

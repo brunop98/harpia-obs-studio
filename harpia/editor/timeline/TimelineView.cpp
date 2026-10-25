@@ -8,6 +8,7 @@
 #include "ClipVariations.hpp"
 
 #include "../MediaFiles.hpp"
+#include "../ShortcutRegistry.hpp"
 
 #include "../component/BuiltinComponents.hpp"
 #include "../component/ComponentRegistry.hpp"
@@ -73,7 +74,9 @@ TimelineView::TimelineView(QWidget *parent) : QWidget(parent)
 	setAcceptDrops(true);
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 	setToolTip(QStringLiteral("Drag clips to move · drag an edge to trim · right-click to split · "
-				  "scroll to zoom, Shift+scroll to pan, Alt+scroll to move the lanes"));
+				  "scroll to zoom, %1 to pan, %2 to move the lanes")
+		.arg(ShortcutRegistry::mouseGesture(Qt::ShiftModifier, QStringLiteral("scroll")),
+			ShortcutRegistry::mouseGesture(Qt::AltModifier, QStringLiteral("scroll"))));
 	anim_ = new QTimer(this);
 	anim_->setInterval(16);
 	connect(anim_, &QTimer::timeout, this, &TimelineView::animateStep);
@@ -81,7 +84,8 @@ TimelineView::TimelineView(QWidget *parent) : QWidget(parent)
 	// Shown only when the lanes are taller than the view; see syncLaneBar.
 	laneBar_ = new QScrollBar(Qt::Vertical, this);
 	laneBar_->setCursor(Qt::ArrowCursor);
-	laneBar_->setToolTip(QStringLiteral("More lanes below. Alt+scroll over the lanes moves them too."));
+	laneBar_->setToolTip(QStringLiteral("More lanes below. %1 over the lanes moves them too.")
+		.arg(ShortcutRegistry::mouseGesture(Qt::AltModifier, QStringLiteral("scroll"))));
 	laneBar_->setStyleSheet(QStringLiteral(
 		"QScrollBar:vertical{background:transparent;width:10px;margin:0;}"
 		"QScrollBar::handle:vertical{background:rgba(255,255,255,70);border-radius:4px;min-height:24px;}"
@@ -4547,12 +4551,18 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	// (keep, strength, avoid-same) and "only the selected clips" forced on, so
 	// the menu is the fast route to the panel's most common setting.
 	QAction *randomSel = nullptr;
+	const auto undoHint = [this](QAction *action, const QString &pattern) {
+		if (auto *registry = ShortcutRegistry::forWidget(this))
+			registry->bindHint(action, "toolTip", pattern);
+		else
+			action->setToolTip(QString(pattern).replace(QStringLiteral("{edit.undo}"), QStringLiteral("Undo")));
+	};
 	if (inSel && sel.size() > 1) {
 		randomSel = menu.addAction(
 			QStringLiteral("Randomize order of selected clips  (%1)").arg(sel.size()));
-		randomSel->setToolTip(QStringLiteral(
+		undoHint(randomSel, QStringLiteral(
 			"Shuffle these clips among their own slots. Everything else stays put; "
-			"Ctrl+Z brings the previous order back."));
+			"Use {edit.undo} to bring the previous order back."));
 		disableBecause(randomSel, !locked, lockedWhy);
 	}
 	QAction *setDuration = nullptr;
@@ -4620,10 +4630,10 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		randomAct = menu.addAction(menuClip.isRandomClip()
 						   ? QStringLiteral("Make normal clip  (keep the one shown)")
 						   : QStringLiteral("Make random clip"));
-		randomAct->setToolTip(
+		undoHint(randomAct,
 			menuClip.isRandomClip()
 				? QStringLiteral("Back to one clip: the one showing now stays, the others are dropped. "
-						 "Ctrl+Z brings them back.")
+						 "Use {edit.undo} to bring them back.")
 				: QStringLiteral("Give this slot other clips to choose from. Each one becomes a version "
 						 "of the video on export; they all share this clip's place, length "
 						 "and look. Add them in the Inspector."));
@@ -4644,9 +4654,9 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	if (menuClip.link != 0) {
 		const int n = int(model_.linkedClips(menuClip.link).size());
 		unlinkAct = menu.addAction(QStringLiteral("Unlink  (%1 linked clips)").arg(n));
-		unlinkAct->setToolTip(QStringLiteral(
+		undoHint(unlinkAct, QStringLiteral(
 			"These clips stop moving together: each one can then be dragged on its own. "
-			"Ctrl+Z links them again."));
+			"Use {edit.undo} to link them again."));
 		disableBecause(unlinkAct, !locked, lockedWhy);
 	} else if (inSel && sel.size() > 1) {
 		linkAct = menu.addAction(QStringLiteral("Link selected clips  (%1)").arg(sel.size()));
@@ -4783,10 +4793,10 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		if (narrated) {
 			menu.addSeparator();
 			respeak = menu.addAction(QStringLiteral("Re-speak this sentence…"));
-			respeak->setToolTip(QStringLiteral(
+			undoHint(respeak, QStringLiteral(
 				"A new take of just this sentence, in the same voice, with the captions' words as "
 				"they are now (edit them first to change what is said). The rest of the narration "
-				"moves to fit. Ctrl+Z brings the old take back."));
+				"moves to fit. Use {edit.undo} to bring the old take back."));
 			disableBecause(respeak, !locked, lockedWhy);
 		}
 	}

@@ -68,13 +68,18 @@ PKGS="Qt6Widgets Qt6Gui Qt6Core Qt6OpenGL libavcodec libavformat libavutil libsw
 CF="$(pkg-config --cflags $PKGS)"
 LF="$(pkg-config --libs $PKGS)"
 
+# Live command hints in timeline/source widgets share the editor registry.
+"$MOC" -I"$H" "$H/editor/ShortcutRegistry.hpp" -o "$WORK/moc_ShortcutRegistry.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF -c "$H/editor/ShortcutRegistry.cpp" -o "$WORK/ShortcutRegistry.o"
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF -c "$WORK/moc_ShortcutRegistry.cpp" -o "$WORK/moc_ShortcutRegistry.o"
+
 "$MOC" -I"$H" "$H/editor/ClipExporter.hpp" -o "$WORK/moc_ClipExporter.cpp"
 "$MOC" -I"$H" "$H/editor/BatchExport.hpp" -o "$WORK/moc_BatchExport.cpp"
 
 build() { # source-file output-name
 	g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 		"$1" \
-		"$H/editor/ClipExporter.cpp" "$H/editor/CoverArt.cpp" "$H/editor/BatchExport.cpp" "$H/editor/TimelineAudio.cpp" \
+		"$H/editor/ClipExporter.cpp" "$H/core/ExportVideoEncoder.cpp" "$H/editor/CoverArt.cpp" "$H/editor/BatchExport.cpp" "$H/editor/TimelineAudio.cpp" \
 		"$H/editor/VoiceoverMixer.cpp" "$H/editor/AudioRetimer.cpp" \
 		"$H/editor/GifEncoder.cpp" "$H/editor/FrameSeeker.cpp" "$H/editor/HdrToSdr.cpp" \
 		"$H/editor/StillImage.cpp" \
@@ -105,7 +110,7 @@ build "$HERE/swsoverrun_test.cpp" swsoverrun_test
 g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 	"$HERE/exportdialog_test.cpp" "$H/editor/ExportOptionsDialog.cpp" "$H/editor/ExportEstimate.cpp" \
 	"$H/ui/UiText.cpp" \
-	"$H/editor/ClipExporter.cpp" "$H/editor/CoverArt.cpp" "$H/editor/BatchExport.cpp" "$H/editor/TimelineAudio.cpp" \
+	"$H/editor/ClipExporter.cpp" "$H/core/ExportVideoEncoder.cpp" "$H/editor/CoverArt.cpp" "$H/editor/BatchExport.cpp" "$H/editor/TimelineAudio.cpp" \
 	"$H/editor/VoiceoverMixer.cpp" "$H/editor/AudioRetimer.cpp" \
 	"$H/editor/GifEncoder.cpp" "$H/editor/FrameSeeker.cpp" "$H/editor/HdrToSdr.cpp" \
 	"$H/editor/StillImage.cpp" \
@@ -139,19 +144,19 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # Discord: real 49 MB files, independent playback, audio/video continuity,
 # smaller remainder, cancellation cleanup and existing-file protection.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
-	"$HERE/shareparts_test.cpp" "$H/core/ShareExporter.cpp" "$H/core/ShareSplitter.cpp" \
+	"$HERE/shareparts_test.cpp" "$H/core/ShareExporter.cpp" "$H/core/ExportVideoEncoder.cpp" "$H/core/ShareSplitter.cpp" \
 	"$H/editor/HdrToSdr.cpp" "$WORK/moc_ShareExporter.cpp" \
 	-o "$WORK/shareparts_test" $LF
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/proxymedia_test.cpp" "$H/editor/ProxyMedia.cpp" "$H/editor/PreviewDecoder.cpp" \
-	"$H/editor/FrameSeeker.cpp" "$H/editor/HdrToSdr.cpp" "$H/core/ShareExporter.cpp" "$H/core/ShareSplitter.cpp" \
+	"$H/editor/FrameSeeker.cpp" "$H/editor/HdrToSdr.cpp" "$H/core/ShareExporter.cpp" "$H/core/ExportVideoEncoder.cpp" "$H/core/ShareSplitter.cpp" \
 	"$WORK/moc_ProxyMedia.cpp" "$WORK/moc_ShareExporter.cpp" "$WORK/moc_PreviewDecoder.cpp" \
 	-o "$WORK/proxymedia_test" $LF
 
 # Multi-Cut output playback: a cut must stop at its end handle. Links the real
 # TrackEditor (its segment/output mapping) and a real decoder.
 "$MOC" -I"$H" "$H/editor/TrackEditor.hpp" -o "$WORK/moc_TrackEditor.cpp"
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/multicutplay_test.cpp" "$H/editor/TrackEditor.cpp" "$H/editor/FrameSeeker.cpp" "$H/editor/HdrToSdr.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TrackEditor.cpp" \
 	-o "$WORK/multicutplay_test" $LF
@@ -176,7 +181,7 @@ if [ ! -f "$QJSLIB/libqjs.a" ]; then # the same one-time build run_units.sh does
 fi
 mkdir -p "$WORK/win/obj" "$WORK/win/moc"
 ( cd "$H"
-  WSRCS=$(ls editor/*.cpp editor/*/*.cpp ui/*.cpp library/*.cpp core/ShareExporter.cpp core/ShareSplitter.cpp core/AudioFileWriter.cpp platform/OsIntegrationStub.cpp tests/support/logger_stub.cpp | grep -v -E "ui/MainWindow.cpp|ui/WebcamPreview.cpp")
+  WSRCS=$(ls editor/*.cpp editor/*/*.cpp ui/*.cpp library/*.cpp core/ShareExporter.cpp core/ShareSplitter.cpp core/ExportVideoEncoder.cpp core/AudioFileWriter.cpp platform/OsIntegrationStub.cpp tests/support/logger_stub.cpp | grep -v -E "ui/MainWindow.cpp|ui/WebcamPreview.cpp")
   for h in $(grep -l Q_OBJECT editor/*.hpp editor/*/*.hpp ui/*.hpp library/*.hpp core/ShareExporter.hpp | grep -v -E "ui/MainWindow.hpp|ui/WebcamPreview.hpp"); do
 	"$MOC" -I"$H" "$h" -o "$WORK/win/moc/moc_$(echo "$h" | tr '/' '_' | sed 's/.hpp$//').cpp"
   done

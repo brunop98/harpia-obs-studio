@@ -125,6 +125,7 @@ signals:
 	// Details for the file being written. Sent before its first stage/progress.
 	void itemStarted(int index, int count, const QString &path);
 	void stageChanged(const QString &stage);
+	void encodingChanged(const QString &description);
 	void frameProgress(qint64 completed, qint64 total);
 	void outputBytes(qint64 bytes);
 	void itemFinished(int index, bool ok, const QString &path, const QString &error);

@@ -354,7 +354,9 @@ void ShortcutPanel::beginCapture(QTreeWidgetItem *item)
 	v->addWidget(prompt);
 	auto *cap = new KeyCaptureEdit(&dlg);
 	v->addWidget(cap);
-	auto *hint = new QLabel(QStringLiteral("Esc cancels · Backspace clears the binding"), &dlg);
+	auto *hint = new QLabel(QStringLiteral("%1 cancels · %2 clears the binding")
+		.arg(QKeySequence(Qt::Key_Escape).toString(QKeySequence::NativeText),
+			QKeySequence(Qt::Key_Backspace).toString(QKeySequence::NativeText)), &dlg);
 	hint->setStyleSheet(QStringLiteral("color:#7f858e;"));
 	v->addWidget(hint);
 	cap->setFocus();

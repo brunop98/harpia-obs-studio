@@ -1,4 +1,5 @@
 #include "EditorWidgets.hpp"
+#include "ShortcutRegistry.hpp"
 #include "timeline/MotionPath.hpp"
 
 #include "CanvasFit.hpp"
@@ -1485,7 +1486,8 @@ Timeline::Timeline(QWidget *parent) : QWidget(parent)
 {
 	setMinimumHeight(lp_.barTop + barH() + 22);
 	setMouseTracking(true);
-	setToolTip(QStringLiteral("Scroll to zoom, Shift+scroll to pan"));
+	setToolTip(QStringLiteral("Scroll to zoom, %1 to pan")
+		.arg(ShortcutRegistry::mouseGesture(Qt::ShiftModifier, QStringLiteral("scroll"))));
 }
 
 void Timeline::setLayoutParams(const TimelineLayoutParams &p)

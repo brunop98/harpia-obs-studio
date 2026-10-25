@@ -33,6 +33,7 @@ list(FILTER EDITOR_SOURCES EXCLUDE REGEX "ui/(MainWindow|WebcamPreview)\\.cpp$")
 list(FILTER EDITOR_HEADERS EXCLUDE REGEX "ui/(MainWindow|WebcamPreview)\\.hpp$")
 add_library(harpia-test-editor STATIC ${EDITOR_SOURCES}
   "${H}/core/ShareExporter.cpp" "${H}/core/ShareSplitter.cpp" "${H}/core/AudioFileWriter.cpp" "${H}/core/Remuxer.cpp"
+  "${H}/core/ExportVideoEncoder.cpp"
   "${H}/core/GlobalHotkeys.cpp" "${H}/platform/OsIntegrationStub.cpp" support/logger_stub.cpp)
 target_include_directories(harpia-test-editor PUBLIC "${H}" "${ROOT}")
 target_compile_definitions(harpia-test-editor PUBLIC HARPIA_HAVE_QJS=1 HARPIA_TEST_SETTINGS=1)
@@ -74,12 +75,12 @@ function(register_harpia_test name)
   set_tests_properties("${name}" PROPERTIES TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;HARPIA_TEST_MEDIA=${MEDIA}")
 endfunction()
 
-foreach(name settingsisolation loadingdialog loadingtask loadingwindow projectwindow projectstate recentprojectswindow
+foreach(name settingsisolation shortcuthints shortcuthintswindow loadingdialog loadingtask loadingwindow projectwindow projectstate recentprojectswindow
     audiodrop blankeditor previewhandles previewpacing previewcontrols stillimage stillweight
     textstylepresetswindow subtitles captionanimation captionperf socialfeatureswindow exportprogress
     exportcadence exporttelemetry previewdecoder componentrender audioaudit previewgeometry previewinterval
     previewtransition systemaudio pcaudioapps ytdlp globalhotkeys maccoordinates macaudiopcm
-    projectopenqueue remuxcompat)
+    projectopenqueue remuxcompat exportencodingoptions exportencoding shareparts)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${name}_test.cpp")
     add_executable("${name}_test" "${name}_test.cpp")
     target_compile_definitions("${name}_test" PRIVATE HARPIA_SRC="${H}" SRC_MEDIA="${MEDIA}/av_red.mp4")
@@ -144,3 +145,15 @@ if(TARGET OBS::libobs)
   endif()
 endif()
 add_test(NAME macos_package COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/macos_package_test.py")
+
+# Compile the helper independently so its deterministic unavailable-Apple
+# fallback path can also run on Linux, without claiming native hardware coverage.
+foreach(name exportvideoencoder exportvideoencoder_fallback)
+  add_executable("${name}_test" exportvideoencoder_test.cpp "${H}/core/ExportVideoEncoder.cpp")
+  target_include_directories("${name}_test" PRIVATE "${H}")
+  target_link_libraries("${name}_test" PRIVATE Qt6::Core ${TEST_AV})
+  if(name STREQUAL exportvideoencoder_fallback AND NOT APPLE)
+    target_compile_definitions("${name}_test" PRIVATE HARPIA_EXPORT_ENCODER_TEST_APPLE=1)
+  endif()
+  register_harpia_test("${name}")
+endforeach()

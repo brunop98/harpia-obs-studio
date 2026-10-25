@@ -482,14 +482,14 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	urBox->setContentsMargins(0, 0, 0, 0);
 	undoBtn_ = new QPushButton(this);
 	undoBtn_->setIcon(uiIcon(Glyph::Undo));
-	undoBtn_->setToolTip(QStringLiteral("Undo (Ctrl+Z)"));
+	undoBtn_->setToolTip(QStringLiteral("Undo"));
 	undoBtn_->setFixedWidth(34);
 	undoBtn_->setEnabled(false);
 	connect(undoBtn_, &QPushButton::clicked, this, &VideoEditorWindow::undo);
 	urBox->addWidget(undoBtn_);
 	redoBtn_ = new QPushButton(this);
 	redoBtn_->setIcon(uiIcon(Glyph::Redo));
-	redoBtn_->setToolTip(QStringLiteral("Redo (Ctrl+Shift+Z)"));
+	redoBtn_->setToolTip(QStringLiteral("Redo"));
 	redoBtn_->setFixedWidth(34);
 	redoBtn_->setEnabled(false);
 	connect(redoBtn_, &QPushButton::clicked, this, &VideoEditorWindow::redo);
@@ -1351,11 +1351,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		snapBtn_->setText(on ? QStringLiteral("Snap on")
 				     : QStringLiteral("Snap off"));
 		snapBtn_->setToolTip(
-			on ? QStringLiteral("Magnet ON (N) — dragging a clip or trimming an "
+			on ? QStringLiteral("Magnet ON — dragging a clip or trimming an "
 					    "edge sticks to the playhead, to 0 and to other "
 					    "clips' edges. A white guide shows the hold.")
-			   : QStringLiteral("Magnet OFF (N) — clips and trim edges follow the "
+			   : QStringLiteral("Magnet OFF — clips and trim edges follow the "
 					    "cursor exactly."));
+		if (shortcuts_)
+			refreshShortcutHints();
 		harpia::recorderSettings()
 			.setValue(QStringLiteral("editor/timelineSnap"), on);
 	};
@@ -1382,7 +1384,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// the last, to find the sequence that plays best.
 	randomBtn_ = new QPushButton(QStringLiteral("Randomize"), this);
 	randomBtn_->setToolTip(QStringLiteral(
-		"Shuffle the order of the clips (Ctrl+R). Opens the options; Ctrl+Z brings the "
+		"Shuffle the order of the clips. Opens the options; Undo brings the "
 		"previous order back, so try as many as you like."));
 	randomBtn_->setVisible(false); // Multi-Cut and Full editing
 	connect(randomBtn_, &QPushButton::clicked, this, &VideoEditorWindow::openRandomizePanel);
@@ -1391,7 +1393,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// and the same lines saved as templates for the next project.
 	consoleBtn_ = new QPushButton(QStringLiteral("Console"), this);
 	consoleBtn_->setToolTip(QStringLiteral(
-		"A line of JavaScript against the timeline (Ctrl+`): clip.position = [500, 300], "
+		"A line of JavaScript against the timeline: clip.position = [500, 300], "
 		"clips.forEach(c => c.scale = 1.1), run(\"template\"). Each line is one undo step."));
 	consoleBtn_->setVisible(false); // Full editing only, and only with an engine
 	connect(consoleBtn_, &QPushButton::clicked, this, &VideoEditorWindow::openConsole);
@@ -2298,10 +2300,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// Gestures the mouse owns. Listed so the panel is a complete reference,
 	// but not rebindable: the widget reads the mouse directly.
 	shortcuts_->addMouseGesture(QStringLiteral("timeline.zoom"), QStringLiteral("Zoom timeline"),
-				    QStringLiteral("View"), QStringLiteral("Ctrl + Mouse wheel"));
+				    QStringLiteral("View"), ShortcutRegistry::mouseGesture(Qt::ControlModifier, QStringLiteral("Mouse wheel")));
 	shortcuts_->addMouseGesture(QStringLiteral("timeline.pan"), QStringLiteral("Pan timeline"),
 				    QStringLiteral("View"),
-				    QStringLiteral("Shift + Mouse wheel / Middle-drag / Alt + drag"));
+				    ShortcutRegistry::mouseGesture(Qt::ShiftModifier, QStringLiteral("Mouse wheel")) +
+					    QStringLiteral(" / Middle-drag / ") +
+					    ShortcutRegistry::mouseGesture(Qt::AltModifier, QStringLiteral("drag")));
 	shortcuts_->addMouseGesture(QStringLiteral("preview.zoomClip"),
 				    QStringLiteral("Zoom the selected clip"),
 				    QStringLiteral("Video"),
@@ -2311,7 +2315,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 				    QStringLiteral("Video"), QStringLiteral("Drag on the preview"));
 	shortcuts_->addMouseGesture(QStringLiteral("timeline.fine"),
 				    QStringLiteral("Precise drag (bypass snapping)"),
-				    QStringLiteral("Timeline"), QStringLiteral("Hold Shift"));
+				    QStringLiteral("Timeline"), QStringLiteral("Hold %1").arg(ShortcutRegistry::modifierText(Qt::ShiftModifier)));
 
 	shortcuts_->load(); // apply anything the user rebound previously
 	// Tooltips carry the live binding, so a rebind is visible without opening
@@ -8162,6 +8166,19 @@ void VideoEditorWindow::refreshShortcutHints()
 						 : QStringLiteral("%1 (%2)")
 							   .arg(QLatin1String(h.base), keys));
 	}
+	shortcuts_->bindHint(randomBtn_, "toolTip", QStringLiteral(
+		"Use {timeline.randomize} to shuffle the clips. Opens the options; use {edit.undo} "
+		"to bring the previous order back, so try as many as you like."));
+	shortcuts_->bindHint(consoleBtn_, "toolTip", QStringLiteral(
+		"{view.console}: a line of JavaScript against the timeline: clip.position = [500, 300], "
+		"clips.forEach(c => c.scale = 1.1), run(\"template\"). Each line is one undo step."));
+	if (snapBtn_) {
+		shortcuts_->bindHint(snapBtn_, "toolTip", snapBtn_->isChecked()
+			? QStringLiteral("Magnet ON — dragging a clip or trimming an edge sticks to the playhead, "
+				"to 0 and to other clips' edges. A white guide shows the hold. Use {timeline.snap} to switch.")
+			: QStringLiteral("Magnet OFF — clips and trim edges follow the cursor exactly. "
+				"Use {timeline.snap} to switch."));
+	}
 }
 
 void VideoEditorWindow::openKeyframeEditor()
@@ -10649,6 +10666,9 @@ void VideoEditorWindow::openConsole()
 		consoleIn_->setFont(mono);
 		consoleIn_->setPlaceholderText(QStringLiteral("clip.position = [500, 300]      help() for the list"));
 		consoleIn_->setClearButtonEnabled(true);
+		shortcuts_->bindHint(consoleIn_, "toolTip", QStringLiteral(
+			"Run a JavaScript command against the timeline. Each line is one undo step; "
+			"use {edit.undo} to reverse it."));
 		consoleIn_->installEventFilter(this);
 		connect(consoleIn_, &QLineEdit::returnPressed, this, [this]() {
 			const QString line = consoleIn_->text();
@@ -10736,7 +10756,7 @@ void VideoEditorWindow::openConsole()
 		consolePanel_ = p;
 		consolePrint(QStringLiteral("// Editing console. Click a clip to see its name; help() lists what you can set."),
 			     ConsoleTone::Comment);
-		consolePrint(QStringLiteral("// Units: pixels for position, ms for time. Every line is one undo step (Ctrl+Z)."),
+		consolePrint(QStringLiteral("// Units: pixels for position, ms for time. Every line is one undo step."),
 			     ConsoleTone::Comment);
 		consolePrint(QStringLiteral("// Colours: blue = what you typed, white = what came back, amber = names in help(), "
 					    "green = applied, red = error."),
@@ -10793,7 +10813,7 @@ void VideoEditorWindow::runConsoleLine(const QString &lineIn)
 		consolePrint(QStringLiteral("// ok, nothing changed"), ConsoleTone::Comment);
 		return;
 	}
-	consolePrint(QStringLiteral("\u2713 applied \u2014 one undo step (Ctrl+Z)"), ConsoleTone::Success);
+	consolePrint(QStringLiteral("\u2713 applied \u2014 one undo step"), ConsoleTone::Success);
 	// One undo step: the edited copy replaces the model, the selection is put
 	// back (setModel clears it), and the snapshot is closed now rather than
 	// waiting out the coalescing timer -- a second line must not merge into
@@ -14479,7 +14499,8 @@ void VideoEditorWindow::openRandomizePanel()
 		randomSelectedOnly_ = new QCheckBox(QStringLiteral("Only the selected clips"), p);
 		randomSelectedOnly_->setToolTip(QStringLiteral(
 			"Shuffle just the clips you have selected, among their own slots. Everything "
-			"else stays where it is. Ctrl+click adds clips to the selection."));
+			"else stays where it is. %1 adds clips to the selection.")
+			.arg(ShortcutRegistry::mouseGesture(Qt::ControlModifier, QStringLiteral("click"))));
 		randomSelectedOnly_->setChecked(st.value(kRandSelOnly, false).toBool());
 		lay->addWidget(randomSelectedOnly_);
 
@@ -14505,13 +14526,17 @@ void VideoEditorWindow::openRandomizePanel()
 			"Which lanes: the one holding the selected clip or header; with nothing selected, "
 			"every video lane, each on its own. Locked lanes are never touched."), p), 0, Qt::AlignLeft);
 
-		auto *go = new QPushButton(QStringLiteral("Randomize  (Ctrl+R)"), p);
+		auto *go = new QPushButton(p);
+		go->setObjectName(QStringLiteral("randomizeClipsButton"));
+		shortcuts_->bindHint(go, "text", QStringLiteral("{timeline.randomize}"));
 		go->setDefault(true);
 		go->setMinimumHeight(32);
 		connect(go, &QPushButton::clicked, this, [this]() { randomizeClips(); });
 		lay->addWidget(go);
 
-		randomStatus_ = new QLabel(QStringLiteral("Ctrl+Z brings the previous order back."), p);
+		randomStatus_ = new QLabel(p);
+		randomStatus_->setObjectName(QStringLiteral("randomizeStatus"));
+		shortcuts_->bindHint(randomStatus_, "text", QStringLiteral("Use {edit.undo} to bring the previous order back."));
 		randomStatus_->setStyleSheet(QStringLiteral("color:#9aa0a6;"));
 		randomStatus_->setWordWrap(true);
 		lay->addWidget(randomStatus_);
@@ -14572,8 +14597,8 @@ void VideoEditorWindow::randomizeClips(bool selectedOnly)
 						       : QStringLiteral("Nothing moved: no lane with two clips to shuffle "
 									"(a locked lane is left alone)."));
 		else
-			randomStatus_->setText(QStringLiteral("Moved %1 of %2 clips. Ctrl+Z brings the previous "
-							      "order back; Ctrl+R shuffles again.")
+			shortcuts_->bindHint(randomStatus_, "text", QStringLiteral("Moved %1 of %2 clips. Use {edit.undo} to bring the previous "
+							      "order back; {timeline.randomize} shuffles again.")
 						       .arg(moved)
 						       .arg(total));
 	}
@@ -14607,15 +14632,15 @@ void VideoEditorWindow::randomizeCuts()
 		if (seg >= 0)
 			showFrame(tracks_->segments()[seg].sourceId, srcMs);
 	}
-	const QString msg = QStringLiteral("Shuffled %1 of %2 cuts%3. Ctrl+Z brings the previous order back; "
-					   "Ctrl+R shuffles again.")
+	const QString msg = QStringLiteral("Shuffled %1 of %2 cuts%3. Use {edit.undo} to bring the previous order back; "
+					   "{timeline.randomize} shuffles again.")
 				    .arg(moved)
 				    .arg(n)
 				    .arg(selOnly ? QStringLiteral(" (the selected ones)") : QString());
 	if (randomStatus_)
-		randomStatus_->setText(msg);
+		shortcuts_->bindHint(randomStatus_, "text", msg);
 	if (infoLabel_)
-		infoLabel_->setText(msg);
+		shortcuts_->bindHint(infoLabel_, "text", msg);
 }
 
 void VideoEditorWindow::stepSelectedSpeed(double delta)
@@ -15145,6 +15170,7 @@ void VideoEditorWindow::onSave()
 	o.speed = speed_;   // from the editor's speed slider
 	o.videoCrf = dlg.videoCrf();
 	o.effort = dlg.effort();
+	o.encoding = dlg.encoding();
 	o.chroma444 = dlg.chroma444();
 	o.keepAudio = dlg.keepAudio();
 	if (cuts && !sources_.empty()) {
@@ -15283,6 +15309,7 @@ void VideoEditorWindow::onSave()
 
 	progress_ = new ExportProgressDialog(outPath_, exportSettingsSummary(o), this);
 	connect(exporter_, &ClipExporter::stageChanged, progress_, &ExportProgressDialog::setStage);
+	connect(exporter_, &ClipExporter::encodingChanged, progress_, &ExportProgressDialog::setEncoding);
 	connect(exporter_, &ClipExporter::frameProgress, progress_, &ExportProgressDialog::setFrameProgress);
 	connect(progress_, &ExportProgressDialog::cancelRequested, this, [this]() {
 		if (exporter_)
@@ -15366,6 +15393,7 @@ void VideoEditorWindow::startBatchItems(const ClipExporter::Options &base,
 	batchProgress_ = new ExportProgressDialog(firstPath, exportSettingsSummary(base), this);
 	batchProgress_->setItemProgress(0, items.size());
 	connect(batch_, &BatchExporter::stageChanged, batchProgress_, &ExportProgressDialog::setStage);
+	connect(batch_, &BatchExporter::encodingChanged, batchProgress_, &ExportProgressDialog::setEncoding);
 	connect(batch_, &BatchExporter::frameProgress, batchProgress_, &ExportProgressDialog::setFrameProgress);
 	connect(batch_, &BatchExporter::outputBytes, batchProgress_, &ExportProgressDialog::setBytes);
 	connect(batch_, &BatchExporter::itemStarted, batchProgress_,

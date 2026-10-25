@@ -169,6 +169,7 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	form->addRow(QStringLiteral("Save to"), folderRow);
 
 	formatCombo_ = new QComboBox(this);
+	formatCombo_->setObjectName(QStringLiteral("exportFormat"));
 	if (ctx_.allowGif)
 		formatCombo_->addItem(QStringLiteral("GIF (animated)"), int(ClipExporter::Format::Gif));
 	formatCombo_->addItem(QStringLiteral("MP4 (H.264)"), int(ClipExporter::Format::Mp4));
@@ -237,10 +238,28 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 		"Frames per second in the file. Lower than the original leaves frames out evenly: "
 		"smaller files, less smooth motion. 30 or 60 suit most platforms."));
 	vform->addRow(QStringLiteral("Frame rate"), fpsCombo_);
+	if (ctx_.offerAppleHardwareEncoding) {
+		encodingCombo_ = new QComboBox(videoRow_);
+		encodingCombo_->setObjectName(QStringLiteral("exportEncoding"));
+		encodingCombo_->addItem(QStringLiteral("Automatic (prefer Apple hardware)"),
+			int(export_video::Encoding::Automatic));
+		encodingCombo_->addItem(QStringLiteral("Apple hardware (faster)"),
+			int(export_video::Encoding::AppleHardware));
+		encodingCombo_->addItem(QStringLiteral("Software (more compression control)"),
+			int(export_video::Encoding::Software));
+		vform->addRow(QStringLiteral("Encoding"), encodingCombo_);
+		encodingHint_ = new QLabel(videoRow_);
+		encodingHint_->setObjectName(QStringLiteral("exportEncodingHint"));
+		encodingHint_->setTextFormat(Qt::PlainText);
+		encodingHint_->setWordWrap(true);
+		encodingHint_->setMaximumWidth(420);
+		vform->addRow(QString(), encodingHint_);
+	}
 	auto *qrow = new QWidget(videoRow_);
 	auto *ql = new QHBoxLayout(qrow);
 	ql->setContentsMargins(0, 0, 0, 0);
 	qualitySlider_ = new QSlider(Qt::Horizontal, qrow);
+	qualitySlider_->setObjectName(QStringLiteral("exportQuality"));
 	qualitySlider_->setRange(0, 100);
 	qualitySlider_->setValue(sliderForCrf(kDefaultCrf));
 	ql->addWidget(qualitySlider_, 1);
@@ -255,6 +274,7 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	// The other half of "quality", and the one that was hard-coded. CRF asks
 	// for a quality; this decides how hard the encoder may work to reach it.
 	effortCombo_ = new QComboBox(videoRow_);
+	effortCombo_->setObjectName(QStringLiteral("exportEffort"));
 	effortCombo_->addItem(QStringLiteral("Faster encode"),
 			      int(ClipExporter::Options::Effort::Fast));
 	effortCombo_->addItem(QStringLiteral("Balanced"),
@@ -272,6 +292,7 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	vform->addRow(QStringLiteral("Encoder effort"), effortCombo_);
 
 	chroma444Check_ = new QCheckBox(QStringLiteral("Full colour detail (4:4:4)"), videoRow_);
+	chroma444Check_->setObjectName(QStringLiteral("exportChroma444"));
 	chroma444Check_->setToolTip(QStringLiteral(
 		"Normal video stores one colour sample per 2×2 block of pixels. That is "
 		"invisible on camera footage and very visible on coloured text, thin lines "
@@ -382,6 +403,8 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	connect(customH_, &QSpinBox::valueChanged, this, &ExportOptionsDialog::refresh);
 	connect(qualitySlider_, &QSlider::valueChanged, this, &ExportOptionsDialog::refresh);
 	connect(effortCombo_, &QComboBox::currentIndexChanged, this, &ExportOptionsDialog::refresh);
+	if (encodingCombo_)
+		connect(encodingCombo_, &QComboBox::currentIndexChanged, this, &ExportOptionsDialog::refresh);
 	connect(chroma444Check_, &QCheckBox::toggled, this, &ExportOptionsDialog::refresh);
 	connect(audioCheck_, &QCheckBox::toggled, this, &ExportOptionsDialog::refresh);
 	connect(gifFpsSpin_, &QSpinBox::valueChanged, this, &ExportOptionsDialog::refresh);
@@ -628,9 +651,33 @@ void ExportOptionsDialog::refresh()
 	}
 
 	const QSize out = outputSize().isValid() ? outputSize() : ctx_.sourceSize;
+	const bool appleCompatible = format() != ClipExporter::Format::WebM &&
+		format() != ClipExporter::Format::Gif && !chroma444() && videoCrf() > 0;
+	const bool preferApple = encodingCombo_ && appleCompatible &&
+		encoding() != export_video::Encoding::Software;
 	if (qualityLabel_)
-		qualityLabel_->setText(
+		qualityLabel_->setText(preferApple ? qualityWord(videoCrf()) :
 			QStringLiteral("%1 · CRF %2").arg(qualityWord(videoCrf())).arg(videoCrf()));
+	if (encodingCombo_) {
+		const bool h264 = format() != ClipExporter::Format::WebM && format() != ClipExporter::Format::Gif;
+		encodingCombo_->setEnabled(h264);
+		const bool forcedApple = encoding() == export_video::Encoding::AppleHardware;
+		effortCombo_->setEnabled(!preferApple || !forcedApple);
+		if (!h264)
+			encodingHint_->setText(QStringLiteral("This format uses its own software encoder."));
+		else if (!appleCompatible)
+			encodingHint_->setText(forcedApple
+				? QStringLiteral("Apple hardware cannot preserve lossless or full colour detail (4:4:4). Choose Automatic or Software to export these settings.")
+				: QStringLiteral("Software encoding preserves the selected lossless or full colour detail (4:4:4) settings."));
+		else if (encoding() == export_video::Encoding::Software)
+			encodingHint_->setText(QStringLiteral("Software gives precise CRF and encoder-effort control. It can take longer and use more battery."));
+		else
+			encodingHint_->setText(QStringLiteral("Apple hardware reduces encoding work on the CPU. Quality is a target on a different scale; file size can differ from software. Encoder effort applies to software fallback."));
+		if (forcedApple && !appleCompatible)
+			exportBtn_->setEnabled(false);
+		else if (!batchMode() || !batchSelection().isEmpty())
+			exportBtn_->setEnabled(true);
+	}
 	// 4:4:4 is an H.264 thing here; VP9 in this build is 4:2:0 only, so the box
 	// is disabled rather than silently ignored.
 	if (chroma444Check_)
@@ -723,6 +770,13 @@ void ExportOptionsDialog::loadRemembered()
 			.toInt());
 	if (ei >= 0)
 		effortCombo_->setCurrentIndex(ei);
+	if (encodingCombo_) {
+		const int encodingIndex = encodingCombo_->findData(
+			s.value(QLatin1String(kGroup) + QStringLiteral("macEncoding"),
+				int(export_video::Encoding::Automatic)).toInt());
+		if (encodingIndex >= 0)
+			encodingCombo_->setCurrentIndex(encodingIndex);
+	}
 	chroma444Check_->setChecked(
 		s.value(QLatin1String(kGroup) + QStringLiteral("chroma444"), kDefaultChroma444)
 			.toBool());
@@ -748,6 +802,8 @@ void ExportOptionsDialog::saveRemembered() const
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("gifLoop"), gifLoop());
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("keepAudio"), keepAudio());
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("effort"), int(effort()));
+	if (encodingCombo_)
+		s.setValue(QLatin1String(kGroup) + QStringLiteral("macEncoding"), int(encoding()));
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("chroma444"), chroma444());
 }
 
@@ -799,6 +855,13 @@ bool ExportOptionsDialog::gifLoop() const
 ClipExporter::Options::Effort ExportOptionsDialog::effort() const
 {
 	return ClipExporter::Options::Effort(effortCombo_->currentData().toInt());
+}
+
+export_video::Encoding ExportOptionsDialog::encoding() const
+{
+	if (!encodingCombo_ || format() == ClipExporter::Format::WebM || format() == ClipExporter::Format::Gif)
+		return export_video::Encoding::Software;
+	return export_video::Encoding(encodingCombo_->currentData().toInt());
 }
 
 bool ExportOptionsDialog::chroma444() const

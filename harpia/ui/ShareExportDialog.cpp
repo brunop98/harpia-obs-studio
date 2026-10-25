@@ -90,6 +90,7 @@ ShareExportDialog::ShareExportDialog(const QString &inPath, const QString &outPa
 	titleLabel_ = new QLabel(
 		QStringLiteral("Optimizing for sharing (%1)…").arg(ShareExporter::levelName(level_)), prog);
 	titleLabel_->setStyleSheet(QStringLiteral("font-weight:bold;"));
+	titleLabel_->setWordWrap(true);
 	pv->addWidget(titleLabel_);
 
 	auto *sub = new QLabel(level_ == ShareExporter::Level::Discord

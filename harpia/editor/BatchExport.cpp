@@ -117,6 +117,8 @@ void BatchExporter::run(QString primaryInput, ClipExporter::Options base, QVecto
 			Qt::DirectConnection);
 		connect(&ex, &ClipExporter::stageChanged, &ex,
 			[this](const QString &stage) { emit stageChanged(stage); }, Qt::DirectConnection);
+		connect(&ex, &ClipExporter::encodingChanged, &ex,
+			[this](const QString &description) { emit encodingChanged(description); }, Qt::DirectConnection);
 		connect(&ex, &ClipExporter::frameProgress, &ex,
 			[this](qint64 completed, qint64 total) { emit frameProgress(completed, total); },
 			Qt::DirectConnection);

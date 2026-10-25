@@ -123,6 +123,8 @@ target_sources(
     core/Remuxer.cpp
     core/Remuxer.hpp
     core/ShareExporter.cpp
+    core/ExportVideoEncoder.cpp
+    core/ExportVideoEncoder.hpp
     core/ShareExporter.hpp
     core/ShareSplitter.cpp
     core/ShareSplitter.hpp

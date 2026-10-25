@@ -15,6 +15,7 @@
 #include "shader/ShaderRenderer.hpp"
 #include "timeline/TimelineCompositor.hpp"
 #include "SwsImage.hpp"
+#include "../ui/EditorLog.hpp"
 
 #include <QImage>
 #include <QFileInfo>
@@ -123,6 +124,7 @@ struct VideoState {
 	AVStream *coverOut = nullptr;
 	std::unique_ptr<cover::Picker> cover;
 	bool headerWritten = false;
+	QString encodingDescription;
 
 	// The chosen cover, into the file. Before the trailer, after the last
 	// frame (the picker needs them all to know where the middle is).
@@ -196,6 +198,9 @@ struct VideoState {
 			outScaled = av_frame_alloc();
 			if (!toOut || !outScaled)
 				return in;
+			const int *coefficients = sws_getCoefficients(swsSpaceOf(venc->colorspace, venc->height));
+			sws_setColorspaceDetails(toOut, coefficients, venc->color_range == AVCOL_RANGE_JPEG,
+				coefficients, venc->color_range == AVCOL_RANGE_JPEG, 0, 1 << 16, 1 << 16);
 			outScaled->format = venc->pix_fmt;
 			outScaled->width = venc->width;
 			outScaled->height = venc->height;
@@ -204,9 +209,16 @@ struct VideoState {
 		}
 		if (!outScaled)
 			return in;
+		if (av_frame_make_writable(outScaled) < 0)
+			return nullptr;
 		sws_scale(toOut, in->data, in->linesize, 0, in->height, outScaled->data,
 			  outScaled->linesize);
 		outScaled->pts = in->pts;
+		outScaled->colorspace = venc->colorspace;
+		outScaled->color_primaries = venc->color_primaries;
+		outScaled->color_trc = venc->color_trc;
+		outScaled->color_range = venc->color_range;
+		outScaled->sample_aspect_ratio = venc->sample_aspect_ratio;
 		return outScaled;
 	}
 
@@ -277,19 +289,16 @@ QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const
 			 int w, int h, AVRational timeBase, AVRational frameRate, int gopSize)
 {
 	const bool webm = opts.format == ClipExporter::Format::WebM;
-	const AVCodec *vc = avcodec_find_encoder_by_name(webm ? "libvpx-vp9" : "libx264");
-	if (!vc)
-		return QStringLiteral("The output video encoder is not available in this build.");
-	s.venc = avcodec_alloc_context3(vc);
-	if (!s.venc)
-		return QStringLiteral("Could not allocate the video encoder.");
+	export_video::Config config;
+	config.encoding = opts.encoding;
+	config.crf = opts.videoCrf;
 	// Here rather than at the four call sites: every path passes the size it
 	// would naturally produce, and the chosen output size overrides it in one
 	// place. scaleForEncode then rescales whatever arrives to match.
 	const QSize enc = encodeSize(opts, w, h);
-	s.venc->width = enc.width();
-	s.venc->height = enc.height();
-	s.venc->pix_fmt = encodePixFmt(opts);
+	config.width = enc.width();
+	config.height = enc.height();
+	config.softwareFormat = encodePixFmt(opts);
 	// A chosen frame rate replaces the path's own: the stream says it, the
 	// GOP follows it, and VideoSink leaves out the frames in between.
 	if (opts.outFps > 0.0 && opts.format != ClipExporter::Format::Gif) {
@@ -297,17 +306,17 @@ QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const
 		gopSize = std::max(1, int(opts.outFps * 2.0));
 		s.outFps = opts.outFps;
 	}
-	s.venc->time_base = timeBase;
-	s.venc->framerate = frameRate;
-	s.venc->gop_size = gopSize;
+	config.timeBase = timeBase;
+	config.frameRate = frameRate;
+	config.gopSize = gopSize;
 	// Say what the colours MEAN. Left unset, a player has to guess the matrix
 	// and primaries, and the usual guess for anything over SD is what we write
 	// anyway -- but the guess for small frames is BT.601, which shifts every
 	// colour in a downscaled export. Cheap to state, and then nobody guesses.
-	s.venc->colorspace = AVCOL_SPC_BT709;
-	s.venc->color_primaries = AVCOL_PRI_BT709;
-	s.venc->color_trc = AVCOL_TRC_BT709;
-	s.venc->color_range = AVCOL_RANGE_MPEG;
+	config.colorSpace = AVCOL_SPC_BT709;
+	config.colorPrimaries = AVCOL_PRI_BT709;
+	config.colorTransfer = AVCOL_TRC_BT709;
+	config.colorRange = AVCOL_RANGE_MPEG;
 	// An HDR (or BT.2020) source's pixels do not go through as they are: they
 	// are tone mapped to SDR BT.709 on the way in (HdrToSdr.hpp), so the file
 	// says BT.709 -- copying the source's HLG/PQ tags onto SDR pixels is what
@@ -321,23 +330,23 @@ QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const
 		// it is not and every player shows it shifted. Untagged keeps the
 		// HD/SD convention (SwsColor.hpp).
 		const int space = swsSpaceOf(src->colorspace, src->height);
-		s.venc->colorspace = space == SWS_CS_ITU709 ? AVCOL_SPC_BT709
+		config.colorSpace = space == SWS_CS_ITU709 ? AVCOL_SPC_BT709
 				     : space == SWS_CS_BT2020 ? AVCOL_SPC_BT2020_NCL
 								: AVCOL_SPC_SMPTE170M;
 		if (src->color_primaries != AVCOL_PRI_UNSPECIFIED)
-			s.venc->color_primaries = src->color_primaries;
+			config.colorPrimaries = src->color_primaries;
 		else if (space != SWS_CS_ITU709)
-			s.venc->color_primaries = AVCOL_PRI_SMPTE170M;
+			config.colorPrimaries = AVCOL_PRI_SMPTE170M;
 		if (src->color_trc != AVCOL_TRC_UNSPECIFIED)
-			s.venc->color_trc = src->color_trc;
+			config.colorTransfer = src->color_trc;
 		else if (space != SWS_CS_ITU709)
-			s.venc->color_trc = AVCOL_TRC_SMPTE170M;
+			config.colorTransfer = AVCOL_TRC_SMPTE170M;
 		// A yuvj source is converted to limited range on the way in (swscale
 		// does that for the j formats); a plain yuv source tagged full range
 		// keeps its values, so keeps its tag.
 		const bool jFormat = isFullRange(AVCOL_RANGE_UNSPECIFIED, src->pix_fmt);
 		if (src->color_range == AVCOL_RANGE_JPEG && !jFormat)
-			s.venc->color_range = AVCOL_RANGE_JPEG;
+			config.colorRange = AVCOL_RANGE_JPEG;
 	}
 
 	// The container has to exist before the encoder opens: whether it wants a
@@ -346,10 +355,18 @@ QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const
 	    !s.ofmt)
 		return QStringLiteral("Could not create the output file.");
 	if (s.ofmt->oformat->flags & AVFMT_GLOBALHEADER)
-		s.venc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+		config.globalHeader = true;
 
 	using Effort = ClipExporter::Options::Effort;
 	if (webm) {
+		const AVCodec *vc = avcodec_find_encoder_by_name("libvpx-vp9");
+		if (!vc)
+			return QStringLiteral("The WebM video encoder is not available in this build.");
+		s.venc = avcodec_alloc_context3(vc);
+		if (!s.venc)
+			return QStringLiteral("Could not allocate the video encoder.");
+		export_video::applyCommon(s.venc, config);
+		s.venc->pix_fmt = config.softwareFormat;
 		s.venc->bit_rate = 0; // constant-quality VP9
 		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
 		// cpu-used counts the other way from x264's preset: higher is faster
@@ -361,22 +378,18 @@ QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const
 			   opts.effort == Effort::Fast ? "realtime" : "good", 0);
 		av_opt_set_int(s.venc->priv_data, "cpu-used", cpuUsed, 0);
 		av_opt_set(s.venc->priv_data, "row-mt", "1", 0);
+		if (avcodec_open2(s.venc, vc, nullptr) < 0)
+			return QStringLiteral("Could not open the WebM video encoder.");
+		s.encodingDescription = QStringLiteral("Software encoding (VP9)");
 	} else {
-		// "veryfast" is a LIVE preset: it exists so an encoder can keep up with
-		// frames arriving in real time. An export is not real time, and paying
-		// a slower preset buys real detail at the same CRF.
-		const char *preset = opts.effort == Effort::Best     ? "slow"
-				     : opts.effort == Effort::Fast   ? "veryfast"
-								     : "medium";
-		av_opt_set(s.venc->priv_data, "preset", preset, 0);
-		// 4:4:4 needs its own profile; asking for "high" with a 444 pixel
-		// format is a refusal, not a downgrade.
-		av_opt_set(s.venc->priv_data, "profile",
-			   s.venc->pix_fmt == AV_PIX_FMT_YUV444P ? "high444" : "high", 0);
-		av_opt_set_int(s.venc->priv_data, "crf", opts.videoCrf, 0);
+		config.preset = opts.effort == Effort::Best ? "slow"
+			: opts.effort == Effort::Fast ? "veryfast" : "medium";
+		export_video::Result result;
+		if (const QString error = export_video::openH264(config, &s.venc, &result); !error.isEmpty())
+			return error;
+		s.encodingDescription = result.description;
 	}
-	if (avcodec_open2(s.venc, vc, nullptr) < 0)
-		return QStringLiteral("Could not open the video encoder.");
+	editorLog(EditorLogLevel::Info, QStringLiteral("Export encoding"), s.encodingDescription);
 
 	s.vOut = avformat_new_stream(s.ofmt, nullptr);
 	if (!s.vOut || avcodec_parameters_from_context(s.vOut->codecpar, s.venc) < 0)
@@ -561,7 +574,10 @@ struct VideoSink {
 		// (they read normalized coordinates), so shading a 4K frame that is
 		// about to become 1080p ran the whole chain on four times the pixels
 		// that survive -- per frame, for the whole export.
-		f = s.scaleForEncode(f); // no-op unless an output size was chosen
+		const bool hasFrame = f != nullptr;
+		f = s.scaleForEncode(f); // also converts software staging YUV to hardware NV12
+		if (hasFrame && !f)
+			return false;
 		if (f && shader.active)
 			shader.process(f, float(f->pts * av_q2d(s.venc->time_base)), shaderFrame++);
 		// The finished frame, as it is encoded: a candidate for the cover.
@@ -916,6 +932,7 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 	if (QString e = encodeVideo.initShader(opts); !e.isEmpty())
 		return e;
 
+	emit encodingChanged(s.encodingDescription);
 	emit stageChanged(QStringLiteral("Rendering video"));
 	emit frameProgress(0, 0);
 	while (!errored && !videoDone) {
@@ -1197,6 +1214,7 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 	auto lastEmit = startWall;
 	double processedMs = 0.0;
 
+	emit encodingChanged(s.encodingDescription);
 	emit stageChanged(QStringLiteral("Rendering video"));
 	emit frameProgress(0, 0);
 	for (size_t ci = 0; ci < cuts.size() && !errored; ++ci) {
@@ -1544,6 +1562,7 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 	const auto startWall = std::chrono::steady_clock::now();
 	auto lastEmit = startWall;
 
+	emit encodingChanged(s.encodingDescription);
 	emit stageChanged(QStringLiteral("Rendering video"));
 	emit frameProgress(0, 0);
 	for (size_t ci = 0; ci < cuts.size() && !errored; ++ci) {
@@ -1979,6 +1998,7 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 	// ---- Render every frame -----------------------------------------------
 	const auto t0 = std::chrono::steady_clock::now();
 	auto lastEmit = t0;
+	emit encodingChanged(s.encodingDescription);
 	emit stageChanged(QStringLiteral("Rendering video"));
 	emit frameProgress(0, frames);
 	for (int64_t i = 0; i < frames; ++i) {

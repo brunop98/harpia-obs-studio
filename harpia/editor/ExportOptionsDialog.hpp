@@ -45,6 +45,13 @@ public:
 		// always meant.
 		bool canKeepAudio = true;
 		bool allowGif = true;  // multi-cut exports are video-only
+		// A capability supplied with the export context, also letting portable
+		// widget tests exercise the Mac choices without an Apple encoder.
+#if defined(Q_OS_MACOS)
+		bool offerAppleHardwareEncoding = true;
+#else
+		bool offerAppleHardwareEncoding = false;
+#endif
 		QImage previewFrame;   // first frame, for the summary panel
 
 		// An optional sub-range the caller can write INSTEAD of the whole
@@ -97,6 +104,7 @@ public:
 	int videoCrf() const;
 	bool keepAudio() const;
 	ClipExporter::Options::Effort effort() const;
+	export_video::Encoding encoding() const;
 	bool chroma444() const;
 	// 0x0 = keep the source/canvas size. Always even; see encodeSize().
 	QSize outputSize() const;
@@ -153,6 +161,8 @@ private:
 	QSlider *qualitySlider_ = nullptr;
 	QLabel *qualityLabel_ = nullptr;
 	QComboBox *effortCombo_ = nullptr;
+	QComboBox *encodingCombo_ = nullptr;
+	QLabel *encodingHint_ = nullptr;
 	QCheckBox *chroma444Check_ = nullptr;
 	QCheckBox *audioCheck_ = nullptr;
 	QWidget *videoRow_ = nullptr;

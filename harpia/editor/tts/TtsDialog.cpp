@@ -11,6 +11,7 @@
 #include "../../ui/InfoHint.hpp"
 #include "../AudioPreview.hpp"
 #include "../ProjectPaths.hpp"
+#include "../ShortcutRegistry.hpp"
 #include "../VoiceoverMixer.hpp"
 #include "../subtitles/SecretStore.hpp"
 
@@ -230,13 +231,14 @@ void TtsDialog::buildUi()
 	lay->setContentsMargins(0, 0, 0, 0);
 	lay->setSpacing(10);
 	outer->addWidget(right);
-	lay->addWidget(infoHint(QStringLiteral(
-				   "Turns the text into a narration and captions: an audio clip and caption clips, "
-				   "linked so they move together. The audio is kept in Movies/Harpia/Speech. "
-				   "Right-click a caption afterwards to re-speak just its sentence. Ctrl+Z removes "
-				   "them."),
-			       this),
-		       0, Qt::AlignLeft);
+	const QString introText = QStringLiteral(
+		"Turns the text into a narration and captions: an audio clip and caption clips, "
+		"linked so they move together. The audio is kept in Movies/Harpia/Speech. "
+		"Right-click a caption afterwards to re-speak just its sentence. Use {edit.undo} to remove them.");
+	auto *intro = infoHint(QString(introText).replace(QStringLiteral("{edit.undo}"), QStringLiteral("Undo")), this);
+	if (auto *shortcuts = ShortcutRegistry::forWidget(this))
+		shortcuts->bindHint(intro, "toolTip", introText);
+	lay->addWidget(intro, 0, Qt::AlignLeft);
 
 	auto *svc = new QGroupBox(QStringLiteral("Voice"), this);
 	auto *sf = new QFormLayout(svc);
@@ -1051,11 +1053,14 @@ void TtsDialog::onFinished(const TtsResult &r)
 				  .arg(r.spec.tempo, 0, 'f', 2)
 				  .arg(r.durationMs / 1000.0, 0, 'f', 1)
 				  .arg(jobFitMs_ / 1000.0, 0, 'f', 1);
-	status_->setText(QStringLiteral("Done: %1 s of speech, %2 words%3. It is on the timeline; Ctrl+Z removes it.%4")
+	const QString message = QStringLiteral("Done: %1 s of speech, %2 words%3. It is on the timeline; use {edit.undo} to remove it.%4")
 				 .arg(r.durationMs / 1000.0, 0, 'f', 1)
 				 .arg(r.words.size())
 				 .arg(stretched ? QStringLiteral(", paced ×%1 to fit").arg(r.spec.tempo, 0, 'f', 2) : QString())
-				 .arg(fitNote));
+				 .arg(fitNote);
+	status_->setText(QString(message).replace(QStringLiteral("{edit.undo}"), QStringLiteral("Undo")));
+	if (auto *shortcuts = ShortcutRegistry::forWidget(this))
+		shortcuts->bindHint(status_, "text", message);
 	emit speechReady(r.wavPath, r.durationMs, r.words, groupRule(), look(), r.spec.toJson(), jobAtMs_);
 }
 

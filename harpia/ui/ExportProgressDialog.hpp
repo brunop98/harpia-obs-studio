@@ -24,6 +24,7 @@ public:
 
 public slots:
 	void setStage(const QString &stage);
+	void setEncoding(const QString &description);
 	void setFrameProgress(qint64 completed, qint64 total);
 	void setProgress(int percent, qint64 etaMs, qint64 bytes);
 	void setBytes(qint64 bytes);
@@ -48,6 +49,7 @@ private:
 	QLineEdit *destination_ = nullptr;
 	QLabel *item_ = nullptr;
 	QLabel *stage_ = nullptr;
+	QLabel *encoding_ = nullptr;
 	QProgressBar *progress_ = nullptr;
 	QLabel *elapsed_ = nullptr;
 	QLabel *remaining_ = nullptr;

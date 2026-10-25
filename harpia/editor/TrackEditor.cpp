@@ -1,4 +1,5 @@
 #include "TrackEditor.hpp"
+#include "ShortcutRegistry.hpp"
 
 #include "Filmstrip.hpp"
 #include "timeline/ClipShuffle.hpp" // the same shuffle rules the Full-editing timeline uses
@@ -33,7 +34,8 @@ TrackEditor::TrackEditor(QWidget *parent) : QWidget(parent)
 	setFocusPolicy(Qt::ClickFocus); // so Delete works after clicking a segment
 	setMouseTracking(true);         // cursor hints over the tracks
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-	setToolTip(QStringLiteral("Scroll to zoom, Shift+scroll to pan (both the source and output tracks)"));
+	setToolTip(QStringLiteral("Scroll to zoom, %1 to pan (both the source and output tracks)")
+		.arg(ShortcutRegistry::mouseGesture(Qt::ShiftModifier, QStringLiteral("scroll"))));
 
 	// ~60fps easing timer for smooth panning; runs only while the view is gliding.
 	scrollAnim_ = new QTimer(this);
@@ -716,7 +718,9 @@ void TrackEditor::paintEvent(QPaintEvent *)
 				     .arg(totalOutputMs() / 1000.0, 0, 'f', 1);
 	if (!segs_.isEmpty())
 		outCaption += QStringLiteral(
-			"   (drag to reorder · drag edge to trim · Shift+edge to change speed · Del to delete)");
+			"   (drag to reorder · drag edge to trim · %1 to change speed · %2 to delete)")
+			.arg(ShortcutRegistry::mouseGesture(Qt::ShiftModifier, QStringLiteral("edge")),
+				QKeySequence(Qt::Key_Delete).toString(QKeySequence::NativeText));
 	p.drawText(QRect(out.x(), out.y() - lp_.captionH, out.width(), lp_.captionH),
 		   Qt::AlignVCenter | Qt::AlignLeft, outCaption);
 
@@ -1332,16 +1336,22 @@ void TrackEditor::showSegmentMenu(int index, const QPoint &globalPos, const QPoi
 	// versions of one edit, fast, each a Ctrl+Z from the last.
 	QAction *shuffleSel = nullptr;
 	QAction *shuffleAll = nullptr;
+	const auto undoHint = [this](QAction *action, const QString &pattern) {
+		if (auto *registry = ShortcutRegistry::forWidget(this))
+			registry->bindHint(action, "toolTip", pattern);
+		else
+			action->setToolTip(QString(pattern).replace(QStringLiteral("{edit.undo}"), QStringLiteral("Undo")));
+	};
 	if (group) {
 		menu.addSeparator();
 		shuffleSel = menu.addAction(QStringLiteral("Randomize order of selected cuts  (%1)").arg(n));
-		shuffleSel->setToolTip(QStringLiteral(
+		undoHint(shuffleSel, QStringLiteral(
 			"The selected cuts trade places among their own positions; the rest stay put. "
-			"Ctrl+Z brings the previous order back."));
+			"Use {edit.undo} to bring the previous order back."));
 	} else if (segs_.size() >= 2) {
 		menu.addSeparator();
 		shuffleAll = menu.addAction(QStringLiteral("Randomize order of all cuts  (%1)").arg(segs_.size()));
-		shuffleAll->setToolTip(QStringLiteral("Every cut takes a new place. Ctrl+Z brings the previous "
+		undoHint(shuffleAll, QStringLiteral("Every cut takes a new place. Use {edit.undo} to bring the previous "
 						      "order back; select two or more to shuffle only those."));
 	}
 	explainDisabled(&menu);

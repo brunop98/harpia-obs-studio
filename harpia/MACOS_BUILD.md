@@ -91,6 +91,13 @@ and command-line overrides.
   session. Auto uses constant quality where supported; otherwise it logs and uses
   a resolution/frame-rate-based bitrate target. Explicit bitrates remain target
   bitrates. CPU H.264 remains a fallback. New Mac presets prefer hardware.
+- Editor MP4/MOV/MKV exports offer Automatic, Apple hardware and Software
+  encoding. Automatic tries an actual VideoToolbox session, then reports any
+  software fallback in progress and the session log. Lossless and 4:4:4 use
+  software; an explicit incompatible hardware choice is rejected. Sharing and
+  proxy encodes use the same automatic H.264 path. WebM/GIF keep their own
+  encoders. Hardware quality is a separate scale and may produce different file
+  sizes; native speed, power and output-quality measurements remain required.
 - HEVC MP4/MOV recordings/remuxes use the `hvc1` tag for Apple playback; MKV and
   H.264 retain their container behavior.
 - GUI-owned offscreen surfaces are leased by export workers without waiting for
@@ -99,6 +106,8 @@ and command-line overrides.
 - API keys use the login Keychain, with legacy migration verified before removing
   old settings. Finder `.harpiaproj` events queue until the editor can open them,
   and reuse the normal relink/error workflow. Emoji resources use bundle paths.
+- Editor shortcut tips use the current configured bindings and native modifier
+  labels, including mouse gestures. Open options update after a rebind or reset.
 
 ## Automated checks
 

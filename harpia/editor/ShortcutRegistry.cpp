@@ -4,10 +4,12 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSettings>
 #include <QShortcut>
 #include <QWidget>
+#include <QVariant>
 
 #include <algorithm>
 
@@ -21,7 +23,10 @@ QSettings shortcutSettings()
 constexpr const char *kGroup = "editorShortcuts";
 } // namespace
 
-ShortcutRegistry::ShortcutRegistry(QWidget *host, QObject *parent) : QObject(parent), host_(host) {}
+ShortcutRegistry::ShortcutRegistry(QWidget *host, QObject *parent) : QObject(parent), host_(host)
+{
+	connect(this, &ShortcutRegistry::bindingsChanged, this, &ShortcutRegistry::refreshBoundHints);
+}
 
 void ShortcutRegistry::addCommand(const ShortcutCommand &c)
 {
@@ -149,6 +154,87 @@ QString ShortcutRegistry::displayText(const QString &id) const
 	for (const QKeySequence &k : bindings(id))
 		parts << k.toString(QKeySequence::NativeText);
 	return parts.join(QStringLiteral(", "));
+}
+
+QString ShortcutRegistry::actionText(const QString &id, const QString &label) const
+{
+	const ShortcutCommand *c = command(id);
+	const QString name = !label.isEmpty() ? label : c ? c->label : id;
+	const QString keys = displayText(id);
+	return keys.isEmpty() ? name : QStringLiteral("%1 (%2)").arg(name, keys);
+}
+
+QString ShortcutRegistry::formatHint(const QString &pattern) const
+{
+	static const QRegularExpression token(QStringLiteral("\\{([^{}]+)\\}"));
+	QString out;
+	qsizetype offset = 0;
+	auto matches = token.globalMatch(pattern);
+	while (matches.hasNext()) {
+		const auto match = matches.next();
+		out += pattern.mid(offset, match.capturedStart() - offset);
+		const QString id = match.captured(1);
+		out += command(id) ? actionText(id) : match.captured();
+		offset = match.capturedEnd();
+	}
+	return out + pattern.mid(offset);
+}
+
+void ShortcutRegistry::bindHint(QObject *target, const char *property, const QString &pattern)
+{
+	if (!target || !property)
+		return;
+	hints_.erase(std::remove_if(hints_.begin(), hints_.end(), [](const BoundHint &hint) {
+		return hint.target.isNull();
+	}), hints_.end());
+	for (BoundHint &hint : hints_) {
+		if (hint.target == target && hint.property == property) {
+			hint.pattern = pattern;
+			hint.rendered = formatHint(pattern);
+			target->setProperty(property, hint.rendered);
+			return;
+		}
+	}
+	const QString rendered = formatHint(pattern);
+	target->setProperty(property, rendered);
+	hints_.append({target, QByteArray(property), pattern, rendered});
+}
+
+void ShortcutRegistry::refreshBoundHints()
+{
+	for (auto it = hints_.begin(); it != hints_.end();) {
+		if (!it->target || it->target->property(it->property.constData()).toString() != it->rendered) {
+			it = hints_.erase(it);
+			continue;
+		}
+		it->rendered = formatHint(it->pattern);
+		it->target->setProperty(it->property.constData(), it->rendered);
+		++it;
+	}
+}
+
+ShortcutRegistry *ShortcutRegistry::forWidget(const QWidget *widget)
+{
+	for (auto *current = widget; current; current = current->parentWidget())
+		if (auto *registry = current->findChild<ShortcutRegistry *>(QString(), Qt::FindDirectChildrenOnly))
+			return registry;
+	return nullptr;
+}
+
+QString ShortcutRegistry::modifierText(Qt::KeyboardModifiers modifiers)
+{
+	QString text = QKeySequence(int(modifiers)).toString(QKeySequence::NativeText);
+	// Qt renders a modifier-only sequence with a trailing '+' on platforms
+	// that use textual modifier names; macOS uses its native modifier glyphs.
+	while (text.endsWith(QLatin1Char('+')))
+		text.chop(1);
+	return text;
+}
+
+QString ShortcutRegistry::mouseGesture(Qt::KeyboardModifiers modifiers, const QString &gesture)
+{
+	const QString keys = modifierText(modifiers);
+	return keys.isEmpty() ? gesture : QStringLiteral("%1 + %2").arg(keys, gesture);
 }
 
 void ShortcutRegistry::rebuild()

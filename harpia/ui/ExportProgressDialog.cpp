@@ -86,6 +86,11 @@ ExportProgressDialog::ExportProgressDialog(const QString &outputPath, const QStr
 	settings->setWordWrap(true);
 	settings->setTextInteractionFlags(Qt::TextSelectableByMouse);
 	layout->addWidget(settings);
+	encoding_ = plainLabel(QString(), "exportActualEncoding", this);
+	encoding_->setWordWrap(true);
+	encoding_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+	encoding_->hide();
+	layout->addWidget(encoding_);
 
 	item_ = plainLabel(QString(), "exportItem", this);
 	item_->hide();
@@ -152,6 +157,7 @@ ExportProgressDialog::ExportProgressDialog(const QString &outputPath, const QStr
 
 void ExportProgressDialog::setOutputPath(const QString &path)
 {
+	setEncoding(QString());
 	const QFileInfo file(path);
 	filename_->setText(file.fileName());
 	filename_->setCursorPosition(0);
@@ -160,6 +166,12 @@ void ExportProgressDialog::setOutputPath(const QString &path)
 	destination_->setText(folder);
 	destination_->setCursorPosition(0);
 	destination_->setToolTip(folder);
+}
+
+void ExportProgressDialog::setEncoding(const QString &description)
+{
+	encoding_->setText(description);
+	encoding_->setVisible(!description.isEmpty());
 }
 
 void ExportProgressDialog::setStage(const QString &stage)

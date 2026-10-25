@@ -21,6 +21,11 @@ MOC="$(command -v moc || ls /usr/lib/qt6/libexec/moc /usr/lib/x86_64-linux-gnu/q
 # Qt6OpenGL is here for SpotlightGl, which Spotlight.cpp dispatches to.
 CF="$(pkg-config --cflags Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
 LF="$(pkg-config --libs Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
+
+# Live command hints in timeline/source widgets share the editor registry.
+"$MOC" -I"$H" "$H/editor/ShortcutRegistry.hpp" -o "$WORK/moc_ShortcutRegistry.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF -c "$H/editor/ShortcutRegistry.cpp" -o "$WORK/ShortcutRegistry.o"
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF -c "$WORK/moc_ShortcutRegistry.cpp" -o "$WORK/moc_ShortcutRegistry.o"
 # The colour emoji in text clips (editor/timeline/Emoji.cpp) decode their
 # pictures with FFmpeg: wherever the compositor is built, so is that.
 EMOJI_FLAGS="$(pkg-config --cflags --libs libavcodec libswscale libavutil)"
@@ -32,7 +37,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # Multi-Cut: "Randomize order of selected cuts" among their own positions.
 "$MOC" -I"$H" "$H/editor/TrackEditor.hpp" -o "$WORK/moc_TrackEditor_mc.cpp"
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/multicutshuffle_test.cpp" "$H/editor/TrackEditor.cpp" "$WORK/moc_TrackEditor_mc.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
@@ -41,7 +46,6 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/ui/UiText.cpp" -o "$WORK/multicutshuffle_test" $LF
 
 # Two commands must never end up sharing a key: Qt fires neither.
-"$MOC" -I"$H" "$H/editor/ShortcutRegistry.hpp" -o "$WORK/moc_ShortcutRegistry.cpp"
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/shortcut_dupkey_test.cpp" "$H/editor/ShortcutRegistry.cpp" \
 	"$WORK/moc_ShortcutRegistry.cpp" -o "$WORK/shortcut_dupkey_test" $LF
@@ -431,7 +435,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 # A track's lock/hide/mute toggles stay inside the gutter at every width the Dev
 # panel can set, and nothing paints over them.
 "$MOC" -I"$H" "$H/editor/timeline/TimelineView.hpp" -o "$WORK/moc_TimelineView.cpp"
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/gutterspill_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
@@ -443,7 +447,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # The volume rubber-band on an audio clip: the line's height IS the level, the
 # grab is the line and not the clip, and every step emits clipsChanged -- which
 # is what rebuilds the audio the preview plays.
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/clipvolume_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
@@ -454,7 +458,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # Batch style for a caption lane: every text clip on the lane, nothing else,
 # not a locked lane, and one coalesced undo step.
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/captionlane_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
@@ -469,7 +473,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # Solo (a set, not a radio button; mute still wins) and a per-lane gain. A
 # duplicated lane keeps a typed name, numbered; a clip's volume counts on a
 # video lane too.
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/tracks_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
@@ -480,7 +484,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # Slip: the footage moves inside a clip that keeps its place and length; its
 # linked sound follows, it stops at the source's ends, one drag is one undo.
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/slip_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
@@ -491,7 +495,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # One duration for selected videos: trim at each clip's speed, cap at the
 # shortest clip, preserve the selection, and accept/cancel through the menu.
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/clipduration_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
@@ -525,7 +529,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # Randomising clip order: permutations, pins, strengths, "avoid the same
 # order", the re-layout, and one undo step per press in the timeline.
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/clipshuffle_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
@@ -535,7 +539,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	-o "$WORK/clipshuffle_test" $LF
 
 # Shift+drag: a box that selects every clip it touches, through the real view.
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/marquee_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
@@ -556,7 +560,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # Linked clips move as one: clicking one selects the group, a drag or a nudge
 # moves every member, a pasted copy is a group of its own, and it is saved.
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/linkedclips_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
@@ -567,7 +571,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # The timeline must not rescale itself while a clip is being dragged: every
 # pixel comes from the project's total span, and dragging past the end grows it.
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/timelinedragspan_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
@@ -579,7 +583,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # Keyframes on the timeline: every kind of key is drawn, a pip can be grabbed
 # and retimed without moving its clip, and the magnet knows about markers and
 # keys as well as clip edges.
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/timelinekeys_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
@@ -591,7 +595,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # Where a clip was split: the drawn shapes leave a gap the eye can see, the hit
 # rects still tile so the gap is not a dead strip, and only a REAL split -- one
 # whose halves would rejoin seamlessly -- gets the seam mark.
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/splitseam_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
@@ -602,7 +606,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # Grabbing the timeline and sliding it: the moment under the pointer stays put,
 # releasing ends it, and the gestures that already worked still do.
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/timelinepan_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
@@ -613,7 +617,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # Hit-testing must not go quadratic again: every "where is this on screen"
 # question used to re-measure the project's whole duration.
-g++ -std=c++17 -O2 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O2 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/timelineperf_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
@@ -685,7 +689,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 
 # "Export this clip": the sliced timeline has to RENDER what the project
 # rendered, which is a claim about pixels rather than about field arithmetic.
-g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
+g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/timelineslice_test.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
@@ -700,7 +704,7 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 # tracks at once at different timestamps. Keyed by source alone, the lower
 # track freezes on the upper one's frame. The control here keeps the old keying
 # alive so the check is demonstrably able to tell the two apart.
-g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
+g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/playbacktracks_test.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
@@ -757,7 +761,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 for h in editor/EditorWidgets editor/TrackEditor editor/VoiceoverTrack editor/ParamSlider; do
 	"$MOC" -I"$H" "$H/$h.hpp" -o "$WORK/moc_ph_$(basename "$h").cpp"
 done
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/playheadrepaint_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/TrackEditor.cpp" \
 	"$H/editor/VoiceoverTrack.cpp" "$H/editor/ParamSlider.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
@@ -768,7 +772,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # PreviewCanvas, so it links the widget and what it draws with.
 "$MOC" -I"$H" "$H/editor/EditorWidgets.hpp" -o "$WORK/moc_EditorWidgets.cpp"
 "$MOC" -I"$H" "$H/editor/ParamSlider.hpp" -o "$WORK/moc_ParamSlider2.cpp"
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/previewaspect_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/ParamSlider.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
@@ -830,7 +834,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # The motion path: position keys only, speed dots, a click back to a time;
 # pick, drag, add and right-click on the preview; Delete takes the picked key.
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/motionpath_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/ParamSlider.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
@@ -839,7 +843,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # The pointer over a grip says what a press will do: resize cursors that follow
 # a turned box's own axes, a hand over the body, a rotate cursor on the knob.
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/gripcursor_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/ParamSlider.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
@@ -847,7 +851,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	-o "$WORK/gripcursor_test" $LF
 
 # Social interface margins only shade the widget; clean frames and drags remain unchanged.
-g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/socialsafeareas_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/ParamSlider.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
@@ -906,7 +910,7 @@ for h in editor/DevPanel editor/EditorWidgets editor/TrackEditor editor/Voiceove
 	 editor/component/ComponentPanel; do
 	"$MOC" -I"$H" "$H/$h.hpp" -o "$WORK/moc_dp_$(basename "$h").cpp"
 done
-g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF $AVCF \
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF $AVCF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
 	"$HERE/devpanelreset_test.cpp" \
 	"$H/editor/DevPanel.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/TrackEditor.cpp" \
 	"$H/editor/VoiceoverTrack.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \

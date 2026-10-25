@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include "ExportVideoEncoder.hpp"
 
 #include <atomic>
 
@@ -36,6 +37,7 @@ public:
 		bool dropAudio = false;
 		// 0 = one file. Otherwise `outPath` is a NEW folder of numbered MP4s.
 		qint64 maxPartBytes = 0;
+		export_video::Encoding encoding = export_video::Encoding::Automatic;
 	};
 
 	static Options optionsFor(Level level);

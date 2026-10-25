@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QString>
 
+#include "../core/ExportVideoEncoder.hpp"
 #include "shader/ShaderEffect.hpp"    // ShaderParam (post-processing effect)
 #include "timeline/TimelineModel.hpp" // TimelineModel (Full-editing export)
 
@@ -71,6 +72,9 @@ public:
 		// long as it likes.
 		enum class Effort { Fast, Balanced, Best };
 		Effort effort = Effort::Best;
+		// Automatic uses Apple hardware for compatible H.264 exports on Mac,
+		// with software fallback if a hardware session cannot be opened.
+		export_video::Encoding encoding = export_video::Encoding::Automatic;
 
 		// 4:4:4 chroma instead of 4:2:0. 4:2:0 stores one colour sample per 2x2
 		// block, which is invisible on camera footage and very visible on
@@ -167,6 +171,8 @@ signals:
 	void stageChanged(const QString &stage);
 	// total == 0 means the source has no exact output-frame count (e.g. VFR).
 	void frameProgress(qint64 completed, qint64 total);
+	// Actual encoding path, including any hardware-to-software fallback.
+	void encodingChanged(const QString &description);
 	void finished(bool ok, bool canceled, const QString &error);
 
 private:

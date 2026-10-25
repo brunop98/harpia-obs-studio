@@ -7,6 +7,7 @@
 #include "SecretStore.hpp"
 #include "../../ui/InfoHint.hpp"
 #include "../timeline/TimelineCompositor.hpp"
+#include "../ShortcutRegistry.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -123,12 +124,14 @@ void SubtitleDialog::buildUi()
 	lay->setSpacing(10);
 	outer->addLayout(lay, 1);
 
-	lay->addWidget(infoHint(QStringLiteral(
-				   "Turns the speech in the selected clips into caption clips on a Subtitles lane, "
-				   "lined up with the audio. Edit any caption's text in the Inspector afterwards; "
-				   "Ctrl+Z removes the whole batch."),
-			       this),
-		       0, Qt::AlignLeft);
+	const QString introText = QStringLiteral(
+		"Turns the speech in the selected clips into caption clips on a Subtitles lane, "
+		"lined up with the audio. Edit any caption's text in the Inspector afterwards; "
+		"use {edit.undo} to remove the whole batch.");
+	auto *intro = infoHint(QString(introText).replace(QStringLiteral("{edit.undo}"), QStringLiteral("Undo")), this);
+	if (auto *shortcuts = ShortcutRegistry::forWidget(this))
+		shortcuts->bindHint(intro, "toolTip", introText);
+	lay->addWidget(intro, 0, Qt::AlignLeft);
 
 	// ---- Service ----
 	service_ = new QGroupBox(QStringLiteral("Speech to text"), this);
@@ -653,7 +656,11 @@ void SubtitleDialog::finishJob(const QString &error)
 	}
 	const QString summary = QStringLiteral("%1 captions from %2 words").arg(out_.size()).arg(wordsTotal_);
 	editorLog(EditorLogLevel::Info, QStringLiteral("Subtitles"), QStringLiteral("done: %1").arg(summary));
-	status_->setText(QStringLiteral("Done: %1. They are on the Subtitles lane; Ctrl+Z removes them.").arg(summary));
+	const QString message = QStringLiteral("Done: %1. They are on the Subtitles lane; use {edit.undo} to remove them.")
+		.arg(summary);
+	status_->setText(QString(message).replace(QStringLiteral("{edit.undo}"), QStringLiteral("Undo")));
+	if (auto *shortcuts = ShortcutRegistry::forWidget(this))
+		shortcuts->bindHint(status_, "text", message);
 	emit captionsReady(out_, summary);
 }
 

@@ -20,6 +20,7 @@
 #include <QHash>
 #include <QKeySequence>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -85,6 +86,18 @@ public:
 	// Human text for a command's keys, e.g. "Ctrl+Z, Ctrl+Shift+Z". A mouse
 	// gesture returns its own text.
 	QString displayText(const QString &id) const;
+	// A command name followed by its current native shortcut, or just the name
+	// when unbound. Hint templates use {command.id} for this complete label.
+	QString actionText(const QString &id, const QString &label = {}) const;
+	QString formatHint(const QString &pattern) const;
+	// Keep a text/toolTip property current on rebind. A later, unrelated write
+	// to that property retires the hint rather than restoring obsolete status.
+	void bindHint(QObject *target, const char *property, const QString &pattern);
+	static ShortcutRegistry *forWidget(const QWidget *widget);
+	// Mouse handlers read Qt modifiers directly; use the same native names as
+	// keyboard shortcuts without changing what modifier those handlers accept.
+	static QString modifierText(Qt::KeyboardModifiers modifiers);
+	static QString mouseGesture(Qt::KeyboardModifiers modifiers, const QString &gesture);
 
 	// A whole profile as JSON, for sharing between machines.
 	QByteArray exportProfile() const;
@@ -105,6 +118,14 @@ private:
 	void rebuild(); // recreate the QShortcut objects from the current bindings
 	// Remove any key a previously-registered command already claims.
 	void dropDuplicateBindings();
+	void refreshBoundHints();
+	struct BoundHint {
+		QPointer<QObject> target;
+		QByteArray property;
+		QString pattern;
+		QString rendered;
+	};
+	QVector<BoundHint> hints_;
 
 	QWidget *host_ = nullptr;
 	QVector<ShortcutCommand> cmds_;

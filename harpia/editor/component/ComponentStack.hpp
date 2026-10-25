@@ -87,6 +87,7 @@ private:
 
 	QVector<ComponentInstance> owned_; // a stack outlives the caller's vector
 	QVector<Entry> entries_;
+	QVector<int> missingShaders_; // indices in owned_, only shader types without an implementation
 	QStringList warnings_;
 	bool pure_ = true;
 };

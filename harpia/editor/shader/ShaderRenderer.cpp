@@ -229,13 +229,19 @@ bool ShaderRenderer::setChain(const QVector<ShaderLayerSource> &layers, QString 
 		// source, so the next launch (and every hot reload back to a version
 		// already seen) skips the driver's compile. Falls back to a normal
 		// compile wherever program binaries are not supported.
+		bool compiled = false;
 		if (!prog->addCacheableShaderFromSourceCode(QOpenGLShader::Vertex, kVert))
 			log = prog->log();
 		else if (!prog->addCacheableShaderFromSourceCode(QOpenGLShader::Fragment, layers[i].wrapped))
 			log = prog->log();
-		else if (!prog->link())
-			log = prog->log();
-		if (!log.isEmpty()) {
+		else {
+			compiled = prog->link();
+			if (!compiled)
+				log = prog->log();
+		}
+		if (!compiled) {
+			if (log.trimmed().isEmpty())
+				log = QStringLiteral("Shader layer %1 failed to compile or link; the graphics driver returned no diagnostic.").arg(i + 1);
 			delete prog;
 			for (Pass &p : built)
 				delete p.prog;
@@ -266,16 +272,21 @@ bool ShaderRenderer::setChain(const QVector<ShaderLayerSource> &layers, QString 
 	return true;
 }
 
-void ShaderRenderer::ensureFbos(int w, int h)
+bool ShaderRenderer::ensureFbos(int w, int h)
 {
-	if (fbo_[0] && fboW_ == w && fboH_ == h)
-		return;
+	if (fbo_[0] && fbo_[1] && fboW_ == w && fboH_ == h)
+		return fbo_[0]->isValid() && fbo_[1]->isValid();
 	delete fbo_[0];
 	delete fbo_[1];
 	fbo_[0] = new QOpenGLFramebufferObject(w, h, QOpenGLFramebufferObject::NoAttachment, GL_TEXTURE_2D,
 					       GL_RGBA8);
 	fbo_[1] = new QOpenGLFramebufferObject(w, h, QOpenGLFramebufferObject::NoAttachment, GL_TEXTURE_2D,
 					       GL_RGBA8);
+	if (!fbo_[0]->isValid() || !fbo_[1]->isValid()) {
+		error_ = QStringLiteral("Could not allocate %1 × %2 shader render buffers. "
+			"Reduce the output resolution or free graphics memory.").arg(w).arg(h);
+		return false;
+	}
 	auto *f = ctx_->functions();
 	for (QOpenGLFramebufferObject *fb : fbo_) {
 		f->glBindTexture(GL_TEXTURE_2D, fb->texture());
@@ -286,20 +297,40 @@ void ShaderRenderer::ensureFbos(int w, int h)
 	}
 	fboW_ = w;
 	fboH_ = h;
+	return true;
 }
 
 QImage ShaderRenderer::apply(const QImage &src, float iTime, int iFrame,
 			     const QVector<QMap<QString, double>> &perLayerParams)
 {
-	if (!glReady_ || passes_.isEmpty() || src.isNull())
+	if (passes_.isEmpty() && !glFailed_)
 		return src;
-	if (!ctx_->makeCurrent(surface_))
-		return src;
+	if (src.isNull()) {
+		error_ = QStringLiteral("The shader received an empty source image.");
+		return QImage();
+	}
+	if (!glReady_ || !ctx_) {
+		if (error_.isEmpty())
+			error_ = QStringLiteral("The shader's OpenGL context is unavailable.");
+		return QImage();
+	}
+	if (!ctx_->makeCurrent(surface_)) {
+		error_ = QStringLiteral("Could not make the shader's OpenGL context current.");
+		return QImage();
+	}
+	const auto fail = [this](const QString &reason) {
+		error_ = reason;
+		ctx_->doneCurrent();
+		return QImage();
+	};
 
 	const int w = src.width();
 	const int h = src.height();
 	auto *f = ctx_->functions();
-	ensureFbos(w, h);
+	// Discard earlier users' error state before checking this render's work.
+	for (int i = 0; i < 16 && f->glGetError() != GL_NO_ERROR; ++i) {}
+	if (!ensureFbos(w, h))
+		return fail(error_.isEmpty() ? QStringLiteral("The shader render buffers are unavailable.") : error_);
 
 	// Upload flipped vertically so the shader samples with the ShaderToy
 	// bottom-left origin; the FBO read-back (toImage) flips once more, so the
@@ -310,6 +341,8 @@ QImage ShaderRenderer::apply(const QImage &src, float iTime, int iFrame,
 #else
 	const QImage up = rgba.mirrored(false, true);
 #endif
+	if (up.isNull())
+		return fail(QStringLiteral("Could not allocate the shader's RGBA upload image."));
 	f->glBindTexture(GL_TEXTURE_2D, tex_);
 	// Same size as last frame: refill the texture's existing storage rather
 	// than reallocating it on the GPU every frame.
@@ -332,13 +365,15 @@ QImage ShaderRenderer::apply(const QImage &src, float iTime, int iFrame,
 		QOpenGLFramebufferObject *target = fbo_[i % 2];
 		lastTarget = i % 2;
 
-		target->bind();
+		if (!target->bind())
+			return fail(QStringLiteral("Could not bind shader render buffer %1.").arg(i + 1));
 		f->glViewport(0, 0, w, h);
 		f->glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 		f->glClear(GL_COLOR_BUFFER_BIT);
 
 		Pass &p = passes_[i];
-		p.prog->bind();
+		if (!p.prog->bind())
+			return fail(QStringLiteral("Could not bind shader program %1.").arg(i + 1));
 		p.prog->setUniformValue(p.locRes, QVector3D(float(w), float(h), 1.0f));
 		p.prog->setUniformValue(p.locTime, iTime);
 		p.prog->setUniformValue(p.locFrame, iFrame);
@@ -373,9 +408,17 @@ QImage ShaderRenderer::apply(const QImage &src, float iTime, int iFrame,
 		vao_.release();
 		p.prog->release();
 	}
+	const auto glError = f->glGetError();
+	if (glError != GL_NO_ERROR)
+		return fail(QStringLiteral("The graphics driver failed while rendering the shader (OpenGL error 0x%1).")
+			.arg(uint(glError), 0, 16));
 
 	QImage out = fbo_[lastTarget]->toImage(); // flips back to top-down, upright
 	ctx_->doneCurrent();
+	if (out.isNull()) {
+		error_ = QStringLiteral("Could not read back the shader's rendered image.");
+		return QImage();
+	}
 	// The shader wrote straight colour -- the kind it was handed above -- but
 	// toImage() labels what it reads as PREMULTIPLIED, and converting from
 	// that divides every pixel by its alpha: a clip's soft edge (a logo's
@@ -387,7 +430,9 @@ QImage ShaderRenderer::apply(const QImage &src, float iTime, int iFrame,
 		out.reinterpretAsFormat(QImage::Format_ARGB32);
 	else if (out.format() == QImage::Format_RGBA8888_Premultiplied)
 		out.reinterpretAsFormat(QImage::Format_RGBA8888);
-	return out.convertToFormat(QImage::Format_RGBA8888);
+	QImage rgbaOut = out.convertToFormat(QImage::Format_RGBA8888);
+	error_ = rgbaOut.isNull() ? QStringLiteral("Could not convert the shader's rendered image to RGBA.") : QString();
+	return rgbaOut;
 }
 
 } // namespace harpia

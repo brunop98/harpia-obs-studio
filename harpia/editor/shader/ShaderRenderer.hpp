@@ -63,8 +63,9 @@ public:
 	bool setChain(const QVector<ShaderLayerSource> &layers, QString *err = nullptr);
 
 	// Run the chain over `src`. perLayerParams[i] holds the values for layer i
-	// (missing keys fall back to that layer's declared default). Returns `src`
-	// unchanged when GL isn't ready or the chain is empty.
+	// (missing keys fall back to that layer's declared default). An empty chain
+	// returns `src` unchanged. A render failure returns null and sets lastError(),
+	// so a caller cannot mistake an unapplied effect for a successful render.
 	QImage apply(const QImage &src, float iTime, int iFrame,
 		     const QVector<QMap<QString, double>> &perLayerParams);
 
@@ -76,7 +77,7 @@ public:
 private:
 	bool buildQuad();
 	void deletePasses();
-	void ensureFbos(int w, int h);
+	bool ensureFbos(int w, int h);
 
 	struct Pass {
 		QOpenGLShaderProgram *prog = nullptr;

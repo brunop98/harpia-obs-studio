@@ -26,6 +26,10 @@ LF="$(pkg-config --libs Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
 "$MOC" -I"$H" "$H/editor/ShortcutRegistry.hpp" -o "$WORK/moc_ShortcutRegistry.cpp"
 g++ -std=c++17 -O1 -fPIC -I"$H" $CF -c "$H/editor/ShortcutRegistry.cpp" -o "$WORK/ShortcutRegistry.o"
 g++ -std=c++17 -O1 -fPIC -I"$H" $CF -c "$WORK/moc_ShortcutRegistry.cpp" -o "$WORK/moc_ShortcutRegistry.o"
+# Preview failures stay visible and copyable without interrupting playback or
+# logging the same compiler failure on every frame.
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/previewwarning_test.cpp" -o "$WORK/previewwarning_test" $LF
 # The colour emoji in text clips (editor/timeline/Emoji.cpp) decode their
 # pictures with FFmpeg: wherever the compositor is built, so is that.
 EMOJI_FLAGS="$(pkg-config --cflags --libs libavcodec libswscale libavutil)"
@@ -1146,6 +1150,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/console_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/subtitles_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/searchpicker_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/componentrender_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/previewwarning_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/opaqueframe_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/batchplan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textvariations_test" || rc=1

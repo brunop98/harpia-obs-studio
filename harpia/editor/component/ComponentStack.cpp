@@ -21,8 +21,11 @@ ComponentStack::ComponentStack(const QVector<ComponentInstance> &list, const Com
 	for (int idx : order) {
 		const ComponentInstance &inst = owned_[idx];
 		const ComponentType *type = reg.find(inst.typeId);
-		if (!type)
+		if (!type) {
+			if (inst.typeId.startsWith(QLatin1String("harpia.shader.")))
+				missingShaders_.append(idx);
 			continue; // already reported by resolveOrder; nothing to run
+		}
 		Entry e;
 		e.index = idx;
 		e.stage = type->stage;
@@ -31,6 +34,8 @@ ComponentStack::ComponentStack(const QVector<ComponentInstance> &list, const Com
 		e.impl = type->make ? std::shared_ptr<IComponent>(type->make().release()) : nullptr;
 		if (e.impl)
 			entries_.append(e);
+		else if (inst.typeId.startsWith(QLatin1String("harpia.shader.")))
+			missingShaders_.append(idx);
 	}
 }
 
@@ -68,6 +73,7 @@ bool ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io, QS
 			gpu = nullptr; // someone further up is mid-session: stay on the CPU
 	}
 	bool onGpu = false;
+	const Entry *lastGpuEntry = nullptr;
 	const auto bringBack = [&]() {
 		if (!onGpu)
 			return;
@@ -75,6 +81,9 @@ bool ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io, QS
 		const QImage out = gpu->end();
 		if (!out.isNull())
 			*io.frame = out;
+		else
+			io.renderError = QStringLiteral("The GPU could not read back the effect image. "
+				"Try restarting the editor or updating the graphics driver; disable the effect if it still fails.");
 	};
 	const auto fail = [&](const Entry &e, const QString &reason) {
 		// CPU evaluation already brought the frame back. Keep the failure
@@ -83,8 +92,10 @@ bool ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io, QS
 		if (error) {
 			const QString instance = e.inst->instanceId.isEmpty() ? QStringLiteral("unnamed")
 									     : e.inst->instanceId;
-			*error = QStringLiteral("%1 component \"%2\" (instance \"%3\"): %4")
-					 .arg(QString::fromLatin1(stageName(stage)), e.inst->typeId, instance, reason);
+			*error = QStringLiteral("%1 effect \"%2\" [%3] (instance \"%4\"): %5")
+					 .arg(QString::fromLatin1(stageName(stage)),
+					      e.type->displayName.isEmpty() ? e.inst->typeId : e.type->displayName,
+					      e.inst->typeId, instance, reason);
 		}
 		return false;
 	};
@@ -106,13 +117,17 @@ bool ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io, QS
 				if (!full)
 					gpu->saveInput();
 				if (e.impl->evaluateGpu(ctx, *gpu)) {
-					if (!full)
-						gpu->mixWithSaved(1.0 - wg); // the CPU path's cross-fade, below
+					lastGpuEntry = &e;
+					if (!full && !gpu->mixWithSaved(1.0 - wg))
+						return fail(e, QStringLiteral("The GPU could not blend the effect's fade. "
+							"Try restarting the editor or disable the effect's fade."));
 					continue;
 				}
 			}
 		}
 		bringBack(); // this one runs on the CPU, on the frame as it is now
+		if (!io.renderError.isEmpty())
+			return fail(lastGpuEntry ? *lastGpuEntry : e, io.renderError);
 
 		// In / Out ramp. Zero on both (the default, and every project written
 		// before this) yields exactly 1 and takes none of the paths below --
@@ -128,6 +143,8 @@ bool ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io, QS
 
 		if (envelopeIsFull(w)) {
 			e.impl->evaluate(ctx, io); // the hold: no ramp work at all
+			if (!io.renderError.isEmpty())
+				return fail(e, io.renderError);
 			if (outputMissing())
 				return fail(e, missingOutput);
 			continue;
@@ -166,6 +183,8 @@ bool ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io, QS
 			if (input.isNull())
 				return fail(e, QStringLiteral("Could not allocate the input image for the component's fade."));
 			e.impl->evaluate(ctx, io);
+			if (!io.renderError.isEmpty())
+				return fail(e, io.renderError);
 			if (outputMissing())
 				return fail(e, missingOutput);
 			QPainter p(io.frame);
@@ -178,10 +197,14 @@ bool ComponentStack::run(Stage stage, const EvalContext &base, ClipState &io, QS
 		}
 
 		e.impl->evaluate(ctx, io); // Audio and anything with no frame yet
+		if (!io.renderError.isEmpty())
+			return fail(e, io.renderError);
 		if (outputMissing())
 			return fail(e, missingOutput);
 	}
 	bringBack();
+	if (!io.renderError.isEmpty() && lastGpuEntry)
+		return fail(*lastGpuEntry, io.renderError);
 	return true;
 }
 
@@ -210,6 +233,22 @@ void ComponentStack::evaluatePixels(const EvalContext &base, QImage &frame, QStr
 	if (frame.isNull()) {
 		if (error)
 			*error = QStringLiteral("Cannot evaluate pixel components: the input image is empty.");
+		return;
+	}
+	// Unknown components normally survive a project round trip untouched. An
+	// enabled custom shader must also be visible as a render failure: otherwise
+	// a project from another computer could export successfully without it.
+	for (int index : missingShaders_) {
+		const ComponentInstance &inst = owned_[index];
+		if (!inst.enabled ||
+		    envelopeIsEmpty(componentWeight(base.tMs, base.durMs, inst.inMs, inst.outMs)))
+			continue;
+		if (error)
+			*error = QStringLiteral("Shader effect \"%1\" [%2] (instance \"%3\") is unavailable. "
+				"Restore its .frag file in the shaders folder and reload components, "
+				"or disable/remove the effect before exporting.")
+				.arg(inst.typeId.mid(14), inst.typeId, inst.instanceId);
+		frame = QImage();
 		return;
 	}
 	ClipState st;

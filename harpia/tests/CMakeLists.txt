@@ -80,7 +80,8 @@ foreach(name settingsisolation shortcuthints shortcuthintswindow loadingdialog l
     textstylepresetswindow subtitles captionanimation captionperf socialfeatureswindow exportprogress
     exportcadence exporttelemetry previewdecoder componentrender audioaudit previewgeometry previewinterval
     previewtransition systemaudio pcaudioapps ytdlp globalhotkeys maccoordinates macaudiopcm
-    projectopenqueue remuxcompat exportencodingoptions exportencoding shareparts)
+    projectopenqueue remuxcompat exportencodingoptions exportencoding shareparts
+    effectwarnings previewwarning previewwarningwindow)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${name}_test.cpp")
     add_executable("${name}_test" "${name}_test.cpp")
     target_compile_definitions("${name}_test" PRIVATE HARPIA_SRC="${H}" SRC_MEDIA="${MEDIA}/av_red.mp4")
@@ -145,6 +146,14 @@ if(TARGET OBS::libobs)
   endif()
 endif()
 add_test(NAME macos_package COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/macos_package_test.py")
+
+if(APPLE)
+  add_test(NAME effectwarnings_gl COMMAND effectwarnings_test --require-gl)
+  set_tests_properties(effectwarnings_gl PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=cocoa" TIMEOUT 60)
+elseif(HARPIA_XVFB_RUN)
+  add_test(NAME effectwarnings_gl COMMAND "${HARPIA_XVFB_RUN}" -a "$<TARGET_FILE:effectwarnings_test>" --require-gl)
+  set_tests_properties(effectwarnings_gl PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=xcb;LIBGL_ALWAYS_SOFTWARE=1" TIMEOUT 60)
+endif()
 
 # Compile the helper independently so its deterministic unavailable-Apple
 # fallback path can also run on Linux, without claiming native hardware coverage.

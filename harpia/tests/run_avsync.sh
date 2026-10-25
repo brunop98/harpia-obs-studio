@@ -90,12 +90,14 @@ build() { # source-file output-name
 		"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
 		"$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 		"$H/editor/script/TransformScript.cpp" "$H/editor/shader/ShaderRenderer.cpp" \
+		"$H/editor/shader/GpuFxGl.cpp" \
 		"$H/editor/component/ShaderComponent.cpp" \
 		"$WORK/moc_ClipExporter.cpp" "$WORK/moc_BatchExport.cpp" \
 		-o "$WORK/$2" $LF
 }
 build "$HERE/avsync_test.cpp" avsync_test
 build "$HERE/exportpaths_test.cpp" exportpaths_test
+build "$HERE/effectwarnings_test.cpp" effectwarnings_test
 build "$HERE/exportcolor_test.cpp" exportcolor_test
 build "$HERE/batchexport_test.cpp" batchexport_test
 build "$HERE/exporttelemetry_test.cpp" exporttelemetry_test
@@ -196,7 +198,7 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
 	-o "$WORK/shareexportdialog_test" $WLF
 # Render diagnostics and regressions from the preview audit.
-for name in loadingwindow inspectorreuse silencetrimdialog socialfeatureswindow silencetrimav textstylepresetswindow rendererrors exporterrorwindow audioaudit previewgeometry previewinterval previewcontrols previewtransition previewlegacypacing; do
+for name in loadingwindow inspectorreuse silencetrimdialog socialfeatureswindow silencetrimav textstylepresetswindow rendererrors exporterrorwindow previewwarningwindow audioaudit previewgeometry previewinterval previewcontrols previewtransition previewlegacypacing; do
 	g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 		"$HERE/${name}_test.cpp" \
 		-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
@@ -343,6 +345,8 @@ QT_QPA_PLATFORM=offscreen "$WORK/proxymedia_test" "$WORK" || rc=1
 "$WORK/shareparts_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/shareexportdialog_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/rendererrors_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/effectwarnings_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/previewwarningwindow_test" || rc=1
 XDG_CONFIG_HOME="$WORK/loading-config" XDG_DATA_HOME="$WORK/loading-data" QT_QPA_PLATFORM=offscreen \
 	"$WORK/loadingwindow_test" "$WORK" || rc=1
 XDG_CONFIG_HOME="$WORK/inspector-reuse-config" XDG_DATA_HOME="$WORK/inspector-reuse-data" QT_QPA_PLATFORM=offscreen \

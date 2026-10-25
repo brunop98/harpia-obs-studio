@@ -108,6 +108,10 @@ and command-line overrides.
   and reuse the normal relink/error workflow. Emoji resources use bundle paths.
 - Editor shortcut tips use the current configured bindings and native modifier
   labels, including mouse gestures. Open options update after a rebind or reset.
+- Failed or missing custom shader effects show a nonmodal preview warning with
+  copyable details. Exports report the named effect and reason instead of
+  silently omitting it. The same diagnostics are maintained on the main editor
+  development branch for every platform.
 
 ## Automated checks
 

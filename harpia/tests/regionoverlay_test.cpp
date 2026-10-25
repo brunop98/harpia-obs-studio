@@ -20,10 +20,13 @@
 #include "ui/RegionTool.hpp"
 
 #include <QApplication>
+#include <QImage>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QScreen>
 #include <QSignalSpy>
 
+#include <cmath>
 #include <cstdio>
 #include <utility>
 
@@ -64,6 +67,49 @@ static bool interiorGrabsMouse(RegionTool *t)
 	if (m.isNull() || m.isEmpty())
 		return true; // no mask = the whole widget is live
 	return m.contains(t->rect().center());
+}
+
+// Locate the capture rectangle through the public screen/device-pixel API.
+// Handle margins and the space reserved for controls are implementation
+// details; changing their size must not move these tests' grab points.
+static QRect captureRectLocal(RegionTool *t)
+{
+	const QScreen *screen = QGuiApplication::primaryScreen();
+	const CaptureRegion r = t->region();
+	const qreal scale = screen->devicePixelRatio();
+	const QPoint global = screen->geometry().topLeft() +
+		QPoint(int(std::lround(r.x / scale)), int(std::lround(r.y / scale)));
+	return QRect(t->mapFromGlobal(global), QSize(int(std::lround(r.width / scale)), int(std::lround(r.height / scale))));
+}
+
+static Qt::CursorShape hoverAt(RegionTool *t, const QPoint &point)
+{
+	QMouseEvent move(QEvent::MouseMove, QPointF(point), t->mapToGlobal(point),
+			Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+	QApplication::sendEvent(t, &move);
+	return t->cursor().shape();
+}
+
+static bool receivesMouse(RegionTool *t, const QPoint &point)
+{
+	const QRegion mask = t->mask();
+	return mask.isNull() || mask.isEmpty() || mask.contains(point);
+}
+
+static QImage paintOverlay(RegionTool *t)
+{
+	QImage image(t->size(), QImage::Format_ARGB32_Premultiplied);
+	image.fill(Qt::transparent);
+	QPainter painter(&image);
+	// Exercise the real painter, including transparent holes, independently of
+	// whether the offscreen window system implements native input masks.
+	t->render(&painter, QPoint(), QRegion(), QWidget::DrawWindowBackground | QWidget::IgnoreMask);
+	return image;
+}
+
+static bool inkAt(const QImage &image, const QPoint &point)
+{
+	return image.rect().contains(point) && image.pixelColor(point).alpha() > 32;
 }
 
 int main(int argc, char **argv)
@@ -311,6 +357,175 @@ int main(int argc, char **argv)
 		return std::make_pair(after, before);
 	};
 
+	std::printf("\n-- the longer corner arms behave as corners, not individual edges --\n");
+	{
+		using Z = RegionTool::Zone;
+		for (auto mode : {RegionTool::Mode::Editing, RegionTool::Mode::Watching}) {
+			RegionTool *t = buildSmall();
+			t->setMode(mode);
+			const QRect inner = captureRectLocal(t);
+			struct Arm {
+				QPoint point;
+				Z zone;
+				Qt::CursorShape cursor;
+			};
+			// These points are well beyond an old 8px corner square, on BOTH
+			// arms of each L. A corner should keep resizing both dimensions
+			// however far along its visible arm it was grabbed.
+			const Arm arms[] = {
+				{inner.topLeft() + QPoint(18, 0), Z::TopLeft, Qt::SizeFDiagCursor},
+				{inner.topLeft() + QPoint(0, 18), Z::TopLeft, Qt::SizeFDiagCursor},
+				{inner.topRight() + QPoint(-18, 0), Z::TopRight, Qt::SizeBDiagCursor},
+				{inner.topRight() + QPoint(0, 18), Z::TopRight, Qt::SizeBDiagCursor},
+				{inner.bottomLeft() + QPoint(18, 0), Z::BottomLeft, Qt::SizeBDiagCursor},
+				{inner.bottomLeft() + QPoint(0, -18), Z::BottomLeft, Qt::SizeBDiagCursor},
+				{inner.bottomRight() + QPoint(-18, 0), Z::BottomRight, Qt::SizeFDiagCursor},
+				{inner.bottomRight() + QPoint(0, -18), Z::BottomRight, Qt::SizeFDiagCursor},
+			};
+			bool correctZones = true, correctCursors = true;
+			for (const Arm &arm : arms) {
+				correctZones &= t->zoneAtForTest(arm.point) == arm.zone;
+				correctCursors &= hoverAt(t, arm.point) == arm.cursor;
+			}
+			ok(correctZones, "all long L arms select their corner in Editing and Watching");
+			ok(correctCursors, "hovering either arm offers its corner's diagonal resize");
+			t->deleteLater();
+		}
+		struct CornerDrag {
+			int corner;
+			QPoint offset;
+			QPoint delta;
+			QRect expected;
+		};
+		const CornerDrag drags[] = {
+			{0, QPoint(18, 0), QPoint(-20, -15), QRect(180, 185, 320, 215)},
+			{1, QPoint(-18, 0), QPoint(20, -15), QRect(200, 185, 320, 215)},
+			{2, QPoint(0, -18), QPoint(-20, 15), QRect(180, 200, 320, 215)},
+			{3, QPoint(0, -18), QPoint(20, 15), QRect(200, 200, 320, 215)},
+		};
+		for (const CornerDrag &drag : drags) {
+			RegionTool *t = buildSmall();
+			t->setMode(RegionTool::Mode::Watching);
+			const QRect inner = captureRectLocal(t);
+			const QPoint corners[] = {inner.topLeft(), inner.topRight(), inner.bottomLeft(), inner.bottomRight()};
+			const auto [after, before] = dragBy(t, corners[drag.corner] + drag.offset, drag.delta);
+			const QRect actual(after.x, after.y, after.width, after.height);
+			std::printf("     corner %d: (%d,%d) %dx%d\n", drag.corner, after.x, after.y, after.width, after.height);
+			ok(actual == drag.expected, "dragging a long corner arm resizes both axes and preserves the opposite corner");
+			t->deleteLater();
+		}
+	}
+
+	std::printf("\n-- elongated edge grips and padded arms remain reachable without blocking the app --\n");
+	{
+		using Z = RegionTool::Zone;
+		for (auto mode : {RegionTool::Mode::Editing, RegionTool::Mode::Watching, RegionTool::Mode::Recording}) {
+			RegionTool *t = buildSmall();
+			t->setMode(mode);
+			const QRect inner = captureRectLocal(t);
+			struct Grip {
+				QPoint point;
+				Z zone;
+				Qt::CursorShape cursor;
+			};
+			// Four pixels inward is in the forgiving grip target, beyond the
+			// old 2px live boundary. The gaps deeper inside an L must stay open.
+			const Grip grips[] = {
+				{inner.topLeft() + QPoint(18, 4), Z::TopLeft, Qt::SizeFDiagCursor},
+				{inner.topRight() + QPoint(-18, 4), Z::TopRight, Qt::SizeBDiagCursor},
+				{inner.bottomLeft() + QPoint(4, -18), Z::BottomLeft, Qt::SizeBDiagCursor},
+				{inner.bottomRight() + QPoint(-4, -18), Z::BottomRight, Qt::SizeFDiagCursor},
+				{QPoint(inner.center().x() + 14, inner.top() + 4), Z::Top, Qt::SizeVerCursor},
+				{QPoint(inner.center().x() - 14, inner.bottom() - 4), Z::Bottom, Qt::SizeVerCursor},
+				{QPoint(inner.left() + 4, inner.center().y() + 14), Z::Left, Qt::SizeHorCursor},
+				{QPoint(inner.right() - 4, inner.center().y() - 14), Z::Right, Qt::SizeHorCursor},
+			};
+			bool allLive = true, correctZones = true, correctCursors = true;
+			for (const Grip &grip : grips) {
+				const bool recording = mode == RegionTool::Mode::Recording;
+				allLive &= receivesMouse(t, grip.point);
+				correctZones &= t->zoneAtForTest(grip.point) == (recording ? Z::Move : grip.zone);
+				correctCursors &= hoverAt(t, grip.point) == (recording ? Qt::SizeAllCursor : grip.cursor);
+			}
+			ok(allLive, "every padded corner arm and elongated edge grip is included in each mode's input mask");
+			ok(correctZones && correctCursors, "grips offer directional resizing while idle and move-only while recording");
+			if (mode != RegionTool::Mode::Editing) {
+				ok(!receivesMouse(t, inner.center()), "the main interior remains click-through beside the larger grips");
+				ok(!receivesMouse(t, inner.topLeft() + QPoint(12, 12)),
+				   "the hollow inside an L does not become a solid mouse-blocking corner square");
+			}
+			if (mode == RegionTool::Mode::Recording) {
+				const auto [after, before] = dragBy(t, grips[0].point, QPoint(25, 20));
+				ok(after.width == before.width && after.height == before.height &&
+				   after.x == before.x + 25 && after.y == before.y + 20,
+				   "the extended corner target moves the live crop without changing the encoder size");
+			}
+			t->deleteLater();
+		}
+	}
+
+	std::printf("\n-- the painted grips follow the rectangle and leave a dotted boundary between them --\n");
+	{
+		RegionTool *t = buildSmall();
+		const QRect inner = captureRectLocal(t);
+		const QImage image = paintOverlay(t);
+		const auto white = [&image](QPoint point) {
+			const QColor color = image.pixelColor(point);
+			return color.alpha() > 200 && color.red() > 210 && color.green() > 210 && color.blue() > 210;
+		};
+		bool longArms = true;
+		for (const QPoint &point : {inner.topLeft() + QPoint(18, 0), inner.topLeft() + QPoint(0, 18),
+			inner.topRight() + QPoint(-18, 0), inner.topRight() + QPoint(0, 18),
+			inner.bottomLeft() + QPoint(18, 0), inner.bottomLeft() + QPoint(0, -18),
+			inner.bottomRight() + QPoint(-18, 0), inner.bottomRight() + QPoint(0, -18)})
+			longArms &= white(point);
+		ok(longArms, "each corner paints two long white arms along the capture edges");
+		ok(white(QPoint(inner.center().x() + 14, inner.top())) &&
+		   white(QPoint(inner.center().x() - 14, inner.bottom())) &&
+		   white(QPoint(inner.left(), inner.center().y() + 14)) &&
+		   white(QPoint(inner.right(), inner.center().y() - 14)),
+		   "all four mid-edge grips are elongated along their corresponding edge");
+		ok(!inkAt(image, inner.topLeft() + QPoint(12, 12)) && !inkAt(image, inner.center()),
+		   "L-shaped grips leave the corner hollow and the captured interior transparent");
+		int painted = 0, gaps = 0;
+		for (int x = inner.left() + 55; x < inner.center().x() - 30; ++x) {
+			bool ink = false;
+			for (int y = inner.top() - 1; y <= inner.top() + 1; ++y)
+				ink |= inkAt(image, QPoint(x, y));
+			ink ? ++painted : ++gaps;
+		}
+		ok(painted >= 4 && gaps >= 4, "the boundary has repeated visible marks and transparent gaps away from grips");
+		const int snapshot = app.arguments().indexOf(QStringLiteral("--snapshot"));
+		if (snapshot >= 0 && snapshot + 1 < app.arguments().size())
+			ok(image.save(app.arguments().at(snapshot + 1)), "saved the optional overlay snapshot");
+		t->deleteLater();
+	}
+
+	std::printf("\n-- small capture areas keep distinct grips and an open interior --\n");
+	{
+		using Z = RegionTool::Zone;
+		RegionTool *t = buildSmall();
+		t->setRegionDevicePx(QRect(200, 200, 32, 32));
+		t->setMode(RegionTool::Mode::Watching);
+		const CaptureRegion before = t->region();
+		const QRect inner = captureRectLocal(t);
+		ok(t->zoneAtForTest(inner.topLeft()) == Z::TopLeft &&
+		   t->zoneAtForTest(inner.topRight()) == Z::TopRight &&
+		   t->zoneAtForTest(inner.bottomLeft()) == Z::BottomLeft &&
+		   t->zoneAtForTest(inner.bottomRight()) == Z::BottomRight,
+		   "minimum-sized regions retain all four corner targets");
+		ok(t->zoneAtForTest(QPoint(inner.center().x(), inner.top())) == Z::Top &&
+		   t->zoneAtForTest(QPoint(inner.center().x(), inner.bottom())) == Z::Bottom &&
+		   t->zoneAtForTest(QPoint(inner.left(), inner.center().y())) == Z::Left &&
+		   t->zoneAtForTest(QPoint(inner.right(), inner.center().y())) == Z::Right,
+		   "shortened corner arms leave the middle of each side available for one-axis resizing");
+		ok(!receivesMouse(t, inner.center()), "larger grip targets do not block the center of a minimum-sized capture");
+		t->setMoveHandleEnabled(true);
+		t->setMode(RegionTool::Mode::Recording);
+		ok(t->region() == before, "adaptive grip sizes, optional controls and mode changes preserve the exact small crop");
+		t->deleteLater();
+	}
+
 	std::printf("\n-- the tab moves the region while another app is in front --\n");
 	{
 		RegionTool *t = buildSmall();
@@ -506,6 +721,29 @@ int main(int argc, char **argv)
 		t->deleteLater();
 	}
 
+	std::printf("\n-- a Record button flipped onto the bottom edge wins over its enlarged grip --\n");
+	{
+		RegionTool *t = buildSmall();
+		const QScreen *screen = QGuiApplication::primaryScreen();
+		const int screenHeightPx = int(std::lround(screen->geometry().height() * screen->devicePixelRatio()));
+		t->setRegionDevicePx(QRect(200, screenHeightPx - 200, 300, 200));
+		t->setMode(RegionTool::Mode::Watching);
+		const QRect inner = captureRectLocal(t);
+		const QRect button = t->startButtonRect();
+		ok(inner.contains(button), "the Record control stays on screen when the crop reaches the bottom");
+		// The control's lower band overlaps the padded center-edge grip. Its
+		// click must still start one take rather than beginning a bottom resize.
+		const QPoint point(button.center().x(), button.bottom() - 1);
+		ok(t->zoneAtForTest(point) == RegionTool::Zone::StartButton && hoverAt(t, point) == Qt::PointingHandCursor,
+		   "the overlapping control keeps its button zone and hand cursor");
+		QSignalSpy started(t, &RegionTool::startRecordingRequested);
+		QSignalSpy resized(t, &RegionTool::regionChanged);
+		const auto [after, before] = dragBy(t, point, QPoint());
+		ok(started.count() == 1 && after == before && resized.isEmpty(),
+		   "pressing the overlapping control starts once without moving or resizing the crop");
+		t->deleteLater();
+	}
+
 	std::printf("\n-- a press you slide off is cancelled --\n");
 	{
 		// The ordinary button contract. Starting a recording by accident is not a
@@ -584,7 +822,7 @@ int main(int argc, char **argv)
 
 		// Every handle now reports Move. Stated per-corner because "the corner
 		// resizes" is exactly the case that survives a half-done fix.
-		const QRect inner = t->rect().adjusted(10, 37, -10, -37);
+		const QRect inner = captureRectLocal(t);
 		struct Spot {
 			const char *name;
 			QPoint p;
@@ -621,7 +859,7 @@ int main(int argc, char **argv)
 		RegionTool *t = buildSmall();
 		t->setMode(RegionTool::Mode::Watching);
 		QApplication::processEvents();
-		const QRect inner = t->rect().adjusted(10, 37, -10, -37);
+		const QRect inner = captureRectLocal(t);
 		ok(t->zoneAtForTest(inner.bottomRight()) == RegionTool::Zone::BottomRight,
 		   "idle, the bottom-right corner is a resize corner");
 		const auto [after, before] = dragBy(t, inner.bottomRight(), QPoint(35, 25));
@@ -648,7 +886,7 @@ int main(int argc, char **argv)
 		// The point of the change: over a corner, the pointer says "resize" when
 		// idle and "move" while recording, because that is what a press does.
 		RegionTool *t = buildSmall();
-		const QRect inner = t->rect().adjusted(10, 37, -10, -37);
+		const QRect inner = captureRectLocal(t);
 		const QPoint corner = inner.bottomRight();
 		const auto hoverShape = [&](RegionTool::Mode m) {
 			t->setMode(m);

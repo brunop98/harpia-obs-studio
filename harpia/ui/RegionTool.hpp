@@ -3,6 +3,7 @@
 #include "core/CaptureManager.hpp"
 
 #include <QRect>
+#include <QRegion>
 #include <QWidget>
 
 #include <optional>
@@ -13,10 +14,11 @@ class QTimer;
 namespace harpia {
 
 // An interactive, always-on-top region selector that lives on the desktop as a
-// lightweight overlay (independent of the recording pipeline). It draws a thin
-// colored border with eight resize handles; the user drags the interior to move
-// it and the handles to resize. Every change emits regionChanged() so the owner
-// can update the live crop — this works even while recording.
+// lightweight overlay (independent of the recording pipeline). It draws a
+// dotted colored border with corner brackets and wide edge grips. Drag the
+// interior to move it and the grips to resize. Every change emits regionChanged()
+// so the owner can update the live crop; during recording, grips move the
+// fixed-size region instead of resizing the encoder's canvas.
 //
 // Interior input:
 //  - Editing (not recording): the whole rectangle grabs the mouse so it can be
@@ -197,6 +199,9 @@ private:
 	void matchPlacement(const QRect &want);
 	void queueResync();
 	QRect innerRectLocal() const; // the region rect within the widget (handle margin inset)
+	// The same edge-following strips drive painting, hit testing and the mask.
+	// Padding increases the grab area without filling the corner's interior.
+	QRegion resizeGripRegion(Zone zone, int padding = 0) const;
 	// The widget's top inset. Larger than the side margin when the move handle is
 	// on, since the tab sits above the frame. innerRectLocal() and applyGeometry()
 	// both derive from this, which is what keeps switching the handle on from

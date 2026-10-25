@@ -32,7 +32,10 @@ namespace harpia {
 
 namespace {
 constexpr int kMargin = 10;   // frame margin around the region (for handles)
-constexpr int kHandle = 8;    // handle square size
+constexpr int kCornerArm = 24; // corner brackets follow both adjoining edges
+constexpr int kEdgeGrip = 32;  // wide handles centred on each side
+constexpr int kGripWidth = 3;
+constexpr int kGripHitPadding = 4;
 constexpr int kSnap = 12;     // snap threshold (logical px)
 constexpr int kMinSize = 32;  // minimum region size (logical px)
 // The move handle: a grab tab above the top edge. The gap deliberately clears
@@ -47,6 +50,14 @@ constexpr int kStartW = 84;
 constexpr int kStartH = 24;
 constexpr int kStartGap = kMargin + 3;
 const QColor kAccent(0, 174, 239);
+
+// Corners win where padded grab areas overlap on a very small region.
+constexpr RegionTool::Zone kResizeZones[] = {
+	RegionTool::Zone::TopLeft, RegionTool::Zone::TopRight,
+	RegionTool::Zone::BottomLeft, RegionTool::Zone::BottomRight,
+	RegionTool::Zone::Top, RegionTool::Zone::Bottom,
+	RegionTool::Zone::Left, RegionTool::Zone::Right,
+};
 
 // Common capture resolutions to snap to (device pixels).
 const QSize kSnapSizes[] = {{1280, 720}, {1920, 1080}, {2560, 1440}, {3840, 2160}};
@@ -116,6 +127,40 @@ int RegionTool::bottomMargin() const
 QRect RegionTool::innerRectLocal() const
 {
 	return rect().adjusted(kMargin, topMargin(), -kMargin, -bottomMargin());
+}
+
+QRegion RegionTool::resizeGripRegion(Zone zone, int padding) const
+{
+	const QRect inner = innerRectLocal();
+	if (inner.isEmpty())
+		return {};
+	const int horizontalArm = std::min(kCornerArm, std::max(1, inner.width() / 4));
+	const int verticalArm = std::min(kCornerArm, std::max(1, inner.height() / 4));
+	const int horizontalGrip = std::min(kEdgeGrip, std::max(1, inner.width() / 3));
+	const int verticalGrip = std::min(kEdgeGrip, std::max(1, inner.height() / 3));
+	const int half = kGripWidth / 2;
+	const auto strip = [padding](const QRect &r) {
+		return QRegion(r.adjusted(-padding, -padding, padding, padding));
+	};
+	const bool left = zone == Zone::TopLeft || zone == Zone::BottomLeft;
+	const bool top = zone == Zone::TopLeft || zone == Zone::TopRight;
+	if (zone == Zone::TopLeft || zone == Zone::TopRight ||
+	    zone == Zone::BottomLeft || zone == Zone::BottomRight) {
+		const int x = left ? inner.left() : inner.right();
+		const int y = top ? inner.top() : inner.bottom();
+		return strip(QRect(left ? x - half : x - horizontalArm, y - half,
+			horizontalArm + half + 1, kGripWidth)) |
+			strip(QRect(x - half, top ? y - half : y - verticalArm,
+				kGripWidth, verticalArm + half + 1));
+	}
+	if (zone == Zone::Top || zone == Zone::Bottom)
+		return strip(QRect(inner.center().x() - horizontalGrip / 2,
+			(zone == Zone::Top ? inner.top() : inner.bottom()) - half,
+			horizontalGrip, kGripWidth));
+	if (zone == Zone::Left || zone == Zone::Right)
+		return strip(QRect((zone == Zone::Left ? inner.left() : inner.right()) - half,
+			inner.center().y() - verticalGrip / 2, kGripWidth, verticalGrip));
+	return {};
 }
 
 QRect RegionTool::startButtonRect() const
@@ -316,8 +361,14 @@ void RegionTool::rebuildMask()
 	// Outside Editing the interior is click-through, so the app underneath stays
 	// usable. That is not only a recording concern -- an overlay left up over
 	// another window with a solid input area makes that window unclickable.
-	if (mode_ != Mode::Editing)
+	if (mode_ != Mode::Editing) {
 		mask -= QRegion(inner.adjusted(2, 2, -2, -2));
+		// Broad visible grips need matching input on both sides of the edge.
+		// Keep only their padded strips live; the rest of the interior passes
+		// clicks through to the application being framed or recorded.
+		for (const Zone zone : kResizeZones)
+			mask += resizeGripRegion(zone, kGripHitPadding);
+	}
 	// The tab is the one piece deliberately outside the frame. It has to be in
 	// the mask in EVERY mode, since being grabbable while another app is in
 	// front is the whole reason it exists.
@@ -411,6 +462,10 @@ RegionTool::Zone RegionTool::zoneAt(const QPoint &p) const
 		return inner.adjusted(-kMargin - 2, -kMargin - 2, kMargin + 2, kMargin + 2).contains(p)
 			       ? Zone::Move
 			       : Zone::None;
+
+	for (const Zone zone : kResizeZones)
+		if (resizeGripRegion(zone, kGripHitPadding).contains(p))
+			return zone;
 
 	const int m = kMargin + 2;
 	const bool nearL = std::abs(p.x() - inner.left()) <= m;
@@ -741,26 +796,23 @@ void RegionTool::paintEvent(QPaintEvent *)
 		border = QColor(0xd2, 0x99, 0x22); // yellow — paused
 	else
 		border = QColor(0xe5, 0x48, 0x4d); // red — recording
-	p.setPen(QPen(border, 2));
+	p.setPen(QPen(border, 2, Qt::DotLine, Qt::FlatCap));
 	p.setBrush(Qt::NoBrush);
 	p.drawRect(inner);
 
-	// Eight resize handles.
-	p.setBrush(border);
-	p.setPen(Qt::NoPen);
-	const int h = kHandle;
-	const QPoint pts[8] = {
-		inner.topLeft(),
-		{inner.center().x(), inner.top()},
-		inner.topRight(),
-		{inner.left(), inner.center().y()},
-		{inner.right(), inner.center().y()},
-		inner.bottomLeft(),
-		{inner.center().x(), inner.bottom()},
-		inner.bottomRight(),
-	};
-	for (const QPoint &c : pts)
-		p.drawRect(QRect(c.x() - h / 2, c.y() - h / 2, h, h));
+	// Corner brackets and elongated side grips follow the capture boundary.
+	// A dark halo keeps the white grip visible over bright desktop content.
+	for (const Zone zone : kResizeZones) {
+		// Windows layered windows pass fully transparent pixels through even
+		// inside the input mask. A nearly invisible fill makes the generous
+		// grab area work there too, including at recording's lower opacity.
+		for (const QRect &r : resizeGripRegion(zone, kGripHitPadding))
+			p.fillRect(r, QColor(0, 0, 0, 4));
+		for (const QRect &r : resizeGripRegion(zone, 1))
+			p.fillRect(r, QColor(8, 10, 14, 230));
+		for (const QRect &r : resizeGripRegion(zone))
+			p.fillRect(r, QColor(250, 251, 253));
+	}
 
 	// The move tab, in the same colour as the frame so it reads as part of it
 	// (and turns red while recording along with everything else).

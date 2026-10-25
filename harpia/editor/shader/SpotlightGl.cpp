@@ -1,4 +1,5 @@
 #include "SpotlightGl.hpp"
+#include "EditorGlSurface.hpp"
 
 #include "../timeline/Spotlight.hpp"
 
@@ -13,6 +14,7 @@
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
 #include <QSurfaceFormat>
+#include <QThread>
 #include <QVector2D>
 #include <QVector4D>
 
@@ -137,18 +139,16 @@ public:
 		return inst;
 	}
 
-	~GlPass()
+	~GlPass() { release(); }
+
+	void release()
 	{
-		// A thread_local outlives the QGuiApplication on the MAIN thread —
-		// thread_locals for it are destroyed after main() returns — and tearing
-		// down a QOffscreenSurface then walks into a QScreen that no longer
-		// exists, which segfaults on the way out of a run that otherwise
-		// succeeded. Nothing here is worth reclaiming at that point: the process
-		// is ending and the driver frees it all. Worker threads finish while the
-		// application is still up, so they take the real path below.
+		// GUI-thread engines can outlive QApplication as C++ thread_locals.
+		// The application releases them explicitly before deleting its screens.
 		if (!QCoreApplication::instance())
 			return;
-		if (ctx_ && surface_ && ctx_->makeCurrent(surface_)) {
+		const bool sameThread = ctx_ && ctx_->thread() == QThread::currentThread();
+		if (ctx_ && surface_ && sameThread && ctx_->makeCurrent(surface_)) {
 			auto *f = ctx_->functions();
 			if (tex_)
 				f->glDeleteTextures(1, &tex_);
@@ -157,16 +157,25 @@ public:
 			delete fboA_;
 			delete fboB_;
 			delete fboC_;
-			if (vbo_)
-				vbo_->destroy();
-			if (vao_)
-				vao_->destroy();
+			delete vbo_;
+			delete vao_;
 			ctx_->doneCurrent();
 		}
-		delete vbo_;
-		delete vao_;
-		delete ctx_;
-		delete surface_;
+		if (ctx_) {
+			if (sameThread)
+				delete ctx_;
+			else
+				ctx_->deleteLater();
+		}
+		destroyEditorGlSurface(surface_);
+		ctx_ = nullptr;
+		surface_ = nullptr;
+		blur_ = comp_ = nullptr;
+		fboA_ = fboB_ = fboC_ = nullptr;
+		vbo_ = nullptr;
+		vao_ = nullptr;
+		tex_ = 0;
+		ok_ = failed_ = false;
 	}
 
 	bool ready()
@@ -177,15 +186,9 @@ public:
 			return false;
 		failed_ = true; // until proven otherwise; every path below returns
 
-		QSurfaceFormat fmt;
-		fmt.setRenderableType(QSurfaceFormat::OpenGL);
-		fmt.setProfile(QSurfaceFormat::CoreProfile);
-		fmt.setVersion(3, 3);
-
-		surface_ = new QOffscreenSurface();
-		surface_->setFormat(fmt);
-		surface_->create();
-		if (!surface_->isValid())
+		const QSurfaceFormat fmt = editorGlFormat();
+		surface_ = createEditorGlSurface();
+		if (!surface_)
 			return false;
 		ctx_ = new QOpenGLContext();
 		ctx_->setFormat(fmt);
@@ -452,6 +455,11 @@ bool GlPass::run(QImage &frame, const SpotlightSpec &spec, qint64 outMs)
 }
 
 } // namespace
+
+void SpotlightGl::releaseThreadResources()
+{
+	GlPass::forThisThread().release();
+}
 
 bool SpotlightGl::available()
 {

@@ -1,10 +1,16 @@
 #include "SecretStore.hpp"
+#include "../../core/RecorderSettings.hpp"
 
 #include "../../ui/EditorLog.hpp"
 
 #include <QByteArray>
 #include <QSettings>
 #include <QSysInfo>
+
+#if defined(Q_OS_MACOS) || defined(HARPIA_TEST_MAC_SECRET_STORE)
+#include "MacSecretStore.hpp"
+#define HARPIA_MAC_KEYCHAIN 1
+#endif
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -17,7 +23,14 @@ namespace {
 
 QSettings settings()
 {
-	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+#ifdef HARPIA_TEST_MAC_SECRET_STORE
+	// macOS native preferences ignore QSettings::setPath. The mock-backend
+	// tests must never read or overwrite the user's real application settings.
+	return QSettings(QSettings::IniFormat, QSettings::UserScope,
+		QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+#else
+	return harpia::recorderSettings();
+#endif
 }
 
 #ifndef Q_OS_WIN
@@ -57,6 +70,45 @@ bool SecretStore::saveNamedKey(const QString &settingsName, const QString &displ
 	const QString kKey = settingsName;
 	const QString kKind = kKey + QStringLiteral("Kind"); // "dpapi" | "scrambled"
 	const QString &name = display;
+#ifdef HARPIA_MAC_KEYCHAIN
+	QSettings s = settings();
+	QString why;
+	const QString trimmed = key.trimmed();
+	if (trimmed.isEmpty()) {
+		if (!mac_secret_store::remove(kKey, &why)) {
+			editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
+				QStringLiteral("%1 API key could not be removed: %2").arg(name, why));
+			return false;
+		}
+		s.remove(kKey);
+		s.remove(kKind);
+	} else {
+		if (!mac_secret_store::write(kKey, trimmed.toUtf8(), &why)) {
+			editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
+				QStringLiteral("%1 API key could not be saved: %2").arg(name, why));
+			return false; // never fall back to a newly scrambled key on macOS
+		}
+		const auto back = mac_secret_store::read(kKey);
+		if (back.status != mac_secret_store::ReadStatus::Found || back.secret != trimmed.toUtf8()) {
+			editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
+				QStringLiteral("%1 API key could not be verified in macOS Keychain. %2")
+					.arg(name, back.error));
+			return false; // preserve an existing legacy key until verification succeeds
+		}
+		s.remove(kKey);
+		s.setValue(kKind, QStringLiteral("keychain"));
+	}
+	s.sync();
+	if (s.status() != QSettings::NoError) {
+		editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
+			QStringLiteral("%1 API key: the settings could not be updated (%2)").arg(name, s.fileName()));
+		return false;
+	}
+	editorLog(EditorLogLevel::Info, QStringLiteral("Subtitles"), trimmed.isEmpty()
+		? QStringLiteral("%1 API key removed").arg(name)
+		: QStringLiteral("%1 API key saved in macOS Keychain (%2)").arg(name, maskedKey(trimmed)));
+	return true;
+#else
 	bool stored = false;
 	{
 		QSettings s = settings();
@@ -89,6 +141,7 @@ bool SecretStore::saveNamedKey(const QString &settingsName, const QString &displ
 				  .arg(name, stored ? QStringLiteral("it did not read back the same")
 						    : QStringLiteral("Windows refused to protect it (DPAPI)")));
 	return readable;
+#endif
 }
 
 bool SecretStore::storeSealed(QSettings &s, const QString &kKey, const QString &kKind, const QByteArray &plain)
@@ -124,6 +177,52 @@ QString SecretStore::loadNamedKey(const QString &settingsName, const QString &di
 	const QString kKey = settingsName;
 	const QString kKind = kKey + QStringLiteral("Kind");
 	QSettings s = settings();
+#ifdef HARPIA_MAC_KEYCHAIN
+	const auto result = mac_secret_store::read(kKey);
+	if (result.status == mac_secret_store::ReadStatus::Found) {
+		const QString key = QString::fromUtf8(result.secret);
+		if (key.isEmpty() || key.toUtf8() != result.secret) {
+			editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
+				QStringLiteral("The saved %1 API key in macOS Keychain is invalid. Enter it again.").arg(display));
+			return QString();
+		}
+		// Recover cleanup after an earlier write succeeded but settings sync or
+		// verification was interrupted. The native credential is authoritative.
+		if (s.contains(kKey) || s.value(kKind).toString() != QLatin1String("keychain")) {
+			s.remove(kKey);
+			s.setValue(kKind, QStringLiteral("keychain"));
+			s.sync();
+			if (s.status() != QSettings::NoError)
+				editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
+					QStringLiteral("The %1 API key is in macOS Keychain, but legacy settings cleanup "
+						"could not finish (%2).").arg(display, s.fileName()));
+		}
+		return key;
+	}
+	if (result.status == mac_secret_store::ReadStatus::Failed) {
+		editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
+			QStringLiteral("The saved %1 API key could not be read: %2").arg(display, result.error));
+		return QString();
+	}
+	// Older Mac releases kept reversible settings. Only remove those bytes
+	// after the Keychain has saved and read back the exact same value.
+	const QString kind = s.value(kKind).toString();
+	if (kind != QLatin1String("scrambled"))
+		return QString();
+	const QByteArray stored = QByteArray::fromBase64(s.value(kKey).toByteArray());
+	const QByteArray plain = scramble(stored);
+	const QString legacy = QString::fromUtf8(plain);
+	if (legacy.isEmpty() || legacy.toUtf8() != plain) {
+		editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
+			QStringLiteral("The legacy %1 API key could not be read on this Mac. Enter it again.").arg(display));
+		return QString();
+	}
+	if (!saveNamedKey(settingsName, display, legacy))
+		editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
+			QStringLiteral("The existing %1 API key is still in legacy settings because Keychain migration "
+				"could not finish. Unlock the login keychain and try again.").arg(display));
+	return legacy;
+#else
 	const QByteArray stored = QByteArray::fromBase64(s.value(kKey).toByteArray());
 	if (stored.isEmpty())
 		return QString();
@@ -151,6 +250,7 @@ QString SecretStore::loadNamedKey(const QString &settingsName, const QString &di
 	if (kind == QLatin1String("scrambled"))
 		return QString::fromUtf8(scramble(stored));
 	return QString();
+#endif
 #endif
 }
 

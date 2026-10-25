@@ -134,9 +134,13 @@ static const UInt32 kMaxFrameRateRangesInDescription = 10;
         return NO;
     }
 
-    AVCaptureAudioDataOutput *audioOutput = [[AVCaptureAudioDataOutput alloc] init];
+    // A camera-only consumer must not create a microphone capture output.
+    // Keep the default enabled for existing OBS sources; Harpia explicitly
+    // disables it and configures its selected microphones separately.
+    BOOL captureAudio = obs_data_get_bool(self.captureInfo->settings, "enable_audio");
+    AVCaptureAudioDataOutput *audioOutput = captureAudio ? [[AVCaptureAudioDataOutput alloc] init] : nil;
 
-    if (!audioOutput) {
+    if (captureAudio && !audioOutput) {
         if (error) {
             NSDictionary *userInfo = @{NSLocalizedDescriptionKey: @"Failed to create AVCaptureAudioDataOutput"};
             *error = [NSError errorWithDomain:self.errorDomain code:-103 userInfo:userInfo];
@@ -157,9 +161,9 @@ static const UInt32 kMaxFrameRateRangesInDescription = 10;
         return NO;
     }
 
-    dispatch_queue_t audioQueue = dispatch_queue_create(nil, nil);
+    dispatch_queue_t audioQueue = captureAudio ? dispatch_queue_create(nil, nil) : nil;
 
-    if (!audioQueue) {
+    if (captureAudio && !audioQueue) {
         if (error) {
             NSDictionary *userInfo = @{NSLocalizedDescriptionKey: @"Failed to create audio dispatch queue"};
 
@@ -174,7 +178,7 @@ static const UInt32 kMaxFrameRateRangesInDescription = 10;
         [videoOutput setSampleBufferDelegate:self queue:videoQueue];
     }
 
-    if ([session canAddOutput:audioOutput]) {
+    if (captureAudio && [session canAddOutput:audioOutput]) {
         [session addOutput:audioOutput];
         [audioOutput setSampleBufferDelegate:self queue:audioQueue];
     }
@@ -223,7 +227,8 @@ static const UInt32 kMaxFrameRateRangesInDescription = 10;
 
     self.deviceUUID = device.uniqueID;
 
-    BOOL isAudioSupported = [device hasMediaType:AVMediaTypeAudio] || [device hasMediaType:AVMediaTypeMuxed];
+    BOOL isAudioSupported = obs_data_get_bool(self.captureInfo->settings, "enable_audio") &&
+                            ([device hasMediaType:AVMediaTypeAudio] || [device hasMediaType:AVMediaTypeMuxed]);
 
     obs_source_set_audio_active(self.captureInfo->source, isAudioSupported);
 
@@ -639,8 +644,9 @@ static const UInt32 kMaxFrameRateRangesInDescription = 10;
         });
     }
 
-    BOOL isAudioAvailable = [self.deviceInput.device hasMediaType:AVMediaTypeAudio] ||
-                            [self.deviceInput.device hasMediaType:AVMediaTypeMuxed];
+    BOOL isAudioAvailable = obs_data_get_bool(self.captureInfo->settings, "enable_audio") &&
+                            ([self.deviceInput.device hasMediaType:AVMediaTypeAudio] ||
+                             [self.deviceInput.device hasMediaType:AVMediaTypeMuxed]);
 
     obs_source_set_audio_active(self.captureInfo->source, isAudioAvailable);
 
@@ -1417,6 +1423,8 @@ static const UInt32 kMaxFrameRateRangesInDescription = 10;
             }
         }
         case kCMMediaType_Audio: {
+            if (!obs_data_get_bool(_captureInfo->settings, "enable_audio"))
+                break;
             size_t requiredBufferListSize;
             OSStatus status = noErr;
 

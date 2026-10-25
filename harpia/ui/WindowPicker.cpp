@@ -27,7 +27,11 @@ public:
 		if (screen) {
 			setScreen(screen);
 			setGeometry(screen->geometry());
+#if defined(Q_OS_MACOS)
+			dpr_ = 1.0; // native Mac window/display bounds use Quartz logical points
+#else
 			dpr_ = screen->devicePixelRatio();
+#endif
 		}
 		if (physical_.isNull()) // no physical rectangle: assume the logical one, scaled
 			physical_ = QRect(geometry().topLeft() * dpr_, geometry().size() * dpr_);

@@ -175,6 +175,8 @@ struct EditorSource {
 class VideoEditorWindow : public QDialog {
 	Q_OBJECT
 public:
+	bool openProjectWithDialogs(const QString &path, bool showSuccess = true);
+
 	// libraryFolders: the app's recording output folders, so the Sources panel's
 	// "Library" tab can offer existing recordings to add as sources.
 	// An EMPTY inPath opens the editor blank: no source, no clips, and a panel
@@ -751,6 +753,7 @@ private:
 	quint64 projectLoadGeneration_ = 0;
 	QVector<std::function<void()>> afterLoading_;
 	bool deferUntilLoaded(std::function<void()> callback);
+	bool voPermissionPending_ = false;
 	bool loadingProject_ = false;
 	QStringList loadFailures_; // files a load could not read, reported together
 	QString clipLabel(const TlClip &c) const;
@@ -1108,7 +1111,7 @@ private:
 	void syncProjectFormatControls(); // push the current values into the widgets
 	void applyProjectFormat();        // read the widgets, re-render, re-measure
 	void onSaveProjectAs();
-	void openProjectWithDialogs(const QString &path, bool showSuccess = true);
+
 	// `quiet` suppresses every dialog: the relink picker, the wrong-source
 	// question and the "Project loaded" confirmation. openProjectAt() is quiet.
 	void applyProjectJson(const QJsonObject &root, const QString &path, bool quiet,

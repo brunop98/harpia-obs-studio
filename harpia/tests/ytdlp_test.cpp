@@ -7,6 +7,7 @@
 // machine without it, and that case is checked too: locate() says no, and
 // the menu entry is the caller's to hide.
 #include "editor/ytdlp/YtDlp.hpp"
+#include "editor/ytdlp/YtDlpHelpers.hpp"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -255,6 +256,7 @@ int main(int argc, char **argv)
 		f.open(QIODevice::WriteOnly);
 		f.write("#!/bin/sh\necho 2026.09.01\n");
 		f.close();
+		f.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner | QFile::ReadGroup | QFile::ExeGroup);
 		s.exePath = dir.filePath(QStringLiteral("yt-dlp"));
 		eqs(YtDlp::locate(s), qPrintable(QFileInfo(s.exePath).absoluteFilePath()), "a set file path is used as is");
 		s.exePath = dir.path();
@@ -268,6 +270,64 @@ int main(int argc, char **argv)
 		ok(!YtDlp::looksLikeUrl(QStringLiteral("youtube.com/watch")), "no scheme, no URL");
 		ok(!YtDlp::looksLikeUrl(QStringLiteral("some text I copied")), "prose is not a URL");
 		ok(!YtDlp::looksLikeUrl(QStringLiteral("https://")), "a bare scheme is not one either");
+	}
+
+	std::printf("\n-- Mac helpers without a shell PATH --\n");
+	{
+		QTemporaryDir temp;
+		const QString app = temp.filePath(QStringLiteral("Harpia Test.app/Contents/MacOS"));
+		const QString helpers = temp.filePath(QStringLiteral("Harpia Test.app/Contents/Helpers"));
+		const QString user = temp.filePath(QStringLiteral("chosen downloader"));
+		const QString path = temp.filePath(QStringLiteral("shell bin"));
+		const QString arm = temp.filePath(QStringLiteral("opt/homebrew/bin"));
+		const QString intel = temp.filePath(QStringLiteral("usr/local/bin"));
+		for (const QString &directory : {app, helpers, user, path, arm, intel})
+			QDir().mkpath(directory);
+		const auto executable = [](const QString &directory, const QString &name, bool executable = true) {
+			QFile file(QDir(directory).filePath(name));
+			if (!file.open(QIODevice::WriteOnly))
+				return QString();
+			file.write("#!/bin/sh\nexit 0\n");
+			file.close();
+			file.setPermissions(QFile::ReadOwner | QFile::WriteOwner |
+				(executable ? QFile::ExeOwner : QFile::Permissions()));
+			return QFileInfo(file).absoluteFilePath();
+		};
+		const QString bundled = executable(helpers, QStringLiteral("yt-dlp"));
+		executable(path, QStringLiteral("yt-dlp"));
+		const QString installed = executable(arm, QStringLiteral("yt-dlp"));
+		const QStringList automatic = yt_helpers::macSearchDirectories(app, {}, {path}, {arm, intel});
+		ok(automatic.first() == helpers && yt_helpers::findExecutable(QStringLiteral("yt-dlp"), automatic) == bundled,
+		   "a signed bundle helper wins over PATH and Homebrew with spaces preserved");
+		const QStringList finder = yt_helpers::macSearchDirectories(app, {}, {}, {arm, intel});
+		QFile::remove(bundled);
+		ok(yt_helpers::findExecutable(QStringLiteral("yt-dlp"), finder) == installed,
+		   "a Finder-style environment still finds Homebrew without it on PATH");
+		const QString chosen = executable(user, QStringLiteral("ffmpeg"));
+		executable(helpers, QStringLiteral("ffmpeg"));
+		const QStringList companions = yt_helpers::macSearchDirectories(app, user, {user, path}, {arm, intel});
+		ok(yt_helpers::findExecutable(QStringLiteral("ffmpeg"), companions) == chosen && companions.count(user) == 1,
+		   "a selected downloader's companion helpers win and duplicate directories are removed");
+		executable(helpers, QStringLiteral("deno"), false);
+		const QString runtime = executable(intel, QStringLiteral("deno"));
+		ok(yt_helpers::findExecutable(QStringLiteral("deno"), finder) == runtime,
+		   "a non-executable bundled download cannot hide a working installed runtime");
+		executable(helpers, QStringLiteral("yt-dlp.exe"));
+		ok(yt_helpers::findExecutable(QStringLiteral("yt-dlp"), {helpers}).isEmpty(),
+		   "Mac discovery never substitutes a Windows .exe");
+		ok(yt_helpers::macInstallDirectories(QStringLiteral("arm64")).first() == QStringLiteral("/opt/homebrew/bin") &&
+		   yt_helpers::macInstallDirectories(QStringLiteral("x86_64")).first() == QStringLiteral("/usr/local/bin"),
+		   "both Homebrew locations are searched in the native architecture's usual order");
+		const QStringList overrides = yt_helpers::argumentOverrides(chosen, runtime, {});
+		ok(overrides == QStringList{QStringLiteral("--ffmpeg-location"), chosen,
+			QStringLiteral("--js-runtimes"), QStringLiteral("deno:") + runtime},
+		   "ffmpeg and Deno paths become exact process arguments, including spaces");
+		ok(yt_helpers::argumentOverrides(chosen, runtime,
+			{QStringLiteral("--ffmpeg-location=/my ffmpeg"), QStringLiteral("--js-runtimes"), QStringLiteral("node")}).isEmpty(),
+		   "explicit user helper options override automatic discovery in either argument form");
+		ok(yt_helpers::argumentOverrides({}, runtime, {QStringLiteral("--no-js-runtimes")}).isEmpty(),
+		   "an explicit request to disable JavaScript runtimes is respected");
+		ok(yt_helpers::argumentOverrides({}, {}, {}).isEmpty(), "missing optional helpers add no unsupported paths");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

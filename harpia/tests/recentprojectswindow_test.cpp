@@ -1,5 +1,6 @@
 // The opening screen remembers saved projects across editor windows, and its
 // recent-project buttons reopen the actual timeline without another picker.
+#include "../core/RecorderSettings.hpp"
 #include "editor/RecentProjects.hpp"
 #include "editor/VideoEditorWindow.hpp"
 #include "editor/timeline/TimelineView.hpp"
@@ -87,8 +88,7 @@ int main(int argc, char **argv)
 	QStandardPaths::setTestModeEnabled(true);
 	QSettings::setDefaultFormat(QSettings::IniFormat);
 	QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, scratch.filePath("settings"));
-	QSettings settings(QSettings::defaultFormat(), QSettings::UserScope,
-			   QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings settings = harpia::recorderSettings(QSettings::defaultFormat());
 	settings.clear();
 	settings.sync();
 

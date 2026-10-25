@@ -39,7 +39,7 @@ public:
 	ShaderRenderer(const ShaderRenderer &) = delete;
 	ShaderRenderer &operator=(const ShaderRenderer &) = delete;
 
-	// Create the offscreen GL context + surface on the CALLING thread. Idempotent;
+	// Create this thread's GL context and acquire a prepared surface. Idempotent;
 	// returns false (and stays false) if OpenGL 3.3 is unavailable here.
 	bool ensureGl();
 

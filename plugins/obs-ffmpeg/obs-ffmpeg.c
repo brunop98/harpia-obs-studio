@@ -23,6 +23,12 @@ extern struct obs_encoder_info aac_encoder_info;
 extern struct obs_encoder_info svt_av1_encoder_info;
 extern struct obs_encoder_info aom_av1_encoder_info;
 
+#if defined(__APPLE__)
+extern struct obs_encoder_info h264_videotoolbox_encoder_info;
+extern struct obs_encoder_info hevc_videotoolbox_encoder_info;
+extern bool harpia_videotoolbox_available(const char *name);
+#endif
+
 #ifdef LIBAVUTIL_VAAPI_AVAILABLE
 extern struct obs_encoder_info h264_vaapi_encoder_info;
 extern struct obs_encoder_info h264_vaapi_encoder_tex_info;
@@ -99,6 +105,15 @@ bool obs_module_load(void)
 	obs_register_encoder(&aac_encoder_info);
 	register_encoder_if_available(&svt_av1_encoder_info, "libsvtav1");
 	register_encoder_if_available(&aom_av1_encoder_info, "libaom-av1");
+
+#if defined(__APPLE__)
+	if (harpia_videotoolbox_available("h264_videotoolbox"))
+		obs_register_encoder(&h264_videotoolbox_encoder_info);
+#ifdef ENABLE_HEVC
+	if (harpia_videotoolbox_available("hevc_videotoolbox"))
+		obs_register_encoder(&hevc_videotoolbox_encoder_info);
+#endif
+#endif
 
 #if defined(_WIN32) && !defined(_M_ARM64)
 	amf_load();

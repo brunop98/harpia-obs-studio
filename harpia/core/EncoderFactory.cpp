@@ -22,9 +22,9 @@ namespace {
 // order. The first that is registered wins.
 const char *const *hardwareIds(VideoCodec codec, size_t &count)
 {
-	static const char *h264[] = {"obs_nvenc_h264_tex", "ffmpeg_nvenc", "h264_texture_amf",
+	static const char *h264[] = {"ffmpeg_h264_videotoolbox", "obs_nvenc_h264_tex", "ffmpeg_nvenc", "h264_texture_amf",
 				     "obs_qsv11_v2", "ffmpeg_vaapi"};
-	static const char *hevc[] = {"obs_nvenc_hevc_tex", "ffmpeg_hevc_nvenc", "h265_texture_amf",
+	static const char *hevc[] = {"ffmpeg_hevc_videotoolbox", "obs_nvenc_hevc_tex", "ffmpeg_hevc_nvenc", "h265_texture_amf",
 				     "obs_qsv11_hevc", "hevc_ffmpeg_vaapi"};
 	static const char *av1[] = {"obs_nvenc_av1_tex", "av1_texture_amf", "obs_qsv11_av1",
 				    "av1_ffmpeg_vaapi"};
@@ -144,6 +144,14 @@ void EncoderFactory::applyRecordingQuality(obs_data_t *settings, const std::stri
 {
 	// A keyframe every 2 s keeps files seekable without bloating them.
 	obs_data_set_int(settings, "keyint_sec", 2);
+	if (encoderId == "ffmpeg_h264_videotoolbox" || encoderId == "ffmpeg_hevc_videotoolbox") {
+		obs_data_set_string(settings, "rate_control", bitrateKbps > 0 ? "ABR" : "QUALITY");
+		if (bitrateKbps > 0)
+			obs_data_set_int(settings, "bitrate", bitrateKbps);
+		else
+			obs_data_set_int(settings, "quality", 65);
+		return;
+	}
 
 	if (bitrateKbps > 0) {
 		// The user picked an explicit bitrate — honor it as CBR.

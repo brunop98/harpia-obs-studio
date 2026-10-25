@@ -1,3 +1,4 @@
+#include "../core/RecorderSettings.hpp"
 #include "ShortcutPanel.hpp"
 #include "../ui/EditorLog.hpp"
 
@@ -29,7 +30,7 @@ namespace {
 constexpr int kIdRole = Qt::UserRole + 1;
 QSettings panelSettings()
 {
-	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	return harpia::recorderSettings();
 }
 } // namespace
 

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleExecutable</key><string>@MACOSX_BUNDLE_EXECUTABLE_NAME@</string>
+  <key>CFBundleIdentifier</key><string>@HARPIA_MAC_BUNDLE_ID@</string>
+  <key>CFBundleName</key><string>Harpia</string>
+  <key>CFBundleDisplayName</key><string>Harpia Recorder and Editor</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleShortVersionString</key><string>@HARPIA_MAC_VERSION@</string>
+  <key>CFBundleVersion</key><string>@HARPIA_MAC_VERSION@</string>
+  <key>CFBundleIconFile</key><string>Harpia.icns</string>
+  <key>LSMinimumSystemVersion</key><string>@CMAKE_OSX_DEPLOYMENT_TARGET@</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.video</string>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+  <key>NSCameraUseContinuityCameraDeviceType</key><true/>
+  <key>NSCameraUsageDescription</key><string>Harpia uses your camera when you enable webcam recording or preview.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Harpia records your microphone when you enable microphone audio or record narration.</string>
+  <key>NSAudioCaptureUsageDescription</key><string>Harpia records system or application audio when you enable PC audio recording.</string>
+  <key>CFBundleDocumentTypes</key><array><dict>
+    <key>CFBundleTypeName</key><string>Harpia project</string>
+    <key>CFBundleTypeRole</key><string>Editor</string>
+    <key>LSHandlerRank</key><string>Owner</string>
+    <key>LSItemContentTypes</key><array><string>com.harpia.project</string></array>
+  </dict></array>
+  <key>UTExportedTypeDeclarations</key><array><dict>
+    <key>UTTypeIdentifier</key><string>com.harpia.project</string>
+    <key>UTTypeDescription</key><string>Harpia project</string>
+    <key>UTTypeConformsTo</key><array><string>public.json</string></array>
+    <key>UTTypeTagSpecification</key><dict>
+      <key>public.filename-extension</key><array><string>harpiaproj</string></array>
+    </dict>
+  </dict></array>
+</dict></plist>

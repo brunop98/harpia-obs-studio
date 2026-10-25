@@ -1,10 +1,12 @@
 #include "Remuxer.hpp"
 
+#include <cstring>
 #include <vector>
 
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/common.h>
 }
 
 namespace harpia {
@@ -48,7 +50,12 @@ bool Remuxer::remux(const std::string &inPath, const std::string &outPath)
 				mapOk = false;
 				break;
 			}
-			out->codecpar->codec_tag = 0; // let the muxer pick a valid tag
+				// QuickTime/Safari require the hvc1 sample entry for HEVC in
+				// MP4/MOV. Leave other codecs/containers to their own tag tables.
+				const char *container = ofmt->oformat->name;
+				const bool appleHevc = out->codecpar->codec_id == AV_CODEC_ID_HEVC &&
+					(std::strcmp(container, "mp4") == 0 || std::strcmp(container, "mov") == 0);
+				out->codecpar->codec_tag = appleHevc ? MKTAG('h', 'v', 'c', '1') : 0;
 			streamMap[i] = outIdx++;
 		}
 		if (!mapOk || outIdx == 0)

@@ -4,6 +4,7 @@
 // the speaker said them. None of this needs a network or a decoder, which is
 // what makes it checkable here -- the network half is a thin envelope around
 // it and is checked only for what it puts on the wire.
+#include "../core/RecorderSettings.hpp"
 #include "editor/component/BuiltinComponents.hpp"
 #include "editor/component/ComponentRegistry.hpp"
 #include "editor/component/ComponentStack.hpp"
@@ -433,7 +434,7 @@ int main(int argc, char **argv)
 			back = back && SecretStore::loadApiKey(i.provider) == QStringLiteral("key-for-%1").arg(QLatin1String(i.id));
 		ok(back, "each service reads back its own key, trimmed, none overwriting another");
 		{
-			QSettings raw(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+			QSettings raw = harpia::recorderSettings();
 			ok(!raw.value(SecretStore::settingsName(SpeechProvider::Groq)).toString().contains(QStringLiteral("key-for")),
 			   "and the settings file does not hold it readable");
 		}

@@ -1,4 +1,5 @@
 #include "ShaderRenderer.hpp"
+#include "EditorGlSurface.hpp"
 
 #include <QCoreApplication>
 #include <QOffscreenSurface>
@@ -85,7 +86,7 @@ void ShaderRenderer::release()
 		fbo_[0] = fbo_[1] = nullptr;
 		ctx_ = nullptr;
 		surface_ = nullptr;
-		glReady_ = false;
+		glReady_ = glFailed_ = false;
 		return;
 	}
 	QThread *cur = QThread::currentThread();
@@ -112,13 +113,14 @@ void ShaderRenderer::release()
 	// undefined, and the surface owns a QWindow, which belongs to the GUI
 	// thread. Hand them back rather than destroying them here.
 	deleteGlObject(ctx_);
-	deleteGlObject(surface_);
+	destroyEditorGlSurface(surface_);
 	ctx_ = nullptr;
 	surface_ = nullptr;
 	tex_ = 0;
 	texW_ = texH_ = 0;
 	fboW_ = fboH_ = 0;
-	glReady_ = false;
+	glReady_ = glFailed_ = false;
+	error_.clear();
 }
 
 void ShaderRenderer::deletePasses()
@@ -135,16 +137,10 @@ bool ShaderRenderer::ensureGl()
 	if (glFailed_)
 		return false;
 
-	QSurfaceFormat fmt;
-	fmt.setRenderableType(QSurfaceFormat::OpenGL);
-	fmt.setProfile(QSurfaceFormat::CoreProfile);
-	fmt.setVersion(3, 3);
-
-	surface_ = new QOffscreenSurface();
-	surface_->setFormat(fmt);
-	surface_->create();
-	if (!surface_->isValid()) {
-		error_ = QStringLiteral("Could not create an offscreen GL surface.");
+	const QSurfaceFormat fmt = editorGlFormat();
+	surface_ = createEditorGlSurface();
+	if (!surface_) {
+		error_ = QStringLiteral("Could not acquire an offscreen GL surface prepared on the GUI thread.");
 		glFailed_ = true;
 		return false;
 	}

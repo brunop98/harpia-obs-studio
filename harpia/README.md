@@ -160,30 +160,60 @@ pin -- since it moves into its own folder at start-up, where libobs looks for
 its data. `OBS_PLUGINS_PATH` / `OBS_PLUGINS_DATA_PATH` override where the
 plugins are looked for.
 
-### Other platforms
+### macOS
 
-The recorder has Linux and macOS code paths (capture, audio, idle detection),
-but Windows is the platform it is developed and tested on. Some features are
-Windows-only for now — window picking, click ripples, global hotkeys.
+The macOS port targets **macOS 13+** and includes native screen/window handling,
+ScreenCaptureKit system/app audio, microphone/camera permission handling, global
+shortcuts and Apple VideoToolbox recording when supported. Native Mac build and
+hardware validation are still required before treating this branch as a release.
 
-See [macOS readiness](MACOS_READINESS.md) for the confirmed recording and
-packaging gaps, implementation order and native validation needed for a Mac
-release.
+Use full Xcode **26.5+** with the matching macOS SDK, CMake 3.28+, Python 3.10+, and FFmpeg CLI for the media tests. The
+configure step downloads the Qt/OBS dependency archives pinned in the presets.
+
+```sh
+# From the repository root on an Apple Silicon Mac:
+./harpia/scripts/build-macos.sh --arch arm64 --test --package --check-runtime
+```
+
+The deployed application is `build_macos/harpia/RelWithDebInfo/Harpia.app`;
+verified ZIP/checksum/runtime-report files are written under `build_macos/dist`.
+Use `--arch x86_64` or `--arch universal` for Intel/universal builds. See
+[Mac build and validation](MACOS_BUILD.md) for signing, notarization, optional
+URL helpers, the test runner and the required device checks.
+
+The original [macOS audit](MACOS_READINESS.md) records the problems this port
+addresses. Linux retains its existing capture/audio backends.
 
 ## Tests
 
-The tests build with plain `g++` against Qt 6 and FFmpeg — no libobs, no
-CMake — and run headless (`QT_QPA_PLATFORM=offscreen`):
+The portable Qt 6/FFmpeg editor harness uses CMake/CTest and can be built
+without libobs. It requires Qt's Test, Multimedia and OpenGL modules and FFmpeg
+CLI for media fixtures. Set `CMAKE_PREFIX_PATH` if dependencies are outside
+CMake's normal search locations:
+
+```sh
+cmake -S harpia/tests -B build_editor_tests
+cmake --build build_editor_tests --target harpia-tests --parallel 4
+ctest --test-dir build_editor_tests --output-on-failure --no-tests=error
+```
+
+On macOS, `harpia/scripts/build-macos.sh --test` runs this harness through the
+application build. See [Mac build and validation](MACOS_BUILD.md) for the full
+Xcode workflow. Test builds use private INI preferences and an in-memory Mac
+Keychain backend. Most widget checks run offscreen; native GPU, permission and
+recording-device behavior still needs platform validation.
+
+The legacy Linux shell runners use `g++`, Qt 6 and FFmpeg directly:
 
 ```sh
 harpia/tests/run_units.sh  [work-dir]   # logic, widgets, compositor, file formats
 harpia/tests/run_avsync.sh [work-dir]   # export, A/V sync, and the real editor window
 ```
 
-Each prints `ALL PASSED (0 failures)` per program and exits non-zero on any
-failure. The editor window tests drive the real `VideoEditorWindow` with mouse
-and keyboard events. The recorder's libobs-facing code (`core/`,
-`MainWindow`) is not covered here — it is checked on a Windows build.
+They print results per program and exit non-zero on failures. Editor window
+tests drive the real `VideoEditorWindow` with mouse and keyboard events.
+Validate recorder hardware and permissions using the native checklist in
+[Mac build and validation](MACOS_BUILD.md).
 
 ## Project layout
 

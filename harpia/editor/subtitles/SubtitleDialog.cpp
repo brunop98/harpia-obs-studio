@@ -1,3 +1,4 @@
+#include "../../core/RecorderSettings.hpp"
 #include "SubtitleDialog.hpp"
 
 #include "../../ui/EditorLog.hpp"
@@ -32,7 +33,7 @@ namespace harpia {
 namespace {
 QSettings settings()
 {
-	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	return harpia::recorderSettings();
 }
 const QString kGrp = QStringLiteral("subtitles/");
 const QSize kPreviewBox(300, 400); // the most the preview may take

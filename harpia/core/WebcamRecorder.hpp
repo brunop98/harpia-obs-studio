@@ -56,6 +56,11 @@ public:
 	// (e.g. the live toolbar preview's source) instead of opening the device a
 	// second time — DirectShow cameras are typically exclusive. The recorder
 	// takes its own reference and never destroys the shared source.
+	// Configure a macOS camera from the native plugin's actual format/FPS
+	// properties, falling back to an exposed preset when the request is absent.
+	// Requires an already-created source; other source types are unchanged.
+	static void configureCameraSource(obs_source_t *source, int width, int height, int fps);
+
 	bool start(const Preset &preset, const std::string &deviceId, int width, int height, int fps,
 		   const std::string &filePath, obs_source_t *sharedSource = nullptr);
 

@@ -4,6 +4,7 @@
 // Driven through DevPanel::loadChrome() against a real QSettings, because the
 // bug this guards is entirely about persisted state: a fresh run passes no
 // matter what the migration does.
+#include "../core/RecorderSettings.hpp"
 #include "editor/DevPanel.hpp"
 #include "ui/UiText.hpp"
 
@@ -27,7 +28,7 @@ static void ok(bool c, const char *w)
 // passes while testing nothing.
 static QSettings dev()
 {
-	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	return harpia::recorderSettings();
 }
 static void put(const char *key, int v)
 {

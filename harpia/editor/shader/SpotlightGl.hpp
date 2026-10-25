@@ -52,6 +52,8 @@ public:
 	// Whether this thread has (or can get) a usable context. Exposed for tests
 	// and for reporting; tryApply calls it itself.
 	static bool available();
+	// Release before a worker exits, or before GUI surfaces are torn down.
+	static void releaseThreadResources();
 };
 
 } // namespace harpia

@@ -1,3 +1,4 @@
+#include "../core/RecorderSettings.hpp"
 #include "MainWindow.hpp"
 
 #include "AppName.hpp"
@@ -34,6 +35,9 @@
 #include "StatusBadge.hpp"
 #include "editor/AudioExtractDialog.hpp"
 #include "editor/VideoEditorWindow.hpp"
+#if defined(Q_OS_MACOS)
+#include "platform/mac/MacPlatform.hpp"
+#endif
 #include "WebcamPreview.hpp"
 #include "core/EncoderFactory.hpp"
 #include "core/Remuxer.hpp"
@@ -708,6 +712,13 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	pauseShortcut_ = new QShortcut(QKeySequence(Qt::Key_F10), this);
 	connect(pauseShortcut_, &QShortcut::activated, this, &MainWindow::onPauseButton);
 	hotkeys_ = std::make_unique<GlobalHotkeys>();
+#if defined(Q_OS_MACOS)
+	qApp->installEventFilter(this);
+	connect(hotkeys_.get(), &GlobalHotkeys::bindingsChanged, this, [this]() {
+		rebindHotkeys();
+		rebindPresetHotkeys();
+	}, Qt::QueuedConnection);
+#endif
 	connect(hotkeys_.get(), &GlobalHotkeys::triggered, this, [this](int id) {
 		if (id == 1)
 			onPrimaryButton();
@@ -987,7 +998,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// Whose sound PC Audio is, before it first starts: the captures are made
 	// once, for the right apps.
 	{
-		QSettings settings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		QSettings settings = harpia::recorderSettings();
 		audio_.setPcAudioChoice(pc_audio_settings::load(settings, &pcAudioNames_));
 	}
 	audioPanel_->setPcAudioFromShown(true);
@@ -1025,7 +1036,11 @@ void MainWindow::finishStartup()
 	// Bring the capture source up now so the first record is instant. This is
 	// the biggest single item here and the reason the window comes first.
 	obs_.resetVideo(canvasSize_.width(), canvasSize_.height(), activePreset().fps);
+#if defined(Q_OS_MACOS)
+	applyLiveCapture(); // preflight: startup must not request recording permission
+#else
 	capture_.startCapture(activePreset().monitorIndex, activePreset().showMouseCursor);
+#endif
 
 	refreshRecentList();
 	refreshReadiness();
@@ -1434,7 +1449,13 @@ QScreen *MainWindow::resolveScreenForMonitor(int monitorIndex) const
 	if (screens.isEmpty())
 		return nullptr;
 
-#if defined(_WIN32)
+#if defined(Q_OS_MACOS)
+	const auto monitors = CaptureManager::enumerateMonitors();
+	if (monitorIndex >= 0 && size_t(monitorIndex) < monitors.size()) {
+		if (QScreen *screen = mac_platform::screenForDisplay(QString::fromStdString(monitors[monitorIndex].strValue)))
+			return screen;
+	}
+#elif defined(_WIN32)
 	// The overlay/crop origin must sit on the SAME physical monitor OBS captures.
 	// Qt's screen order and OBS's monitor list order are independent on Windows,
 	// so map by device identity (OBS monitor_id → GDI name → QScreen) rather
@@ -1490,6 +1511,16 @@ QSize MainWindow::canvasForActivePreset() const
 	QScreen *screen = screenForActivePreset();
 	if (!screen)
 		return QSize(1920, 1080);
+#if defined(Q_OS_MACOS)
+	const auto monitors = CaptureManager::enumerateMonitors();
+	const int index = activePreset().monitorIndex;
+	if (index >= 0 && size_t(index) < monitors.size()) {
+		const QString wanted = QString::fromStdString(monitors[index].strValue);
+		for (const auto &display : mac_platform::displays())
+			if (display.uuid == wanted)
+				return display.pixelSize;
+	}
+#endif
 	const QSize logical = screen->size();
 	const qreal dpr = screen->devicePixelRatio();
 	return QSize(int(logical.width() * dpr), int(logical.height() * dpr));
@@ -1601,6 +1632,35 @@ void MainWindow::startRecording()
 	// its cost hides behind the countdown; the calls inside dedupe, so this
 	// second pass is nearly free when a countdown already armed everything.
 	armVideoPipeline();
+#if defined(Q_OS_MACOS)
+	refreshMacCaptureExclusions();
+	if (const std::string audioFailure = audio_.pcCaptureFailure(); !audioFailure.empty()) {
+		macCaptureWaiting_ = false;
+		starting_ = false;
+		updateButtons();
+		QMessageBox::warning(this, QStringLiteral("System audio unavailable"), QString::fromStdString(audioFailure));
+		return;
+	}
+	if (modeUsesVideoEncoder(recordMode()) && !capture_.captureReady()) {
+		if (!macCaptureWaiting_) {
+			macCaptureWaiting_ = true;
+			macCaptureClock_.start();
+		}
+		if (capture_.captureFailed() || macCaptureClock_.elapsed() >= 5000) {
+			macCaptureWaiting_ = false;
+			starting_ = false;
+			updateButtons();
+			QMessageBox::warning(this, QStringLiteral("Screen capture unavailable"),
+				QStringLiteral("macOS did not deliver a screen frame. Check Screen & System Audio Recording "
+					       "permission and the selected display, then try again."));
+			return;
+		}
+		statusBar()->showMessage(QStringLiteral("Waiting for the first screen frame…"));
+		QTimer::singleShot(40, this, [this]() { if (macCaptureWaiting_ && starting_) startRecording(); });
+		return;
+	}
+	macCaptureWaiting_ = false;
+#endif
 
 	// Build the context tokens the clock can't supply, then expand once so the
 	// screen and webcam files share a base name.
@@ -1799,8 +1859,83 @@ void MainWindow::onPrimaryButton()
 		beginRecordFlow();
 }
 
+bool MainWindow::ensureMacPermissions(std::function<void()> resume, bool screen, bool microphone, bool camera)
+{
+#if defined(Q_OS_MACOS)
+	using namespace mac_platform;
+	if (macPermissionPending_)
+		return false;
+	const auto ask = [this, resume](const QString &label, const QString &pane, auto request) {
+		macPermissionPending_ = true;
+		updateButtons();
+		request(this, [this, resume, label, pane](bool granted) {
+			macPermissionPending_ = false;
+			hwProbeMs_ = 0;
+			screenCache_ = nullptr;
+			monitorScreens_.clear();
+			refreshReadiness();
+			updateButtons();
+			if (granted) {
+				audio_.refreshCapture();
+				audioPanel_->rescanDevices();
+				refreshWebcamRow();
+				if (!recorder_.isRecording() && !starting_ && !stopping_)
+					resume();
+				return;
+			}
+			QMessageBox box(QMessageBox::Warning, QStringLiteral("macOS permission needed"),
+				QStringLiteral("Allow %1 for Harpia in System Settings > Privacy & Security, "
+					       "then try again. If macOS asks you to quit and reopen Harpia, do so first.").arg(label),
+				QMessageBox::Close, this);
+			QPushButton *settings = box.addButton(QStringLiteral("Open System Settings"), QMessageBox::ActionRole);
+			box.exec();
+			if (box.clickedButton() == settings)
+				QDesktopServices::openUrl(QUrl(QStringLiteral("x-apple.systempreferences:com.apple.preference.security?Privacy_") + pane));
+		});
+		return false;
+	};
+	if (screen && screenCaptureStatus() != PermissionStatus::Granted)
+		return ask(QStringLiteral("Screen & System Audio Recording"), QStringLiteral("ScreenCapture"), requestScreenCapture);
+	if (microphone && microphoneStatus() != PermissionStatus::Granted)
+		return ask(QStringLiteral("Microphone"), QStringLiteral("Microphone"), requestMicrophone);
+	if (camera && cameraStatus() != PermissionStatus::Granted)
+		return ask(QStringLiteral("Camera"), QStringLiteral("Camera"), requestCamera);
+#else
+	Q_UNUSED(resume); Q_UNUSED(screen); Q_UNUSED(microphone); Q_UNUSED(camera);
+#endif
+	return true;
+}
+
+void MainWindow::refreshMacCaptureExclusions(bool force)
+{
+#if defined(Q_OS_MACOS)
+	std::vector<uint32_t> ids;
+	for (QWidget *window : QApplication::topLevelWidgets()) {
+		// Desktop mouse highlights are intentionally captured. Controls,
+		// framing and dialogs are not part of the recorded picture.
+		if (qobject_cast<MouseFxOverlay *>(window))
+			continue;
+		if (const quint32 id = mac_platform::nativeWindowId(window))
+			ids.push_back(id);
+	}
+	std::sort(ids.begin(), ids.end());
+	ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+	capture_.setExcludedWindows(ids, force);
+#else
+	Q_UNUSED(force);
+#endif
+}
+
 void MainWindow::beginRecordFlow()
 {
+	const Preset &permissionPreset = activePreset();
+	if (!ensureMacPermissions([this]() { beginRecordFlow(); },
+		modeUsesVideoEncoder(recordMode()) || permissionPreset.recordDesktopAudio,
+		!permissionPreset.micDeviceIds.empty(), permissionPreset.webcamEnabled && modeSupportsWebcam(recordMode())))
+		return;
+#if defined(Q_OS_MACOS)
+	audio_.refreshCapture();
+#endif
 	// Gate on readiness before showing any countdown.
 	refreshReadiness();
 	if (recordingBlocked_)
@@ -1967,7 +2102,7 @@ void MainWindow::rebindHotkeys()
 	// every change, so without this the keys would be taken back mid-edit.
 	if (hotkeysSuspended_)
 		return;
-	QSettings s(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings s = harpia::recorderSettings();
 	const QKeySequence rec(s.value(QStringLiteral("hotkeys/record"), QStringLiteral("F9")).toString());
 	const QKeySequence pause(
 		s.value(QStringLiteral("hotkeys/pause"), QStringLiteral("F10")).toString());
@@ -2525,6 +2660,18 @@ void MainWindow::refreshWebcamRow()
 		// Explain *why* there are no cameras: plugin missing / privacy / none.
 		QString warn;
 		QString tip;
+#if defined(Q_OS_MACOS)
+		if (!WebcamRecorder::supported()) {
+			warn = QStringLiteral("Webcam capture unavailable in this build");
+			tip = QStringLiteral("Camera support is missing in this copy of Harpia. Reinstall the complete application.");
+		} else if (cameraAccessStatus() == CameraAccess::DeniedByPrivacy) {
+			warn = QStringLiteral("Camera access blocked by macOS");
+			tip = QStringLiteral("Allow Harpia under System Settings > Privacy & Security > Camera.");
+		} else {
+			warn = QStringLiteral("Webcam not found");
+			tip = QStringLiteral("Connect a camera and check System Settings > Privacy & Security > Camera.");
+		}
+#else
 		if (!WebcamRecorder::supported()) {
 			warn = QStringLiteral("Webcam capture unavailable in this build");
 			tip = QStringLiteral("The camera plugin (win-dshow) isn't loaded. Install the "
@@ -2538,6 +2685,7 @@ void MainWindow::refreshWebcamRow()
 			tip = QStringLiteral("Connect a camera that isn't already in use by another app. "
 					     "If it still doesn't appear, check Windows camera privacy settings.");
 		}
+#endif
 		webcamWarn_->setText(warn);
 		webcamWarn_->setToolTip(tip);
 		webcamWarn_->setVisible(true);
@@ -2553,6 +2701,14 @@ void MainWindow::refreshWebcamRow()
 				     .arg(webcamCombo_->currentText()));
 	webcamWarn_->setVisible(wantedMissing);
 
+#if defined(Q_OS_MACOS)
+	if (mac_platform::cameraStatus() != mac_platform::PermissionStatus::Granted) {
+		webcamWarn_->setText(QStringLiteral("Camera permission is required. Choose a camera or press Record to allow access."));
+		webcamWarn_->setVisible(true);
+		webcamPreview_->clearDevice();
+		return;
+	}
+#endif
 	const std::string dev = webcamCombo_->currentData().toString().toStdString();
 	webcamPreview_->setDevice(dev, p.webcamWidth, p.webcamHeight, p.webcamFps);
 }
@@ -2569,6 +2725,8 @@ void MainWindow::onWebcamDeviceChanged()
 		presets_.upsert(*cur);
 	}
 	hwProbeMs_ = 0; // re-probe hardware now that webcam use changed
+	if (!id.isEmpty() && !ensureMacPermissions([this]() { refreshWebcamRow(); refreshReadiness(); }, false, false, true))
+		return;
 	refreshWebcamRow();
 	refreshReadiness();
 }
@@ -2661,7 +2819,7 @@ void MainWindow::refreshReadiness()
 
 	// --- Display / region ---
 	const int monitorCount = hwMonitorCount_;
-	if (monitorCount > 0 && p.monitorIndex >= monitorCount) {
+	if (modeUsesVideoEncoder(recordMode()) && (monitorCount == 0 || p.monitorIndex < 0 || p.monitorIndex >= monitorCount)) {
 		warnings.push_back({QStringLiteral("The selected monitor is no longer available."),
 				    [this]() { editActivePreset(); }, QStringLiteral("Choose display")});
 	}
@@ -2674,6 +2832,20 @@ void MainWindow::refreshReadiness()
 			warnings.push_back({QStringLiteral("The capture region is too small."), nullptr, QString()});
 		}
 	}
+
+#if defined(Q_OS_MACOS)
+	using mac_platform::PermissionStatus;
+	if ((modeUsesVideoEncoder(recordMode()) || p.recordDesktopAudio) &&
+	    mac_platform::screenCaptureStatus() != PermissionStatus::Granted) {
+		warnings.push_back({QStringLiteral("Screen & System Audio Recording permission is required."),
+			[this]() { ensureMacPermissions([this]() { applyLiveCapture(); refreshReadiness(); }, true, false, false); },
+			QStringLiteral("Allow recording"), false});
+	}
+	if (!p.micDeviceIds.empty() && mac_platform::microphoneStatus() != PermissionStatus::Granted)
+		warnings.push_back({QStringLiteral("Microphone access is required for the selected microphones."),
+			[this]() { ensureMacPermissions([this]() { audioPanel_->rescanDevices(); refreshReadiness(); }, false, true, false); },
+			QStringLiteral("Allow microphone"), false});
+#endif
 
 	// --- Microphones ---
 	if (!p.micDeviceIds.empty()) {
@@ -2821,6 +2993,20 @@ void MainWindow::onOpenClipLibrary()
 	clipWindow_->raise();
 	clipWindow_->activateWindow();
 	clipWindow_->refresh();
+}
+
+void MainWindow::openProjectFile(const QString &path)
+{
+	if (!path.endsWith(QStringLiteral(".harpiaproj"), Qt::CaseInsensitive))
+		return;
+	auto *editor = new VideoEditorWindow(QString(), presetFolders(), this);
+	if (!editor->openProjectWithDialogs(path, false)) {
+		delete editor;
+		return;
+	}
+	connect(editor, &VideoEditorWindow::exported, this, [this]() { refreshClipViews(); });
+	editor->setAttribute(Qt::WA_DeleteOnClose);
+	editor->exec();
 }
 
 void MainWindow::openBlankEditor()
@@ -2972,6 +3158,8 @@ void MainWindow::reloadCaptureModeCombo()
 
 void MainWindow::startWindowPick()
 {
+	if (!ensureMacPermissions([this]() { startWindowPick(); }, true, false, false))
+		return;
 	if (!window_list::available())
 		return;
 	if (!windowPicker_) {
@@ -2994,10 +3182,20 @@ void MainWindow::applyPickedWindow(const DesktopWindow &w)
 	const int count = std::max(hwMonitorCount_, int(CaptureManager::enumerateMonitors().size()));
 	for (int i = 0; i < count; ++i) {
 		QScreen *s = screenForMonitor(i);
+#if defined(Q_OS_MACOS)
+		monitors.push_back(s ? s->geometry() : QRect());
+#else
 		monitors.push_back(s ? window_list::monitorRect(s->name()) : QRect());
+#endif
 	}
 	const int m = window_region::monitorFor(w.bounds, monitors);
+#if defined(Q_OS_MACOS)
+	QScreen *pickedScreen = m >= 0 ? screenForMonitor(m) : nullptr;
+	const std::optional<QRect> r = pickedScreen
+		? mac_platform::physicalRegionForWindow(w.id, pickedScreen) : std::nullopt;
+#else
 	const std::optional<QRect> r = m >= 0 ? window_region::regionForWindow(w.bounds, monitors[m]) : std::nullopt;
+#endif
 	if (!r) {
 		QMessageBox::information(this, QStringLiteral("Pick a window"),
 					 QStringLiteral("Too little of that window is on a screen to record."));
@@ -3103,12 +3301,20 @@ void MainWindow::followWindowTick()
 	if (!b)
 		return;
 	QScreen *s = screenForActivePreset();
+#if defined(Q_OS_MACOS)
+	const QRect mon = s ? s->geometry() : QRect();
+#else
 	const QRect mon = s ? window_list::monitorRect(s->name()) : QRect();
+#endif
 	if (mon.isNull())
 		return;
 	// On the display being recorded: a window dragged to another one is
 	// followed up to the edge, not across (that would mean a new capture).
+#if defined(Q_OS_MACOS)
+	const std::optional<QRect> r = mac_platform::physicalRegionForWindow(pickedWindow_, s);
+#else
 	const std::optional<QRect> r = window_region::regionForWindow(*b, mon);
+#endif
 	if (!r || (r->x() == currentRegion_.x && r->y() == currentRegion_.y && r->width() == currentRegion_.width &&
 		   r->height() == currentRegion_.height))
 		return;
@@ -3165,6 +3371,13 @@ void MainWindow::openSavedRegionsManager()
 
 void MainWindow::applyLiveCapture()
 {
+#if defined(Q_OS_MACOS)
+	if (mac_platform::screenCaptureStatus() != mac_platform::PermissionStatus::Granted) {
+		capture_.stopCapture();
+		return;
+	}
+	refreshMacCaptureExclusions();
+#endif
 	if (recorder_.isRecording())
 		return; // don't disturb an in-progress capture
 
@@ -3251,6 +3464,18 @@ void MainWindow::reloadAppCombo()
 
 bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 {
+#if defined(Q_OS_MACOS)
+	auto *changedWindow = qobject_cast<QWidget *>(obj);
+	if (!macExclusionsPending_ && changedWindow && changedWindow->isWindow() &&
+	    !qobject_cast<MouseFxOverlay *>(changedWindow) &&
+	    (event->type() == QEvent::Show || event->type() == QEvent::Hide || event->type() == QEvent::WinIdChange)) {
+		macExclusionsPending_ = true;
+		QTimer::singleShot(0, this, [this]() {
+			macExclusionsPending_ = false;
+			refreshMacCaptureExclusions(true);
+		});
+	}
+#endif
 	if (obj == appCombo_ && event->type() == QEvent::MouseButtonPress)
 		reloadAppCombo(); // refresh the list right before the popup opens
 	if (obj == monitorCombo_ && event->type() == QEvent::MouseButtonPress)
@@ -4197,7 +4422,7 @@ void MainWindow::choosePcAudioApps()
 	pcAudioNames_ = dlg.names();
 	const PcAudioChoice c = dlg.choice();
 	{
-		QSettings settings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		QSettings settings = harpia::recorderSettings();
 		pc_audio_settings::save(settings, c, pcAudioNames_);
 	}
 	audio_.setPcAudioChoice(c);
@@ -4671,7 +4896,7 @@ void MainWindow::updateButtons()
 {
 	const bool recording = recorder_.isRecording();
 	const bool paused = recorder_.isPaused();
-	const bool transitioning = starting_ || stopping_ || countingDown_;
+	const bool transitioning = starting_ || stopping_ || countingDown_ || macPermissionPending_;
 
 	// Region overlay border color follows the state (green/red/yellow).
 	if (regionTool_)
@@ -4904,6 +5129,17 @@ void MainWindow::updateStatusChip()
 
 void MainWindow::tickState()
 {
+#if defined(Q_OS_MACOS)
+	if (recorder_.isRecording() && !stopping_ &&
+	    ((modeUsesVideoEncoder(recordMode()) && capture_.captureFailed()) || !audio_.pcCaptureFailure().empty())) {
+		beginStop();
+		QMessageBox::warning(this, QStringLiteral("Recording interrupted"),
+			QStringLiteral("macOS stopped a capture stream. The recording is being saved. "
+				       "Check recording permissions and connected devices before trying again."));
+		return;
+	}
+#endif
+
 	++spinPhase_; // drive the Starting…/Stopping… spinner
 
 	// The editor opens with exec(), which spins its own event loop -- this timer

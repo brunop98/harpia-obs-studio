@@ -3,8 +3,9 @@
 // Plays a mixed timeline through the speakers while the preview runs.
 //
 // The buffer is the whole timeline pre-mixed to interleaved stereo float at
-// 48 kHz (see TimelineAudio), so seeking is just an index — no decoding happens
-// on the audio path and the playhead can jump anywhere instantly.
+// 48 kHz (see TimelineAudio), so seeking is just an index. Devices that need
+// another PCM format are converted in small streaming chunks. No decoding or
+// second copy of the whole mix is needed on the audio path.
 //
 // The device is also the CLOCK. positionMs() reports what has actually reached
 // the speakers, which is what keeps the picture matched to the sound: a
@@ -13,6 +14,7 @@
 
 #include <QAudioFormat>
 #include <QObject>
+#include <QString>
 
 #include <memory>
 #include <vector>
@@ -28,8 +30,8 @@ public:
 	explicit AudioPreview(QObject *parent = nullptr);
 	~AudioPreview() override;
 
-	// False when the machine has no usable audio output; every call below then
-	// does nothing and the editor plays silently, as it did before.
+	// False when the machine has no output device. A failed start also emits
+	// failed() with a readable reason; callers can surface it without a modal.
 	static bool available();
 
 	// Hand over the mix. Any playback in progress stops.
@@ -44,6 +46,7 @@ public:
 
 	// Where the sound actually is, in output-time. -1 when not playing.
 	qint64 positionMs() const;
+	QString lastError() const { return lastError_; }
 
 	void setMuted(bool on);
 	bool isMuted() const { return muted_; }
@@ -51,14 +54,18 @@ public:
 
 signals:
 	void finished(); // the buffer ran out
+	void failed(const QString &reason);
 
 private:
 	class Reader; // QIODevice over the buffer
+	void reportFailure(const QString &why);
 
 	std::vector<float> pcm_;
 	std::unique_ptr<QAudioSink> sink_;
 	std::unique_ptr<Reader> reader_;
 	QAudioFormat format_;
+	QString lastError_;
+	quint64 playbackGeneration_ = 0;
 	qint64 startMs_ = 0;
 	bool muted_ = false;
 	double volume_ = 1.0;

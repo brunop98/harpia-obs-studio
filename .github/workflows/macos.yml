@@ -1,0 +1,76 @@
+name: macOS build and package
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, codex/macos-support]
+    paths: ['harpia/**', 'libobs/**', 'libobs-opengl/**', 'plugins/**', 'cmake/**', 'CMakeLists.txt', 'CMakePresets.json', '.github/workflows/macos.yml']
+  pull_request:
+    paths: ['harpia/**', 'libobs/**', 'libobs-opengl/**', 'plugins/**', 'cmake/**', 'CMakeLists.txt', 'CMakePresets.json', '.github/workflows/macos.yml']
+permissions:
+  contents: read
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select an installed Xcode meeting the repository SDK requirement
+        id: toolchain
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import glob, os, pathlib, re, subprocess
+          source = pathlib.Path('cmake/macos/compilerconfig.cmake').read_text()
+          minimum = re.search(r'set\(obs_macos_minimum_xcode ([\d.]+)\)', source).group(1)
+          minimum_sdk = re.search(r'set\(obs_macos_minimum_sdk ([\d.]+)\)', source).group(1)
+          def version(text): return tuple(int(x) for x in text.split('.'))
+          candidates = []
+          for app in glob.glob('/Applications/Xcode*.app'):
+              developer = app + '/Contents/Developer'
+              environment = dict(os.environ, DEVELOPER_DIR=developer)
+              try:
+                  output = subprocess.check_output(['xcodebuild', '-version'], env=environment, text=True)
+                  xcode = re.search(r'Xcode ([\d.]+)', output).group(1)
+                  sdk = subprocess.check_output(['xcrun', '--sdk', 'macosx', '--show-sdk-platform-version'], env=environment, text=True).strip()
+                  if version(xcode) >= version(minimum) and version(sdk) >= version(minimum_sdk):
+                      candidates.append((version(xcode), developer, sdk))
+              except (subprocess.CalledProcessError, AttributeError):
+                  pass
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('available=' + ('true' if candidates else 'false') + '\n')
+          if candidates:
+              _, developer, sdk = max(candidates)
+              with open(os.environ['GITHUB_ENV'], 'a') as output: output.write('DEVELOPER_DIR=' + developer + '\n')
+              print('Selected', developer, 'with SDK', sdk)
+          else:
+              message = f'Native build was NOT RUN: this hosted runner has no Xcode {minimum}+ with macOS SDK {minimum_sdk}+. Use a runner with that toolchain; the repository requirement was not weakened.'
+              print('::notice::' + message)
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output: output.write('## macOS validation unavailable\n\n' + message + '\n')
+          PY
+      - name: Check packaging logic
+        run: |
+          python3 harpia/tests/macos_package_test.py
+          bash -n harpia/scripts/build-macos.sh harpia/scripts/package-macos.sh harpia/scripts/make-macos-icon.sh
+      - name: Install build and media-test tools
+        if: steps.toolchain.outputs.available == 'true'
+        run: brew install cmake ffmpeg pkg-config python
+      - uses: actions/cache@v4
+        if: steps.toolchain.outputs.available == 'true'
+        with:
+          path: .deps
+          key: macos-deps-${{ runner.arch }}-${{ hashFiles('CMakePresets.json') }}
+      - name: Build, deploy, test and verify a relocated package
+        if: steps.toolchain.outputs.available == 'true'
+        run: harpia/scripts/build-macos.sh --preset macos-ci --build-dir build_macos_ci --test --package --check-runtime
+      - uses: actions/upload-artifact@v4
+        if: steps.toolchain.outputs.available == 'true' && success()
+        with:
+          name: Harpia-macOS-${{ runner.arch }}-development
+          path: |
+            build_macos_ci/dist/*.zip
+            build_macos_ci/dist/*.sha256
+            build_macos_ci/dist/*.runtime.json
+          if-no-files-found: error

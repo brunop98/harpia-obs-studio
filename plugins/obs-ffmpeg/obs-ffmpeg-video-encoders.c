@@ -135,7 +135,7 @@ void ffmpeg_video_encoder_free(struct ffmpeg_video_encoder *enc)
 	}
 
 	avcodec_free_context(&enc->context);
-	av_frame_unref(enc->vframe);
+	/* av_frame_free also unrefs, and accepts NULL after partial init failure. */
 	av_frame_free(&enc->vframe);
 	da_free(enc->buffer);
 }
@@ -214,6 +214,12 @@ bool ffmpeg_video_encode(struct ffmpeg_video_encoder *enc, struct encoder_frame 
 	if (!enc->start_ts)
 		enc->start_ts = cur_ts;
 
+	/* Asynchronous encoders may retain the previous frame's buffers. */
+	ret = av_frame_make_writable(enc->vframe);
+	if (ret < 0) {
+		obs_encoder_set_last_error(enc->encoder, "Could not prepare a writable video encoder frame.");
+		return false;
+	}
 	copy_data(enc->vframe, frame, enc->height, enc->context->pix_fmt);
 
 	enc->vframe->pts = frame->pts;

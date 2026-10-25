@@ -9,13 +9,14 @@
 //   All apps except one   everything but one app -- the music player, left out
 //                         once, for every game after
 //
-// Apps are remembered by their program's file name ("spotify.exe"), so the
-// choice holds across launches, and holds whether or not the app is running
-// when a recording starts. Windows singles apps out from Windows 10 version
-// 2004 on; anywhere else the whole mix is recorded, whatever the choice says.
+// Apps are remembered by Windows executable name ("spotify.exe") or macOS
+// bundle identifier ("com.spotify.client"). Normalized keys survive launches;
+// the native Mac filter compares bundle identifiers without case sensitivity.
+// Per-app capture uses Windows process loopback or macOS 13+ ScreenCaptureKit.
+// Unsupported backends fall back to the whole mix.
 //
 // Qt-free and pure: what to capture for a choice is decided here, so the rules
-// are checkable without Windows or libobs.
+// are checkable without a native sound device or libobs.
 
 #include <string>
 #include <vector>
@@ -45,7 +46,8 @@ struct PcAudioChoice {
 };
 
 // "C:\Games\Game.EXE" or " Game.exe " -> "game.exe": the file name, trimmed,
-// in lower case (Windows' own file names ignore case).
+// in lower case. A macOS bundle identifier is kept as a normalized identifier;
+// native matching is case-insensitive as are these saved keys.
 inline std::string normalizeAppExe(const std::string &s)
 {
 	const size_t slash = s.find_last_of("/\\");

@@ -1,3 +1,4 @@
+#include "../../core/RecorderSettings.hpp"
 #include "SoundLibrary.hpp"
 
 #include "SoundRules.hpp"
@@ -68,13 +69,13 @@ QByteArray SoundLibrary::toJson(const QVector<SoundSlot> &entries)
 
 QVector<SoundSlot> SoundLibrary::load()
 {
-	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings st = harpia::recorderSettings();
 	return fromJson(st.value(QString::fromLatin1(kKey)).toByteArray());
 }
 
 void SoundLibrary::save(const QVector<SoundSlot> &entries)
 {
-	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings st = harpia::recorderSettings();
 	st.setValue(QString::fromLatin1(kKey), toJson(entries));
 }
 

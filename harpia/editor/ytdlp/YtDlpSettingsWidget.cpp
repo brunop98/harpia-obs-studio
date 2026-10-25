@@ -20,7 +20,7 @@ YtDlpSettingsWidget::YtDlpSettingsWidget(QWidget *parent) : QWidget(parent)
 	lay->setSpacing(8);
 
 	lay->addWidget(infoHint(QStringLiteral(
-		"yt-dlp is your own copy, found on the PATH. The editor's Add menu offers "
+		"yt-dlp is optional. The editor uses your selected copy or finds one automatically. Its Add menu offers "
 		"\"Video from URL…\" only when it is found. Nothing here is required for anything else."), this), 0, Qt::AlignLeft);
 
 	auto *form = new QFormLayout;
@@ -29,8 +29,9 @@ YtDlpSettingsWidget::YtDlpSettingsWidget(QWidget *parent) : QWidget(parent)
 
 	auto *exeRow = new QHBoxLayout;
 	exePath_ = new QLineEdit(this);
-	exePath_->setPlaceholderText(QStringLiteral("(found on the PATH)"));
-	exePath_->setToolTip(QStringLiteral("Leave empty to use the yt-dlp on your PATH, or point at yt-dlp.exe."));
+	exePath_->setPlaceholderText(QStringLiteral("(find automatically)"));
+	exePath_->setToolTip(QStringLiteral("Leave empty to find yt-dlp automatically, or choose its executable. "
+		"On macOS, the app also checks its bundled helpers and Homebrew."));
 	exeRow->addWidget(exePath_, 1);
 	auto *browseExe = new QPushButton(QStringLiteral("Browse…"), this);
 	connect(browseExe, &QPushButton::clicked, this, [this]() {

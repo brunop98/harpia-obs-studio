@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <set>
 #include <vector>
 
 struct obs_source;
@@ -59,6 +60,11 @@ public:
 	static bool appCaptureAvailable();
 	// What PC audio is being recorded from right now: one entry per capture.
 	std::vector<PcAudioCapture> pcCaptures() const;
+	// Reason a requested PC capture failed to start; empty after success/off.
+	std::string pcCaptureFailure() const;
+	// Retry requested captures after native permission/device changes. Does
+	// nothing while a recording holds the audio graph.
+	void refreshCapture();
 
 	// Microphones by device id.
 	void setMicEnabled(const std::string &deviceId, bool on);
@@ -117,10 +123,12 @@ private:
 	// The PC captures and what each one is, side by side.
 	std::vector<std::unique_ptr<Meter>> pc_;
 	std::vector<PcAudioCapture> pcPlan_;
+	std::string pcFailure_;
 	bool pcOn_ = false;
 	PcAudioChoice pcChoice_;
 	bool pcPending_ = false; // a choice made mid-recording, applied when it ends
 	std::map<std::string, std::unique_ptr<Meter>> mics_;
+	std::set<std::string> requestedMics_;
 	float desktopVol_ = 1.f;
 	std::map<std::string, float> micVols_;
 	bool hold_ = false; // a recording is running: mute rather than destroy

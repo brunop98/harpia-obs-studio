@@ -1,4 +1,7 @@
 #include "MouseFxOverlay.hpp"
+#if defined(Q_OS_MACOS)
+#include <CoreGraphics/CoreGraphics.h>
+#endif
 
 #include <QCursor>
 #include <QDateTime>
@@ -92,10 +95,15 @@ void MouseFxOverlay::tick()
 		return;
 	}
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(Q_OS_MACOS)
 	if (cfg_.showClicks) {
+#if defined(Q_OS_MACOS)
+		const bool left = CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft);
+		const bool right = CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonRight);
+#else
 		const bool left = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
 		const bool right = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+#endif
 		if (left && !lastLeft_) {
 			ripples_.push_back({QPointF(cursorLocal_), now, cfg_.leftColor});
 			ripplesChanged = true;

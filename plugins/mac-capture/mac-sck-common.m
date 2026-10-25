@@ -9,18 +9,33 @@ bool is_screen_capture_available(void)
     }
 }
 
+void harpia_capture_status(void *data, calldata_t *parameters)
+{
+    struct screen_capture *sc = data;
+    bool failed = !sc || os_atomic_load_bool(&sc->harpia_stream_failed);
+    bool ready = sc && !failed && os_atomic_load_bool(&sc->harpia_stream_running) &&
+                 (sc->audio_only || os_atomic_load_bool(&sc->harpia_frame_received)) &&
+                 (!sc->audio_only || !os_atomic_load_bool(&sc->audio_routing_pending));
+    calldata_set_bool(parameters, "ready", ready);
+    calldata_set_bool(parameters, "failed", failed);
+}
+
 #pragma mark - ScreenCaptureDelegate
 
 @implementation ScreenCaptureDelegate
 
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer ofType:(SCStreamOutputType)type
 {
-    if (self.sc != NULL) {
-        if (type == SCStreamOutputTypeScreen && !self.sc->audio_only) {
-            screen_stream_video_update(self.sc, sampleBuffer);
-        } else if (@available(macOS 13.0, *)) {
-            if (type == SCStreamOutputTypeAudio) {
-                screen_stream_audio_update(self.sc, sampleBuffer);
+    @synchronized(self) {
+        if (self.sc != NULL && stream == self.sc->disp) {
+            if (type == SCStreamOutputTypeScreen && !self.sc->audio_only &&
+                !os_atomic_load_bool(&self.sc->harpia_filter_pending)) {
+                screen_stream_video_update(self.sc, sampleBuffer);
+            } else if (@available(macOS 13.0, *)) {
+                if (type == SCStreamOutputTypeAudio &&
+                    (!self.sc->audio_only || !os_atomic_load_bool(&self.sc->audio_routing_pending))) {
+                    screen_stream_audio_update(self.sc, sampleBuffer);
+                }
             }
         }
     }
@@ -28,24 +43,30 @@ bool is_screen_capture_available(void)
 
 - (void)stream:(SCStream *)stream didStopWithError:(NSError *)error
 {
-    NSString *errorMessage;
-    switch (error.code) {
-        case SCStreamErrorUserStopped:
-            errorMessage = @"User stopped stream.";
-            break;
-        case SCStreamErrorNoCaptureSource:
-            errorMessage = @"Stream stopped as no capture source was not found.";
-            break;
-        default:
-            errorMessage = [NSString stringWithFormat:@"Stream stopped with error %ld (\"%s\")", error.code,
-                                                      error.localizedDescription.UTF8String];
-            break;
+    @synchronized(self) {
+        if (self.sc == NULL || stream != self.sc->disp)
+            return;
+        os_atomic_store_bool(&self.sc->harpia_stream_running, false);
+        os_atomic_store_bool(&self.sc->harpia_stream_failed, true);
+        NSString *errorMessage;
+        switch (error.code) {
+            case SCStreamErrorUserStopped:
+                errorMessage = @"User stopped stream.";
+                break;
+            case SCStreamErrorNoCaptureSource:
+                errorMessage = @"Stream stopped as no capture source was not found.";
+                break;
+            default:
+                errorMessage = [NSString stringWithFormat:@"Stream stopped with error %ld (\"%s\")", error.code,
+                                                          error.localizedDescription.UTF8String];
+                break;
+        }
+
+        MACCAP_LOG(LOG_WARNING, "%s", errorMessage.UTF8String);
+
+        self.sc->capture_failed = true;
+        obs_source_update_properties(self.sc->source);
     }
-
-    MACCAP_LOG(LOG_WARNING, "%s", errorMessage.UTF8String);
-
-    self.sc->capture_failed = true;
-    obs_source_update_properties(self.sc->source);
 }
 
 @end
@@ -71,6 +92,7 @@ void screen_capture_build_content_list(struct screen_capture *sc, bool display_c
 
     os_sem_wait(sc->shareable_content_available);
     [sc->shareable_content release];
+    sc->shareable_content = nil;
     BOOL onScreenWindowsOnly = (display_capture) ? NO : !sc->show_hidden_windows;
     [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:onScreenWindowsOnly
                                                  completionHandler:new_content_received];
@@ -212,11 +234,20 @@ bool build_application_list(struct screen_capture *sc, obs_properties_t *props)
 
 API_AVAILABLE(macos(12.5)) void screen_stream_video_update(struct screen_capture *sc, CMSampleBufferRef sample_buffer)
 {
+    if (!sample_buffer || !CMSampleBufferIsValid(sample_buffer) || !CMSampleBufferDataIsReady(sample_buffer))
+        return;
     bool frame_detail_errored = false;
     float scale_factor = 1.0f;
     CGRect window_rect = {};
 
     CFArrayRef attachments_array = CMSampleBufferGetSampleAttachmentsArray(sample_buffer, false);
+    if (attachments_array && CFArrayGetCount(attachments_array) > 0) {
+        CFDictionaryRef attachments = CFArrayGetValueAtIndex(attachments_array, 0);
+        CFNumberRef status = attachments ? CFDictionaryGetValue(attachments, SCStreamFrameInfoStatus) : NULL;
+        int value = SCFrameStatusComplete;
+        if (status && CFNumberGetValue(status, kCFNumberIntType, &value) && value != SCFrameStatusComplete)
+            return; // idle/suspended/blank samples are not a new captured frame
+    }
     if (sc->capture_type == ScreenCaptureWindowStream && attachments_array != NULL &&
         CFArrayGetCount(attachments_array) > 0) {
         CFDictionaryRef attachments_dict = CFArrayGetValueAtIndex(attachments_array, 0);
@@ -256,6 +287,8 @@ API_AVAILABLE(macos(12.5)) void screen_stream_video_update(struct screen_capture
     }
 
     CVImageBufferRef image_buffer = CMSampleBufferGetImageBuffer(sample_buffer);
+    if (!image_buffer)
+        return;
 
     CVPixelBufferLockBaseAddress(image_buffer, 0);
     IOSurfaceRef frame_surface = CVPixelBufferGetIOSurface(image_buffer);
@@ -305,6 +338,9 @@ API_AVAILABLE(macos(12.5)) void screen_stream_video_update(struct screen_capture
         sc->current = frame_surface;
         CFRetain(sc->current);
         IOSurfaceIncrementUseCount(sc->current);
+        // Publish readiness only after the complete surface and geometry are
+        // installed, so the application cannot start on an empty first frame.
+        os_atomic_store_bool(&sc->harpia_frame_received, true);
 
         pthread_mutex_unlock(&sc->mutex);
     }

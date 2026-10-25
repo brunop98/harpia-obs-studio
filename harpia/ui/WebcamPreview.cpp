@@ -5,6 +5,7 @@
 
 #include "core/AudioManager.hpp" // full AudioDevice definition ({id, name})
 #include "core/WebcamRecorder.hpp"
+#include "platform/CameraAccess.hpp"
 
 #include <obs.h>
 
@@ -53,6 +54,12 @@ void WebcamPreview::paintEvent(QPaintEvent *)
 
 void WebcamPreview::setDevice(const std::string &deviceId, int width, int height, int fps)
 {
+#if defined(__APPLE__)
+	if (cameraAccessStatus() != CameraAccess::Allowed) {
+		clearDevice();
+		return; // selecting/previewing is resumed by the UI after explicit consent
+	}
+#endif
 	deviceId_ = deviceId;
 	width_ = width >= 16 ? width : 1280;
 	height_ = height >= 16 ? height : 720;
@@ -76,13 +83,21 @@ void WebcamPreview::setDevice(const std::string &deviceId, int width, int height
 		if (props)
 			obs_properties_destroy(props);
 	}
+#if defined(__APPLE__)
+	obs_data_set_bool(cs, "enable_audio", false);
+#else
 	obs_data_set_int(cs, "res_type", 1);
 	obs_data_set_string(cs, "resolution",
 			    (std::to_string(width_) + "x" + std::to_string(height_)).c_str());
 	obs_data_set_int(cs, "frame_interval", 10000000LL / fps_);
+#endif
 
 	obs_source_t *fresh = obs_source_create(camId, "harpia_webcam_preview", cs, nullptr);
 	obs_data_release(cs);
+#if defined(__APPLE__)
+	if (fresh)
+		WebcamRecorder::configureCameraSource(fresh, width_, height_, fps_);
+#endif
 
 	// Swap the source under the graphics lock so the draw callback never reads a
 	// source mid-destruction, then release the old one outside the lock.

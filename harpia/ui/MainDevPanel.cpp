@@ -1,3 +1,4 @@
+#include "../core/RecorderSettings.hpp"
 #include "MainDevPanel.hpp"
 
 #include "MainWindow.hpp"
@@ -25,7 +26,7 @@ namespace harpia {
 namespace {
 QSettings devSettings()
 {
-	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	return harpia::recorderSettings();
 }
 } // namespace
 

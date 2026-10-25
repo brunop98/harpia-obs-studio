@@ -1,25 +1,12 @@
 #pragma once
 
-// Recording the computer's own sound -- whatever Windows is playing -- for the
-// voiceover panel's "Windows audio" sources: play a video in the browser and
-// grab its sound straight onto the timeline.
+// Records computer audio for editor narration. Windows uses WASAPI process
+// loopback (or endpoint loopback as fallback). macOS 13+ uses ScreenCaptureKit
+// with native system/application filters and excludes Harpia's own playback.
+// Unsupported platforms still offer microphone narration through Qt.
 //
-// Two ways to listen, both WASAPI:
-//   - Process loopback (Windows 10 version 2004 and newer; see
-//     platform/ProcessLoopback.hpp):
-//     either every app EXCEPT Harpia -- the timeline playing along is never
-//     recorded back into itself -- or ONE app and its child processes (only
-//     the browser: no Discord pings, no music player in the background).
-//   - Endpoint loopback, everywhere else: the whole mix of the default output.
-//     Harpia's own sound is in it, so the editor mutes its preview for the take
-//     (excludesSelf() says which one is running).
-//
-// Elsewhere than Windows there is nothing to listen with: available() is false
-// and the panel offers microphones only.
-//
-// The capture runs on its own thread and hands over 16-bit stereo PCM through
-// take(). Gaps where nothing is playing (endpoint loopback sends no packets
-// then) are filled with silence by the clock, so a take is as long as it took.
+// take() returns signed 16-bit stereo PCM. Silent gaps are kept on the capture
+// clock so a quiet application does not shorten or accelerate the take.
 
 #include <QByteArray>
 #include <QString>
@@ -31,7 +18,7 @@ namespace harpia {
 
 // An app with sound open on the default output, for "Only <app>".
 struct SystemAudioApp {
-	QString exe;  // file name, "chrome.exe": what is remembered between launches
+	QString exe;  // Windows executable or macOS bundle ID; stable between launches
 	QString name; // what people call it, "Google Chrome"
 	bool playing = false;
 	bool hasSound = true; // sound open on the output now (not only a window)
@@ -73,7 +60,7 @@ public:
 	void stop();
 	bool running() const;
 
-	int sampleRate() const; // what Windows plays at (48000 for process loopback)
+	int sampleRate() const; // native capture rate (48000 for SCK/process loopback)
 	static constexpr int kChannels = 2;
 	// Everything-but-Harpia, or one app: Harpia's own sound is not in it.
 	bool excludesSelf() const;

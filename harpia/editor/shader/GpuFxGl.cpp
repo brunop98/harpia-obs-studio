@@ -17,6 +17,7 @@
 
 #include "GpuFxGl.hpp"
 #include "GpuFx.hpp"
+#include "EditorGlSurface.hpp"
 
 #include "../timeline/EffectClip.hpp"
 
@@ -227,13 +228,12 @@ public:
 			failed_ = true;
 			return false;
 		}
-		QSurfaceFormat fmt;
-		fmt.setRenderableType(QSurfaceFormat::OpenGL);
-		fmt.setProfile(QSurfaceFormat::CoreProfile);
-		fmt.setVersion(3, 3);
-		surface_ = new QOffscreenSurface();
-		surface_->setFormat(fmt);
-		surface_->create();
+		const QSurfaceFormat fmt = editorGlFormat();
+		surface_ = createEditorGlSurface();
+		if (!surface_) {
+			failed_ = true;
+			return false;
+		}
 		ctx_ = new QOpenGLContext();
 		ctx_->setFormat(fmt);
 		if (!surface_->isValid() || !ctx_->create() || !ctx_->makeCurrent(surface_) ||
@@ -286,7 +286,7 @@ public:
 			progs_.clear();
 			ctx_ = nullptr;
 			surface_ = nullptr;
-			ready_ = active_ = false;
+			ready_ = active_ = failed_ = false;
 			return;
 		}
 		QThread *cur = QThread::currentThread();
@@ -303,11 +303,10 @@ public:
 			progs_.clear(); // they go with the context
 		}
 		deleteGlObject(ctx_);
-		deleteGlObject(surface_);
+		destroyEditorGlSurface(surface_);
 		ctx_ = nullptr;
 		surface_ = nullptr;
-		ready_ = false;
-		active_ = false;
+		ready_ = active_ = failed_ = false;
 		w_ = h_ = 0;
 	}
 
@@ -873,6 +872,11 @@ void releaseThread()
 
 void installGpuFx()
 {
+#ifdef Q_OS_MACOS
+	if (QCoreApplication::instance() &&
+	    QThread::currentThread() == QCoreApplication::instance()->thread())
+		prepareEditorGlSurfaces();
+#endif
 	gpuFxProvider() = &provide;
 	gpuFxReleaser() = &releaseThread;
 }

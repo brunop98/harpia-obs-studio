@@ -1,3 +1,4 @@
+#include "../core/RecorderSettings.hpp"
 #include "ClipLibraryWindow.hpp"
 
 #include "ShareExportDialog.hpp"
@@ -727,7 +728,7 @@ void ClipLibraryWindow::deleteSelected()
 
 void ClipLibraryWindow::loadPersistentState()
 {
-	QSettings s(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings s = harpia::recorderSettings();
 	cardScale_ = qBound(0, s.value(QStringLiteral("library/cardScale"), 1).toInt(), 2);
 	const QStringList favs = s.value(QStringLiteral("library/favorites")).toStringList();
 	const QStringList recent = s.value(QStringLiteral("library/recentlyViewed")).toStringList();
@@ -737,7 +738,7 @@ void ClipLibraryWindow::loadPersistentState()
 
 void ClipLibraryWindow::savePersistentState()
 {
-	QSettings s(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings s = harpia::recorderSettings();
 	s.setValue(QStringLiteral("library/cardScale"), cardScale_);
 	s.setValue(QStringLiteral("library/favorites"), QStringList(favorites_.begin(), favorites_.end()));
 	s.setValue(QStringLiteral("library/recentlyViewed"),

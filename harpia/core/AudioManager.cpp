@@ -1,11 +1,16 @@
 #include "AudioManager.hpp"
 
 #include "ObsChannel.hpp"
+#if defined(__APPLE__)
+#include "platform/mac/MacAudioPermissions.hpp"
+#include "platform/mac/MacPlatform.hpp"
+#endif
 
 #include <obs.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <iterator>
 
 namespace harpia {
@@ -28,7 +33,7 @@ const char *AudioManager::outputCaptureId()
 #if defined(_WIN32)
 	return "wasapi_output_capture";
 #elif defined(__APPLE__)
-	return "coreaudio_output_capture";
+	return "sck_audio_capture";
 #else
 	return "pulse_output_capture";
 #endif
@@ -101,10 +106,40 @@ std::unique_ptr<AudioManager::Meter> AudioManager::makeMeter(const char *sourceI
 std::unique_ptr<AudioManager::Meter> AudioManager::makeMeter(const char *sourceId, const char *name,
 							    obs_data_t *settings, uint32_t channel)
 {
+#if defined(__APPLE__)
+	if (std::strcmp(sourceId, inputCaptureId()) == 0 &&
+	    mac_platform::microphoneStatus() != mac_platform::PermissionStatus::Granted)
+		return nullptr; // Record owns permission prompts, never startup metering.
+#endif
 	auto m = std::make_unique<Meter>();
 	m->source = obs_source_create(sourceId, name, settings, nullptr);
 	if (!m->source)
 		return nullptr;
+#if defined(__APPLE__)
+	if (std::strcmp(sourceId, "sck_audio_capture") == 0) {
+		calldata_t tracking;
+		calldata_init(&tracking);
+		proc_handler_call(obs_source_get_proc_handler(m->source), "harpia_begin_app_tracking", &tracking);
+		calldata_free(&tracking);
+		// libobs preserves a source object even when a plugin's create() fails.
+		// The successful native instance registers this proc after startup.
+		calldata_t state;
+		calldata_init(&state);
+		const bool answered = proc_handler_call(obs_source_get_proc_handler(m->source),
+			"harpia_capture_status", &state);
+		const bool failed = answered && calldata_bool(&state, "failed");
+		calldata_free(&state);
+		if (!answered || failed) {
+			calldata_t shutdown;
+			calldata_init(&shutdown);
+			proc_handler_call(obs_source_get_proc_handler(m->source), "harpia_prepare_shutdown", &shutdown);
+			calldata_free(&shutdown);
+			obs_source_release(m->source);
+			m->source = nullptr;
+			return nullptr;
+		}
+	}
+#endif
 
 	m->channel = channel;
 	obs_set_output_source(channel, m->source);
@@ -130,6 +165,14 @@ void AudioManager::destroyMeter(std::unique_ptr<Meter> &m)
 		m->volmeter = nullptr;
 	}
 	if (m->source) {
+#if defined(__APPLE__)
+		// Quiesce native routing jobs while this owner reference is still
+		// alive: obs_shutdown can forcibly destroy leftover source objects.
+		calldata_t shutdown;
+		calldata_init(&shutdown);
+		proc_handler_call(obs_source_get_proc_handler(m->source), "harpia_prepare_shutdown", &shutdown);
+		calldata_free(&shutdown);
+#endif
 		if (channelShows(m->channel, m->source))
 			obs_set_output_source(m->channel, nullptr);
 		obs_source_release(m->source);
@@ -156,8 +199,12 @@ uint32_t AudioManager::allocMicChannel() const
 
 bool AudioManager::appCaptureAvailable()
 {
+#if defined(__APPLE__)
+	return obs_source_get_display_name("sck_audio_capture") != nullptr;
+#else
 	// Registered by core/AppAudioSource where Windows can single apps out.
 	return obs_source_get_display_name(kAppAudioSourceId) != nullptr;
+#endif
 }
 
 std::vector<PcAudioCapture> AudioManager::pcCaptures() const
@@ -165,20 +212,87 @@ std::vector<PcAudioCapture> AudioManager::pcCaptures() const
 	return pcOn_ ? pcPlan_ : std::vector<PcAudioCapture>();
 }
 
+std::string AudioManager::pcCaptureFailure() const
+{
+	if (!pcFailure_.empty())
+		return pcFailure_;
+#if defined(__APPLE__)
+	if (pcOn_ && !pcPlan_.empty() && !mac_audio::permissionGranted())
+		return "Screen & System Audio Recording permission was revoked in macOS. Grant it again before recording.";
+	for (const auto &meter : pc_) {
+		if (!meter || !meter->source)
+			continue;
+		calldata_t state;
+		calldata_init(&state);
+		const bool answered = proc_handler_call(obs_source_get_proc_handler(meter->source),
+			"harpia_capture_status", &state);
+		const bool failed = answered && calldata_bool(&state, "failed");
+		calldata_free(&state);
+		if (!answered || failed)
+			return "macOS stopped system audio capture. Check recording permission and the selected application, then start a new recording.";
+	}
+#endif
+	return {};
+}
+
+void AudioManager::refreshCapture()
+{
+	if (hold_)
+		return;
+	for (auto &meter : pc_)
+		destroyMeter(meter);
+	pc_.clear();
+	pcPlan_.clear();
+	for (auto &entry : mics_)
+		destroyMeter(entry.second);
+	mics_.clear();
+	rebuildPc();
+	const auto requested = requestedMics_;
+	for (const auto &device : requested)
+		setMicEnabled(device, true);
+}
+
 void AudioManager::rebuildPc()
 {
 	const std::vector<PcAudioCapture> plan =
 		pcOn_ ? pcAudioCaptures(pcChoice_, appCaptureAvailable()) : std::vector<PcAudioCapture>();
+	if (plan.empty())
+		pcFailure_.clear();
+#if defined(__APPLE__)
+	if (pcOn_ && !plan.empty() && !mac_audio::permissionGranted()) {
+		for (auto &meter : pc_)
+			destroyMeter(meter);
+		pc_.clear();
+		pcPlan_.clear();
+		pcFailure_ = "Allow Harpia in System Settings > Privacy & Security > Screen & System Audio Recording, then try again.";
+		return;
+	}
+#endif
 	if (plan == pcPlan_ && pc_.size() == plan.size())
 		return; // already exactly this
 	for (auto &m : pc_)
 		destroyMeter(m);
 	pc_.clear();
 	pcPlan_.clear();
+	pcFailure_.clear();
 	for (size_t i = 0; i < plan.size() && i < std::size(kPcChannels); ++i) {
 		const PcAudioCapture &c = plan[i];
 		const std::string name = "harpia_pc_audio" + (i ? "_" + std::to_string(i + 1) : std::string());
 		std::unique_ptr<Meter> m;
+#if defined(__APPLE__)
+		// SCK uses stable application bundle identifiers and its own filter
+		// settings, rather than a CoreAudio device or a Windows executable.
+		obs_data_t *settings = obs_data_create();
+		obs_data_set_int(settings, "type", c.wholeMix() ? 0 : 1);
+		obs_data_set_string(settings, "application", c.exe.c_str());
+		obs_data_set_bool(settings, "exclude_application", c.exclude);
+		m = makeMeter("sck_audio_capture", name.c_str(), settings, kPcChannels[i]);
+		obs_data_release(settings);
+		if (!m && pcFailure_.empty())
+			pcFailure_ = c.wholeMix()
+				? "macOS could not start system audio. Allow Screen & System Audio Recording in System Settings."
+				: "macOS could not record the selected app's audio. Start the app and allow Screen & System Audio Recording in System Settings.";
+#else
 		if (c.wholeMix()) {
 			m = makeMeter(outputCaptureId(), name.c_str(), "default", kPcChannels[i]);
 		} else {
@@ -191,6 +305,7 @@ void AudioManager::rebuildPc()
 				blog(LOG_WARNING, "[harpia] failed to create the app audio capture for '%s'",
 				     c.exe.c_str());
 		}
+#endif
 		if (!m)
 			continue;
 		if (m->source)
@@ -209,8 +324,14 @@ void AudioManager::rebuildPc()
 
 void AudioManager::setDesktopEnabled(bool on)
 {
-	if (on == pcOn_)
+	if (on == pcOn_) {
+#if defined(__APPLE__)
+		// Permission may have been granted since the source's first attempt.
+		if (on)
+			rebuildPc();
+#endif
 		return;
+	}
 	pcOn_ = on;
 	rebuildPc();
 }
@@ -304,6 +425,10 @@ void AudioManager::endHold()
 
 void AudioManager::setMicEnabled(const std::string &deviceId, bool on)
 {
+	if (on)
+		requestedMics_.insert(deviceId);
+	else
+		requestedMics_.erase(deviceId);
 	auto it = mics_.find(deviceId);
 	if (on) {
 		if (it != mics_.end()) {
@@ -364,10 +489,12 @@ void AudioManager::clear()
 		destroyMeter(m);
 	pc_.clear();
 	pcPlan_.clear();
+	pcFailure_.clear();
 	pcOn_ = false;
 	for (auto &kv : mics_)
 		destroyMeter(kv.second);
 	mics_.clear();
+	requestedMics_.clear();
 }
 
 AudioManager::~AudioManager()

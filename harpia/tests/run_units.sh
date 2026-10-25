@@ -6,6 +6,12 @@
 # Each is a regression guard for a bug that was actually found here, not a
 # restatement of the code: run them before touching the areas they cover.
 set -e
+# The legacy commands below use Linux linkage and platform stubs. The CMake
+# harness links the native Mac backends and isolates credential-store tests.
+if [ "$(uname -s)" = Darwin ]; then
+  echo "On macOS use harpia/scripts/build-macos.sh --test (the CMake/CTest harness)." >&2
+  exit 2
+fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 H="$(cd "$HERE/.." && pwd)"
 ROOT="$(cd "$H/.." && pwd)"
@@ -31,7 +37,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Spotlight.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/ui/UiText.cpp" -o "$WORK/multicutshuffle_test" $LF
 
 # Two commands must never end up sharing a key: Qt fires neither.
@@ -44,7 +50,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 "$MOC" -I"$H" "$H/editor/KeyList.hpp" -o "$WORK/moc_KeyList.cpp"
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/keylist_test.cpp" "$H/editor/KeyList.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/ui/UiIcons.cpp" \
 	"$WORK/moc_KeyList.cpp" -o "$WORK/keylist_test" $LF
 
@@ -195,7 +201,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/component_test.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
-	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
 	-o "$WORK/component_test" $LF
 
@@ -228,7 +234,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Spotlight.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/console_test" "$QJSLIB/libqjs.a" $LF
 
 # Subtitles from speech: API JSON -> words -> captions -> clips aligned to the
@@ -248,7 +254,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF $AVCF
 	"$H/editor/component/TransformScriptComponent.cpp" \
 	"$H/editor/shader/ShaderRenderer.cpp" "$H/editor/script/TransformScript.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Spotlight.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/subtitles_test" "$QJSLIB/libqjs.a" $LF $AVLF
 
 # The searchable picker behind Add Component / Add effect: fuzzy ranking,
@@ -266,7 +272,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/component/ScriptComponent.cpp" \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
-	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
+	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/componentrender_test" "$QJSLIB/libqjs.a" $LF
 
 # Rich text in captions (<b>, <color=...>, <size=...>): the parser, drawn
@@ -279,7 +285,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/component/ScriptComponent.cpp" \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
-	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
+	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/${name}_test" "$QJSLIB/libqjs.a" $LF
 done
 
@@ -333,7 +339,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/component/ScriptComponent.cpp" \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
-	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
+	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/opaqueframe_test" "$QJSLIB/libqjs.a" $LF
 
 # Large stills: what is heavy, the working and preview copies, and a crop that
@@ -345,7 +351,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/component/ScriptComponent.cpp" \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
-	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
+	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/stillweight_test" "$QJSLIB/libqjs.a" $LF
 
 # The preview caches are invisible: the finished-frame key changes exactly when
@@ -357,7 +363,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $CF \
 	"$H/editor/component/ScriptComponent.cpp" \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
-	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
+	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/previewcache_test" "$QJSLIB/libqjs.a" $LF
 
 # Effects on the GPU give the CPU's answer: every effect both ways, compared.
@@ -370,7 +376,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -DHARPIA_SRC="\"$H\"" -I"$H" -I"$QJ
 	"$H/editor/shader/ShaderRenderer.cpp" \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
-	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
+	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/gpufx_test" "$QJSLIB/libqjs.a" $LF
 
 # The Color Overlay shader and the dropdown a shader can declare: parsed, a
@@ -384,7 +390,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -DHARPIA_SRC="\"$H\"" -I"$H" -I"$QJ
 	"$H/editor/shader/ShaderRenderer.cpp" \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
-	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
+	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/coloroverlay_test" "$QJSLIB/libqjs.a" $LF
 
 # Effects as components: every FxType registered, rendering pixel-for-pixel
@@ -394,7 +400,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Spotlight.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/effectcomponent_test" $LF
 
 # Shaders and transform scripts as components: one type per file in the folder,
@@ -408,7 +414,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$H/editor/component/TransformScriptComponent.cpp" \
 	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/ShaderRenderer.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Spotlight.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/assetcomponent_test" "$QJSLIB/libqjs.a" $LF
 
 # An effect clip grades only inside its own transform area -- and a clip nobody
@@ -419,7 +425,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
-	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/effectarea_test" "$QJSLIB/libqjs.a" $LF
 
 # A track's lock/hide/mute toggles stay inside the gutter at every width the Dev
@@ -428,7 +434,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/gutterspill_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
@@ -440,7 +446,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/clipvolume_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
@@ -451,7 +457,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/captionlane_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
@@ -466,7 +472,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/tracks_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
@@ -477,7 +483,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/slip_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
@@ -488,7 +494,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/clipduration_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
@@ -500,7 +506,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/soundrules_test.cpp" "$H/editor/timeline/SoundRules.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	-o "$WORK/soundrules_test" $LF
@@ -512,7 +518,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/soundlibrary_test.cpp" "$H/editor/timeline/SoundLibrary.cpp" \
 	"$H/editor/timeline/SoundPresets.cpp" "$H/editor/timeline/SoundRules.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	-o "$WORK/soundlibrary_test" $LF
@@ -522,7 +528,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/clipshuffle_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
@@ -532,7 +538,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/marquee_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
@@ -543,7 +549,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # joining the audio, and the linked place on the timeline.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/tts_test.cpp" "$H/editor/component/Component.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/ComponentRegistry.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/component/ComponentStack.cpp" \
 	-o "$WORK/tts_test" $LF
@@ -553,7 +559,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/linkedclips_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
@@ -564,7 +570,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/timelinedragspan_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
@@ -576,7 +582,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/timelinekeys_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
@@ -588,7 +594,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/splitseam_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
@@ -599,7 +605,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/timelinepan_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
@@ -610,7 +616,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O2 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/timelineperf_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
@@ -629,7 +635,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/propkeys_test.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
-	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
 	-o "$WORK/propkeys_test" $LF
 
@@ -637,7 +643,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # at 1..8 row bands, including counts that divide the height unevenly.
 g++ -std=c++17 -O2 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/pixelbands_test.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/pixelbands_test" $LF
 
 # Masking a clip to a shape: the outside is CLEARED, not darkened, and the track
@@ -648,7 +654,7 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
-	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/mask_test" "$QJSLIB/libqjs.a" $LF
 
 # A caption wider than the picture wraps at a space and carries on below;
@@ -661,7 +667,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
-	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/${name}_test" "$QJSLIB/libqjs.a" $LF
 done
 
@@ -674,7 +680,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS \
 	"$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
-	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/emoji_test" "$QJSLIB/libqjs.a" $LF
 
 # "Export this clip": the sliced timeline has to RENDER what the project
@@ -687,7 +693,7 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" "$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
 	"$WORK/moc_TimelineView.cpp" \
-	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/timelineslice_test" "$QJSLIB/libqjs.a" $LF
 
 # Playback decodes sequentially, and one source can be on screen from several
@@ -702,7 +708,7 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" "$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
 	"$WORK/moc_TimelineView.cpp" \
-	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/playbacktracks_test" "$QJSLIB/libqjs.a" $LF
 
 # "Zoom here": the clicked point has to land in the MIDDLE, and pushing in near
@@ -713,7 +719,7 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
-	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/zoomkeyframes_test" "$QJSLIB/libqjs.a" $LF
 
 # Saving a project and opening it must give back what you had. Found the Bezier
@@ -721,7 +727,7 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/projectroundtrip_test.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Spotlight.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	-o "$WORK/projectroundtrip_test" $LF
@@ -731,7 +737,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/projectfull_test.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Spotlight.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	-o "$WORK/projectfull_test" $LF
@@ -754,7 +760,7 @@ done
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/playheadrepaint_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/TrackEditor.cpp" \
 	"$H/editor/VoiceoverTrack.cpp" "$H/editor/ParamSlider.cpp" \
-	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK"/moc_ph_*.cpp \
 	-o "$WORK/playheadrepaint_test" $LF
 
@@ -764,7 +770,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 "$MOC" -I"$H" "$H/editor/ParamSlider.hpp" -o "$WORK/moc_ParamSlider2.cpp"
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/previewaspect_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/ParamSlider.cpp" \
-	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
 	"$WORK/moc_EditorWidgets.cpp" "$WORK/moc_ParamSlider2.cpp" \
 	-o "$WORK/previewaspect_test" $LF
@@ -791,7 +797,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # Curved motion paths: Bezier segments, automatic and dragged handles, an even
 # pace along the curve, and the line the preview draws.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
-	"$HERE/curvepath_test.cpp" "$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$HERE/curvepath_test.cpp" "$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/curvepath_test" $LF
 
 # Deleting recordings: the Delete key wherever the window's keyboard is (never
@@ -819,14 +825,14 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # The keyframe list's reorder (poses move, times stay), Reset value and Delete.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
-	"$HERE/keyorder_test.cpp" "$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$HERE/keyorder_test.cpp" "$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/keyorder_test" $LF
 
 # The motion path: position keys only, speed dots, a click back to a time;
 # pick, drag, add and right-click on the preview; Delete takes the picked key.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/motionpath_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/ParamSlider.cpp" \
-	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
 	"$WORK/moc_EditorWidgets.cpp" "$WORK/moc_ParamSlider2.cpp" \
 	-o "$WORK/motionpath_test" $LF
@@ -835,7 +841,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # a turned box's own axes, a hand over the body, a rotate cursor on the knob.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/gripcursor_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/ParamSlider.cpp" \
-	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
 	"$WORK/moc_EditorWidgets.cpp" "$WORK/moc_ParamSlider2.cpp" \
 	-o "$WORK/gripcursor_test" $LF
@@ -843,7 +849,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # Social interface margins only shade the widget; clean frames and drags remain unchanged.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/socialsafeareas_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/ParamSlider.cpp" \
-	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" \
 	"$WORK/moc_EditorWidgets.cpp" "$WORK/moc_ParamSlider2.cpp" \
 	-o "$WORK/socialsafeareas_test" $LF
@@ -905,7 +911,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF $AVCF \
 	"$H/editor/DevPanel.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/TrackEditor.cpp" \
 	"$H/editor/VoiceoverTrack.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/KeyframeEditor.cpp" "$H/editor/ParamSlider.cpp" \
-	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/shader/ShaderRenderer.cpp" "$H/editor/script/TransformScript.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H"/editor/component/*.cpp "$H/editor/StillImage.cpp" "$H/editor/FrameSeeker.cpp" "$H/editor/HdrToSdr.cpp" \
@@ -918,7 +924,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF $AVCF \
 g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 	"$HERE/keyframetabs_test.cpp" "$H/editor/timeline/KeyframeEditor.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/shader/ShaderRenderer.cpp" "$H/editor/script/TransformScript.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
@@ -940,7 +946,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 	"$H/editor/component/TransformScriptComponent.cpp" "$H/editor/ParamSlider.cpp" \
 	"$H/editor/shader/ShaderRenderer.cpp" "$H/editor/script/TransformScript.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK"/moc_hi_*.cpp \
 	-o "$WORK/hoverinspect_test" $LF
 
@@ -968,7 +974,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 	"$H/editor/component/TransformScriptComponent.cpp" \
 	"$H/editor/shader/ShaderRenderer.cpp" "$H/editor/script/TransformScript.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/texttyping_test" $LF
 
 # Slide to Position: every curve 0 -> 1 (Back/Elastic overshoot, Bounce never
@@ -980,7 +986,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 	"$H/editor/component/ComponentRegistry.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/slide_test" $LF
 
 # Bullets on cue: the "[3.5] " marker, build-up versus one-at-a-time, and -- the
@@ -994,7 +1000,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 	"$H/editor/component/TransformScriptComponent.cpp" \
 	"$H/editor/shader/ShaderRenderer.cpp" "$H/editor/script/TransformScript.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
-	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	-o "$WORK/bullets_test" $LF
 
 # Which reader a source file needs. Audio used to go to the video reader, which

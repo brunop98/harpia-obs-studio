@@ -38,3 +38,10 @@ if(ENABLE_HARPIA)
 endif()
 
 message_configuration()
+
+# Portable Qt/FFmpeg regression checks, opt-in for development and macOS CI.
+option(HARPIA_BUILD_TESTS "Build Harpia regression tests" OFF)
+if(HARPIA_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(harpia/tests)
+endif()

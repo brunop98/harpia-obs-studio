@@ -1,10 +1,15 @@
 #include "CaptureManager.hpp"
 
 #include "ObsChannel.hpp"
+#if defined(__APPLE__)
+#include "platform/mac/MacPlatform.hpp"
+#include "platform/WindowList.hpp"
+#endif
 
 #include <obs.h>
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <string>
@@ -32,6 +37,8 @@ const char *CaptureManager::platformWindowCaptureId()
 {
 #if defined(_WIN32)
 	return "window_capture";
+#elif defined(__APPLE__)
+	return "screen_capture";
 #else
 	// Window capture isn't wired for macOS/Linux here.
 	return nullptr;
@@ -40,17 +47,35 @@ const char *CaptureManager::platformWindowCaptureId()
 
 // Candidate settings keys used by the various platform capture sources to pick
 // a display. We probe these in order and use whichever the source exposes.
+#if !defined(__APPLE__)
 static const char *findMonitorKey(obs_properties_t *props)
 {
-	for (const char *k : {"monitor_id", "monitor", "screen", "display"}) {
+	for (const char *k : {"monitor_id", "monitor", "screen", "display", "display_uuid"}) {
 		if (obs_properties_get(props, k))
 			return k;
 	}
 	return nullptr;
 }
+#endif
 
 std::vector<MonitorOption> CaptureManager::enumerateMonitors()
 {
+#if defined(__APPLE__)
+	// The SCK source properties require a live source and cannot safely be
+	// queried with obs_get_source_properties(NULL). Native IDs also let the UI
+	// map this exact display to Qt instead of assuming both lists share order.
+	std::vector<MonitorOption> out;
+	for (const auto &display : mac_platform::displays()) {
+		MonitorOption option;
+		option.name = QStringLiteral("%1 (%2 × %3)").arg(display.name)
+			.arg(display.pixelSize.width()).arg(display.pixelSize.height()).toStdString();
+		option.key = "display_uuid";
+		option.isString = true;
+		option.strValue = display.uuid.toStdString();
+		out.push_back(std::move(option));
+	}
+	return out;
+#else
 	// Building source properties is expensive, and this runs on every capture
 	// (re)creation and readiness probe. Displays change rarely — cache the
 	// list for a few seconds (GUI-thread only, like every caller).
@@ -93,11 +118,18 @@ std::vector<MonitorOption> CaptureManager::enumerateMonitors()
 		cacheAt = now;
 	}
 	return out;
+#endif
 }
 
 std::vector<WindowOption> CaptureManager::enumerateWindows()
 {
 	std::vector<WindowOption> out;
+#if defined(__APPLE__)
+	for (const auto &window : window_list::windows())
+		if (!window.ours)
+			out.push_back({window.title.toStdString(), std::to_string(window.id)});
+	return out;
+#else
 	const char *id = platformWindowCaptureId();
 	if (!id)
 		return out;
@@ -119,6 +151,53 @@ std::vector<WindowOption> CaptureManager::enumerateWindows()
 	}
 	obs_properties_destroy(props);
 	return out;
+#endif
+}
+
+namespace {
+#if defined(__APPLE__)
+void applyExcludedWindows(obs_data_t *settings, const std::vector<uint32_t> &ids, uint64_t revision)
+{
+	obs_data_array_t *windows = obs_data_array_create();
+	for (uint32_t id : ids) {
+		obs_data_t *entry = obs_data_create();
+		obs_data_set_int(entry, "id", id);
+		obs_data_array_push_back(windows, entry);
+		obs_data_release(entry);
+	}
+	obs_data_set_array(settings, "harpia_excluded_windows", windows);
+	obs_data_set_int(settings, "harpia_exclusion_revision", static_cast<long long>(revision));
+	obs_data_array_release(windows);
+}
+#endif
+} // namespace
+
+void CaptureManager::setExcludedWindows(const std::vector<uint32_t> &windowIds, bool forceRefresh)
+{
+#if defined(__APPLE__)
+	std::vector<uint32_t> ids = windowIds;
+	ids.erase(std::remove(ids.begin(), ids.end(), 0), ids.end());
+	std::sort(ids.begin(), ids.end());
+	ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+	if (!forceRefresh && ids == excludedWindowIds_)
+		return;
+	excludedWindowIds_ = std::move(ids);
+	++exclusionRevision_;
+	const auto update = [this](obs_source_t *source) {
+		if (!source)
+			return;
+		obs_data_t *settings = obs_source_get_settings(source);
+		applyExcludedWindows(settings, excludedWindowIds_, exclusionRevision_);
+		obs_source_update(source, settings);
+		obs_data_release(settings);
+	};
+	update(source_);
+	for (const ExtraCapture &capture : extras_)
+		update(capture.source);
+#else
+	(void)windowIds;
+	(void)forceRefresh;
+#endif
 }
 
 bool CaptureManager::sourceSize(uint32_t &w, uint32_t &h) const
@@ -128,6 +207,49 @@ bool CaptureManager::sourceSize(uint32_t &w, uint32_t &h) const
 	w = obs_source_get_width(source_);
 	h = obs_source_get_height(source_);
 	return w > 0 && h > 0;
+}
+
+bool CaptureManager::captureReady() const
+{
+	obs_source_t *source = shownSource();
+	if (!source)
+		return false;
+#if defined(__APPLE__)
+	calldata_t status;
+	calldata_init(&status);
+	const bool supported = proc_handler_call(obs_source_get_proc_handler(source), "harpia_capture_status", &status);
+	const bool ready = supported && calldata_bool(&status, "ready") && !calldata_bool(&status, "failed");
+	calldata_free(&status);
+	return ready;
+#else
+	return obs_source_get_width(source) > 0 && obs_source_get_height(source) > 0;
+#endif
+}
+
+bool CaptureManager::captureFailed() const
+{
+	obs_source_t *source = shownSource();
+	if (!source)
+		return true;
+#if defined(__APPLE__)
+	calldata_t status;
+	calldata_init(&status);
+	const bool supported = proc_handler_call(obs_source_get_proc_handler(source), "harpia_capture_status", &status);
+	const bool failed = !supported || calldata_bool(&status, "failed");
+	calldata_free(&status);
+	return failed;
+#else
+	return false;
+#endif
+}
+
+obs_source_t *CaptureManager::shownSource() const
+{
+	if (shownMonitor_ >= 0)
+		for (const ExtraCapture &capture : extras_)
+			if (capture.monitor == shownMonitor_)
+				return capture.source;
+	return source_;
 }
 
 CaptureManager::~CaptureManager()
@@ -146,9 +268,22 @@ bool CaptureManager::startWindowCapture(const std::string &windowValue, bool cap
 	}
 
 	obs_data_t *settings = obs_data_create();
+#if defined(__APPLE__)
+	bool valid = false;
+	const qulonglong windowId = QString::fromStdString(windowValue).toULongLong(&valid);
+	if (!valid || windowId == 0 || windowId > UINT32_MAX) {
+		obs_data_release(settings);
+		return false;
+	}
+	obs_data_set_int(settings, "type", 1); // ScreenCaptureWindowStream
+	obs_data_set_int(settings, "window", static_cast<long long>(windowId));
+	obs_data_set_bool(settings, "show_cursor", captureCursor);
+	obs_data_set_bool(settings, "capture_audio", false);
+#else
 	obs_data_set_bool(settings, "cursor", captureCursor); // window_capture uses "cursor"
 	if (!windowValue.empty())
 		obs_data_set_string(settings, "window", windowValue.c_str());
+#endif
 
 	static std::atomic<uint64_t> creationCounter{0};
 	const std::string sourceName =
@@ -172,7 +307,11 @@ bool CaptureManager::startCapture(int monitorIndex, bool captureCursor)
 	// hundreds of milliseconds and risks black first frames -- and it used to
 	// happen on every Record press, throwing away the source finishStartup()
 	// built precisely so the first recording would start instantly.
-	if (source_ && monitorIndex == monitorIndex_ && captureCursor == captureCursor_)
+	if (source_ && monitorIndex == monitorIndex_ && captureCursor == captureCursor_
+#if defined(__APPLE__)
+	    && !captureFailed()
+#endif
+	)
 		return true;
 
 	stopCapture();
@@ -195,10 +334,26 @@ obs_source_t *CaptureManager::createDisplaySource(int monitorIndex, const char *
 	const char *id = platformCaptureId();
 
 	obs_data_t *settings = obs_data_create();
+#if defined(__APPLE__)
+	obs_data_set_int(settings, "type", 0); // ScreenCaptureDisplayStream
+	obs_data_set_bool(settings, "show_cursor", captureCursor_);
+	// PC/microphone audio is routed independently by AudioManager. A screen
+	// source's implicit system audio would leak when PC audio is off or double
+	// the mix when it is on.
+	obs_data_set_bool(settings, "capture_audio", false);
+	applyExcludedWindows(settings, excludedWindowIds_, exclusionRevision_);
+#else
 	obs_data_set_bool(settings, "capture_cursor", captureCursor_);
+#endif
 
 	// Apply the chosen display if the source supports selection.
 	const std::vector<MonitorOption> monitors = enumerateMonitors();
+#if defined(__APPLE__)
+	if (monitorIndex < 0 || static_cast<size_t>(monitorIndex) >= monitors.size()) {
+		obs_data_release(settings);
+		return nullptr;
+	}
+#endif
 	if (monitorIndex >= 0 && (size_t)monitorIndex < monitors.size()) {
 		const MonitorOption &m = monitors[monitorIndex];
 		if (m.isString)

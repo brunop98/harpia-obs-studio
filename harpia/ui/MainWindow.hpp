@@ -29,6 +29,7 @@
 #include <QSize>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -82,6 +83,8 @@ class MainDevPanel;
 class MainWindow : public QMainWindow {
 	Q_OBJECT
 public:
+	void openProjectFile(const QString &path);
+
 	MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFolder, QWidget *parent = nullptr);
 	~MainWindow() override;
 
@@ -147,6 +150,13 @@ private slots:
 	void refreshReadiness(); // validate settings, update warnings + Record button
 
 private:
+	bool ensureMacPermissions(std::function<void()> resume, bool screen, bool microphone, bool camera);
+	void refreshMacCaptureExclusions(bool force = false);
+	bool macPermissionPending_ = false;
+	bool macExclusionsPending_ = false;
+	bool macCaptureWaiting_ = false;
+	QElapsedTimer macCaptureClock_;
+
 	// The foreground process's executable name, remembered by pid for a
 	// moment: the name is an OpenProcess + image-path query, and the state
 	// tick asked for it four times a second while the same app sat in front.

@@ -14,6 +14,12 @@
 # one is a decision about how this project wants to run tests, not a side effect
 # of writing a test.
 set -e
+# The legacy commands below use Linux linkage and platform stubs. The CMake
+# harness links the native Mac backends and isolates credential-store tests.
+if [ "$(uname -s)" = Darwin ]; then
+  echo "On macOS use harpia/scripts/build-macos.sh --test (the CMake/CTest harness)." >&2
+  exit 2
+fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -77,7 +83,7 @@ build() { # source-file output-name
 		"$H/editor/component/BuiltinComponents.cpp" \
 		"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" "$H/editor/timeline/Spotlight.cpp" \
 		"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
-		"$H/editor/shader/SpotlightGl.cpp" \
+		"$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 		"$H/editor/script/TransformScript.cpp" "$H/editor/shader/ShaderRenderer.cpp" \
 		"$H/editor/component/ShaderComponent.cpp" \
 		"$WORK/moc_ClipExporter.cpp" "$WORK/moc_BatchExport.cpp" \
@@ -108,7 +114,7 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=0 -I"$H" -I"$ROOT" $CF \
 	"$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
-	"$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/script/TransformScript.cpp" "$H/editor/shader/ShaderRenderer.cpp" \
 	"$H/editor/component/ShaderComponent.cpp" \
 	"$WORK/moc_ClipExporter.cpp" "$WORK/moc_BatchExport.cpp" "$WORK/moc_ExportOptionsDialog.cpp" \

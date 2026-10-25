@@ -7,9 +7,9 @@
 // Never in a project file, never in a log, never shown whole. On Windows it
 // is sealed with DPAPI (CryptProtectData), so only this user on this machine
 // can read it back -- the same protection the browsers use for saved
-// passwords. Elsewhere it is kept in the app's settings, lightly scrambled so
-// it is not readable at a glance; that is obfuscation, not security, and the
-// header says so rather than pretending.
+// passwords. macOS uses the login Keychain and migrates legacy scrambled
+// settings only after verified storage. Other platforms keep a lightly
+// scrambled settings value; that is obfuscation, not security.
 
 #include "SpeechProviders.hpp"
 
@@ -22,7 +22,7 @@ namespace harpia {
 class SecretStore {
 public:
 	// Empty removes it. True when the key can be read back afterwards (or was
-	// removed); false when Windows refused to protect it, so nothing was kept.
+	// removed); false when the platform credential store refused the request.
 	// Either way the outcome goes into the error log -- never the key itself.
 	static bool saveApiKey(SpeechProvider p, const QString &key);
 	static QString loadApiKey(SpeechProvider p);

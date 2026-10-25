@@ -1,5 +1,8 @@
+#include "../../core/RecorderSettings.hpp"
 #include "YtDlp.hpp"
+#include "YtDlpHelpers.hpp"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -9,6 +12,7 @@
 #include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QSysInfo>
 #include <QThread>
 #include <QUrl>
 
@@ -20,7 +24,7 @@ namespace {
 const QString kGrp = QStringLiteral("ytdlp/");
 QSettings settings()
 {
-	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	return harpia::recorderSettings();
 }
 
 struct Probe {
@@ -340,10 +344,44 @@ QString YtDlpSettings::defaultDownloadDir()
 
 // ---- locating -----------------------------------------------------------------
 
+namespace {
+#if defined(__APPLE__)
+QStringList macHelperDirectories(const QString &downloaderDir = {})
+{
+	return yt_helpers::macSearchDirectories(
+		QCoreApplication::applicationDirPath(), downloaderDir,
+		qEnvironmentVariable("PATH").split(QDir::listSeparator(), Qt::SkipEmptyParts),
+		yt_helpers::macInstallDirectories(QSysInfo::currentCpuArchitecture()));
+}
+#endif
+
+QStringList automaticHelperArguments(const YtDlpSettings &settings)
+{
+#if defined(__APPLE__)
+	const QString downloader = YtDlp::locate(settings);
+	const QString downloaderDir = downloader.isEmpty() ? QString() : QFileInfo(downloader).absolutePath();
+	const QStringList directories = macHelperDirectories(downloaderDir);
+	return yt_helpers::argumentOverrides(
+		yt_helpers::findExecutable(QStringLiteral("ffmpeg"), directories),
+		yt_helpers::findExecutable(QStringLiteral("deno"), directories),
+		QProcess::splitCommand(settings.extraArgs));
+#else
+	Q_UNUSED(settings);
+	return {};
+#endif
+}
+} // namespace
+
 QString YtDlp::locate(const YtDlpSettings &s)
 {
 	if (!s.exePath.trimmed().isEmpty()) {
 		const QFileInfo fi(s.exePath.trimmed());
+#if defined(__APPLE__)
+		if (fi.isFile() && fi.isExecutable() && fi.suffix().compare(QStringLiteral("exe"), Qt::CaseInsensitive) != 0)
+			return fi.absoluteFilePath();
+		if (fi.isDir())
+			return yt_helpers::findExecutable(QStringLiteral("yt-dlp"), {fi.absoluteFilePath()});
+#else
 		if (fi.isFile())
 			return fi.absoluteFilePath();
 		// A folder: look for the binary in it.
@@ -354,12 +392,17 @@ QString YtDlp::locate(const YtDlpSettings &s)
 					return in.absoluteFilePath();
 			}
 		}
+#endif
 		return QString(); // set but wrong: say so rather than silently use another
 	}
+#if defined(__APPLE__)
+	return yt_helpers::findExecutable(QStringLiteral("yt-dlp"), macHelperDirectories());
+#else
 	QString found = QStandardPaths::findExecutable(QStringLiteral("yt-dlp"));
 	if (found.isEmpty())
 		found = QStandardPaths::findExecutable(QStringLiteral("yt-dlp.exe"));
 	return found;
+#endif
 }
 
 bool YtDlp::probe(bool force)
@@ -424,6 +467,7 @@ QStringList YtDlp::infoArgs(const QString &url, const YtDlpSettings &s)
 {
 	QStringList a;
 	a << QStringLiteral("-J") << QStringLiteral("--no-playlist") << QStringLiteral("--no-warnings");
+	a << automaticHelperArguments(s);
 	a << cookieArgs(s);
 	a << QProcess::splitCommand(s.extraArgs);
 	a << QStringLiteral("--") << url.trimmed();
@@ -450,6 +494,7 @@ QStringList YtDlp::downloadArgs(const QString &url, const YtDlpSettings &s, cons
 	QStringList a;
 	a << QStringLiteral("--no-playlist") << QStringLiteral("--no-warnings") << QStringLiteral("--newline")
 	  << QStringLiteral("--progress");
+	a << automaticHelperArguments(s);
 	a << QStringLiteral("-f") << formatSelector(o);
 	if (s.preferMp4 && !o.audioOnly) // nothing to merge into a video container
 		a << QStringLiteral("--merge-output-format") << QStringLiteral("mp4");

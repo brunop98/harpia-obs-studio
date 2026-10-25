@@ -1,3 +1,4 @@
+#include "../../core/RecorderSettings.hpp"
 #include "TtsEngine.hpp"
 
 #include "TtsAudio.hpp"
@@ -27,7 +28,7 @@ const QString kGoogleKey = QStringLiteral("tts/apiKey_google");
 
 QSettings settings()
 {
-	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	return harpia::recorderSettings();
 }
 
 // The services that give audio only are timed by transcribing it back.

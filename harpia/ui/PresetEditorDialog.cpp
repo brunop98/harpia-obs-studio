@@ -1,3 +1,4 @@
+#include "../core/RecorderSettings.hpp"
 #include "PresetEditorDialog.hpp"
 #include "RecordingBitrateGuide.hpp"
 
@@ -1092,6 +1093,19 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	camStatus->setWordWrap(true);
 	QString statusText;
 	QString statusColor;
+#if defined(Q_OS_MACOS)
+	if (!WebcamRecorder::supported()) {
+		statusText = QStringLiteral("Camera support is missing in this copy of Harpia. Reinstall the complete application.");
+		statusColor = QStringLiteral("#e5484d");
+	} else if (cameraAccessStatus() == CameraAccess::DeniedByPrivacy) {
+		statusText = QStringLiteral("Allow Harpia under System Settings > Privacy & Security > Camera, then try again.");
+		statusColor = QStringLiteral("#e5484d");
+	} else {
+		statusText = cams.empty() ? QStringLiteral("Connect a camera. macOS will ask for Camera permission when you use it.")
+			: QStringLiteral("%1 camera(s) detected.").arg(cams.size());
+		statusColor = cams.empty() ? QStringLiteral("#d29922") : QStringLiteral("#3fb950");
+	}
+#else
 	if (!WebcamRecorder::supported()) {
 		statusText = QStringLiteral(
 			"Webcam capture is not available in this build. Install the Visual Studio "
@@ -1118,6 +1132,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 			"> Camera settings and ensure desktop apps are allowed to access the camera.");
 		statusColor = QStringLiteral("#d29922");
 	}
+#endif
 	camStatus->setText(statusText);
 	camStatus->setStyleSheet(QStringLiteral("color:%1;").arg(statusColor));
 	camStatus->setOpenExternalLinks(true); // the ATL install link opens in the browser
@@ -1208,7 +1223,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 						     "background:#2b2415; border-radius:4px; padding:6px;"));
 		v->addWidget(banner);
 		v->addSpacing(10);
-		QSettings hk(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		QSettings hk = harpia::recorderSettings();
 		recordKeyEdit_ = new QKeySequenceEdit(
 			QKeySequence(hk.value(QStringLiteral("hotkeys/record"), QStringLiteral("F9"))
 					     .toString()),
@@ -1482,7 +1497,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	// hiding what does not apply: the window was sized for the fullest page
 	// this dialog ever had, and most of them no longer fill it.
 	{
-		QSettings ui(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		QSettings ui = harpia::recorderSettings();
 		const QSize saved = ui.value(QStringLiteral("presetEditor/size")).toSize();
 		resize(saved.isValid() && saved.width() > 300 && saved.height() > 300 ? saved
 										     : QSize(640, 580));
@@ -2034,7 +2049,7 @@ void PresetEditorDialog::collectInto(Preset &out) const
 	// Hotkeys are app-wide QSettings, written on OK like everything else here
 	// (Cancel leaves them untouched). Empty means "back to the default".
 	{
-		QSettings hk(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		QSettings hk = harpia::recorderSettings();
 		const QString rec = recordKeyEdit_->keySequence().toString();
 		const QString pause = pauseKeyEdit_->keySequence().toString();
 		hk.setValue(QStringLiteral("hotkeys/record"),
@@ -2134,7 +2149,7 @@ void PresetEditorDialog::collectInto(Preset &out) const
 // Both ways out remember the window, so it does not matter which was pressed.
 void PresetEditorDialog::rememberGeometry() const
 {
-	QSettings ui(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings ui = harpia::recorderSettings();
 	ui.setValue(QStringLiteral("presetEditor/size"), size());
 	if (QListWidgetItem *cur = nav_ ? nav_->currentItem() : nullptr)
 		if (cur->data(Qt::UserRole).isValid())

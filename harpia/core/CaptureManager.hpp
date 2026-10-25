@@ -77,6 +77,16 @@ public:
 
 	// Current captured content size (e.g. the window's size). False if unknown.
 	bool sourceSize(uint32_t &w, uint32_t &h) const;
+	// Mac SCK readiness requires a running stream and an actual decoded surface.
+	// A stopped/revoked stream stays failed even if its last frame has a size.
+	bool captureReady() const;
+	bool captureFailed() const;
+
+	// macOS display capture excludes only recorder controls, preserving the
+	// separate overlay that intentionally draws mouse highlights/spotlights.
+	// Native IDs come from mac_platform::nativeWindowId, not QWidget::winId.
+	// Refresh after an overlay first appears so SCK has its SCWindow reference.
+	void setExcludedWindows(const std::vector<uint32_t> &windowIds, bool forceRefresh = false);
 
 	// Apply (or clear) a recording region via crop_filter. Safe to call while
 	// capturing; pass an empty/disabled region to record the full display.
@@ -154,6 +164,8 @@ private:
 	// can keep it instead of rebuilding. -1 = no live source.
 	int monitorIndex_ = -1;
 	bool captureCursor_ = true;
+	std::vector<uint32_t> excludedWindowIds_;
+	uint64_t exclusionRevision_ = 0;
 
 	struct ExtraCapture {
 		int monitor = -1;
@@ -165,6 +177,7 @@ private:
 	std::vector<ExtraCapture> extras_;
 	int shownMonitor_ = -1; // -1: the main capture
 	obs_source_t *createDisplaySource(int monitorIndex, const char *label) const;
+	obs_source_t *shownSource() const;
 	static void applyCrop(obs_source_t *source, obs_source_t *&crop, const CaptureRegion &region);
 };
 

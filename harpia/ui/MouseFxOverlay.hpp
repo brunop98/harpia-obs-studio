@@ -19,8 +19,8 @@ namespace harpia {
 // clicks. Because it lives on the desktop, the screen capture records it — no
 // custom obs source needed. Active only while recording.
 //
-// Click detection is Windows-only for now (GetAsyncKeyState polling); on other
-// platforms the cursor highlight still works but clicks are not detected.
+// Button-state polling supports Windows and macOS without intercepting keys;
+// other platforms retain the cursor highlight without click ripples.
 class MouseFxOverlay : public QWidget {
 	Q_OBJECT
 public:

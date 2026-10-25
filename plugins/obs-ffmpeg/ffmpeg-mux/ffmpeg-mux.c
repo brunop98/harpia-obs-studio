@@ -24,6 +24,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "ffmpeg-mux.h"
 
 #include <util/threading.h>
@@ -33,6 +34,7 @@
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/common.h>
 #include <libavutil/mastering_display_metadata.h>
 
 #define ANSI_COLOR_RED "\x1b[0;91m"
@@ -451,6 +453,12 @@ static void create_video_stream(struct ffmpeg_mux *ffm)
 	context->codec_type = codec->type;
 	context->codec_id = codec->id;
 	context->codec_tag = ffm->params.codec_tag;
+	/* HEVC needs the hvc1 MP4/MOV sample entry for native Apple players.
+	 * Applying this at the container boundary leaves Matroska and other
+	 * outputs free to use their own codec tags. */
+	const char *container = ffm->output->oformat->name;
+	if (codec->id == AV_CODEC_ID_HEVC && (!strcmp(container, "mp4") || !strcmp(container, "mov")))
+		context->codec_tag = MKTAG('h', 'v', 'c', '1');
 	context->bit_rate = (int64_t)ffm->params.vbitrate * 1000;
 	context->width = ffm->params.width;
 	context->height = ffm->params.height;

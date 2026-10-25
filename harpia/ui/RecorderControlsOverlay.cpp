@@ -1,3 +1,4 @@
+#include "../core/RecorderSettings.hpp"
 #include "RecorderControlsOverlay.hpp"
 
 #include "UiIcons.hpp"
@@ -39,7 +40,7 @@ constexpr qreal kHoverOpacity = 1.0;
 
 QSettings hudSettings()
 {
-	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	return harpia::recorderSettings();
 }
 } // namespace
 

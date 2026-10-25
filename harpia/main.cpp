@@ -8,6 +8,9 @@
 #include "platform/OsIntegration.hpp"
 #include "ui/MainWindow.hpp"
 #include "ui/SingleInstance.hpp"
+#include "ui/ProjectOpenQueue.hpp"
+#include "editor/shader/EditorGlSurface.hpp"
+#include "editor/component/ShaderComponent.hpp"
 #include "ui/StartupSplash.hpp"
 #include "ui/UiText.hpp"
 
@@ -30,10 +33,20 @@
 
 #include <QStandardPaths>
 #include <QStyleFactory>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <obs.h>
 #include <string>
 #include <vector>
 
 namespace {
+
+void runtimeLogToStderr(int, const char *format, va_list arguments, void *)
+{
+	std::vfprintf(stderr, format, arguments);
+	std::fputc('\n', stderr);
+}
 
 // Apply a clean, modern dark theme app-wide (so dialogs match the main window).
 void applyDarkPalette(QApplication &app)
@@ -154,6 +167,19 @@ int main(int argc, char *argv[])
 	// starts. Logged once the log is open (below).
 	const QString osSetup = harpia::os_integration::applyAtStartup();
 	QApplication app(argc, argv);
+	harpia::ProjectOpenQueue documents(&app);
+	for (int index = 1; index < argc; ++index)
+		documents.enqueue(QString::fromLocal8Bit(argv[index]));
+	harpia::prepareEditorGlSurfaces();
+	struct GlCleanup {
+		~GlCleanup() {
+			harpia::ShaderComponents::releaseThreadResources();
+			harpia::releaseEditorGlSurfaces();
+		}
+	} glCleanup;
+	const bool checkRuntime = app.arguments().contains(QStringLiteral("--check-runtime"));
+	if (checkRuntime)
+		base_set_log_handler(runtimeLogToStderr, nullptr);
 	// The internal name, which the settings and data folders are named after:
 	// keep it. What people see is HARPIA_APP_DISPLAY_NAME (AppName.hpp).
 	QApplication::setApplicationName(QStringLiteral("Harpia Recorder"));
@@ -175,8 +201,11 @@ int main(int argc, char *argv[])
 	// corrupt the first one's.
 	harpia::SingleInstance instance(
 		harpia::SingleInstance::userScopedKey(QStringLiteral("harpia-recorder")));
-	if (!instance.acquire())
-		return 0; // the running copy has been asked to come forward
+	if (!instance.acquire()) {
+		if (checkRuntime)
+			std::fprintf(stderr, "Close the running Harpia instance before checking its runtime.\n");
+		return checkRuntime ? 2 : 0;
+	} // the running copy has been asked to come forward
 
 	// Crash handlers before anything that can crash: fatal signals, unhandled
 	// C++ exceptions and (on Windows) SEH all write a description to a pending
@@ -212,7 +241,8 @@ int main(int argc, char *argv[])
 	clock.start();
 	harpia::StartupSplash splash(
 		QStringLiteral("v%1").arg(QString::fromUtf8(HARPIA_VERSION_STRING)));
-	splash.show();
+	if (!checkRuntime)
+		splash.show();
 	const auto step = [&](harpia::StartupPhase p) {
 		timeline.begin(p, clock.elapsed());
 		splash.showPhase(timeline.label(), timeline.percent());
@@ -222,6 +252,10 @@ int main(int argc, char *argv[])
 	harpia::ObsContext obs;
 	if (!obs.startup()) {
 		splash.hide();
+		if (checkRuntime) {
+			std::fprintf(stderr, "The OBS backend could not initialize.\n");
+			return 1;
+		}
 		QMessageBox::critical(nullptr, QStringLiteral(HARPIA_APP_DISPLAY_NAME),
 				      QStringLiteral("Failed to initialize the OBS backend (obs_startup)."));
 		return 1;
@@ -242,6 +276,46 @@ int main(int argc, char *argv[])
 	obs.resetVideo(1920, 1080, 30);
 	step(harpia::StartupPhase::Plugins);
 	obs.loadModules();
+
+	if (checkRuntime) {
+		QJsonArray missing;
+		for (const auto &item : obs.missingDependencies())
+			missing.append(QString::fromStdString(item));
+		bool propertiesSafe = true;
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+		const auto probeProperties = [&propertiesSafe](const char *id) {
+			if (!obs_source_get_display_name(id))
+				return;
+			obs_properties_t *properties = obs_get_source_properties(id);
+			propertiesSafe = propertiesSafe && properties;
+			obs_properties_destroy(properties);
+		};
+#endif
+#if defined(Q_OS_MACOS)
+		for (const char *id : {"screen_capture", "sck_audio_capture"}) {
+			if (!obs_source_get_display_name(id))
+				missing.append(QString::fromUtf8(id));
+			else
+				probeProperties(id);
+		}
+#elif defined(Q_OS_WIN)
+		probeProperties(harpia::CaptureManager::platformCaptureId());
+#endif
+#if defined(Q_OS_MACOS)
+		const int displays = int(harpia::CaptureManager::enumerateMonitors().size());
+#else
+		// Linux's XSHM properties require a live source. This smoke check
+		// deliberately avoids creating capture streams on every platform.
+		const int displays = QGuiApplication::screens().size();
+#endif
+		QJsonObject report{{QStringLiteral("runtimeOk"), missing.isEmpty() && propertiesSafe},
+			{QStringLiteral("missingDependencies"), missing},
+			{QStringLiteral("capturePropertiesSafe"), propertiesSafe},
+			{QStringLiteral("displayCount"), displays}};
+		const QByteArray json = QJsonDocument(report).toJson();
+		std::fwrite(json.constData(), 1, size_t(json.size()), stdout);
+		return missing.isEmpty() && propertiesSafe ? 0 : 1;
+	}
 
 	// Dependency self-check: if required backend plugins didn't load (missing or
 	// blocked libraries), report it clearly and log it, rather than failing with a
@@ -305,6 +379,7 @@ int main(int argc, char *argv[])
 		QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 		step(harpia::StartupPhase::Finishing);
 		win.finishStartup();
+		documents.setReceiver(&win, [&win](const QString &path) { win.openProjectFile(path); });
 		timeline.finish(clock.elapsed());
 
 		// The measurement this whole thing doubles as: what each phase really
@@ -324,6 +399,8 @@ int main(int argc, char *argv[])
 		rc = app.exec();
 	}
 
+	harpia::ShaderComponents::releaseThreadResources();
+	harpia::releaseEditorGlSurfaces();
 	obs.shutdown();
 	harpia::Logger::instance().shutdown();
 	return rc;

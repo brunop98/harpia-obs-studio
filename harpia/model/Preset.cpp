@@ -100,7 +100,11 @@ Preset Preset::makeDefault(const std::string &outputFolder)
 	p.format = RecordingFormat::MP4;
 	p.fps = 30;
 	p.outputFolder = outputFolder;
+#if defined(__APPLE__)
+	p.gpuCompression = true; // native Apple encoder when available; x264 remains a fallback
+#else
 	p.gpuCompression = false;
+#endif
 	p.audioBitrateKbps = 160;
 	p.filenameTemplate = "Recording_{Year}-{Month}-{Day}_{Hour}-{Minute}-{Second}";
 	p.idleTimeoutSeconds = 0;

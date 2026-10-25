@@ -1,6 +1,7 @@
 // Social editing controls through the real window: caption animation changes
 // only the chosen text clips, guides stay out of the project, and silence
 // preview is a transaction which becomes one undo action only after Apply.
+#include "../core/RecorderSettings.hpp"
 #include "editor/VideoEditorWindow.hpp"
 #include "editor/EditorWidgets.hpp"
 #include "editor/SilenceTrimDialog.hpp"
@@ -14,6 +15,7 @@
 #include <QComboBox>
 #include <QElapsedTimer>
 #include <QMessageBox>
+#include <QLabel>
 #include <QMimeData>
 #include <QPushButton>
 #include <QSettings>
@@ -198,8 +200,11 @@ static SilenceReview reviewSilence(VideoEditorWindow &window, TimelineView *time
 	});
 	QObject::connect(&watchdog, &QTimer::timeout, [&]() {
 		result.timedOut = true;
-		if (auto *dialog = window.findChild<SilenceTrimDialog *>())
+		if (auto *dialog = window.findChild<SilenceTrimDialog *>()) {
+			for (auto *label : dialog->findChildren<QLabel *>())
+				std::fprintf(stderr, "Silence review timeout: %s\n", qUtf8Printable(label->text()));
 			dialog->reject();
+		}
 		if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
 			box->reject();
 	});
@@ -218,7 +223,7 @@ int main(int argc, char **argv)
 	QApplication app(argc, argv);
 	QCoreApplication::setOrganizationName(QStringLiteral("HarpiaSocialFeaturesTest"));
 	QCoreApplication::setApplicationName(QStringLiteral("Inspector"));
-	QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder")).remove(QStringLiteral("editor/socialSafeArea"));
+	harpia::recorderSettings().remove(QStringLiteral("editor/socialSafeArea"));
 
 	VideoEditorWindow window{QString()};
 	window.resize(1350, 850);
@@ -309,7 +314,7 @@ int main(int argc, char **argv)
 	check(guideActions, "all platform safe-area actions are present");
 	check(timeline->model() == beforeGuides && canvas->currentFrame() == cleanFrame,
 	      "guide selection changes neither the timeline nor the clean rendered frame");
-	check(QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+	check(harpia::recorderSettings()
 	      .value(QStringLiteral("editor/socialSafeArea")).toInt() == 3,
 	      "the chosen guide is remembered as a view preference");
 	{

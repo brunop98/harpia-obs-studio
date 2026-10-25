@@ -1,45 +1,68 @@
 #include "mac-sck-common.h"
 #include "window-utils.h"
 
+// Native window IDs are stored instead of application exclusions so mouse
+// effect windows can remain in the capture while recorder controls stay out.
+static NSArray<NSNumber *> *read_excluded_windows(obs_data_t *settings)
+{
+    NSMutableArray<NSNumber *> *ids = [[NSMutableArray alloc] init];
+    obs_data_array_t *entries = obs_data_get_array(settings, "harpia_excluded_windows");
+    for (size_t i = 0; i < obs_data_array_count(entries); ++i) {
+        obs_data_t *entry = obs_data_array_item(entries, i);
+        long long value = obs_data_get_int(entry, "id");
+        if (value > 0 && value <= UINT32_MAX)
+            [ids addObject:@((uint32_t) value)];
+        obs_data_release(entry);
+    }
+    obs_data_array_release(entries);
+    return ids;
+}
+
 API_AVAILABLE(macos(12.5)) static void destroy_screen_stream(struct screen_capture *sc)
 {
-    if (sc->disp && !sc->capture_failed) {
-        [sc->disp stopCaptureWithCompletionHandler:^(NSError *_Nullable error) {
-            if (error && error.code != SCStreamErrorAttemptToStopStreamState) {
-                MACCAP_ERR("destroy_screen_stream: Failed to stop stream with error %s\n",
-                           [[error localizedFailureReason] cStringUsingEncoding:NSUTF8StringEncoding]);
-            }
-        }];
-    }
+    @synchronized(sc->capture_delegate) {
+        os_atomic_store_bool(&sc->harpia_stream_running, false);
+        os_atomic_store_bool(&sc->harpia_frame_received, false);
+        os_atomic_store_bool(&sc->harpia_filter_pending, false);
+        if (sc->disp && !sc->capture_failed) {
+            [sc->disp stopCaptureWithCompletionHandler:^(NSError *_Nullable error) {
+                if (error && error.code != SCStreamErrorAttemptToStopStreamState) {
+                    MACCAP_ERR("destroy_screen_stream: Failed to stop stream with error %s\n",
+                               [[error localizedFailureReason] cStringUsingEncoding:NSUTF8StringEncoding]);
+                }
+            }];
+        }
 
-    if (sc->stream_properties) {
-        [sc->stream_properties release];
-        sc->stream_properties = NULL;
-    }
+        if (sc->stream_properties) {
+            [sc->stream_properties release];
+            sc->stream_properties = NULL;
+        }
 
-    if (sc->tex) {
-        gs_texture_destroy(sc->tex);
-        sc->tex = NULL;
-    }
+        if (sc->tex) {
+            gs_texture_destroy(sc->tex);
+            sc->tex = NULL;
+        }
 
-    if (sc->current) {
-        IOSurfaceDecrementUseCount(sc->current);
-        CFRelease(sc->current);
-        sc->current = NULL;
-    }
+        if (sc->current) {
+            IOSurfaceDecrementUseCount(sc->current);
+            CFRelease(sc->current);
+            sc->current = NULL;
+        }
 
-    if (sc->prev) {
-        IOSurfaceDecrementUseCount(sc->prev);
-        CFRelease(sc->prev);
-        sc->prev = NULL;
-    }
+        if (sc->prev) {
+            IOSurfaceDecrementUseCount(sc->prev);
+            CFRelease(sc->prev);
+            sc->prev = NULL;
+        }
 
-    if (sc->disp) {
-        [sc->disp release];
-        sc->disp = NULL;
-    }
+        if (sc->disp) {
+            [sc->disp release];
+            sc->disp = NULL;
+        }
 
-    os_event_destroy(sc->stream_start_completed);
+        os_event_destroy(sc->stream_start_completed);
+        sc->stream_start_completed = NULL;
+    }
 }
 
 API_AVAILABLE(macos(12.5)) static void sck_video_capture_destroy(void *data)
@@ -49,13 +72,16 @@ API_AVAILABLE(macos(12.5)) static void sck_video_capture_destroy(void *data)
     if (!sc)
         return;
 
+    @synchronized(sc->capture_delegate) {
+        sc->capture_delegate.sc = NULL;
+    }
     obs_enter_graphics();
 
     destroy_screen_stream(sc);
 
     obs_leave_graphics();
 
-    if (sc->shareable_content) {
+    if (sc->shareable_content_available) {
         os_sem_wait(sc->shareable_content_available);
         [sc->shareable_content release];
         os_sem_destroy(sc->shareable_content_available);
@@ -66,14 +92,21 @@ API_AVAILABLE(macos(12.5)) static void sck_video_capture_destroy(void *data)
         [sc->capture_delegate release];
     }
     [sc->application_id release];
+    [sc->excluded_window_ids release];
 
     pthread_mutex_destroy(&sc->mutex);
+    if (sc->harpia_video_queue)
+        dispatch_release(sc->harpia_video_queue);
     bfree(sc);
 }
 
 API_AVAILABLE(macos(12.5)) static bool init_screen_stream(struct screen_capture *sc)
 {
-    SCContentFilter *content_filter;
+    SCContentFilter *content_filter = nil;
+    os_atomic_store_bool(&sc->harpia_stream_running, false);
+    os_atomic_store_bool(&sc->harpia_frame_received, false);
+    os_atomic_store_bool(&sc->harpia_stream_failed, false);
+    os_atomic_store_bool(&sc->harpia_filter_pending, false);
     if (sc->capture_failed) {
         sc->capture_failed = false;
         obs_source_update_properties(sc->source);
@@ -107,8 +140,8 @@ API_AVAILABLE(macos(12.5)) static bool init_screen_stream(struct screen_capture 
                 MACCAP_ERR("init_screen_stream: Invalid target display ID:  %u\n", sc->display);
                 os_sem_post(sc->shareable_content_available);
                 sc->disp = NULL;
-                os_event_init(&sc->stream_start_completed, OS_EVENT_TYPE_MANUAL);
-                return true;
+                os_atomic_store_bool(&sc->harpia_stream_failed, true);
+                return false;
             }
             if (sc->hide_obs) {
                 SCRunningApplication *obsApp = nil;
@@ -127,9 +160,12 @@ API_AVAILABLE(macos(12.5)) static bool init_screen_stream(struct screen_capture 
                 [empty release];
                 [exclusions release];
             } else {
-                NSArray *empty = [[NSArray alloc] init];
-                content_filter = [[SCContentFilter alloc] initWithDisplay:target_display excludingWindows:empty];
-                [empty release];
+                NSMutableArray<SCWindow *> *excluded = [[NSMutableArray alloc] init];
+                for (SCWindow *window in sc->shareable_content.windows)
+                    if ([sc->excluded_window_ids containsObject:@(window.windowID)])
+                        [excluded addObject:window];
+                content_filter = [[SCContentFilter alloc] initWithDisplay:target_display excludingWindows:excluded];
+                [excluded release];
             }
 
             set_display_mode(sc, target_display);
@@ -148,8 +184,8 @@ API_AVAILABLE(macos(12.5)) static bool init_screen_stream(struct screen_capture 
                 MACCAP_ERR("init_screen_stream: Invalid target window ID:  %u\n", sc->window);
                 os_sem_post(sc->shareable_content_available);
                 sc->disp = NULL;
-                os_event_init(&sc->stream_start_completed, OS_EVENT_TYPE_MANUAL);
-                return true;
+                os_atomic_store_bool(&sc->harpia_stream_failed, true);
+                return false;
             } else {
                 content_filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:target_window];
 
@@ -167,8 +203,8 @@ API_AVAILABLE(macos(12.5)) static bool init_screen_stream(struct screen_capture 
                 MACCAP_ERR("init_screen_stream: Invalid target display ID:  %u\n", sc->display);
                 os_sem_post(sc->shareable_content_available);
                 sc->disp = NULL;
-                os_event_init(&sc->stream_start_completed, OS_EVENT_TYPE_MANUAL);
-                return true;
+                os_atomic_store_bool(&sc->harpia_stream_failed, true);
+                return false;
             }
             SCRunningApplication *target_application = nil;
             for (SCRunningApplication *application in sc->shareable_content.applications) {
@@ -176,6 +212,12 @@ API_AVAILABLE(macos(12.5)) static bool init_screen_stream(struct screen_capture 
                     target_application = application;
                     break;
                 }
+            }
+            if (!target_application) {
+                MACCAP_ERR("init_screen_stream: Target application is not available\n");
+                os_sem_post(sc->shareable_content_available);
+                os_atomic_store_bool(&sc->harpia_stream_failed, true);
+                return false;
             }
             NSArray *target_application_array = [[NSArray alloc] initWithObjects:target_application, nil];
             NSArray *empty_array = [[NSArray alloc] init];
@@ -191,6 +233,11 @@ API_AVAILABLE(macos(12.5)) static bool init_screen_stream(struct screen_capture 
 
             set_display_mode(sc, target_display);
         } break;
+        default:
+            MACCAP_ERR("init_screen_stream: Invalid capture type: %u\n", sc->capture_type);
+            os_sem_post(sc->shareable_content_available);
+            os_atomic_store_bool(&sc->harpia_stream_failed, true);
+            return false;
     }
     os_sem_post(sc->shareable_content_available);
 
@@ -214,15 +261,15 @@ API_AVAILABLE(macos(12.5)) static bool init_screen_stream(struct screen_capture 
     [sc->stream_properties setPixelFormat:l10r_type];
 
     if (@available(macOS 13.0, *)) {
-        [sc->stream_properties setCapturesAudio:YES];
+        [sc->stream_properties setCapturesAudio:sc->capture_audio];
         [sc->stream_properties setExcludesCurrentProcessAudio:YES];
         [sc->stream_properties setChannelCount:2];
     } else {
         if (sc->capture_type != ScreenCaptureWindowStream) {
             sc->disp = NULL;
             [content_filter release];
-            os_event_init(&sc->stream_start_completed, OS_EVENT_TYPE_MANUAL);
-            return true;
+            os_atomic_store_bool(&sc->harpia_stream_failed, true);
+            return false;
         }
     }
 
@@ -233,31 +280,35 @@ API_AVAILABLE(macos(12.5)) static bool init_screen_stream(struct screen_capture 
 
     NSError *addStreamOutputError = nil;
     BOOL did_add_output = [sc->disp addStreamOutput:sc->capture_delegate type:SCStreamOutputTypeScreen
-                                 sampleHandlerQueue:nil
+                                 sampleHandlerQueue:sc->harpia_video_queue
                                               error:&addStreamOutputError];
     if (!did_add_output) {
         MACCAP_ERR("init_screen_stream: Failed to add stream output with error %s\n",
                    [[addStreamOutputError localizedFailureReason] cStringUsingEncoding:NSUTF8StringEncoding]);
-        [addStreamOutputError release];
-        return !did_add_output;
+        os_atomic_store_bool(&sc->harpia_stream_failed, true);
+        return false;
     }
 
     if (@available(macOS 13.0, *)) {
-        did_add_output = [sc->disp addStreamOutput:sc->capture_delegate type:SCStreamOutputTypeAudio
-                                sampleHandlerQueue:nil
-                                             error:&addStreamOutputError];
-        if (!did_add_output) {
-            MACCAP_ERR("init_screen_stream: Failed to add audio stream output with error %s\n",
-                       [[addStreamOutputError localizedFailureReason] cStringUsingEncoding:NSUTF8StringEncoding]);
-            [addStreamOutputError release];
-            return !did_add_output;
+        if (sc->capture_audio) {
+            did_add_output = [sc->disp addStreamOutput:sc->capture_delegate type:SCStreamOutputTypeAudio
+                                    sampleHandlerQueue:sc->harpia_video_queue
+                                                 error:&addStreamOutputError];
+            if (!did_add_output) {
+                MACCAP_ERR("init_screen_stream: Failed to add audio stream output with error %s\n",
+                           [[addStreamOutputError localizedFailureReason] cStringUsingEncoding:NSUTF8StringEncoding]);
+                os_atomic_store_bool(&sc->harpia_stream_failed, true);
+                return false;
+            }
         }
     }
     os_event_init(&sc->stream_start_completed, OS_EVENT_TYPE_MANUAL);
 
     __block BOOL did_stream_start = NO;
     [sc->disp startCaptureWithCompletionHandler:^(NSError *_Nullable error) {
-        did_stream_start = (BOOL) (error == nil);
+        did_stream_start = (BOOL) (error == nil && !os_atomic_load_bool(&sc->harpia_stream_failed));
+        os_atomic_store_bool(&sc->harpia_stream_running, did_stream_start);
+        os_atomic_store_bool(&sc->harpia_stream_failed, !did_stream_start);
         if (!did_stream_start) {
             MACCAP_ERR("init_screen_stream: Failed to start capture with error %s\n",
                        [[error localizedFailureReason] cStringUsingEncoding:NSUTF8StringEncoding]);
@@ -277,6 +328,11 @@ API_AVAILABLE(macos(12.5)) static void *sck_video_capture_create(obs_data_t *set
     struct screen_capture *sc = bzalloc(sizeof(struct screen_capture));
 
     sc->source = source;
+    sc->harpia_video_queue = dispatch_queue_create("com.harpia.capture.video", DISPATCH_QUEUE_SERIAL);
+    pthread_mutex_init(&sc->mutex, NULL);
+    sc->excluded_window_ids = read_excluded_windows(settings);
+    sc->exclusion_revision = (uint64_t) obs_data_get_int(settings, "harpia_exclusion_revision");
+    sc->capture_audio = obs_data_get_bool(settings, "capture_audio");
     sc->hide_cursor = !obs_data_get_bool(settings, "show_cursor");
     sc->hide_obs = obs_data_get_bool(settings, "hide_obs");
     sc->show_empty_names = obs_data_get_bool(settings, "show_empty_names");
@@ -305,10 +361,10 @@ API_AVAILABLE(macos(12.5)) static void *sck_video_capture_create(obs_data_t *set
     sc->display = get_display_migrate_settings(settings);
 
     sc->application_id = [[NSString alloc] initWithUTF8String:obs_data_get_string(settings, "application")];
-    pthread_mutex_init(&sc->mutex, NULL);
-
     if (!init_screen_stream(sc))
         goto fail;
+    proc_handler_add(obs_source_get_proc_handler(source),
+                     "void harpia_capture_status(out bool ready, out bool failed)", harpia_capture_status, sc);
 
     return sc;
 
@@ -397,14 +453,76 @@ static void sck_video_capture_defaults(obs_data_t *settings)
     obs_data_set_default_int(settings, "type", ScreenCaptureDisplayStream);
     obs_data_set_default_int(settings, "window", kCGNullWindowID);
     obs_data_set_default_bool(settings, "show_cursor", true);
+    obs_data_set_default_bool(settings, "capture_audio", true);
     obs_data_set_default_bool(settings, "hide_obs", false);
     obs_data_set_default_bool(settings, "show_empty_names", false);
     obs_data_set_default_bool(settings, "show_hidden_windows", false);
 }
 
+// A window/dialog appearing must not stop and restart the screen stream. Freeze
+// new surfaces while obtaining a fresh SCWindow snapshot, then update only the
+// filter. The previous valid surface stays available to the encoder throughout.
+API_AVAILABLE(macos(12.5)) static void update_excluded_windows(struct screen_capture *sc)
+{
+    os_atomic_store_bool(&sc->harpia_filter_pending, true);
+    screen_capture_build_content_list(sc, true);
+    os_sem_wait(sc->shareable_content_available);
+    SCDisplay *target = nil;
+    for (SCDisplay *display in sc->shareable_content.displays)
+        if (display.displayID == sc->display) {
+            target = display;
+            break;
+        }
+    if (!target) {
+        os_sem_post(sc->shareable_content_available);
+        os_atomic_store_bool(&sc->harpia_stream_failed, true);
+        return;
+    }
+    NSMutableArray<SCWindow *> *excluded = [[NSMutableArray alloc] init];
+    for (SCWindow *window in sc->shareable_content.windows)
+        if ([sc->excluded_window_ids containsObject:@(window.windowID)])
+            [excluded addObject:window];
+    SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:target excludingWindows:excluded];
+    [excluded release];
+    os_sem_post(sc->shareable_content_available);
+
+    ScreenCaptureDelegate *delegate = sc->capture_delegate;
+    SCStream *stream = sc->disp;
+    dispatch_queue_t queue = sc->harpia_video_queue;
+    const uint64_t revision = sc->exclusion_revision;
+    if (!stream || !queue) {
+        [filter release];
+        os_atomic_store_bool(&sc->harpia_stream_failed, true);
+        return;
+    }
+    dispatch_retain(queue);
+    [stream updateContentFilter:filter completionHandler:^(NSError *_Nullable error) {
+        // Old-filter packets queued before completion are discarded before
+        // this barrier publishes the updated filter. Retained delegate/stream
+        // references and its synchronized sc check make late completion safe.
+        dispatch_async(queue, ^{
+            @synchronized(delegate) {
+                struct screen_capture *active = delegate.sc;
+                if (active && active->disp == stream && active->exclusion_revision == revision) {
+                    if (error) {
+                        MACCAP_ERR("Failed to update excluded recorder windows: %s\n",
+                                   error.localizedDescription.UTF8String);
+                        os_atomic_store_bool(&active->harpia_stream_failed, true);
+                    }
+                    os_atomic_store_bool(&active->harpia_filter_pending, false);
+                }
+            }
+        });
+        dispatch_release(queue);
+    }];
+    [filter release];
+}
+
 API_AVAILABLE(macos(12.5)) static void sck_video_capture_update(void *data, obs_data_t *settings)
 {
     struct screen_capture *sc = data;
+    if (!sc)
+        return;
 
     CGWindowID old_window_id = sc->window;
     CGWindowID new_window_id = (CGWindowID) obs_data_get_int(settings, "window");
@@ -421,18 +539,39 @@ API_AVAILABLE(macos(12.5)) static void sck_video_capture_update(void *data, obs_
     bool hide_obs = obs_data_get_bool(settings, "hide_obs");
     bool show_empty_names = obs_data_get_bool(settings, "show_empty_names");
     bool show_hidden_windows = obs_data_get_bool(settings, "show_hidden_windows");
+    bool capture_audio = obs_data_get_bool(settings, "capture_audio");
+    NSArray<NSNumber *> *excluded_window_ids = read_excluded_windows(settings);
+    uint64_t exclusion_revision = (uint64_t) obs_data_get_int(settings, "harpia_exclusion_revision");
+    bool same_exclusions = [excluded_window_ids isEqualToArray:sc->excluded_window_ids] &&
+                           exclusion_revision == sc->exclusion_revision;
 
-    if (capture_type == sc->capture_type) {
+    bool same_display_capture = capture_type == ScreenCaptureDisplayStream && sc->capture_type == capture_type &&
+                                sc->display == display && sc->hide_cursor != show_cursor &&
+                                sc->hide_obs == hide_obs && !hide_obs && capture_audio == sc->capture_audio;
+    if (same_display_capture && !same_exclusions && sc->disp &&
+        !os_atomic_load_bool(&sc->harpia_stream_failed)) {
+        [application_id release];
+        [sc->excluded_window_ids release];
+        sc->excluded_window_ids = excluded_window_ids;
+        sc->exclusion_revision = exclusion_revision;
+        update_excluded_windows(sc);
+        return;
+    }
+
+    if (capture_type == sc->capture_type && same_exclusions && capture_audio == sc->capture_audio &&
+        !os_atomic_load_bool(&sc->harpia_stream_failed)) {
         switch (sc->capture_type) {
             case ScreenCaptureDisplayStream: {
                 if (sc->display == display && sc->hide_cursor != show_cursor && sc->hide_obs == hide_obs) {
                     [application_id release];
+                    [excluded_window_ids release];
                     return;
                 }
             } break;
             case ScreenCaptureWindowStream: {
                 if (old_window_id == sc->window && sc->hide_cursor != show_cursor) {
                     [application_id release];
+                    [excluded_window_ids release];
                     return;
                 }
             } break;
@@ -440,6 +579,7 @@ API_AVAILABLE(macos(12.5)) static void sck_video_capture_update(void *data, obs_
                 if (sc->display == display && [application_id isEqualToString:sc->application_id] &&
                     sc->hide_cursor != show_cursor) {
                     [application_id release];
+                    [excluded_window_ids release];
                     return;
                 }
             } break;
@@ -457,7 +597,16 @@ API_AVAILABLE(macos(12.5)) static void sck_video_capture_update(void *data, obs_
     sc->hide_obs = hide_obs;
     sc->show_empty_names = show_empty_names;
     sc->show_hidden_windows = show_hidden_windows;
-    init_screen_stream(sc);
+    sc->capture_audio = capture_audio;
+    [sc->excluded_window_ids release];
+    sc->excluded_window_ids = excluded_window_ids;
+    sc->exclusion_revision = exclusion_revision;
+    // Newly-created overlays are not in the old SCShareableContent snapshot.
+    screen_capture_build_content_list(sc, sc->capture_type == ScreenCaptureDisplayStream);
+    if (!init_screen_stream(sc)) {
+        sc->capture_failed = true;
+        os_atomic_store_bool(&sc->harpia_stream_failed, true);
+    }
 
     obs_leave_graphics();
 }
@@ -540,7 +689,7 @@ API_AVAILABLE(macos(12.5))
 static bool reactivate_capture(obs_properties_t *props __unused, obs_property_t *property, void *data)
 {
     struct screen_capture *sc = data;
-    if (!sc->capture_failed) {
+    if (!sc || !sc->capture_failed) {
         MACCAP_LOG(LOG_WARNING, "Tried to reactivate capture that hadn't failed.");
         return false;
     }
@@ -587,7 +736,7 @@ API_AVAILABLE(macos(12.5)) static obs_properties_t *sck_video_capture_properties
     obs_property_t *hide_obs = obs_properties_add_bool(props, "hide_obs", obs_module_text("DisplayCapture.HideOBS"));
     obs_property_t *reactivate =
         obs_properties_add_button2(props, "reactivate_capture", obs_module_text("SCK.Restart"), reactivate_capture, sc);
-    obs_property_set_enabled(reactivate, sc->capture_failed);
+    obs_property_set_enabled(reactivate, sc && sc->capture_failed);
 
     if (sc) {
         obs_property_set_modified_callback2(capture_type, content_settings_changed, sc);

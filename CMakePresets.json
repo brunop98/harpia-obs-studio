@@ -44,7 +44,7 @@
     {
       "name": "macos",
       "displayName": "macOS",
-      "description": "Default macOS build (single architecture only)",
+      "description": "macOS 13+ build for the host architecture",
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",
@@ -53,10 +53,52 @@
       "generator": "Xcode",
       "binaryDir": "${sourceDir}/build_macos",
       "cacheVariables": {
-        "CMAKE_OSX_DEPLOYMENT_TARGET": {"type": "STRING", "value": "12.0"},
+        "CMAKE_OSX_DEPLOYMENT_TARGET": {"type": "STRING", "value": "13.0"},
         "OBS_CODESIGN_IDENTITY": {"type": "STRING", "value": "$penv{CODESIGN_IDENT}"},
         "OBS_CODESIGN_TEAM": {"type": "STRING", "value": "$penv{CODESIGN_TEAM}"},
         "OBS_PROVISIONING_PROFILE": {"type": "STRING", "value": "$penv{PROVISIONING_PROFILE}"}
+      }
+    },
+    {
+      "name": "macos-arm64",
+      "displayName": "macOS Apple Silicon",
+      "inherits": [
+        "macos"
+      ],
+      "binaryDir": "${sourceDir}/build_macos_arm64",
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": {
+          "type": "STRING",
+          "value": "arm64"
+        }
+      }
+    },
+    {
+      "name": "macos-x86_64",
+      "displayName": "macOS Intel",
+      "inherits": [
+        "macos"
+      ],
+      "binaryDir": "${sourceDir}/build_macos_x86_64",
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": {
+          "type": "STRING",
+          "value": "x86_64"
+        }
+      }
+    },
+    {
+      "name": "macos-universal",
+      "displayName": "macOS Universal 2",
+      "inherits": [
+        "macos"
+      ],
+      "binaryDir": "${sourceDir}/build_macos_universal",
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": {
+          "type": "STRING",
+          "value": "arm64;x86_64"
+        }
       }
     },
     {
@@ -166,6 +208,38 @@
       "displayName": "Windows on ARM 64-bit",
       "description": "Windows build for ARM 64-bit (aka ARM64)",
       "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "macos",
+      "configurePreset": "macos",
+      "configuration": "RelWithDebInfo",
+      "targets": [
+        "harpia-deploy"
+      ]
+    },
+    {
+      "name": "macos-arm64",
+      "configurePreset": "macos-arm64",
+      "configuration": "RelWithDebInfo",
+      "targets": [
+        "harpia-deploy"
+      ]
+    },
+    {
+      "name": "macos-x86_64",
+      "configurePreset": "macos-x86_64",
+      "configuration": "RelWithDebInfo",
+      "targets": [
+        "harpia-deploy"
+      ]
+    },
+    {
+      "name": "macos-universal",
+      "configurePreset": "macos-universal",
+      "configuration": "RelWithDebInfo",
+      "targets": [
+        "harpia-deploy"
+      ]
     }
   ]
 }

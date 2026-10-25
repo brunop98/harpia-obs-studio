@@ -1,4 +1,8 @@
+#include "../core/RecorderSettings.hpp"
 #include "VideoEditorWindow.hpp"
+#if defined(Q_OS_MACOS)
+#include "platform/mac/MacPlatform.hpp"
+#endif
 #include "AppName.hpp"
 #include "../ui/EditorLog.hpp"
 #include "timeline/SoundLibrary.hpp"
@@ -531,7 +535,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		"identical and skips work you cannot see. Lower settings scrub faster on heavy "
 		"timelines. The export is never affected."));
 	{
-		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		QSettings st = harpia::recorderSettings();
 		const int q = st.value(QStringLiteral("editor/previewQuality"), 0).toInt();
 		previewQuality_ = PreviewQuality(std::clamp(q, 0, 3));
 		QSignalBlocker b(previewQualityCombo_);
@@ -539,7 +543,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	}
 	connect(previewQualityCombo_, &QComboBox::currentIndexChanged, this, [this](int i) {
 		previewQuality_ = PreviewQuality(std::clamp(i, 0, 3));
-		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		QSettings st = harpia::recorderSettings();
 		st.setValue(QStringLiteral("editor/previewQuality"), i);
 		refreshPreviewAtPlayhead();
 	});
@@ -557,7 +561,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		"tall preview side by side, for vertical videos. For every mode."));
 	connect(layoutCombo_, &QComboBox::activated, this, [this](int i) {
 		const auto l = EditorLayout(layoutCombo_->itemData(i).toInt());
-		QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+		harpia::recorderSettings()
 			.setValue(QStringLiteral("editor/layout"), int(l));
 		setEditorLayout(l);
 	});
@@ -566,6 +570,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// Monitor toggle. Preview audio is Full-editing only for now, so it hides
 	// with the other Full-only controls.
 	audioPreview_ = new AudioPreview(this);
+	connect(audioPreview_, &AudioPreview::failed, this, [this](const QString &reason) {
+		editorLog(EditorLogLevel::Error, QStringLiteral("Preview audio"), reason);
+		if (infoLabel_)
+			infoLabel_->setText(reason);
+	});
 	// Debounced: a dragged slider or a run of edits mixes once, after it stops.
 	audioPremixTimer_ = new QTimer(this);
 	audioPremixTimer_->setSingleShot(true);
@@ -634,7 +643,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(sourcesBtn_, &QPushButton::toggled, this, [this](bool on) {
 		if (!sourcesPanel_)
 			return;
-		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		QSettings st = harpia::recorderSettings();
 		if (on) {
 			showSourcesPanel();
 		} else {
@@ -1148,7 +1157,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 
 	// Wire the disclosure header: toggle the body, swap the arrow, persist state.
 	{
-		QSettings s(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		QSettings s = harpia::recorderSettings();
 		const bool expanded = s.value(QStringLiteral("editor/audioExpanded"), false).toBool();
 		auto apply = [audioHeader, audioBody](bool on) {
 			audioBody->setVisible(on);
@@ -1161,7 +1170,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		connect(audioHeader, &QPushButton::clicked, this, [audioBody, apply]() {
 			const bool on = !audioBody->isVisible();
 			apply(on);
-			QSettings s2(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+			QSettings s2 = harpia::recorderSettings();
 			s2.setValue(QStringLiteral("editor/audioExpanded"), on);
 		});
 	}
@@ -1192,7 +1201,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		}
 	});
 	connect(voRecorder_, &AudioRecorder::error, this, [this](const QString &msg) {
-		warnAndLog(this, voRecorder_->isSystemSource() ? QStringLiteral("Windows audio")
+		warnAndLog(this, voRecorder_->isSystemSource() ? QStringLiteral("System audio")
 							       : QStringLiteral("Microphone"),
 			   msg);
 	});
@@ -1347,14 +1356,14 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 					    "clips' edges. A white guide shows the hold.")
 			   : QStringLiteral("Magnet OFF (N) — clips and trim edges follow the "
 					    "cursor exactly."));
-		QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+		harpia::recorderSettings()
 			.setValue(QStringLiteral("editor/timelineSnap"), on);
 	};
 	connect(snapBtn_, &QPushButton::toggled, this, applySnap);
 	{
 		// setChecked() only signals on a change, so apply the stored state by
 		// hand as well — otherwise "on" would leave the label unset.
-		const bool on = QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+		const bool on = harpia::recorderSettings()
 					.value(QStringLiteral("editor/timelineSnap"), true)
 					.toBool();
 		snapBtn_->setChecked(on);
@@ -1421,7 +1430,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		if (!vsplit_ || vsplit_->sizes().size() != 2)
 			return;
 		const int bottom = vsplit_->sizes().at(1);
-		QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+		harpia::recorderSettings()
 			.setValue(QStringLiteral("editor/splitBottom/%1").arg(int(mode())), bottom);
 	});
 
@@ -1515,13 +1524,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 
 	// Come back to the tab you were last on, like the Dev panel does.
 	{
-		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		QSettings st = harpia::recorderSettings();
 		const int want = st.value(QStringLiteral("editor/inspectorTab"), kInsTabProject).toInt();
 		if (want >= 0 && want < insTabs_->count())
 			insTabs_->setCurrentIndex(want);
 	}
 	connect(insTabs_, &QTabWidget::currentChanged, this, [this](int i) {
-		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		QSettings st = harpia::recorderSettings();
 		st.setValue(QStringLiteral("editor/inspectorTab"), i);
 		// The clip tab's panels are only synced when something asks; arriving on
 		// it by hand is one of those times. The other tabs catch up the same way.
@@ -2056,7 +2065,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			return;
 		const int w = hsplit_->sizes().value(hsplit_->indexOf(topPane_));
 		if (w > 0)
-			QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+			harpia::recorderSettings()
 				.setValue(QStringLiteral("editor/verticalPreviewW"), w);
 	});
 	setEditorLayout(savedEditorLayout());
@@ -3172,7 +3181,7 @@ void VideoEditorWindow::warnHeavyStill(const QString &path, QSize px, qint64 byt
 			  .arg(name, w.why));
 	// Not while a project opens (a dialog per image, before the window is
 	// even usable), and not again once the user said so.
-	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings st = harpia::recorderSettings();
 	if (loadingProject_ || st.value(QStringLiteral("editor/quietLargeImages"), false).toBool())
 		return;
 	QMessageBox box(QMessageBox::Warning, QStringLiteral("Very large image"),
@@ -5319,7 +5328,7 @@ QString VideoEditorWindow::scriptsDirPath()
 	// one with no way to know. So the hash of what was last written out is
 	// remembered — if the file on disk still matches it, nobody has edited it and
 	// it is safe to replace. Anything else is the user's, and is left alone.
-	QSettings seedSt(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings seedSt = harpia::recorderSettings();
 	seedSt.beginGroup(QStringLiteral("scriptSeed"));
 	for (const QString &name : {QStringLiteral("tutorial-zoom"), QStringLiteral("zoom-in"),
 				    QStringLiteral("fade-in-out"), QStringLiteral("shake")}) {
@@ -9099,7 +9108,7 @@ void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
 	safeAreas->setToolTipsVisible(true);
 	auto *safeAreaGroup = new QActionGroup(safeAreas);
 	safeAreaGroup->setExclusive(true);
-	QSettings viewSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings viewSettings = harpia::recorderSettings();
 	const int storedGuide = viewSettings.value(QStringLiteral("editor/socialSafeArea"), 0).toInt();
 	const int guide = storedGuide >= 0 && storedGuide <= 3 ? storedGuide : 0;
 	canvas_->setSocialSafeArea(SocialSafeArea(guide));
@@ -9116,7 +9125,7 @@ void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
 		safeAreaGroup->addAction(action);
 		connect(action, &QAction::triggered, this, [this, i]() {
 			canvas_->setSocialSafeArea(SocialSafeArea(i));
-			QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+			harpia::recorderSettings()
 				.setValue(QStringLiteral("editor/socialSafeArea"), i);
 		});
 	}
@@ -10249,7 +10258,7 @@ void VideoEditorWindow::showSourcesPanel()
 	if (!sourcesPanel_)
 		return;
 	if (!sourcesPlaced_) {
-		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		QSettings st = harpia::recorderSettings();
 		const QByteArray geom = st.value(QStringLiteral("editor/sourcesGeom")).toByteArray();
 		if (!geom.isEmpty())
 			sourcesPanel_->restoreGeometry(geom);
@@ -10387,7 +10396,7 @@ bool VideoEditorWindow::eventFilter(QObject *watched, QEvent *e)
 			QSignalBlocker b(sourcesBtn_);
 			sourcesBtn_->setChecked(false);
 		}
-		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		QSettings st = harpia::recorderSettings();
 		st.setValue(QStringLiteral("editor/sourcesGeom"), sourcesPanel_->saveGeometry());
 		st.setValue(QStringLiteral("editor/sourcesShown"), false);
 	}
@@ -11577,7 +11586,7 @@ void VideoEditorWindow::applyModeSplit()
 	// A height the user chose for this mode wins: put it back, within reason
 	// (the window may be smaller than when it was set).
 	{
-		const QVariant saved = QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+		const QVariant saved = harpia::recorderSettings()
 					       .value(QStringLiteral("editor/splitBottom/%1").arg(int(mode())));
 		if (saved.isValid()) {
 			const int floor = std::max(80, bottomPane_->minimumSizeHint().height());
@@ -11668,7 +11677,7 @@ void VideoEditorWindow::setInspectorWidth(int want)
 
 VideoEditorWindow::EditorLayout VideoEditorWindow::savedEditorLayout() const
 {
-	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings st = harpia::recorderSettings();
 	// v0.1.438 kept one per mode; Full editing's (where vertical work is
 	// done) carries over as the choice for all of them.
 	const QVariant fullsOwn = st.value(QStringLiteral("editor/layout/%1").arg(int(EditMode::Full)), 0);
@@ -11762,7 +11771,7 @@ void VideoEditorWindow::sizeVerticalLayout()
 	const int insW = inspector_->isVisible() ? sizes[ins] : 0;
 	// Where it was last dragged to in this mode; else as wide as the picture
 	// needs at the column's full height, so a 9:16 video fills it top to bottom.
-	int want = QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+	int want = harpia::recorderSettings()
 			   .value(QStringLiteral("editor/verticalPreviewW"), 0)
 			   .toInt();
 	if (want <= 0) {
@@ -12225,6 +12234,40 @@ void VideoEditorWindow::onVoiceoverRecordClicked()
 	}
 	if (!valid_)
 		return;
+#if defined(Q_OS_MACOS)
+	if (voPermissionPending_)
+		return;
+	const bool system = system_audio::isSourceId(voDevice_->currentData().toString());
+	const auto permission = system ? mac_platform::screenCaptureStatus() : mac_platform::microphoneStatus();
+	if (permission != mac_platform::PermissionStatus::Granted) {
+		voPermissionPending_ = true;
+		voRecordBtn_->setEnabled(false);
+		const auto completed = [this, system](bool granted) {
+			voPermissionPending_ = false;
+			voRecordBtn_->setEnabled(true);
+			if (granted) {
+				refreshVoiceoverDevices();
+				onVoiceoverRecordClicked();
+				return;
+			}
+			const QString permissionName = system ? QStringLiteral("Screen & System Audio Recording")
+				: QStringLiteral("Microphone");
+			QMessageBox box(QMessageBox::Warning, QStringLiteral("macOS permission needed"),
+				QStringLiteral("Allow Harpia under System Settings > Privacy & Security > %1, then try again.")
+					.arg(permissionName), QMessageBox::Close, this);
+			QPushButton *settings = box.addButton(QStringLiteral("Open System Settings"), QMessageBox::ActionRole);
+			box.exec();
+			if (box.clickedButton() == settings)
+				QDesktopServices::openUrl(QUrl(QStringLiteral("x-apple.systempreferences:com.apple.preference.security?Privacy_") +
+					(system ? QStringLiteral("ScreenCapture") : QStringLiteral("Microphone"))));
+		};
+		if (system)
+			mac_platform::requestScreenCapture(this, completed);
+		else
+			mac_platform::requestMicrophone(this, completed);
+		return;
+	}
+#endif
 	saveVoiceoverSettings();
 	const int secs = voCountdownSec_ ? voCountdownSec_->value() : 0;
 	if (secs > 0) {
@@ -12430,7 +12473,7 @@ void VideoEditorWindow::finishVoiceover()
 	voRecordBtn_->setIcon(uiIcon(Glyph::Record, 12, QColor(0xe5, 0x48, 0x4d)));
 	if (path.isEmpty() || durMs <= 0) {
 		voStatus_->setText(heardNothing ? QStringLiteral("Nothing was heard. Was the video playing, and not muted?")
-				   : sysTake    ? QStringLiteral("Nothing was captured from Windows audio.")
+				   : sysTake    ? QStringLiteral("Nothing was captured from system audio.")
 						: QStringLiteral("Nothing was captured. Check the microphone above."));
 		if (fullEdit() && timelineView_) {
 			TimelineModel m = timelineView_->model();
@@ -12497,7 +12540,7 @@ void VideoEditorWindow::refreshVoiceoverDevices()
 {
 	if (!voDevice_)
 		return;
-	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings st = harpia::recorderSettings();
 	const QString want = voDevice_->count() ? voDevice_->currentData().toString()
 						: st.value(QStringLiteral("editor/vo/device")).toString();
 	QSignalBlocker b(voDevice_);
@@ -12519,7 +12562,7 @@ void VideoEditorWindow::refreshVoiceoverDevices()
 	if (system_audio::available()) {
 		voDevice_->insertSeparator(voDevice_->count());
 		const int everything = voDevice_->count();
-		voDevice_->addItem(QStringLiteral("Windows audio (everything)"), system_audio::sourceId());
+		voDevice_->addItem(QStringLiteral("System audio (everything)"), system_audio::sourceId());
 		if (!mics)
 			def = everything;
 		if (system_audio::perAppAvailable()) {
@@ -12545,7 +12588,7 @@ void VideoEditorWindow::refreshVoiceoverDevices()
 
 void VideoEditorWindow::saveVoiceoverSettings()
 {
-	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings st = harpia::recorderSettings();
 	if (voDevice_)
 		st.setValue(QStringLiteral("editor/vo/device"), voDevice_->currentData().toString());
 	if (voCountdownSec_)
@@ -12572,7 +12615,7 @@ void VideoEditorWindow::syncVoiceoverSource()
 		return;
 	const bool sys = system_audio::isSourceId(voDevice_->currentData().toString());
 	// Windows audio is taken as Windows plays it: stereo, at its own rate.
-	const QString asPlayed = QStringLiteral("Windows audio is recorded in stereo, at the rate Windows plays it.");
+	const QString asPlayed = QStringLiteral("System audio is recorded in stereo at its capture sample rate.");
 	if (voChannels_) {
 		voChannels_->setEnabled(!sys);
 		voChannels_->setToolTip(sys ? asPlayed : QStringLiteral("Mono suits a single voice and a single microphone."));
@@ -12593,7 +12636,7 @@ void VideoEditorWindow::buildVoiceoverPanel()
 	auto *v = new QVBoxLayout(voPanel_);
 	v->setContentsMargins(14, 12, 14, 12);
 	v->setSpacing(8);
-	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings st = harpia::recorderSettings();
 
 	auto *form = new QFormLayout;
 	form->setHorizontalSpacing(10);
@@ -13090,7 +13133,7 @@ void VideoEditorWindow::onOpenProject()
 	openProjectWithDialogs(path);
 }
 
-void VideoEditorWindow::openProjectWithDialogs(const QString &path, bool showSuccess)
+bool VideoEditorWindow::openProjectWithDialogs(const QString &path, bool showSuccess)
 {
 	LoadingScope loading(*this, QStringLiteral("Loading project"));
 	loading.stage(QStringLiteral("Reading project…"), path);
@@ -13098,9 +13141,10 @@ void VideoEditorWindow::openProjectWithDialogs(const QString &path, bool showSuc
 	if (!project.error.isEmpty()) {
 		loading.hide();
 		warnAndLog(this, QStringLiteral("Open project"), project.error);
-		return;
+		return false;
 	}
 	applyProjectJson(project.root, path, /*quiet=*/false, showSuccess);
+	return projectPath_ == path;
 }
 
 // Open a project from a known path. Same validation as the menu item, without
@@ -14395,7 +14439,7 @@ ShuffleOptions VideoEditorWindow::randomizeOptions() const
 	}
 	// Ctrl+R before the panel has ever been opened this session: the options
 	// it would show, which are the ones saved last time.
-	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings st = harpia::recorderSettings();
 	o.keep = ShuffleOptions::Keep(std::clamp(st.value(kRandKeep, 0).toInt(), 0, 3));
 	o.selectedOnly = st.value(kRandSelOnly, false).toBool();
 	o.avoidSameOrder = st.value(kRandAvoid, true).toBool();
@@ -14408,7 +14452,7 @@ void VideoEditorWindow::openRandomizePanel()
 	if (!(fullEdit() && timelineView_) && !(multiCut() && tracks_))
 		return;
 	if (!randomPanel_) {
-		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		QSettings st = harpia::recorderSettings();
 		auto *p = new QWidget(this, Qt::Tool | Qt::WindowTitleHint | Qt::WindowCloseButtonHint);
 		p->setWindowTitle(QStringLiteral("Randomize clips"));
 		auto *lay = new QVBoxLayout(p);
@@ -14475,7 +14519,7 @@ void VideoEditorWindow::openRandomizePanel()
 		// Every option is remembered the moment it changes, so Ctrl+R with the
 		// panel closed -- or next session -- does what the panel last said.
 		auto persist = [this]() {
-			QSettings s(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+			QSettings s = harpia::recorderSettings();
 			s.setValue(kRandKeep, randomKeep_->checkedId());
 			s.setValue(kRandSelOnly, randomSelectedOnly_->isChecked());
 			s.setValue(kRandAvoid, randomAvoidSame_->isChecked());

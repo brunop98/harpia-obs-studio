@@ -56,6 +56,10 @@ void loadLocked(Pack &p)
 		candidates << QString::fromLocal8Bit(env);
 	if (QCoreApplication::instance()) {
 		const QString dir = QCoreApplication::applicationDirPath();
+#ifdef Q_OS_MACOS
+		candidates << dir + QStringLiteral("/../Resources/harpia/noto-emoji.pack")
+			   << dir + QStringLiteral("/../Resources/noto-emoji.pack");
+#endif
 		candidates << dir + QStringLiteral("/noto-emoji.pack")
 			   << dir + QStringLiteral("/../../data/harpia/noto-emoji.pack");
 	}

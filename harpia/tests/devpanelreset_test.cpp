@@ -10,6 +10,7 @@
 // resetting tab A, tab B still holds what you put there. So the test tunes
 // SEVERAL sections away from their defaults, resets exactly one, and checks
 // both halves -- that one changed, and that the others did not.
+#include "../core/RecorderSettings.hpp"
 #include "editor/DevPanel.hpp"
 #include "editor/EditorWidgets.hpp"
 #include "editor/TrackEditor.hpp"
@@ -172,7 +173,7 @@ int main(int argc, char **argv)
 		// restored at the end of this section so running the test does not
 		// repaint a real install's editor.
 		const auto savedBg = []() {
-			return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+			return harpia::recorderSettings()
 				.value(QStringLiteral("devLayout/color/timelineBg"))
 				.toString();
 		};
@@ -203,7 +204,7 @@ int main(int argc, char **argv)
 		// through the same accept path, or drop the key if there was none.
 		p2.finishColorPick(0, before.timelineBg, /*accepted=*/true, before.timelineBg);
 		if (savedBefore.isEmpty())
-			QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+			harpia::recorderSettings()
 				.remove(QStringLiteral("devLayout/color/timelineBg"));
 	}
 

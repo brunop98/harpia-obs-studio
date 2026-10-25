@@ -1,3 +1,4 @@
+#include "../core/RecorderSettings.hpp"
 #include "DevPanel.hpp"
 #include "../ui/InfoHint.hpp"
 
@@ -44,7 +45,7 @@ QSettings devSettings()
 	// pinned in your real settings.
 	if (!settingsFileOverride().isEmpty())
 		return QSettings(settingsFileOverride(), QSettings::IniFormat);
-	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	return harpia::recorderSettings();
 }
 // The editor's timecode and inspector font sizes were fixed at 18 and 13; they
 // now follow the app-wide text scale. Every existing install has those old

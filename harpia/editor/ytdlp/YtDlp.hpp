@@ -3,8 +3,9 @@
 // yt-dlp, from the editor: paste a link, see what it is, choose a quality,
 // download, and the file lands on the timeline.
 //
-// yt-dlp is not bundled and not required. It is the user's own copy, found on
-// the PATH (or at a path they set), probed once at startup; the Add menu only
+// yt-dlp is optional. It is found on the PATH (or at a path the user sets),
+// with signed bundle helpers and Homebrew also searched on macOS. It is
+// probed once at startup; the Add menu only
 // offers "Video from URL…" when it was found. Everything the program does
 // with it is an argument list and a parse of what it prints, and those two
 // halves are pure functions here so a test can hold them still: the JSON of
@@ -24,7 +25,7 @@
 namespace harpia {
 
 struct YtDlpSettings {
-	QString exePath;        // "" = look on the PATH
+	QString exePath;        // "" = automatic discovery (bundle/Homebrew on macOS)
 	QString cookiesBrowser; // "" or one of cookieBrowsers(): --cookies-from-browser
 	QString cookiesFile;    // a cookies.txt: --cookies
 	QString downloadDir;    // "" = the default download folder
@@ -116,8 +117,9 @@ struct YtDownloadOptions {
 class YtDlp {
 public:
 	// The executable to run, or "" when there is none. `settings.exePath`
-	// wins when it points at a file; otherwise the PATH is searched for
-	// yt-dlp (yt-dlp.exe on Windows).
+	// wins; an invalid explicit path reports missing rather than falling back.
+	// Automatic discovery searches the bundle and Homebrew on macOS, and PATH
+	// on every platform. A Mac helper must be executable and have no .exe suffix.
 	static QString locate(const YtDlpSettings &settings);
 
 	// Startup probe: locate, and run --version. Cached; available() answers

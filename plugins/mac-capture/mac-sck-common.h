@@ -5,6 +5,8 @@
 #include <obs-module.h>
 #include <util/threading.h>
 #include <pthread.h>
+#include <dispatch/dispatch.h>
+#include <dispatch/dispatch.h>
 
 #include <IOSurface/IOSurface.h>
 #include <ScreenCaptureKit/ScreenCaptureKit.h>
@@ -46,6 +48,26 @@ struct API_AVAILABLE(macos(12.5)) screen_capture {
     bool show_hidden_windows;
     bool show_empty_names;
     bool audio_only;
+    bool capture_audio;
+
+    // Harpia excludes recorder controls by native window ID, rather than
+    // hiding its entire application (which would also hide mouse effects).
+    NSArray<NSNumber *> *excluded_window_ids;
+    uint64_t exclusion_revision;
+
+    // Read by the application without rebuilding source properties. The
+    // ScreenCaptureKit delegate writes these from a separate callback queue.
+    volatile bool harpia_stream_running;
+    volatile bool harpia_frame_received;
+    volatile bool harpia_stream_failed;
+    volatile bool harpia_filter_pending;
+    dispatch_queue_t harpia_video_queue;
+    bool audio_exclude_application;
+    volatile bool audio_routing_pending;
+    volatile bool audio_routing_shutdown;
+    volatile long audio_routing_revision;
+    NSArray *audio_app_observers;
+    dispatch_queue_t audio_routing_queue;
 
     SCStream *disp;
     SCStreamConfiguration *stream_properties;
@@ -81,3 +103,5 @@ static const char *screen_capture_getname(void *unused __unused);
 API_AVAILABLE(macos(12.5)) void screen_stream_video_update(struct screen_capture *sc, CMSampleBufferRef sample_buffer);
 
 API_AVAILABLE(macos(12.5)) void screen_stream_audio_update(struct screen_capture *sc, CMSampleBufferRef sample_buffer);
+
+API_AVAILABLE(macos(12.5)) void harpia_capture_status(void *data, calldata_t *parameters);

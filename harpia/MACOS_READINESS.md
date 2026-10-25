@@ -5,6 +5,12 @@ Linux environment; no native Mac build, permission flow or device test was run.
 The findings below distinguish confirmed implementation gaps from behavior that
 still needs testing on a Mac.
 
+Implementation update: `codex/macos-support` implements the capture, audio,
+platform, GPU, Keychain, helper-discovery and deployment work described here.
+See [Mac build and validation](MACOS_BUILD.md) for the current implementation,
+build commands and native validation still required. The findings below retain
+this audit's pre-implementation evidence.
+
 Harpia has useful macOS dependencies and OBS capture plugins, but it is not
 ready to distribute as a reliable Mac recorder. The Qt/FFmpeg editor provides a
 reusable foundation. Recording, application deployment and several platform

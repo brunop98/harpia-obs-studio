@@ -1,3 +1,4 @@
+#include "../core/RecorderSettings.hpp"
 #include "InspectorSection.hpp"
 
 #include "ui/UiIcons.hpp"
@@ -41,7 +42,7 @@ InspectorSection::InspectorSection(const QString &title, const QString &key, boo
 	: QWidget(parent), title_(title), key_(key), expanded_(expandedByDefault)
 {
 	if (!key_.isEmpty()) {
-		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		QSettings st = harpia::recorderSettings();
 		expanded_ = st.value(settingsKey(key_), expandedByDefault).toBool();
 	}
 
@@ -79,7 +80,7 @@ void InspectorSection::setExpanded(bool on)
 		return;
 	expanded_ = on;
 	if (!key_.isEmpty()) {
-		QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		QSettings st = harpia::recorderSettings();
 		st.setValue(settingsKey(key_), on);
 	}
 	applyState();

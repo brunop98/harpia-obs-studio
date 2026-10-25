@@ -2,7 +2,7 @@
 
 // The desktop's top-level windows, for setting the recording area to one.
 //
-// Everything is in PHYSICAL pixels of the virtual desktop -- the space the
+// Windows/Linux bounds use PHYSICAL pixels of the virtual desktop -- the space the
 // capture's crop is measured in -- not Qt's scaled coordinates. On Windows the
 // bounds are what DWM draws (DWMWA_EXTENDED_FRAME_BOUNDS): the window as you
 // see it, title bar included, WITHOUT the invisible resize border and the drop
@@ -14,6 +14,8 @@
 // Store app), not a tool window or popup with no owner, and not the desktop or
 // the taskbar.
 //
+// macOS uses Quartz logical points for picking across mixed-DPI displays;
+// MacPlatform::physicalRegionForWindow converts to a selected display's pixels.
 // Implemented per platform (platform/win, platform/nix, platform/mac); where
 // there is nothing to ask, the list is empty and the feature hides itself.
 

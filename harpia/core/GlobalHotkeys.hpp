@@ -5,19 +5,19 @@
 // F9/F10 were window-scoped QShortcuts presented as recording hotkeys -- but
 // during a recording Harpia is almost never the focused window, which is to
 // say they mostly did not work at exactly the moment they were for. On
-// Windows this registers them with RegisterHotKey, so they fire whichever app
-// is in front; the WM_HOTKEY messages arrive through a native event filter.
+// Windows uses RegisterHotKey and macOS uses Carbon RegisterEventHotKey, so
+// these fire whichever app is in front. Other platforms keep Qt shortcuts.
 //
 // The QKeySequence -> (modifiers, virtual-key) translation is a pure function
 // with the Win32 constants mirrored locally, so the half of this that can rot
 // silently -- the mapping -- is compiled and tested on every platform, while
-// the RegisterHotKey half stays behind #ifdef _WIN32. On other platforms
-// bind() reports failure and the callers keep their window-scoped QShortcuts,
-// which is exactly the behaviour those platforms had before.
+// native registration stays in its platform backend. A refused registration
+// keeps the caller's window-scoped QShortcut available.
 
 #include <QAbstractNativeEventFilter>
 #include <QKeySequence>
 #include <QObject>
+#include <memory>
 
 namespace harpia {
 
@@ -32,6 +32,21 @@ struct WinHotkey {
 // The pure translation. Invalid when the sequence is empty, has more than one
 // chord, or names a key with no stable virtual-key equivalent.
 WinHotkey winHotkeyFor(const QKeySequence &seq);
+
+// Carbon constants mirrored for portable mapping tests. Letter/digit bindings
+// carry a character; the native backend resolves it using the active keyboard
+// layout rather than assuming US physical key positions.
+struct MacHotkey {
+	unsigned modifiers = 0; // cmdKey=256 | shiftKey=512 | optionKey=2048 | controlKey=4096
+	unsigned keyCode = 0;
+	unsigned character = 0;
+	bool valid = false;
+};
+MacHotkey macHotkeyFor(const QKeySequence &seq);
+
+#if defined(__APPLE__)
+class MacGlobalHotkeys;
+#endif
 
 class GlobalHotkeys : public QObject, public QAbstractNativeEventFilter {
 	Q_OBJECT
@@ -50,9 +65,15 @@ public:
 
 signals:
 	void triggered(int id);
+	// The native keyboard layout changed. Rebind the configured actions so
+	// character keys and registration/fallback hints follow the new layout.
+	void bindingsChanged();
 
 private:
 	bool installed_ = false;
+#if defined(__APPLE__)
+	std::unique_ptr<MacGlobalHotkeys> mac_;
+#endif
 };
 
 } // namespace harpia

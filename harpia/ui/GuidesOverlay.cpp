@@ -91,6 +91,10 @@ bool GuidesOverlay::systemCanHideFromCapture()
 	static const bool can = QOperatingSystemVersion::current() >=
 				QOperatingSystemVersion(QOperatingSystemVersion::Windows, 10, 0, 19041);
 	return can;
+#elif defined(Q_OS_MACOS)
+	// MainWindow's selective ScreenCaptureKit filter excludes this native
+	// window while keeping the intended mouse-effect overlay in the recording.
+	return true;
 #else
 	return false;
 #endif

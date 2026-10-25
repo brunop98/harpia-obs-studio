@@ -1,4 +1,9 @@
 #include "ObsContext.hpp"
+#if defined(__APPLE__)
+#include <QCoreApplication>
+#include <QByteArray>
+#include <QString>
+#endif
 
 #include "AppAudioSource.hpp"
 #include "VideoStatus.hpp"
@@ -34,6 +39,10 @@ const char *ObsContext::renderModule()
 {
 #if defined(_WIN32)
 	return DL_D3D11;
+#elif defined(__APPLE__)
+	static const QByteArray module = (QCoreApplication::applicationDirPath() +
+		QStringLiteral("/../Frameworks/") + QString::fromUtf8(DL_OPENGL)).toUtf8();
+	return module.constData();
 #else
 	return DL_OPENGL;
 #endif
@@ -71,7 +80,8 @@ void ObsContext::addModulePaths()
 
 #if defined(__APPLE__)
 	// macOS bundle layout — a single, unambiguous path.
-	obs_add_module_path("../PlugIns", "../PlugIns/%module%.plugin/Contents/Resources");
+	// libobs registers the absolute NSBundle plugin path itself. Harpia's
+	// former relative entry did not point inside .plugin/Contents/MacOS.
 #else
 	// Windows/Linux: we support two install layouts (running from the OBS
 	// rundir with the exe under bin/64bit, or with plugins beside the exe).
@@ -126,6 +136,11 @@ void ObsContext::loadModules()
 		return;
 
 	addModulePaths();
+	// These modules call OBS Studio's frontend API while loading. Harpia owns
+	// its interface and does not install those callbacks; frontend-tools can
+	// dereference a null frontend configuration before startup completes.
+	obs_add_disabled_module("frontend-tools");
+	obs_add_disabled_module("obs-websocket");
 
 	struct obs_module_failure_info mfi;
 	obs_load_all_modules2(&mfi);

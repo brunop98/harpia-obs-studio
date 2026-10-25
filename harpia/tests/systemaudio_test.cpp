@@ -103,13 +103,16 @@ int main(int argc, char **argv)
 		ok(system_audio::isSourceId(system_audio::sourceId(QStringLiteral("chrome.exe")), &exe) &&
 			   exe == QStringLiteral("chrome.exe"),
 		   "\"only Chrome\" carries its app, by file name (stable across launches, unlike a process id)");
+		ok(system_audio::isSourceId(system_audio::sourceId(QStringLiteral("com.apple.Safari")), &exe) &&
+			exe == QStringLiteral("com.apple.Safari"),
+		   "a macOS application keeps its stable bundle identifier in the source id");
 		ok(!system_audio::isSourceId(QStringLiteral("{0.0.1.00000000}.{6f3c-mic}")),
 		   "a microphone's id is not one");
 		ok(!system_audio::isSourceId(QString()) && !system_audio::isSourceId(QStringLiteral("harpia:system:app:")),
 		   "nor is nothing, or an app with no name");
 	}
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__APPLE__)
 	std::printf("\n-- with no Windows to ask --\n");
 	{
 		ok(!system_audio::available() && !system_audio::perAppAvailable() && system_audio::apps().isEmpty(),
@@ -118,7 +121,7 @@ int main(int argc, char **argv)
 		SystemAudioCapture cap;
 		QString why;
 		ok(!cap.start(QString(), &why) && !cap.running(), "starting fails cleanly");
-		ok(why.contains(QStringLiteral("only available on Windows")), "and says why");
+		ok(why.contains(QStringLiteral("not available on this platform")), "and says why");
 		ok(cap.take().isEmpty() && cap.failure().isEmpty(), "with nothing captured and nothing broken");
 	}
 #endif

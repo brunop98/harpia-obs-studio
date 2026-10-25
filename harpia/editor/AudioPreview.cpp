@@ -1,6 +1,7 @@
 #include "AudioPreview.hpp"
 
 #include "TimelineAudio.hpp"
+#include "AudioOutputStream.hpp"
 
 #include <QAudioDevice>
 #include <QAudioSink>
@@ -8,7 +9,6 @@
 #include <QMediaDevices>
 
 #include <algorithm>
-#include <cstring>
 
 namespace harpia {
 
@@ -17,43 +17,37 @@ namespace harpia {
 // playing (and keeps clocking) to the end.
 class AudioPreview::Reader : public QIODevice {
 public:
-	Reader(const std::vector<float> &pcm, qint64 startFrame)
-		: pcm_(pcm), pos_(startFrame * TimelineAudio::kChannels)
-	{
-	}
-
+	Reader(const std::vector<float> &pcm, qint64 startFrame, const QAudioFormat &format)
+		: stream_(pcm, startFrame, format) {}
 	bool isSequential() const override { return true; }
-	qint64 bytesAvailable() const override { return 1 << 20; } // always ready
-
-	bool atEndOfMix() const { return pos_ >= qint64(pcm_.size()); }
-
+	qint64 bytesAvailable() const override { return (1 << 20) + QIODevice::bytesAvailable(); }
+	bool isValid() const { return stream_.isValid(); }
+	QString conversionError() const { return stream_.error(); }
 protected:
-	qint64 readData(char *data, qint64 maxSize) override
-	{
-		const qint64 wantSamples = maxSize / qint64(sizeof(float));
-		if (wantSamples <= 0)
-			return 0;
-		const qint64 have = std::clamp<qint64>(qint64(pcm_.size()) - pos_, 0, wantSamples);
-		if (have > 0)
-			std::memcpy(data, pcm_.data() + pos_, size_t(have) * sizeof(float));
-		if (have < wantSamples) // ran off the end: feed silence, don't stop
-			std::memset(data + have * qint64(sizeof(float)), 0,
-				    size_t(wantSamples - have) * sizeof(float));
-		pos_ += wantSamples;
-		return wantSamples * qint64(sizeof(float));
-	}
+	qint64 readData(char *data, qint64 maxSize) override { return stream_.read(data, maxSize); }
 	qint64 writeData(const char *, qint64) override { return -1; }
-
 private:
-	const std::vector<float> &pcm_;
-	qint64 pos_ = 0; // in samples (not frames)
+	AudioOutputStream stream_;
 };
+
+namespace {
+QString sinkError(QAudio::Error error)
+{
+	switch (error) {
+	case QAudio::OpenError: return QStringLiteral("The audio output device could not be opened.");
+	case QAudio::IOError: return QStringLiteral("The audio output device stopped accepting sound.");
+	case QAudio::UnderrunError: return QStringLiteral("The audio output device ran out of data.");
+	case QAudio::FatalError: return QStringLiteral("The audio output device reported a fatal error.");
+	default: return QStringLiteral("The audio output device could not start playback.");
+	}
+}
+} // namespace
 
 AudioPreview::AudioPreview(QObject *parent) : QObject(parent)
 {
-	format_.setSampleRate(TimelineAudio::kRate);
-	format_.setChannelCount(TimelineAudio::kChannels);
-	format_.setSampleFormat(QAudioFormat::Float);
+	static_assert(TimelineAudio::kRate == AudioOutputStream::kInputRate &&
+		TimelineAudio::kChannels == AudioOutputStream::kInputChannels);
+	format_ = AudioOutputStream::mixFormat();
 }
 
 AudioPreview::~AudioPreview()
@@ -92,11 +86,21 @@ qint64 AudioPreview::durationMs() const
 void AudioPreview::start(qint64 fromMs)
 {
 	stop();
-	if (pcm_.empty() || muted_ || !available())
+	lastError_.clear();
+	if (pcm_.empty() || muted_)
 		return;
 	const QAudioDevice dev = QMediaDevices::defaultAudioOutput();
-	if (!dev.isFormatSupported(format_))
-		return; // no float stereo 48k path: stay silent rather than play noise
+	if (dev.isNull()) {
+		reportFailure(QStringLiteral("No audio output device is available. Connect speakers or headphones and try again."));
+		return;
+	}
+	format_ = AudioOutputStream::chooseFormat(dev.preferredFormat(),
+		[&dev](const QAudioFormat &candidate) { return dev.isFormatSupported(candidate); });
+	if (!format_.isValid()) {
+		reportFailure(QStringLiteral("%1 does not provide a supported audio output format. Choose another output device.")
+			.arg(dev.description()));
+		return;
+	}
 
 	// Starting past the end would only produce silence.
 	const qint64 startFrame = std::clamp<qint64>(TimelineAudio::frameForMs(fromMs), 0,
@@ -105,17 +109,47 @@ void AudioPreview::start(qint64 fromMs)
 		return;
 
 	startMs_ = startFrame * 1000 / TimelineAudio::kRate;
-	reader_ = std::make_unique<Reader>(pcm_, startFrame);
-	reader_->open(QIODevice::ReadOnly);
-
+	reader_ = std::make_unique<Reader>(pcm_, startFrame, format_);
+	if (!reader_->isValid() || !reader_->open(QIODevice::ReadOnly)) {
+		const QString why = reader_->conversionError();
+		stop();
+		reportFailure(why.isEmpty() ? QStringLiteral("Could not open the preview audio stream.") : why);
+		return;
+	}
 	sink_ = std::make_unique<QAudioSink>(dev, format_);
+	const QString outputDescription = QStringLiteral("%1 (%2 Hz, %3 channels)")
+		.arg(dev.description()).arg(format_.sampleRate()).arg(format_.channelCount());
+	const quint64 generation = playbackGeneration_;
+	connect(sink_.get(), &QAudioSink::stateChanged, this, [this, generation, outputDescription](QAudio::State state) {
+		if (generation != playbackGeneration_ || !sink_ || state != QAudio::StoppedState || sink_->error() == QAudio::NoError)
+			return;
+		QString why = reader_ ? reader_->conversionError() : QString();
+		if (why.isEmpty())
+			why = sinkError(sink_->error());
+		why = outputDescription + QStringLiteral(": ") + why;
+		// A backend can emit this from start/stop itself. Release it after that
+		// stack unwinds; an intentional stop or restart invalidates this result.
+		QMetaObject::invokeMethod(this, [this, generation, why]() {
+			if (generation != playbackGeneration_)
+				return;
+			stop();
+			reportFailure(why);
+		}, Qt::QueuedConnection);
+	});
 	sink_->setVolume(qreal(std::clamp(volume_, 0.0, 1.0)));
 	sink_->start(reader_.get());
+	if (sink_->error() != QAudio::NoError && sink_->state() == QAudio::StoppedState) {
+		const QString why = outputDescription + QStringLiteral(": ") + sinkError(sink_->error());
+		stop();
+		reportFailure(why);
+	}
 }
 
 void AudioPreview::stop()
 {
+	++playbackGeneration_;
 	if (sink_) {
+		disconnect(sink_.get(), nullptr, this, nullptr);
 		sink_->stop();
 		sink_.reset();
 	}
@@ -137,6 +171,14 @@ qint64 AudioPreview::positionMs() const
 	// processedUSecs() counts what the device has actually consumed, which is the
 	// only honest answer to "where is the sound right now".
 	return startMs_ + qint64(sink_->processedUSecs() / 1000);
+}
+
+void AudioPreview::reportFailure(const QString &why)
+{
+	if (why == lastError_)
+		return;
+	lastError_ = why;
+	emit failed(why);
 }
 
 void AudioPreview::setMuted(bool on)

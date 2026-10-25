@@ -1,3 +1,4 @@
+#include "../../core/RecorderSettings.hpp"
 #include "TtsDialog.hpp"
 
 #include "TtsAudio.hpp"
@@ -105,7 +106,7 @@ private:
 namespace {
 QSettings settings()
 {
-	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	return harpia::recorderSettings();
 }
 const QString kGrp = QStringLiteral("tts/");
 const QString kSubs = QStringLiteral("subtitles/"); // the caption settings, shared

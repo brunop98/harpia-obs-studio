@@ -2,6 +2,7 @@
 // else does: importing a profile, or a hand-edited settings file, can land the
 // same key on two commands. Qt calls that an ambiguous shortcut and fires
 // NEITHER -- so two commands go dead and the panel shows both as bound.
+#include "../core/RecorderSettings.hpp"
 #include "editor/ShortcutRegistry.hpp"
 #include <QApplication>
 #include <QTest>
@@ -19,7 +20,7 @@ int main(int argc, char **argv) {
     // ShortcutRegistry reads and writes QSettings("Harpia", "Recorder")
     // explicitly, NOT the application's own scope -- so that is the group to
     // clear, or the test reads whatever a previous run left behind.
-    { QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+    { QSettings st = harpia::recorderSettings();
       st.remove(QStringLiteral("editorShortcuts")); }
     QWidget host; host.resize(200,100); host.show();
     host.activateWindow();

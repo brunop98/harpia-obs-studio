@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../core/RecorderSettings.hpp"
+
 #include "ProjectPaths.hpp"
 
 #include <QSettings>
@@ -43,8 +45,7 @@ inline void appendProject(QStringList &paths, const QString &path)
 // it never changes settings or makes a folder merely to show the opening screen.
 inline QStringList recentProjects(const QString &folder = defaultProjectsFolder())
 {
-	QSettings settings(QSettings::defaultFormat(), QSettings::UserScope,
-			   QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings settings = harpia::recorderSettings(QSettings::defaultFormat());
 	QStringList paths;
 	for (const QString &path : settings.value(QStringLiteral("editor/recentProjects")).toStringList())
 		recent_projects_detail::appendProject(paths, path);
@@ -65,8 +66,7 @@ inline void rememberRecentProject(const QString &path)
 	const QString canonical = recent_projects_detail::projectPath(path);
 	if (canonical.isEmpty())
 		return;
-	QSettings settings(QSettings::defaultFormat(), QSettings::UserScope,
-			   QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings settings = harpia::recorderSettings(QSettings::defaultFormat());
 	QStringList paths{canonical};
 	for (const QString &previous : settings.value(QStringLiteral("editor/recentProjects")).toStringList())
 		recent_projects_detail::appendProject(paths, previous);

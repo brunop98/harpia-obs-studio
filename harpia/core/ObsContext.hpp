@@ -56,11 +56,11 @@ public:
 
 	bool initialized() const { return initialized_; }
 
-private:
 	// Resolve the DLL/so name of the graphics module to use for this platform
 	// (D3D11 on Windows, OpenGL elsewhere).
 	static const char *renderModule();
 
+private:
 	// Add platform plugin search paths (built-in bundle + env overrides).
 	void addModulePaths();
 

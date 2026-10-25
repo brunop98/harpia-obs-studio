@@ -1,4 +1,7 @@
 #include "SystemAudioCapture.hpp"
+#if defined(__APPLE__)
+#include "platform/mac/MacSystemAudioCapture.hpp"
+#endif
 
 #include <QFileInfo>
 #include <QSet>
@@ -55,6 +58,9 @@ bool system_audio::isSourceId(const QString &id, QString *appExe)
 }
 
 struct SystemAudioCapture::Impl {
+#if defined(__APPLE__)
+	mac_audio::Capture mac;
+#endif
 	std::thread thread;
 	std::atomic<bool> quit{false};
 	bool stopped = false;
@@ -556,7 +562,14 @@ QVector<SystemAudioApp> system_audio::runningApps()
 	return out;
 }
 
-#else // not Windows
+#elif defined(__APPLE__)
+
+bool system_audio::available() { return mac_audio::available(); }
+bool system_audio::perAppAvailable() { return mac_audio::available(); }
+QVector<SystemAudioApp> system_audio::apps() { return mac_audio::runningApps(); }
+QVector<SystemAudioApp> system_audio::runningApps() { return mac_audio::runningApps(); }
+
+#else // unsupported platform
 
 bool system_audio::available()
 {
@@ -619,9 +632,14 @@ bool SystemAudioCapture::start(const QString &appExe, QString *error)
 			d_.reset();
 		}
 	}
+#elif defined(__APPLE__)
+	d_ = std::make_unique<Impl>();
+	d_->excludesSelf = true;
+	if (!d_->mac.start(appExe, &err))
+		d_.reset();
 #else
 	Q_UNUSED(appExe);
-	err = QStringLiteral("Recording the computer's sound is only available on Windows.");
+	err = QStringLiteral("Recording the computer's sound is not available on this platform.");
 #endif
 	if (error)
 		*error = err;
@@ -633,6 +651,9 @@ void SystemAudioCapture::stop()
 	// The thread goes; what it captured stays for take() until the next start.
 	if (!d_)
 		return;
+#if defined(__APPLE__)
+	d_->mac.stop();
+#endif
 	d_->quit.store(true);
 	if (d_->thread.joinable())
 		d_->thread.join();
@@ -641,7 +662,11 @@ void SystemAudioCapture::stop()
 
 bool SystemAudioCapture::running() const
 {
+#if defined(__APPLE__)
+	return d_ && !d_->stopped && d_->mac.running();
+#else
 	return d_ && !d_->stopped;
+#endif
 }
 
 int SystemAudioCapture::sampleRate() const
@@ -659,6 +684,9 @@ QByteArray SystemAudioCapture::take()
 {
 	if (!d_)
 		return QByteArray();
+#if defined(__APPLE__)
+	return d_->mac.take();
+#endif
 	std::lock_guard<std::mutex> lock(d_->bufMutex);
 	QByteArray out;
 	out.swap(d_->buf);
@@ -669,6 +697,9 @@ QString SystemAudioCapture::failure() const
 {
 	if (!d_)
 		return QString();
+#if defined(__APPLE__)
+	return d_->mac.failure();
+#endif
 	std::lock_guard<std::mutex> lock(d_->bufMutex);
 	return d_->failure;
 }

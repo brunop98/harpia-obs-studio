@@ -1,4 +1,9 @@
 #include "WebcamRecorder.hpp"
+#include "ObsContext.hpp"
+#include "platform/CameraAccess.hpp"
+#if defined(__APPLE__)
+#include "platform/mac/MacPlatform.hpp"
+#endif
 
 #include "AudioManager.hpp" // for AudioDevice {id, name}
 #include "EncoderFactory.hpp"
@@ -84,6 +89,14 @@ static void readCameras(obs_properties_t *props, std::vector<AudioDevice> &out)
 std::vector<AudioDevice> WebcamRecorder::cameras()
 {
 	std::vector<AudioDevice> out;
+#if defined(__APPLE__)
+	// Enumerating AVFoundation metadata does not open a camera or trigger TCC.
+	// The source's property list requires a live capture delegate, so it is
+	// inappropriate for startup/readiness probes before the user grants access.
+	for (const auto &camera : mac_platform::cameras())
+		out.push_back({camera.id.toStdString(), camera.name.toStdString()});
+	return out;
+#else
 	const char *id = platformCameraId();
 
 	if (!supported()) {
@@ -118,6 +131,94 @@ std::vector<AudioDevice> WebcamRecorder::cameras()
 		blog(LOG_INFO, "[harpia] webcam enumeration found %zu device(s) via '%s'", out.size(), id);
 	}
 	return out;
+#endif
+}
+
+void WebcamRecorder::configureCameraSource(obs_source_t *source, int width, int height, int fps)
+{
+	if (!source || std::strcmp(obs_source_get_id(source), "macos-avcapture") != 0)
+		return;
+	// Camera video never implicitly enables a second microphone. The preset's
+	// selected AudioManager inputs remain responsible for recorded sound.
+	obs_source_set_audio_mixers(source, 0);
+	obs_source_set_muted(source, true);
+	obs_data_t *current = obs_source_get_settings(source);
+	obs_data_t *settings = obs_data_create();
+	obs_data_apply(settings, current);
+	const std::string previousPreset = obs_data_get_string(current, "preset");
+	obs_data_release(current);
+	obs_data_set_bool(settings, "enable_audio", false);
+	obs_properties_t *properties = obs_source_properties(source);
+	bool configured = false;
+	if (properties) {
+		obs_data_set_bool(settings, "use_preset", false);
+		obs_data_set_frames_per_second(settings, "frame_rate", {uint32_t(fps > 0 ? fps : 30), 1}, nullptr);
+		obs_properties_apply_settings(properties, settings);
+		const std::string wanted = std::to_string(width) + "x" + std::to_string(height);
+		const std::string prefix = wanted + " ";
+		std::vector<std::string> candidates;
+		if (obs_property_t *formats = obs_properties_get(properties, "supported_format"))
+			for (size_t i = 0; i < obs_property_list_item_count(formats); ++i) {
+				const char *label = obs_property_list_item_name(formats, i);
+				const char *value = obs_property_list_item_string(formats, i);
+				if (label && value && *value && !obs_property_list_item_disabled(formats, i) &&
+				    std::strncmp(label, prefix.c_str(), prefix.size()) == 0)
+					candidates.emplace_back(value);
+			}
+		for (const auto &candidate : candidates) {
+			obs_data_set_string(settings, "supported_format", candidate.c_str());
+			obs_properties_apply_settings(properties, settings);
+			obs_property_t *rates = obs_properties_get(properties, "frame_rate");
+			for (size_t i = 0; rates && i < obs_property_frame_rate_fps_ranges_count(rates); ++i) {
+				const auto minimum = obs_property_frame_rate_fps_range_min(rates, i);
+				const auto maximum = obs_property_frame_rate_fps_range_max(rates, i);
+				const uint64_t requested = uint32_t(fps > 0 ? fps : 30);
+				if (minimum.denominator && maximum.denominator &&
+				    requested * minimum.denominator >= minimum.numerator &&
+				    requested * maximum.denominator <= maximum.numerator) {
+					configured = true;
+					break;
+				}
+			}
+			if (configured)
+				break;
+		}
+		if (!configured) {
+			obs_data_set_bool(settings, "use_preset", true);
+			obs_data_erase(settings, "supported_format");
+			obs_data_erase(settings, "frame_rate");
+			obs_properties_apply_settings(properties, settings);
+			std::string fallback, exact;
+			if (obs_property_t *presets = obs_properties_get(properties, "preset"))
+				for (size_t i = 0; i < obs_property_list_item_count(presets); ++i) {
+					const char *label = obs_property_list_item_name(presets, i);
+					const char *value = obs_property_list_item_string(presets, i);
+					if (!value || !*value || obs_property_list_item_disabled(presets, i))
+						continue;
+					if (fallback.empty() || previousPreset == value)
+						fallback = value;
+					if (label && wanted == label)
+						exact = value;
+				}
+			const std::string selected = exact.empty() ? fallback : exact;
+			if (!selected.empty()) {
+				obs_data_set_string(settings, "preset", selected.c_str());
+				configured = true;
+			}
+		}
+		obs_properties_destroy(properties);
+	}
+	if (configured)
+		obs_source_update(source, settings);
+	else {
+		obs_data_t *audioOnly = obs_data_create();
+		obs_data_set_bool(audioOnly, "enable_audio", false);
+		obs_source_update(source, audioOnly);
+		obs_data_release(audioOnly);
+		blog(LOG_WARNING, "[harpia] webcam has no advertised format for %dx%d @ %d fps; keeping camera defaults",
+		     width, height, fps);
+	}
+	obs_data_release(settings);
 }
 
 WebcamRecorder::~WebcamRecorder()
@@ -129,6 +230,10 @@ bool WebcamRecorder::start(const Preset &preset, const std::string &deviceId, in
 			   const std::string &filePath, obs_source_t *sharedSource)
 {
 	teardown();
+#if defined(__APPLE__)
+	if (cameraAccessStatus() != CameraAccess::Allowed)
+		return false; // consent is requested only by the explicit UI action
+#endif
 
 	if (width < 16 || height < 16)
 		return false;
@@ -171,30 +276,43 @@ bool WebcamRecorder::start(const Preset &preset, const std::string &deviceId, in
 			if (props)
 				obs_properties_destroy(props);
 		}
+#if defined(__APPLE__)
+		obs_data_set_bool(cs, "enable_audio", false);
+#else
 		// DirectShow custom resolution/fps hints (ignored by other platforms;
 		// the mix below enforces the final output size regardless).
 		obs_data_set_int(cs, "res_type", 1);
 		obs_data_set_string(cs, "resolution",
 				    (std::to_string(width) + "x" + std::to_string(height)).c_str());
 		obs_data_set_int(cs, "frame_interval", 10000000LL / fps);
+#endif
 		camera_ = obs_source_create(platformCameraId(), "harpia_webcam", cs, nullptr);
 		obs_data_release(cs);
 		if (!camera_) {
 			blog(LOG_ERROR, "[harpia] failed to create webcam source");
 			return false;
 		}
+#if defined(__APPLE__)
+		configureCameraSource(camera_, width, height, fps);
+#endif
 	}
+
+#if defined(__APPLE__)
+	// OBS keeps source metadata even when a plugin could not create its
+	// capture context. Refuse a camera with no usable picture dimensions.
+	if (!obs_source_get_width(camera_) || !obs_source_get_height(camera_)) {
+		blog(LOG_WARNING, "[harpia] the macOS camera has not delivered a usable video format");
+		teardown();
+		return false;
+	}
+#endif
 
 	// 2. Private view + independent mix at the webcam's own resolution/fps.
 	view_ = obs_view_create();
 	obs_view_set_source(view_, 0, camera_);
 
 	struct obs_video_info ovi = {};
-#if defined(_WIN32)
-	ovi.graphics_module = DL_D3D11;
-#else
-	ovi.graphics_module = DL_OPENGL;
-#endif
+	ovi.graphics_module = ObsContext::renderModule();
 	ovi.fps_num = (uint32_t)fps;
 	ovi.fps_den = 1;
 	ovi.base_width = ovi.output_width = (uint32_t)width;

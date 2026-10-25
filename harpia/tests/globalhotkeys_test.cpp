@@ -66,14 +66,46 @@ int main(int argc, char **argv)
 		   "an unmappable key refuses instead of guessing");
 	}
 
-	std::printf("\n-- bind() off Windows says no, so callers keep their fallback --\n");
+	std::printf("\n-- Mac native codes and Qt's Command semantics --\n");
 	{
-#if !defined(_WIN32)
+		const MacHotkey f9 = macHotkeyFor(QKeySequence(QStringLiteral("F9")));
+		const MacHotkey f10 = macHotkeyFor(QKeySequence(QStringLiteral("F10")));
+		ok(f9.valid && f9.modifiers == 0 && f9.keyCode == 109 && f9.character == 0,
+		   "Mac F9 is physical code 109, without a Windows virtual-key assumption");
+		ok(f10.valid && f10.keyCode == 103, "Mac F10 uses its non-contiguous physical code");
+		const MacHotkey zoom = macHotkeyFor(QKeySequence(QStringLiteral("Ctrl+Shift+Z")));
+		ok(zoom.valid && zoom.modifiers == (0x100 | 0x200) && zoom.character == 'Z',
+		   "portable Ctrl+Shift+Z becomes Command+Shift and a layout-resolved character");
+		const MacHotkey physicalControl = macHotkeyFor(QKeySequence(Qt::META | Qt::ALT | Qt::Key_F4));
+		ok(physicalControl.valid && physicalControl.modifiers == (0x1000 | 0x800) && physicalControl.keyCode == 118,
+		   "Qt Meta means physical Control on Mac, and Alt means Option");
+		ok(macHotkeyFor(QKeySequence(Qt::Key_F20)).valid && !macHotkeyFor(QKeySequence(Qt::Key_F21)).valid,
+		   "only the Mac's defined F1 through F20 codes are accepted");
+		ok(macHotkeyFor(QKeySequence(Qt::Key_Backspace)).keyCode == 51 &&
+		   macHotkeyFor(QKeySequence(Qt::Key_Delete)).keyCode == 117,
+		   "Backspace and forward Delete remain different native keys");
+		ok(macHotkeyFor(QKeySequence(Qt::Key_Left)).keyCode == 123 &&
+		   macHotkeyFor(QKeySequence(Qt::Key_Right)).keyCode == 124,
+		   "arrow-key physical codes are stable");
+		ok(macHotkeyFor(QKeySequence(QStringLiteral("Ctrl+1"))).character == '1',
+		   "digit shortcuts resolve through the layout rather than US number-row positions");
+		ok(!macHotkeyFor(QKeySequence()).valid &&
+		   !macHotkeyFor(QKeySequence(QStringLiteral("Ctrl+K, Ctrl+B"))).valid,
+		   "empty and multi-chord bindings cannot become partial Mac hotkeys");
+		ok(!macHotkeyFor(QKeySequence(Qt::Key_Pause)).valid &&
+		   !macHotkeyFor(QKeySequence(Qt::Key_ydiaeresis)).valid &&
+		   !macHotkeyFor(QKeySequence(Qt::KeypadModifier | Qt::Key_1)).valid,
+		   "unsupported keys and ambiguous keypad bindings keep the window fallback");
+	}
+
+	std::printf("\n-- unsupported native backends keep their fallback --\n");
+	{
+#if !defined(_WIN32) && !defined(__APPLE__)
 		GlobalHotkeys hk;
 		ok(!hk.bind(1, QKeySequence(QStringLiteral("F9"))),
 		   "no global backend here: bind reports failure honestly");
 #else
-		std::printf("     (skipped: running on Windows)\n");
+		std::printf("     (skipped: native registration needs an interactive desktop)\n");
 #endif
 	}
 

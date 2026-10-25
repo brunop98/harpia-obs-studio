@@ -7,11 +7,11 @@ namespace harpia {
 enum class CameraAccess {
 	Allowed,        // privacy settings permit camera access
 	DeniedByPrivacy, // OS privacy blocks desktop apps from the camera
-	Unknown,        // couldn't determine (non-Windows, or read failed)
+	Unknown,        // permission not requested yet, unsupported or query failed
 };
 
 // Query the OS camera-privacy state. Windows reads the CapabilityAccessManager
-// consent store; other platforms return Unknown.
+// consent store; macOS queries AVCaptureDevice authorization.
 CameraAccess cameraAccessStatus();
 
 } // namespace harpia

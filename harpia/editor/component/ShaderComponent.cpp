@@ -3,6 +3,7 @@
 #include "../shader/ShaderEffect.hpp"
 #include "../shader/GpuFx.hpp"
 #include "../shader/ShaderRenderer.hpp"
+#include "../shader/SpotlightGl.hpp"
 #include "Component.hpp"
 #include "ComponentRegistry.hpp"
 
@@ -155,6 +156,7 @@ void ShaderComponents::releaseThreadResources()
 {
 	ThreadRenderers::get().release();
 	releaseGpuFxThread(); // the effect engine's context on this thread, too
+	SpotlightGl::releaseThreadResources();
 }
 
 int ShaderComponents::generation()

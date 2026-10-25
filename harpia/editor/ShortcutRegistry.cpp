@@ -1,3 +1,4 @@
+#include "../core/RecorderSettings.hpp"
 #include "ShortcutRegistry.hpp"
 
 #include <QJsonArray>
@@ -15,7 +16,7 @@ namespace harpia {
 namespace {
 QSettings shortcutSettings()
 {
-	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	return harpia::recorderSettings();
 }
 constexpr const char *kGroup = "editorShortcuts";
 } // namespace

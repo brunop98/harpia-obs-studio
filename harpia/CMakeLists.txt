@@ -65,7 +65,7 @@ foreach(graphics_library IN ITEMS opengl d3d11)
     target_compile_definitions(
       harpia-recorder
       PRIVATE
-        DL_${graphics_library_U}="$<$<IF:$<PLATFORM_ID:Windows>,TARGET_FILE_NAME,TARGET_SONAME_FILE_NAME>:OBS::libobs-${graphics_library}>"
+        DL_${graphics_library_U}="$<$<IF:$<PLATFORM_ID:Windows,Darwin>,TARGET_FILE_NAME,TARGET_SONAME_FILE_NAME>:OBS::libobs-${graphics_library}>"
     )
   else()
     target_compile_definitions(harpia-recorder PRIVATE DL_${graphics_library_U}="")
@@ -424,6 +424,12 @@ target_sources(
     editor/script/TransformScript.hpp
 )
 
+target_sources(harpia-recorder PRIVATE
+  editor/AudioOutputStream.cpp editor/AudioOutputStream.hpp
+  editor/shader/EditorGlSurface.cpp editor/shader/EditorGlSurface.hpp
+  editor/subtitles/MacSecretStore.hpp editor/ytdlp/YtDlpHelpers.hpp
+  ui/ProjectOpenQueue.hpp)
+
 # Platform-specific idle detection + foreground-window backends.
 if(OS_WINDOWS)
   target_sources(harpia-recorder PRIVATE
@@ -472,13 +478,23 @@ elseif(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
   find_package(Qt6 REQUIRED DBus)
   target_link_libraries(harpia-recorder PRIVATE Qt::DBus ${CMAKE_DL_LIBS})
 elseif(OS_MACOS)
+  enable_language(OBJCXX)
   target_sources(harpia-recorder PRIVATE
     platform/mac/MacIdleMonitor.cpp
     platform/mac/MacForegroundWatcher.cpp
     platform/mac/MacWindowList.cpp
     platform/mac/MacCameraAccess.cpp
+    platform/mac/MacPlatform.mm platform/mac/MacPlatform.hpp platform/mac/MacCoordinates.hpp
+    platform/mac/MacGlobalHotkeys.mm platform/mac/MacGlobalHotkeys.hpp
+    platform/mac/MacSystemAudioCapture.mm platform/mac/MacSystemAudioCapture.hpp
+    platform/mac/MacAudioPcm.hpp platform/mac/MacAudioPermissions.hpp
+    editor/subtitles/MacSecretStore.mm
     platform/OsIntegrationStub.cpp)
-  target_link_libraries(harpia-recorder PRIVATE "-framework CoreGraphics")
+  set_source_files_properties(platform/mac/MacSystemAudioCapture.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  target_link_libraries(harpia-recorder PRIVATE
+    "-framework CoreGraphics" "-framework Cocoa" "-framework AVFoundation"
+    "-framework Carbon" "-framework Security" "-framework CoreFoundation"
+    "-framework ScreenCaptureKit" "-framework CoreMedia" "-framework AudioToolbox")
 endif()
 
 if(OS_WINDOWS)
@@ -538,3 +554,7 @@ foreach(_dep IN LISTS _harpia_runtime_targets)
     add_dependencies(harpia-recorder ${_dep})
   endif()
 endforeach()
+
+if(OS_MACOS)
+  include(cmake/os-macos.cmake)
+endif()

@@ -1,0 +1,140 @@
+# Building and validating the macOS port
+
+This branch implements the macOS work identified in [the source audit](MACOS_READINESS.md).
+It has been built and regression-tested on Linux, including forced Mac GPU
+surface ownership tests. A native Mac build, signed distribution and physical
+screen/audio/camera checks have not been verified in this environment. The CI
+workflow explicitly reports when its required Apple toolchain is unavailable.
+
+## Build a development application
+
+Requirements:
+
+- macOS 13 or newer; Apple Silicon is the primary initial target.
+- Full Xcode 26.5+ and macOS SDK 26.5+, as required by this checkout. This build
+  SDK requirement is separate from the application's macOS 13 runtime minimum.
+- CMake 3.28+, Python 3.10+ for the deployment scripts, and Git.
+- FFmpeg CLI on PATH to generate/regression-test media (`brew install ffmpeg`).
+
+```sh
+./harpia/scripts/build-macos.sh --arch arm64 --test --package --check-runtime
+```
+
+The build downloads the dependency versions/hashes in `CMakePresets.json`.
+`harpia-deploy` builds the recorder and runtime modules, creates `Harpia.app`,
+deploys Qt plus OBS/FFmpeg dependencies, repairs load paths and signs the nested
+code/application. Re-running this target also refreshes plugin-only changes.
+The development signing default is ad-hoc (`-`).
+
+Outputs:
+
+- `build_macos/harpia/RelWithDebInfo/Harpia.app`
+- ZIP, SHA-256 and runtime JSON under `build_macos/dist` when packaging/checking.
+
+The package verifier relocates the app, checks Mach-O load commands, architecture
+slices, minimum OS versions, required helpers/resources and signatures. With
+`--check-runtime`, it launches that relocated app's `--check-runtime` mode to
+load OBS and inspect the real capture/audio property callbacks. This mode does
+not create recording sources or request screen/camera/microphone access.
+
+Other options include `--configuration Debug`, `--arch x86_64`,
+`--arch universal`, `--build-dir PATH`, and `--run`. Every embedded dependency
+must support the selected architecture(s) and the advertised minimum macOS
+version; deployment fails if it does not.
+
+## Sign a distributable
+
+Supply your own installed Developer ID identity and an existing notarization
+profile; credentials are not stored in the repository:
+
+```sh
+CODESIGN_IDENT='Developer ID Application: Your Company (TEAMID)' \
+HARPIA_NOTARY_PROFILE='your-existing-notary-profile' \
+./harpia/scripts/build-macos.sh --arch arm64 --package --check-runtime
+```
+
+Packaging submits the ZIP with `notarytool`, checks the Accepted result, staples
+the ticket, assesses Gatekeeper and recreates the ZIP/checksum. An ad-hoc build
+is useful for development; it does not establish notarized distribution.
+Keep the stable `com.harpia.recorder` bundle identity/team for permission and
+Keychain continuity across releases.
+
+Optional `HARPIA_YT_DLP_HELPER`, `HARPIA_FFMPEG_HELPER` and `HARPIA_DENO_HELPER` paths can
+stage URL-download helpers under `Contents/Helpers` (environment variables read by
+`harpia/scripts/deploy-macos.py`). Bundled helpers must be standalone Mac
+Mach-O executables and satisfy the app's architecture/OS-floor checks. Python
+or shell wrappers, including pip/Homebrew yt-dlp scripts, cannot be bundled this
+way. External runtime discovery can use installed tools and their interpreters;
+it also checks Homebrew locations and respects explicit user-selected tools
+and command-line overrides.
+
+## Implemented behavior
+
+- Native display UUID enumeration avoids the former null-context SCK property
+  query. Cursor settings use the Mac source's actual keys. Screen recording
+  waits for a valid first frame and detects interrupted capture streams.
+- Permission requests run only for requested screen/system audio, microphones
+  and cameras, with System Settings guidance and regrant recovery. Audio-only
+  recording does not request unused webcam access. Editor narration requests its
+  own screen/microphone permission when needed.
+- SCK system/app audio avoids virtual loopback devices and disables implicit
+  audio on the screen source, preventing duplicate sound or PC-audio mute leaks.
+  App filters use stable bundle identifiers and refresh on app lifecycle changes.
+  Choose/start the target application before beginning an Only-app recording.
+- Native picking/follow-window crops map logical Quartz coordinates into the
+  selected display's captured pixels. Foreground app identity supports focus
+  auto-pause. Global Carbon hotkeys support keyboard-layout changes and retain
+  focused-window fallback when registration conflicts with another shortcut.
+- Recording controls, framing, guides and dialogs are selectively excluded from
+  SCK display capture while intended mouse effects remain visible.
+- H.264/HEVC VideoToolbox encoders are advertised only after opening a hardware
+  session. Auto uses constant quality where supported; otherwise it logs and uses
+  a resolution/frame-rate-based bitrate target. Explicit bitrates remain target
+  bitrates. CPU H.264 remains a fallback. New Mac presets prefer hardware.
+- HEVC MP4/MOV recordings/remuxes use the `hvc1` tag for Apple playback; MKV and
+  H.264 retain their container behavior.
+- GUI-owned offscreen surfaces are leased by export workers without waiting for
+  the GUI thread during joins. Audio preview negotiates supported formats and
+  streams bounded conversion buffers; failures appear in the editor/log.
+- API keys use the login Keychain, with legacy migration verified before removing
+  old settings. Finder `.harpiaproj` events queue until the editor can open them,
+  and reuse the normal relink/error workflow. Emoji resources use bundle paths.
+
+## Automated checks
+
+From the full application build:
+
+```sh
+cmake --preset macos -DHARPIA_BUILD_TESTS=ON -DCMAKE_OSX_ARCHITECTURES=arm64
+cmake --build build_macos --config RelWithDebInfo --target harpia-tests --parallel 4
+ctest --test-dir build_macos -C RelWithDebInfo --output-on-failure --no-tests=error
+```
+
+The Qt/FFmpeg editor harness can also be configured directly, without libobs:
+
+```sh
+cmake -S harpia/tests -B build_editor_tests -DCMAKE_PREFIX_PATH=/path/to/qt-and-ffmpeg
+cmake --build build_editor_tests --target harpia-tests --parallel 4
+ctest --test-dir build_editor_tests --output-on-failure
+```
+
+CMake discovers Qt and FFmpeg, creates real media fixtures, and runs project,
+preview, export, audio, text, GPU-lifetime, settings-isolation, Keychain-migration,
+helper-discovery and packaging checks. Test settings use private INI files;
+Mac editor tests use an in-memory Keychain backend. The production login
+Keychain and Harpia preferences are not used for test storage.
+
+## Native release acceptance still required
+
+Run the actual Cocoa app from Finder on clean target Macs, not only headless
+widget tests. Verify first-run denial/grant/regrant; signed app updates; Retina
+and mixed-monitor capture/cropping/hot-plug; no recorded controls; mouse effects;
+mic/system/Only/Except audio and app restarts; headphones/Bluetooth/USB changes;
+webcam formats; Fn/system shortcut conflicts; sustained 1080p/4K recording,
+pause/resume, A/V sync, cancellation/shutdown and interruption recovery.
+
+Open projects moved from Windows and verify relinking, fonts, keyframes,
+preview/export effects, MP4/MOV/WebM/GIF exports and Discord part sizes. Test
+Keychain locked/denied states and URL downloads from a Finder-launched app with
+no shell PATH. Repeat package/notarization/Gatekeeper validation on an app moved
+outside the build tree. Intel/universal builds need their own native validation.

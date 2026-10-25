@@ -89,6 +89,19 @@ int main(int argc, char **argv)
 		ExportOptionsDialog dialog(context);
 		check(dialog.encoding() == export_video::Encoding::Software,
 		      "the selected Mac encoding mode is remembered across exports");
+		auto *encoding = dialog.findChild<QComboBox *>(QStringLiteral("exportEncoding"));
+		auto *format = dialog.findChild<QComboBox *>(QStringLiteral("exportFormat"));
+		if (encoding && format && format->findData(int(ClipExporter::Format::WebM)) >= 0) {
+			encoding->setCurrentIndex(encoding->findData(int(export_video::Encoding::Automatic)));
+			format->setCurrentIndex(format->findData(int(ClipExporter::Format::WebM)));
+			dialog.accept();
+			ExportOptionsDialog next(context);
+			auto *nextFormat = next.findChild<QComboBox *>(QStringLiteral("exportFormat"));
+			if (nextFormat)
+				nextFormat->setCurrentIndex(nextFormat->findData(int(ClipExporter::Format::Mp4)));
+			check(next.encoding() == export_video::Encoding::Automatic,
+			      "a WebM export does not overwrite the remembered H.264 encoding preference");
+		}
 	}
 	context.offerAppleHardwareEncoding = false;
 	{

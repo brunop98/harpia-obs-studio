@@ -803,7 +803,8 @@ void ExportOptionsDialog::saveRemembered() const
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("keepAudio"), keepAudio());
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("effort"), int(effort()));
 	if (encodingCombo_)
-		s.setValue(QLatin1String(kGroup) + QStringLiteral("macEncoding"), int(encoding()));
+		// WebM/GIF use their own encoder but retain the H.264 preference.
+		s.setValue(QLatin1String(kGroup) + QStringLiteral("macEncoding"), encodingCombo_->currentData());
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("chroma444"), chroma444());
 }
 

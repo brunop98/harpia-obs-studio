@@ -24,8 +24,8 @@
 // GL lives on the thread that renders. One ShaderRenderer per thread, keyed by
 // shader name, so the preview thread and the export worker each compile once
 // and neither can touch the other's context. Where OpenGL 3.3 is unavailable
-// the component passes the frame through untouched rather than failing the
-// render.
+// the component reports why rendering failed instead of silently dropping the
+// effect from preview or export.
 
 #include <QString>
 #include <QStringList>
@@ -66,9 +66,8 @@ public:
 			      QStringList *errors = nullptr);
 
 	// False when this build or this machine has no usable OpenGL 3.3. Shader
-	// components still register and still serialise; they just render as a
-	// pass-through, so opening a project on a machine without GL does not
-	// silently throw the shaders away.
+	// components still register and serialise; rendering reports the unavailable
+	// effect so the user can restore support or disable it.
 	static bool available();
 
 	// Bumped on every loadFolder: a cached preview frame made before a shader

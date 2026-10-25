@@ -15,6 +15,11 @@ MOC="$(command -v moc || ls /usr/lib/qt6/libexec/moc /usr/lib/x86_64-linux-gnu/q
 # Qt6OpenGL is here for SpotlightGl, which Spotlight.cpp dispatches to.
 CF="$(pkg-config --cflags Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
 LF="$(pkg-config --libs Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
+
+# Preview failures stay visible and copyable without interrupting playback or
+# logging the same compiler failure on every frame.
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/previewwarning_test.cpp" -o "$WORK/previewwarning_test" $LF
 # The colour emoji in text clips (editor/timeline/Emoji.cpp) decode their
 # pictures with FFmpeg: wherever the compositor is built, so is that.
 EMOJI_FLAGS="$(pkg-config --cflags --libs libavcodec libswscale libavutil)"
@@ -1136,6 +1141,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/console_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/subtitles_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/searchpicker_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/componentrender_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/previewwarning_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/opaqueframe_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/batchplan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textvariations_test" || rc=1

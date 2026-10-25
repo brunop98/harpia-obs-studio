@@ -6,6 +6,7 @@
 #include "Transitions.hpp"
 #include "../component/ComponentRegistry.hpp"
 #include "../component/ComponentStack.hpp"
+#include "../component/ComponentEnvelope.hpp"
 #include "Spotlight.hpp"
 #include "RichText.hpp"
 #include "Emoji.hpp"
@@ -925,6 +926,22 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 				else if (c.type == TlClip::Type::Video || c.type == TlClip::Type::Image)
 					ectx.srcSize = fp.sourceSize(c.sourceId);
 				ectx.scriptSize = logicalScriptSize(c, fp.sourceSize(c.sourceId), logicalCanvas);
+				// Captions are drawn directly with QPainter, without a source
+				// image for Pixel components. Older projects can still carry a
+				// shader here: report that unsupported target instead of exporting
+				// a caption with its requested effect silently omitted.
+				if (c.type == TlClip::Type::Text) {
+					for (const ComponentInstance &inst : c.components) {
+						if (!inst.enabled || !inst.typeId.startsWith(QLatin1String("harpia.shader.")) ||
+						    envelopeIsEmpty(componentWeight(ectx.tMs, ectx.durMs, inst.inMs, inst.outMs)))
+							continue;
+						const ComponentType *type = ComponentRegistry::instance().find(inst.typeId);
+						fail("TL-EFFECT-TARGET", QStringLiteral("Shader effect \"%1\" [%2] cannot render directly on a text clip. "
+							"Move it to an effect clip above the text, or disable/remove the shader.")
+							.arg(type ? type->displayName : inst.typeId.mid(14), inst.typeId), ti, ci);
+						return false;
+					}
+				}
 			}
 
 			// Time stage FIRST, because which source instant to decode is its

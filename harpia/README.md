@@ -52,6 +52,10 @@ Three modes, each one step up from the last:
   - **components** stacked on any clip: transform and speed, ShaderToy-style
     **shaders** (`.frag`), **JavaScript** transform scripts, typing, subtitles,
     bullets and more — written in a watched folder and picked up live;
+  - **effect diagnostics**: a nonmodal preview warning names a missing or
+    failed custom shader; **Details…** shows a copyable report and recovery
+    steps. Repeated frames log the same problem once. Exports refuse to
+    silently omit the effect; restore/fix its `.frag` file or disable it;
   - **text** with presets and Unity-style **rich text** tags
     (`<b>`, `<color=#f80>`, `<size=150%>`…);
   - **Random text**: one caption with several alternatives, exported as one

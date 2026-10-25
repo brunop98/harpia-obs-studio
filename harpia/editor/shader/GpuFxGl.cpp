@@ -322,9 +322,14 @@ public:
 		const QImage rgba = frame.format() == QImage::Format_RGBA8888
 					    ? frame
 					    : frame.convertToFormat(QImage::Format_RGBA8888);
+		if (rgba.isNull())
+			return false; // the stack can still use the original image on the CPU
+		for (int i = 0; i < 16 && f_->glGetError() != GL_NO_ERROR; ++i) {}
 		ensureTextures(rgba.width(), rgba.height());
 		f_->glBindTexture(GL_TEXTURE_2D, tex_[0]);
 		f_->glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w_, h_, GL_RGBA, GL_UNSIGNED_BYTE, rgba.constBits());
+		if (f_->glGetError() != GL_NO_ERROR)
+			return false;
 		cur_ = 0;
 		active_ = true;
 		return true;
@@ -337,12 +342,23 @@ public:
 		active_ = false;
 		if (!current())
 			return QImage();
+		// A draw can fail while leaving the previous texture allocated. Reading
+		// that texture as a successful frame would silently drop the effect.
+		if (f_->glGetError() != GL_NO_ERROR) {
+			ctx_->doneCurrent();
+			return QImage();
+		}
 		QImage out(w_, h_, QImage::Format_RGBA8888);
+		if (out.isNull()) {
+			ctx_->doneCurrent();
+			return QImage();
+		}
 		f_->glBindFramebuffer(GL_FRAMEBUFFER, fbo_[cur_]);
 		f_->glReadPixels(0, 0, w_, h_, GL_RGBA, GL_UNSIGNED_BYTE, out.bits());
+		const bool readOk = f_->glGetError() == GL_NO_ERROR;
 		f_->glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		ctx_->doneCurrent();
-		return out;
+		return readOk ? out : QImage();
 	}
 
 	bool fx(int type, const QMap<QString, double> &p) override

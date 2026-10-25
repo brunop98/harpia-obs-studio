@@ -434,6 +434,8 @@ struct ShaderPass {
 	SwsContext *toYuv = nullptr;
 	int w = 0, h = 0;
 	bool active = false;
+	QString error;
+	QStringList effectNames;
 	QVector<QMap<QString, double>> perLayer; // values per effect layer
 
 	~ShaderPass()
@@ -450,9 +452,13 @@ struct ShaderPass {
 	{
 		if (o.effects.empty())
 			return QString();
+		for (size_t i = 0; i < o.effects.size(); ++i)
+			effectNames.append(shaderDisplayName(o.effects[i].source,
+				QStringLiteral("Post-processing layer %1").arg(i + 1)));
 		if (!renderer.ensureGl())
-			return QStringLiteral("The effect needs OpenGL 3.3, which isn't available here: %1")
-				.arg(renderer.lastError());
+			return QStringLiteral("Shader effects \"%1\" need OpenGL 3.3, which is unavailable: %2. "
+				"Update the graphics driver and restart the editor, or disable these effects.")
+				.arg(effectNames.join(QStringLiteral(", ")), renderer.lastError());
 		QVector<ShaderLayerSource> layers;
 		layers.reserve(int(o.effects.size()));
 		perLayer.clear();
@@ -462,7 +468,9 @@ struct ShaderPass {
 		}
 		QString err;
 		if (!renderer.setChain(layers, &err))
-			return QStringLiteral("The effect shader failed to compile:\n%1").arg(err);
+			return QStringLiteral("Shader effects \"%1\" failed to compile. "
+				"Fix the .frag file and reload components, or disable the effect.\n%2")
+				.arg(effectNames.join(QStringLiteral(", ")), err);
 		active = true;
 		return QString();
 	}
@@ -473,6 +481,11 @@ struct ShaderPass {
 	{
 		if (!active || !f)
 			return true;
+		const auto fail = [this, frame](const QString &reason) {
+			error = QStringLiteral("Shader effects \"%1\" failed at frame %2: %3")
+				.arg(effectNames.join(QStringLiteral(", "))).arg(frame + 1).arg(reason);
+			return false;
+		};
 		const int W = f->width, H = f->height;
 		if (!toRgba || W != w || H != h) {
 			if (toRgba)
@@ -492,28 +505,34 @@ struct ShaderPass {
 			h = H;
 		}
 		if (!toRgba || !toYuv)
-			return false;
+			return fail(QStringLiteral("Could not create the shader image converters."));
 
 		// W x H to W x H: swscale's block-wise converter, which overruns the
 		// last row -- hence the spare bytes (see SwsImage.hpp).
 		QImage img = swsTargetImage(W, H, QImage::Format_RGBA8888);
 		if (img.isNull())
-			return false;
+			return fail(QStringLiteral("Could not allocate the shader input image. Reduce the output resolution."));
 		uint8_t *dst[4] = {img.bits(), nullptr, nullptr, nullptr};
 		int dstStride[4] = {(int)img.bytesPerLine(), 0, 0, 0};
-		sws_scale(toRgba, f->data, f->linesize, 0, H, dst, dstStride);
+		if (sws_scale(toRgba, f->data, f->linesize, 0, H, dst, dstStride) != H)
+			return fail(QStringLiteral("Could not convert the frame for the shader."));
 
 		QImage out = renderer.apply(img, tSec, frame, perLayer);
+		if (out.isNull())
+			return fail(renderer.lastError());
 		if (out.format() != QImage::Format_RGBA8888)
 			out = out.convertToFormat(QImage::Format_RGBA8888);
+		if (out.isNull() || out.size() != img.size())
+			return fail(QStringLiteral("The shader returned an invalid output image."));
 
 		// The decoded frame may be a read-only, decoder-owned buffer (yuv420p
 		// sources pass through un-copied); make it writable before overwriting it.
 		if (av_frame_make_writable(f) < 0)
-			return false;
+			return fail(QStringLiteral("Could not prepare the shader output buffer."));
 		const uint8_t *src[4] = {out.constBits(), nullptr, nullptr, nullptr};
 		int srcStride[4] = {(int)out.bytesPerLine(), 0, 0, 0};
-		sws_scale(toYuv, src, srcStride, 0, H, f->data, f->linesize);
+		if (sws_scale(toYuv, src, srcStride, 0, H, f->data, f->linesize) != H)
+			return fail(QStringLiteral("Could not convert the shader output for encoding."));
 		return true;
 	}
 };
@@ -546,6 +565,8 @@ struct VideoSink {
 
 	bool operator()(AVFrame *f)
 	{
+		if (!shader.error.isEmpty())
+			return false;
 		// A lower frame rate: the first frame in each tick goes on, stamped
 		// on the tick; the others in it are left out. Before the scale and
 		// the shader, so a frame that is dropped costs neither.
@@ -562,8 +583,9 @@ struct VideoSink {
 		// about to become 1080p ran the whole chain on four times the pixels
 		// that survive -- per frame, for the whole export.
 		f = s.scaleForEncode(f); // no-op unless an output size was chosen
-		if (f && shader.active)
-			shader.process(f, float(f->pts * av_q2d(s.venc->time_base)), shaderFrame++);
+		if (f && shader.active &&
+		    !shader.process(f, float(f->pts * av_q2d(s.venc->time_base)), shaderFrame++))
+			return false;
 		// The finished frame, as it is encoded: a candidate for the cover.
 		if (f && s.cover)
 			s.cover->offer(f, double(f->pts) * av_q2d(s.venc->time_base));
@@ -594,7 +616,7 @@ struct VideoSink {
 QString finalizeOutput(VideoState &s, VideoSink &encode)
 {
 	if (!encode(nullptr))
-		return QStringLiteral("Could not flush the video encoder.");
+		return encode.shader.error.isEmpty() ? QStringLiteral("Could not flush the video encoder.") : encode.shader.error;
 	const int trailerResult = av_write_trailer(s.ofmt);
 	int closeResult = 0;
 	if (s.ofmt->pb && !(s.ofmt->oformat->flags & AVFMT_NOFILE))
@@ -1030,7 +1052,8 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 				}
 				if (ok) {
 					toEnc->pts = scaledPts(pts);
-					encodeVideo(toEnc);
+					if (!encodeVideo(toEnc))
+						errored = true;
 				}
 			}
 			av_frame_unref(frame);
@@ -1053,6 +1076,8 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 		return QString();
 	if (!finalError.isEmpty())
 		return finalError;
+	if (!encodeVideo.shader.error.isEmpty())
+		return encodeVideo.shader.error;
 	return errored ? QStringLiteral("Encoding failed.") : QString();
 }
 
@@ -1350,6 +1375,8 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 
 	if (cancel_.load())
 		return QString();
+	if (!encodeVideo.shader.error.isEmpty())
+		return encodeVideo.shader.error;
 	if (errored)
 		return audioErr.isEmpty() ? QStringLiteral("Encoding failed.") : audioErr;
 	return QString();
@@ -1701,6 +1728,8 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 
 	if (cancel_.load())
 		return QString();
+	if (!encodeVideo.shader.error.isEmpty())
+		return encodeVideo.shader.error;
 	if (errored)
 		return audioErr.isEmpty() ? QStringLiteral("Encoding failed.") : audioErr;
 	return QString();

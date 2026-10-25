@@ -74,6 +74,7 @@ class ToolbarLayout;
 class SubtitleDialog;
 class UrlDownloadDialog;
 class LinkDownload;
+class PreviewRenderWarning;
 }
 class QResizeEvent;
 class QJsonObject;
@@ -557,6 +558,7 @@ private:
 	void onTimelineScrub(qint64 outMs);
 	void onTimelineHoverScrub(qint64 outMs);
 	void showTimelineFrame(qint64 outMs);
+	PreviewRenderWarning *previewRenderWarning_ = nullptr;
 	void addActiveSourceToTimeline(); // "Add to timeline" for the active source
 	// ---- Audio on the timeline (Full editing) ----
 	// Register an audio-only file as a source (decoded to a session WAV so the

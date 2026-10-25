@@ -43,6 +43,7 @@
 #include "timeline/VariationPresets.hpp"
 #include "FrameSeeker.hpp"
 #include "PreviewDecoder.hpp"
+#include "PreviewRenderWarning.hpp"
 #include "ProjectPaths.hpp"
 #include "RecentProjects.hpp"
 #include "ProxyMedia.hpp"
@@ -398,6 +399,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	overview_ = new TimelineOverview(canvas_);
 	canvas_->installEventFilter(this);
 	topLayout->addWidget(canvas_, 1);
+	previewRenderWarning_ = new PreviewRenderWarning(topPane);
+	topLayout->addWidget(previewRenderWarning_);
 
 	// One toolbar under the preview, in three zones (see ToolbarLayout):
 	//   Left   the mode switch and the editing tools (Add, Snap, Fit, ...)
@@ -4977,13 +4980,30 @@ void VideoEditorWindow::showTimelineFrame(qint64 outMs)
 		// active clips and hashing a key that it would immediately discard.
 		sig = previewSignature(shownModel, outMs, renderSize, canvasSize);
 		if (const QImage *hit = previewFrames_.object(sig)) {
+			previewRenderWarning_->clearFailure();
 			setPreviewFrame(*hit, outMs);
 			return;
 		}
 	}
 	frameCacheable_ = !playing_;
+	TimelineCompositor::RenderError renderError;
 	const QImage composed = TimelineCompositor::compose(shownModel, outMs, renderSize, fp, scriptEval_.get(),
-							    fps, canvasSize);
+							    fps, canvasSize, &renderError);
+	if (composed.isNull() && !renderError.message.isEmpty()) {
+		const QString key = QStringLiteral("%1/%2/%3/%4").arg(renderError.code)
+			.arg(renderError.track).arg(renderError.clip).arg(renderError.message);
+		QString report = QStringLiteral("Preview rendering failed [%1].\n\n%2\n\nTimeline time: %3 ms\nRender canvas: %4 × %5\n")
+			.arg(renderError.code, renderError.message).arg(outMs)
+			.arg(renderSize.width()).arg(renderSize.height());
+		if (renderError.track >= 0 && renderError.track < shownModel.tracks.size()) {
+			const TlTrack &track = shownModel.tracks[renderError.track];
+			report += QStringLiteral("Track: %1 (%2)\nClip: %3\n")
+				.arg(renderError.track + 1).arg(track.name).arg(renderError.clip + 1);
+		}
+		previewRenderWarning_->setFailure(key, renderError.message.section(QLatin1Char('\n'), 0, 0), report);
+	} else {
+		previewRenderWarning_->clearFailure();
+	}
 	if (frameCacheable_ && shownExact_ && !composed.isNull())
 		previewFrames_.insert(sig, new QImage(composed), int(std::max<qint64>(1, composed.sizeInBytes() / 1024)));
 	setPreviewFrame(composed, outMs);
@@ -13169,6 +13189,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	QScopedValueRollback<int> totalLoading(loadingTotal_, 0);
 	QScopedValueRollback<int> completedLoading(loadingCompleted_, 0);
 	++projectLoadGeneration_; // old async audio imports belong to the previous timeline
+	previewRenderWarning_->resetHistory();
 	loadFailures_.clear();
 
 	const int ver = root.value(QStringLiteral("harpiaProject")).toInt(1);
@@ -14732,6 +14753,7 @@ void VideoEditorWindow::showFrame(int sourceId, qint64 ms)
 {
 	if (!valid_)
 		return;
+	previewRenderWarning_->clearFailure();
 	if (!sourceById(sourceId))
 		sourceId = activeSourceId_; // fall back to the active source
 	// Trim / Multi-Cut show one source frame; the same quality setting applies,

@@ -204,6 +204,10 @@ struct ClipState {
 
 	// Pixel stage. Null in the stages that run before pixels exist.
 	QImage *frame = nullptr;
+	// A component that cannot produce its requested effect reports why here.
+	// This belongs to one evaluation, never to the shared component instance:
+	// preview and export can render on different threads without sharing errors.
+	QString renderError;
 
 	// Source stage, text clips only. Seeded from the clip's own caption; a
 	// component may rewrite it -- a typing effect hands back a prefix -- and

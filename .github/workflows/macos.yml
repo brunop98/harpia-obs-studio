@@ -53,7 +53,8 @@ jobs:
       - name: Check packaging logic
         run: |
           python3 harpia/tests/macos_package_test.py
-          bash -n harpia/scripts/build-macos.sh harpia/scripts/package-macos.sh harpia/scripts/make-macos-icon.sh
+          python3 harpia/tests/macos_launcher_test.py
+          bash -n harpia/scripts/build-macos.sh harpia/scripts/package-macos.sh harpia/scripts/make-macos-icon.sh harpia/scripts/macos-tools.sh harpia/scripts/build-and-run-harpia.sh harpia/scripts/build-and-run-harpia.command
       - name: Install build and media-test tools
         if: steps.toolchain.outputs.available == 'true'
         run: brew install cmake ffmpeg pkg-config python

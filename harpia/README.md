@@ -174,6 +174,11 @@ hardware validation are still required before treating this branch as a release.
 Use full Xcode **26.5+** with the matching macOS SDK, CMake 3.28+, Python 3.10+, and FFmpeg CLI for the media tests. The
 configure step downloads the Qt/OBS dependency archives pinned in the presets.
 
+Double-click `harpia/scripts/build-and-run-harpia.command` in Finder, or run
+`./harpia/scripts/build-and-run-harpia.sh` from Terminal, to find the tools,
+build and open Harpia. Missing tools print their download links. Add `Debug`
+for a debug build or `--check-tools` to check the installation without building.
+
 ```sh
 # From the repository root on an Apple Silicon Mac:
 ./harpia/scripts/build-macos.sh --arch arm64 --test --package --check-runtime

@@ -146,6 +146,7 @@ if(TARGET OBS::libobs)
   endif()
 endif()
 add_test(NAME macos_package COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/macos_package_test.py")
+add_test(NAME macos_launcher COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/macos_launcher_test.py")
 
 if(APPLE)
   add_test(NAME effectwarnings_gl COMMAND effectwarnings_test --require-gl)

@@ -16,6 +16,39 @@ Requirements:
 - CMake 3.28+, Python 3.10+ for the deployment scripts, and Git.
 - FFmpeg CLI on PATH to generate/regression-test media (`brew install ffmpeg`).
 
+For the Mac equivalent of `build-and-run-harpia.bat`, double-click
+[`build-and-run-harpia.command`](scripts/build-and-run-harpia.command) in Finder,
+or run:
+
+```sh
+./harpia/scripts/build-and-run-harpia.sh
+./harpia/scripts/build-and-run-harpia.sh Debug
+./harpia/scripts/build-and-run-harpia.sh --check-tools
+```
+
+The launcher finds compatible tools on PATH, in common Homebrew/MacPorts
+locations, in `CMake.app`, and in Python framework installations. It checks full
+Xcode and its SDK, compiler, first-run setup, CMake, Python, Git and bundle tools
+before configuring. Missing or outdated tools produce download links and stop
+the build. `--check-tools` performs discovery without building or launching.
+The `.command` launcher keeps errors visible in an interactive Terminal window.
+
+Tool downloads: [Xcode](https://developer.apple.com/xcode/),
+[CMake](https://cmake.org/download/),
+[Python](https://www.python.org/downloads/macos/),
+[Git](https://git-scm.com/download/mac), and
+[FFmpeg CLI](https://ffmpeg.org/download.html#build-mac) for `--test`.
+Qt and the OBS/FFmpeg build libraries come from the pinned dependency archives.
+
+An explicit `DEVELOPER_DIR` is respected. Otherwise a compatible active or
+installed Xcode is selected for this process. The selected SDK is passed to
+CMake explicitly, including when the shell has an older `SDKROOT` value.
+The selected Python is also used for CMake and packaging. Existing build caches
+are retained; use `--build-dir PATH` for a separate checkout/toolchain build.
+
+The launcher accepts the options below and opens the resulting `Harpia.app`.
+For tests and a verified package without launching, use:
+
 ```sh
 ./harpia/scripts/build-macos.sh --arch arm64 --test --package --check-runtime
 ```

@@ -12,9 +12,10 @@ run_app=false
 package_app=false
 run_tests=false
 check_runtime=false
+check_tools=false
 usage() {
   echo "Usage: build-macos.sh [--arch arm64|x86_64|universal] [--configuration Release|RelWithDebInfo|Debug|MinSizeRel]"
-  echo "                      [--build-dir path] [--preset macos|macos-ci] [--identity codesign-id] [--test] [--package] [--check-runtime] [--run]"
+  echo "                      [--build-dir path] [--preset macos|macos-ci] [--identity codesign-id] [--test] [--package] [--check-runtime] [--check-tools] [--run]"
 }
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -25,6 +26,7 @@ while [[ $# -gt 0 ]]; do
     --identity) identity=${2:?Missing signing identity}; shift 2 ;;
     --test) run_tests=true; shift ;;
     --check-runtime) check_runtime=true; package_app=true; shift ;;
+    --check-tools) check_tools=true; shift ;;
     --package) package_app=true; shift ;;
     --run) run_app=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -39,30 +41,31 @@ case "$architecture" in
   *) echo "Choose arm64, x86_64 or universal." >&2; exit 2 ;;
 esac
 case "$preset" in macos|macos-ci) ;; *) echo "Choose the macos or macos-ci preset." >&2; exit 2 ;; esac
-for tool in cmake python3 xcrun xcodebuild codesign; do
-  command -v "$tool" >/dev/null || { echo "Missing build tool: $tool" >&2; exit 1; }
-done
-# CMake performs the authoritative SDK/Xcode version check. Do not silently
-# lower that requirement when an older Xcode happens to be selected.
-xcodebuild -version
-xcrun --sdk macosx --show-sdk-platform-version
+source "$script_dir/macos-tools.sh"
+harpia_macos_check_tools "$repo_dir" "$run_tests" || exit 1
+if $check_tools; then exit 0; fi
+test_args=()
+if $run_tests; then test_args=("-DHARPIA_TEST_FFMPEG=$HARPIA_MAC_FFMPEG"); fi
 mkdir -p "$build_dir"
 build_dir=$(cd "$build_dir" && pwd)
 cd "$repo_dir"
-cmake --preset "$preset" -B "$build_dir" \
+"$HARPIA_MAC_CMAKE" --preset "$preset" -B "$build_dir" \
   "-DCMAKE_OSX_ARCHITECTURES=$cmake_architectures" \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+  "-DCMAKE_OSX_SYSROOT=$HARPIA_MAC_SDK" \
+  "-DPython3_EXECUTABLE=$HARPIA_MAC_PYTHON" \
+  "-DGIT_EXECUTABLE=$HARPIA_MAC_GIT" \
   "-DHARPIA_MAC_CODESIGN_IDENTITY=$identity" \
-  "-DHARPIA_BUILD_TESTS=$($run_tests && echo ON || echo OFF)"
-cmake --build "$build_dir" --config "$configuration" --target harpia-deploy \
+  "-DHARPIA_BUILD_TESTS=$($run_tests && echo ON || echo OFF)" \
+  ${test_args[@]+"${test_args[@]}"}
+"$HARPIA_MAC_CMAKE" --build "$build_dir" --config "$configuration" --target harpia-deploy \
   --parallel "${HARPIA_BUILD_JOBS:-4}"
 app="$build_dir/harpia/$configuration/Harpia.app"
 [[ -d "$app" ]] || { echo "The deployed app was not produced at: $app" >&2; exit 1; }
 if $run_tests; then
-  command -v ffmpeg >/dev/null || { echo "Media regression tests need ffmpeg on PATH (brew install ffmpeg)." >&2; exit 1; }
-  cmake --build "$build_dir" --config "$configuration" --target harpia-tests \
+  "$HARPIA_MAC_CMAKE" --build "$build_dir" --config "$configuration" --target harpia-tests \
     --parallel "${HARPIA_BUILD_JOBS:-4}"
-  ctest --test-dir "$build_dir" -C "$configuration" --output-on-failure --no-tests=error
+  "$HARPIA_MAC_CTEST" --test-dir "$build_dir" -C "$configuration" --output-on-failure --no-tests=error
 fi
 if $package_app; then
   package_args=(--app "$app" --output "$build_dir/dist")

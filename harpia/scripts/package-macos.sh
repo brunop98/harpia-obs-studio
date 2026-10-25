@@ -7,6 +7,7 @@ app=
 output=
 notary_profile=${HARPIA_NOTARY_PROFILE:-}
 check_runtime=false
+python=${HARPIA_MAC_PYTHON:-python3}
 usage() { echo "Usage: package-macos.sh --app Harpia.app [--output directory] [--notary-profile keychain-profile] [--check-runtime]"; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -35,11 +36,11 @@ version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$reloc
 architectures=$(lipo -archs "$relocated/Contents/MacOS/$executable")
 verify_args=()
 for architecture in $architectures; do verify_args+=(--architecture "$architecture"); done
-python3 "$script_dir/deploy-macos.py" --verify-only --app "$relocated" "${verify_args[@]}"
+"$python" "$script_dir/deploy-macos.py" --verify-only --app "$relocated" "${verify_args[@]}"
 architecture_label=$(echo "$architectures" | tr ' ' '-')
 archive="$output/Harpia-$version-macos-$architecture_label.zip"
 if $check_runtime; then
-  python3 - "$relocated/Contents/MacOS/$executable" "$archive.runtime.json" <<'PYRUNTIME'
+  "$python" - "$relocated/Contents/MacOS/$executable" "$archive.runtime.json" <<'PYRUNTIME'
 import subprocess, sys
 with open(sys.argv[2], "w") as report:
     subprocess.run([sys.argv[1], "--check-runtime"], stdout=report, timeout=90, check=True)
@@ -54,7 +55,7 @@ if [[ -n "$notary_profile" ]]; then
   fi
   report="$output/Harpia-$version-notarization.json"
   xcrun notarytool submit "$archive" --keychain-profile "$notary_profile" --wait --output-format json > "$report"
-  python3 - "$report" <<'PY'
+  "$python" - "$report" <<'PY'
 import json, sys
 with open(sys.argv[1]) as file:
     report = json.load(file)

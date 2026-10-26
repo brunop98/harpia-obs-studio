@@ -163,14 +163,23 @@ inline QString googleProsody(quint32 f)
 {
 	// The marks first, then the moods' nearest pace / pitch / volume.
 	QString rate, pitch, volume;
-	if (f & FxWhisper)
-		rate = QStringLiteral("slow"), volume = QStringLiteral("x-soft");
-	if (f & FxExcited)
-		rate = QStringLiteral("fast"), pitch = QStringLiteral("+2st"), volume = QStringLiteral("loud");
-	if (f & FxSad)
-		rate = QStringLiteral("slow"), pitch = QStringLiteral("-2st");
-	if (f & FxCalm)
-		rate = QStringLiteral("slow"), volume = QStringLiteral("soft");
+	if (f & FxWhisper) {
+		rate = QStringLiteral("slow");
+		volume = QStringLiteral("x-soft");
+	}
+	if (f & FxExcited) {
+		rate = QStringLiteral("fast");
+		pitch = QStringLiteral("+2st");
+		volume = QStringLiteral("loud");
+	}
+	if (f & FxSad) {
+		rate = QStringLiteral("slow");
+		pitch = QStringLiteral("-2st");
+	}
+	if (f & FxCalm) {
+		rate = QStringLiteral("slow");
+		volume = QStringLiteral("soft");
+	}
 	if (f & FxCheerful)
 		pitch = QStringLiteral("+2st");
 	if (f & FxSlow)

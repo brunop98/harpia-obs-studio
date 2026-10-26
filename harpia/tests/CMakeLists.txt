@@ -78,7 +78,7 @@ endfunction()
 
 foreach(name localsend phonesharing exportdone shareexportdialog settingsisolation shortcuthints shortcuthintswindow loadingdialog loadingtask loadingwindow projectwindow projectstate recentprojectswindow
     audiodrop blankeditor previewhandles previewpacing previewcontrols stillimage stillweight
-    textstylepresetswindow subtitles captionanimation captionperf socialfeatureswindow exportprogress
+    textstylepresetswindow subtitles tts captionanimation captionperf socialfeatureswindow exportprogress
     exportcadence exporttelemetry previewdecoder componentrender audioaudit previewgeometry previewinterval
     previewtransition systemaudio pcaudioapps ytdlp globalhotkeys maccoordinates macaudiopcm
     projectopenqueue remuxcompat exportencodingoptions exportencoding shareparts

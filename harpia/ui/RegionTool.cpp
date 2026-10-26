@@ -46,7 +46,6 @@ constexpr int kTabGap = kMargin + 3;
 constexpr int kStartW = 84;
 constexpr int kStartH = 24;
 constexpr int kStartGap = kMargin + 3;
-const QColor kAccent(0, 174, 239);
 
 // Common capture resolutions to snap to (device pixels).
 const QSize kSnapSizes[] = {{1280, 720}, {1920, 1080}, {2560, 1440}, {3840, 2160}};

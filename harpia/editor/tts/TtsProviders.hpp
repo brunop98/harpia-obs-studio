@@ -657,7 +657,8 @@ inline QVector<ClipWordTime> alignToTranscript(const QVector<TtsWord> &words, co
 		int i1 = 0, j1 = 0, diff = 0;
 		while (i1 < x.size() && j1 < y.size()) {
 			if (x[i1] == y[j1]) {
-				++i1, ++j1;
+				++i1;
+				++j1;
 				continue;
 			}
 			if (++diff > 1)
@@ -666,8 +667,10 @@ inline QVector<ClipWordTime> alignToTranscript(const QVector<TtsWord> &words, co
 				++i1;
 			else if (y.size() > x.size())
 				++j1;
-			else
-				++i1, ++j1;
+			else {
+				++i1;
+				++j1;
+			}
 		}
 		return diff + (x.size() - i1) + (y.size() - j1) <= 1;
 	};
@@ -687,7 +690,8 @@ inline QVector<ClipWordTime> alignToTranscript(const QVector<TtsWord> &words, co
 			out[i].startMs = heard[j].startMs;
 			out[i].endMs = std::max(heard[j].startMs, heard[j].endMs);
 			(*matched)[i] = true;
-			++i, ++j;
+			++i;
+			++j;
 		} else if (at(i + 1, j) >= at(i, j + 1)) {
 			++i;
 		} else {

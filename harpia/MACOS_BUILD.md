@@ -56,6 +56,10 @@ CMake explicitly, including when the shell has an older `SDKROOT` value.
 The selected Python is also used for CMake and packaging. Existing build caches
 are retained; use `--build-dir PATH` for a separate checkout/toolchain build.
 
+The `macos-ci` preset disables Xcode's compilation cache and clears any prior
+CAS path in the build cache. This avoids Xcode's `CAS filesystem cannot be
+initialized ... RootID does not exist` failure on hosted runners.
+
 The launcher accepts the options below and opens the resulting `Harpia.app`.
 For tests and a verified package without launching, use:
 

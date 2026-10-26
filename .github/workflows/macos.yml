@@ -63,6 +63,7 @@ jobs:
         run: |
           python3 harpia/tests/repository_checkout_test.py
           python3 harpia/tests/versionconfig_test.py
+          python3 harpia/tests/macos_presets_test.py
           python3 harpia/tests/qt_macos_tools_test.py
           python3 harpia/tests/macos_package_test.py
           python3 harpia/tests/macos_launcher_test.py

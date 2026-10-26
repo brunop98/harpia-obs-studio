@@ -57,11 +57,8 @@ set_target_properties(harpia-recorder PROPERTIES
   XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS "@executable_path/../Frameworks"
 )
 
-set(_harpia_qt_hints "${Qt6_DIR}/../../../bin" "${Qt6CoreTools_DIR}/../../../bin")
-foreach(_prefix IN LISTS CMAKE_PREFIX_PATH)
-  list(APPEND _harpia_qt_hints "${_prefix}/bin")
-endforeach()
-find_program(HARPIA_MACDEPLOYQT NAMES macdeployqt HINTS ${_harpia_qt_hints} REQUIRED)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/qt-macos-tools.cmake")
+harpia_prepare_qt_tools()
 
 set(_harpia_deploy_args
   --app "$<TARGET_BUNDLE_DIR:harpia-recorder>"

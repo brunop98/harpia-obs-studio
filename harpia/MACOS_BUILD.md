@@ -39,6 +39,14 @@ Tool downloads: [Xcode](https://developer.apple.com/xcode/),
 [Git](https://git-scm.com/download/mac), and
 [FFmpeg CLI](https://ffmpeg.org/download.html#build-mac) for `--test`.
 Qt and the OBS/FFmpeg build libraries come from the pinned dependency archives.
+That Qt SDK omits `macdeployqt` and QtTest. When needed, configuration downloads
+the checksum-verified matching Qt 6.11.1 source and builds only those components
+against the selected SDK. They are installed under the build directory's
+`harpia-qt-tools` folder; the original Qt runtime is kept in its dependency
+prefix. Sources are cached under `.deps/qt-tools`. A compatible complete local
+qtbase tree can be supplied with the `HARPIA_QTBASE_SOURCE_DIR` CMake cache entry
+for offline builds. Configure/build/install diagnostics for these components
+are saved under `harpia-qt-tools/<version-and-key>/*.log`.
 
 An explicit `DEVELOPER_DIR` is respected. Otherwise a compatible active or
 installed Xcode is selected for this process. The selected SDK is passed to

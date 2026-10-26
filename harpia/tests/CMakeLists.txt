@@ -150,6 +150,8 @@ add_test(NAME macos_package COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOU
 add_test(NAME macos_launcher COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/macos_launcher_test.py")
 add_test(NAME versionconfig COMMAND "${CMAKE_COMMAND}" -E env "HARPIA_TEST_CMAKE=${CMAKE_COMMAND}"
   "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/versionconfig_test.py")
+add_test(NAME qt_macos_tools COMMAND "${CMAKE_COMMAND}" -E env "HARPIA_TEST_CMAKE=${CMAKE_COMMAND}"
+  "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/qt_macos_tools_test.py")
 
 if(APPLE)
   add_test(NAME effectwarnings_gl COMMAND effectwarnings_test --require-gl)

@@ -317,6 +317,21 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/silencetrim_test.cpp" "$H/editor/SilenceTrim.cpp" -o "$WORK/silencetrim_test" $LF
 
+# Named timeline markers and the output end survive saves, slices and ripple edits.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/markersmodel_test.cpp" "$H/editor/SilenceTrim.cpp" \
+	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	-o "$WORK/markersmodel_test" $LF
+
+# An explicit video end bounds the audio prefix without shifting its fades.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF $AVCF \
+	"$HERE/markeraudio_test.cpp" "$H/editor/TimelineAudio.cpp" \
+	"$H/editor/VoiceoverMixer.cpp" "$H/editor/AudioRetimer.cpp" \
+	-o "$WORK/markeraudio_test" $LF $AVLF
+
 # Social media text styles use installed fonts and preserve caption content
 # when applied or saved through the existing style/project JSON format.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -592,6 +607,16 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
 	-o "$WORK/timelinekeys_test" $LF
+
+# The ruler marker row uses real pointer gestures and commits each drag once.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/markers_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
+	-o "$WORK/markers_test" $LF
 
 # Where a clip was split: the drawn shapes leave a gap the eye can see, the hit
 # rects still tile so the gap is not a dead strip, and only a REAL split -- one
@@ -1168,6 +1193,9 @@ QT_QPA_PLATFORM=offscreen "$WORK/colorswatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/loadingtask_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/loadingdialog_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/silencetrim_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/markersmodel_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/markeraudio_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/markers_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/socialsafeareas_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textstylepresets_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/curvepath_test" || rc=1

@@ -57,6 +57,13 @@ Three modes, each one step up from the last:
 - **Full Editing** — a multi-track timeline:
   - video, image, text, effect and audio clips; overlapping clips become
     **transitions**; marquee selection, groups, ripple, snapping;
+  - **markers** in the ruler above the tracks: double-click to add one,
+    drag to move it, or right-click to rename/delete it. Named markers draw
+    dotted guides across every track and provide snap points. Drag the
+    yellow **End** marker, or choose **Set video end here**, to set the end
+    of playback and full-timeline exports. Later clips remain editable;
+    **Reset video end** restores the automatic end. Markers and the end
+    boundary are saved with the project and support undo/redo;
   - **keyframes** per channel (position, scale, rotation, opacity) with easing
     curves, and **curved motion paths** with Bezier handles on the preview;
   - **components** stacked on any clip: transform and speed, ShaderToy-style

@@ -295,8 +295,11 @@ EditResult apply(const TimelineModel &model, const QVector<TlSpan> &ranges)
 			kept.append({cursor, range.fromMs});
 		cursor = range.toMs;
 	}
-	if (cursor < duration)
-		kept.append({cursor, duration});
+	// Material beyond an explicit output end is still editable. Ripple it with
+	// the removed pauses instead of discarding it at the rendering boundary.
+	const qint64 contentEnd = std::max(duration, model.contentDurationMs());
+	if (cursor < contentEnd)
+		kept.append({cursor, contentEnd});
 	TimelineModel changed = model;
 	bool anyFragment = false;
 	for (int trackIndex = 0; trackIndex < model.tracks.size(); ++trackIndex) {
@@ -350,6 +353,7 @@ EditResult apply(const TimelineModel &model, const QVector<TlSpan> &ranges)
 			}
 	}
 	changed.markers.clear();
+	changed.markerLabels.clear();
 	for (qint64 marker : model.markers) {
 		bool cut = false;
 		for (const TlSpan &range : removed)
@@ -357,11 +361,17 @@ EditResult apply(const TimelineModel &model, const QVector<TlSpan> &ranges)
 				cut = true;
 				break;
 			}
-		if (!cut)
-			changed.markers.append(mapTime(marker, removed));
+		if (!cut) {
+			const qint64 time = mapTime(marker, removed);
+			changed.markers.append(time);
+			if (model.markerLabels.contains(marker))
+				changed.markerLabels.insert(time, model.markerLabels.value(marker));
+		}
 	}
 	std::sort(changed.markers.begin(), changed.markers.end());
 	changed.markers.erase(std::unique(changed.markers.begin(), changed.markers.end()), changed.markers.end());
+	if (model.hasVideoEnd())
+		changed.videoEndMs = mapTime(model.videoEndMs, removed);
 	result.model = changed;
 	result.removed = removed;
 	result.removedMs = removedMs;

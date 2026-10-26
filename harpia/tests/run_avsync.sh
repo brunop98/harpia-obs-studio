@@ -93,6 +93,7 @@ build "$HERE/exporttelemetry_test.cpp" exporttelemetry_test
 # Every frame once: sources that number their frames, read the way an export
 # reads them and exported from a two-track 60 fps timeline.
 build "$HERE/exportcadence_test.cpp" exportcadence_test
+build "$HERE/markerexport_test.cpp" markerexport_test
 build "$HERE/timelinemix_test.cpp" timelinemix_test
 build "$HERE/swsoverrun_test.cpp" swsoverrun_test
 # The export window: what it says is what it asks for -- resolution, frame
@@ -187,7 +188,7 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
 	-o "$WORK/shareexportdialog_test" $WLF
 # Render diagnostics and regressions from the preview audit.
-for name in loadingwindow inspectorreuse silencetrimdialog socialfeatureswindow silencetrimav textstylepresetswindow rendererrors exporterrorwindow previewwarningwindow audioaudit previewgeometry previewinterval previewcontrols previewtransition previewlegacypacing; do
+for name in loadingwindow inspectorreuse silencetrimdialog socialfeatureswindow silencetrimav textstylepresetswindow rendererrors exporterrorwindow previewwarningwindow audioaudit previewgeometry previewinterval previewcontrols previewtransition previewlegacypacing markerendwindow; do
 	g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 		"$HERE/${name}_test.cpp" \
 		-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
@@ -351,6 +352,9 @@ for name in audioaudit previewgeometry previewinterval previewtransition; do
 done
 XDG_CONFIG_HOME="$WORK/preview-audit-config" XDG_DATA_HOME="$WORK/preview-audit-data" QT_QPA_PLATFORM=offscreen \
 	"$WORK/previewcontrols_test" || rc=1
+XDG_CONFIG_HOME="$WORK/marker-end-config" XDG_DATA_HOME="$WORK/marker-end-data" QT_QPA_PLATFORM=offscreen \
+	"$WORK/markerendwindow_test" "$WORK" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/markerexport_test" || rc=1
 XDG_CONFIG_HOME="$WORK/legacy-pacing-config" XDG_DATA_HOME="$WORK/legacy-pacing-data" QT_QPA_PLATFORM=offscreen \
 	"$WORK/previewlegacypacing_test" || rc=1
 XDG_CONFIG_HOME="$WORK/error-test-config" XDG_DATA_HOME="$WORK/error-test-data" QT_QPA_PLATFORM=offscreen \

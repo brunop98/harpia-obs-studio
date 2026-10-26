@@ -1,6 +1,8 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 // The Full-editing timeline as JSON — the project file's "tracks" array.
 //
@@ -666,9 +668,13 @@ inline TlTag tagFromJson(const QJsonObject &o)
 // opens projects is the code the round-trip test runs.
 inline void timelineToProject(const TimelineModel &m, QJsonObject &root)
 {
+	// Callers may reuse a root while editing: removed metadata must stay removed.
+	root.remove(QStringLiteral("markers"));
+	root.remove(QStringLiteral("markerLabels"));
+	root.remove(QStringLiteral("videoEndMs"));
 	// Tags and sound rules count too: a project set up before any clip is on
 	// it keeps its tag list.
-	if (m.isEmpty() && m.tags.isEmpty() && m.soundRules.isEmpty() && m.markers.isEmpty())
+	if (m.isEmpty() && m.tags.isEmpty() && m.soundRules.isEmpty() && m.markers.isEmpty() && !m.hasVideoEnd())
 		return;
 	QJsonArray trackArr;
 	for (const TlTrack &t : m.tracks)
@@ -679,7 +685,15 @@ inline void timelineToProject(const TimelineModel &m, QJsonObject &root)
 		for (const qint64 v : m.markers)
 			mk.append(double(v));
 		root[QStringLiteral("markers")] = mk;
+		QJsonObject labels;
+		for (auto it = m.markerLabels.cbegin(); it != m.markerLabels.cend(); ++it)
+			if (m.markers.contains(it.key()) && !it.value().trimmed().isEmpty())
+				labels[QString::number(it.key())] = it.value();
+		if (!labels.isEmpty())
+			root[QStringLiteral("markerLabels")] = labels;
 	}
+	if (m.hasVideoEnd())
+		root[QStringLiteral("videoEndMs")] = double(m.videoEndMs);
 	if (!m.soundRules.isEmpty()) {
 		QJsonArray sr;
 		for (const TlSoundRule &r : m.soundRules)
@@ -698,9 +712,36 @@ inline void timelineToProject(const TimelineModel &m, QJsonObject &root)
 inline TimelineModel timelineFromProject(const QJsonObject &root)
 {
 	TimelineModel m;
-	for (const QJsonValue &mv : root.value(QStringLiteral("markers")).toArray())
-		m.markers.append(qint64(mv.toDouble()));
+	const auto markerTime = [](const QJsonValue &value, qint64 *time) {
+		if (!value.isDouble())
+			return false;
+		const double number = value.toDouble();
+		if (!std::isfinite(number) || number < 0.0 ||
+		    number >= double(std::numeric_limits<qint64>::max()) || std::floor(number) != number)
+			return false;
+		*time = qint64(number);
+		return true;
+	};
+	for (const QJsonValue mv : root.value(QStringLiteral("markers")).toArray()) {
+		qint64 time = 0;
+		if (markerTime(mv, &time))
+			m.markers.append(time);
+	}
 	std::sort(m.markers.begin(), m.markers.end());
+	m.markers.erase(std::unique(m.markers.begin(), m.markers.end()), m.markers.end());
+	const QJsonObject labels = root.value(QStringLiteral("markerLabels")).toObject();
+	for (auto it = labels.begin(); it != labels.end(); ++it) {
+		bool valid = false;
+		const qint64 time = it.key().toLongLong(&valid);
+		if (valid && time >= 0 && m.markers.contains(time) && it.value().isString()) {
+			const QString label = it.value().toString();
+			if (!label.trimmed().isEmpty())
+				m.markerLabels.insert(time, label);
+		}
+	}
+	qint64 end = 0;
+	if (markerTime(root.value(QStringLiteral("videoEndMs")), &end) && end > 0)
+		m.videoEndMs = end;
 	for (const QJsonValue &tv : root.value(QStringLiteral("tracks")).toArray())
 		m.tracks.append(trackFromJson(tv.toObject()));
 	for (const QJsonValue &tv : root.value(QStringLiteral("tags")).toArray()) {

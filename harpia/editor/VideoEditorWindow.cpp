@@ -747,6 +747,20 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(timelineView_, &TimelineView::hoverScrubEnded, this,
 		&VideoEditorWindow::showPlayheadFrame);
 	connect(timelineView_, &TimelineView::clipsChanged, this, [this]() {
+		bool stoppedAtEnd = false;
+		if (fullEdit() && playing_ && timelineView_->model().hasVideoEnd()) {
+			qint64 playingAt = playAnchorMs_ + playClock_.elapsed();
+			if (audioPreview_ && audioPreview_->isPlaying()) {
+				const qint64 audioAt = audioPreview_->positionMs();
+				if (audioAt >= 0)
+					playingAt = audioAt;
+			}
+			const qint64 endMs = timelineView_->durationMs();
+			if (playingAt >= endMs || timelinePlayheadMs() >= endMs) {
+				stopAtTimelineEnd(endMs);
+				stoppedAtEnd = true;
+			}
+		}
 		// Sounds for events first: the rules' clips are derived from the
 		// timeline, so they are rebuilt before anything below reads it (the
 		// mix, the preview, the undo snapshot).
@@ -755,9 +769,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		// source is loaded — refresh it whenever the timeline changes.
 		timelineView_->setFrameRate(timelineFps());
 		updateInfoLabel();
+		updateVoiceoverAxis();
 		syncPreviewTransformTarget();
 		scriptScanDirty_ = true;
-		invalidateAudioMix(); // clips moved/trimmed: the mix no longer matches
+		// Chapter markers and their labels do not change the sound. Keep a
+		// matching mix playing while those annotations are edited.
+		if (!audioMixValid_ || audioMixKey() != audioMixKeyBuilt_)
+			invalidateAudioMix();
 		// Moving or trimming a clip on the timeline changes where the playhead
 		// falls inside it, so the pose and keyframe readout the Inspector shows
 		// have to follow along live.
@@ -782,7 +800,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		// on every mouse-move of a drag, and requestPreview renders the first
 		// one at once, paces the rest, and keeps only the newest.
 		if (fullEdit())
-			requestPreview(-1, timelinePlayheadMs());
+			requestPreview(-1, stoppedAtEnd ? std::max<qint64>(0, timelinePlayheadMs() - 1)
+						      : timelinePlayheadMs());
 		scheduleSnapshot();
 		rebuildSoundsTab();
 		rebuildTagsSection();
@@ -2144,7 +2163,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		return qint64(std::llround(1000.0 / (fps > 1.0 ? fps : 30.0)));
 	};
 	auto seekTo = [this](qint64 ms) {
-		const qint64 t = std::clamp<qint64>(ms, 0, timelineView_->durationMs());
+		const TimelineModel &model = timelineView_->model();
+		qint64 editingEnd = std::max(model.contentDurationMs(), model.durationMs());
+		for (qint64 marker : model.markers)
+			editingEnd = std::max(editingEnd, marker);
+		const qint64 t = std::clamp<qint64>(ms, 0, editingEnd);
 		timelineView_->setPlayhead(t);
 		onTimelineScrub(t);
 	};
@@ -4782,7 +4805,7 @@ void VideoEditorWindow::addActiveSourceToTimeline()
 	c.sourceId = s->id;
 	c.srcStartMs = 0;
 	c.srcEndMs = s->durationMs;
-	c.outStartMs = timelineView_->durationMs();
+	c.outStartMs = timelineView_->model().contentDurationMs();
 	timelineView_->addClip(TlTrack::Kind::Video, c);
 	if (!fullEdit())
 		setEditMode(EditMode::Full);
@@ -11813,7 +11836,7 @@ void VideoEditorWindow::sendToFullEditing()
 
 	// Append, never overwrite: sending twice piles clips up, which is visible
 	// and undoable, whereas sending ON TOP of Full-editing work is neither.
-	const qint64 at = timelineView_->durationMs();
+	const qint64 at = timelineView_->model().contentDurationMs();
 	QVector<TlClip> clips;
 	if (multiCut()) {
 		clips = clipsFromSegments(tracks_->segments(), at);
@@ -14210,6 +14233,18 @@ void VideoEditorWindow::stopPlayback()
 	playSeekers_.clear();
 }
 
+void VideoEditorWindow::stopAtTimelineEnd(qint64 endMs)
+{
+	stopPlayback();
+	timelineView_->setPlayhead(endMs);
+	cursorTimeLabel_->setText(previewTimeText(endMs));
+	syncPreviewTransformTarget(false);
+	syncComponentPanel();
+	// The marker names the first instant outside the output. Hold the final
+	// in-range frame while leaving the playhead exactly on that boundary.
+	showTimelineFrame(std::max<qint64>(0, endMs - 1));
+}
+
 void VideoEditorWindow::onPlayTick()
 {
 	if (!playing_ || !valid_)
@@ -14236,7 +14271,12 @@ void VideoEditorWindow::onPlayTick()
 				playClock_.restart();
 			}
 		}
-		if (outPos >= total) { // loop
+		if (outPos >= total) {
+			if (timelineView_->model().hasVideoEnd()) {
+				stopAtTimelineEnd(total);
+				return;
+			}
+			// Automatic duration keeps the existing whole-timeline loop.
 			playAnchorMs_ = 0;
 			playClock_.restart();
 			outPos = 0;
@@ -15030,11 +15070,10 @@ void VideoEditorWindow::onSave()
 		ec.fps = timelineFps();
 		ec.seconds = timelineView_->durationMs() / 1000.0;
 		ec.previewFrame = canvas_->currentFrame();
-		// Offer the range only when it is actually a smaller thing than the
-		// project. A "Selection" entry that covers everything is a choice with
-		// one outcome, which is worse than no choice at all.
+		// Offer the chosen range when its bounds differ from the full output.
+		// An explicit selection can include clips past the video-end marker.
 		span.fromMs = std::max<qint64>(0, span.fromMs);
-		span.toMs = std::min(span.toMs, timelineView_->durationMs());
+		span.toMs = std::min(span.toMs, timelineView_->model().contentDurationMs());
 		// Text variations: every combination is a version (Variations tab).
 		{
 			const QVector<text_variations::Slot> vs = text_variations::slotsOf(
@@ -15055,7 +15094,7 @@ void VideoEditorWindow::onSave()
 				ec.variantLabels << parts.join(QStringLiteral("  ·  "));
 			}
 		}
-		if (span.isValid() && span.durationMs() < timelineView_->durationMs()) {
+		if (span.isValid() && (span.fromMs != 0 || span.toMs != timelineView_->durationMs())) {
 			ec.rangeSeconds = span.durationMs() / 1000.0;
 			ec.rangeLabel = QStringLiteral("Selection  (%1 – %2)")
 						.arg(timeTextCentis(span.fromMs),

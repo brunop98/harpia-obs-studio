@@ -178,6 +178,16 @@ public:
 	qint64 overlapWith(int track, int a, int b) const;     // ms, 0 when apart
 	// Markers: add one at the playhead, or remove the one already there.
 	void toggleMarkerAtPlayhead();
+	void addMarker(qint64 atMs, const QString &label = QString());
+	bool renameMarker(qint64 atMs, const QString &label);
+	bool removeMarker(qint64 atMs);
+	void setVideoEnd(qint64 endMs);
+	void resetVideoEnd();
+	QRect markerBandRectForTest() const { return markerBandRect(); }
+	QRect markerHandleRectForTest(qint64 atMs, bool end = false) const
+	{
+		return markerHandleRect(atMs, end);
+	}
 	// Nearest marker before/after `fromMs`, or -1 when there is none that way.
 	qint64 markerNear(qint64 fromMs, bool forward) const;
 	bool isSelected(int track, int clip) const;
@@ -502,6 +512,7 @@ private:
 	int laneScroll_ = 0;
 	QScrollBar *laneBar_ = nullptr;
 	qint64 spanMs() const;                 // total axis length (duration + tail)
+	qint64 timelineExtentMs() const;       // all editable clips/markers, including beyond the video end
 	qint64 visibleMs() const;              // spanMs / zoom
 
 	// spanMs() asks the model for its duration, which walks every clip in the
@@ -568,6 +579,19 @@ private:
 	void commitEdit(); // clipsChanged + editCommitted, for a finished action
 
 	void drawRuler(QPainter &p) const;
+	void drawMarkers(QPainter &p) const;
+	QRect markerBandRect() const;
+	QRect markerHandleRect(qint64 atMs, bool end) const;
+	QString markerLabel(qint64 atMs) const;
+	struct MarkerHit {
+		qint64 timeMs = -1;
+		bool end = false;
+		bool valid() const { return timeMs >= 0; }
+	};
+	MarkerHit markerAt(const QPoint &pos) const;
+	void showMarkerMenu(const QPoint &pos, const QPoint &globalPos);
+	void editMarkerName(qint64 atMs);
+	void cancelMarkerDrag();
 	void drawClip(QPainter &p, int track, int clip, bool silent) const;
 
 	// ---- fade handles (audio clips) ----
@@ -762,8 +786,13 @@ private:
 	// drags the playhead across a still view. Both are "navigating", and mixing
 	// them up is why it needs its own mode rather than a flag on Scrub.
 	// TrackDrag is a header being dragged up or down to reorder the lanes.
-	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan, KeyDrag, Volume, TrackDrag, Marquee };
+	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan, KeyDrag, Volume, TrackDrag, Marquee, MarkerDrag };
 	Mode mode_ = Mode::None;
+	qint64 selectedMarkerMs_ = -1;
+	bool selectedEndMarker_ = false;
+	qint64 markerDragFromMs_ = -1;
+	qint64 markerDragTimeMs_ = -1;
+	bool markerDragEnd_ = false;
 	// The lane whose header is being dragged, and the slot (an insertion index,
 	// "before lane N", clamped into the lane's own kind group) it would land in
 	// if released now. -1 = none yet.

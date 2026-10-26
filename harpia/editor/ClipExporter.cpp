@@ -2094,7 +2094,8 @@ QString ClipExporter::mixTimelineAudio(const QString &videoPath, const Options &
 	if (takes.empty())
 		return QString(); // a silent timeline is fine — leave the video as-is
 	// originalVolume 0: the rendered video has no audio of its own to keep.
-	return VoiceoverMixer::mix(videoPath, 0.0, false, takes, &cancel_);
+	return VoiceoverMixer::mix(videoPath, 0.0, false, takes, &cancel_,
+				  opts.timeline.hasVideoEnd() ? opts.timeline.videoEndMs : -1);
 }
 
 } // namespace harpia

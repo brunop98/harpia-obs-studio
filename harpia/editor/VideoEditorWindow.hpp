@@ -517,6 +517,7 @@ private:
 	QString exportSettingsSummary(const ClipExporter::Options &options) const;
 	void startPlayback();
 	void stopPlayback();
+	void stopAtTimelineEnd(qint64 endMs);
 	// The three editor modes map 1:1 onto stack_ page indices.
 	enum class EditMode { Trim = 0, MultiCut = 1, Full = 2 };
 	void setEditMode(EditMode mode);

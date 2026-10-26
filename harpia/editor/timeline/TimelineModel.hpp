@@ -1280,9 +1280,13 @@ struct TimelineModel {
 	// the clip spans the timeline, which the clip form covers by being dragged
 	// that wide.
 
-	// Points of interest on the output timeline, sorted, in ms. Purely for
-	// navigation — nothing about the render depends on them.
+	// Points of interest on the output timeline, sorted, in ms. Labels are
+	// optional so existing projects' numeric marker positions remain valid.
 	QVector<qint64> markers;
+	QMap<qint64, QString> markerLabels;
+	// An output boundary, not a destructive trim: clips after it stay editable.
+	// Only a positive value overrides the last clip's automatic end.
+	qint64 videoEndMs = -1;
 
 	QVector<TlTrack> tracks;
 
@@ -1440,7 +1444,7 @@ struct TimelineModel {
 		return t.solo || !anySolo();
 	}
 
-	qint64 durationMs() const
+	qint64 contentDurationMs() const
 	{
 		qint64 d = 0;
 		for (const TlTrack &t : tracks)
@@ -1448,6 +1452,9 @@ struct TimelineModel {
 				d = std::max(d, c.outEndMs());
 		return d;
 	}
+
+	bool hasVideoEnd() const { return videoEndMs > 0; }
+	qint64 durationMs() const { return hasVideoEnd() ? videoEndMs : contentDurationMs(); }
 
 	bool isEmpty() const
 	{
@@ -1459,7 +1466,8 @@ struct TimelineModel {
 
 	bool operator==(const TimelineModel &o) const
 	{
-		return tracks == o.tracks && markers == o.markers && soundRules == o.soundRules && tags == o.tags;
+		return tracks == o.tracks && markers == o.markers && markerLabels == o.markerLabels &&
+		       videoEndMs == o.videoEndMs && soundRules == o.soundRules && tags == o.tags;
 	}
 	bool operator!=(const TimelineModel &o) const { return !(*this == o); }
 };

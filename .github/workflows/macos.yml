@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
   push:
     branches: [master, codex/macos-support]
-    paths: ['harpia/**', 'libobs/**', 'libobs-opengl/**', 'plugins/**', 'cmake/**', 'CMakeLists.txt', 'CMakePresets.json', '.github/workflows/macos.yml']
+    paths: ['harpia/**', 'libobs/**', 'libobs-opengl/**', 'plugins/**', 'cmake/**', 'CMakeLists.txt', 'CMakePresets.json', '.gitmodules', '.github/workflows/macos.yml']
   pull_request:
-    paths: ['harpia/**', 'libobs/**', 'libobs-opengl/**', 'plugins/**', 'cmake/**', 'CMakeLists.txt', 'CMakePresets.json', '.github/workflows/macos.yml']
+    paths: ['harpia/**', 'libobs/**', 'libobs-opengl/**', 'plugins/**', 'cmake/**', 'CMakeLists.txt', 'CMakePresets.json', '.gitmodules', '.github/workflows/macos.yml']
 permissions:
   contents: read
 concurrency:
@@ -16,7 +16,11 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          # Windows capture sources are not needed for this Mac build. Git
+          # still requires valid .gitmodules metadata during checkout cleanup.
+          submodules: false
       - name: Select an installed Xcode meeting the repository SDK requirement
         id: toolchain
         shell: bash
@@ -50,15 +54,16 @@ jobs:
               print('::notice::' + message)
               with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output: output.write('## macOS validation unavailable\n\n' + message + '\n')
           PY
-      - name: Check packaging logic
+      - name: Check repository and packaging logic
         run: |
+          python3 harpia/tests/repository_checkout_test.py
           python3 harpia/tests/macos_package_test.py
           python3 harpia/tests/macos_launcher_test.py
           bash -n harpia/scripts/build-macos.sh harpia/scripts/package-macos.sh harpia/scripts/make-macos-icon.sh harpia/scripts/macos-tools.sh harpia/scripts/build-and-run-harpia.sh harpia/scripts/build-and-run-harpia.command
       - name: Install build and media-test tools
         if: steps.toolchain.outputs.available == 'true'
         run: brew install cmake ffmpeg pkg-config python
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         if: steps.toolchain.outputs.available == 'true'
         with:
           path: .deps
@@ -66,7 +71,7 @@ jobs:
       - name: Build, deploy, test and verify a relocated package
         if: steps.toolchain.outputs.available == 'true'
         run: harpia/scripts/build-macos.sh --preset macos-ci --build-dir build_macos_ci --test --package --check-runtime
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: steps.toolchain.outputs.available == 'true' && success()
         with:
           name: Harpia-macOS-${{ runner.arch }}-development

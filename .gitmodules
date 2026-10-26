@@ -1,0 +1,3 @@
+[submodule "plugins/win-dshow/libdshowcapture"]
+	path = deps/libdshowcapture/src
+	url = https://github.com/obsproject/libdshowcapture.git

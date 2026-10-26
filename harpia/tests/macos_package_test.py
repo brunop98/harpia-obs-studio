@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Packaging regression tests which run without a Mac SDK or signing identity."""
 import importlib.util
+import os
 from pathlib import Path
 import plistlib
 import shutil
+import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -26,7 +29,9 @@ class PackagingTests(unittest.TestCase):
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory(prefix="harpia package ")
         self.addCleanup(self.scratch.cleanup)
-        self.root = Path(self.scratch.name)
+        # macOS exposes /var through /private/var. The deployer canonicalizes
+        # paths; fixture metadata and expected paths must use the same identity.
+        self.root = Path(self.scratch.name).resolve()
         self.app = self.root / "Harpia.app"
         self.executable = binary(self.app / "Contents/MacOS/Harpia")
         self.deployer = deploy.Deployer(self.app, [], ["arm64"])
@@ -209,6 +214,24 @@ class PackagingTests(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=True):
             with self.assertRaisesRegex(RuntimeError, "standalone Mac executable"):
                 deploy.stage(args, self.deployer)
+
+
+class TemporaryDirectoryTests(unittest.TestCase):
+    def test_packaging_checks_accept_a_symlinked_system_temp_directory(self):
+        # Reproduce macOS's /var -> /private/var on any host. Run only the
+        # packaging cases in the child, so this regression cannot recurse.
+        with tempfile.TemporaryDirectory(prefix="harpia temp alias ") as scratch:
+            root = Path(scratch).resolve()
+            physical = root / "physical"
+            physical.mkdir()
+            alias = root / "temporary directory link"
+            alias.symlink_to(physical, target_is_directory=True)
+            result = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve()), "PackagingTests"],
+                env=dict(os.environ, TMPDIR=str(alias)), text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout)
 
 
 if __name__ == "__main__":

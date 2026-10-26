@@ -23,7 +23,11 @@ needs (see [The OBS tree](#the-obs-tree)).
   recording itself.
 - **Follow Mouse:** the region pans to keep the pointer in view.
 - **Multiple areas:** lay out several same-size areas, across monitors; the
-  recording switches to whichever one the mouse moves into.
+  recording switches to whichever one the mouse moves into. For Custom Region
+  presets, select **Recording areas → Region movement → Multiple areas** in
+  Preset Settings. Or right-click the recording frame and choose **Multiple
+  areas → Arrange areas…** to enable it and place areas directly. Switching it
+  off keeps the layout for next time; layout changes are locked during a take.
 - **Zoom** (F4) and **spotlight** effects while recording; click ripples and a
   cursor highlight.
 - **Webcam** recorded alongside as its own file, with a live preview.

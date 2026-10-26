@@ -694,6 +694,25 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	QWidget *rightColorRow = addColorField(v, QStringLiteral("Right click color"), rightColorBtn_);
 	dependsOn(mouseClicksCheck_, {leftColorRow, rightColorRow});
 
+	mousePreview_ = new MousePreview(this);
+	addField(v, QStringLiteral("Preview"), QString(), mousePreview_);
+	connect(mouseAreaCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::updateMousePreview);
+	connect(mouseClicksCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::updateMousePreview);
+	connect(highlightSizeSlider_, &QSlider::valueChanged, this, &PresetEditorDialog::updateMousePreview);
+	v->addStretch(1);
+	addPage(QStringLiteral("Mouse"), mousePage);
+
+	// ===== Recording areas =====
+	// Area switching belongs with capture setup, rather than being buried
+	// among cursor effects on the Mouse page.
+	QWidget *recordingAreasPage = makePage(v);
+	auto *areasHint = new QLabel(
+		QStringLiteral("To record multiple areas, choose Multiple areas below and save. "
+			       "Then right-click the recording frame → Multiple areas → Arrange areas…"), this);
+	areasHint->setWordWrap(true);
+	v->addWidget(areasHint);
+	v->addSpacing(12);
+
 	// ---- Region movement: stays put / Follow Mouse / Multiple areas ----
 	// One dropdown, not two checkboxes: the two ways of moving the region are
 	// exclusive, and a pair of checkboxes that untick each other reads as a
@@ -706,6 +725,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	multiAreaCheck_->setChecked(preset.multiArea && !preset.followMouse);
 	multiAreaCheck_->hide();
 	regionMoveCombo_ = new QComboBox(this);
+	regionMoveCombo_->setObjectName(QStringLiteral("regionMovement"));
 	regionMoveCombo_->addItem(QStringLiteral("Stays put"));      // 0
 	regionMoveCombo_->addItem(QStringLiteral("Follow Mouse"));   // 1
 	regionMoveCombo_->addItem(QStringLiteral("Multiple areas")); // 2
@@ -845,7 +865,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	countLay->addWidget(multiAreaClearBtn_);
 	QWidget *multiAreaCountRow = addField(
 		v, QStringLiteral("Areas"),
-		QStringLiteral("Lay them out on the desktop: right-click the region frame → Arrange areas…"),
+		QStringLiteral("Lay them out on the desktop: right-click the recording frame → Multiple areas → Arrange areas…"),
 		countBox);
 	connect(multiAreaClearBtn_, &QPushButton::clicked, this, [this]() {
 		multiAreaSpots_.clear();
@@ -874,13 +894,8 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 		multiAreaCountRow->hide();
 	}
 
-	mousePreview_ = new MousePreview(this);
-	addField(v, QStringLiteral("Preview"), QString(), mousePreview_);
-	connect(mouseAreaCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::updateMousePreview);
-	connect(mouseClicksCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::updateMousePreview);
-	connect(highlightSizeSlider_, &QSlider::valueChanged, this, &PresetEditorDialog::updateMousePreview);
 	v->addStretch(1);
-	addPage(QStringLiteral("Mouse"), mousePage);
+	pages.insert(1, {QStringLiteral("Recording areas"), recordingAreasPage});
 
 	// ===== Spotlight =====
 	// The recorded display's width, for the preview's scaling. Resolved here
@@ -1337,6 +1352,8 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 			return modeUsesVideoEncoder(mode_);
 		if (title == QStringLiteral("Mouse"))
 			return modeSupportsMouseFx(mode_);
+		if (title == QStringLiteral("Recording areas"))
+			return modeUsesRegion(mode_);
 		if (title == QStringLiteral("Spotlight"))
 			return modeSupportsSpotlight(mode_);
 		if (title == QStringLiteral("Guides"))
@@ -1399,6 +1416,9 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 				text += QLatin1Char(' ') + l->text();
 			for (const QAbstractButton *b : row->findChildren<QAbstractButton *>())
 				text += QLatin1Char(' ') + b->text();
+			for (const QComboBox *combo : row->findChildren<QComboBox *>())
+				for (int item = 0; item < combo->count(); ++item)
+					text += QLatin1Char(' ') + combo->itemText(item);
 			if (auto *asLabel = qobject_cast<QLabel *>(row))
 				text += QLatin1Char(' ') + asLabel->text();
 			searchRows_.push_back({row, i, text.toLower()});
@@ -1542,6 +1562,7 @@ template <class F> void forEachPageField(const QString &page, F &&f)
 		f(&Preset::recordMouseClicks);
 		f(&Preset::leftClickColor);
 		f(&Preset::rightClickColor);
+	} else if (page == QStringLiteral("Recording areas")) {
 		f(&Preset::followMouse);
 		f(&Preset::followPaddingPct);
 		f(&Preset::followSmoothness);

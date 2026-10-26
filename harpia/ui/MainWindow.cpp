@@ -912,6 +912,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(regionTool_.get(), &RegionTool::saveRegionRequested, this, &MainWindow::onSaveRegionRequested);
 	connect(regionTool_.get(), &RegionTool::manageRegionsRequested, this,
 		&MainWindow::openSavedRegionsManager);
+	connect(regionTool_.get(), &RegionTool::multiAreaToggled, this, &MainWindow::setMultiAreaEnabled);
 	connect(regionTool_.get(), &RegionTool::arrangeAreasRequested, this, &MainWindow::onArrangeAreas);
 	connect(regionTool_.get(), &RegionTool::clearAreasRequested, this, [this]() { clearAllAreas(true); });
 	connect(regionTool_.get(), &RegionTool::pickWindowRequested, this, &MainWindow::startWindowPick);
@@ -5648,7 +5649,7 @@ void MainWindow::onAreasEdited(int monitor, const QVector<QPoint> &tops)
 
 void MainWindow::clearAllAreas(bool confirm)
 {
-	if (recorder_.isRecording() || starting_ || stopping_)
+	if (recorder_.isRecording() || starting_ || stopping_ || countingDown_)
 		return; // the layout is fixed for a take
 	Preset *cur = const_cast<Preset *>(presets_.find(activePresetId_));
 	if (!cur || cur->multiAreaSpots.empty())
@@ -5689,7 +5690,8 @@ void MainWindow::finishArrange()
 void MainWindow::updateAreaOverlay()
 {
 	if (regionTool_)
-		regionTool_->setMultiAreaMenu(multiAreaWanted(), int(activePreset().multiAreaSpots.size()));
+		regionTool_->setMultiAreaMenu(multiAreaWanted(), int(activePreset().multiAreaSpots.size()),
+					    !recorder_.isRecording() && !starting_ && !stopping_ && !countingDown_);
 	if (areaArranging_)
 		return;
 	const QSize size(currentRegion_.width, currentRegion_.height);
@@ -5740,16 +5742,43 @@ void MainWindow::setAreaStylePreview(int mode)
 	updateAreaOverlay();
 }
 
+void MainWindow::setMultiAreaEnabled(bool enabled)
+{
+	if (captureMode_ != CaptureMode::Region || recorder_.isRecording() || starting_ || stopping_ ||
+	    countingDown_)
+		return;
+	const Preset *cur = presets_.find(activePresetId_);
+	if (!cur)
+		return;
+	Preset updated = *cur;
+	updated.multiArea = enabled;
+	if (enabled) {
+		updated.followMouse = false;
+		setFollowWindow(false);
+	}
+	presets_.upsert(updated);
+	if (!enabled)
+		finishArrange();
+	syncFollowMouse();
+	updateRegionLeaveVisibility();
+	rebindPresetHotkeys();
+	updateRegionToolVisibility();
+	refreshReadiness();
+}
+
 void MainWindow::onArrangeAreas()
 {
+	if (recorder_.isRecording() || starting_ || stopping_ || countingDown_)
+		return; // the layout is fixed for a take
+	if (!multiAreaWanted() && captureMode_ == CaptureMode::Region && currentRegion_.enabled &&
+	    currentRegion_.width > 0 && currentRegion_.height > 0)
+		setMultiAreaEnabled(true);
 	if (!multiAreaWanted()) {
 		statusBar()->showMessage(
-			QStringLiteral("Multiple areas needs a Custom Region and the preset's Multiple areas option."),
+			QStringLiteral("Choose a Custom Region before arranging multiple areas."),
 			6000);
 		return;
 	}
-	if (recorder_.isRecording() || starting_ || stopping_)
-		return; // the layout is fixed for a take
 	areaEdit_ = multiAreaLayout();
 	areaArranging_ = true;
 	if (regionTool_)

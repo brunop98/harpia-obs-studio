@@ -171,7 +171,7 @@ private:
 	QPushButton *leftColorBtn_ = nullptr;
 	QPushButton *rightColorBtn_ = nullptr;
 	MousePreview *mousePreview_ = nullptr;
-	// How the region moves while recording (Custom Region only): one dropdown
+	// Recording areas page (Custom Region only): one movement dropdown
 	// -- Stays put / Follow Mouse / Multiple areas -- because the two features
 	// are exclusive. followCheck_ / multiAreaCheck_ are the hidden state it
 	// drives, so the rows that depend on each (dependsOn) work unchanged.

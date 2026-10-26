@@ -127,13 +127,13 @@ public:
 	// the interior out from under a drag that started there drops it halfway.
 	bool isInteracting() const { return dragZone_ != Zone::None; }
 
-	// Offer "Arrange areas…" on the right-click menu -- only where the active
-	// preset records Multi-Area, so other presets keep the short menu.
-	// `extraAreas` (areas besides the region) enables "Remove all areas".
-	void setMultiAreaMenu(bool on, int extraAreas = 0)
+	// Multiple areas is always discoverable on the region's right-click menu.
+	// Keep the saved state visible, but lock layout edits during a take.
+	void setMultiAreaMenu(bool enabled, int extraAreas = 0, bool editable = true)
 	{
-		multiAreaMenu_ = on;
+		multiAreaEnabled_ = enabled;
 		extraAreas_ = extraAreas;
+		multiAreaEditable_ = editable;
 	}
 
 	// "Snap to a window…" on the right-click menu (where the platform can list
@@ -155,6 +155,7 @@ signals:
 	void startRecordingRequested(); // the Record button below the frame was pressed
 	void saveRegionRequested();  // "Save Region…" chosen from the right-click menu
 	void manageRegionsRequested(); // "Manage saved regions…" chosen
+	void multiAreaToggled(bool enabled); // enable/disable without losing the saved layout
 	void arrangeAreasRequested();  // "Arrange areas…" chosen (Multi-Area)
 	void clearAreasRequested();    // "Remove all areas" chosen (Multi-Area)
 	void pickWindowRequested();    // "Snap to a window…" chosen
@@ -226,7 +227,8 @@ private:
 	Mode mode_ = Mode::Editing;
 	bool paused_ = false;
 	bool moveHandle_ = false;
-	bool multiAreaMenu_ = false;
+	bool multiAreaEnabled_ = false;
+	bool multiAreaEditable_ = true;
 	bool windowPick_ = false;
 	QString followTitle_;
 	bool following_ = false;

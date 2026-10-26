@@ -436,6 +436,7 @@ private:
 	void syncMultiArea();
 	void tickMultiArea();
 	void updateAreaOverlay();
+	void setMultiAreaEnabled(bool enabled);
 	void onArrangeAreas();
 	// The area from a window: point and click (WindowPicker), then optionally
 	// keep the area on that window as it moves or resizes.

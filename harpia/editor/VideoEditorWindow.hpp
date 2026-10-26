@@ -335,6 +335,7 @@ private:
 private slots:
 	void onExportFinished(bool ok, bool canceled, const QString &err);
 	void openSilenceTrim();
+	void openBeatDetection(int track, int clip);
 	void onPlayPause();
 	void onResetMarker(); // move the playhead back to the start
 	void onPlayTick();

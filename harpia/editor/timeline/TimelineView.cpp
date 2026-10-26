@@ -5189,9 +5189,18 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		}
 		snd->setToolTipsVisible(true);
 	}
-	// Subtitles from what this clip says: a media clip on any lane (captions,
-	// stills and effects have no speech). With a selection that includes it,
-	// every selected media clip is transcribed.
+	// Rhythm analysis reads the clicked media clip, even if its lane is muted
+	// or locked: adding timeline markers does not change the clip itself.
+	QAction *beats = nullptr;
+	if (menuClip.type == TlClip::Type::Video && menuClip.sourceId > 0) {
+		menu.addSeparator();
+		beats = menu.addAction(QStringLiteral("Detect beats…"));
+		beats->setObjectName(QStringLiteral("detectClipBeatsAction"));
+		beats->setToolTip(QStringLiteral(
+			"Find the rhythm in this clip's audio and review beat markers for snapping across the timeline."));
+	}
+	// With a selection that includes this clip, transcribe every selected
+	// media clip into captions. Stills and effects have no soundtrack.
 	QAction *subs = nullptr;
 	if (menuClip.type == TlClip::Type::Video && menuClip.soundRule == 0 && menuClip.sourceId > 0) {
 		menu.addSeparator();
@@ -5271,6 +5280,10 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	}
 	if (respeak && chosen == respeak) {
 		emit respeakRequested(track, clip, atOutMs);
+		return;
+	}
+	if (beats && chosen == beats) {
+		emit beatsRequested(track, clip);
 		return;
 	}
 	if (subs && chosen == subs) {

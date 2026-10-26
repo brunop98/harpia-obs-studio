@@ -57,6 +57,7 @@
 #include "timeline/TextStylePresets.hpp"
 #include "SilenceTrim.hpp"
 #include "SilenceTrimDialog.hpp"
+#include "BeatDetectionDialog.hpp"
 #include "timeline/FrameSignature.hpp"
 #include "TrackEditor.hpp"
 #include "VoiceoverMixer.hpp"
@@ -869,6 +870,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		&VideoEditorWindow::onSoundForTransition);
 	connect(timelineView_, &TimelineView::soundRulesRequested, this, &VideoEditorWindow::showSoundsTab);
 	connect(timelineView_, &TimelineView::subtitlesRequested, this, &VideoEditorWindow::openSubtitles);
+	connect(timelineView_, &TimelineView::beatsRequested, this, &VideoEditorWindow::openBeatDetection);
 	connect(timelineView_, &TimelineView::respeakRequested, this, &VideoEditorWindow::respeakSentence);
 	connect(timelineView_, &TimelineView::slipRequested, this, &VideoEditorWindow::openSlip);
 	// Fit to selection (Text to speech) follows what is selected.
@@ -9148,6 +9150,13 @@ void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
 	silence->setObjectName(QStringLiteral("trimSilenceAction"));
 	silence->setToolTip(QStringLiteral("Review long pauses, preview the trimmed result, then ripple-cut every track together as one undo action."));
 	connect(silence, &QAction::triggered, this, &VideoEditorWindow::openSilenceTrim);
+	QAction *beats = fullOnly(tools->addAction(QStringLiteral("Detect beats…")));
+	beats->setObjectName(QStringLiteral("detectBeatsAction"));
+	beats->setToolTip(QStringLiteral("Find musical beats in the selected audio or video clip, then add snapping markers."));
+	connect(beats, &QAction::triggered, this, [this]() {
+		openBeatDetection(timelineView_ ? timelineView_->selectedTrack() : -1,
+				  timelineView_ ? timelineView_->selectedClip() : -1);
+	});
 	tools->addSeparator();
 	connect(keyed(tools->addAction(QStringLiteral("Keyboard shortcuts…")), "view.shortcuts"), &QAction::triggered,
 		this, &VideoEditorWindow::openShortcutPanel);
@@ -9196,6 +9205,65 @@ void VideoEditorWindow::refreshMenuLabels()
 		const QString base = a->text().section(QLatin1Char('\t'), 0, 0);
 		a->setText(withShortcut(base, shortcuts_->displayText(pr.second)));
 	}
+}
+
+void VideoEditorWindow::openBeatDetection(int track, int clip)
+{
+	if (!fullEdit() || !timelineView_ || track < 0 || track >= timelineView_->model().tracks.size() ||
+	    clip < 0 || clip >= timelineView_->model().tracks[track].clips.size()) {
+		QMessageBox::information(this, QStringLiteral("Detect beats"),
+			QStringLiteral("Select a music or video clip on the Full Editing timeline first."));
+		return;
+	}
+	const TlClip target = timelineView_->model().tracks[track].clips[clip];
+	if (target.type != TlClip::Type::Video || target.sourceId <= 0 || target.srcLenMs() <= 0) {
+		QMessageBox::information(this, QStringLiteral("Detect beats"),
+			QStringLiteral("Choose an audio or video clip with a soundtrack to find its beats."));
+		return;
+	}
+	const EditorSource *source = sourceById(target.sourceId);
+	const QString path = source ? source->path : QString();
+	stopPlayback();
+	commitSnapshot();
+	const TimelineModel original = timelineView_->model();
+	BeatDetectionDialog dialog(path, target, this);
+	if (dialog.exec() != QDialog::Accepted)
+		return;
+	// Analysis uses a snapshot. Timers and queued callbacks still run while a
+	// modal window is open, so do not apply stale source positions to a new edit.
+	if (timelineView_->model() != original) {
+		warnAndLog(this, QStringLiteral("Detect beats"),
+			QStringLiteral("The timeline changed during analysis. Detect beats again to align the markers with the current clip."));
+		return;
+	}
+	TimelineModel next = original;
+	QMap<qint64, bool> positions;
+	for (qint64 at : original.markers)
+		positions.insert(at, true);
+	int added = 0;
+	int number = 0;
+	for (qint64 at : dialog.selectedBeatTimes()) {
+		++number;
+		if (at < 0 || at < target.outStartMs || at >= target.outEndMs())
+			continue;
+		// Rerunning detection, or a nearby hand-placed section marker, should
+		// not produce doubled snap targets or overwrite a marker's name.
+		const auto after = positions.lowerBound(at);
+		if ((after != positions.end() && after.key() - at <= 20) ||
+		    (after != positions.begin() && at - std::prev(after).key() <= 20))
+			continue;
+		positions.insert(at, true);
+		next.markers.append(at);
+		next.markerLabels.insert(at, QStringLiteral("Beat %1").arg(number));
+		++added;
+	}
+	if (added > 0) {
+		std::sort(next.markers.begin(), next.markers.end());
+		timelineView_->setModelAndCommit(next);
+	}
+	if (infoLabel_)
+		infoLabel_->setText(added > 0 ? QStringLiteral("Added %1 beat markers. Undo removes them together.").arg(added)
+					     : QStringLiteral("These beats already have nearby markers."));
 }
 
 void VideoEditorWindow::openSilenceTrim()

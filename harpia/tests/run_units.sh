@@ -317,6 +317,10 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/silencetrim_test.cpp" "$H/editor/SilenceTrim.cpp" -o "$WORK/silencetrim_test" $LF
 
+# Musical pulse detection rejects silence/steady tones and follows real attacks.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/beatdetector_test.cpp" "$H/editor/BeatDetector.cpp" -o "$WORK/beatdetector_test" $LF
+
 # Named timeline markers and the output end survive saves, slices and ripple edits.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/markersmodel_test.cpp" "$H/editor/SilenceTrim.cpp" \
@@ -1193,6 +1197,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/colorswatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/loadingtask_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/loadingdialog_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/silencetrim_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/beatdetector_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/markersmodel_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/markeraudio_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/markers_test" || rc=1

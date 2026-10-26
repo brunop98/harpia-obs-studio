@@ -311,6 +311,11 @@ target_sources(
     editor/SilenceTrim.hpp
     editor/SilenceTrimDialog.cpp
     editor/SilenceTrimDialog.hpp
+    editor/BeatDetector.cpp
+    editor/BeatDetector.hpp
+    editor/BeatAudio.cpp
+    editor/BeatDetectionDialog.cpp
+    editor/BeatDetectionDialog.hpp
     editor/SocialSafeAreas.hpp
     editor/LevelMeter.cpp
     editor/LevelMeter.hpp

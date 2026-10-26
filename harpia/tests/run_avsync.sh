@@ -94,6 +94,10 @@ build "$HERE/exporttelemetry_test.cpp" exporttelemetry_test
 # reads them and exported from a two-track 60 fps timeline.
 build "$HERE/exportcadence_test.cpp" exportcadence_test
 build "$HERE/markerexport_test.cpp" markerexport_test
+# Beat analysis seeks the kept source range, preserving timestamp offsets.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/beatdecode_test.cpp" "$H/editor/BeatAudio.cpp" \
+	-o "$WORK/beatdecode_test" $LF
 build "$HERE/timelinemix_test.cpp" timelinemix_test
 build "$HERE/swsoverrun_test.cpp" swsoverrun_test
 # The export window: what it says is what it asks for -- resolution, frame
@@ -173,7 +177,7 @@ if [ ! -f "$QJSLIB/libqjs.a" ]; then # the same one-time build run_units.sh does
 fi
 mkdir -p "$WORK/win/obj" "$WORK/win/moc"
 ( cd "$H"
-  WSRCS=$(ls editor/*.cpp editor/*/*.cpp ui/*.cpp library/*.cpp core/ShareExporter.cpp core/ShareSplitter.cpp core/AudioFileWriter.cpp platform/OsIntegrationStub.cpp tests/support/logger_stub.cpp | grep -v -E "ui/MainWindow.cpp|ui/WebcamPreview.cpp")
+  WSRCS=$(ls editor/*.cpp editor/*/*.cpp ui/*.cpp library/*.cpp core/ShareExporter.cpp core/ShareSplitter.cpp core/AudioFileWriter.cpp core/LocalSend.cpp platform/PhoneSharingNativeStub.cpp platform/OsIntegrationStub.cpp tests/support/logger_stub.cpp | grep -v -E "ui/MainWindow.cpp|ui/WebcamPreview.cpp")
   for h in $(grep -l Q_OBJECT editor/*.hpp editor/*/*.hpp ui/*.hpp library/*.hpp core/ShareExporter.hpp | grep -v -E "ui/MainWindow.hpp|ui/WebcamPreview.hpp"); do
 	"$MOC" -I"$H" "$h" -o "$WORK/win/moc/moc_$(echo "$h" | tr '/' '_' | sed 's/.hpp$//').cpp"
   done
@@ -188,7 +192,7 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
 	-o "$WORK/shareexportdialog_test" $WLF
 # Render diagnostics and regressions from the preview audit.
-for name in loadingwindow inspectorreuse silencetrimdialog socialfeatureswindow silencetrimav textstylepresetswindow rendererrors exporterrorwindow previewwarningwindow audioaudit previewgeometry previewinterval previewcontrols previewtransition previewlegacypacing markerendwindow; do
+for name in loadingwindow inspectorreuse silencetrimdialog socialfeatureswindow silencetrimav textstylepresetswindow rendererrors exporterrorwindow previewwarningwindow audioaudit previewgeometry previewinterval previewcontrols previewtransition previewlegacypacing markerendwindow beatmarkerswindow; do
 	g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 		"$HERE/${name}_test.cpp" \
 		-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
@@ -355,6 +359,9 @@ XDG_CONFIG_HOME="$WORK/preview-audit-config" XDG_DATA_HOME="$WORK/preview-audit-
 XDG_CONFIG_HOME="$WORK/marker-end-config" XDG_DATA_HOME="$WORK/marker-end-data" QT_QPA_PLATFORM=offscreen \
 	"$WORK/markerendwindow_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/markerexport_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/beatdecode_test" || rc=1
+XDG_CONFIG_HOME="$WORK/beat-markers-config" XDG_DATA_HOME="$WORK/beat-markers-data" QT_QPA_PLATFORM=offscreen \
+	"$WORK/beatmarkerswindow_test" || rc=1
 XDG_CONFIG_HOME="$WORK/legacy-pacing-config" XDG_DATA_HOME="$WORK/legacy-pacing-data" QT_QPA_PLATFORM=offscreen \
 	"$WORK/previewlegacypacing_test" || rc=1
 XDG_CONFIG_HOME="$WORK/error-test-config" XDG_DATA_HOME="$WORK/error-test-data" QT_QPA_PLATFORM=offscreen \

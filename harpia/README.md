@@ -69,6 +69,13 @@ Three modes, each one step up from the last:
     of playback and full-timeline exports. Later clips remain editable;
     **Reset video end** restores the automatic end. Markers and the end
     boundary are saved with the project and support undo/redo;
+  - **beat markers:** right-click a music or video clip and choose **Detect
+    beats…**, or use **Tools → Detect beats…**. Review the estimated tempo and
+    add every beat, every second beat or every fourth beat in one undo step.
+    Analysis runs locally on the kept source range (up to 30 minutes), respects
+    trim, playback speed and timeline position, and keeps existing markers and
+    the video end. Best with steady music. Generated markers are fixed timeline
+    markers; moving or retiming the music does not move them;
   - **keyframes** per channel (position, scale, rotation, opacity) with easing
     curves, and **curved motion paths** with Bezier handles on the preview;
   - **components** stacked on any clip: transform and speed, ShaderToy-style

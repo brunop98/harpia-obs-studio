@@ -54,9 +54,15 @@ jobs:
               print('::notice::' + message)
               with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output: output.write('## macOS validation unavailable\n\n' + message + '\n')
           PY
-      - name: Check repository and packaging logic
+      - name: Ensure CMake for bootstrap regression checks
+        run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            brew install cmake
+          fi
+      - name: Check repository, bootstrap and packaging logic
         run: |
           python3 harpia/tests/repository_checkout_test.py
+          python3 harpia/tests/versionconfig_test.py
           python3 harpia/tests/macos_package_test.py
           python3 harpia/tests/macos_launcher_test.py
           bash -n harpia/scripts/build-macos.sh harpia/scripts/package-macos.sh harpia/scripts/make-macos-icon.sh harpia/scripts/macos-tools.sh harpia/scripts/build-and-run-harpia.sh harpia/scripts/build-and-run-harpia.command

@@ -44,6 +44,13 @@ if(APPLE)
   enable_language(OBJCXX)
 endif()
 find_package(Qt6 "${HARPIA_QT_VERSION}" EXACT REQUIRED COMPONENTS BuildInternals Core Gui Widgets Network)
+
+# BuildInternals exports the SDK publisher's ccache setting. These small,
+# independent component builds must also work on machines without ccache.
+# Override after importing the SDK so both fresh and reused caches are covered.
+set(QT_USE_CCACHE OFF CACHE BOOL "Enable the use of ccache" FORCE)
+set(QT_USE_CCACHE OFF)
+
 if(QT6_INSTALL_PREFIX)
   file(REAL_PATH "${QT6_INSTALL_PREFIX}" _sdk_prefix)
   file(MAKE_DIRECTORY "${CMAKE_INSTALL_PREFIX}")

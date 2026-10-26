@@ -43,7 +43,9 @@ That Qt SDK omits `macdeployqt` and QtTest. When needed, configuration downloads
 the checksum-verified matching Qt 6.11.1 source and builds only those components
 against the selected SDK. They are installed under the build directory's
 `harpia-qt-tools` folder; the original Qt runtime is kept in its dependency
-prefix. Sources are cached under `.deps/qt-tools`. A compatible complete local
+prefix. These component builds disable the SDK publisher's `QT_USE_CCACHE`
+setting, so `ccache` is optional on developer and CI machines.
+Sources are cached under `.deps/qt-tools`. A compatible complete local
 qtbase tree can be supplied with the `HARPIA_QTBASE_SOURCE_DIR` CMake cache entry
 for offline builds. Configure/build/install diagnostics for these components
 are saved under `harpia-qt-tools/<version-and-key>/*.log`.

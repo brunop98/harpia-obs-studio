@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Exercise matching Qt add-on preparation without an Apple SDK or downloads.
 
-The outer CMake project is real. Only the nested configure/build/install tool
-is replaced with a recorder, so argument boundaries, reuse and failure handling
-are checked independently of Qt's own build implementation.
+Preparation checks use a real outer CMake project and record only the nested
+configure/build/install tool. Wrapper bootstrap checks run the real production
+C/C++ project against controlled SDK metadata to verify inherited build options.
 """
 
 import configparser
@@ -308,6 +308,92 @@ class QtMacToolsTests(unittest.TestCase):
                                 stderr=subprocess.STDOUT, timeout=30)
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("does not match SDK version", result.stdout)
+
+
+class QtMacWrapperCacheTests(unittest.TestCase):
+    """A prebuilt SDK's optional cache preference must not become a dependency."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cmake = shutil.which(os.environ.get("HARPIA_TEST_CMAKE", "cmake"))
+        if not cls.cmake:
+            raise RuntimeError("CMake 3.28+ is required; install it or set HARPIA_TEST_CMAKE.")
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="harpia Qt cache preference ")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.sdk = self.root / "prebuilt Qt SDK"
+        package = self.sdk / "lib/cmake/Qt6"
+        package.mkdir(parents=True)
+        (package / "Qt6ConfigVersion.cmake").write_text(
+            "set(PACKAGE_VERSION 6.11.1)\n"
+            "set(PACKAGE_VERSION_COMPATIBLE TRUE)\n"
+            "set(PACKAGE_VERSION_EXACT TRUE)\n")
+        (package / "Qt6Config.cmake").write_text(
+            "set(Qt6_FOUND TRUE)\nset(Qt6_VERSION 6.11.1)\n"
+            f"set(QT6_INSTALL_PREFIX {quote(self.sdk)})\n"
+            "set(QT6_INSTALL_LIBS lib)\n"
+            # QtBuildInternalsExtra exports this option from OBS's own build
+            # host. The consuming machine need not have that optional tool.
+            "set(QT_USE_CCACHE ON CACHE BOOL \"Prebuilt SDK compiler cache preference\")\n"
+            "if(HARPIA_FAKE_SDK_NORMAL_CCACHE)\n set(QT_USE_CCACHE ON)\nendif()\n"
+            "foreach(component IN LISTS Qt6_FIND_COMPONENTS)\n"
+            " set(Qt6${component}_FOUND TRUE)\n"
+            " if(NOT TARGET Qt6::${component})\n"
+            "  add_library(Qt6::${component} INTERFACE IMPORTED GLOBAL)\n"
+            " endif()\nendforeach()\n"
+            "function(qt_build_repo_begin)\n"
+            " if(QT_USE_CCACHE)\n"
+            "  message(FATAL_ERROR \"Fixture SDK requested an optional ccache dependency\")\n"
+            " endif()\n"
+            " get_property(cached_preference CACHE QT_USE_CCACHE PROPERTY VALUE)\n"
+            " if(cached_preference)\n"
+            "  message(FATAL_ERROR \"The SDK's enabled ccache preference remains cached\")\n"
+            " endif()\n"
+            " file(WRITE \"${CMAKE_BINARY_DIR}/repo-started.txt\"\n"
+            "  \"effective=${QT_USE_CCACHE}\\ncache=${cached_preference}\\n\")\n"
+            "endfunction()\n"
+            "function(qt_build_repo_end)\n"
+            " file(WRITE \"${CMAKE_BINARY_DIR}/repo-finished.txt\" \"complete\\n\")\n"
+            "endfunction()\n")
+        self.qtbase = self.root / "matching qtbase source"
+        testlib = self.qtbase / "src/testlib"
+        testlib.mkdir(parents=True)
+        (self.qtbase / ".cmake.conf").write_text('set(QT_REPO_MODULE_VERSION "6.11.1")\n')
+        (testlib / "fixture.cpp").write_text("int harpia_qt_test_fixture() { return 0; }\n")
+        (testlib / "CMakeLists.txt").write_text("add_library(Test SHARED fixture.cpp)\n")
+
+    def configure_wrapper(self, build, normal_preference=False, stale_preference=False):
+        command = [self.cmake, "-S", str(WRAPPER), "-B", str(build),
+                   "-DHARPIA_QT_VERSION=6.11.1", "-DHARPIA_QTBASE_SOURCE_DIR=" + str(self.qtbase),
+                   "-DHARPIA_QT_BUILD_TESTLIB=ON", "-DHARPIA_QT_BUILD_MACDEPLOYQT=OFF",
+                   "-DCMAKE_INSTALL_PREFIX=" + str(self.root / "private Qt add-on"),
+                   "-DQt6_DIR=" + str(self.sdk / "lib/cmake/Qt6"),
+                   "-DHARPIA_FAKE_SDK_NORMAL_CCACHE=" + ("ON" if normal_preference else "OFF")]
+        if stale_preference:
+            command.append("-DQT_USE_CCACHE:BOOL=ON")
+        result = subprocess.run(command, text=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        values = dict(line.split("=", 1) for line in
+                      (build / "repo-started.txt").read_text().splitlines())
+        self.assertEqual(values, {"effective": "OFF", "cache": "OFF"})
+        self.assertEqual((build / "repo-finished.txt").read_text(), "complete\n")
+        return result
+
+    def test_sdk_ccache_preference_does_not_require_a_tool_on_the_consumer(self):
+        # The fake SDK checks the controlling option directly, so this is
+        # deterministic even when the test machine happens to have ccache.
+        for normal_preference in (False, True):
+            with self.subTest(normal_preference=normal_preference):
+                build = self.root / ("cache and normal" if normal_preference else "cache only")
+                self.configure_wrapper(build, normal_preference=normal_preference)
+
+    def test_reconfigure_clears_a_stale_enabled_cache_preference(self):
+        build = self.root / "reconfigured add-on build"
+        self.configure_wrapper(build, normal_preference=True)
+        self.configure_wrapper(build, normal_preference=True, stale_preference=True)
 
 
 if __name__ == "__main__":

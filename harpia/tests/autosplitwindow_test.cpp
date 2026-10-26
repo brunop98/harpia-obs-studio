@@ -12,7 +12,7 @@
 #define private public
 #include "ui/MainWindow.hpp"
 #undef private
-#include "ui/AutoSplitDialog.hpp"
+#include "ui/PresetEditorDialog.hpp"
 #include "core/ObsContext.hpp"
 #include "core/RecordingParts.hpp"
 #include "model/PresetStore.hpp"
@@ -45,25 +45,65 @@ bool waitFor(const std::function<bool()> &done)
 		QTest::qWait(10);
 	return done();
 }
-void choose(MainWindow &window, bool enabled, bool always, int size, bool accept = true)
+void choose(MainWindow &window, bool enabled, int mode, int minutes, int size, bool accept = true)
 {
-	QTimer::singleShot(0, [&]() {
-		auto *dialog = dynamic_cast<AutoSplitDialog *>(window.findChild<QDialog *>(QStringLiteral("autoSplitDialog")));
-		check(dialog && dialog->isVisible(), "Auto Split opens from the recorder's button");
-		check(window.hotkeysSuspended_, "recording hotkeys are suspended while choosing split settings");
-		if (!dialog)
+	bool seen = false;
+	bool answered = false;
+	bool timedOut = false;
+	QTimer driver, watchdog;
+	driver.setInterval(10);
+	watchdog.setSingleShot(true);
+	QObject::connect(&driver, &QTimer::timeout, [&]() {
+		if (auto *question = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+			if (!accept && question->standardButtons().testFlag(QMessageBox::Discard))
+				question->button(QMessageBox::Discard)->click();
 			return;
-		dialog->findChild<QCheckBox *>(QStringLiteral("autoSplitEnabled"))->setChecked(enabled);
-		dialog->findChild<QRadioButton *>(QStringLiteral("autoSplitSize"))->setChecked(true);
-		dialog->findChild<QSpinBox *>(QStringLiteral("autoSplitSizeMB"))->setValue(size);
-		dialog->findChild<QRadioButton *>(always ? QStringLiteral("autoSplitAlways") : QStringLiteral("autoSplitOnce"))->setChecked(true);
-		if (accept)
-			dialog->accept();
-		else
-			dialog->reject();
+		}
+		auto *dialog = qobject_cast<PresetEditorDialog *>(QApplication::activeModalWidget());
+		if (!dialog || answered)
+			return;
+		seen = true;
+		answered = true;
+		auto *checkBox = dialog->findChild<QCheckBox *>(QStringLiteral("autoSplitEnabled"));
+		auto *modeCombo = dialog->findChild<QComboBox *>(QStringLiteral("autoSplitMode"));
+		auto *minutesSpin = dialog->findChild<QSpinBox *>(QStringLiteral("autoSplitMinutes"));
+		auto *sizeSpin = dialog->findChild<QSpinBox *>(QStringLiteral("autoSplitSizeMB"));
+		auto *buttons = dialog->findChild<QDialogButtonBox *>();
+		check(checkBox && modeCombo && minutesSpin && sizeSpin && buttons,
+		      "the profile Recording page exposes Auto Split and both limits");
+		if (!checkBox || !modeCombo || !minutesSpin || !sizeSpin || !buttons) {
+			dialog->done(QDialog::Rejected);
+			return;
+		}
+		check(checkBox->isVisible() && checkBox->isEnabled(), "Auto Split is available in a video profile");
+		check(window.hotkeysSuspended_, "recording hotkeys stay suspended while editing the profile");
+		checkBox->setChecked(enabled);
+		modeCombo->setCurrentIndex(mode);
+		minutesSpin->setValue(minutes);
+		sizeSpin->setValue(size);
+		if (!accept) {
+			QTimer::singleShot(0, []() {
+				auto *question = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+				if (question && question->standardButtons().testFlag(QMessageBox::Discard))
+					question->button(QMessageBox::Discard)->click();
+			});
+		}
+		buttons->button(accept ? QDialogButtonBox::Save : QDialogButtonBox::Cancel)->click();
 	});
-	window.autoSplitButton_->click();
-	check(!window.hotkeysSuspended_, "recording hotkeys resume after accepting or canceling split settings");
+	QObject::connect(&watchdog, &QTimer::timeout, [&]() {
+		timedOut = true;
+		if (auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget()))
+			dialog->done(QDialog::Rejected);
+		for (auto *dialog : window.findChildren<PresetEditorDialog *>())
+			dialog->done(QDialog::Rejected);
+	});
+	driver.start();
+	watchdog.start(4000);
+	window.editActivePreset(QStringLiteral("Recording"));
+	driver.stop();
+	watchdog.stop();
+	check(seen && !timedOut, "Auto Split is edited through the normal profile window");
+	check(!window.hotkeysSuspended_, "recording hotkeys resume after saving or canceling profile settings");
 }
 }
 
@@ -103,29 +143,68 @@ int main(int argc, char **argv)
 		QCoreApplication::processEvents();
 		if (argc > 1)
 			check(window.grab().save(QString::fromLocal8Bit(argv[1])), "recorder window snapshot is saved");
-		check(window.autoSplitButton_ && window.autoSplitButton_->isEnabled() && window.autoSplitButton_->text().contains(QStringLiteral("Off")),
-		      "Auto Split is accessible and off by default");
-		choose(window, true, false, 49);
-		check(window.autoSplit_.hasOverride() && window.autoSplit_.next().sizeMB == 49,
-		      "Only this time sets the next recording's size limit");
-		QSettings saved(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
-		check(!auto_split_settings::load(saved).enabled, "one-time settings do not change the saved default");
-		choose(window, true, true, 123, false);
-		check(window.autoSplit_.hasOverride() && window.autoSplit_.next().sizeMB == 49,
-		      "Cancel retains the previous one-time choice");
-		choose(window, true, true, 500);
-		check(!window.autoSplit_.hasOverride() && auto_split_settings::load(saved).enabled && auto_split_settings::load(saved).sizeMB == 500,
-		      "Always persists settings and replaces the one-time choice");
+		check(!window.findChild<QWidget *>(QStringLiteral("autoSplitButton")),
+		      "the main recording view has no Auto Split control");
+		check(!window.recordingSplitSettings().enabled, "a new profile does not split recordings by default");
+		const std::string firstId = window.activePresetId_;
+		choose(window, true, 1, 5, 49);
+		check(window.activePreset().autoSplit && window.activePreset().autoSplitMode == 1 &&
+		      window.activePreset().autoSplitMinutes == 5 && window.activePreset().autoSplitSizeMB == 49,
+		      "saving the profile retains its selected split mode and both limits");
+		check(window.recordingSplitSettings().enabled &&
+		      window.recordingSplitSettings().mode == AutoSplitSettings::Mode::Size &&
+		      window.recordingSplitSettings().sizeMB == 49,
+		      "recording uses the active profile's file-size split limit");
+		const Preset beforeCancel = window.activePreset();
+		choose(window, false, 0, 7, 123, false);
+		check(window.activePreset() == beforeCancel,
+		      "Cancel discards split edits together with the rest of the profile");
+		PresetStore reopened(presets.configDir());
+		reopened.load(output.toStdString());
+		const Preset *persisted = reopened.find(firstId);
+		check(persisted && persisted->autoSplit && persisted->autoSplitMode == 1 &&
+		      persisted->autoSplitMinutes == 5 && persisted->autoSplitSizeMB == 49,
+		      "profile split limits survive reloading the preset store");
+
+		Preset secondProfile = Preset::makeDefault(output.toStdString());
+		secondProfile.id = "second-profile";
+		secondProfile.name = "Unsplit profile";
+		presets.upsert(secondProfile);
+		window.reloadPresetCombo();
+		window.presetCombo_->setCurrentIndex(window.presetCombo_->findData(QString::fromStdString(secondProfile.id)));
+		check(window.activePresetId_ == secondProfile.id && !window.recordingSplitSettings().enabled,
+		      "switching to another profile does not inherit the first profile's split setting");
+		choose(window, true, 0, 2, 500);
+		check(window.recordingSplitSettings().enabled &&
+		      window.recordingSplitSettings().mode == AutoSplitSettings::Mode::Time &&
+		      window.recordingSplitSettings().minutes == 2 &&
+		      presets.find(firstId)->autoSplitSizeMB == 49,
+		      "another profile can use time splitting without changing the first profile");
+		window.presetCombo_->setCurrentIndex(window.presetCombo_->findData(QString::fromStdString(firstId)));
+		check(window.recordingSplitSettings().mode == AutoSplitSettings::Mode::Size &&
+		      window.recordingSplitSettings().sizeMB == 49,
+		      "switching back restores the original profile's recording split limit");
+		const auto captureMode = window.captureMode_;
+		window.captureMode_ = MainWindow::CaptureMode::AudioOnly;
+		check(!window.recordingSplitSettings().enabled && window.activePreset().autoSplit,
+		      "audio-only capture suppresses splitting without erasing the profile setting");
+		window.captureMode_ = captureMode;
+		Preset gif = window.activePreset();
+		gif.format = RecordingFormat::GIF;
+		presets.upsert(gif);
+		check(!window.recordingSplitSettings().enabled && window.activePreset().autoSplit,
+		      "GIF capture suppresses splitting without erasing the profile setting");
+		presets.upsert(beforeCancel);
 		window.starting_ = true;
 		window.updateButtons();
-		check(!window.autoSplitButton_->isEnabled(), "split settings are locked while starting a take");
+		check(!window.editPresetButton_->isEnabled(), "profile settings are locked while starting a take");
 		window.starting_ = false;
 		window.countingDown_ = true;
 		window.updateButtons();
-		check(!window.autoSplitButton_->isEnabled(), "split settings are locked during the countdown");
+		check(!window.editPresetButton_->isEnabled(), "profile settings are locked during the countdown");
 		window.countingDown_ = false;
 		window.updateButtons();
-		check(window.autoSplitButton_->isEnabled(), "split settings unlock after the countdown is canceled");
+		check(window.editPresetButton_->isEnabled(), "profile settings unlock after canceling the countdown");
 		check(ClipLibrary::videoExtensions().contains(QStringLiteral("avi")), "AVI recording parts are included in the library");
 
 		// Same-container publishing maps every native split file to user names,

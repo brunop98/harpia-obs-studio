@@ -32,8 +32,8 @@ inline AutoSplitSettings validated(AutoSplitSettings value)
 	return value;
 }
 
-// Only the "Always" choice is saved here. The main window owns a separate
-// next-recording override, so canceling or failing to start never consumes it.
+// Legacy app-wide "Always" preferences. PresetStore imports these when an old
+// profile has no Auto Split fields; current recordings use the active profile.
 inline AutoSplitSettings load(QSettings &settings)
 {
 	AutoSplitSettings value;

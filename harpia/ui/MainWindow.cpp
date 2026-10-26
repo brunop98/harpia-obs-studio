@@ -9,7 +9,6 @@
 #include "UiText.hpp"
 
 #include "AudioPanel.hpp"
-#include "AutoSplitDialog.hpp"
 #include "PcAudioAppsDialog.hpp"
 #include "ClipLibraryWindow.hpp"
 #include "CrashReportDialog.hpp"
@@ -413,16 +412,6 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	behaviorRow(timeCol, timeLabels, QStringLiteral("Pause when idle"), idleCombo_);
 	behaviorRow(timeCol, timeLabels, QStringLiteral("Min length"), minLengthCombo_);
 	behaviorRow(timeCol, timeLabels, QStringLiteral("Countdown"), countdownCombo_);
-	autoSplitButton_ = new QPushButton(central);
-	autoSplitButton_->setObjectName(QStringLiteral("autoSplitButton"));
-	autoSplitButton_->setFixedWidth(kTimeComboW);
-	{
-		QSettings settings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
-		autoSplit_ = AutoSplitState(auto_split_settings::load(settings));
-	}
-	updateAutoSplitButton();
-	behaviorRow(timeCol, timeLabels, QStringLiteral("Auto split"), autoSplitButton_);
-	connect(autoSplitButton_, &QPushButton::clicked, this, &MainWindow::showAutoSplitDialog);
 	// A checkbox names itself; the empty label keeps it under the dropdowns.
 	behaviorRow(timeCol, timeLabels, QString(), guidesCheck_);
 	timeCol->addStretch(1);
@@ -763,7 +752,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// dialog because four places edit a shortcut today and nothing stops there
 	// being a fifth.
 	connect(qApp, &QApplication::focusChanged, this, [this](QWidget *, QWidget *now) {
-		setHotkeysSuspended(qobject_cast<QKeySequenceEdit *>(now) != nullptr);
+		setHotkeysSuspended(presetEditorOpen_ || qobject_cast<QKeySequenceEdit *>(now) != nullptr);
 	});
 	connect(editPresetButton_, &QPushButton::clicked, this, [this]() { editActivePreset(); });
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
@@ -1224,8 +1213,6 @@ void MainWindow::setLayoutParams(const MainLayoutParams &p)
 		if (c)
 			c->setFixedWidth(p.timeComboW);
 	}
-	if (autoSplitButton_)
-		autoSplitButton_->setFixedWidth(p.timeComboW);
 	for (QWidget *row : behaviorRows_) {
 		if (row && row->layout())
 			row->layout()->setSpacing(p.behaviorRowSpacing);
@@ -1625,15 +1612,7 @@ void MainWindow::startRecording()
 	}
 
 	const Preset &preset = activePreset();
-	const AutoSplitSettings split = autoSplit_.next();
-	if (split.enabled && (recordMode() == RecordMode::AudioOnly || preset.format == RecordingFormat::GIF)) {
-		QMessageBox::warning(this, QStringLiteral("Auto Split"),
-			QStringLiteral("Auto Split supports MP4, MKV, MOV and AVI screen recordings.\n\n"
-				"Choose one of these formats or turn off Auto Split before recording."));
-		starting_ = false;
-		updateButtons();
-		return;
-	}
+	const AutoSplitSettings split = recordingSplitSettings();
 
 	// The video pipeline. Also run at countdown start (beginRecordFlow), where
 	// its cost hides behind the countdown; the calls inside dedupe, so this
@@ -1714,9 +1693,6 @@ void MainWindow::startRecording()
 	lastAutoSplit_ = split.enabled;
 	lastRecordingFiles_.clear();
 	recordingPart_ = 1;
-	// Failed starts and canceled countdowns retain a one-time choice.
-	autoSplit_.recordingStarted();
-	updateAutoSplitButton();
 
 	// Keep the machine awake for the life of the recording. Without this a
 	// long unattended take ends when the OS sleep timer does -- and this app's
@@ -2116,36 +2092,16 @@ void MainWindow::finalizeRecordingParts()
 		close();
 }
 
-void MainWindow::showAutoSplitDialog()
+AutoSplitSettings MainWindow::recordingSplitSettings() const
 {
-	if (recorder_.isRecording() || starting_ || stopping_ || countingDown_)
-		return;
-	AutoSplitDialog dialog(autoSplit_.next(), !autoSplit_.hasOverride(), this);
-	const bool alreadySuspended = hotkeysSuspended_;
-	setHotkeysSuspended(true);
-	const int result = dialog.exec();
-	setHotkeysSuspended(alreadySuspended);
-	if (result != QDialog::Accepted)
-		return;
-	autoSplit_.apply(dialog.settings(), dialog.always());
-	if (dialog.always()) {
-		QSettings settings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
-		auto_split_settings::save(settings, autoSplit_.defaults());
-	}
-	updateAutoSplitButton();
-}
-
-void MainWindow::updateAutoSplitButton()
-{
-	if (!autoSplitButton_)
-		return;
-	const auto &split = autoSplit_.next();
-	const QString limit = split.mode == AutoSplitSettings::Mode::Time
-		? QStringLiteral("%1 min").arg(split.minutes) : QStringLiteral("%1 MB").arg(split.sizeMB);
-	autoSplitButton_->setText(split.enabled ? limit + QStringLiteral("…") : QStringLiteral("Off…"));
-	autoSplitButton_->setToolTip(QStringLiteral("Auto Split: %1. %2\nClick to change time or file-size limits.")
-		.arg(split.enabled ? limit : QStringLiteral("off"), autoSplit_.hasOverride()
-			? QStringLiteral("Next recording only") : QStringLiteral("Saved for future recordings")));
+	const Preset &preset = activePreset();
+	AutoSplitSettings split;
+	split.enabled = preset.autoSplit && recordMode() != RecordMode::AudioOnly &&
+			preset.format != RecordingFormat::GIF;
+	split.mode = preset.autoSplitMode == 1 ? AutoSplitSettings::Mode::Size : AutoSplitSettings::Mode::Time;
+	split.minutes = preset.autoSplitMinutes;
+	split.sizeMB = preset.autoSplitSizeMB;
+	return auto_split_settings::validated(split);
 }
 
 void MainWindow::beginStart()
@@ -2564,11 +2520,11 @@ void MainWindow::editActivePreset(const QString &initialPage)
 	// file. The audio panel is deliberately NOT covered -- levels and
 	// microphones are the one thing worth changing while talking, and
 	// AudioManager holds sources open for exactly that.
-	if (recorder_.isRecording() || starting_ || stopping_) {
+	if (recorder_.isRecording() || starting_ || stopping_ || countingDown_) {
 		QMessageBox::information(
 			this, QStringLiteral("Preset settings"),
-			QStringLiteral("Settings can't be changed while a recording is running.\n\n"
-				       "Stop the recording first. Audio levels and microphones can "
+			QStringLiteral("Settings can't be changed while a recording is running or counting down.\n\n"
+				       "Stop the recording or cancel the countdown first. Audio levels and microphones can "
 				       "still be adjusted from the panel below."));
 		return;
 	}
@@ -2578,7 +2534,12 @@ void MainWindow::editActivePreset(const QString &initialPage)
 	PresetEditorDialog dlg(*cur, audio_, this);
 	if (!initialPage.isEmpty())
 		dlg.showPage(initialPage);
+	const bool alreadySuspended = hotkeysSuspended_;
+	presetEditorOpen_ = true;
+	setHotkeysSuspended(true);
 	const int answer = dlg.exec();
+	presetEditorOpen_ = false;
+	setHotkeysSuspended(alreadySuspended);
 	if (answer != QDialog::Accepted) {
 		// Cancel: the Audio page has been driving the live capture, so put it
 		// back to what the active preset says.
@@ -4827,8 +4788,6 @@ void MainWindow::updateButtons()
 	const bool recording = recorder_.isRecording();
 	const bool paused = recorder_.isPaused();
 	const bool transitioning = starting_ || stopping_ || countingDown_;
-	if (autoSplitButton_)
-		autoSplitButton_->setEnabled(!recording && !transitioning);
 
 	// Region overlay border color follows the state (green/red/yellow).
 	if (regionTool_)

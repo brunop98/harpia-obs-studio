@@ -116,6 +116,15 @@ private:
 	QSpinBox *idleSpin_ = nullptr;
 	QComboBox *countdownCombo_ = nullptr;
 	QSpinBox *minLengthSpin_ = nullptr;
+	QCheckBox *autoSplitCheck_ = nullptr;
+	QComboBox *autoSplitModeCombo_ = nullptr;
+	QSpinBox *autoSplitMinutesSpin_ = nullptr;
+	QSpinBox *autoSplitSizeSpin_ = nullptr;
+	QWidget *autoSplitOptions_ = nullptr;
+	QWidget *autoSplitMinutesRow_ = nullptr;
+	QWidget *autoSplitSizeRow_ = nullptr;
+	QLabel *autoSplitHelp_ = nullptr;
+	void syncAutoSplitControls();
 
 	// Recording border (Full Screen)
 	QCheckBox *borderCheck_ = nullptr;

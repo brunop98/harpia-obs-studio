@@ -20,6 +20,7 @@
 #include "core/SpotlightFx.hpp"     // SpotlightParams limits, shared with the overlay
 #include "core/ZoomMode.hpp"      // ZoomParams::kMinPercent / kMaxPercent
 #include "core/AudioManager.hpp" // AudioDevice
+#include "core/AutoSplitSettings.hpp"
 #include "model/FileNameTemplate.hpp"
 #include "platform/CameraAccess.hpp"
 
@@ -315,6 +316,45 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	addField(v, QStringLiteral("Minimum recording length"),
 		 QStringLiteral("Shorter recordings ask before saving. Catches accidental clips."),
 		 minLengthSpin_);
+
+	autoSplitCheck_ = new QCheckBox(QStringLiteral("Auto split the recording file"), this);
+	autoSplitCheck_->setObjectName(QStringLiteral("autoSplitEnabled"));
+	autoSplitCheck_->setChecked(preset.autoSplit);
+	addCheck(v, autoSplitCheck_, QStringLiteral(
+		"Continue recording in a new file when the selected limit is reached. Saved with this profile."));
+	autoSplitOptions_ = new QWidget(this);
+	auto *splitLayout = new QVBoxLayout(autoSplitOptions_);
+	splitLayout->setContentsMargins(20, 0, 0, 0);
+	splitLayout->setSpacing(0);
+	autoSplitModeCombo_ = new QComboBox(this);
+	autoSplitModeCombo_->setObjectName(QStringLiteral("autoSplitMode"));
+	autoSplitModeCombo_->addItems({QStringLiteral("Recording time"), QStringLiteral("File size")});
+	autoSplitModeCombo_->setCurrentIndex(preset.autoSplitMode == 1 ? 1 : 0);
+	addField(splitLayout, QStringLiteral("Split by"), QString(), autoSplitModeCombo_);
+	autoSplitMinutesSpin_ = new QSpinBox(this);
+	autoSplitMinutesSpin_->setObjectName(QStringLiteral("autoSplitMinutes"));
+	autoSplitMinutesSpin_->setRange(1, auto_split_settings::maxMinutes);
+	autoSplitMinutesSpin_->setSuffix(QStringLiteral(" minutes"));
+	autoSplitMinutesSpin_->setValue(preset.autoSplitMinutes);
+	autoSplitMinutesRow_ = addField(splitLayout, QStringLiteral("Recording time per part"),
+		QStringLiteral("Recorded minutes per part. Paused time is excluded."), autoSplitMinutesSpin_);
+	autoSplitSizeSpin_ = new QSpinBox(this);
+	autoSplitSizeSpin_->setObjectName(QStringLiteral("autoSplitSizeMB"));
+	autoSplitSizeSpin_->setRange(1, auto_split_settings::maxSizeMB);
+	autoSplitSizeSpin_->setSuffix(QStringLiteral(" MB"));
+	autoSplitSizeSpin_->setValue(preset.autoSplitSizeMB);
+	autoSplitSizeRow_ = addField(splitLayout, QStringLiteral("File size per part"),
+		QStringLiteral("Approximate size per part. 1 MB here is 1,048,576 bytes."), autoSplitSizeSpin_);
+	v->addWidget(autoSplitOptions_);
+	autoSplitHelp_ = new QLabel(this);
+	autoSplitHelp_->setObjectName(QStringLiteral("autoSplitHelp"));
+	autoSplitHelp_->setWordWrap(true);
+	v->addWidget(autoSplitHelp_);
+	v->addSpacing(12);
+	connect(autoSplitCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::syncAutoSplitControls);
+	connect(autoSplitModeCombo_, &QComboBox::currentIndexChanged, this,
+		&PresetEditorDialog::syncAutoSplitControls);
+	syncAutoSplitControls();
 
 	// Focus auto-pause now lives on the main window's "Record only one
 	// application" toggle (pick the app there and it pauses when that app isn't
@@ -1529,6 +1569,10 @@ template <class F> void forEachPageField(const QString &page, F &&f)
 		f(&Preset::countdownSeconds);
 		f(&Preset::idleTimeoutSeconds);
 		f(&Preset::minRecordingSeconds);
+		f(&Preset::autoSplit);
+		f(&Preset::autoSplitMode);
+		f(&Preset::autoSplitMinutes);
+		f(&Preset::autoSplitSizeMB);
 		f(&Preset::showScreenBorder);
 		f(&Preset::screenBorderColor);
 		f(&Preset::screenBorderThickness);
@@ -1650,6 +1694,11 @@ void PresetEditorDialog::applyFrom(const Preset &p)
 		countdownCombo_->setCurrentIndex(ci >= 0 ? ci : 0);
 	}
 	minLengthSpin_->setValue(p.minRecordingSeconds);
+	autoSplitCheck_->setChecked(p.autoSplit);
+	autoSplitModeCombo_->setCurrentIndex(p.autoSplitMode == 1 ? 1 : 0);
+	autoSplitMinutesSpin_->setValue(p.autoSplitMinutes);
+	autoSplitSizeSpin_->setValue(p.autoSplitSizeMB);
+	syncAutoSplitControls();
 	borderCheck_->setChecked(p.showScreenBorder);
 	borderColor_ = QColor(QString::fromStdString(p.screenBorderColor));
 	setButtonColor(borderColorBtn_, borderColor_);
@@ -1934,8 +1983,24 @@ void PresetEditorDialog::browseFolder()
 		folderEdit_->setText(dir);
 }
 
+void PresetEditorDialog::syncAutoSplitControls()
+{
+	const auto format = formatCombo_ ? RecordingFormat(formatCombo_->currentData().toInt()) : original_.format;
+	const bool supported = modeHasVideo(mode_) && format != RecordingFormat::GIF;
+	autoSplitCheck_->setEnabled(supported);
+	autoSplitOptions_->setVisible(supported && autoSplitCheck_->isChecked());
+	autoSplitMinutesRow_->setVisible(autoSplitModeCombo_->currentIndex() == 0);
+	autoSplitSizeRow_->setVisible(autoSplitModeCombo_->currentIndex() == 1);
+	autoSplitHelp_->setText(supported
+		? QStringLiteral("Auto Split is saved with this profile. Parts split at video keyframes, so time and size "
+				 "can exceed the limit. Paused time is excluded. A separate webcam recording stays in one file.")
+		: QStringLiteral("Auto Split is available for MP4, MKV, MOV and AVI video recordings. "
+				 "This profile's saved limits are kept while using GIF or Audio Only."));
+}
+
 void PresetEditorDialog::updateValidation()
 {
+	syncAutoSplitControls();
 	const auto format = RecordingFormat(formatCombo_->currentData().toInt());
 	const auto codec = VideoCodec(codecCombo_->currentData().toInt());
 	const int kbps = bitrateCombo_->currentData().toInt() == -1
@@ -2071,6 +2136,10 @@ void PresetEditorDialog::collectInto(Preset &out) const
 	out.idleTimeoutSeconds = idleSpin_->value();
 	out.countdownSeconds = countdownCombo_->currentData().toInt();
 	out.minRecordingSeconds = minLengthSpin_->value();
+	out.autoSplit = autoSplitCheck_->isChecked();
+	out.autoSplitMode = autoSplitModeCombo_->currentIndex();
+	out.autoSplitMinutes = autoSplitMinutesSpin_->value();
+	out.autoSplitSizeMB = autoSplitSizeSpin_->value();
 	out.showScreenBorder = borderCheck_->isChecked();
 	out.screenBorderColor = borderColor_.name().toStdString();
 	out.screenBorderThickness = borderThicknessSpin_->value();

@@ -76,6 +76,13 @@ struct Preset {
 	int videoBitrateKbps = 0;  // 0 => EncoderFactory picks a sane default
 	int audioBitrateKbps = 160;
 
+	// Split this profile's recording into successive files without restarting
+	// the encoder. Limits are approximate: a video keyframe starts each part.
+	bool autoSplit = false;
+	int autoSplitMode = 0; // 0 = recorded time, 1 = file size
+	int autoSplitMinutes = 30;
+	int autoSplitSizeMB = 500;
+
 	// Audio capture: system/desktop ("PC") audio, and the set of microphone/
 	// input device ids to record. Empty micDeviceIds means no mic.
 	bool recordDesktopAudio = false;
@@ -256,6 +263,8 @@ inline bool operator==(const Preset &a, const Preset &b)
 	       a.outputFolder == b.outputFolder && a.monitorIndex == b.monitorIndex &&
 	       a.gpuCompression == b.gpuCompression && a.videoBitrateKbps == b.videoBitrateKbps &&
 	       a.audioBitrateKbps == b.audioBitrateKbps &&
+	       a.autoSplit == b.autoSplit && a.autoSplitMode == b.autoSplitMode &&
+	       a.autoSplitMinutes == b.autoSplitMinutes && a.autoSplitSizeMB == b.autoSplitSizeMB &&
 	       a.recordDesktopAudio == b.recordDesktopAudio && a.micDeviceIds == b.micDeviceIds &&
 	       a.desktopVolume == b.desktopVolume && a.micVolumes == b.micVolumes &&
 	       a.showMouseCursor == b.showMouseCursor && a.showMouseArea == b.showMouseArea &&

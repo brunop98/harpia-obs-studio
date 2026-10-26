@@ -104,7 +104,6 @@ private slots:
 	void onRecordPauseButton();
 	// Stop beside it: ends the take, or calls off the countdown before one.
 	void onStopButton();
-	void showAutoSplitDialog();
 	void onNewPreset();
 	void showPresetMenu(const QPoint &pos); // right-click combo: edit/delete
 	// Delete, from the button or the combo's menu: asks first (saying what
@@ -200,7 +199,7 @@ private:
 	// De-duplicate a preset name against the other presets ("Name (2)"…).
 	std::string uniquePresetName(const std::string &wanted, const std::string &selfId) const;
 	void startRecording();
-	void updateAutoSplitButton();
+	AutoSplitSettings recordingSplitSettings() const;
 	void finalizeRecordingParts();
 	void applyLiveCapture(); // (re)bind the live capture to the current mode
 	void beginRecordFlow(); // readiness gate -> countdown or immediate start
@@ -354,6 +353,7 @@ private:
 	// which is precisely what the conflict dialog asks for.
 	void setHotkeysSuspended(bool on);
 	bool hotkeysSuspended_ = false;
+	bool presetEditorOpen_ = false; // recording settings stay fixed until Save or Cancel
 
 	FollowMouse followMouse_;
 	QTimer *followTimer_ = nullptr;
@@ -521,8 +521,6 @@ private:
 
 	// The record column
 	QPushButton *primaryButton_ = nullptr; // Record, then Pause/Resume
-	QPushButton *autoSplitButton_ = nullptr;
-	AutoSplitState autoSplit_;
 	QPushButton *stopButton_ = nullptr;
 	QLabel *timerLabel_ = nullptr;
 

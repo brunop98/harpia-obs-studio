@@ -1,7 +1,11 @@
 #include "PresetStore.hpp"
 
+#include "core/AutoSplitSettings.hpp"
+
 #include <obs.h>
 #include <util/platform.h>
+
+#include <cmath>
 
 namespace harpia {
 
@@ -9,6 +13,25 @@ namespace {
 
 constexpr const char *kConfigSubdir = "harpia-recorder";
 constexpr const char *kPresetsFile = "presets.json";
+
+// Inspect before narrowing: an out-of-range JSON number must not wrap into a
+// small limit, and a malformed string must not silently become one minute.
+double splitNumber(obs_data_t *data, const char *key, double fallback)
+{
+	obs_data_item_t *item = obs_data_item_byname(data, key);
+	const bool numeric = item && obs_data_item_gettype(item) == OBS_DATA_NUMBER;
+	const double value = numeric ? obs_data_item_get_double(item) : fallback;
+	obs_data_item_release(&item);
+	return std::isfinite(value) && std::floor(value) == value ? value : fallback;
+}
+
+bool hasAutoSplitSettings(obs_data_t *data)
+{
+	return obs_data_has_user_value(data, "auto_split") ||
+	       obs_data_has_user_value(data, "auto_split_mode") ||
+	       obs_data_has_user_value(data, "auto_split_minutes") ||
+	       obs_data_has_user_value(data, "auto_split_size_mb");
+}
 
 // Resolve (and create) the per-user config directory for Harpia.
 std::string resolveConfigDir()
@@ -36,6 +59,16 @@ obs_data_t *presetToData(const Preset &p)
 	obs_data_set_bool(d, "gpu_compression", p.gpuCompression);
 	obs_data_set_int(d, "video_bitrate_kbps", p.videoBitrateKbps);
 	obs_data_set_int(d, "audio_bitrate_kbps", p.audioBitrateKbps);
+	AutoSplitSettings split;
+	split.enabled = p.autoSplit;
+	split.mode = p.autoSplitMode == 1 ? AutoSplitSettings::Mode::Size : AutoSplitSettings::Mode::Time;
+	split.minutes = p.autoSplitMinutes;
+	split.sizeMB = p.autoSplitSizeMB;
+	split = auto_split_settings::validated(split);
+	obs_data_set_bool(d, "auto_split", split.enabled);
+	obs_data_set_int(d, "auto_split_mode", split.mode == AutoSplitSettings::Mode::Size ? 1 : 0);
+	obs_data_set_int(d, "auto_split_minutes", split.minutes);
+	obs_data_set_int(d, "auto_split_size_mb", split.sizeMB);
 	obs_data_set_string(d, "filename_template", p.filenameTemplate.c_str());
 	obs_data_set_int(d, "idle_timeout_seconds", p.idleTimeoutSeconds);
 	// The stored key keeps its original name: it is internal, and renaming it
@@ -143,6 +176,12 @@ Preset presetFromData(obs_data_t *d)
 	p.gpuCompression = obs_data_get_bool(d, "gpu_compression");
 	p.videoBitrateKbps = (int)obs_data_get_int(d, "video_bitrate_kbps");
 	p.audioBitrateKbps = (int)obs_data_get_int(d, "audio_bitrate_kbps");
+	p.autoSplit = obs_data_get_bool(d, "auto_split");
+	p.autoSplitMode = splitNumber(d, "auto_split_mode", 0) == 1 ? 1 : 0;
+	p.autoSplitMinutes = static_cast<int>(std::clamp(splitNumber(d, "auto_split_minutes", 30),
+		1.0, double(auto_split_settings::maxMinutes)));
+	p.autoSplitSizeMB = static_cast<int>(std::clamp(splitNumber(d, "auto_split_size_mb", 500),
+		1.0, double(auto_split_settings::maxSizeMB)));
 	p.filenameTemplate = obs_data_get_string(d, "filename_template");
 	p.idleTimeoutSeconds = (int)obs_data_get_int(d, "idle_timeout_seconds");
 	// Default -1 (off), not obs_data_get_int's 0 — 0 here means "stop the moment
@@ -309,6 +348,9 @@ std::string PresetStore::filePath() const
 void PresetStore::load(const std::string &defaultOutputFolder)
 {
 	presets_.clear();
+	bool migratedAutoSplit = false;
+	QSettings legacySettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	const AutoSplitSettings legacySplit = auto_split_settings::load(legacySettings);
 
 	const std::string path = filePath();
 	obs_data_t *root = obs_data_create_from_json_file(path.c_str());
@@ -317,7 +359,17 @@ void PresetStore::load(const std::string &defaultOutputFolder)
 		const size_t count = arr ? obs_data_array_count(arr) : 0;
 		for (size_t i = 0; i < count; i++) {
 			obs_data_t *item = obs_data_array_item(arr, i);
-			presets_.push_back(presetFromData(item));
+			Preset preset = presetFromData(item);
+			// Copy the old app-wide "Always" preference once for existing
+			// profiles only. Explicit and partially saved profile settings win.
+			if (!hasAutoSplitSettings(item)) {
+				preset.autoSplit = legacySplit.enabled;
+				preset.autoSplitMode = legacySplit.mode == AutoSplitSettings::Mode::Size ? 1 : 0;
+				preset.autoSplitMinutes = legacySplit.minutes;
+				preset.autoSplitSizeMB = legacySplit.sizeMB;
+				migratedAutoSplit = true;
+			}
+			presets_.push_back(std::move(preset));
 			obs_data_release(item);
 		}
 		obs_data_array_release(arr);
@@ -326,6 +378,10 @@ void PresetStore::load(const std::string &defaultOutputFolder)
 
 	if (presets_.empty()) {
 		presets_.push_back(Preset::makeDefault(defaultOutputFolder));
+		save();
+	} else if (migratedAutoSplit) {
+		// Save the per-profile keys immediately, so changing a legacy global
+		// setting later cannot override an already migrated profile.
 		save();
 	}
 }

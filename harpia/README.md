@@ -39,9 +39,10 @@ needs (see [The OBS tree](#the-obs-tree)).
   name template, webcam, audio, region behaviour.
 - **Global hotkeys** (F9 record, F10 pause, F4 zoom), a countdown, floating
   recording controls, **idle auto-pause** and pause-when-another-app-is-focused.
-- **Auto Split:** open **Auto split** in the recording controls to split by
-  recorded minutes or approximate file size. **Only this time** applies to the
-  next successful recording; **Always** saves the setting across restarts.
+- **Auto Split:** set **Auto split the recording file** under **Preset Settings
+  → Recording** to split by recorded minutes or approximate file size. Each
+  preset saves its own enable switch, split mode and limits across restarts.
+  Existing saved Auto Split preferences are carried over to existing presets.
   Capture continues while the muxer opens the next file. After stopping, all
   parts are saved as `_part001`, `_part002`, and so on, including the shorter
   final part. Paused time is excluded. Supports MP4, MKV, MOV and AVI video;

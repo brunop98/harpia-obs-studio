@@ -1,11 +1,14 @@
 #pragma once
 
 #include "AudioOnlyRecorder.hpp"
+#include "AutoSplitSettings.hpp"
 #include "model/Preset.hpp"
 
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <vector>
 
 struct obs_output;
 struct obs_encoder;
@@ -44,9 +47,19 @@ public:
 	// Invoked (on a libobs thread) when recording successfully starts.
 	std::function<void()> onStarted;
 
+	// Invoked on the output thread when it switches to another segment. This
+	// is a notification, not a file-close guarantee: wait for onFinished before
+	// moving/remuxing any segment. Set callbacks before starting a recording.
+	std::function<void(const std::string &nextFile)> onFileChanged;
+
 	// Start recording `preset` to `fullFilePath`. Requires the video/audio
 	// graph and capture source to already be set up. Returns false on failure.
-	bool start(const Preset &preset, const std::string &fullFilePath);
+	bool start(const Preset &preset, const std::string &fullFilePath,
+		   const AutoSplitSettings &split = {});
+
+	// Ordered snapshot of this take's files, including the first file. Safe
+	// while the output thread is adding segments. Files are closed on finish.
+	std::vector<std::string> recordedFiles() const;
 
 	// Request the recording to stop (asynchronous; onFinished fires when done).
 	void stop();
@@ -83,6 +96,7 @@ private:
 	void teardown();
 	static void onStartSignal(void *data, calldata_t *cd);
 	static void onStopSignal(void *data, calldata_t *cd);
+	static void onFileChangedSignal(void *data, calldata_t *cd);
 
 	// Non-null only for an Audio Only take; output_ stays null in that case and
 	// vice versa, which is what every branch below tests on.
@@ -92,8 +106,11 @@ private:
 	obs_encoder_t *videoEncoder_ = nullptr;
 	obs_encoder_t *audioEncoder_ = nullptr;
 	std::string currentFilePath_;
+	mutable std::mutex recordedFilesMutex_;
+	std::vector<std::string> recordedFiles_;
 	Preset activePreset_;
 	bool usesFfmpegOutput_ = false;
+	bool splitEnabled_ = false;
 	int lastStopCode_ = 0;
 	std::string lastStopError_;
 };

@@ -16,6 +16,12 @@ MOC="$(command -v moc || ls /usr/lib/qt6/libexec/moc /usr/lib/x86_64-linux-gnu/q
 CF="$(pkg-config --cflags Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
 LF="$(pkg-config --libs Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
 
+# Recording split preferences, one-time overrides, dialog state and safe paths.
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/autosplitdialog_test.cpp" "$H/ui/AutoSplitDialog.cpp" -o "$WORK/autosplitdialog_test" $LF
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/recordingparts_test.cpp" -o "$WORK/recordingparts_test" $LF
+
 # Preview failures stay visible and copyable without interrupting playback or
 # logging the same compiler failure on every frame.
 g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
@@ -1113,6 +1119,8 @@ QT_QPA_PLATFORM=offscreen "$WORK/crashreport_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/autopause_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/globalhotkeys_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/sendtofull_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/autosplitdialog_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/recordingparts_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/componentenvelope_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/envelopestack_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionoverlay_test" || rc=1

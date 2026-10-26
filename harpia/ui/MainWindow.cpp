@@ -9,6 +9,7 @@
 #include "UiText.hpp"
 
 #include "AudioPanel.hpp"
+#include "AutoSplitDialog.hpp"
 #include "PcAudioAppsDialog.hpp"
 #include "ClipLibraryWindow.hpp"
 #include "CrashReportDialog.hpp"
@@ -37,6 +38,7 @@
 #include "WebcamPreview.hpp"
 #include "core/EncoderFactory.hpp"
 #include "core/Remuxer.hpp"
+#include "core/RecordingParts.hpp"
 #include "platform/CameraAccess.hpp"
 #include "platform/ForegroundWatcher.hpp"
 #include "core/ObsContext.hpp"
@@ -62,6 +64,7 @@
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
+#include <QDirIterator>
 #include <QEvent>
 #include <QLayoutItem>
 
@@ -409,6 +412,16 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	behaviorRow(timeCol, timeLabels, QStringLiteral("Pause when idle"), idleCombo_);
 	behaviorRow(timeCol, timeLabels, QStringLiteral("Min length"), minLengthCombo_);
 	behaviorRow(timeCol, timeLabels, QStringLiteral("Countdown"), countdownCombo_);
+	autoSplitButton_ = new QPushButton(central);
+	autoSplitButton_->setObjectName(QStringLiteral("autoSplitButton"));
+	autoSplitButton_->setFixedWidth(kTimeComboW);
+	{
+		QSettings settings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		autoSplit_ = AutoSplitState(auto_split_settings::load(settings));
+	}
+	updateAutoSplitButton();
+	behaviorRow(timeCol, timeLabels, QStringLiteral("Auto split"), autoSplitButton_);
+	connect(autoSplitButton_, &QPushButton::clicked, this, &MainWindow::showAutoSplitDialog);
 	// A checkbox names itself; the empty label keeps it under the dropdowns.
 	behaviorRow(timeCol, timeLabels, QString(), guidesCheck_);
 	timeCol->addStretch(1);
@@ -805,9 +818,13 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		// (or the tap's writer) thread, and lastRecordedPath_ belongs to the
 		// window. Queued before the finalize below, so it lands first.
 		const QString written = QString::fromStdString(writtenPath);
+		QStringList files;
+		for (const auto &path : recorder_.recordedFiles())
+			files.append(QString::fromStdString(path));
 		QMetaObject::invokeMethod(
 			this,
-			[this, written]() {
+			[this, written, files]() {
+				lastRecordingFiles_ = files;
 				if (written.isEmpty())
 					return;
 				lastRecordedPath_ = written;
@@ -824,6 +841,12 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 			Qt::QueuedConnection);
 		QMetaObject::invokeMethod(this, "refreshRecentList", Qt::QueuedConnection);
 		QMetaObject::invokeMethod(this, [this]() { finalizeAfterStop(); }, Qt::QueuedConnection);
+	};
+	recorder_.onFileChanged = [this](const std::string &) {
+		QMetaObject::invokeMethod(this, [this]() {
+			++recordingPart_;
+			statusBar()->showMessage(QStringLiteral("Auto split: recording part %1").arg(recordingPart_), 5000);
+		}, Qt::QueuedConnection);
 	};
 
 	mouseFx_ = std::make_unique<MouseFxOverlay>();
@@ -1075,13 +1098,15 @@ void MainWindow::finishStartup()
 	QStringList orphanPaths;
 	for (const QString &folder : presetFolders()) {
 		const QDir tmpDir(folder + QStringLiteral("/.harpia_tmp"));
-		for (const QString &f : tmpDir.entryList(QDir::Files)) {
-			const QString path = tmpDir.filePath(f);
+		QDirIterator files(tmpDir.absolutePath(), QDir::Files, QDirIterator::Subdirectories);
+		while (files.hasNext()) {
+			const QString path = files.next();
 			blog(LOG_WARNING, "[harpia] orphaned partial recording (crash/kill?): %s",
 			     path.toUtf8().constData());
-			// Tiny stubs (a header and nothing else) hold no recoverable
-			// video -- delete instead of offering a guaranteed-broken file.
-			if (QFileInfo(path).size() < 256 * 1024)
+			// Preserve small final split parts: even a few frames can be valid.
+			// Retain the legacy stub threshold for older flat temporary files.
+			const bool splitPart = QFileInfo(path).absolutePath() != tmpDir.absolutePath();
+			if (QFileInfo(path).size() == 0 || (!splitPart && QFileInfo(path).size() < 256 * 1024))
 				QFile::remove(path);
 			else
 				orphanPaths.append(path);
@@ -1123,7 +1148,7 @@ void MainWindow::offerOrphanRecovery(const QStringList &orphans)
 	// the output folder, named so it cannot collide with a live recording.
 	for (const QString &p : orphans) {
 		const QFileInfo fi(p);
-		const QString outFolder = QFileInfo(fi.absolutePath()).absolutePath(); // .harpia_tmp's parent
+		const QString outFolder = recording_parts::recoveryFolder(p);
 		const QString target = QDir(outFolder).filePath(fi.completeBaseName() +
 								QStringLiteral("_recovered.mp4"));
 		remuxInBackground(p, target);
@@ -1197,6 +1222,8 @@ void MainWindow::setLayoutParams(const MainLayoutParams &p)
 		if (c)
 			c->setFixedWidth(p.timeComboW);
 	}
+	if (autoSplitButton_)
+		autoSplitButton_->setFixedWidth(p.timeComboW);
 	for (QWidget *row : behaviorRows_) {
 		if (row && row->layout())
 			row->layout()->setSpacing(p.behaviorRowSpacing);
@@ -1596,6 +1623,15 @@ void MainWindow::startRecording()
 	}
 
 	const Preset &preset = activePreset();
+	const AutoSplitSettings split = autoSplit_.next();
+	if (split.enabled && (recordMode() == RecordMode::AudioOnly || preset.format == RecordingFormat::GIF)) {
+		QMessageBox::warning(this, QStringLiteral("Auto Split"),
+			QStringLiteral("Auto Split supports MP4, MKV, MOV and AVI screen recordings.\n\n"
+				"Choose one of these formats or turn off Auto Split before recording."));
+		starting_ = false;
+		updateButtons();
+		return;
+	}
 
 	// The video pipeline. Also run at countdown start (beginRecordFlow), where
 	// its cost hides behind the countdown; the calls inside dedupe, so this
@@ -1633,8 +1669,20 @@ void MainWindow::startRecording()
 	// .harpia_tmp (see the startup sweep log).
 	QDir tmp(dir.filePath(QStringLiteral(".harpia_tmp")));
 	tmp.mkpath(QStringLiteral("."));
+	if (split.enabled) {
+		// A take owns its temporary directory: native split names and a second
+		// recording with the same filename template can never overwrite it.
+		tmp = QDir(tmp.filePath(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+		if (!tmp.mkpath(QStringLiteral("."))) {
+			QMessageBox::warning(this, QStringLiteral("Could not start the recording"),
+				QStringLiteral("Could not create the temporary recording folder:\n%1").arg(tmp.absolutePath()));
+			starting_ = false;
+			updateButtons();
+			return;
+		}
+	}
 	const QString recordPath =
-		tmp.filePath(baseName + QLatin1Char('.') +
+		tmp.filePath(baseName + (split.enabled ? QStringLiteral("_part001") : QString()) + QLatin1Char('.') +
 			     ((preset.format == RecordingFormat::MP4 &&
 			       recordMode() != RecordMode::AudioOnly)
 				      ? QStringLiteral("mkv")
@@ -1644,7 +1692,9 @@ void MainWindow::startRecording()
 	// for the quarter second until the state tick arms the switcher.
 	primeMultiArea();
 
-	if (!recorder_.start(preset, recordPath.toStdString())) {
+	if (!recorder_.start(preset, recordPath.toStdString(), split)) {
+		if (split.enabled)
+			QDir().rmdir(tmp.absolutePath()); // only if empty; keep captured data
 		restoreAreaHome();
 		// The timer label gets overwritten by the next tick — the status bar
 		// keeps the failure visible (details are in the Error Logs).
@@ -1659,6 +1709,12 @@ void MainWindow::startRecording()
 		updateButtons();
 		return;
 	}
+	lastAutoSplit_ = split.enabled;
+	lastRecordingFiles_.clear();
+	recordingPart_ = 1;
+	// Failed starts and canceled countdowns retain a one-time choice.
+	autoSplit_.recordingStarted();
+	updateAutoSplitButton();
 
 	// Keep the machine awake for the life of the recording. Without this a
 	// long unattended take ends when the OS sleep timer does -- and this app's
@@ -1954,7 +2010,7 @@ void MainWindow::setHotkeysSuspended(bool on)
 
 	if (on) {
 		hotkeys_->unbindAll();
-		blog(LOG_INFO, "[harpia] hotkeys released while a shortcut is being edited");
+		blog(LOG_INFO, "[harpia] hotkeys released while recorder settings are being edited");
 	} else {
 		rebindHotkeys();
 		rebindPresetHotkeys();
@@ -1997,6 +2053,11 @@ void MainWindow::finalizeAfterStop()
 	if (stopHandled_)
 		return;
 	stopHandled_ = true;
+	if (lastAutoSplit_) {
+		finalizeRecordingParts();
+		markersPath_.clear();
+		return;
+	}
 
 	const bool needMinCheck = (lastMinSeconds_ > 0 && lastContentMs_ > 0 &&
 				   lastContentMs_ < (qint64)lastMinSeconds_ * 1000);
@@ -2007,6 +2068,82 @@ void MainWindow::finalizeAfterStop()
 	else if (closePending_)
 		close(); // close was requested mid-recording; the file is flushed now
 	markersPath_.clear();
+}
+
+void MainWindow::finalizeRecordingParts()
+{
+	// A file_changed signal only queues a change in the muxer process. It is
+	// safe to read the parts once the output's final stop has closed them all.
+	QStringList files = lastRecordingFiles_;
+	if (files.isEmpty()) {
+		for (const auto &path : recorder_.recordedFiles())
+			files.append(QString::fromStdString(path));
+	}
+	if (files.isEmpty() && !lastRecordedPath_.isEmpty())
+		files.append(lastRecordedPath_);
+	files.removeDuplicates();
+	const bool tooShort = lastMinSeconds_ > 0 && lastContentMs_ > 0 &&
+		lastContentMs_ < qint64(lastMinSeconds_) * 1000;
+	// Apply the minimum to the complete take, including a short final part.
+	if (tooShort && !files.isEmpty() && discardShortRecording(files.first(), lastWebcamPath_,
+		markersPath_, lastContentMs_, lastMinSeconds_)) {
+		for (const QString &path : files) {
+			QFile::remove(path);
+			QDir().rmdir(QFileInfo(path).absolutePath());
+		}
+	} else {
+		int part = 0;
+		for (const QString &path : files) {
+			const QString target = recording_parts::numberedPath(lastScreenPath_, ++part);
+			if (QFileInfo(path).suffix().compare(QFileInfo(target).suffix(), Qt::CaseInsensitive) != 0) {
+				remuxInBackground(path, target);
+				continue;
+			}
+			const QString available = recording_parts::availablePath(target, pendingRecordingTargets_);
+			if (!QFile::rename(path, available)) {
+				blog(LOG_WARNING, "[harpia] auto split: could not save part %d; kept at %s", part, qUtf8Printable(path));
+				statusBar()->showMessage(QStringLiteral("Could not save recording part %1 — kept at %2").arg(part).arg(path), 15000);
+			} else {
+				QDir().rmdir(QFileInfo(path).absolutePath());
+			}
+		}
+	}
+	refreshClipViews();
+	// Schedule every part before allowing a pending close to run.
+	if (closePending_ && remuxActive_ == 0)
+		close();
+}
+
+void MainWindow::showAutoSplitDialog()
+{
+	if (recorder_.isRecording() || starting_ || stopping_ || countingDown_)
+		return;
+	AutoSplitDialog dialog(autoSplit_.next(), !autoSplit_.hasOverride(), this);
+	const bool alreadySuspended = hotkeysSuspended_;
+	setHotkeysSuspended(true);
+	const int result = dialog.exec();
+	setHotkeysSuspended(alreadySuspended);
+	if (result != QDialog::Accepted)
+		return;
+	autoSplit_.apply(dialog.settings(), dialog.always());
+	if (dialog.always()) {
+		QSettings settings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+		auto_split_settings::save(settings, autoSplit_.defaults());
+	}
+	updateAutoSplitButton();
+}
+
+void MainWindow::updateAutoSplitButton()
+{
+	if (!autoSplitButton_)
+		return;
+	const auto &split = autoSplit_.next();
+	const QString limit = split.mode == AutoSplitSettings::Mode::Time
+		? QStringLiteral("%1 min").arg(split.minutes) : QStringLiteral("%1 MB").arg(split.sizeMB);
+	autoSplitButton_->setText(split.enabled ? limit + QStringLiteral("…") : QStringLiteral("Off…"));
+	autoSplitButton_->setToolTip(QStringLiteral("Auto Split: %1. %2\nClick to change time or file-size limits.")
+		.arg(split.enabled ? limit : QStringLiteral("off"), autoSplit_.hasOverride()
+			? QStringLiteral("Next recording only") : QStringLiteral("Saved for future recordings")));
 }
 
 void MainWindow::beginStart()
@@ -2122,9 +2259,13 @@ bool MainWindow::discardShortRecording(const QString &recordedPath, const QStrin
 
 void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Path)
 {
+	const QString target = recording_parts::availablePath(mp4Path, pendingRecordingTargets_);
+	pendingRecordingTargets_.insert(target);
+	const QString staging = QFileInfo(mkvPath).dir().filePath(
+		QStringLiteral(".save_%1.mp4").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
 	const qint64 srcSize = QFileInfo(mkvPath).size();
 	blog(LOG_INFO, "[harpia] remux: %s -> %s (%lld MB, lossless stream copy)",
-	     mkvPath.toUtf8().constData(), mp4Path.toUtf8().constData(), (long long)(srcSize / (1024 * 1024)));
+	     mkvPath.toUtf8().constData(), target.toUtf8().constData(), (long long)(srcSize / (1024 * 1024)));
 
 	// Visible feedback while the file is being finalized — otherwise the clip
 	// silently appears "late" in the recent strip and saving looks stuck.
@@ -2135,12 +2276,17 @@ void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Pat
 	QPointer<MainWindow> guard(this);
 	const qint64 startMs = QDateTime::currentMSecsSinceEpoch();
 
-	QThreadPool::globalInstance()->start(QRunnable::create([guard, mkvPath, mp4Path, srcSize, startMs]() {
-		const bool ok = Remuxer::remux(mkvPath.toStdString(), mp4Path.toStdString());
-		const qint64 outSize = ok ? QFileInfo(mp4Path).size() : 0;
+	QThreadPool::globalInstance()->start(QRunnable::create([guard, mkvPath, target, staging, srcSize, startMs]() {
+		// Publish only a completed MP4. rename refuses to overwrite a destination
+		// created externally while this worker was busy; the MKV stays intact.
+		const bool ok = Remuxer::remux(mkvPath.toStdString(), staging.toStdString()) &&
+			QFile::rename(staging, target);
+		const qint64 outSize = ok ? QFileInfo(target).size() : 0;
+		if (!ok)
+			QFile::remove(staging);
 		QMetaObject::invokeMethod(
 			qApp,
-			[guard, mkvPath, mp4Path, ok, srcSize, outSize, startMs]() {
+			[guard, mkvPath, target, ok, srcSize, outSize, startMs]() {
 				const qint64 secs =
 					(QDateTime::currentMSecsSinceEpoch() - startMs + 500) / 1000;
 				if (ok) {
@@ -2151,19 +2297,18 @@ void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Pat
 					     (long long)(srcSize / (1024 * 1024)),
 					     (long long)(outSize / (1024 * 1024)), (long long)secs);
 				} else {
-					// A failed remux may have written a partial header/trailer —
-					// remove the broken .mp4 so the library doesn't list it.
-					QFile::remove(mp4Path);
 					// Don't lose the recording: keep the .mkv beside the target.
-					const QString fallback =
-						QFileInfo(mp4Path).absolutePath() + QLatin1Char('/') +
-						QFileInfo(mp4Path).completeBaseName() + QStringLiteral(".mkv");
-					QFile::rename(mkvPath, fallback);
+					const QString fallback = recording_parts::availablePath(
+						QFileInfo(target).absolutePath() + QLatin1Char('/') +
+						QFileInfo(target).completeBaseName() + QStringLiteral(".mkv"),
+						guard ? guard->pendingRecordingTargets_ : QSet<QString>{});
+					const bool moved = QFile::rename(mkvPath, fallback);
 					blog(LOG_WARNING,
 					     "[harpia] remux FAILED — kept the recording as %s",
-					     fallback.toUtf8().constData());
+					     qUtf8Printable(moved ? fallback : mkvPath));
 				}
 				if (guard) {
+					guard->pendingRecordingTargets_.remove(target);
 					guard->remuxActive_ = std::max(0, guard->remuxActive_ - 1);
 					if (ok)
 						guard->statusBar()->showMessage(
@@ -4672,6 +4817,8 @@ void MainWindow::updateButtons()
 	const bool recording = recorder_.isRecording();
 	const bool paused = recorder_.isPaused();
 	const bool transitioning = starting_ || stopping_ || countingDown_;
+	if (autoSplitButton_)
+		autoSplitButton_->setEnabled(!recording && !transitioning);
 
 	// Region overlay border color follows the state (green/red/yellow).
 	if (regionTool_)

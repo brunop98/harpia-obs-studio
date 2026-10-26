@@ -72,7 +72,8 @@ QString ClipInfo::durationString(qint64 ms)
 
 QStringList ClipLibrary::videoExtensions()
 {
-	return {QStringLiteral("mp4"), QStringLiteral("mkv"), QStringLiteral("mov"), QStringLiteral("gif")};
+	return {QStringLiteral("mp4"), QStringLiteral("mkv"), QStringLiteral("mov"),
+		QStringLiteral("avi"), QStringLiteral("gif")};
 }
 
 QStringList ClipLibrary::audioExtensions()

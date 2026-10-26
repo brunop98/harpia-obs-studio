@@ -7,6 +7,8 @@
 
 #include <obs.h>
 
+#include <algorithm>
+
 namespace harpia {
 
 RecordingController::~RecordingController()
@@ -32,6 +34,9 @@ void RecordingController::teardown()
 		if (sh) {
 			signal_handler_disconnect(sh, "start", &RecordingController::onStartSignal, this);
 			signal_handler_disconnect(sh, "stop", &RecordingController::onStopSignal, this);
+			if (splitEnabled_)
+				signal_handler_disconnect(sh, "file_changed",
+						  &RecordingController::onFileChangedSignal, this);
 		}
 		obs_output_release(output_);
 		output_ = nullptr;
@@ -44,20 +49,33 @@ void RecordingController::teardown()
 		obs_encoder_release(audioEncoder_);
 		audioEncoder_ = nullptr;
 	}
+	splitEnabled_ = false;
 }
 
-bool RecordingController::start(const Preset &preset, const std::string &fullFilePath)
+bool RecordingController::start(const Preset &preset, const std::string &fullFilePath,
+				const AutoSplitSettings &requestedSplit)
 {
 	if (isRecording())
 		return false;
+	const AutoSplitSettings split = auto_split_settings::validated(requestedSplit);
 
 	teardown(); // release any previous session's objects
 
 	lastStopCode_ = 0;
 	lastStopError_.clear();
+	{
+		std::lock_guard<std::mutex> lock(recordedFilesMutex_);
+		recordedFiles_.clear();
+	}
 	activePreset_ = preset;
 	currentFilePath_ = fullFilePath;
 	usesFfmpegOutput_ = EncoderFactory::usesFfmpegOutput(preset);
+	if (split.enabled && (usesFfmpegOutput_ ||
+			      !modeUsesVideoEncoder(recordModeFromInt(preset.captureMode)))) {
+		lastStopError_ = "Auto Split supports MP4, MKV, MOV and AVI screen recordings. "
+				 "Turn off Auto Split for Audio Only or GIF recording.";
+		return false;
+	}
 
 	// Audio Only: no output, no encoders, no video graph -- a tap straight on
 	// the audio mix. libobs will not start an FFmpeg output without a video
@@ -72,6 +90,10 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 			// leaves the captured WAV behind rather than nothing, and the
 			// user should be shown the file that exists.
 			currentFilePath_ = path;
+			{
+				std::lock_guard<std::mutex> lock(recordedFilesMutex_);
+				recordedFiles_ = {path};
+			}
 			if (onFinished)
 				onFinished(path);
 		};
@@ -83,6 +105,10 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 			lastStopError_ = err;
 			tap_.reset();
 			return false;
+		}
+		{
+			std::lock_guard<std::mutex> lock(recordedFilesMutex_);
+			recordedFiles_ = {fullFilePath};
 		}
 		if (onStarted)
 			onStarted();
@@ -193,6 +219,35 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 
 		obs_data_t *osettings = obs_data_create();
 		obs_data_set_string(osettings, "path", fullFilePath.c_str());
+		if (split.enabled) {
+			// The caller gives each take its own hidden directory. A short,
+			// literal internal stem avoids the OBS formatter interpreting '%'
+			// in user names or truncating a long generated filename. The GUI
+			// assigns numbered, user-facing names after the take stops.
+			const size_t slash = fullFilePath.find_last_of("/\\");
+			const size_t dot = fullFilePath.find_last_of('.');
+			if (slash == std::string::npos || dot == std::string::npos || dot <= slash) {
+				lastStopError_ = "Auto Split requires a recording path with a folder and extension.";
+				obs_data_release(osettings);
+				teardown();
+				return false;
+			}
+			obs_data_set_bool(osettings, "split_file", true);
+			obs_data_set_int(osettings, "max_time_sec",
+					 split.mode == AutoSplitSettings::Mode::Time
+						 ? int64_t(std::max(1, split.minutes)) * 60
+						 : 0);
+			obs_data_set_int(osettings, "max_size_mb",
+					 split.mode == AutoSplitSettings::Mode::Size
+						 ? std::max(1, split.sizeMB)
+						 : 0);
+			obs_data_set_string(osettings, "directory", fullFilePath.substr(0, slash).c_str());
+			obs_data_set_string(osettings, "format", "part");
+			obs_data_set_string(osettings, "extension", fullFilePath.substr(dot + 1).c_str());
+			obs_data_set_bool(osettings, "allow_spaces", true);
+			obs_data_set_bool(osettings, "allow_overwrite", false);
+			splitEnabled_ = true;
+		}
 		obs_output_update(output_, osettings);
 		obs_data_release(osettings);
 	}
@@ -200,15 +255,48 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 	signal_handler_t *sh = obs_output_get_signal_handler(output_);
 	signal_handler_connect(sh, "start", &RecordingController::onStartSignal, this);
 	signal_handler_connect(sh, "stop", &RecordingController::onStopSignal, this);
+	if (splitEnabled_)
+		signal_handler_connect(sh, "file_changed", &RecordingController::onFileChangedSignal, this);
+	{
+		std::lock_guard<std::mutex> lock(recordedFilesMutex_);
+		recordedFiles_ = {fullFilePath};
+	}
 
 	if (!obs_output_start(output_)) {
 		const char *err = obs_output_get_last_error(output_);
 		blog(LOG_ERROR, "[harpia] obs_output_start failed: %s", err ? err : "(unknown)");
+		lastStopError_ = err ? err : "The recording output could not start.";
 		teardown();
+		{
+			std::lock_guard<std::mutex> lock(recordedFilesMutex_);
+			recordedFiles_.clear();
+		}
 		return false;
 	}
 
 	return true;
+}
+
+std::vector<std::string> RecordingController::recordedFiles() const
+{
+	std::lock_guard<std::mutex> lock(recordedFilesMutex_);
+	return recordedFiles_;
+}
+
+void RecordingController::onFileChangedSignal(void *data, calldata_t *cd)
+{
+	auto *self = static_cast<RecordingController *>(data);
+	const char *next = calldata_string(cd, "next_file");
+	if (!next || !*next)
+		return;
+	const std::string path(next);
+	{
+		std::lock_guard<std::mutex> lock(self->recordedFilesMutex_);
+		if (self->recordedFiles_.empty() || self->recordedFiles_.back() != path)
+			self->recordedFiles_.push_back(path);
+	}
+	if (self->onFileChanged)
+		self->onFileChanged(path);
 }
 
 void RecordingController::stop()

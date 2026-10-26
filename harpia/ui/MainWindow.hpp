@@ -4,6 +4,7 @@
 #include "ui/MainLayoutParams.hpp"
 #include "core/CaptureManager.hpp"
 #include "core/RecordingController.hpp"
+#include "core/AutoSplitSettings.hpp"
 #include "core/DiskSpace.hpp"
 #include "core/FollowMouse.hpp"
 #include "core/MultiArea.hpp"
@@ -27,6 +28,7 @@
 #include <QPoint>
 #include <QMainWindow>
 #include <QSize>
+#include <QSet>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -102,6 +104,7 @@ private slots:
 	void onRecordPauseButton();
 	// Stop beside it: ends the take, or calls off the countdown before one.
 	void onStopButton();
+	void showAutoSplitDialog();
 	void onNewPreset();
 	void showPresetMenu(const QPoint &pos); // right-click combo: edit/delete
 	// Delete, from the button or the combo's menu: asks first (saying what
@@ -197,6 +200,8 @@ private:
 	// De-duplicate a preset name against the other presets ("Name (2)"…).
 	std::string uniquePresetName(const std::string &wanted, const std::string &selfId) const;
 	void startRecording();
+	void updateAutoSplitButton();
+	void finalizeRecordingParts();
 	void applyLiveCapture(); // (re)bind the live capture to the current mode
 	void beginRecordFlow(); // readiness gate -> countdown or immediate start
 	void beginStart();      // enter Starting… and kick off the recording
@@ -515,6 +520,8 @@ private:
 
 	// The record column
 	QPushButton *primaryButton_ = nullptr; // Record, then Pause/Resume
+	QPushButton *autoSplitButton_ = nullptr;
+	AutoSplitState autoSplit_;
 	QPushButton *stopButton_ = nullptr;
 	QLabel *timerLabel_ = nullptr;
 
@@ -648,6 +655,7 @@ private:
 	// a bool would be cleared by whichever finished first while the rest were
 	// still writing.
 	int remuxActive_ = 0;
+	QSet<QString> pendingRecordingTargets_;
 
 	// Pre-recording countdown state.
 	bool countingDown_ = false;
@@ -671,6 +679,9 @@ private:
 	QString lastRecordedPath_;
 	QString lastScreenPath_;
 	QString lastWebcamPath_;
+	QStringList lastRecordingFiles_;
+	bool lastAutoSplit_ = false;
+	int recordingPart_ = 1;
 	qint64 lastContentMs_ = 0;
 	int lastMinSeconds_ = 0;
 };

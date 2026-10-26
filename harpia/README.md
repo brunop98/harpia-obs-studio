@@ -35,6 +35,16 @@ needs (see [The OBS tree](#the-obs-tree)).
   name template, webcam, audio, region behaviour.
 - **Global hotkeys** (F9 record, F10 pause, F4 zoom), a countdown, floating
   recording controls, **idle auto-pause** and pause-when-another-app-is-focused.
+- **Auto Split:** open **Auto split** in the recording controls to split by
+  recorded minutes or approximate file size. **Only this time** applies to the
+  next successful recording; **Always** saves the setting across restarts.
+  Capture continues while the muxer opens the next file. After stopping, all
+  parts are saved as `_part001`, `_part002`, and so on, including the shorter
+  final part. Paused time is excluded. Supports MP4, MKV, MOV and AVI video;
+  a separate webcam file stays continuous and recording markers cover the full
+  take. Splits wait for video keyframes; file sizes also include container
+  overhead, so limits are approximate. For a strict Discord upload cap,
+  use **Optimize for sharing → Discord** after recording.
 - **Multi-monitor** with per-preset display choice, and per-monitor DPI.
 
 ### Editing

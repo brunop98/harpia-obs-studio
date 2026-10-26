@@ -96,6 +96,8 @@ target_sources(
     core/AudioOnlyRecorder.hpp
     core/AudioTap.hpp
     core/AutoPause.hpp
+    core/AutoSplitSettings.hpp
+    core/RecordingParts.hpp
     core/GlobalHotkeys.cpp
     core/GlobalHotkeys.hpp
     core/CrashGuard.cpp
@@ -168,6 +170,8 @@ target_sources(
     ui/GuidesOverlay.hpp
     ui/RecorderControlsOverlay.cpp
     ui/RecorderControlsOverlay.hpp
+    ui/AutoSplitDialog.cpp
+    ui/AutoSplitDialog.hpp
     ui/ShareExportDialog.cpp
     ui/ShareExportDialog.hpp
     ui/WebcamPreview.cpp

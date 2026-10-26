@@ -28,6 +28,7 @@
 #include <set>
 
 #include <algorithm>
+#include <cmath>
 
 #include <QAbstractButton>
 #include <QCheckBox>
@@ -53,6 +54,7 @@
 #include <QSet>
 #include <QScrollArea>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QSlider>
 #include <QPainter>
 #include <QSpinBox>
@@ -63,6 +65,28 @@
 namespace harpia {
 
 namespace {
+
+// Give ordinary screen-recording rates enough drag space while retaining the
+// existing high-bitrate range. Zero is Auto; the numeric field keeps exact
+// saved/custom values instead of rounding them to the slider's drag steps.
+constexpr int kBitrateSliderSteps = 1000;
+
+int bitrateAtSliderPosition(int position)
+{
+	if (position <= 0)
+		return 0;
+	const double kbps = 500.0 * std::pow(1000.0, (position - 1.0) / (kBitrateSliderSteps - 1));
+	const int step = kbps < 20000 ? 100 : kbps < 100000 ? 500 : 1000;
+	return std::clamp(int(std::lround(kbps / step)) * step, 500, 500000);
+}
+
+int sliderPositionForBitrate(int kbps)
+{
+	if (kbps <= 0)
+		return 0;
+	const double fraction = std::log(std::clamp(kbps, 500, 500000) / 500.0) / std::log(1000.0);
+	return 1 + int(std::lround(fraction * (kBitrateSliderSteps - 1)));
+}
 
 const char *codecLabel(VideoCodec c)
 {
@@ -1301,56 +1325,62 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 		QStringLiteral("CFR is safest for editing. VFR adapts frame timing, but some editors struggle with it."),
 		frameRateModeCombo_);
 
-	// Bitrate: a dropdown of common presets, plus Auto and a Custom escape hatch
-	// that reveals the numeric field below.
-	bitrateCombo_ = new QComboBox(this);
-	bitrateCombo_->setObjectName(QStringLiteral("recordingBitrate"));
-	bitrateCombo_->addItem(QStringLiteral("Auto (Recommended)"), 0); // 0 = let the encoder decide
-	for (int kbps : {4000, 6000, 8000, 10000, 12000, 16000, 20000, 30000, 40000, 50000, 80000, 100000})
-		bitrateCombo_->addItem(QStringLiteral("%L1 kbps").arg(kbps), kbps);
-	bitrateCombo_->addItem(QStringLiteral("Custom…"), -1);
-	for (int i = 0; i < bitrateCombo_->count() - 1; ++i)
-		bitrateCombo_->setItemData(i, recordingBitrateGuide(bitrateCombo_->itemData(i).toInt()), Qt::ToolTipRole);
-	bitrateCombo_->setItemData(bitrateCombo_->count() - 1,
-		QStringLiteral("Enter a bitrate to see its estimated size and recording guidance."), Qt::ToolTipRole);
-
+	auto *bitrateControl = new QWidget(this);
+	auto *bitrateControls = new QGridLayout(bitrateControl);
+	bitrateControls->setContentsMargins(0, 0, 0, 0);
+	bitrateControls->setHorizontalSpacing(8);
+	bitrateControls->setVerticalSpacing(2);
+	bitrateSlider_ = new QSlider(Qt::Horizontal, this);
+	bitrateSlider_->setObjectName(QStringLiteral("recordingBitrate"));
+	bitrateSlider_->setAccessibleName(QStringLiteral("Video bitrate"));
+	bitrateSlider_->setRange(0, kBitrateSliderSteps);
+	bitrateSlider_->setPageStep(50);
+	bitrateSlider_->setTracking(true);
+	bitrateSlider_->setToolTip(QStringLiteral(
+		"Drag to change bitrate and see the size estimate below. Far left selects Auto. Use the number box for an exact value."));
 	bitrateSpin_ = new QSpinBox(this);
 	bitrateSpin_->setObjectName(QStringLiteral("customRecordingBitrate"));
-	bitrateSpin_->setRange(500, 500000);
+	bitrateSpin_->setAccessibleName(QStringLiteral("Video bitrate in kilobits per second"));
+	bitrateSpin_->setRange(0, 500000);
+	bitrateSpin_->setSpecialValueText(QStringLiteral("Auto"));
 	bitrateSpin_->setSingleStep(500);
+	bitrateSpin_->setGroupSeparatorShown(true);
 	bitrateSpin_->setSuffix(QStringLiteral(" kbps"));
-	bitrateSpin_->setValue(preset.videoBitrateKbps > 0 ? preset.videoBitrateKbps : 12000);
-
-	// Seed the dropdown from the stored value: 0 = Auto, a listed value selects
-	// it, anything else becomes Custom with the numeric field showing the value.
-	if (preset.videoBitrateKbps <= 0) {
-		bitrateCombo_->setCurrentIndex(0);
-	} else {
-		const int idx = bitrateCombo_->findData(preset.videoBitrateKbps);
-		if (idx >= 0)
-			bitrateCombo_->setCurrentIndex(idx);
-		else
-			bitrateCombo_->setCurrentIndex(bitrateCombo_->count() - 1); // Custom…
-	}
-
-	// Also consults the format: GIF hides the whole bitrate row, and the
-	// Custom… spin box must not reappear underneath a hidden dropdown.
-	auto syncBitrate = [this]() {
-		const bool gif = RecordingFormat(formatCombo_->currentData().toInt()) == RecordingFormat::GIF;
-		bitrateSpin_->setVisible(!gif && bitrateCombo_->currentData().toInt() == -1);
-	};
-	connect(bitrateCombo_, &QComboBox::currentIndexChanged, this, syncBitrate);
-	// The note lives on the Video page and the bitrate on Advanced, so the
-	// warning has to be recomputed from here or it never appears.
-	connect(bitrateCombo_, &QComboBox::currentIndexChanged, this,
-		&PresetEditorDialog::updateValidation);
-	connect(bitrateSpin_, &QSpinBox::valueChanged, this, &PresetEditorDialog::updateValidation);
+	bitrateSpin_->setKeyboardTracking(false);
+	bitrateSpin_->setToolTip(QStringLiteral("Enter an exact bitrate from 500 to 500,000 kbps, or 0 for Auto."));
+	bitrateSpin_->setValue(preset.videoBitrateKbps > 0 ? std::max(500, preset.videoBitrateKbps) : 0);
+	bitrateSlider_->setValue(sliderPositionForBitrate(bitrateSpin_->value()));
+	bitrateControls->addWidget(bitrateSlider_, 0, 0);
+	bitrateControls->addWidget(bitrateSpin_, 0, 1);
+	bitrateControls->setColumnStretch(0, 1);
+	auto *bitrateEnds = new QWidget(this);
+	auto *bitrateEndsLayout = new QHBoxLayout(bitrateEnds);
+	bitrateEndsLayout->setContentsMargins(0, 0, 0, 0);
+	bitrateEndsLayout->addWidget(new QLabel(QStringLiteral("Auto"), this));
+	bitrateEndsLayout->addStretch();
+	bitrateEndsLayout->addWidget(new QLabel(QStringLiteral("500 Mbps"), this));
+	bitrateControls->addWidget(bitrateEnds, 1, 0);
+	connect(bitrateSlider_, &QSlider::valueChanged, this, [this](int position) {
+		// Do not map the rounded value back onto the handle mid-drag.
+		const QSignalBlocker block(bitrateSpin_);
+		bitrateSpin_->setValue(bitrateAtSliderPosition(position));
+		updateValidation();
+	});
+	connect(bitrateSpin_, &QSpinBox::valueChanged, this, [this](int kbps) {
+		if (kbps > 0 && kbps < 500) {
+			const QSignalBlocker block(bitrateSpin_);
+			bitrateSpin_->setValue(500);
+			kbps = 500;
+		}
+		const QSignalBlocker block(bitrateSlider_);
+		bitrateSlider_->setValue(sliderPositionForBitrate(kbps));
+		updateValidation();
+	});
 
 	bitrateRow_ = addField(v, QStringLiteral("Bitrate"),
 			       QStringLiteral("A numeric bitrate controls video size. Higher values leave more room for detail. Auto targets quality instead."),
-			       bitrateCombo_);
+			       bitrateControl);
 	auto *bitrateLayout = qobject_cast<QVBoxLayout *>(bitrateRow_->layout());
-	bitrateLayout->addWidget(bitrateSpin_);
 	bitrateGuide_ = new QLabel(this);
 	bitrateGuide_->setObjectName(QStringLiteral("recordingBitrateGuide"));
 	bitrateGuide_->setTextFormat(Qt::PlainText);
@@ -1359,7 +1389,6 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	bitrateGuide_->setStyleSheet(QStringLiteral(
 		"QLabel{color:#c8ccd4; background:#22262d; border:1px solid #3a3f48; border-radius:6px; padding:10px;}"));
 	bitrateLayout->addWidget(bitrateGuide_);
-	syncBitrate();
 	v->addStretch(1);
 	addPage(QStringLiteral("Advanced"), advancedPage);
 
@@ -1675,16 +1704,10 @@ void PresetEditorDialog::applyFrom(const Preset &p)
 	}
 	frameRateModeCombo_->setCurrentIndex(frameRateModeCombo_->findData(int(p.frameRateMode)));
 	fpsCombo_->setCurrentText(QString::number(p.fps));
-	if (p.videoBitrateKbps <= 0) {
-		bitrateCombo_->setCurrentIndex(0);
-	} else {
-		const int idx = bitrateCombo_->findData(p.videoBitrateKbps);
-		if (idx >= 0) {
-			bitrateCombo_->setCurrentIndex(idx);
-		} else {
-			bitrateSpin_->setValue(p.videoBitrateKbps);
-			bitrateCombo_->setCurrentIndex(bitrateCombo_->count() - 1); // Custom…
-		}
+	bitrateSpin_->setValue(p.videoBitrateKbps > 0 ? std::max(500, p.videoBitrateKbps) : 0);
+	{
+		const QSignalBlocker block(bitrateSlider_);
+		bitrateSlider_->setValue(sliderPositionForBitrate(bitrateSpin_->value()));
 	}
 	folderEdit_->setText(QString::fromStdString(p.outputFolder));
 	gpuCheck_->setChecked(p.gpuCompression);
@@ -2003,8 +2026,7 @@ void PresetEditorDialog::updateValidation()
 	syncAutoSplitControls();
 	const auto format = RecordingFormat(formatCombo_->currentData().toInt());
 	const auto codec = VideoCodec(codecCombo_->currentData().toInt());
-	const int kbps = bitrateCombo_->currentData().toInt() == -1
-			 ? bitrateSpin_->value() : bitrateCombo_->currentData().toInt();
+	const int kbps = bitrateSpin_->value();
 	if (bitrateGuide_)
 		bitrateGuide_->setText(recordingBitrateGuide(kbps));
 
@@ -2021,7 +2043,6 @@ void PresetEditorDialog::updateValidation()
 	showRow(codecRow_, !isGif);
 	showRow(bitrateRow_, !isGif);
 	showRow(frameRateModeRow_, !isGif);
-	bitrateSpin_->setVisible(!isGif && bitrateCombo_->currentData().toInt() == -1);
 	showRow(audioSection_, !isGif);
 	showRow(audioBitrateRow_, !isGif);
 	if (audioGifNote_)
@@ -2107,15 +2128,7 @@ void PresetEditorDialog::collectInto(Preset &out) const
 	out.codec = VideoCodec(codecCombo_->currentData().toInt());
 	out.frameRateMode = FrameRateMode(frameRateModeCombo_->currentData().toInt());
 	out.fps = qMax(1, fpsCombo_->currentText().toInt());
-	{
-		const int sel = bitrateCombo_->currentData().toInt();
-		if (sel == 0)
-			out.videoBitrateKbps = 0; // Auto
-		else if (sel == -1)
-			out.videoBitrateKbps = bitrateSpin_->value(); // Custom
-		else
-			out.videoBitrateKbps = sel; // a listed preset
-	}
+	out.videoBitrateKbps = bitrateSpin_->value();
 
 	// Hotkeys are app-wide QSettings, written on OK like everything else here
 	// (Cancel leaves them untouched). Empty means "back to the default".

@@ -107,7 +107,7 @@ private:
 	QComboBox *codecCombo_ = nullptr;
 	QComboBox *fpsCombo_ = nullptr;
 	QComboBox *frameRateModeCombo_ = nullptr;
-	QComboBox *bitrateCombo_ = nullptr;
+	QSlider *bitrateSlider_ = nullptr;
 	QComboBox *audioBitrateCombo_ = nullptr;
 	QSpinBox *bitrateSpin_ = nullptr;
 	QLabel *bitrateGuide_ = nullptr;

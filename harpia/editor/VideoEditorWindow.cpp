@@ -13271,17 +13271,17 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 		// exactly that: an imported voiceover, long since deleted from a temp
 		// folder, on an audio track with no clips on it.
 		QSet<int> used;
-		for (const QJsonValue &tv : root.value(QStringLiteral("tracks")).toArray())
-			for (const QJsonValue &cv : tv.toObject().value(QStringLiteral("clips")).toArray()) {
+		for (const QJsonValue tv : root.value(QStringLiteral("tracks")).toArray())
+			for (const QJsonValue cv : tv.toObject().value(QStringLiteral("clips")).toArray()) {
 				const QJsonObject co = cv.toObject();
 				const QString cty = co.value(QStringLiteral("type")).toString();
 				// A caption carries a source id it never reads.
 				if (cty != QLatin1String("text"))
 					used.insert(co.value(QStringLiteral("source")).toInt());
 			}
-		for (const QJsonValue &sv : root.value(QStringLiteral("segments")).toArray())
+		for (const QJsonValue sv : root.value(QStringLiteral("segments")).toArray())
 			used.insert(sv.toObject().value(QStringLiteral("source")).toInt());
-		for (const QJsonValue &rv : root.value(QStringLiteral("soundRules")).toArray())
+		for (const QJsonValue rv : root.value(QStringLiteral("soundRules")).toArray())
 			used.insert(rv.toObject().value(QStringLiteral("source")).toInt());
 		if (root.contains(QStringLiteral("activeSource")))
 			used.insert(root.value(QStringLiteral("activeSource")).toInt());
@@ -13397,7 +13397,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	s.cropEnabled = crop.value(QStringLiteral("enabled")).toBool(false);
 	s.cropRect = QRect(crop.value(QStringLiteral("x")).toInt(), crop.value(QStringLiteral("y")).toInt(),
 			   crop.value(QStringLiteral("w")).toInt(), crop.value(QStringLiteral("h")).toInt());
-	for (const QJsonValue &jv : root.value(QStringLiteral("segments")).toArray()) {
+	for (const QJsonValue jv : root.value(QStringLiteral("segments")).toArray()) {
 		const QJsonObject o = jv.toObject();
 		CutSegment c;
 		c.srcStartMs = qint64(o.value(QStringLiteral("srcStart")).toDouble());
@@ -13410,7 +13410,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 		s.segments.push_back(c);
 	}
 	const QString projDir = QFileInfo(path).absolutePath();
-	for (const QJsonValue &jv : root.value(QStringLiteral("voiceovers")).toArray()) {
+	for (const QJsonValue jv : root.value(QStringLiteral("voiceovers")).toArray()) {
 		const QJsonObject o = jv.toObject();
 		VoiceoverClip v;
 		v.path = QDir(projDir).filePath(o.value(QStringLiteral("file")).toString());
@@ -13531,7 +13531,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 		};
 		QVector<ShaderState> old;
 		if (root.value(QStringLiteral("effects")).isArray()) {
-			for (const QJsonValue &jv : root.value(QStringLiteral("effects")).toArray()) {
+			for (const QJsonValue jv : root.value(QStringLiteral("effects")).toArray()) {
 				const ShaderState st = readEffect(jv.toObject());
 				if (!st.name.isEmpty())
 					old.append(st);

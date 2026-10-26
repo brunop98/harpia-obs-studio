@@ -66,7 +66,7 @@ PresetMergeResult SoundPresets::merge(TimelineModel &m, const QJsonObject &prese
 				      const std::function<int(const SoundRef &)> &sourceFor)
 {
 	PresetMergeResult res;
-	for (const QJsonValue &tv : preset.value(QStringLiteral("tags")).toArray()) {
+	for (const QJsonValue tv : preset.value(QStringLiteral("tags")).toArray()) {
 		const QJsonObject to = tv.toObject();
 		const QString n = to.value(QStringLiteral("name")).toString().trimmed();
 		if (n.isEmpty() || m.tagNamed(n))
@@ -74,7 +74,7 @@ PresetMergeResult SoundPresets::merge(TimelineModel &m, const QJsonObject &prese
 		m.ensureTag(n, QColor(to.value(QStringLiteral("color")).toString()));
 		++res.tagsAdded;
 	}
-	for (const QJsonValue &rv : preset.value(QStringLiteral("rules")).toArray()) {
+	for (const QJsonValue rv : preset.value(QStringLiteral("rules")).toArray()) {
 		const QJsonObject ro = rv.toObject();
 		TlSoundRule r = soundRuleFromJson(ro);
 		r.lane = -1;

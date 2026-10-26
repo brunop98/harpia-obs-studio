@@ -60,6 +60,11 @@ The `macos-ci` preset disables Xcode's compilation cache and clears any prior
 CAS path in the build cache. This avoids Xcode's `CAS filesystem cannot be
 initialized ... RootID does not exist` failure on hosted runners.
 
+If the native CI build fails, its run summary shows the first compiler/build
+diagnostic with context. Download the `Harpia-macOS-build-log` artifact for the
+complete output, including errors printed much earlier than Xcode's final
+`CompileC` / exit-code summary.
+
 The launcher accepts the options below and opens the resulting `Harpia.app`.
 For tests and a verified package without launching, use:
 

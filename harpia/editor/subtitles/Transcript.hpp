@@ -80,7 +80,7 @@ inline Transcript parseOpenAiVerboseJson(const QByteArray &json, QString *err = 
 	t.language = o.value(QStringLiteral("language")).toString();
 	t.text = o.value(QStringLiteral("text")).toString().trimmed();
 	const auto ms = [](const QJsonValue &v) { return qint64(std::llround(v.toDouble() * 1000.0)); };
-	for (const QJsonValue &wv : o.value(QStringLiteral("words")).toArray()) {
+	for (const QJsonValue wv : o.value(QStringLiteral("words")).toArray()) {
 		const QJsonObject wo = wv.toObject();
 		ClipWordTime w;
 		w.text = wo.value(QStringLiteral("word")).toString().trimmed();
@@ -92,7 +92,7 @@ inline Transcript parseOpenAiVerboseJson(const QByteArray &json, QString *err = 
 	if (t.words.isEmpty()) {
 		// No word timestamps: spread each segment's words evenly over it. Worse
 		// than real timings, far better than nothing.
-		for (const QJsonValue &sv : o.value(QStringLiteral("segments")).toArray()) {
+		for (const QJsonValue sv : o.value(QStringLiteral("segments")).toArray()) {
 			const QJsonObject so = sv.toObject();
 			const QStringList words =
 				so.value(QStringLiteral("text")).toString().split(QLatin1Char(' '), Qt::SkipEmptyParts);

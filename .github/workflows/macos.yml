@@ -77,8 +77,28 @@ jobs:
           path: .deps
           key: macos-deps-${{ runner.arch }}-${{ hashFiles('CMakePresets.json') }}
       - name: Build, deploy, test and verify a relocated package
+        id: native_build
         if: steps.toolchain.outputs.available == 'true'
-        run: harpia/scripts/build-macos.sh --preset macos-ci --build-dir build_macos_ci --test --package --check-runtime
+        shell: bash
+        run: |
+          set -o pipefail
+          harpia/scripts/build-macos.sh --preset macos-ci --build-dir build_macos_ci --test --package --check-runtime 2>&1 | tee "$RUNNER_TEMP/harpia-macos-build.log"
+      - name: Show the first build diagnostic
+        if: failure() && steps.native_build.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          log = Path(os.environ['RUNNER_TEMP']) / 'harpia-macos-build.log'
+          lines = log.read_text(errors='replace').splitlines() if log.exists() else ['The build log was not created.']
+          first = next((i for i, line in enumerate(lines) if re.search(r'\berror:|^\s*CMake Error', line, re.I)), None)
+          title = 'First compiler/build diagnostic' if first is not None else 'Build log tail (no error marker found)'
+          excerpt = '\n'.join(line[:1500] for line in (lines[first:first + 60] if first is not None else lines[-60:]))
+          print(title + '\n' + excerpt)
+          fence = '`' * max(3, max((len(match[0]) + 1 for match in re.finditer(r'`+', excerpt)), default=3))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write(f'## {title}\n\nDownload the **Harpia-macOS-build-log** artifact for the complete output.\n\n{fence}text\n{excerpt}\n{fence}\n')
+          PY
       - uses: actions/upload-artifact@v6
         if: steps.toolchain.outputs.available == 'true' && success()
         with:
@@ -88,3 +108,9 @@ jobs:
             build_macos_ci/dist/*.sha256
             build_macos_ci/dist/*.runtime.json
           if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        if: always() && (steps.native_build.outcome == 'success' || steps.native_build.outcome == 'failure')
+        with:
+          name: Harpia-macOS-build-log
+          path: ${{ runner.temp }}/harpia-macos-build.log
+          if-no-files-found: warn

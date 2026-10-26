@@ -274,7 +274,7 @@ inline Transcript parseDeepgramJson(const QByteArray &json, QString *err = nullp
 		if (!alts.isEmpty()) {
 			const QJsonObject alt = alts.first().toObject();
 			t.text = alt.value(QStringLiteral("transcript")).toString().trimmed();
-			for (const QJsonValue &wv : alt.value(QStringLiteral("words")).toArray()) {
+			for (const QJsonValue wv : alt.value(QStringLiteral("words")).toArray()) {
 				const QJsonObject wo = wv.toObject();
 				ClipWordTime w;
 				w.text = wo.value(QStringLiteral("punctuated_word")).toString().trimmed();
@@ -336,7 +336,7 @@ inline Transcript parseAssemblyAiJson(const QByteArray &json, QString *err = nul
 	}
 	t.language = o.value(QStringLiteral("language_code")).toString();
 	t.text = o.value(QStringLiteral("text")).toString().trimmed();
-	for (const QJsonValue &wv : o.value(QStringLiteral("words")).toArray()) {
+	for (const QJsonValue wv : o.value(QStringLiteral("words")).toArray()) {
 		const QJsonObject wo = wv.toObject();
 		ClipWordTime w;
 		w.text = wo.value(QStringLiteral("text")).toString().trimmed();
@@ -366,7 +366,7 @@ inline Transcript parseElevenLabsJson(const QByteArray &json, QString *err = nul
 	}
 	t.language = o.value(QStringLiteral("language_code")).toString();
 	t.text = o.value(QStringLiteral("text")).toString().trimmed();
-	for (const QJsonValue &wv : o.value(QStringLiteral("words")).toArray()) {
+	for (const QJsonValue wv : o.value(QStringLiteral("words")).toArray()) {
 		const QJsonObject wo = wv.toObject();
 		const QString type = wo.value(QStringLiteral("type")).toString();
 		if (!type.isEmpty() && type != QLatin1String("word"))

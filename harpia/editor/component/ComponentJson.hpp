@@ -122,7 +122,7 @@ inline ComponentInstance componentFromJson(const QJsonObject &in, const Componen
 	const QJsonObject keys = o.value(QStringLiteral("keys")).toObject();
 	for (auto it = keys.begin(); it != keys.end(); ++it) {
 		QVector<PropKey> ks;
-		for (const QJsonValue &kv : it->toArray())
+		for (const QJsonValue kv : it->toArray())
 			ks.append(propKeyFromJson(kv.toObject()));
 		std::sort(ks.begin(), ks.end(),
 			  [](const PropKey &a, const PropKey &b) { return a.tMs < b.tMs; });
@@ -153,7 +153,7 @@ inline QVector<ComponentInstance> componentsFromJson(const QJsonArray &arr,
 {
 	QVector<ComponentInstance> out;
 	out.reserve(arr.size());
-	for (const QJsonValue &v : arr)
+	for (const QJsonValue v : arr)
 		out.append(componentFromJson(v.toObject(), reg));
 	return out;
 }

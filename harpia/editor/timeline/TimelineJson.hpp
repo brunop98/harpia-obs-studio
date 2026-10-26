@@ -101,14 +101,14 @@ inline SpotlightSpec spotlightFromJson(const QJsonObject &o)
 	if (c.isValid())
 		s.dimColor = c;
 	s.blur = std::clamp(o.value(QStringLiteral("blur")).toDouble(0.0), 0.0, 1.0);
-	for (const QJsonValue &mv : o.value(QStringLiteral("masks")).toArray()) {
+	for (const QJsonValue mv : o.value(QStringLiteral("masks")).toArray()) {
 		const QJsonObject mo = mv.toObject();
 		SpotMask m;
 		m.name = mo.value(QStringLiteral("name")).toString();
 		m.shape = spotShapeFromInt(mo.value(QStringLiteral("shape")).toInt(1));
 		m.enabled = mo.value(QStringLiteral("enabled")).toBool(true);
 		m.pose = spotPoseFromJson(mo.value(QStringLiteral("pose")).toObject());
-		for (const QJsonValue &kv : mo.value(QStringLiteral("keys")).toArray()) {
+		for (const QJsonValue kv : mo.value(QStringLiteral("keys")).toArray()) {
 			const QJsonObject ko = kv.toObject();
 			SpotKey k;
 			k.tMs = qint64(ko.value(QStringLiteral("t")).toDouble());
@@ -332,7 +332,7 @@ inline TlClip clipFromJson(const QJsonObject &co)
 	c.soundRule = co.value(QStringLiteral("soundRule")).toInt(0);
 	c.link = std::max(0, co.value(QStringLiteral("link")).toInt(0));
 	c.tts = co.value(QStringLiteral("tts")).toString();
-	for (const QJsonValue &ov : co.value(QStringLiteral("clipOptions")).toArray()) {
+	for (const QJsonValue ov : co.value(QStringLiteral("clipOptions")).toArray()) {
 		const QJsonObject oo = ov.toObject();
 		c.clipOptions.append({oo.value(QStringLiteral("source")).toInt(0),
 				      qint64(oo.value(QStringLiteral("srcStart")).toDouble())});
@@ -340,7 +340,7 @@ inline TlClip clipFromJson(const QJsonObject &co)
 	c.clipShown = c.clipOptions.isEmpty()
 			      ? 0
 			      : std::clamp(co.value(QStringLiteral("clipShown")).toInt(0), 0, int(c.clipOptions.size()) - 1);
-	for (const QJsonValue &tv : co.value(QStringLiteral("tags")).toArray())
+	for (const QJsonValue tv : co.value(QStringLiteral("tags")).toArray())
 		if (const int id = tv.toInt(0); id > 0 && !c.tags.contains(id))
 			c.tags.append(id);
 	c.posX = co.value(QStringLiteral("posX")).toDouble(0.5);
@@ -355,7 +355,7 @@ inline TlClip clipFromJson(const QJsonObject &co)
 			       cr.value(QStringLiteral("w")).toInt(),
 			       cr.value(QStringLiteral("h")).toInt());
 	}
-	for (const QJsonValue &kv : co.value(QStringLiteral("keys")).toArray()) {
+	for (const QJsonValue kv : co.value(QStringLiteral("keys")).toArray()) {
 		const QJsonObject ko = kv.toObject();
 		TlKeyframe k;
 		k.tMs = qint64(ko.value(QStringLiteral("t")).toDouble());
@@ -415,7 +415,7 @@ inline TlClip clipFromJson(const QJsonObject &co)
 		const QJsonObject pv = fo.value(QStringLiteral("params")).toObject();
 		for (auto it = pv.constBegin(); it != pv.constEnd(); ++it)
 			c.fx.params[it.key()] = it.value().toDouble();
-		for (const QJsonValue &kv : fo.value(QStringLiteral("keys")).toArray()) {
+		for (const QJsonValue kv : fo.value(QStringLiteral("keys")).toArray()) {
 			const QJsonObject ko = kv.toObject();
 			FxKey k;
 			k.tMs = qint64(ko.value(QStringLiteral("t")).toDouble());
@@ -484,7 +484,7 @@ inline TlClip clipFromJson(const QJsonObject &co)
 		return s;
 	};
 	if (co.contains(QStringLiteral("scripts"))) {
-		for (const QJsonValue &sv : co.value(QStringLiteral("scripts")).toArray()) {
+		for (const QJsonValue sv : co.value(QStringLiteral("scripts")).toArray()) {
 			const TlScript s = readScript(sv.toObject());
 			if (!s.name.isEmpty())
 				c.scripts.append(s);
@@ -524,12 +524,12 @@ inline TlClip clipFromJson(const QJsonObject &co)
 		applyTextStyleFromJson(tx, c.text);
 		c.text.text = tx.value(QStringLiteral("text")).toString();
 		c.text.variations.clear();
-		for (const QJsonValue &vv : tx.value(QStringLiteral("variations")).toArray())
+		for (const QJsonValue vv : tx.value(QStringLiteral("variations")).toArray())
 			c.text.variations << vv.toString();
 		// Projects from before the two kinds existed: a caption with
 		// variations was the random kind.
 		c.text.random = tx.value(QStringLiteral("random")).toBool(!c.text.variations.isEmpty());
-		for (const QJsonValue &wv : tx.value(QStringLiteral("words")).toArray()) {
+		for (const QJsonValue wv : tx.value(QStringLiteral("words")).toArray()) {
 			const QJsonObject wo = wv.toObject();
 			ClipWordTime w;
 			w.text = wo.value(QStringLiteral("w")).toString();
@@ -590,7 +590,7 @@ inline TlTrack trackFromJson(const QJsonObject &to)
 	if (const QColor tc(to.value(QStringLiteral("color")).toString()); tc.isValid())
 		t.color = tc;
 	t.autoSounds = to.value(QStringLiteral("autoSounds")).toBool(false);
-	for (const QJsonValue &cv : to.value(QStringLiteral("clips")).toArray())
+	for (const QJsonValue cv : to.value(QStringLiteral("clips")).toArray())
 		t.clips.append(clipFromJson(cv.toObject()));
 	return t;
 }
@@ -698,17 +698,17 @@ inline void timelineToProject(const TimelineModel &m, QJsonObject &root)
 inline TimelineModel timelineFromProject(const QJsonObject &root)
 {
 	TimelineModel m;
-	for (const QJsonValue &mv : root.value(QStringLiteral("markers")).toArray())
+	for (const QJsonValue mv : root.value(QStringLiteral("markers")).toArray())
 		m.markers.append(qint64(mv.toDouble()));
 	std::sort(m.markers.begin(), m.markers.end());
-	for (const QJsonValue &tv : root.value(QStringLiteral("tracks")).toArray())
+	for (const QJsonValue tv : root.value(QStringLiteral("tracks")).toArray())
 		m.tracks.append(trackFromJson(tv.toObject()));
-	for (const QJsonValue &tv : root.value(QStringLiteral("tags")).toArray()) {
+	for (const QJsonValue tv : root.value(QStringLiteral("tags")).toArray()) {
 		const TlTag t = tagFromJson(tv.toObject());
 		if (t.id > 0 && !t.name.isEmpty() && !m.tag(t.id))
 			m.tags.append(t);
 	}
-	for (const QJsonValue &rv : root.value(QStringLiteral("soundRules")).toArray()) {
+	for (const QJsonValue rv : root.value(QStringLiteral("soundRules")).toArray()) {
 		const TlSoundRule r = soundRuleFromJson(rv.toObject());
 		if (r.id > 0)
 			m.soundRules.append(r);

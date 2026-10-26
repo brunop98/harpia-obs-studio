@@ -43,7 +43,7 @@ inline QMap<QString, QStringList> fromJson(const QByteArray &bytes)
 		if (!it.value().isArray() || it.key().trimmed().isEmpty())
 			continue;
 		QStringList lines;
-		for (const QJsonValue &v : it.value().toArray())
+		for (const QJsonValue v : it.value().toArray())
 			if (v.isString())
 				lines << v.toString();
 		lines = cleaned(lines);

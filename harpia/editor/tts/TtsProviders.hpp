@@ -768,11 +768,11 @@ inline TtsReply parseTtsReply(TtsProvider p, const QByteArray &body, const QStri
 		const QJsonObject al = o.value(QStringLiteral("alignment")).toObject();
 		QStringList chars;
 		QVector<double> starts, ends;
-		for (const QJsonValue &v : al.value(QStringLiteral("characters")).toArray())
+		for (const QJsonValue v : al.value(QStringLiteral("characters")).toArray())
 			chars << v.toString();
-		for (const QJsonValue &v : al.value(QStringLiteral("character_start_times_seconds")).toArray())
+		for (const QJsonValue v : al.value(QStringLiteral("character_start_times_seconds")).toArray())
 			starts << v.toDouble();
-		for (const QJsonValue &v : al.value(QStringLiteral("character_end_times_seconds")).toArray())
+		for (const QJsonValue v : al.value(QStringLiteral("character_end_times_seconds")).toArray())
 			ends << v.toDouble();
 		if (r.audio.isEmpty()) {
 			if (err)
@@ -809,7 +809,7 @@ inline TtsReply parseTtsReply(TtsProvider p, const QByteArray &body, const QStri
 			return r;
 		}
 		QHash<QString, double> marks;
-		for (const QJsonValue &v : o.value(QStringLiteral("timepoints")).toArray()) {
+		for (const QJsonValue v : o.value(QStringLiteral("timepoints")).toArray()) {
 			const QJsonObject tp = v.toObject();
 			marks.insert(tp.value(QStringLiteral("markName")).toString(),
 				     tp.value(QStringLiteral("timeSeconds")).toDouble());
@@ -833,7 +833,7 @@ inline QVector<TtsVoice> parseTtsVoices(TtsProvider p, const QByteArray &body)
 	QJsonObject o;
 	if (!ttsdetail::jsonObject(body, &o))
 		return out;
-	for (const QJsonValue &v : o.value(QStringLiteral("voices")).toArray()) {
+	for (const QJsonValue v : o.value(QStringLiteral("voices")).toArray()) {
 		const QJsonObject vo = v.toObject();
 		if (p == TtsProvider::ElevenLabs) {
 			const QString id = vo.value(QStringLiteral("voice_id")).toString();

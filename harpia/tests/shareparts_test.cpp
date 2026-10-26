@@ -68,7 +68,7 @@ static QByteArray fileHash(const QString &path)
 
 static qint64 audioPackets(const QJsonObject &info)
 {
-	for (const QJsonValue &value : info.value("streams").toArray()) {
+	for (const QJsonValue value : info.value("streams").toArray()) {
 		const QJsonObject stream = value.toObject();
 		if (stream.value("codec_type").toString() == QStringLiteral("audio"))
 			return stream.value("nb_read_packets").toString().toLongLong();
@@ -122,7 +122,7 @@ int main(int argc, char **argv)
 		const QJsonObject info = probe(part);
 		audioCount += audioPackets(info);
 		bool videoSeen = false, audioSeen = false;
-		for (const QJsonValue &value : info.value("streams").toArray()) {
+		for (const QJsonValue value : info.value("streams").toArray()) {
 			const QJsonObject stream = value.toObject();
 			const QString type = stream.value("codec_type").toString();
 			if (type == QStringLiteral("video")) {

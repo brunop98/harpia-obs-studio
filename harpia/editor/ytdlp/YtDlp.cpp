@@ -8,6 +8,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMap>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSettings>
@@ -17,6 +18,8 @@
 #include <QUrl>
 
 #include <algorithm>
+#include <cmath>
+#include <functional>
 
 namespace harpia {
 
@@ -573,7 +576,7 @@ YtVideoInfo YtDlp::parseInfo(const QByteArray &json, QString *err)
 		qint64 size = -1;
 	};
 	QMap<int, Best> byHeight;
-	for (const QJsonValue &fv : o.value(QStringLiteral("formats")).toArray()) {
+	for (const QJsonValue fv : o.value(QStringLiteral("formats")).toArray()) {
 		const QJsonObject f = fv.toObject();
 		const QString vcodec = f.value(QStringLiteral("vcodec")).toString();
 		const int h = f.value(QStringLiteral("height")).toInt();

@@ -29,7 +29,7 @@ QVector<SoundSlot> SoundLibrary::fromJson(const QByteArray &json)
 		out.append(s);
 	}
 	const QJsonArray arr = QJsonDocument::fromJson(json).array();
-	for (const QJsonValue &v : arr) {
+	for (const QJsonValue v : arr) {
 		const QJsonObject o = v.toObject();
 		const QString name = o.value(QStringLiteral("name")).toString().trimmed();
 		if (name.isEmpty())

@@ -393,7 +393,7 @@ bool ShortcutRegistry::importProfile(const QByteArray &json, QString *err)
 		if (!index_.contains(it.key()))
 			continue; // a command this build does not have
 		QVector<QKeySequence> v;
-		for (const QJsonValue &kv : it.value().toArray()) {
+		for (const QJsonValue kv : it.value().toArray()) {
 			const QKeySequence k(kv.toString(), QKeySequence::PortableText);
 			if (!k.isEmpty() && !v.contains(k))
 				v.append(k);

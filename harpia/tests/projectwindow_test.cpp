@@ -326,7 +326,7 @@ int main(int argc, char **argv)
 		// Source ids are the editor's own numbering: compare by file, then drop them.
 		const auto files = [](const QJsonObject &j) {
 			QStringList out;
-			for (const QJsonValue &s : j.value(QStringLiteral("sources")).toArray())
+			for (const QJsonValue s : j.value(QStringLiteral("sources")).toArray())
 				out << QFileInfo(s.toObject().value(QStringLiteral("path")).toString()).fileName();
 			out.sort();
 			return out;
@@ -352,7 +352,7 @@ int main(int argc, char **argv)
 		QJsonObject j = QJsonDocument::fromJson(f1.readAll()).object();
 		f1.close();
 		int vidPid = -1;
-		for (const QJsonValue &sv : j.value(QStringLiteral("sources")).toArray())
+		for (const QJsonValue sv : j.value(QStringLiteral("sources")).toArray())
 			if (QFileInfo(sv.toObject().value(QStringLiteral("path")).toString()).fileName() ==
 			    QStringLiteral("av_red.mp4"))
 				vidPid = sv.toObject().value(QStringLiteral("id")).toInt();
@@ -434,9 +434,9 @@ int main(int argc, char **argv)
 		ok(differ.isEmpty(), "format, author, trim, speed, crop, Multi-Cut cuts and voiceovers all come back");
 		ok(voFile, "and the voiceover audio travels with the project (copied to its assets folder)");
 		int segSrcOk = 0;
-		for (const QJsonValue &sv : k.value(QStringLiteral("segments")).toArray()) {
+		for (const QJsonValue sv : k.value(QStringLiteral("segments")).toArray()) {
 			const int pid = sv.toObject().value(QStringLiteral("source")).toInt();
-			for (const QJsonValue &src : k.value(QStringLiteral("sources")).toArray())
+			for (const QJsonValue src : k.value(QStringLiteral("sources")).toArray())
 				if (src.toObject().value(QStringLiteral("id")).toInt() == pid &&
 				    QFileInfo(src.toObject().value(QStringLiteral("path")).toString()).fileName() ==
 					    QStringLiteral("av_red.mp4"))

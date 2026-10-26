@@ -7639,9 +7639,6 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	auto *styleRow = new FlowLayout(nullptr, 10, 2); // wraps in a narrow panel
 	boldChk_ = new QCheckBox(QStringLiteral("Bold"), textBox_);
 	italicChk_ = new QCheckBox(QStringLiteral("Italic"), textBox_);
-	// Title case as a switch beside Bold and Italic: the Case dropdown below
-	// still has it, with the other cases; this is the one people reach for.
-	// The two are one setting, and stay in step.
 	titleCaseChk_ = new QCheckBox(QStringLiteral("Title Case"), textBox_);
 	titleCaseChk_->setToolTip(QStringLiteral(
 		"Draw Every Word With A Capital. A style, not a rewrite: your typed wording is kept."));
@@ -7666,13 +7663,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(titleCaseChk_, &QCheckBox::toggled, this, [this](bool on) {
 		if (syncingClip_)
 			return;
-		// On: Title Case. Off: back to As typed -- not to whichever other case
-		// was set, since a switch has two states and "off" has to mean one thing.
 		editTextStyle([on](TlClip &c) { c.text.textCase = on ? TlCaseTitle : TlCaseAsTyped; });
-		if (caseCombo_) {
-			QSignalBlocker b(caseCombo_);
-			caseCombo_->setCurrentIndex(on ? TlCaseTitle : TlCaseAsTyped);
-		}
 	});
 
 	alignCombo_ = new QComboBox(textBox_);
@@ -7682,26 +7673,6 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		if (syncingClip_)
 			return;
 		editTextStyle([i](TlClip &c) { c.text.align = i; });
-	});
-
-	// Case is a STYLE, not an edit: the box above keeps the words as typed and
-	// this changes how they are drawn. Right under Align, since both are about
-	// how the block reads rather than what it says.
-	caseCombo_ = new QComboBox(textBox_);
-	caseCombo_->addItems({QStringLiteral("As typed"), QStringLiteral("Title Case"),
-			      QStringLiteral("ALL UPPER"), QStringLiteral("all lower")});
-	caseCombo_->setToolTip(QStringLiteral(
-		"Changes how the caption is drawn, not what it says. Your typed wording "
-		"is kept, so going back to As typed restores your own capitalisation."));
-	tForm->addRow(QStringLiteral("Case"), caseCombo_);
-	connect(caseCombo_, &QComboBox::currentIndexChanged, this, [this](int i) {
-		if (syncingClip_)
-			return;
-		editTextStyle([i](TlClip &c) { c.text.textCase = i; });
-		if (titleCaseChk_) {
-			QSignalBlocker b(titleCaseChk_);
-			titleCaseChk_->setChecked(i == TlCaseTitle);
-		}
 	});
 
 	textColorBtn_ = new QPushButton(textBox_);
@@ -8548,7 +8519,6 @@ void VideoEditorWindow::syncTextInspector(const TlClip &c)
 	boldChk_->setChecked(c.text.bold);
 	italicChk_->setChecked(c.text.italic);
 	alignCombo_->setCurrentIndex(std::clamp(c.text.align, 0, 2));
-	caseCombo_->setCurrentIndex(std::clamp(c.text.textCase, 0, kTlTextCaseCount - 1));
 	titleCaseChk_->setChecked(c.text.textCase == TlCaseTitle);
 	outlineWSpin_->setValue(c.text.outlineWidth);
 	boxChk_->setChecked(c.text.boxEnabled);

@@ -976,9 +976,8 @@ private:
 	QSpinBox *fontSizeSpin_ = nullptr;
 	QCheckBox *boldChk_ = nullptr;
 	QCheckBox *italicChk_ = nullptr;
-	QCheckBox *titleCaseChk_ = nullptr; // Title Case, in step with caseCombo_
+	QCheckBox *titleCaseChk_ = nullptr;
 	QComboBox *alignCombo_ = nullptr;
-	QComboBox *caseCombo_ = nullptr; // As typed / Title Case / ALL UPPER / all lower
 	QPushButton *textColorBtn_ = nullptr;
 	QDoubleSpinBox *outlineWSpin_ = nullptr;
 	QPushButton *outlineColorBtn_ = nullptr;

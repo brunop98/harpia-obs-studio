@@ -3216,7 +3216,13 @@ void MainWindow::followWindowTick()
 		return;
 	// On the display being recorded: a window dragged to another one is
 	// followed up to the edge, not across (that would mean a new capture).
-	const std::optional<QRect> r = window_region::regionForWindow(*b, mon);
+	// Once the take is armed, its encoded dimensions stay fixed. A window
+	// shrinking or straddling the display edge must move that same-size frame,
+	// rather than reduce the cropped picture and expose a black remainder.
+	const bool fixedFrame = recorder_.isRecording() || starting_ || stopping_ || countingDown_;
+	const QSize outputSize = fixedFrame && armedW_ > 0 && armedH_ > 0
+		? QSize(int(armedW_), int(armedH_)) : QSize();
+	const std::optional<QRect> r = window_region::regionForWindow(*b, mon, outputSize);
 	if (!r || (r->x() == currentRegion_.x && r->y() == currentRegion_.y && r->width() == currentRegion_.width &&
 		   r->height() == currentRegion_.height))
 		return;
@@ -3880,6 +3886,10 @@ void MainWindow::configureZoomCanvas()
 void MainWindow::applyRegionFraming()
 {
 	if (!regionByTransform_) {
+		// A canceled countdown or failed zoom-enabled take can leave the
+		// previous region offset on this reused scene item. A cropped source
+		// already starts at (0,0); applying that offset again hides most of it.
+		capture_.clearZoomTransform();
 		capture_.setRegion(currentRegion_);
 		return;
 	}

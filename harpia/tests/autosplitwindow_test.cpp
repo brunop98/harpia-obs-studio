@@ -3,6 +3,7 @@
 #include <QtWidgets>
 #include <QTest>
 #include <atomic>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -16,6 +17,8 @@
 #include "core/ObsContext.hpp"
 #include "core/RecordingParts.hpp"
 #include "model/PresetStore.hpp"
+#include <obs.h>
+#include <graphics/vec2.h>
 #include <cstdio>
 
 using namespace harpia;
@@ -141,6 +144,26 @@ int main(int argc, char **argv)
 			timer->stop();
 		window.show();
 		QCoreApplication::processEvents();
+		// A canceled/failed region Zoom start can leave a reused scene offset.
+		// Returning to ordinary framing must reset the actual OBS item, even
+		// when the new mode is Entire Monitor (its region is disabled).
+		check(window.capture_.startCapture(0), "the recorder scene is ready for a framing change");
+		window.capture_.setZoomTransform(2.0, -500.0, -150.0);
+		window.regionByTransform_ = false;
+		window.applyRegionFraming();
+		obs_source_t *program = obs_get_output_source(0);
+		obs_scene_t *scene = program ? obs_scene_from_source(program) : nullptr;
+		obs_sceneitem_t *item = scene && window.capture_.source()
+			? obs_scene_find_source(scene, obs_source_get_name(window.capture_.source())) : nullptr;
+		vec2 position{}, scale{};
+		if (item) {
+			obs_sceneitem_get_pos(item, &position);
+			obs_sceneitem_get_scale(item, &scale);
+		}
+		check(item && std::abs(position.x) < 0.01 && std::abs(position.y) < 0.01 &&
+		      std::abs(scale.x - 1.0) < 0.01 && std::abs(scale.y - 1.0) < 0.01,
+		      "ordinary capture framing clears stale region Zoom scale and offsets");
+		obs_source_release(program);
 		if (argc > 1)
 			check(window.grab().save(QString::fromLocal8Bit(argv[1])), "recorder window snapshot is saved");
 		check(!window.findChild<QWidget *>(QStringLiteral("autoSplitButton")),

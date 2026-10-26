@@ -712,7 +712,7 @@ void RegionTool::contextMenuEvent(QContextMenuEvent *e)
 			followAct->setCheckable(true);
 			followAct->setChecked(following_);
 			followAct->setToolTip(QStringLiteral(
-				"Keep the area on that window when it moves or is resized -- also while recording"));
+				"Keep the area on that window when it moves or is resized. While recording, the area keeps its original size."));
 		}
 		menu.addSeparator();
 	}

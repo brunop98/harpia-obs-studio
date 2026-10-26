@@ -54,6 +54,14 @@ bool ObsContext::startup()
 		blog(LOG_ERROR, "[harpia] obs_startup failed");
 		return false;
 	}
+	// Capture framing uses device pixels at 1:1 scale. libobs otherwise stores
+	// scene items relative to the canvas, automatically shrinking/repositioning
+	// them when resetVideo switches from a monitor to a smaller Custom Region.
+	// Set this before creating any scene, including secondary area captures.
+	obs_data_t *sceneSettings = obs_data_create();
+	obs_data_set_bool(sceneSettings, "AbsoluteCoordinates", true);
+	obs_apply_private_data(sceneSettings);
+	obs_data_release(sceneSettings);
 
 	initialized_ = true;
 	return true;

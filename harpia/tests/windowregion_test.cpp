@@ -69,6 +69,35 @@ int main(int argc, char **argv)
 		ok(max && *max == QRect(0, 0, 1920, 1040), "a maximised window: the screen above the taskbar");
 	}
 
+	std::printf("\n-- following a window during a fixed-size recording --\n");
+	{
+		const QRect monitor(0, 0, 1920, 1080);
+		const QSize frame(800, 600);
+		const QRect smallWindow(300, 200, 160, 90);
+		const auto fixed = regionForWindow(smallWindow, monitor, frame);
+		ok(fixed && *fixed == QRect(300, 200, 800, 600),
+		   "a shrinking window keeps the original recording width and height");
+		const auto idle = regionForWindow(smallWindow, monitor);
+		ok(idle && *idle == smallWindow, "before recording the area still follows the window's new size");
+		const auto edge = regionForWindow(QRect(1800, 1000, 300, 200), monitor, frame);
+		ok(edge && *edge == QRect(1120, 480, 800, 600),
+		   "a window crossing the right and bottom edges keeps the whole recording frame onscreen");
+		const auto topLeft = regionForWindow(QRect(-300, -50, 1000, 600), monitor, frame);
+		ok(topLeft && *topLeft == QRect(0, 0, 800, 600),
+		   "crossing the top and left edges clamps position without clipping the frame");
+		const auto left = regionForWindow(QRect(-1500, 100, 160, 90), QRect(-1920, 0, 1920, 1080), frame);
+		ok(left && *left == QRect(420, 100, 800, 600),
+		   "fixed-size following stays relative to a monitor left of the primary display");
+		ok(!regionForWindow(QRect(2000, 100, 300, 200), monitor, frame),
+		   "a window wholly on another monitor does not move this recording frame");
+		ok(!regionForWindow(smallWindow, monitor, QSize(2000, 600)) &&
+		   !regionForWindow(smallWindow, monitor, QSize(800, 1200)),
+		   "a recording frame that no longer fits the monitor is rejected rather than shrunk");
+		ok(!regionForWindow(smallWindow, monitor, QSize(0, 0)) &&
+		   !regionForWindow(smallWindow, monitor, QSize(800, -1)),
+		   "an invalid fixed output size cannot silently fall back to resizing the capture");
+	}
+
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
 }

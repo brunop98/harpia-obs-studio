@@ -17,7 +17,8 @@ needs (see [The OBS tree](#the-obs-tree)).
   Regions can be saved and reused by name.
 - **Pick a window:** point at any window and click — the area becomes that
   window as you see it (without its invisible border or shadow). Optionally
-  **follow** it as it moves or resizes, even while recording.
+  **follow** it as it moves or resizes. During a recording the frame moves
+  with the window while keeping the take's original dimensions.
 - **Region frame on the desktop:** resize from its handles, move it from the
   tab above it, start recording from the button under it; it stays out of the
   recording itself.

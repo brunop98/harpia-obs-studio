@@ -2,6 +2,7 @@
 #include "ClipLibraryWindow.hpp"
 
 #include "ShareExportDialog.hpp"
+#include "PhoneSharingDialog.hpp"
 #include "editor/VideoEditorWindow.hpp"
 
 #include "RecentListWidget.hpp"
@@ -535,6 +536,8 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 		grid_->setCurrentItem(item);
 
 	const QStringList sel = selectedPaths();
+	if (sel.isEmpty())
+		return;
 	const bool anyFav = std::any_of(sel.begin(), sel.end(),
 					[this](const QString &p) { return favorites_.contains(p); });
 
@@ -543,6 +546,8 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 	QAction *favAct = menu.addAction(anyFav ? QStringLiteral("Remove from favorites")
 						: QStringLiteral("Add to favorites"));
 	QAction *copyAct = menu.addAction(QStringLiteral("Copy"));
+	QAction *sendPhoneAct = menu.addAction(QStringLiteral("Send to phone…"));
+	sendPhoneAct->setObjectName(QStringLiteral("sendToPhoneAction"));
 	QAction *renameAct = menu.addAction(QStringLiteral("Rename…"));
 
 	// Video editor + internet-sharing copy — one video clip at a time (not GIFs).
@@ -578,6 +583,12 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 	QAction *deleteAct = menu.addAction(QStringLiteral("Delete"));
 
 	QAction *chosen = menu.exec(grid_->viewport()->mapToGlobal(pos));
+	if (!chosen)
+		return;
+	if (chosen == sendPhoneAct) {
+		PhoneSharingDialog::runModal(sel, this);
+		return;
+	}
 	if (chosen == extractAct) {
 		emit extractAudioRequested(sel.front());
 		return;

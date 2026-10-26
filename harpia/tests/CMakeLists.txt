@@ -34,15 +34,16 @@ list(FILTER EDITOR_HEADERS EXCLUDE REGEX "ui/(MainWindow|WebcamPreview)\\.hpp$")
 add_library(harpia-test-editor STATIC ${EDITOR_SOURCES}
   "${H}/core/ShareExporter.cpp" "${H}/core/ShareSplitter.cpp" "${H}/core/AudioFileWriter.cpp" "${H}/core/Remuxer.cpp"
   "${H}/core/ExportVideoEncoder.cpp"
+  "${H}/core/LocalSend.cpp" "${H}/platform/PhoneSharingNativeStub.cpp"
   "${H}/core/GlobalHotkeys.cpp" "${H}/platform/OsIntegrationStub.cpp" support/logger_stub.cpp)
 target_include_directories(harpia-test-editor PUBLIC "${H}" "${ROOT}")
 target_compile_definitions(harpia-test-editor PUBLIC HARPIA_HAVE_QJS=1 HARPIA_TEST_SETTINGS=1)
 target_link_libraries(harpia-test-editor PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Multimedia Qt6::OpenGL Qt6::Test ${TEST_AV} harpia-quickjs)
 if(APPLE)
   enable_language(OBJCXX)
-  target_sources(harpia-test-editor PRIVATE "${H}/platform/mac/MacSystemAudioCapture.mm" "${H}/platform/mac/MacGlobalHotkeys.mm" "${H}/platform/mac/MacPlatform.mm" support/mac_secret_store_stub.cpp)
+  target_sources(harpia-test-editor PRIVATE "${H}/platform/mac/MacSystemAudioCapture.mm" "${H}/platform/mac/MacGlobalHotkeys.mm" "${H}/platform/mac/MacPlatform.mm" "${H}/platform/mac/MacPhoneSharing.mm" support/mac_secret_store_stub.cpp)
   target_compile_definitions(harpia-test-editor PRIVATE HARPIA_TEST_MAC_SECRET_STORE=1)
-  set_source_files_properties("${H}/platform/mac/MacSystemAudioCapture.mm" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  set_source_files_properties("${H}/platform/mac/MacSystemAudioCapture.mm" "${H}/platform/mac/MacPhoneSharing.mm" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   target_link_libraries(harpia-test-editor PUBLIC "-framework AVFoundation" "-framework ScreenCaptureKit" "-framework AppKit" "-framework CoreMedia" "-framework CoreGraphics" "-framework AudioToolbox" "-framework Carbon" "-framework CoreFoundation")
 elseif(WIN32)
   target_link_libraries(harpia-test-editor PUBLIC crypt32 ole32 version)
@@ -75,7 +76,7 @@ function(register_harpia_test name)
   set_tests_properties("${name}" PROPERTIES TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;HARPIA_TEST_MEDIA=${MEDIA}")
 endfunction()
 
-foreach(name settingsisolation shortcuthints shortcuthintswindow loadingdialog loadingtask loadingwindow projectwindow projectstate recentprojectswindow
+foreach(name localsend phonesharing exportdone shareexportdialog settingsisolation shortcuthints shortcuthintswindow loadingdialog loadingtask loadingwindow projectwindow projectstate recentprojectswindow
     audiodrop blankeditor previewhandles previewpacing previewcontrols stillimage stillweight
     textstylepresetswindow subtitles captionanimation captionperf socialfeatureswindow exportprogress
     exportcadence exporttelemetry previewdecoder componentrender audioaudit previewgeometry previewinterval

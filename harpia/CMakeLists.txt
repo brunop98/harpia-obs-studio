@@ -128,6 +128,8 @@ target_sources(
     core/ShareExporter.hpp
     core/ShareSplitter.cpp
     core/ShareSplitter.hpp
+    core/LocalSend.cpp
+    core/LocalSend.hpp
     core/WebcamRecorder.cpp
     core/WebcamRecorder.hpp
     model/Preset.cpp
@@ -193,6 +195,10 @@ target_sources(
     ui/SystemSettingsWidget.hpp
     ui/ExportDoneDialog.cpp
     ui/ExportDoneDialog.hpp
+    ui/PhoneSharingDialog.cpp
+    ui/PhoneSharingDialog.hpp
+    platform/PhoneSharingNative.hpp
+    platform/PhoneSharingNativeStub.cpp
     ui/ExportProgressDialog.cpp
     ui/ExportProgressDialog.hpp
     ui/LoadingDialog.cpp
@@ -486,13 +492,15 @@ elseif(OS_MACOS)
     platform/mac/MacForegroundWatcher.cpp
     platform/mac/MacWindowList.cpp
     platform/mac/MacCameraAccess.cpp
+    platform/mac/MacPhoneSharing.mm
     platform/mac/MacPlatform.mm platform/mac/MacPlatform.hpp platform/mac/MacCoordinates.hpp
     platform/mac/MacGlobalHotkeys.mm platform/mac/MacGlobalHotkeys.hpp
     platform/mac/MacSystemAudioCapture.mm platform/mac/MacSystemAudioCapture.hpp
     platform/mac/MacAudioPcm.hpp platform/mac/MacAudioPermissions.hpp
     editor/subtitles/MacSecretStore.mm
     platform/OsIntegrationStub.cpp)
-  set_source_files_properties(platform/mac/MacSystemAudioCapture.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  set_source_files_properties(platform/mac/MacSystemAudioCapture.mm platform/mac/MacPhoneSharing.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   target_link_libraries(harpia-recorder PRIVATE
     "-framework CoreGraphics" "-framework Cocoa" "-framework AVFoundation"
     "-framework Carbon" "-framework Security" "-framework CoreFoundation"

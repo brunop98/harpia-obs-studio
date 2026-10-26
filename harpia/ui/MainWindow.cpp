@@ -32,6 +32,7 @@
 #include "ScreenBorderOverlay.hpp"
 #include "GuidesOverlay.hpp"
 #include "ShareExportDialog.hpp"
+#include "PhoneSharingDialog.hpp"
 #include "StatusBadge.hpp"
 #include "editor/AudioExtractDialog.hpp"
 #include "editor/VideoEditorWindow.hpp"
@@ -4726,6 +4727,8 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 	const QString path = item->data(kClipPathRole).toString();
 	if (path.isEmpty())
 		return;
+	const QStringList selected = recording_delete::selectedPaths(recentStrip_);
+	const QStringList phoneFiles = item->isSelected() && selected.contains(path) ? selected : QStringList{path};
 
 	QMenu menu(this);
 	QAction *openAct = menu.addAction(QStringLiteral("Open"));
@@ -4733,6 +4736,8 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 	menu.addSeparator();
 	QAction *copyAct = menu.addAction(QStringLiteral("Copy"));
 	QAction *copyPathAct = menu.addAction(QStringLiteral("Copy Path"));
+	QAction *sendPhoneAct = menu.addAction(QStringLiteral("Send to phone…"));
+	sendPhoneAct->setObjectName(QStringLiteral("sendToPhoneAction"));
 
 	// Trim / crop / export (built-in editor) + internet-sharing copy — videos only.
 	QAction *trimAct = nullptr;
@@ -4766,6 +4771,10 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 	QAction *chosen = menu.exec(recentStrip_->viewport()->mapToGlobal(pos));
 	if (!chosen)
 		return;
+	if (chosen == sendPhoneAct) {
+		PhoneSharingDialog::runModal(phoneFiles, this);
+		return;
+	}
 
 	if (chosen == extractAct) {
 		openAudioExtract(path);

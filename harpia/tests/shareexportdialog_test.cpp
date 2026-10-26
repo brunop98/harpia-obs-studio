@@ -13,6 +13,7 @@
 #include <QPushButton>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QTimer>
 #include <QUrl>
 
 #include <cstdio>
@@ -46,6 +47,26 @@ static bool waitReady(QWidget &widget, const QString &title)
 		QThread::msleep(5);
 	}
 	return false;
+}
+
+static void checkPhoneSharing(QWidget &result, const QStringList &files)
+{
+	auto *send = result.findChild<QPushButton *>(QStringLiteral("sendToPhoneButton"));
+	ok(send && send->isEnabled(), "the completed sharing copy offers Send to phone");
+	if (!send)
+		return;
+	QTimer::singleShot(0, [&]() {
+		auto *chooser = result.findChild<QDialog *>(QStringLiteral("phoneSharingDialog"));
+		ok(chooser && chooser->isVisible(), "the sharing copy opens the optional phone chooser");
+		if (chooser) {
+			auto *selection = chooser->findChild<QLabel *>(QStringLiteral("phoneSharingFiles"));
+			ok(selection && selection->toolTip() == files.join(QLatin1Char('\n')),
+			   "the phone chooser receives every published file in order");
+			chooser->reject();
+		}
+	});
+	send->click();
+	ok(result.isVisible(), "closing the phone chooser preserves the sharing summary");
 }
 
 int main(int argc, char **argv)
@@ -92,6 +113,10 @@ int main(int argc, char **argv)
 	for (QLabel *label : discord.findChildren<QLabel *>())
 		remainder = remainder || label->text().contains(QStringLiteral("each at most 49 MB"));
 	ok(remainder, "the summary explains the per-part limit and smaller last part");
+	QStringList parts;
+	for (const QString &name : names)
+		parts.append(QDir(directory).filePath(name));
+	checkPhoneSharing(discord, parts);
 	discord.accept();
 
 	std::printf("\n-- ordinary sharing remains a single-file workflow --\n");
@@ -106,6 +131,7 @@ int main(int argc, char **argv)
 		const QList<QUrl> urls = QApplication::clipboard()->mimeData()->urls();
 		ok(urls.size() == 1 && urls[0].toLocalFile() == shared, "Copy File still copies that MP4");
 	}
+	checkPhoneSharing(standard, {shared});
 	standard.accept();
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

@@ -79,6 +79,15 @@ Three modes, each one step up from the last:
 - A strip of recent recordings and a **Clip Library** window, with
   thumbnails, rename, delete, drag-out to other apps, and audio extraction.
 - **Share copies:** a compressed, fast-start MP4 next to the original.
+- **Send to phone:** available after export, on completed sharing copies and
+  in the library's right-click menu, including multiple selected files.
+  **LocalSend** is optional: Harpia finds an installed copy or recommends the
+  free app with its [download link](https://localsend.org/download). Install it
+  on your computer and iPhone, open it on the phone, and use the same Wi-Fi.
+  Harpia opens LocalSend with the selected files; choose your phone there to
+  start transferring. Portable installations can be selected with **Locate
+  LocalSend…**. On Mac, **Send with AirDrop…** opens the native recipient
+  picker. Windows uses LocalSend rather than Apple's AirDrop service.
 - **Discord:** Optimize for sharing → Discord creates numbered MP4 parts of at
   most 49 MB each in a new folder, with a smaller final part and Copy All Parts.
 

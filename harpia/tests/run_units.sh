@@ -880,10 +880,15 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # The export-finished window: what its thumbnail hands over when dragged, what
 # each Copy button puts on the clipboard, and that no action dismisses it.
+PHONE_SOURCES=("$H/ui/PhoneSharingDialog.cpp" "$H/core/LocalSend.cpp" "$H/platform/PhoneSharingNativeStub.cpp")
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/localsend_test.cpp" "$H/core/LocalSend.cpp" -o "$WORK/localsend_test" $LF
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/phonesharing_test.cpp" "${PHONE_SOURCES[@]}" -o "$WORK/phonesharing_test" $LF
 "$MOC" -I"$H" "$H/ui/ExportDoneDialog.hpp" -o "$WORK/moc_ExportDoneDialog.cpp"
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/exportdone_test.cpp" "$H/ui/ExportDoneDialog.cpp" \
-	"$WORK/moc_ExportDoneDialog.cpp" -o "$WORK/exportdone_test" $LF
+	"${PHONE_SOURCES[@]}" "$WORK/moc_ExportDoneDialog.cpp" -o "$WORK/exportdone_test" $LF
 
 # Export progress: cancellation remains visible until cleanup; final success
 # alone reaches 100, and rendering estimates cannot leak into audio/finalizing.
@@ -1137,6 +1142,8 @@ QT_QPA_PLATFORM=offscreen "$WORK/timelineoverview_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/filmstrip_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/deleterouting_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportdone_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/localsend_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/phonesharing_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportpanel_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/diskspace_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/devpanelreset_test" || rc=1

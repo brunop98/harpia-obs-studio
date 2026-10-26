@@ -1,4 +1,5 @@
 #include "ShareExportDialog.hpp"
+#include "PhoneSharingDialog.hpp"
 
 #include "UiText.hpp"
 
@@ -244,6 +245,18 @@ void ShareExportDialog::buildSummary()
 	pathLabel->setWordWrap(true);
 	pathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
 	v->addWidget(pathLabel);
+
+	auto *sendRow = new QHBoxLayout;
+	auto *sendPhone = new QPushButton(QStringLiteral("Send to phone…"), page);
+	sendPhone->setObjectName(QStringLiteral("sendToPhoneButton"));
+	sendPhone->setEnabled(!outputFiles_.isEmpty());
+	sendPhone->setToolTip(discord ? QStringLiteral("Choose how to send all numbered parts to your phone.")
+				    : QStringLiteral("Choose how to send the sharing copy to your phone."));
+	sendRow->addWidget(sendPhone);
+	sendRow->addStretch(1);
+	v->addLayout(sendRow);
+	connect(sendPhone, &QPushButton::clicked, this,
+		[this]() { PhoneSharingDialog::runModal(outputFiles_, this); });
 
 	auto *btns = new QHBoxLayout;
 	auto *openFolder = new QPushButton(QStringLiteral("Open Folder"), page);

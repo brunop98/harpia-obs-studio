@@ -1,4 +1,5 @@
 #include "ui/ExportDoneDialog.hpp"
+#include "ui/PhoneSharingDialog.hpp"
 
 #include <QApplication>
 #include <QClipboard>
@@ -174,7 +175,7 @@ ExportDoneDialog::ExportDoneDialog(const QString &filePath, const QImage &thumb,
 	top->addLayout(info, 1);
 	root->addLayout(top);
 
-	// The actions, in a grid so five of them do not stretch the dialog into a
+	// The actions, in a grid so they do not stretch the dialog into a
 	// letterbox. None of these close anything -- that is the whole point.
 	auto *grid = new QGridLayout;
 	grid->setSpacing(6);
@@ -187,15 +188,20 @@ ExportDoneDialog::ExportDoneDialog(const QString &filePath, const QImage &thumb,
 		{"Copy File", "copyFile", 0, 0},   {"Copy File Path", "copyFilePath", 0, 1},
 		{"Copy Folder Path", "copyFolderPath", 0, 2}, {"Open File", "openFile", 1, 0},
 		{"Open Folder", "openFolder", 1, 1},
+		{"Send to phone…", "send-phone", 1, 2},
 	};
 	for (const Action &a : actions) {
-		auto *b = new QPushButton(QString::fromLatin1(a.label), this);
+		auto *b = new QPushButton(QString::fromUtf8(a.label), this);
 		// Not the default button, and not auto-default: otherwise Return would
 		// fire whichever one Qt picked instead of closing, and a button that
 		// looks like the primary action would imply it finishes the dialog.
 		b->setAutoDefault(false);
 		b->setDefault(false);
 		const QString id = QString::fromLatin1(a.id);
+		if (id == QLatin1String("send-phone")) {
+			b->setObjectName(QStringLiteral("sendToPhoneButton"));
+			b->setToolTip(QStringLiteral("Choose an optional app to send this exported file to your phone."));
+		}
 		connect(b, &QPushButton::clicked, this, [this, id]() {
 			if (id == QLatin1String("copyFile")) {
 				if (QMimeData *m = fileMimeData(path_)) {
@@ -212,6 +218,8 @@ ExportDoneDialog::ExportDoneDialog(const QString &filePath, const QImage &thumb,
 			} else if (id == QLatin1String("openFolder")) {
 				revealFile(path_);
 				flash(QStringLiteral("Opening the folder…"));
+			} else if (id == QLatin1String("send-phone")) {
+				PhoneSharingDialog::runModal({path_}, this);
 			}
 			emit actionTriggered(id);
 		});

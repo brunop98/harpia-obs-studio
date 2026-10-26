@@ -22,10 +22,13 @@
 #include <QClipboard>
 #include <QDir>
 #include <QFileInfo>
+#include <QDialog>
+#include <QLabel>
 #include <QMimeData>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QTimer>
 
 #include <cstdio>
 #include <memory>
@@ -156,6 +159,24 @@ int main(int argc, char **argv)
 		std::printf("     5 actions clicked, dialog still up after %d of them\n", stillUp);
 		ok(stillUp == 5, "every action leaves the window open");
 		ok(acted.count() == 5, "CONTROL: and all five really ran, rather than doing nothing");
+
+		QPushButton *send = dlg.findChild<QPushButton *>(QStringLiteral("sendToPhoneButton"));
+		ok(send != nullptr, "the completed export offers Send to phone");
+		ok(send && send->text() == QStringLiteral("Send to phone…"), "the phone action label preserves its Unicode ellipsis");
+		if (send) {
+			QTimer::singleShot(0, [&]() {
+				auto *chooser = dlg.findChild<QDialog *>(QStringLiteral("phoneSharingDialog"));
+				ok(chooser && chooser->isVisible(), "Send to phone opens the optional sharing chooser");
+				if (chooser) {
+					const auto *files = chooser->findChild<QLabel *>(QStringLiteral("phoneSharingFiles"));
+					ok(files && files->toolTip() == QFileInfo(path).absoluteFilePath(),
+					   "the chooser receives the actual exported file");
+					chooser->reject();
+				}
+			});
+			send->click();
+			ok(dlg.isVisible(), "closing the phone chooser preserves the export result window");
+		}
 
 		// Close is the only thing that ends it.
 		buttonNamed(&dlg, QStringLiteral("Close"))->click();

@@ -12,8 +12,8 @@
 //   * the thumbnail is a drag source. Drag it into Discord, an email, a folder
 //     -- anywhere that takes a dropped file -- and the exported file goes with
 //     it, because the drag carries the file's URL and not a picture of it.
-//   * five actions, none of which dismiss anything. Copy the file, its path,
-//     its folder; open the file or the folder. Do all five if you like.
+//   * actions that keep the result available: copy the file, its path or its
+//     folder, open the file or folder, or choose how to send it to a phone.
 //   * it closes when YOU close it. Close, or the window's X. Nothing else.
 //
 // The two pieces worth testing on their own -- what the clipboard and the drag

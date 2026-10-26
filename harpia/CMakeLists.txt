@@ -128,6 +128,8 @@ target_sources(
     core/ShareExporter.hpp
     core/ShareSplitter.cpp
     core/ShareSplitter.hpp
+    core/LocalSend.cpp
+    core/LocalSend.hpp
     core/WebcamRecorder.cpp
     core/WebcamRecorder.hpp
     model/Preset.cpp
@@ -195,6 +197,10 @@ target_sources(
     ui/SystemSettingsWidget.hpp
     ui/ExportDoneDialog.cpp
     ui/ExportDoneDialog.hpp
+    ui/PhoneSharingDialog.cpp
+    ui/PhoneSharingDialog.hpp
+    platform/PhoneSharingNative.hpp
+    platform/PhoneSharingNativeStub.cpp
     ui/ExportProgressDialog.cpp
     ui/ExportProgressDialog.hpp
     ui/LoadingDialog.cpp
@@ -476,13 +482,16 @@ elseif(OS_LINUX OR OS_FREEBSD OR OS_OPENBSD)
   find_package(Qt6 REQUIRED DBus)
   target_link_libraries(harpia-recorder PRIVATE Qt::DBus ${CMAKE_DL_LIBS})
 elseif(OS_MACOS)
+  enable_language(OBJCXX)
   target_sources(harpia-recorder PRIVATE
     platform/mac/MacIdleMonitor.cpp
     platform/mac/MacForegroundWatcher.cpp
     platform/mac/MacWindowList.cpp
     platform/mac/MacCameraAccess.cpp
+    platform/mac/MacPhoneSharing.mm
     platform/OsIntegrationStub.cpp)
-  target_link_libraries(harpia-recorder PRIVATE "-framework CoreGraphics")
+  set_source_files_properties(platform/mac/MacPhoneSharing.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  target_link_libraries(harpia-recorder PRIVATE "-framework CoreGraphics" "-framework Cocoa")
 endif()
 
 if(OS_WINDOWS)

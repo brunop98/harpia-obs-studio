@@ -7,6 +7,7 @@
 
 #include "UiIcons.hpp"
 #include "UiText.hpp"
+#include "WindowScreen.hpp"
 
 #include "AudioPanel.hpp"
 #include "PcAudioAppsDialog.hpp"
@@ -1150,6 +1151,8 @@ void MainWindow::offerOrphanRecovery(const QStringList &orphans)
 
 MainWindow::~MainWindow()
 {
+	if (isVisible())
+		window_screen::save(*this, QStringLiteral("recorder"));
 	webcam_.stop();
 	if (recorder_.isRecording()) {
 		// stop() is asynchronous, and destroying RecordingController while the
@@ -4110,6 +4113,15 @@ void MainWindow::changeEvent(QEvent *event)
 		updateRegionToolVisibility();
 }
 
+void MainWindow::showEvent(QShowEvent *event)
+{
+	QMainWindow::showEvent(event);
+	if (!shownOnce_) {
+		shownOnce_ = true;
+		window_screen::restore(*this, QStringLiteral("recorder"));
+	}
+}
+
 void MainWindow::closeEvent(QCloseEvent *event)
 {
 	// A countdown hasn't recorded anything yet — cancel it and close normally.
@@ -4153,6 +4165,8 @@ void MainWindow::closeEvent(QCloseEvent *event)
 	if (guides_)
 		guides_->hideGuides();
 	QMainWindow::closeEvent(event);
+	if (event->isAccepted())
+		window_screen::save(*this, QStringLiteral("recorder"));
 }
 
 void MainWindow::onIdleSettingChanged()

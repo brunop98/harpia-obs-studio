@@ -13,6 +13,7 @@
 #include "../ui/LoadingDialog.hpp"
 #include "../ui/RecordingVideoPicker.hpp"
 #include "../ui/MediaFileDetailsDialog.hpp"
+#include "../ui/WindowScreen.hpp"
 #include "LoadingTask.hpp"
 #include <QScopedValueRollback>
 #include "../ui/ColorField.hpp"
@@ -365,6 +366,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	setWindowFlags(Qt::Window | Qt::WindowTitleHint | Qt::WindowSystemMenuHint |
 		       Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint);
 	setSizeGripEnabled(true);
+	connect(this, &QDialog::finished, this, [this]() {
+		if (shownOnce_)
+			window_screen::save(*this, QStringLiteral("editor"));
+	});
 	// The size it RESTORES to (the title bar's restore button); the editor
 	// itself opens MAXIMISED (see showEvent), because every part of it wants
 	// the room -- the preview, the track stack and the Inspector are all things
@@ -10542,6 +10547,7 @@ void VideoEditorWindow::showEvent(QShowEvent *e)
 	// window the user has resized back to maximised.
 	if (!shownOnce_) {
 		shownOnce_ = true;
+		window_screen::restore(*this, QStringLiteral("editor"));
 		QTimer::singleShot(0, this, [this]() {
 			if (!isMaximized() && !isFullScreen())
 				showMaximized();
@@ -12408,6 +12414,8 @@ void VideoEditorWindow::onSegmentSelected(int index)
 
 VideoEditorWindow::~VideoEditorWindow()
 {
+	if (isVisible())
+		window_screen::save(*this, QStringLiteral("editor"));
 	--openCount_;
 	stopPlayback();
 	if (voRecorder_ && voRecorder_->isRecording())

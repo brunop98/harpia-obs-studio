@@ -16,6 +16,11 @@ MOC="$(command -v moc || ls /usr/lib/qt6/libexec/moc /usr/lib/x86_64-linux-gnu/q
 CF="$(pkg-config --cflags Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
 LF="$(pkg-config --libs Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
 
+# Window monitor identity survives display reordering; disconnected monitors
+# fall back to a usable screen, independently for recorder and editor.
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/windowscreen_test.cpp" "$H/ui/WindowScreen.cpp" -o "$WORK/windowscreen_test" $LF
+
 # Recording split preferences, one-time overrides, dialog state and safe paths.
 g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
 	"$HERE/autosplitdialog_test.cpp" "$H/ui/AutoSplitDialog.cpp" -o "$WORK/autosplitdialog_test" $LF
@@ -1134,6 +1139,7 @@ else
 fi
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/ytdlp_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/windowscreen_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/multicutshuffle_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/trackpan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1

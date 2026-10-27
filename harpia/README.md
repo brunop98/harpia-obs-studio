@@ -58,6 +58,8 @@ needs (see [The OBS tree](#the-obs-tree)).
   overhead, so limits are approximate. For a strict Discord upload cap,
   use **Optimize for sharing → Discord** after recording.
 - **Multi-monitor** with per-preset display choice, and per-monitor DPI.
+  The recorder and editor each reopen on their last monitor, with a fallback
+  to an available screen when that monitor is disconnected.
 
 ### Editing
 

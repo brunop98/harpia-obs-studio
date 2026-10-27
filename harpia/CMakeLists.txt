@@ -192,6 +192,8 @@ target_sources(
     ui/RecordingVideoPicker.hpp
     ui/MediaFileDetailsDialog.cpp
     ui/MediaFileDetailsDialog.hpp
+    ui/WindowScreen.cpp
+    ui/WindowScreen.hpp
     ui/PresetDelete.hpp
     ui/CrashReportDialog.cpp
     ui/CrashReportDialog.hpp

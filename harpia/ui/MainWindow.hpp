@@ -254,6 +254,7 @@ private:
 	void openDevPanel();
 
 protected:
+	void showEvent(QShowEvent *event) override;
 	void changeEvent(QEvent *event) override; // track window activation
 	// Windows: WM_DEVICECHANGE forces an immediate hardware re-probe, so the
 	// periodic probe can be lazy without missing a plugged-in camera or mic.
@@ -271,6 +272,7 @@ protected:
 	void resizeEvent(QResizeEvent *event) override; // drives applyResponsiveLayout
 
 private:
+	bool shownOnce_ = false;
 	// How the screen is captured (a global tool, not part of a preset).
 	// Mirrors RecordMode in core/ModeCapabilities.hpp, which owns the rules for
 	// what each mode supports. Kept as a separate enum only because this one is

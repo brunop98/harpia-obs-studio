@@ -113,11 +113,9 @@ struct VideoState {
 	hdr::Converter hdr;           // HDR (HLG/PQ) or BT.2020 source frames -> SDR BT.709
 	AVStream *vOut = nullptr;
 	AVStream *aOut = nullptr; // audio stream-copy (optional)
-	// A chosen output frame rate (Options::outFps), applied where every path
-	// meets the encoder: one frame per tick of it, the first to arrive in
-	// each, stamped on the tick. 0 = every frame, as it comes.
+	// A chosen output frame rate (Options::outFps). Legacy paths sample their
+	// retimed source timestamps onto this clock; 0 keeps their original clock.
 	double outFps = 0.0;
-	int64_t lastTick = std::numeric_limits<int64_t>::min();
 	// The file's cover picture (MP4/MOV; CoverArt.hpp): the stream, made with
 	// the header, and the frames it may come from.
 	AVStream *coverOut = nullptr;
@@ -204,9 +202,13 @@ struct VideoState {
 		}
 		if (!outScaled)
 			return in;
+		if (av_frame_make_writable(outScaled) < 0)
+			return in;
 		sws_scale(toOut, in->data, in->linesize, 0, in->height, outScaled->data,
 			  outScaled->linesize);
 		outScaled->pts = in->pts;
+		outScaled->duration = in->duration;
+		outScaled->time_base = in->time_base;
 		return outScaled;
 	}
 
@@ -290,10 +292,12 @@ QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const
 	s.venc->width = enc.width();
 	s.venc->height = enc.height();
 	s.venc->pix_fmt = encodePixFmt(opts);
-	// A chosen frame rate replaces the path's own: the stream says it, the
-	// GOP follows it, and VideoSink leaves out the frames in between.
+	// A chosen frame rate uses exact frame ticks. Legacy source timestamps
+	// reach VideoSink separately in seconds, so a coarse input clock cannot
+	// collapse a speed-up or make fractional output rates uneven.
 	if (opts.outFps > 0.0 && opts.format != ClipExporter::Format::Gif) {
 		frameRate = av_d2q(opts.outFps, 1000000);
+		timeBase = av_inv_q(frameRate);
 		gopSize = std::max(1, int(opts.outFps * 2.0));
 		s.outFps = opts.outFps;
 	}
@@ -537,6 +541,25 @@ struct ShaderPass {
 	}
 };
 
+// Keep source timestamp precision until the output clock samples it. Container
+// timestamp rounding is accounted for after applying each cut's playback speed.
+struct SourceClock {
+	double tick = 0.0, frameDuration = 0.0, speed = 1.0;
+	SourceClock(AVStream *stream, AVRational rate, double playbackSpeed)
+		: tick(av_q2d(stream->time_base)),
+		  frameDuration(rate.num > 0 && rate.den > 0 ? av_q2d(av_inv_q(rate)) : 1.0 / 30.0),
+		  speed(playbackSpeed) {}
+	double seconds(int64_t pts) const { return double(pts) * tick; }
+	double duration(int64_t ticks) const { return (ticks > 0 ? ticks * tick : frameDuration) / speed; }
+	double tolerance() const
+	{
+		// Millisecond container clocks round e.g. 30 fps to 0,33,67 ms.
+		// Allow that timestamp uncertainty after retiming. A clock already
+		// measured in whole frames (e.g. 1/30) is exact, not half a frame early.
+		return tick < frameDuration * 0.5 ? tick * 0.5 / speed : 0.0;
+	}
+};
+
 // The tail every export path shares.
 //
 // Bake the effect chain, rescale to the encoder's size and format, send, drain,
@@ -550,34 +573,85 @@ struct ShaderPass {
 // have to live as long as the encode does, come along with it instead of being
 // three more locals every caller has to remember to declare.
 struct VideoSink {
-	VideoSink(VideoState &st, AVPacket *p) : s(st), pkt(p) {}
+	VideoSink(VideoState &st, AVPacket *p, const std::atomic<bool> *cancel = nullptr)
+		: s(st), pkt(p), canceled(cancel) {}
+	~VideoSink() { av_frame_free(&held); }
 
 	VideoState &s;
 	AVPacket *pkt; // scratch for the drained packets; owned by the caller
 	ShaderPass shader;
 	int shaderFrame = 0;
 	qint64 framesSubmitted = 0;
+	const std::atomic<bool> *canceled = nullptr;
+	AVFrame *held = nullptr; // raw/unshaded pixels; each output tick gets its own clone
+	int64_t nextTick = 0;
+	double lastFrameEnd = 0.0;
 
 	// Compile the effect chain, if there is one. Callers that bake no shaders
 	// (the timeline composites them as components) simply do not call this, and
 	// the pass stays inactive.
 	QString initShader(const ClipExporter::Options &opts) { return shader.init(opts); }
 
+	bool emitBefore(double seconds)
+	{
+		// A tick exactly on the next source timestamp belongs to that next
+		// frame. The epsilon absorbs floating-point arithmetic at rational
+		// boundaries without moving a real fraction of a source frame.
+		const int64_t stop = int64_t(std::ceil(seconds * s.outFps - 1e-7));
+		while (held && nextTick < stop) {
+			if (canceled && canceled->load())
+				return true;
+			AVFrame *sample = av_frame_clone(held);
+			if (!sample)
+				return false;
+			sample->pts = av_rescale_q(nextTick, av_inv_q(s.venc->framerate), s.venc->time_base);
+			sample->duration = av_rescale_q(nextTick + 1, av_inv_q(s.venc->framerate), s.venc->time_base) - sample->pts;
+			sample->time_base = s.venc->time_base;
+			sample->pict_type = AV_PICTURE_TYPE_NONE;
+			const bool okay = write(sample);
+			av_frame_free(&sample);
+			if (!okay)
+				return false;
+			++nextTick;
+		}
+		return true;
+	}
+
+	bool atTime(AVFrame *frame, double seconds, double durationSeconds, double timestampTolerance)
+	{
+		if (!held) {
+			held = av_frame_clone(frame);
+			if (!held)
+				return false;
+		}
+		if (!emitBefore(seconds - timestampTolerance))
+			return false;
+		av_frame_unref(held);
+		if (av_frame_ref(held, frame) < 0)
+			return false;
+		lastFrameEnd = std::max(lastFrameEnd, seconds + durationSeconds);
+		return true;
+	}
+
+	bool endSegment(double endSeconds)
+	{
+		const bool okay = s.outFps <= 0.0 || emitBefore(endSeconds > 0.0 ? endSeconds : lastFrameEnd);
+		av_frame_free(&held); // a different cut must never inherit this picture
+		lastFrameEnd = 0.0;
+		return okay;
+	}
+
 	bool operator()(AVFrame *f)
+	{
+		if (!f && held && !endSegment(0.0))
+			return false;
+		return write(f);
+	}
+
+	bool write(AVFrame *f)
 	{
 		if (!shader.error.isEmpty())
 			return false;
-		// A lower frame rate: the first frame in each tick goes on, stamped
-		// on the tick; the others in it are left out. Before the scale and
-		// the shader, so a frame that is dropped costs neither.
-		if (f && s.outFps > 0.0 && f->pts != AV_NOPTS_VALUE) {
-			const double sec = double(f->pts) * av_q2d(s.venc->time_base);
-			const int64_t tick = int64_t(std::floor(sec * s.outFps + 1e-6));
-			if (tick <= s.lastTick)
-				return true;
-			s.lastTick = tick;
-			f->pts = av_rescale_q(tick, av_inv_q(s.venc->framerate), s.venc->time_base);
-		}
 		// Downscale FIRST, then shade. The effects are resolution-independent
 		// (they read normalized coordinates), so shading a 4K frame that is
 		// about to become 1080p ran the whole chain on four times the pixels
@@ -793,7 +867,8 @@ QString ClipExporter::mixVoiceover(const QString &videoPath, const Options &opts
 	takes.reserve(opts.voiceovers.size());
 	for (const Voiceover &v : opts.voiceovers)
 		takes.push_back(
-			{v.path, v.outStartMs, v.srcStartMs, v.playMs, v.volume, v.fadeInMs, v.fadeOutMs});
+			{v.path, v.outStartMs, v.srcStartMs, v.playMs, v.volume, v.fadeInMs, v.fadeOutMs,
+			 FadeCurve::Linear, FadeCurve::Linear, {}});
 	return VoiceoverMixer::mix(videoPath, opts.originalVolume, opts.duckOriginal, takes, &cancel_);
 }
 
@@ -896,7 +971,9 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 		return e;
 
 	// ---- Trim range in each stream's time base ----
-	const int64_t startV = av_rescale_q(opts.startMs, {1, 1000}, vin->time_base);
+	const int64_t startV = s.outFps > 0.0
+		? av_rescale_q_rnd(opts.startMs, {1, 1000}, vin->time_base, AV_ROUND_DOWN)
+		: av_rescale_q(opts.startMs, {1, 1000}, vin->time_base);
 	const int64_t endV = (opts.endMs > 0) ? av_rescale_q(opts.endMs, {1, 1000}, vin->time_base) : INT64_MAX;
 	const int64_t startA = ain ? av_rescale_q(opts.startMs, {1, 1000}, ain->time_base) : 0;
 	const int64_t endA = ain ? ((opts.endMs > 0) ? av_rescale_q(opts.endMs, {1, 1000}, ain->time_base)
@@ -934,9 +1011,20 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 
 	auto ensureYuvFull = [&](AVFrame *f) { return s.ensureEncodeFormat(f, encodePixFmt(opts)); };
 
-	VideoSink encodeVideo(s, outPkt);
+	VideoSink encodeVideo(s, outPkt, &cancel_);
 	if (QString e = encodeVideo.initShader(opts); !e.isEmpty())
 		return e;
+	const SourceClock clock(vin, fr, speed);
+	auto beforeEnd = [&](int64_t pts) {
+		return opts.endMs <= 0 || clock.seconds(pts) < double(opts.endMs) / 1000.0 - 1e-9;
+	};
+	auto submitFrame = [&](AVFrame *toEnc, int64_t pts, int64_t duration) {
+		if (s.outFps > 0.0)
+			return encodeVideo.atTime(toEnc, (clock.seconds(pts) - double(opts.startMs) / 1000.0) / speed,
+				clock.duration(duration), clock.tolerance());
+		toEnc->pts = scaledPts(pts);
+		return encodeVideo(toEnc);
+	};
 
 	emit stageChanged(QStringLiteral("Rendering video"));
 	emit frameProgress(0, 0);
@@ -953,11 +1041,11 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 						frame->best_effort_timestamp != AV_NOPTS_VALUE
 							? frame->best_effort_timestamp
 							: 0;
-					if (pts < startV) {
+					if (pts < startV && s.outFps <= 0.0) {
 						av_frame_unref(frame);
 						continue;
 					}
-					if (pts > endV) {
+					if (s.outFps > 0.0 ? !beforeEnd(pts) : pts > endV) {
 						videoDone = true;
 						av_frame_unref(frame);
 						break;
@@ -982,10 +1070,9 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 							      yf->linesize, encodePixFmt(opts), cw, ch);
 						toEnc = s.cropFrame;
 					}
-					toEnc->pts = scaledPts(pts);
 					processedMs = std::max(processedMs, (pts - startV) * av_q2d(vin->time_base) *
 										     1000.0);
-					if (!encodeVideo(toEnc)) {
+					if (!submitFrame(toEnc, pts, frame->duration)) {
 						errored = true;
 						av_frame_unref(frame);
 						break;
@@ -1031,7 +1118,7 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 			const int64_t pts = frame->best_effort_timestamp != AV_NOPTS_VALUE
 						    ? frame->best_effort_timestamp
 						    : 0;
-			if (pts >= startV && pts <= endV) {
+			if (s.outFps > 0.0 ? beforeEnd(pts) : pts >= startV && pts <= endV) {
 				AVFrame *yf = ensureYuvFull(frame);
 				AVFrame *toEnc = yf;
 				bool ok = true;
@@ -1051,12 +1138,21 @@ QString ClipExporter::runVideo(const QString &inPath, const QString &outPath, co
 					}
 				}
 				if (ok) {
-					toEnc->pts = scaledPts(pts);
-					if (!encodeVideo(toEnc))
+					if (!submitFrame(toEnc, pts, frame->duration))
 						errored = true;
 				}
 			}
 			av_frame_unref(frame);
+		}
+		if (!errored && s.outFps > 0.0) {
+			// EOF belongs to the video, not a longer audio/container tail.
+			// An explicit trim end can shorten the last held frame, never
+			// extend the source after its final decoded video frame.
+			double endSeconds = encodeVideo.lastFrameEnd;
+			if (opts.endMs > 0)
+				endSeconds = std::min(endSeconds, double(opts.endMs - opts.startMs) / 1000.0 / speed);
+			if (!encodeVideo.endSegment(endSeconds))
+				errored = true;
 		}
 		emit frameProgress(encodeVideo.framesSubmitted, 0);
 		reportProgress(100, 0, s.ofmt->pb ? avio_tell(s.ofmt->pb) : 0);
@@ -1198,7 +1294,7 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 
 	auto ensureYuvFull = [&](AVFrame *f) { return s.ensureEncodeFormat(f, encodePixFmt(opts)); };
 
-	VideoSink encodeVideo(s, outPkt);
+	VideoSink encodeVideo(s, outPkt, &cancel_);
 	if (QString e = encodeVideo.initShader(opts); !e.isEmpty())
 		return e;
 
@@ -1228,9 +1324,15 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 		if (cancel_.load())
 			break;
 		const Cut &cut = cuts[ci];
-		const int64_t startV = av_rescale_q(cut.startMs, {1, 1000}, vin->time_base);
+		const int64_t startV = s.outFps > 0.0
+			? av_rescale_q_rnd(cut.startMs, {1, 1000}, vin->time_base, AV_ROUND_DOWN)
+			: av_rescale_q(cut.startMs, {1, 1000}, vin->time_base);
 		const int64_t endV = av_rescale_q(cut.endMs, {1, 1000}, vin->time_base);
 		const int64_t endA = ain ? av_rescale_q(cut.endMs, {1, 1000}, ain->time_base) : 0;
+		const SourceClock clock(vin, fr, cut.speed);
+		const auto beforeEnd = [&](int64_t pts) {
+			return clock.seconds(pts) < double(cut.endMs) / 1000.0 - 1e-9;
+		};
 
 		av_seek_frame(s.ifmt, vIdx, startV, AVSEEK_FLAG_BACKWARD);
 		avcodec_flush_buffers(s.vdec);
@@ -1246,9 +1348,9 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 			const int64_t pts = df->best_effort_timestamp != AV_NOPTS_VALUE
 						    ? df->best_effort_timestamp
 						    : 0;
-			if (pts < startV)
+			if (pts < startV && s.outFps <= 0.0)
 				return true;
-			if (pts > endV) {
+			if (s.outFps > 0.0 ? !beforeEnd(pts) : pts > endV) {
 				videoDone = true;
 				return true;
 			}
@@ -1264,14 +1366,18 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 					      encodePixFmt(opts), cw, ch);
 				toEnc = s.cropFrame;
 			}
+			processedMs = std::max(processedMs,
+					       doneOutMs + (pts - startV) * av_q2d(vin->time_base) *
+								   1000.0 / cut.speed);
+			if (s.outFps > 0.0)
+				return encodeVideo.atTime(toEnc,
+					doneOutMs / 1000.0 + (clock.seconds(pts) - double(cut.startMs) / 1000.0) / cut.speed,
+					clock.duration(df->duration), clock.tolerance());
 			int64_t v = (int64_t)llround(outBaseTicks + double(pts - startV) / cut.speed);
 			if (v <= lastEncPts)
 				v = lastEncPts + 1;
 			lastEncPts = v;
 			toEnc->pts = v;
-			processedMs = std::max(processedMs,
-					       doneOutMs + (pts - startV) * av_q2d(vin->time_base) *
-								   1000.0 / cut.speed);
 			return encodeVideo(toEnc);
 		};
 
@@ -1337,13 +1443,16 @@ QString ClipExporter::runVideoCuts(const QString &inPath, const QString &outPath
 			const int64_t pts = frame->best_effort_timestamp != AV_NOPTS_VALUE
 						    ? frame->best_effort_timestamp
 						    : 0;
-			if (pts >= startV && pts <= endV && !videoDone) {
+			if ((s.outFps > 0.0 ? beforeEnd(pts) : pts >= startV && pts <= endV) && !videoDone) {
 				if (!handleDecodedFrame(frame))
 					errored = true;
 			}
 			av_frame_unref(frame);
 		}
 		avcodec_flush_buffers(s.vdec);
+		if (!errored && !cancel_.load() && s.outFps > 0.0 &&
+		    !encodeVideo.endSegment((doneOutMs + double(cut.endMs - cut.startMs) / cut.speed) / 1000.0))
+			errored = true;
 
 		if (ain && !retimer.endSegment(writeAudio, &audioErr))
 			errored = true;
@@ -1553,7 +1662,7 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 		std::memset(f->data[1], 128, size_t(f->linesize[1]) * planeRows(f, 1));
 		std::memset(f->data[2], 128, size_t(f->linesize[2]) * planeRows(f, 2));
 	};
-	VideoSink encodeVideo(s, outPkt);
+	VideoSink encodeVideo(s, outPkt, &cancel_);
 	if (QString e = encodeVideo.initShader(opts); !e.isEmpty())
 		return e;
 	auto writeAudio = [&](AVPacket *p) -> bool {
@@ -1578,9 +1687,15 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 			break;
 		const Cut &cut = cuts[ci];
 		MSrc &m = src[cut.source];
-		const int64_t startV = av_rescale_q(cut.startMs, {1, 1000}, m.vin->time_base);
+		const int64_t startV = s.outFps > 0.0
+			? av_rescale_q_rnd(cut.startMs, {1, 1000}, m.vin->time_base, AV_ROUND_DOWN)
+			: av_rescale_q(cut.startMs, {1, 1000}, m.vin->time_base);
 		const int64_t endV = av_rescale_q(cut.endMs, {1, 1000}, m.vin->time_base);
 		const int64_t endA = m.ain ? av_rescale_q(cut.endMs, {1, 1000}, m.ain->time_base) : 0;
+		const SourceClock clock(m.vin, av_guess_frame_rate(m.ifmt, m.vin, nullptr), cut.speed);
+		const auto beforeEnd = [&](int64_t pts) {
+			return clock.seconds(pts) < double(cut.endMs) / 1000.0 - 1e-9;
+		};
 
 		av_seek_frame(m.ifmt, m.vIdx, startV, AVSEEK_FLAG_BACKWARD);
 		avcodec_flush_buffers(m.vdec);
@@ -1605,9 +1720,9 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 		auto handleDecodedFrame = [&](AVFrame *df) -> bool {
 			const int64_t pts =
 				df->best_effort_timestamp != AV_NOPTS_VALUE ? df->best_effort_timestamp : 0;
-			if (pts < startV)
+			if (pts < startV && s.outFps <= 0.0)
 				return true;
-			if (pts > endV) {
+			if (s.outFps > 0.0 ? !beforeEnd(pts) : pts > endV) {
 				videoDone = true;
 				return true;
 			}
@@ -1626,12 +1741,15 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 					  s.cropFrame->linesize);
 			const double srcMs = double(pts) * av_q2d(m.vin->time_base) * 1000.0;
 			const double outMs = doneOutMs + (srcMs - cut.startMs) / cut.speed;
+			processedMs = std::max(processedMs, outMs);
+			if (s.outFps > 0.0)
+				return encodeVideo.atTime(s.cropFrame, outMs / 1000.0,
+						  clock.duration(df->duration), clock.tolerance());
 			int64_t v = (int64_t)llround(outMs * 90.0); // 90000 ticks/s ÷ 1000
 			if (v <= lastEncPts)
 				v = lastEncPts + 1;
 			lastEncPts = v;
 			s.cropFrame->pts = v;
-			processedMs = std::max(processedMs, outMs);
 			return encodeVideo(s.cropFrame);
 		};
 
@@ -1691,13 +1809,16 @@ QString ClipExporter::runVideoCutsMulti(const QString &outPath, const Options &o
 		while (avcodec_receive_frame(m.vdec, frame) >= 0) {
 			const int64_t pts =
 				frame->best_effort_timestamp != AV_NOPTS_VALUE ? frame->best_effort_timestamp : 0;
-			if (pts >= startV && pts <= endV && !videoDone) {
+			if ((s.outFps > 0.0 ? beforeEnd(pts) : pts >= startV && pts <= endV) && !videoDone) {
 				if (!handleDecodedFrame(frame))
 					errored = true;
 			}
 			av_frame_unref(frame);
 		}
 		avcodec_flush_buffers(m.vdec);
+		if (!errored && !cancel_.load() && s.outFps > 0.0 &&
+		    !encodeVideo.endSegment((doneOutMs + double(cut.endMs - cut.startMs) / cut.speed) / 1000.0))
+			errored = true;
 
 		if (wantAudio && !retimer.endSegment(writeAudio, &audioErr))
 			errored = true;
@@ -2016,7 +2137,7 @@ QString ClipExporter::runTimeline(const QString &outPath, const Options &opts)
 		const qint64 tMs = qint64(std::llround(double(i) * 1000.0 / fps));
 
 		TimelineCompositor::RenderError renderError;
-		QImage composed = TimelineCompositor::compose(tl, tMs, canvas, provider, &scriptEval,
+		QImage composed = TimelineCompositor::composeAtTime(tl, double(i) * 1000.0 / fps, canvas, provider, &scriptEval,
 							    fps, QSize(), &renderError);
 		if (composed.isNull()) {
 			cleanup();

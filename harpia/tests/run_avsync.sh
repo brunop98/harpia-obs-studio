@@ -93,6 +93,8 @@ build "$HERE/exporttelemetry_test.cpp" exporttelemetry_test
 # Every frame once: sources that number their frames, read the way an export
 # reads them and exported from a two-track 60 fps timeline.
 build "$HERE/exportcadence_test.cpp" exportcadence_test
+# Explicit 60/120 fps preserves sped-up source frames and holds slower footage.
+build "$HERE/exporthighfps_test.cpp" exporthighfps_test
 build "$HERE/markerexport_test.cpp" markerexport_test
 # Beat analysis seeks the kept source range, preserving timestamp offsets.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -328,6 +330,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/exportcolor_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/batchexport_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exporttelemetry_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportcadence_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/exporthighfps_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinemix_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/swsoverrun_test" "$WORK" || rc=1
 HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \

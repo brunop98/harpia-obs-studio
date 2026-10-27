@@ -833,6 +833,17 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 				   TransformEvaluator *eval, double fps, QSize logicalCanvas,
 				   RenderError *error)
 {
+	return composeAtTime(m, double(outMs), canvas, fp, eval, fps, logicalCanvas, error);
+}
+
+QImage TimelineCompositor::composeAtTime(const TimelineModel &m, double exactOutMs, QSize canvas, FrameProvider &fp,
+					 TransformEvaluator *eval, double fps, QSize logicalCanvas,
+					 RenderError *error)
+{
+	const qint64 outMs = qint64(std::llround(exactOutMs));
+	// Integer clip boundaries must not be crossed early by rounding an output
+	// tick, e.g. 66.667 ms into a clip that starts at 67 ms.
+	const qint64 lookupMs = qint64(std::floor(exactOutMs + 1e-7));
 	if (error)
 		*error = {};
 	const auto fail = [error](const char *code, const QString &message, int track = -1, int clip = -1) {
@@ -870,7 +881,7 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 		if (t.kind == TlTrack::Kind::Effect) {
 			if (t.hidden)
 				continue;
-			const int ei = t.clipAt(outMs);
+			const int ei = t.clipAt(lookupMs);
 			if (ei < 0)
 				continue;
 			const TlClip &ec = t.clips[ei];
@@ -1046,7 +1057,7 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 			// Time stage FIRST, because which source instant to decode is its
 			// answer to give. Everything after this point is working on the
 			// frame the Time components chose.
-			qint64 srcMs = c.srcAtOutput(outMs);
+			double srcMs = c.srcAtOutputTime(exactOutMs);
 			ClipState cstate;
 			if (hasComponents) {
 				// The caption goes in so a Source-stage component can rewrite
@@ -1058,12 +1069,10 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 					c.type == TlClip::Type::Text ? &caption : nullptr,
 					c.type == TlClip::Type::Text ? &c.words : nullptr);
 				if (std::abs(cstate.timeScale - 1.0) > 1e-9) {
-					const qint64 off = std::clamp<qint64>(
-						outMs - c.outStartMs, 0, c.outDurationMs());
-					srcMs = c.srcStartMs +
-						qint64(std::llround(double(off) *
-								    (c.speed > 0.01 ? c.speed : 1.0) *
-								    cstate.timeScale));
+					const double off = std::clamp(
+						exactOutMs - double(c.outStartMs), 0.0, double(c.outDurationMs()));
+					srcMs = double(c.srcStartMs) + off *
+						(c.speed > 0.01 ? c.speed : 1.0) * cstate.timeScale;
 				}
 			}
 
@@ -1081,7 +1090,7 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 				// one decoder per stack rather than one per source.
 				fp.setTrack(ti);
 				fp.setDecoderSlot(decoderSlot);
-				frame = fp.frameFor(c.sourceId, srcMs);
+				frame = fp.frameFor(c.sourceId, qint64(std::llround(srcMs)));
 				if (!frame.isNull() && !c.crop.isNull() && c.crop.width() > 1 && c.crop.height() > 1) {
 					const QSize original = fp.sourceSize(c.sourceId);
 					if (!original.isEmpty() && original != frame.size()) {
@@ -1164,7 +1173,7 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 		// there is no separate object to create or delete. Pull them apart and
 		// it stops happening on its own.
 		int oi = -1, ii = -1;
-		if (t.overlapAt(outMs, &oi, &ii) && t.clips[ii].transition.enabled) {
+		if (t.overlapAt(lookupMs, &oi, &ii) && t.clips[ii].transition.enabled) {
 			const TlClip &inc = t.clips[ii];
 			const qint64 span = t.overlapBefore(ii);
 			if (span > 0) {
@@ -1204,7 +1213,7 @@ QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize c
 			}
 		}
 
-		const int ci = t.clipAt(outMs);
+		const int ci = t.clipAt(lookupMs);
 		if (ci < 0)
 			continue;
 		if (!renderClip(p, ci))

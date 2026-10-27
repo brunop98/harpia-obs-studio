@@ -97,9 +97,9 @@ public:
 		int outWidth = 0;
 		int outHeight = 0;
 		// Output frame rate. 0 = whatever the path would produce anyway (the
-		// source's, or the timeline's). Lower than that, frames are left out
-		// evenly and the rest land on a steady clock; the exporter never makes
-		// frames up, so a higher rate is not offered. GIF has gifFps instead.
+		// source's, or the timeline's). An explicit rate samples playback on a
+		// steady clock, retaining available frames in speed-ups and holding
+		// slower sources without interpolation. GIF has gifFps instead.
 		double outFps = 0.0;
 
 		// Multi-cut assembly: when non-empty, the output is these source ranges

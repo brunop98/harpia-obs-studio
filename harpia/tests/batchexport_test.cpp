@@ -12,6 +12,9 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QTemporaryDir>
 #include <QThread>
@@ -35,6 +38,37 @@ static double durationOf(const QString &f)
 		{"-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", f});
 	p.waitForFinished(20000);
 	return p.readAllStandardOutput().trimmed().toDouble();
+}
+
+// Check the encoded stream, including timestamps: a nominal 120 fps header
+// alone cannot prove the batch retained the requested cadence and frame count.
+static bool is120FpsCfr(const QString &path, int expectedFrames, double expectedSeconds)
+{
+	QProcess p;
+	p.start(QStringLiteral("ffprobe"),
+		{"-v", "error", "-select_streams", "v:0", "-count_frames", "-show_entries",
+		 "stream=avg_frame_rate,nb_read_frames,duration:frame=best_effort_timestamp_time", "-of", "json", path});
+	const bool completed = p.waitForFinished(20000) && p.exitStatus() == QProcess::NormalExit && p.exitCode() == 0;
+	const QJsonObject result = QJsonDocument::fromJson(p.readAllStandardOutput()).object();
+	const QJsonArray streams = result.value(QStringLiteral("streams")).toArray();
+	const QJsonObject stream = streams.isEmpty() ? QJsonObject() : streams.first().toObject();
+	const QStringList rate = stream.value(QStringLiteral("avg_frame_rate")).toString().split(QLatin1Char('/'));
+	const double denominator = rate.value(1).toDouble();
+	const double fps = denominator > 0.0 ? rate.value(0).toDouble() / denominator : 0.0;
+	const int frameCount = stream.value(QStringLiteral("nb_read_frames")).toString().toInt();
+	const double seconds = stream.value(QStringLiteral("duration")).toString().toDouble();
+	const QJsonArray frames = result.value(QStringLiteral("frames")).toArray();
+	bool cadence = frames.size() == expectedFrames;
+	for (int i = 0; cadence && i < frames.size(); ++i) {
+		bool valid = false;
+		const double timestamp = frames[i].toObject().value(QStringLiteral("best_effort_timestamp_time"))
+			.toString().toDouble(&valid);
+		cadence = valid && std::abs(timestamp - i / 120.0) < 0.00001;
+	}
+	std::printf("     %s: %.3f fps, %d frames, %.6f s, constant cadence %s\n",
+		    qPrintable(QFileInfo(path).fileName()), fps, frameCount, seconds, cadence ? "yes" : "NO");
+	return completed && std::abs(fps - 120.0) < 0.001 && frameCount == expectedFrames &&
+	       std::abs(seconds - expectedSeconds) < 0.0001 && cadence;
 }
 
 // One frame at `sec`, as raw 64x36 RGB bytes (small: enough to see the words).
@@ -145,6 +179,25 @@ int main(int argc, char **argv)
 		ok(!b.running(), "and the runner is idle");
 	}
 
+	std::printf("\n-- chosen 120 fps survives cut batch options cloning --\n");
+	{
+		ClipExporter::Options highFps = base;
+		highFps.outFps = 120.0;
+		highFps.outWidth = 160;
+		highFps.outHeight = 90;
+		highFps.keepAudio = false;
+		highFps.effort = ClipExporter::Options::Effort::Fast;
+		const QString folder = batch_export::uniqueFolder(dir.path(), "HighFps");
+		BatchExporter b;
+		const Run r = runBatch(b, red, highFps,
+			{item("normal", cut(0, 1000, 1.0)), item("fast", cut(1500, 2500, 2.0))}, folder, false);
+		ok(r.done && r.okCount == 2 && r.failCount == 0 && !r.canceled, "both high-frame-rate batch clips export");
+		ok(is120FpsCfr(folder + "/normal.mp4", 120, 1.0),
+		   "the normal-speed batch clip has 120 evenly spaced frames in one second");
+		ok(is120FpsCfr(folder + "/fast.mp4", 60, 0.5),
+		   "the 2x batch clip retains 120 fps with 60 evenly spaced frames in half a second");
+	}
+
 	std::printf("\n-- a cut that cannot be exported does not stop the others --\n");
 	{
 		const QString folder = batch_export::uniqueFolder(dir.path(), "Mixed");
@@ -218,7 +271,8 @@ int main(int argc, char **argv)
 		ClipExporter::Options tb = base;
 		tb.canvasW = 640;
 		tb.canvasH = 360;
-		tb.timelineFps = 15.0;
+		tb.timelineFps = 30.0;
+		tb.outFps = 120.0;
 		tb.timeline = whole;
 		tb.timelineSources[1] = red.toStdString();
 
@@ -233,6 +287,8 @@ int main(int argc, char **argv)
 		const double d1 = durationOf(f1), d3 = durationOf(f3);
 		std::printf("     lengths %.2f %.2f s\n", d1, d3);
 		ok(std::abs(d1 - 1.5) < 0.3 && std::abs(d3 - 1.5) < 0.3, "each the timeline's length");
+		ok(is120FpsCfr(f1, 180, 1.5) && is120FpsCfr(f3, 180, 1.5),
+		   "timeline variation batches preserve the chosen 120 fps over their 30 fps project setting");
 		const QByteArray a = frameAt(f1, 0.7), c = frameAt(f2, 0.7), w = frameAt(f3, 0.7);
 		const int ac = bytesApart(a, c), aw = bytesApart(a, w);
 		std::printf("     bytes apart: dogs/cats %d, dogs/WWW %d (of %d)\n", ac, aw, int(a.size()));

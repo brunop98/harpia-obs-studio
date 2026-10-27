@@ -37,7 +37,7 @@ public:
 		QString defaultName;
 		QString defaultFolder;
 		QSize sourceSize;      // the size the export is at "Original"
-		double fps = 30.0;     // output frame rate (GIF chooses its own)
+		double fps = 30.0;     // frame rate used by Original (GIF chooses its own)
 		double seconds = 0.0;  // output duration
 		// Whether audio CAN be carried at all -- not whether the source has
 		// any. Probing for an audio stream would mean opening the file again
@@ -100,9 +100,9 @@ public:
 	bool chroma444() const;
 	// 0x0 = keep the source/canvas size. Always even; see encodeSize().
 	QSize outputSize() const;
-	// The video frame rate chosen; 0 = the original (Context::fps). Only
-	// ever lower than the original: an export leaves frames out, it does not
-	// make them up. GIF has its own (gifFps).
+	// Constant video output frame rate; 0 = the original (Context::fps). Higher
+	// rates can retain more source frames in sped-up clips. Existing frames are
+	// held when needed; no interpolation is generated. GIF uses its own gifFps.
 	double frameRate() const;
 	// True when the user chose the sub-range rather than the whole thing.
 	// Always false when the Context offered no range.

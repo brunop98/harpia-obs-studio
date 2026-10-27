@@ -438,11 +438,9 @@ int main(int argc, char **argv)
 		ok(fps != nullptr && fps->itemText(0) == QStringLiteral("Original (60 fps)"),
 		   "a Frame rate choice, starting at the original");
 		ok(dlg.frameRate() == 0.0, "which asks the exporter for no change");
-		bool higher = false;
-		for (int i = 1; fps && i < fps->count(); ++i)
-			higher = higher || fps->itemData(i).toDouble() >= 60.0;
-		ok(fps && !higher && fps->findText(QStringLiteral("30 fps")) > 0 && fps->findText(QStringLiteral("24 fps")) > 0,
-		   "then the usual rates below it -- none above, which would only repeat frames");
+		ok(fps && fps->findData(120.0) > 0 && fps->findData(60.0) > 0 &&
+		   fps->findText(QStringLiteral("30 fps")) > 0 && fps->findText(QStringLiteral("24 fps")) > 0,
+		   "explicit standard rates include 60 and 120 fps regardless of the original rate");
 		const qint64 at60 = dlg.estimatedBytes();
 		if (fps)
 			fps->setCurrentIndex(fps->findText(QStringLiteral("30 fps")));
@@ -463,7 +461,71 @@ int main(int argc, char **argv)
 		ExportOptionsDialog other(slow);
 		other.show();
 		QApplication::processEvents();
-		ok(other.frameRate() == 0.0, "a 25 fps project cannot do 30: back to the original");
+		ok(other.frameRate() == 30.0, "a 25 fps project keeps the explicitly chosen 30 fps output rate");
+	}
+
+	QSettings().clear();
+
+	std::printf("\n-- higher output rates for sped-up clips --\n");
+	{
+		ExportOptionsDialog::Context c = ctx1080(); // Original is 30 fps.
+		ExportOptionsDialog fresh(c);
+		QComboBox *freshFps = fresh.findChild<QComboBox *>(QStringLiteral("exportFps"));
+		ok(fresh.frameRate() == 0.0 && freshFps &&
+		   freshFps->itemText(0) == QStringLiteral("Original (30 fps)") &&
+		   freshFps->findData(60.0) > 0 && freshFps->findData(120.0) > 0,
+		   "a fresh 30 fps project defaults to Original and offers explicit 60 and 120 fps");
+		for (double rate : {60.0, 120.0}) {
+			ExportOptionsDialog dlg(c);
+			dlg.show();
+			for (QComboBox *combo : dlg.findChildren<QComboBox *>()) {
+				const int mp4 = combo->findData(int(ClipExporter::Format::Mp4));
+				if (mp4 >= 0 && combo->itemText(mp4).startsWith(QStringLiteral("MP4")))
+					combo->setCurrentIndex(mp4);
+			}
+			QComboBox *fps = dlg.findChild<QComboBox *>(QStringLiteral("exportFps"));
+			if (fps)
+				fps->setCurrentIndex(fps->findData(rate));
+			QApplication::processEvents();
+			QLabel *summary = labelStartingWith(&dlg, QStringLiteral("Format:"));
+			const QString line = QStringLiteral("Frame rate:  %1 fps").arg(rate, 0, 'g', 4);
+			ok(dlg.frameRate() == rate && summary && summary->text().contains(line),
+			   "higher output rate is returned to the caller and shown immediately in the summary");
+			dlg.accept();
+			QApplication::processEvents();
+
+			ExportOptionsDialog::Context lower = c;
+			lower.fps = 25.0;
+			ExportOptionsDialog restored(lower);
+			QLabel *restoredSummary = labelStartingWith(&restored, QStringLiteral("Format:"));
+			ok(restored.frameRate() == rate && restoredSummary && restoredSummary->text().contains(line),
+			   "the explicit 60 or 120 fps choice survives reopening a lower-rate project");
+		}
+
+		ExportOptionsDialog gif(c);
+		gif.show();
+		for (QComboBox *combo : gif.findChildren<QComboBox *>()) {
+			const int index = combo->findData(int(ClipExporter::Format::Gif));
+			if (index >= 0 && combo->itemText(index).startsWith(QStringLiteral("GIF")))
+				combo->setCurrentIndex(index);
+		}
+		QSpinBox *gifRate = nullptr;
+		for (QSpinBox *spin : gif.findChildren<QSpinBox *>())
+			if (spin->suffix() == QStringLiteral(" fps"))
+				gifRate = spin;
+		if (gifRate)
+			gifRate->setValue(23);
+		QApplication::processEvents();
+		QLabel *gifSummary = labelStartingWith(&gif, QStringLiteral("Format:"));
+		QComboBox *hiddenVideoRate = gif.findChild<QComboBox *>(QStringLiteral("exportFps"));
+		ok(gif.format() == ClipExporter::Format::Gif && gif.gifFps() == 23 && gifRate && gifRate->maximum() == 50 &&
+		   hiddenVideoRate && !hiddenVideoRate->isVisible() && gifSummary &&
+		   gifSummary->text().contains(QStringLiteral("Frame rate:  23 fps")),
+		   "GIF keeps its independent frame-rate control and summary after a 120 fps video choice");
+
+		QSettings().setValue(QStringLiteral("export/fps"), 999.0);
+		ExportOptionsDialog unknown(c);
+		ok(unknown.frameRate() == 0.0, "an unsupported remembered frame rate falls back to Original");
 	}
 
 	QSettings().clear();

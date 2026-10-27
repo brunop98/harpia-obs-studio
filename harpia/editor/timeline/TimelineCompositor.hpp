@@ -79,6 +79,13 @@ public:
 	static QImage compose(const TimelineModel &m, qint64 outMs, QSize canvas, FrameProvider &fp,
 			      class TransformEvaluator *eval = nullptr, double fps = 30.0,
 			      QSize logicalCanvas = QSize(), RenderError *error = nullptr);
+	// Export clock: retain fractional milliseconds until clip speed and Time
+	// components have mapped the position into the source. The preview keeps
+	// using compose(); keyframes and component envelopes use their usual
+	// millisecond clock in both paths.
+	static QImage composeAtTime(const TimelineModel &m, double outMs, QSize canvas, FrameProvider &fp,
+				    class TransformEvaluator *eval = nullptr, double fps = 30.0,
+				    QSize logicalCanvas = QSize(), RenderError *error = nullptr);
 
 	// Where a clip is drawn on the canvas at this pose, in canvas pixels. Used by
 	// the preview to hit-test and drag the selected clip. `srcSize` is the clip's

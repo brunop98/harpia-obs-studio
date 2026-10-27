@@ -480,6 +480,13 @@ struct TlClip {
 		const qint64 off = std::clamp<qint64>(outMs - outStartMs, 0, outDurationMs());
 		return srcStartMs + qint64(std::llround(double(off) * (speed > 0.01 ? speed : 1.0)));
 	}
+	// An export's frame clock can fall between milliseconds. Keep that
+	// fraction through speed changes, then round only the source decode time.
+	double srcAtOutputTime(double outMs) const
+	{
+		const double off = std::clamp(outMs - double(outStartMs), 0.0, double(outDurationMs()));
+		return double(srcStartMs) + off * (speed > 0.01 ? speed : 1.0);
+	}
 
 	TlTransform baseTransform() const
 	{

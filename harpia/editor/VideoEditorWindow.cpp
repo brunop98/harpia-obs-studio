@@ -20,6 +20,8 @@
 #include "../ui/UiIcons.hpp"
 #include "component/BuiltinComponents.hpp"
 #include "component/ComponentRegistry.hpp"
+#include "component/ComponentPresets.hpp"
+#include "component/ComponentPresetClip.hpp"
 #include "component/ScriptComponent.hpp"
 #include "../ui/UiText.hpp"
 #include "../ui/InfoHint.hpp"
@@ -1783,6 +1785,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// control before its replacement exists would just remove a feature.
 	componentPanel_ = new ComponentPanel(ComponentRegistry::instance(), this);
 	componentPanel_->setVisible(false);
+	connect(componentPanel_, &ComponentPanel::componentPresetSaveRequested,
+		this, &VideoEditorWindow::saveComponentPreset);
+	connect(componentPanel_, &ComponentPanel::componentPresetApplied,
+		this, &VideoEditorWindow::applyComponentPreset);
+	connect(componentPanel_, &ComponentPanel::componentPresetDeleteRequested,
+		this, &VideoEditorWindow::deleteComponentPreset);
 	// Every operation is applied to EVERY selected clip, in one edit and so one
 	// undo step. There is no single-clip path: one clip is the case where the
 	// selection has one member, which is what stops the two drifting apart.
@@ -7274,6 +7282,231 @@ void VideoEditorWindow::afterComponentEdit()
 	showTimelineFrame(timelinePlayheadMs());
 	syncComponentPanel();
 	scheduleSnapshot();
+}
+
+void VideoEditorWindow::saveComponentPreset(const QString &typeId, int ordinal)
+{
+	if (!fullEdit() || !timelineView_)
+		return;
+	const TlClip *clip = timelineView_->selectedClipPtr();
+	if (!clip)
+		return;
+	ComponentInstance saved;
+	if (ordinal < 0 && component_presets::isPinnedComponentType(typeId)) {
+		saved = component_presets::snapshotPinnedComponent(*clip, typeId);
+	} else {
+		int seen = 0;
+		for (const ComponentInstance &ci : clip->components)
+			if (ci.typeId == typeId && seen++ == ordinal) {
+				saved = ci;
+				break;
+			}
+	}
+	if (saved.typeId.isEmpty())
+		return;
+	component_presets::Store store;
+	QString error;
+	const auto presets = store.load(&error);
+	if (!error.isEmpty()) {
+		QMessageBox::warning(this, QStringLiteral("Save component preset"), error);
+		return;
+	}
+	const ComponentType *type = ComponentRegistry::instance().find(typeId);
+	bool accepted = false;
+	const QString name = QInputDialog::getText(
+		this, QStringLiteral("Save component preset"),
+		timelineView_->selectedPairs().size() > 1
+			? QStringLiteral("Preset name (uses the primary clip's settings and animation):")
+			: QStringLiteral("Preset name (includes settings and animation):"),
+		QLineEdit::Normal, type ? type->displayName : typeId, &accepted).trimmed();
+	if (!accepted || name.isEmpty())
+		return;
+	for (const auto &preset : presets)
+		if (preset.name.compare(name, Qt::CaseInsensitive) == 0 &&
+		    preset.component.value(QStringLiteral("type")).toString() == typeId) {
+			if (QMessageBox::question(this, QStringLiteral("Replace component preset"),
+				QStringLiteral("Replace the saved preset \"%1\"?").arg(preset.name)) != QMessageBox::Yes)
+				return;
+			break;
+		}
+	// A sound's numeric source id belongs to this project. Keep an immutable
+	// WAV beside the preset file, then import/remap it when another project
+	// applies the preset. Session audio remains reusable after this editor closes.
+	project_assets::SaveTransaction assets(store.path());
+	// This directory is shared by editor windows. Once published, another
+	// window may already reference an asset; failed JSON saves must leave it.
+	assets.retain();
+	if (typeId == QLatin1String(kSoundComponentId)) {
+		QJsonObject sounds;
+		for (const char *field : {"inSound", "outSound"}) {
+			const QString key = QString::fromLatin1(field);
+			const int sourceId = saved.props.value(key, 0).toInt();
+			if (sourceId > 0) {
+				const EditorSource *source = sourceById(sourceId);
+				if (!source || source->missing) {
+					error = QStringLiteral("The selected %1 is missing. Choose its audio again before saving this preset.")
+						.arg(key == QLatin1String("inSound") ? QStringLiteral("In sound") : QStringLiteral("Out sound"));
+					break;
+				}
+				const QString slot = source->librarySlot, label = source->name;
+				const QString wav = audioProxyFor(sourceId);
+				QString relative;
+				error = assets.voiceover(wav, &relative);
+				if (!error.isEmpty())
+					break;
+				sounds.insert(key, QJsonObject{
+					{QStringLiteral("path"), QDir(QFileInfo(store.path()).absolutePath()).filePath(relative)},
+					{QStringLiteral("slot"), slot}, {QStringLiteral("name"), label}});
+			}
+			saved.props.insert(key, 0);
+			saved.keys.remove(key);
+		}
+		saved.unknown.insert(QStringLiteral("presetSoundAssets"), sounds);
+	}
+	if (error.isEmpty())
+		store.save(name, saved, ComponentRegistry::instance(), &error);
+	if (!error.isEmpty()) {
+		QMessageBox::warning(this, QStringLiteral("Save component preset"), error);
+		return;
+	}
+}
+
+void VideoEditorWindow::applyComponentPreset(const QString &presetId, const QString &typeId, int ordinal)
+{
+	if (!fullEdit() || !timelineView_)
+		return;
+	QString error;
+	const auto presets = component_presets::Store().load(&error);
+	if (!error.isEmpty()) {
+		QMessageBox::warning(this, QStringLiteral("Apply component preset"), error);
+		return;
+	}
+	QJsonObject record;
+	for (const auto &preset : presets)
+		if (preset.id == presetId) {
+			record = preset.component;
+			break;
+		}
+	if (record.isEmpty())
+		return; // removed in another editor since the menu opened
+	ComponentInstance saved = componentFromJson(record, ComponentRegistry::instance());
+	if (!typeId.isEmpty() && saved.typeId != typeId)
+		return;
+	const ComponentType *type = ComponentRegistry::instance().find(saved.typeId);
+	const bool pinned = component_presets::isPinnedComponentType(saved.typeId);
+	if (!type && typeId.isEmpty()) {
+		QMessageBox::warning(this, QStringLiteral("Apply component preset"),
+			QStringLiteral("This preset requires a component that is not installed: %1").arg(saved.typeId));
+		return;
+	}
+	// Recheck the selection when executing, including locks, before importing
+	// sound assets or creating an undo entry.
+	bool applicable = false;
+	const TimelineModel &model = timelineView_->model();
+	for (const auto &pair : timelineView_->selectedPairs()) {
+		const TlTrack &track = model.tracks[pair.first];
+		const TlClip &clip = track.clips[pair.second];
+		if (track.locked)
+			continue;
+		const unsigned kind = clip.type == TlClip::Type::Text ? ClipKindText
+			: clip.type == TlClip::Type::Image ? ClipKindImage
+			: clip.type == TlClip::Type::Effect ? ClipKindEffect : ClipKindVideo;
+		if (type && (type->clipKinds & kind) == 0u)
+			return; // a preset must fit the entire editable selection
+		if (saved.typeId == QLatin1String("harpia.speed") && clip.freeDuration())
+			continue;
+		if (pinned || typeId.isEmpty()) {
+			applicable = true;
+		} else {
+			int seen = 0;
+			for (const auto &component : clip.components)
+				if (component.typeId == saved.typeId && seen++ == ordinal)
+					applicable = true;
+		}
+	}
+	if (!applicable)
+		return;
+	QStringList missingSounds;
+	if (saved.typeId == QLatin1String(kSoundComponentId)) {
+		const QJsonObject sounds = saved.unknown.take(QStringLiteral("presetSoundAssets")).toObject();
+		for (const char *field : {"inSound", "outSound"}) {
+			const QString key = QString::fromLatin1(field);
+			const QJsonObject sound = sounds.value(key).toObject();
+			const bool hadSound = saved.props.value(key, 0).toInt() > 0 || !sound.isEmpty();
+			int sourceId = -1;
+			if (!sound.isEmpty()) {
+				// SoundRules uses zero as "no sound", even in an otherwise
+				// empty caption-only project with no source zero yet.
+				nextSourceId_ = std::max(nextSourceId_, 1);
+				const QString slot = sound.value(QStringLiteral("slot")).toString();
+				if (!slot.isEmpty()) {
+					sourceId = librarySoundSource(slot);
+					const EditorSource *source = sourceById(sourceId);
+					if (!source || source->missing)
+						sourceId = -1;
+				}
+				if (sourceId <= 0) {
+					const QString path = sound.value(QStringLiteral("path")).toString();
+					if (QFileInfo(path).isFile()) {
+						const EditorSource *existing = sourceByPath(path);
+						sourceId = existing && !existing->missing && existing->id > 0
+							? existing->id : addAudioSource(path);
+						if (EditorSource *source = sourceById(sourceId))
+							source->name = sound.value(QStringLiteral("name")).toString(source->name);
+					}
+				}
+			}
+			saved.props.insert(key, std::max(sourceId, 0));
+			saved.keys.remove(key); // these hidden ids are never animatable
+			if (hadSound && sourceId <= 0)
+				missingSounds.append(key == QLatin1String("inSound") ? QStringLiteral("In sound") : QStringLiteral("Out sound"));
+		}
+	}
+	commitSnapshot();
+	timelineView_->applyToSelection([&](TlClip &clip) {
+		if (pinned) {
+			component_presets::applyPinnedComponentPreset(clip, saved);
+		} else if (typeId.isEmpty()) {
+			pasteComponentInto(clip.components, saved,
+				QUuid::createUuid().toString(QUuid::WithoutBraces));
+		} else {
+			int seen = 0;
+			for (ComponentInstance &component : clip.components)
+				if (component.typeId == saved.typeId && seen++ == ordinal) {
+					const QString identity = component.instanceId;
+					component = saved;
+					component.instanceId = identity;
+					break;
+				}
+		}
+	});
+	afterComponentEdit();
+	syncClipInspector();
+	commitSnapshot(); // every menu choice is one discrete undo step
+	if (!missingSounds.isEmpty())
+		QMessageBox::warning(this, QStringLiteral("Preset audio missing"),
+			QStringLiteral("The preset was applied, but these audio files could not be found: %1. "
+				       "Choose them again using the Sound component's buttons.").arg(missingSounds.join(QStringLiteral(", "))));
+}
+
+void VideoEditorWindow::deleteComponentPreset(const QString &presetId)
+{
+	component_presets::Store store;
+	QString error;
+	const auto presets = store.load(&error);
+	if (error.isEmpty()) {
+		for (const auto &preset : presets)
+			if (preset.id == presetId) {
+				if (QMessageBox::question(this, QStringLiteral("Delete component preset"),
+					QStringLiteral("Delete the saved preset \"%1\"? Components already applied to clips will keep their settings.")
+						.arg(preset.name)) != QMessageBox::Yes)
+					return;
+				store.remove(presetId, &error);
+				break;
+			}
+	}
+	if (!error.isEmpty())
+		QMessageBox::warning(this, QStringLiteral("Delete component preset"), error);
 }
 
 void VideoEditorWindow::syncSpotlightInspector()

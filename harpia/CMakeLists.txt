@@ -363,6 +363,8 @@ target_sources(
     editor/component/ComponentStack.hpp
     editor/component/ComponentEnvelope.hpp
     editor/component/ComponentJson.hpp
+    editor/component/ComponentPresets.hpp
+    editor/component/ComponentPresetClip.hpp
     editor/component/ComponentPanel.cpp
     editor/component/ComponentPanel.hpp
     editor/component/ScriptComponent.cpp

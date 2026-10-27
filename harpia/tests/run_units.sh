@@ -444,6 +444,9 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -DHARPIA_SRC="\"$H\"" -I"$H" -I"$QJ
 	-o "$WORK/crt_test" "$QJSLIB/libqjs.a" $LF
 g++ -std=c++17 -O1 -fPIC -I"$H" $(pkg-config --cflags Qt6Core) \
 	"$HERE/shaderpresets_test.cpp" -o "$WORK/shaderpresets_test" $(pkg-config --libs Qt6Core)
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/componentpresets_test.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	-o "$WORK/componentpresets_test" $LF
 
 # Effects as components: every FxType registered, rendering pixel-for-pixel
 # what the old path did, and an unmigrated project opening with its grade.
@@ -1268,6 +1271,7 @@ if [ "$crt_test_status" -ne 0 ] && [ "$crt_test_status" -ne 77 ]; then
 	rc=1
 fi
 "$WORK/shaderpresets_test" || rc=1
+"$WORK/componentpresets_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/assetcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectarea_test" || rc=1

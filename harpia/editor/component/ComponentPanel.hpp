@@ -123,6 +123,11 @@ signals:
 	// than from an existing component's own menu -- which is the case the panel
 	// could not express: pasting onto a clip that does not have one yet.
 	void componentPasteRequested();
+	// A negative ordinal refers to the pinned Transform or Speed row. An empty
+	// typeId on apply means the preset was picked from Add Component.
+	void componentPresetSaveRequested(const QString &typeId, int ordinal);
+	void componentPresetApplied(const QString &presetId, const QString &typeId, int ordinal);
+	void componentPresetDeleteRequested(const QString &presetId);
 	void keyframeToggled(const QString &typeId, int ordinal, const QString &key);
 	// One of the component's own buttons. The panel does not know what it does;
 	// the window looks the action up on the type and runs it on every selected

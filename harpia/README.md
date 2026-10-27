@@ -114,6 +114,13 @@ Three modes, each one step up from the last:
     Factor control, updating as you adjust it (totals for multiple clips);
     [CRT](CRT_EFFECT.md) has brightness-preserving scanlines, beam controls,
     phosphor masks, glow, brightness and gamma controls;
+  - **component presets:** open a component's chevron menu and choose **Save
+    as preset…** to reuse its settings, keyframes and In/Out timings in any
+    project. Use **Apply preset** on an existing component, or **Add Component
+    → Presets** to find saved looks by name. Transform and Speed support presets
+    too. Applying to several selected clips is one undo step; locked tracks are
+    respected. Sound presets retain their audio. Custom shaders and scripts
+    still need to be installed;
   - **effect diagnostics**: a nonmodal preview warning names a missing or
     failed custom shader; **Details…** shows a copyable report and recovery
     steps. Repeated frames log the same problem once. Exports refuse to

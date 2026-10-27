@@ -5,6 +5,7 @@
 #include "../../ui/UiText.hpp"
 #include "../ParamSlider.hpp"
 #include "ComponentRegistry.hpp"
+#include "ComponentPresets.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -279,6 +280,17 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 	if (type)
 		head->addWidget(stageBadge(type->stage, row->box));
 
+	if (pinned) {
+		auto *more = iconButton(Glyph::ChevronDown, QStringLiteral("Save or apply presets…"), row->box);
+		connect(more, &QPushButton::clicked, this,
+			[this, typeId] { componentMenu(typeId, -1); });
+		head->addWidget(more);
+		for (QWidget *w : {static_cast<QWidget *>(name), static_cast<QWidget *>(row->box)}) {
+			w->setContextMenuPolicy(Qt::CustomContextMenu);
+			connect(w, &QWidget::customContextMenuRequested, this,
+				[this, typeId](const QPoint &) { componentMenu(typeId, -1); });
+		}
+	}
 	if (!pinned) {
 		auto *up = iconButton(Glyph::ArrowUp, QStringLiteral("Move up"), row->box);
 		up->setEnabled(canUp);
@@ -289,7 +301,7 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 		connect(down, &QPushButton::clicked, this,
 			[this, typeId, ordinal] { emit componentMoved(typeId, ordinal, 1); });
 		auto *more = iconButton(Glyph::ChevronDown,
-					QStringLiteral("Reset, copy, paste, duplicate…"), row->box);
+					QStringLiteral("Presets, reset, copy, paste, duplicate…"), row->box);
 		connect(more, &QPushButton::clicked, this,
 			[this, typeId, ordinal] { componentMenu(typeId, ordinal); });
 		// Right-click on the name (or anywhere on the header) opens the same
@@ -773,19 +785,57 @@ void ComponentPanel::componentMenu(const QString &typeId, int ordinal)
 	const QString all = view_.clipCount > 1
 				    ? QStringLiteral(" on all %1 clips").arg(view_.clipCount)
 				    : QString();
-	QAction *reset = menu.addAction(QStringLiteral("Reset to defaults") + all);
-	menu.addSeparator();
-	QAction *copy = menu.addAction(QStringLiteral("Copy component"));
-	QAction *paste = menu.addAction(QStringLiteral("Paste values") + all);
-	QAction *dup = menu.addAction(QStringLiteral("Duplicate") + all);
-	connect(reset, &QAction::triggered, this,
-		[this, typeId, ordinal] { emit componentReset(typeId, ordinal); });
-	connect(copy, &QAction::triggered, this,
-		[this, typeId, ordinal] { emit componentCopied(typeId, ordinal); });
-	connect(paste, &QAction::triggered, this,
-		[this, typeId, ordinal] { emit componentPasted(typeId, ordinal); });
-	connect(dup, &QAction::triggered, this,
-		[this, typeId, ordinal] { emit componentDuplicated(typeId, ordinal); });
+	if (ordinal >= 0) {
+		QAction *reset = menu.addAction(QStringLiteral("Reset to defaults") + all);
+		menu.addSeparator();
+		QAction *copy = menu.addAction(QStringLiteral("Copy component"));
+		QAction *paste = menu.addAction(QStringLiteral("Paste values") + all);
+		QAction *dup = menu.addAction(QStringLiteral("Duplicate") + all);
+		connect(reset, &QAction::triggered, this,
+			[this, typeId, ordinal] { emit componentReset(typeId, ordinal); });
+		connect(copy, &QAction::triggered, this,
+			[this, typeId, ordinal] { emit componentCopied(typeId, ordinal); });
+		connect(paste, &QAction::triggered, this,
+			[this, typeId, ordinal] { emit componentPasted(typeId, ordinal); });
+		connect(dup, &QAction::triggered, this,
+			[this, typeId, ordinal] { emit componentDuplicated(typeId, ordinal); });
+		menu.addSeparator();
+	}
+	auto *save = menu.addAction(QStringLiteral("Save as preset…"));
+	save->setObjectName(QStringLiteral("saveComponentPreset"));
+	save->setToolTip(view_.clipCount > 1
+		? QStringLiteral("Save the primary clip's settings and animation for use in any project.")
+		: QStringLiteral("Save these settings and animation for use in any project."));
+	connect(save, &QAction::triggered, this,
+		[this, typeId, ordinal] { emit componentPresetSaveRequested(typeId, ordinal); });
+	auto *apply = menu.addMenu(QStringLiteral("Apply preset") + all);
+	apply->setObjectName(QStringLiteral("applyComponentPreset"));
+	auto *remove = menu.addMenu(QStringLiteral("Delete preset"));
+	remove->setObjectName(QStringLiteral("deleteComponentPreset"));
+	QString error;
+	const auto presets = component_presets::Store().load(&error);
+	int count = 0;
+	for (const auto &preset : presets) {
+		if (preset.component.value(QStringLiteral("type")).toString() != typeId)
+			continue;
+		++count;
+		auto *use = apply->addAction(preset.name);
+		use->setData(preset.id);
+		connect(use, &QAction::triggered, this,
+			[this, id = preset.id, typeId, ordinal] {
+				emit componentPresetApplied(id, typeId, ordinal);
+			});
+		auto *del = remove->addAction(preset.name);
+		del->setData(preset.id);
+		connect(del, &QAction::triggered, this,
+			[this, id = preset.id] { emit componentPresetDeleteRequested(id); });
+	}
+	if (!count) {
+		apply->addAction(error.isEmpty() ? QStringLiteral("No saved presets")
+					       : QStringLiteral("Could not read presets"))->setEnabled(false);
+		apply->setToolTip(error);
+		remove->menuAction()->setVisible(false);
+	}
 	menu.exec(QCursor::pos());
 }
 
@@ -821,6 +871,25 @@ void ComponentPanel::addComponentMenu()
 		pi.category = t.category;
 		items.append(pi);
 	}
+	QString error;
+	const auto presets = component_presets::Store().load(&error);
+	for (const auto &preset : presets) {
+		const QString typeId = preset.component.value(QStringLiteral("type")).toString();
+		const ComponentType *type = reg_.find(typeId);
+		if (!type || (allowedKinds_ & ~type->clipKinds) != 0u)
+			continue;
+		// A Speed preset has no effect on a selection of freely timed clips.
+		if (typeId == QLatin1String("harpia.speed") &&
+		    std::none_of(view_.pinned.cbegin(), view_.pinned.cend(), [&](const PinnedRow &p) {
+			return p.typeId == typeId;
+		    }))
+			continue;
+		PickItem item;
+		item.id = QStringLiteral("preset:") + preset.id;
+		item.name = QStringLiteral("%1 (%2)").arg(preset.name, type->displayName);
+		item.category = QStringLiteral("Presets");
+		items.append(item);
+	}
 	if (items.isEmpty()) {
 		QMenu menu(this);
 		menu.addAction(QStringLiteral("No components registered"))->setEnabled(false);
@@ -832,6 +901,8 @@ void ComponentPanel::addComponentMenu()
 		return;
 	if (chosen == QStringLiteral("paste:"))
 		emit componentPasteRequested();
+	else if (chosen.startsWith(QLatin1String("preset:")))
+		emit componentPresetApplied(chosen.mid(7), QString(), -1);
 	else
 		emit componentAdded(chosen);
 }

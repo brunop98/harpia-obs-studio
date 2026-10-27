@@ -229,7 +229,8 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	-o "$WORK/projectstate_test" $WLF
 # Reopening documents must preserve media references and narration assets;
 # rejected documents must leave the active project intact.
-for name in projectvalidation projectassets projectload projectmigrate; do
+# Reusable component presets must preserve native poses and apply across projects.
+for name in projectvalidation projectassets projectload projectmigrate componentpresetclip componentpresetswindow; do
 	g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 		-DSRC_MEDIA="\"$WORK/av_red.mp4\"" "$HERE/${name}_test.cpp" \
 		-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
@@ -390,7 +391,7 @@ HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen
 	"$WORK/undohistory_test" "$WORK" || rc=1
 HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
 	"$WORK/projectstate_test" "$WORK" || rc=1
-for name in projectvalidation projectassets projectload projectmigrate; do
+for name in projectvalidation projectassets projectload projectmigrate componentpresetclip componentpresetswindow; do
 	project_test_status=0
 	XDG_CONFIG_HOME="$WORK/${name}-config" XDG_DATA_HOME="$WORK/${name}-data" QT_QPA_PLATFORM=offscreen \
 		"$WORK/${name}_test" "$WORK" || project_test_status=$?

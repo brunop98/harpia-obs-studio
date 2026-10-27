@@ -1217,6 +1217,9 @@ private:
 	void editSharedComponent(const QString &typeId, int ordinal,
 				 const std::function<void(ComponentInstance &)> &fn);
 	void afterComponentEdit();
+	void saveComponentPreset(const QString &typeId, int ordinal);
+	void applyComponentPreset(const QString &presetId, const QString &typeId = QString(), int ordinal = -1);
+	void deleteComponentPreset(const QString &presetId);
 	// A component's own time for the clip it is on. Keys are clip-relative, and
 	// with several clips selected each has its own offset.
 	qint64 componentEditTimeFor(const ComponentInstance &ci) const;

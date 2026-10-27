@@ -21,6 +21,13 @@ LF="$(pkg-config --libs Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
 g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
 	"$HERE/windowscreen_test.cpp" "$H/ui/WindowScreen.cpp" -o "$WORK/windowscreen_test" $LF
 
+# Recursive video discovery streams bounded GUI batches and discards canceled
+# or superseded results without blocking close or tab changes.
+"$MOC" -I"$H" "$H/library/VideoFolderScanner.hpp" -o "$WORK/moc_VideoFolderScanner.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/videofolderscan_test.cpp" "$H/library/VideoFolderScanner.cpp" \
+	"$WORK/moc_VideoFolderScanner.cpp" -o "$WORK/videofolderscan_test" $LF
+
 # Recording split preferences, one-time overrides, dialog state and safe paths.
 g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
 	"$HERE/autosplitdialog_test.cpp" "$H/ui/AutoSplitDialog.cpp" -o "$WORK/autosplitdialog_test" $LF
@@ -1140,6 +1147,7 @@ fi
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/ytdlp_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/windowscreen_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/videofolderscan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/multicutshuffle_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/trackpan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1

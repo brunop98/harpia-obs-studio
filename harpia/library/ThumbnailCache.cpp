@@ -138,21 +138,23 @@ QImage ThumbnailCache::cached(const QString &videoPath, const QSize &target)
 	return {};
 }
 
-void ThumbnailCache::ensure(const QString &videoPath, const QSize &target)
+bool ThumbnailCache::ensure(const QString &videoPath, const QSize &target)
 {
 	const QFileInfo fi(videoPath);
 	if (!fi.exists())
-		return;
+		return false;
 
 	const QString key = keyFor(videoPath, fi.lastModified().toSecsSinceEpoch(), target);
-	if (memory_.contains(key) || inFlight_.contains(key))
-		return;
+	if (memory_.contains(key))
+		return false;
+	if (inFlight_.contains(key))
+		return true;
 	const QString disk = diskPath(key);
 	if (QFileInfo::exists(disk)) {
 		// A disk file only counts if it actually loads — a PNG truncated by a
 		// crash mid-write would otherwise block regeneration forever.
 		if (!QImage(disk).isNull())
-			return;
+			return false;
 		QFile::remove(disk);
 	}
 
@@ -183,6 +185,7 @@ void ThumbnailCache::ensure(const QString &videoPath, const QSize &target)
 			},
 			Qt::QueuedConnection);
 	}));
+	return true;
 }
 
 void ThumbnailCache::jobFinished(const QString &key, const QImage &img, const QString &videoPath)

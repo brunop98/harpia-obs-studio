@@ -73,8 +73,10 @@ Three modes, each one step up from the last:
 - **Multi-Cut** — keep several sections, each at its own speed; randomise
   their order; export them joined or **each to its own file**. Use **Source
   video** above the tracks to switch videos and keep cuts from all of them
-  in the same output. **Add video…** opens a thumbnail grid of your recorded
-  videos; select one to load it without removing cuts. **Import from folder…**
+  in the same output. **Add video…** opens a thumbnail grid with **Harpia
+  Editor**, **Downloads**, and **Videos** tabs. Each scans its folders and
+  subfolders in the background; thumbnails load as they come into view.
+  Select a video to load it without removing cuts. **Import from folder…**
   at the bottom opens the system file picker for another video.
 - **Full Editing** — a multi-track timeline:
   - video, image, text, effect and audio clips; overlapping clips become

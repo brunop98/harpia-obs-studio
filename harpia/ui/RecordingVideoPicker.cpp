@@ -1,6 +1,5 @@
 #include "RecordingVideoPicker.hpp"
 
-#include "library/ClipLibrary.hpp"
 #include "RecordingDelete.hpp"
 
 #include <QAction>
@@ -22,14 +21,45 @@
 #include <QPixmap>
 #include <QPolygonF>
 #include <QPushButton>
+#include <QProgressBar>
+#include <QScrollBar>
 #include <QSignalBlocker>
+#include <QStandardPaths>
+#include <QTabBar>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace harpia {
 
 namespace {
 const QSize kThumbnailSize(192, 108);
+constexpr int kModifiedRole = Qt::UserRole + 1;
+
+QString scanPathKey(const QString &path)
+{
+	// Scanner paths are already canonical. Keep discovery batches free of
+	// filesystem reads on the GUI thread, including for deduplication.
+	QString key = QDir::cleanPath(path);
+#ifdef Q_OS_WIN
+	key = key.toCaseFolded();
+#endif
+	return key;
+}
+
+class VideoItem : public QListWidgetItem {
+public:
+	using QListWidgetItem::QListWidgetItem;
+	bool operator<(const QListWidgetItem &other) const override
+	{
+		const qint64 modified = data(kModifiedRole).toLongLong();
+		const qint64 otherModified = other.data(kModifiedRole).toLongLong();
+		return modified != otherModified ? modified > otherModified
+			: data(Qt::UserRole).toString() < other.data(Qt::UserRole).toString();
+	}
+};
 
 QString recordingPathKey(const QString &path)
 {
@@ -62,10 +92,10 @@ QIcon videoPlaceholder(const QPalette &palette)
 } // namespace
 
 RecordingVideoPicker::RecordingVideoPicker(const QStringList &libraryFolders, QWidget *parent)
-	: QDialog(parent), thumbnails_(this)
+	: QDialog(parent), libraryFolders_(libraryFolders), thumbnails_(this), scanner_(this)
 {
 	setObjectName(QStringLiteral("recordingVideoPicker"));
-	setWindowTitle(QStringLiteral("Add video from recordings"));
+	setWindowTitle(QStringLiteral("Add video"));
 	setWindowFlags(Qt::Dialog | Qt::WindowTitleHint | Qt::WindowSystemMenuHint |
 		       Qt::WindowCloseButtonHint | Qt::WindowMaximizeButtonHint);
 	setSizeGripEnabled(true);
@@ -73,9 +103,16 @@ RecordingVideoPicker::RecordingVideoPicker(const QStringList &libraryFolders, QW
 	setMinimumSize(480, 340);
 
 	auto *layout = new QVBoxLayout(this);
-	auto *hint = new QLabel(QStringLiteral("Choose a recording to add to this project, or double-click it."), this);
+	auto *hint = new QLabel(QStringLiteral("Choose a video to add to this project, or double-click it."), this);
 	hint->setWordWrap(true);
 	layout->addWidget(hint);
+	tabs_ = new QTabBar(this);
+	tabs_->setObjectName(QStringLiteral("recordingVideoTabs"));
+	tabs_->setExpanding(false);
+	tabs_->addTab(QStringLiteral("Harpia Editor"));
+	tabs_->addTab(QStringLiteral("Downloads"));
+	tabs_->addTab(QStringLiteral("Videos"));
+	layout->addWidget(tabs_);
 
 	grid_ = new QListWidget(this);
 	grid_->setObjectName(QStringLiteral("recordingVideoGrid"));
@@ -87,6 +124,8 @@ RecordingVideoPicker::RecordingVideoPicker(const QStringList &libraryFolders, QW
 	grid_->setSelectionMode(QAbstractItemView::SingleSelection);
 	grid_->setEditTriggers(QAbstractItemView::NoEditTriggers);
 	grid_->setUniformItemSizes(true);
+	grid_->setLayoutMode(QListView::Batched);
+	grid_->setBatchSize(64);
 	grid_->setSpacing(8);
 	grid_->setIconSize(kThumbnailSize);
 	grid_->setGridSize(QSize(216, kThumbnailSize.height() + grid_->fontMetrics().lineSpacing() * 2 + 20));
@@ -94,11 +133,25 @@ RecordingVideoPicker::RecordingVideoPicker(const QStringList &libraryFolders, QW
 	grid_->setTextElideMode(Qt::ElideMiddle);
 	grid_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	layout->addWidget(grid_, 1);
+	grid_->viewport()->installEventFilter(this);
+	thumbnailTimer_ = new QTimer(this);
+	thumbnailTimer_->setSingleShot(true);
+	thumbnailTimer_->setInterval(35);
+	connect(thumbnailTimer_, &QTimer::timeout, this, &RecordingVideoPicker::loadVisibleThumbnails);
+	connect(grid_->verticalScrollBar(), &QScrollBar::valueChanged, this, [this]() { scheduleThumbnails(); });
 
 	status_ = new QLabel(this);
 	status_->setObjectName(QStringLiteral("recordingVideoStatus"));
 	status_->setWordWrap(true);
-	layout->addWidget(status_);
+	progress_ = new QProgressBar(this);
+	progress_->setObjectName(QStringLiteral("recordingVideoScanProgress"));
+	progress_->setRange(0, 0);
+	progress_->setTextVisible(false);
+	progress_->setMaximumWidth(140);
+	auto *scanStatus = new QHBoxLayout;
+	scanStatus->addWidget(status_, 1);
+	scanStatus->addWidget(progress_);
+	layout->addLayout(scanStatus);
 
 	auto *importButton = new QPushButton(QStringLiteral("Import from folder…"), this);
 	importButton->setObjectName(QStringLiteral("importVideoFromFolder"));
@@ -128,28 +181,153 @@ RecordingVideoPicker::RecordingVideoPicker(const QStringList &libraryFolders, QW
 	footer->addWidget(buttons);
 	layout->addLayout(footer);
 
+	connect(tabs_, &QTabBar::currentChanged, this, [this]() { startScan(); });
+	connect(&scanner_, &VideoFolderScanner::batchReady, this, &RecordingVideoPicker::appendVideos);
+	connect(&scanner_, &VideoFolderScanner::progress, this, [this](qint64) { updateRecordingCount(); });
+	connect(&scanner_, &VideoFolderScanner::finished, this, [this](int unavailable) {
+		unavailableRoots_ = unavailable;
+		grid_->sortItems(Qt::AscendingOrder); // newest first, once per completed scan
+		progress_->hide();
+		updateRecordingCount();
+		scheduleThumbnails();
+	});
+	connect(this, &QDialog::finished, this, [this]() {
+		scanner_.cancel();
+		thumbnailTimer_->stop();
+	});
+	startScan();
+}
+
+RecordingVideoPicker::~RecordingVideoPicker()
+{
+	scanner_.cancel();
+}
+
+void RecordingVideoPicker::startScan()
+{
+	scanner_.cancel();
+	thumbnailTimer_->stop();
+	// Clear pointers before rows: thumbnail deliveries from a previous tab
+	// may arrive as soon as control returns to the event loop.
+	itemByPath_.clear();
+	checkedThumbnails_.clear();
+	{
+		QSignalBlocker block(grid_);
+		grid_->clear();
+	}
+	addButton_->setEnabled(false);
+	unavailableRoots_ = 0;
+	QStringList folders;
+	if (tabs_->currentIndex() == 0)
+		folders = libraryFolders_;
+	else
+		folders = QStandardPaths::standardLocations(tabs_->currentIndex() == 1
+			? QStandardPaths::DownloadLocation : QStandardPaths::MoviesLocation);
+	status_->setToolTip(folders.join(QLatin1Char('\n')));
+	progress_->show();
+	scanner_.start(folders, tabs_->currentIndex() == 0);
+	updateRecordingCount();
+}
+
+void RecordingVideoPicker::appendVideos(const QVector<ClipInfo> &clips)
+{
 	const QIcon placeholder = videoPlaceholder(grid_->palette());
-	const QVector<ClipInfo> recordings = ClipLibrary::scan(libraryFolders);
-	for (const ClipInfo &clip : recordings) {
-		if (clip.isAudio)
+	for (const ClipInfo &clip : clips) {
+		if (itemByPath_.contains(clip.filePath) || deletedPaths_.contains(scanPathKey(clip.filePath)))
 			continue;
-		auto *item = new QListWidgetItem(placeholder,
+		auto *item = new VideoItem(placeholder,
 			QStringLiteral("%1\n%2 · %3").arg(clip.fileName, clip.humanSize(), clip.relativeAge()), grid_);
 		item->setData(Qt::UserRole, clip.filePath);
+		item->setData(kModifiedRole, clip.modified.toMSecsSinceEpoch());
 		item->setTextAlignment(Qt::AlignHCenter);
 		item->setToolTip(QStringLiteral("%1\n%2 · %3").arg(clip.filePath, clip.exactDate(), clip.humanSize()));
 		itemByPath_.insert(clip.filePath, item);
-		updateThumbnail(clip.filePath);
-		thumbnails_.ensure(clip.filePath, kThumbnailSize);
 	}
 	updateRecordingCount();
+	scheduleThumbnails();
 }
 
 void RecordingVideoPicker::updateRecordingCount()
 {
-	status_->setText(itemByPath_.isEmpty()
-		? QStringLiteral("No recorded videos found. Use Import from folder… to choose a video on your computer.")
-		: QStringLiteral("%1 recorded video%2").arg(itemByPath_.size()).arg(itemByPath_.size() == 1 ? QString() : QStringLiteral("s")));
+	const QString count = QStringLiteral("%1 video%2").arg(itemByPath_.size())
+		.arg(itemByPath_.size() == 1 ? QString() : QStringLiteral("s"));
+	if (scanner_.isRunning()) {
+		status_->setText(QStringLiteral("Scanning %1… %2 found").arg(tabs_->tabText(tabs_->currentIndex()), count));
+	} else {
+		QString text = itemByPath_.isEmpty()
+			? QStringLiteral("No videos found. Use Import from folder… to choose another location.") : count;
+		if (unavailableRoots_ > 0)
+			text += QStringLiteral(" · %1 folder%2 unavailable").arg(unavailableRoots_)
+				.arg(unavailableRoots_ == 1 ? QString() : QStringLiteral("s"));
+		status_->setText(text);
+	}
+}
+
+bool RecordingVideoPicker::eventFilter(QObject *watched, QEvent *event)
+{
+	if (watched == grid_->viewport() && (event->type() == QEvent::Resize || event->type() == QEvent::Show ||
+					    event->type() == QEvent::Paint))
+		scheduleThumbnails();
+	return QDialog::eventFilter(watched, event);
+}
+
+void RecordingVideoPicker::scheduleThumbnails()
+{
+	if (isVisible() && !thumbnailTimer_->isActive())
+		thumbnailTimer_->start();
+}
+
+void RecordingVideoPicker::loadVisibleThumbnails()
+{
+	if (!isVisible() || grid_->count() == 0)
+		return;
+	// Sample visible cells rather than walking every discovered file on each
+	// scroll. The grid has uniform cells; half-cell steps also hit partial rows.
+	const QSize cell = grid_->gridSize();
+	const QSize viewport = grid_->viewport()->size();
+	int first = grid_->count(), last = -1;
+	for (int y = 0; y < viewport.height(); y += std::max(1, cell.height() / 2))
+		for (int x = std::max(1, cell.width() / 4); x < viewport.width(); x += std::max(1, cell.width() / 2)) {
+			const QModelIndex index = grid_->indexAt(QPoint(x, y));
+			if (index.isValid()) {
+				first = std::min(first, index.row());
+				last = std::max(last, index.row());
+			}
+		}
+	if (last < 0)
+		return;
+	const int columns = std::max(1, viewport.width() / std::max(1, cell.width()));
+	QVector<int> rows;
+	rows.reserve(last - first + 1 + 2 * columns);
+	// Current cards get the limited worker slots before off-screen prefetch.
+	for (int row = first; row <= last; ++row)
+		rows.append(row);
+	for (int row = std::max(0, first - columns); row < first; ++row)
+		rows.append(row);
+	for (int row = last + 1; row <= std::min(grid_->count() - 1, last + columns); ++row)
+		rows.append(row);
+	for (int row : rows) {
+		const QString path = grid_->item(row)->data(Qt::UserRole).toString();
+		if (checkedThumbnails_.contains(path))
+			continue;
+		const QImage image = thumbnails_.cached(path, kThumbnailSize);
+		if (!image.isNull()) {
+			checkedThumbnails_.insert(path);
+			grid_->item(row)->setIcon(QIcon(QPixmap::fromImage(image)));
+		} else if (attemptedThumbnails_.contains(path)) {
+			checkedThumbnails_.insert(path);
+		} else if (pendingThumbnails_.size() < 4) {
+			checkedThumbnails_.insert(path);
+			attemptedThumbnails_.insert(path);
+			if (thumbnails_.ensure(path, kThumbnailSize)) {
+				pendingThumbnails_.insert(path);
+			} else {
+				// A concurrent cache writer may have finished between cached()
+				// and ensure(). No worker means no future ready() notification.
+				updateThumbnail(path);
+			}
+		}
+	}
 }
 
 void RecordingVideoPicker::setProtectedPaths(const QStringList &paths)
@@ -211,9 +389,11 @@ void RecordingVideoPicker::showContextMenu(const QPoint &pos)
 			return;
 		{
 			QSignalBlocker block(grid_);
-			for (const QString &removed : gone)
+			for (const QString &removed : gone) {
+				deletedPaths_.insert(scanPathKey(removed));
 				if (QListWidgetItem *row = itemByPath_.take(removed))
 					delete grid_->takeItem(grid_->row(row));
+			}
 			grid_->clearSelection();
 			grid_->setCurrentRow(-1);
 		}
@@ -235,7 +415,7 @@ void RecordingVideoPicker::acceptSelection()
 {
 	if (selectedVideo().isEmpty()) {
 		addButton_->setEnabled(false);
-		status_->setText(QStringLiteral("This recording is no longer available. Choose another video or import from a folder."));
+		status_->setText(QStringLiteral("This video is no longer available. Choose another video or import from a folder."));
 		return;
 	}
 	accept();
@@ -243,6 +423,8 @@ void RecordingVideoPicker::acceptSelection()
 
 void RecordingVideoPicker::updateThumbnail(const QString &path)
 {
+	pendingThumbnails_.remove(path);
+	scheduleThumbnails();
 	QListWidgetItem *item = itemByPath_.value(path, nullptr);
 	if (!item)
 		return;

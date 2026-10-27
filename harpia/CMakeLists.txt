@@ -148,6 +148,8 @@ target_sources(
     library/AudioCard.hpp
     library/ClipLibrary.cpp
     library/ClipLibrary.hpp
+    library/VideoFolderScanner.cpp
+    library/VideoFolderScanner.hpp
     library/ThumbnailCache.cpp
     library/ThumbnailCache.hpp
     ui/MainWindow.cpp

@@ -76,6 +76,7 @@ Three modes, each one step up from the last:
   in the same output. **Add video…** opens a thumbnail grid with **Harpia
   Editor**, **Downloads**, and **Videos** tabs. Each scans its folders and
   subfolders in the background; thumbnails load as they come into view.
+  Use **Order by** to sort by newest date, largest size, or name (A to Z).
   Select a video to load it without removing cuts. **Import from folder…**
   at the bottom opens the system file picker for another video.
 - **Full Editing** — a multi-track timeline:

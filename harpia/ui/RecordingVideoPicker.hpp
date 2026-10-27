@@ -9,6 +9,7 @@
 #include <QStringList>
 
 class QLabel;
+class QComboBox;
 class QListWidget;
 class QListWidgetItem;
 class QPushButton;
@@ -40,6 +41,7 @@ protected:
 private:
 	void startScan();
 	void appendVideos(const QVector<ClipInfo> &clips);
+	void sortVideos();
 	void scheduleThumbnails();
 	void loadVisibleThumbnails();
 	void acceptSelection();
@@ -49,6 +51,7 @@ private:
 
 	QListWidget *grid_ = nullptr;
 	QTabBar *tabs_ = nullptr;
+	QComboBox *orderBy_ = nullptr;
 	QLabel *status_ = nullptr;
 	QProgressBar *progress_ = nullptr;
 	QPushButton *addButton_ = nullptr;

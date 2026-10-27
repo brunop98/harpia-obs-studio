@@ -5,6 +5,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
+#include <QComboBox>
 #include <QDesktopServices>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -37,6 +38,9 @@ namespace harpia {
 namespace {
 const QSize kThumbnailSize(192, 108);
 constexpr int kModifiedRole = Qt::UserRole + 1;
+constexpr int kSizeRole = Qt::UserRole + 2;
+constexpr int kNameRole = Qt::UserRole + 3;
+constexpr const char *kOrderProperty = "recordingVideoSortKey";
 
 QString scanPathKey(const QString &path)
 {
@@ -54,10 +58,17 @@ public:
 	using QListWidgetItem::QListWidgetItem;
 	bool operator<(const QListWidgetItem &other) const override
 	{
-		const qint64 modified = data(kModifiedRole).toLongLong();
-		const qint64 otherModified = other.data(kModifiedRole).toLongLong();
-		return modified != otherModified ? modified > otherModified
-			: data(Qt::UserRole).toString() < other.data(Qt::UserRole).toString();
+		const int order = listWidget() ? listWidget()->property(kOrderProperty).toInt() : 0;
+		if (order == 0 || order == 1) {
+			const int role = order == 1 ? kSizeRole : kModifiedRole;
+			const qint64 value = data(role).toLongLong();
+			const qint64 otherValue = other.data(role).toLongLong();
+			if (value != otherValue)
+				return value > otherValue; // newest or largest first
+		}
+		const int name = QString::compare(data(kNameRole).toString(), other.data(kNameRole).toString(),
+						 Qt::CaseInsensitive);
+		return name != 0 ? name < 0 : data(Qt::UserRole).toString() < other.data(Qt::UserRole).toString();
 	}
 };
 
@@ -112,7 +123,21 @@ RecordingVideoPicker::RecordingVideoPicker(const QStringList &libraryFolders, QW
 	tabs_->addTab(QStringLiteral("Harpia Editor"));
 	tabs_->addTab(QStringLiteral("Downloads"));
 	tabs_->addTab(QStringLiteral("Videos"));
-	layout->addWidget(tabs_);
+	orderBy_ = new QComboBox(this);
+	orderBy_->setObjectName(QStringLiteral("recordingVideoOrderBy"));
+	orderBy_->setAccessibleName(QStringLiteral("Order by"));
+	orderBy_->addItem(QStringLiteral("Date"), 0);
+	orderBy_->addItem(QStringLiteral("Size"), 1);
+	orderBy_->addItem(QStringLiteral("Name"), 2);
+	orderBy_->setToolTip(QStringLiteral("Date: newest first. Size: largest first. Name: A to Z."));
+	auto *orderLabel = new QLabel(QStringLiteral("Order by"), this);
+	orderLabel->setBuddy(orderBy_);
+	auto *browseRow = new QHBoxLayout;
+	browseRow->addWidget(tabs_);
+	browseRow->addStretch(1);
+	browseRow->addWidget(orderLabel);
+	browseRow->addWidget(orderBy_);
+	layout->addLayout(browseRow);
 
 	grid_ = new QListWidget(this);
 	grid_->setObjectName(QStringLiteral("recordingVideoGrid"));
@@ -182,11 +207,12 @@ RecordingVideoPicker::RecordingVideoPicker(const QStringList &libraryFolders, QW
 	layout->addLayout(footer);
 
 	connect(tabs_, &QTabBar::currentChanged, this, [this]() { startScan(); });
+	connect(orderBy_, &QComboBox::currentIndexChanged, this, [this]() { sortVideos(); });
 	connect(&scanner_, &VideoFolderScanner::batchReady, this, &RecordingVideoPicker::appendVideos);
 	connect(&scanner_, &VideoFolderScanner::progress, this, [this](qint64) { updateRecordingCount(); });
 	connect(&scanner_, &VideoFolderScanner::finished, this, [this](int unavailable) {
 		unavailableRoots_ = unavailable;
-		grid_->sortItems(Qt::AscendingOrder); // newest first, once per completed scan
+		sortVideos(); // respect the current choice, once per completed scan
 		progress_->hide();
 		updateRecordingCount();
 		scheduleThumbnails();
@@ -239,11 +265,20 @@ void RecordingVideoPicker::appendVideos(const QVector<ClipInfo> &clips)
 			QStringLiteral("%1\n%2 · %3").arg(clip.fileName, clip.humanSize(), clip.relativeAge()), grid_);
 		item->setData(Qt::UserRole, clip.filePath);
 		item->setData(kModifiedRole, clip.modified.toMSecsSinceEpoch());
+		item->setData(kSizeRole, clip.sizeBytes);
+		item->setData(kNameRole, clip.fileName);
 		item->setTextAlignment(Qt::AlignHCenter);
 		item->setToolTip(QStringLiteral("%1\n%2 · %3").arg(clip.filePath, clip.exactDate(), clip.humanSize()));
 		itemByPath_.insert(clip.filePath, item);
 	}
 	updateRecordingCount();
+	scheduleThumbnails();
+}
+
+void RecordingVideoPicker::sortVideos()
+{
+	grid_->setProperty(kOrderProperty, orderBy_->currentData().toInt());
+	grid_->sortItems(Qt::AscendingOrder);
 	scheduleThumbnails();
 }
 

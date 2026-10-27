@@ -167,6 +167,7 @@ static QJsonObject richProject(const QJsonObject &base, const QString &second, c
 	s2["durationMs"] = 4000.0;
 	s2["width"] = 320;
 	s2["height"] = 180;
+	s2["fps"] = 30.0;
 	sources.append(s2);
 	root["sources"] = sources;
 	root["trimStart"] = 500.0;

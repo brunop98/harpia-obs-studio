@@ -48,6 +48,7 @@
 #include "PreviewDecoder.hpp"
 #include "PreviewRenderWarning.hpp"
 #include "ProjectPaths.hpp"
+#include "ProjectAssets.hpp"
 #include "RecentProjects.hpp"
 #include "ProxyMedia.hpp"
 #include "LevelMeter.hpp"
@@ -413,6 +414,18 @@ ProjectRead readProjectFile(const QString &path)
 	if (error.error != QJsonParseError::NoError || !doc.isObject() ||
 	    !doc.object().contains(QStringLiteral("harpiaProject")))
 		return {{}, QStringLiteral("This is not a valid Harpia project file.")};
+	const QJsonValue version = doc.object().value(QStringLiteral("harpiaProject"));
+	if (!version.isDouble() || version.toDouble() < 1.0 ||
+	    std::floor(version.toDouble()) != version.toDouble())
+		return {{}, QStringLiteral("This is not a valid Harpia project version.")};
+	if (version.toDouble() > 3.0)
+		return {{}, QStringLiteral("This project requires a newer version of Harpia. "
+					  "Update Harpia before opening it to preserve its settings.")};
+	for (const char *section : {"sources", "tracks", "segments", "voiceovers", "markers", "tags", "soundRules"}) {
+		const QJsonValue value = doc.object().value(QLatin1String(section));
+		if (!value.isUndefined() && !value.isArray())
+			return {{}, QStringLiteral("The project's \"%1\" section is not valid.").arg(QLatin1String(section))};
+	}
 	return {doc.object(), {}};
 }
 } // namespace
@@ -2702,7 +2715,8 @@ EditorSource *VideoEditorWindow::sourceByPath(const QString &path)
 		return nullptr;
 	const QString want = QFileInfo(path).absoluteFilePath();
 	for (auto &s : sources_)
-		if (QFileInfo(s.path).absoluteFilePath() == want)
+		if (!s.missing && (QFileInfo(s.path).absoluteFilePath() == want ||
+			(!s.origPath.isEmpty() && QFileInfo(s.origPath).absoluteFilePath() == want)))
 			return &s;
 	return nullptr;
 }
@@ -2784,6 +2798,7 @@ int VideoEditorWindow::addSource(const QString &path)
 	src.durationMs = seeker->durationMs();
 	src.width = seeker->width();
 	src.height = seeker->height();
+	src.fps = seeker->fps();
 	const QString codecName = seeker->codecName();
 	src.seeker = std::move(seeker);
 	const int id = src.id;
@@ -2872,6 +2887,13 @@ void VideoEditorWindow::setActiveSource(int id)
 		multiCutSourceCombo_->setCurrentIndex(multiCutSourceCombo_->findData(id));
 	}
 	tracks_->setActiveSource(id);
+	if (s->missing) {
+		lastPreviewRaw_ = QImage();
+		canvas_->setFrame(QImage());
+		shownSource_ = -1;
+		shownMs_ = -1;
+		shownExact_ = true;
+	}
 	// Simple Trim exports the active source at its own resolution, so the
 	// preview is that source. Multi-Cut assembles everything into ONE output
 	// sized from the primary, and re-shaping the canvas to whichever source was
@@ -2883,7 +2905,7 @@ void VideoEditorWindow::setActiveSource(int id)
 	tracks_->setDuration(s->durationMs);
 	timeline_->setThumbs(s->thumbCache);
 	tracks_->setThumbs(s->thumbCache);
-	baseInfo_ = QStringLiteral("%1 × %2   %3s")
+	baseInfo_ = s->missing ? QStringLiteral("Missing media — %1").arg(s->name) : QStringLiteral("%1 × %2   %3s")
 			    .arg(s->width)
 			    .arg(s->height)
 			    .arg(s->durationMs / 1000.0, 0, 'f', 1);
@@ -2907,9 +2929,9 @@ void VideoEditorWindow::refreshMultiCutSources()
 	QSignalBlocker b(multiCutSourceCombo_);
 	multiCutSourceCombo_->clear();
 	for (const EditorSource &s : sources_) {
-		if (!s.seeker)
+		if (!s.seeker && !(s.missing && sourceKindFor(s.path) == SourceKind::Video))
 			continue; // images and audio have no video timeline to cut from
-		multiCutSourceCombo_->addItem(s.name, s.id);
+		multiCutSourceCombo_->addItem(s.missing ? QStringLiteral("Missing — %1").arg(s.name) : s.name, s.id);
 		multiCutSourceCombo_->setItemData(multiCutSourceCombo_->count() - 1, s.path, Qt::ToolTipRole);
 	}
 	multiCutSourceCombo_->setCurrentIndex(multiCutSourceCombo_->findData(activeSourceId_));
@@ -2926,7 +2948,7 @@ void VideoEditorWindow::refreshSourceList()
 	for (const EditorSource &s : sources_) {
 		auto *item = new QListWidgetItem(
 			QStringLiteral("%1\n%2s · %3×%4")
-				.arg(s.name)
+				.arg(s.missing ? QStringLiteral("Missing — %1").arg(s.name) : s.name)
 				.arg(s.durationMs / 1000.0, 0, 'f', 1)
 				.arg(s.width)
 				.arg(s.height));
@@ -3887,7 +3909,7 @@ SoundInfo VideoEditorWindow::soundInfoFor(int sourceId)
 {
 	SoundInfo si;
 	EditorSource *s = sourceById(sourceId);
-	if (!s)
+	if (!s || s->missing)
 		return si;
 	const qint64 duration = s->durationMs;
 	const QString wav = audioProxyFor(sourceId);
@@ -5049,6 +5071,8 @@ double VideoEditorWindow::timelineFps() const
 	// like the canvas size does.
 	if (projFps_ >= 1.0)
 		return projFps_;
+	if (!sources_.empty() && sources_.front().fps >= 1.0)
+		return sources_.front().fps;
 	if (!sources_.empty() && sources_.front().seeker && sources_.front().seeker->fps() > 1.0)
 		return sources_.front().seeker->fps();
 	return 30.0;
@@ -6459,7 +6483,9 @@ void VideoEditorWindow::doAutosave()
 	const QFileInfo fi(projectPath_);
 	const QString side = fi.absolutePath() + QLatin1Char('/') + fi.completeBaseName() +
 			     QStringLiteral("_autosave.harpiaproj");
-	saveProjectTo(side, /*quiet=*/true);
+	const QString error = saveProjectTo(side, /*quiet=*/true);
+	if (!error.isEmpty())
+		qWarning("Project autosave failed for \"%s\": %s", qUtf8Printable(side), qUtf8Printable(error));
 	refreshProjectInspector();
 }
 
@@ -11212,8 +11238,13 @@ bool VideoEditorWindow::hasUnsavedEdits() const
 		return true;
 	if (voTrack_ && !voTrack_->isEmpty())
 		return true; // recorded narration would be lost
-	if (timelineView_ && !timelineView_->model().isEmpty())
-		return true; // Full-editing timeline in progress
+	if (timelineView_) {
+		const TimelineModel &model = timelineView_->model();
+		if (!model.isEmpty() || !model.tags.isEmpty() || !model.soundRules.isEmpty() ||
+		    !model.markers.isEmpty() || model.hasVideoEnd() ||
+		    (fullEdit() && !model.tracks.isEmpty()))
+			return true; // track layouts and timeline metadata are edits too
+	}
 	if (projCanvas_.isValid() || projFps_ >= 1.0)
 		return true; // a pinned output format is a decision worth keeping
 	return false;
@@ -12566,7 +12597,7 @@ QString VideoEditorWindow::voiceoverTempDir()
 	if (voTempDir_.isEmpty()) {
 		const QString base =
 			QDir::tempPath() + QStringLiteral("/harpia_voiceover_") +
-			QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss"));
+			QUuid::createUuid().toString(QUuid::WithoutBraces);
 		QDir().mkpath(base);
 		voTempDir_ = base;
 	}
@@ -13289,16 +13320,13 @@ void VideoEditorWindow::onSaveProjectAs()
 QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 {
 	const EditorSnapshot s = snapshot();
-	const QString projDir = QFileInfo(path).absolutePath();
-	const QString assetsRel = QFileInfo(path).completeBaseName() + QStringLiteral("_assets");
-	const QString assetsDir = projDir + QLatin1Char('/') + assetsRel;
+	project_assets::SaveTransaction assets(path);
 
 	QJsonObject root;
 	root[QStringLiteral("harpiaProject")] = 2; // v2: multiple sources
 	// Project metadata (shown in the Inspector's Project section).
-	if (!projectCreated_.isValid())
-		projectCreated_ = QDateTime::currentDateTime();
-	root[QStringLiteral("created")] = projectCreated_.toString(Qt::ISODate);
+	const QDateTime created = projectCreated_.isValid() ? projectCreated_ : QDateTime::currentDateTime();
+	root[QStringLiteral("created")] = created.toString(Qt::ISODate);
 	root[QStringLiteral("saved")] = QDateTime::currentDateTime().toString(Qt::ISODate);
 	if (!projectAuthor_.isEmpty())
 		root[QStringLiteral("author")] = projectAuthor_;
@@ -13313,20 +13341,45 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 		root[QStringLiteral("fps")] = projFps_;
 	// All sources (index by stable id; segments reference these ids).
 	QJsonArray srcArr;
+	QHash<int, QString> savedOwnedOriginals;
+	const QString currentAssets = projectPath_.isEmpty() ? QString()
+		: QDir(QFileInfo(projectPath_).absolutePath()).filePath(
+			QFileInfo(projectPath_).completeBaseName() + QStringLiteral("_assets"));
 	for (const EditorSource &es : sources_) {
 		QJsonObject so;
 		so[QStringLiteral("id")] = es.id;
 		// The original for an audio source, whose `path` is a session decode in
 		// a temp folder: saving that meant saving a file that would not exist
 		// the next time the project was opened.
-		so[QStringLiteral("path")] = QDir::toNativeSeparators(
-			es.origPath.isEmpty() ? es.path : es.origPath);
+		QString original = es.origPath.isEmpty() ? es.path : es.origPath;
+		// Full-editing microphone takes are media-pool sources, rather than
+		// VoiceoverTrack clips. Their originals still live in the session dir
+		// deleted on close, so preserve them alongside the other narration.
+		// Ordinary imported audio keeps its external original; its session WAV
+		// is only a decode cache and does not need a project-owned copy.
+		// A reopened project's own assets remain owned too: Save As/autosave
+		// must carry them to the new assets folder, with a relative reference.
+		// These app-owned originals are WAV narration. A user-imported image
+		// or video in the same directory must keep its own media classification.
+		const bool ownedWav = QFileInfo(original).suffix().compare(QStringLiteral("wav"), Qt::CaseInsensitive) == 0 &&
+			(project_assets::isWithinDirectory(original, voTempDir_) ||
+			 project_assets::isWithinDirectory(original, currentAssets));
+		if (ownedWav) {
+			QString relativePath;
+			if (const QString error = assets.voiceover(original, &relativePath); !error.isEmpty())
+				return error;
+			savedOwnedOriginals.insert(es.id, QDir(QFileInfo(path).absolutePath()).filePath(relativePath));
+			original = relativePath;
+		}
+		so[QStringLiteral("path")] = QDir::toNativeSeparators(original);
 		so[QStringLiteral("name")] = es.name;
 		if (!es.librarySlot.isEmpty())
 			so[QStringLiteral("librarySlot")] = es.librarySlot;
 		so[QStringLiteral("durationMs")] = double(es.durationMs);
 		so[QStringLiteral("width")] = es.width;
 		so[QStringLiteral("height")] = es.height;
+		if (std::isfinite(es.fps) && es.fps > 0.0)
+			so[QStringLiteral("fps")] = es.fps;
 		srcArr.append(so);
 	}
 	root[QStringLiteral("sources")] = srcArr;
@@ -13356,18 +13409,13 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 
 	// Copy each voiceover WAV into the project's assets folder so it's portable.
 	QJsonArray voArr;
-	if (!s.voiceClips.isEmpty())
-		QDir().mkpath(assetsDir);
-	bool copyOk = true;
 	for (int i = 0; i < s.voiceClips.size(); ++i) {
 		const VoiceoverClip &v = s.voiceClips[i];
-		const QString dstName = QStringLiteral("vo_%1.wav").arg(i, 3, 10, QLatin1Char('0'));
-		const QString dst = assetsDir + QLatin1Char('/') + dstName;
-		QFile::remove(dst);
-		if (!QFile::copy(v.path, dst))
-			copyOk = false;
+		QString relativePath;
+		if (const QString error = assets.voiceover(v.path, &relativePath); !error.isEmpty())
+			return error;
 		QJsonObject o;
-		o[QStringLiteral("file")] = assetsRel + QLatin1Char('/') + dstName;
+		o[QStringLiteral("file")] = relativePath;
 		o[QStringLiteral("outStart")] = double(v.outStartMs);
 		o[QStringLiteral("duration")] = double(v.durationMs);
 		o[QStringLiteral("srcStart")] = double(v.srcStartMs);
@@ -13409,11 +13457,18 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 	// is written with the clip that carries it. The reader still understands the
 	// old key and migrates it -- see applyProjectJson.
 
-	QFile f(path);
+	QSaveFile f(path);
 	if (!f.open(QIODevice::WriteOnly))
 		return QStringLiteral("Could not write the project file.");
-	f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-	f.close();
+	const QByteArray json = QJsonDocument(root).toJson(QJsonDocument::Indented);
+	if (f.write(json) != json.size()) {
+		f.cancelWriting();
+		return QStringLiteral("Could not write the complete project file.");
+	}
+	if (!f.commit())
+		return QStringLiteral("Could not finalize the project file.");
+	assets.retain();
+	projectCreated_ = created;
 
 	if (quiet) { // autosave sidecar — don't adopt it as the project file
 		// Save when closing also uses quiet mode, but writes the actual
@@ -13425,9 +13480,13 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 		return QString();
 	}
 	projectPath_ = path;
+	// Save As changes which assets directory this editor owns. Keep originals
+	// of the copied narration on that new project too; otherwise another Save
+	// would serialize an absolute reference back into the previous project.
+	for (EditorSource &source : sources_)
+		if (const auto saved = savedOwnedOriginals.constFind(source.id); saved != savedOwnedOriginals.cend())
+			source.origPath = saved.value();
 	rememberRecentProject(path);
-	if (!copyOk)
-		return QStringLiteral("Project saved, but some voiceover audio could not be copied.");
 	QMessageBox::information(this, QStringLiteral("Save project"), QStringLiteral("Project saved."));
 	return QString();
 }
@@ -13518,6 +13577,104 @@ QHash<QString, QVector<float>> VideoEditorWindow::decodePeaks(const QStringList 
 	return out;
 }
 
+void VideoEditorWindow::clearProjectMedia()
+{
+	if (previewTimer_)
+		previewTimer_->stop();
+	pendingMs_ = shownMs_ = -1;
+	pendingSource_ = shownSource_ = -1;
+	shownExact_ = true;
+	setHoverInspect(-1);
+	if (histTimer_)
+		histTimer_->stop();
+	history_.clear();
+	histIndex_ = -1;
+	histJustPushed_ = false;
+	clipboard_.clear();
+	trackClipboard_ = TlTrack();
+	haveTrackClipboard_ = false;
+	trackCopiedFrom_ = -1;
+	copySeq_ = trackCopySeq_ = 0;
+	if (audioPremixTimer_)
+		audioPremixTimer_->stop();
+	audioMixCancel_.store(true);
+	audioMixValid_ = false;
+	audioMixKeyBuilt_.clear();
+	startAudioWhenReady_ = false;
+	if (audioPreview_)
+		audioPreview_->clear();
+	if (soundPreview_)
+		soundPreview_->stop();
+	if (previewDecoder_)
+		previewDecoder_->clear();
+	if (proxyBuilder_)
+		proxyBuilder_->cancelAll();
+	// Source IDs intentionally remain monotonic: queued thumbnail/proxy
+	// completions from the old document can never name a new source.
+	for (const EditorSource &source : sources_) {
+		if (source.thumbs) {
+			disconnect(source.thumbs, nullptr, this, nullptr);
+			source.thumbs->deleteLater();
+		}
+		tracks_->setSourceThumbs(source.id, {}, 0);
+		timelineView_->setSourceThumbs(source.id, {}, 0);
+	}
+	seeker_ = nullptr;
+	activeSourceId_ = -1;
+	sources_.clear();
+	inPath_.clear();
+	stillImages_.clear();
+	stillSizes_.clear();
+	stillPreview_.clear();
+	stillPreviewFor_ = QSize();
+	audioProxy_.clear();
+	soundPeaks_.clear();
+	randomClipPeaks_.clear();
+	playSeekers_.clear();
+	playbackPath_.clear();
+	pendingPlaybackProxy_.clear();
+	proxyProgress_.clear();
+	proxyPending_.clear();
+	proxied_.clear();
+	updateProxyStatus();
+	invalidatePreviewCache();
+	lastPreviewRaw_ = QImage();
+	canvas_->setFrame(QImage());
+	tracks_->setSegments({});
+	tracks_->setDuration(0);
+	tracks_->setThumbs({});
+	timeline_->setDuration(0);
+	timeline_->setThumbs({});
+	timelineView_->setModel(TimelineModel());
+	timelineView_->setPlayhead(0);
+	timelineSeeded_ = false;
+	voTrack_->setClips({});
+	refreshSourceList();
+}
+
+int VideoEditorWindow::addMissingProjectSource(const QJsonObject &source, const QString &path)
+{
+	EditorSource missing;
+	missing.id = nextSourceId_++;
+	missing.path = path;
+	missing.name = source.value(QStringLiteral("name")).toString(QFileInfo(path).fileName());
+	if (missing.name.isEmpty())
+		missing.name = QStringLiteral("Missing source %1").arg(source.value(QStringLiteral("id")).toInt());
+	missing.librarySlot = source.value(QStringLiteral("librarySlot")).toString();
+	missing.durationMs = std::max<qint64>(0, qint64(source.value(QStringLiteral("durationMs")).toDouble()));
+	missing.width = std::max(0, source.value(QStringLiteral("width")).toInt());
+	missing.height = std::max(0, source.value(QStringLiteral("height")).toInt());
+	missing.fps = source.value(QStringLiteral("fps")).toDouble();
+	missing.missing = true;
+	const int id = missing.id;
+	if (inPath_.isEmpty())
+		inPath_ = path;
+	if (!loadFailures_.contains(missing.name))
+		loadFailures_.append(missing.name);
+	sources_.push_back(std::move(missing));
+	return id;
+}
+
 void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString &path, bool quiet,
 					 bool showSuccess)
 {
@@ -13538,13 +13695,16 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	loadFailures_.clear();
 
 	const int ver = root.value(QStringLiteral("harpiaProject")).toInt(1);
+	const bool replaceMedia = ver >= 2;
+	if (replaceMedia)
+		clearProjectMedia();
 
 	// v2 projects carry their own list of sources — open (or relink) each and
 	// map its saved id onto the editor's live source id. v1 projects (single
 	// source) fall back to the primary source and the "different file" hint.
 	QHash<int, int> srcMap; // project source id -> editor source id
 	int defaultSrcId = sources_.empty() ? 0 : sources_.front().id;
-	if (ver >= 2 && root.value(QStringLiteral("sources")).isArray()) {
+	if (replaceMedia) {
 		// Which sources anything actually USES. A project can list a source no
 		// clip refers to -- delete the last clip that used a file and the entry
 		// stays -- and stopping the whole load to hunt for a file nothing needs
@@ -13557,8 +13717,10 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 				const QJsonObject co = cv.toObject();
 				const QString cty = co.value(QStringLiteral("type")).toString();
 				// A caption carries a source id it never reads.
-				if (cty != QLatin1String("text"))
+				if (cty != QLatin1String("text") && cty != QLatin1String("effect"))
 					used.insert(co.value(QStringLiteral("source")).toInt());
+				for (const QJsonValue &option : co.value(QStringLiteral("clipOptions")).toArray())
+					used.insert(option.toObject().value(QStringLiteral("source")).toInt());
 			}
 		for (const QJsonValue &sv : root.value(QStringLiteral("segments")).toArray())
 			used.insert(sv.toObject().value(QStringLiteral("source")).toInt());
@@ -13577,6 +13739,11 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 			const QJsonObject so = jv.toObject();
 			const int pid = so.value(QStringLiteral("id")).toInt();
 			QString spath = so.value(QStringLiteral("path")).toString();
+			const bool foreignAbsolute = (spath.size() >= 3 && spath[0].isLetter() &&
+				spath[1] == QLatin1Char(':') && (spath[2] == QLatin1Char('/') || spath[2] == QLatin1Char('\\'))) ||
+				spath.startsWith(QStringLiteral("\\\\"));
+			if (!spath.isEmpty() && !foreignAbsolute && QDir::isRelativePath(spath))
+				spath = QDir(QFileInfo(path).absolutePath()).absoluteFilePath(spath);
 			const QString sname = so.value(QStringLiteral("name")).toString();
 			// A library slot plays whatever file the slot has NOW, on this
 			// machine: that is how swapping a slot reaches old projects.
@@ -13584,6 +13751,10 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 				const int sid = librarySoundSource(slot);
 				if (sid >= 0) {
 					srcMap.insert(pid, sid);
+					if (first) {
+						defaultSrcId = sid;
+						first = false;
+					}
 					continue;
 				}
 			}
@@ -13639,7 +13810,21 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 				case SourceKind::Video: eid = addSource(spath); break;
 				}
 			}
+			if (eid < 0 && used.contains(pid))
+				eid = addMissingProjectSource(so, spath);
 			if (eid >= 0) {
+				// Embedded media filenames need not be their human names. The
+				// first declaration of a decoded path owns its label; a later
+				// alias of the same file must not rename that shared source.
+				if (!known)
+					if (EditorSource *loaded = sourceById(eid)) {
+						if (!sname.isEmpty())
+							loaded->name = sname;
+						// An unconfigured library slot can still open its saved
+						// fallback file. Keep the binding for when that slot is
+						// configured later or the project returns to its machine.
+						loaded->librarySlot = so.value(QStringLiteral("librarySlot")).toString();
+					}
 				srcMap.insert(pid, eid);
 				if (first) {
 					defaultSrcId = eid;
@@ -13647,6 +13832,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 				}
 			}
 		}
+		refreshSourceList();
 	} else {
 		const QString projSourceName = root.value(QStringLiteral("sourceName")).toString();
 		if (!quiet && !projSourceName.isEmpty() &&
@@ -13663,6 +13849,16 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 		}
 	}
 
+	const auto mapSource = [&](int projectId) {
+		if (!replaceMedia)
+			return defaultSrcId;
+		if (srcMap.contains(projectId))
+			return srcMap.value(projectId);
+		// A dangling reference still must never become an unrelated video.
+		const int id = addMissingProjectSource(QJsonObject{{QStringLiteral("id"), projectId}}, QString());
+		srcMap.insert(projectId, id);
+		return id;
+	};
 	loadingTotal_ = 0;
 	loading.stage(QStringLiteral("Preparing timeline…"), path);
 	EditorSnapshot s;
@@ -13687,7 +13883,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 		// Remap the project's source id onto the live editor source (v1 has no
 		// per-segment source → the primary).
 		const int pid = o.value(QStringLiteral("source")).toInt(defaultSrcId);
-		c.sourceId = srcMap.isEmpty() ? defaultSrcId : srcMap.value(pid, defaultSrcId);
+		c.sourceId = mapSource(pid);
 		s.segments.push_back(c);
 	}
 	const QString projDir = QFileInfo(path).absolutePath();
@@ -13712,13 +13908,14 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	// onto whatever those files became in this session's media pool.
 	for (TlTrack &t : s.timeline.tracks)
 		for (TlClip &c : t.clips) {
-			c.sourceId = srcMap.isEmpty() ? defaultSrcId : srcMap.value(c.sourceId, defaultSrcId);
+			c.sourceId = (c.type == TlClip::Type::Video || c.type == TlClip::Type::Image)
+				? mapSource(c.sourceId) : srcMap.value(c.sourceId, defaultSrcId);
 			// A Random clip's other choices name files the same way.
 			for (TlClipOption &o : c.clipOptions)
-				o.sourceId = srcMap.isEmpty() ? defaultSrcId : srcMap.value(o.sourceId, defaultSrcId);
+				o.sourceId = mapSource(o.sourceId);
 		}
 	for (TlSoundRule &r : s.timeline.soundRules)
-		r.sourceId = srcMap.isEmpty() ? r.sourceId : srcMap.value(r.sourceId, 0);
+		r.sourceId = replaceMedia ? mapSource(r.sourceId) : r.sourceId;
 
 	// Waveforms are a derived cache, so they are not stored in the project — but
 	// they DO have to be rebuilt, or an audio clip reopens as a blank bar. Every
@@ -13862,9 +14059,10 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	int activeSrc = defaultSrcId;
 	if (root.contains(QStringLiteral("activeSource"))) {
 		const int pid = root.value(QStringLiteral("activeSource")).toInt();
-		if (srcMap.contains(pid))
-			activeSrc = srcMap.value(pid);
+		if (replaceMedia)
+			activeSrc = mapSource(pid);
 	}
+	refreshSourceList();
 	loading.stage(QStringLiteral("Restoring timeline…"), path);
 	setActiveSource(activeSrc);
 	restoreSnapshot(s);
@@ -13903,7 +14101,8 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 
 	// Open in the mode the project was saved in; older projects say nothing,
 	// and are opened in the mode their contents suggest.
-	if (!s.timeline.isEmpty())
+	if (!s.timeline.isEmpty() || root.contains(QStringLiteral("tracks")) ||
+	    root.value(QStringLiteral("editMode")).toString() == QLatin1String("full"))
 		timelineSeeded_ = true; // don't seed over the loaded timeline
 	const QString savedMode = root.value(QStringLiteral("editMode")).toString();
 	EditMode want = mode();
@@ -13919,12 +14118,12 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 		want = EditMode::MultiCut;
 	if (want != mode())
 		setEditMode(want);
-	captureSnapshot(); // make the load an undo step
-	updateUndoRedoButtons();
 
 	// A loaded project IS a working editor, whatever state this window was in
 	// before -- including the one where its launch file would not open.
 	valid_ = true;
+	captureSnapshot(); // the loaded document starts its own undo history
+	updateUndoRedoButtons();
 	rememberRecentProject(path);
 	// And the project may have brought in no SOURCES at all: a caption, a
 	// still or an effect needs none. updateEmptyState was only ever reached
@@ -13941,6 +14140,8 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	updateInspector();
 	if (fullEdit())
 		showTimelineFrame(timelinePlayheadMs());
+	else
+		showPlayheadFrame();
 	loading.hide();
 	if (!quiet) {
 		// One message, whatever went wrong, and only once the editor is whole
@@ -13956,7 +14157,8 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 				this, QStringLiteral("Open project"),
 				QStringLiteral("The project opened, but %1 of its files could not "
 					       "be read:\n\n%2\n\nIts clips are still on the "
-					       "timeline. Use Add video to relink them.")
+					       "timeline. Restore the files at their original locations, or reopen "
+					       "the project and locate them when prompted.")
 					.arg(loadFailures_.size())
 					.arg(loadFailures_.join(QStringLiteral("\n"))));
 		}
@@ -15118,6 +15320,14 @@ void VideoEditorWindow::showFrame(int sourceId, qint64 ms)
 	previewRenderWarning_->clearFailure();
 	if (!sourceById(sourceId))
 		sourceId = activeSourceId_; // fall back to the active source
+	if (const EditorSource *source = sourceById(sourceId); source && source->missing) {
+		lastPreviewRaw_ = QImage();
+		canvas_->setFrame(QImage());
+		shownSource_ = sourceId;
+		shownMs_ = ms;
+		shownExact_ = true;
+		return;
+	}
 	// Trim / Multi-Cut show one source frame; the same quality setting applies,
 	// against the 720p these modes have always previewed at.
 	//
@@ -15160,7 +15370,7 @@ void VideoEditorWindow::showFrame(int sourceId, qint64 ms)
 // refer to the original file, which is the only one that will be encoded.
 void VideoEditorWindow::onProxyReady(int sourceId, const QString &proxyPath)
 {
-	if (!previewDecoder_)
+	if (!previewDecoder_ || !sourceById(sourceId))
 		return;
 	previewDecoder_->setProxy(sourceId, proxyPath);
 	proxyProgress_.remove(sourceId);

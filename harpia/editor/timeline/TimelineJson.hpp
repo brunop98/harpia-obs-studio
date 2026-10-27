@@ -268,8 +268,11 @@ inline QJsonObject clipToJson(const TlClip &c)
 		tx[QStringLiteral("text")] = c.text.text; // the words travel with the clip
 		if (!c.text.variations.isEmpty())
 			tx[QStringLiteral("variations")] = QJsonArray::fromStringList(c.text.variations);
-		if (c.text.random)
-			tx[QStringLiteral("random")] = true;
+		// A plain caption can retain alternatives without participating in
+		// variation exports. Older files omitted this flag, so the reader still
+		// infers Random Text from alternatives only when the flag is absent.
+		if (c.text.random || !c.text.variations.isEmpty())
+			tx[QStringLiteral("random")] = c.text.random;
 		if (!c.words.isEmpty()) {
 			QJsonArray wa;
 			for (const ClipWordTime &w : c.words) {
@@ -674,9 +677,12 @@ inline void timelineToProject(const TimelineModel &m, QJsonObject &root)
 	root.remove(QStringLiteral("markers"));
 	root.remove(QStringLiteral("markerLabels"));
 	root.remove(QStringLiteral("videoEndMs"));
+	root.remove(QStringLiteral("tracks"));
+	root.remove(QStringLiteral("tags"));
+	root.remove(QStringLiteral("soundRules"));
 	// Tags and sound rules count too: a project set up before any clip is on
 	// it keeps its tag list.
-	if (m.isEmpty() && m.tags.isEmpty() && m.soundRules.isEmpty() && m.markers.isEmpty() && !m.hasVideoEnd())
+	if (m.tracks.isEmpty() && m.tags.isEmpty() && m.soundRules.isEmpty() && m.markers.isEmpty() && !m.hasVideoEnd())
 		return;
 	QJsonArray trackArr;
 	for (const TlTrack &t : m.tracks)

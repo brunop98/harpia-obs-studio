@@ -158,6 +158,8 @@ struct EditorSource {
 	qint64 durationMs = 0;
 	int width = 0;
 	int height = 0;
+	double fps = 0.0; // original video rate, retained when media is unavailable
+	bool missing = false; // project reference retained without a decoded source
 	std::unique_ptr<FrameSeeker> seeker;
 	TimelineThumbs *thumbs = nullptr; // parented to the window
 	QVector<QImage> thumbCache;       // last emitted filmstrip
@@ -1128,6 +1130,8 @@ private:
 	// question and the "Project loaded" confirmation. openProjectAt() is quiet.
 	void applyProjectJson(const QJsonObject &root, const QString &path, bool quiet,
 			      bool showSuccess = true);
+	void clearProjectMedia();
+	int addMissingProjectSource(const QJsonObject &source, const QString &path);
 	// Waveform peaks for many files at once, on every core. See the .cpp:
 	// loadPeaks is a pure function of its path, so the calls are independent.
 	static QHash<QString, QVector<float>> decodePeaks(const QStringList &paths);

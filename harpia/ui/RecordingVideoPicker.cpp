@@ -24,6 +24,7 @@
 #include <QPushButton>
 #include <QProgressBar>
 #include <QScrollBar>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QTabBar>
@@ -41,6 +42,7 @@ constexpr int kModifiedRole = Qt::UserRole + 1;
 constexpr int kSizeRole = Qt::UserRole + 2;
 constexpr int kNameRole = Qt::UserRole + 3;
 constexpr const char *kOrderProperty = "recordingVideoSortKey";
+const QString kTabSetting = QStringLiteral("editor/videoPickerTab");
 
 QString scanPathKey(const QString &path)
 {
@@ -123,6 +125,16 @@ RecordingVideoPicker::RecordingVideoPicker(const QStringList &libraryFolders, QW
 	tabs_->addTab(QStringLiteral("Harpia Editor"));
 	tabs_->addTab(QStringLiteral("Downloads"));
 	tabs_->addTab(QStringLiteral("Videos"));
+	tabs_->setTabData(0, QStringLiteral("recordings"));
+	tabs_->setTabData(1, QStringLiteral("downloads"));
+	tabs_->setTabData(2, QStringLiteral("videos"));
+	const QString lastTab = QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+		.value(kTabSetting, QStringLiteral("recordings")).toString();
+	for (int tab = 0; tab < tabs_->count(); ++tab)
+		if (tabs_->tabData(tab).toString() == lastTab) {
+			tabs_->setCurrentIndex(tab);
+			break;
+		}
 	orderBy_ = new QComboBox(this);
 	orderBy_->setObjectName(QStringLiteral("recordingVideoOrderBy"));
 	orderBy_->setAccessibleName(QStringLiteral("Order by"));
@@ -206,7 +218,13 @@ RecordingVideoPicker::RecordingVideoPicker(const QStringList &libraryFolders, QW
 	footer->addWidget(buttons);
 	layout->addLayout(footer);
 
-	connect(tabs_, &QTabBar::currentChanged, this, [this]() { startScan(); });
+	connect(tabs_, &QTabBar::currentChanged, this, [this](int tab) {
+		if (tab < 0)
+			return;
+		QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"))
+			.setValue(kTabSetting, tabs_->tabData(tab));
+		startScan();
+	});
 	connect(orderBy_, &QComboBox::currentIndexChanged, this, [this]() { sortVideos(); });
 	connect(&scanner_, &VideoFolderScanner::batchReady, this, &RecordingVideoPicker::appendVideos);
 	connect(&scanner_, &VideoFolderScanner::progress, this, [this](qint64) { updateRecordingCount(); });

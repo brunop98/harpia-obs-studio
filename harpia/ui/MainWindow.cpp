@@ -3492,6 +3492,7 @@ void MainWindow::setRecordingRegionLocked(bool locked)
 	if (floatingControls_)
 		floatingControls_->setFollowPaused(false);
 	writeMarker(locked ? QStringLiteral("Recording Area Locked") : QStringLiteral("Recording Area Unlocked"));
+	updateRegionToolVisibility();
 	updateFloatingControls();
 }
 
@@ -4055,7 +4056,9 @@ void MainWindow::updateRegionToolVisibility()
 	// could change it -- editing the preset, switching preset, switching capture
 	// mode, startup, the 250 ms tick -- ends up here. The setter early-returns
 	// when nothing changed, so the tick costs nothing.
-	regionTool_->setMoveHandleEnabled(activePreset().regionMoveHandle);
+	// Locking stops the automatic chase, while this temporary grip lets the
+	// user place the held area without changing the profile or its frame size.
+	regionTool_->setMoveHandleEnabled(activePreset().regionMoveHandle || regionFollowLocked_);
 	regionTool_->setMode(st.mode);
 	// Never steals the foreground: showing an always-on-top window normally
 	// activates it, which would yank focus off whatever the user just clicked

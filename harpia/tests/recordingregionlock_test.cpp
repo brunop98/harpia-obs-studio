@@ -114,6 +114,7 @@ int main(int argc, char **argv)
 		profile.followSmoothness = 0;
 		profile.followPaddingPct = 0;
 		profile.followAxis = 0;
+		profile.regionMoveHandle = false;
 		profile.idleTimeoutSeconds = 0;
 		profile.regionLeavePauseSeconds = 0;
 		presets.upsert(profile);
@@ -249,6 +250,59 @@ int main(int argc, char **argv)
 		check(!window.regionFollowLocked_ && window.followMouse_.armed() && window.followTimer_->isActive(),
 		      "the next take follows normally rather than inheriting a previous lock");
 		window.followTimer_->stop();
+
+		// Locking pauses the automatic chase, not deliberate positioning. A
+		// temporary move tab must be available even if the profile hides it.
+		RegionTool *frame = window.regionTool_.get();
+		frame->setScreen(screen);
+		frame->setRegionDevicePx(QRect(100, 100, 200, 140));
+		window.updateFloatingControls();
+		lock->click();
+		check(window.regionFollowLocked_ && frame->moveHandleEnabled() &&
+		      frame->mode() == RegionTool::Mode::Recording && frame->isVisible(),
+		      "locking exposes a move tab immediately even when the profile disables it");
+		const CaptureRegion positioned = window.currentRegion_;
+		const QPoint tab = frame->moveHandleRect().center();
+		const double dpr = screen->devicePixelRatio();
+		const QPoint interior = frame->mapFromGlobal(screenOrigin +
+			QPoint(int((positioned.x + positioned.width / 2) / dpr),
+			       int((positioned.y + positioned.height / 2) / dpr)));
+		check(frame->mask().contains(tab) && !frame->mask().contains(interior),
+		      "the move tab takes input while the recording interior stays click-through");
+		const QPoint start = frame->mapToGlobal(tab);
+		const QPoint delta(60, 45);
+		const QPoint end = start + delta;
+		QMouseEvent press(QEvent::MouseButtonPress, QPointF(tab), QPointF(start),
+			Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+		QApplication::sendEvent(frame, &press);
+		QMouseEvent move(QEvent::MouseMove, QPointF(frame->mapFromGlobal(end)), QPointF(end),
+			Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+		QApplication::sendEvent(frame, &move);
+		QMouseEvent release(QEvent::MouseButtonRelease, QPointF(frame->mapFromGlobal(end)), QPointF(end),
+			Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+		QApplication::sendEvent(frame, &release);
+		const CaptureRegion placed = window.currentRegion_;
+		check(placed.x == positioned.x + int(std::lround(delta.x() * dpr)) &&
+		      placed.y == positioned.y + int(std::lround(delta.y() * dpr)) &&
+		      placed.width == positioned.width && placed.height == positioned.height &&
+		      window.capture_.region_ == placed,
+		      "dragging a locked frame moves the live crop without changing the recording dimensions");
+		QCursor::setPos(farCorner);
+		for (int tick = 0; tick < 20; ++tick)
+			window.tickFollowMouse();
+		window.syncFollowMouse();
+		window.updateRegionToolVisibility();
+		window.updateFloatingControls();
+		check(window.currentRegion_ == placed && window.capture_.region_ == placed &&
+		      window.regionFollowLocked_ && lock->isChecked() && !window.followTimer_->isActive(),
+		      "after manual placement the area remains locked at its new position");
+		lock->click();
+		window.followTimer_->stop();
+		check(!window.regionFollowLocked_ && !frame->moveHandleEnabled() &&
+		      window.followMouse_.region() == placed && window.currentRegion_ == placed,
+		      "unlocking restores the profile's handle setting and resumes from the newly placed area");
+		check(window.activePreset() == profile,
+		      "the temporary locked-area move handle never changes the saved profile");
 		check(endTake(window), "the second test take also stops cleanly");
 	}
 	std::printf("%d failures\n", failures);

@@ -297,7 +297,8 @@ void RecorderControlsOverlay::updateRegionLockAppearance()
 	regionLockButton_->setAccessibleName(locked ? QStringLiteral("Unlock recording area")
 						  : QStringLiteral("Lock recording area"));
 	regionLockButton_->setToolTip(locked
-		? QStringLiteral("Recording area locked in place. Click to unlock and resume following the mouse.")
+		? QStringLiteral("Mouse following is locked. Drag the grip above the recording area to reposition it. "
+				 "Click to unlock and resume following the mouse.")
 		: QStringLiteral("Lock the recording area at its current position while you move the mouse."));
 }
 

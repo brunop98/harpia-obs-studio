@@ -63,6 +63,9 @@ Three modes, each one step up from the last:
 - **Full Editing** — a multi-track timeline:
   - video, image, text, effect and audio clips; overlapping clips become
     **transitions**; marquee selection, groups, ripple, snapping;
+  - **Add → Add from Library…** opens your recorded videos beside the current
+    project. Drag a recording onto a timeline lane, or double-click to add it
+    at the playhead;
   - **markers** in the ruler above the tracks: double-click to add one,
     drag to move it, or right-click to rename/delete it. Named markers draw
     dotted guides across every track and provide snap points. Drag the

@@ -354,6 +354,7 @@ private slots:
 	void onSourceRowChanged();   // sidebar selection → setActiveSource
 	void onSourceDoubleClicked(QListWidgetItem *item); // append whole clip as a cut
 	void onRemoveSource();       // remove the selected source (if unused)
+	void openRecordingLibrary(); // Add > Add from Library (Full editing only)
 	void refreshLibrary();       // rescan the library folders into the Library tab
 	void onLibraryDoubleClicked(QListWidgetItem *item); // add a library clip as a source
 	void onThumbReady(const QString &path);             // library thumbnail decoded
@@ -632,6 +633,7 @@ private:
 	// The Add menu (Full editing): one button, everything that puts something
 	// new on the timeline as its entries.
 	QPushButton *addMenuBtn_ = nullptr;
+	QAction *addLibraryAct_ = nullptr;
 	QAction *addTextAct_ = nullptr;
 	QAction *addRandomTextAct_ = nullptr;
 	QAction *subtitleAct_ = nullptr;
@@ -727,6 +729,7 @@ private:
 	int nextSourceId_ = 0;
 	QListWidget *sourceList_ = nullptr;      // "Sources" tab of the floating panel
 	QListWidget *libraryList_ = nullptr;     // "Library" tab (existing recordings)
+	QTabWidget *sourcesTabs_ = nullptr;
 	QStringList libraryFolders_;             // app recording folders to scan
 	ThumbnailCache *thumbCache_ = nullptr;   // async thumbnails for the Library tab
 	QWidget *sourcesPanel_ = nullptr;        // floating, toggleable tool window

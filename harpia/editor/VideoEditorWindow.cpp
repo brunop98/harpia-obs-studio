@@ -1250,11 +1250,19 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// place to go when you want more on the timeline, and leaves the row room
 	// for the controls you use while editing what is already there.
 	addMenuBtn_ = new QPushButton(QStringLiteral("Add  \u25BE"), this);
-	addMenuBtn_->setToolTip(QStringLiteral("Put something new on the timeline: text, subtitles, "
+	addMenuBtn_->setToolTip(QStringLiteral("Put something new on the timeline: a library recording, text, subtitles, "
 						"audio, an image, an effect clip"));
 	addMenuBtn_->setVisible(false); // Full editing only
 	auto *addMenu = new QMenu(addMenuBtn_);
 	addMenu->setToolTipsVisible(true);
+	addLibraryAct_ = addMenu->addAction(QStringLiteral("Add from Library…"));
+	addLibraryAct_->setObjectName(QStringLiteral("addFromLibraryAction"));
+	addLibraryAct_->setVisible(false); // Full editing only, including the shared menubar entry
+	addLibraryAct_->setToolTip(QStringLiteral(
+		"Open your recorded videos. Drag a recording onto a timeline lane, or double-click "
+		"to add it at the playhead in this project."));
+	connect(addLibraryAct_, &QAction::triggered, this, &VideoEditorWindow::openRecordingLibrary);
+	addMenu->addSeparator();
 	addTextAct_ = addMenu->addAction(QStringLiteral("Text"));
 	addTextAct_->setToolTip(
 		QStringLiteral("Add a text clip at the playhead (font, colour, outline and background "
@@ -2005,6 +2013,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	sideLayout->setContentsMargins(8, 8, 8, 8);
 	sideLayout->setSpacing(6);
 	auto *srcTabs = new QTabWidget(sourcesPanel_);
+	sourcesTabs_ = srcTabs;
+	srcTabs->setObjectName(QStringLiteral("editorSourcesTabs"));
 
 	// Tab 1 — "Sources": the videos currently loaded into this edit.
 	auto *usedTab = new QWidget(srcTabs);
@@ -2038,6 +2048,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	libLayout->setContentsMargins(0, 6, 0, 0);
 	libLayout->setSpacing(6);
 	libraryList_ = new UrlDragList(libTab);
+	libraryList_->setObjectName(QStringLiteral("editorRecordingLibrary"));
 	libraryList_->setIconSize(QSize(128, 72));
 	libraryList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	libraryList_->setToolTip(QStringLiteral(
@@ -3038,6 +3049,17 @@ void VideoEditorWindow::onRemoveSource()
 			updateEmptyState(); // back to "Nothing loaded yet", correctly this time
 		}
 	}
+}
+
+void VideoEditorWindow::openRecordingLibrary()
+{
+	if (!fullEdit() || !sourcesTabs_ || !libraryList_)
+		return;
+	refreshLibrary(); // include recordings made since the editor was opened
+	sourcesTabs_->setCurrentWidget(libraryList_->parentWidget());
+	sourcesBtn_->setChecked(true);
+	showSourcesPanel(); // also raise it when the Sources toggle was already checked
+	libraryList_->setFocus(Qt::OtherFocusReason);
 }
 
 void VideoEditorWindow::refreshLibrary()
@@ -12013,6 +12035,8 @@ void VideoEditorWindow::setEditMode(EditMode m)
 	}
 	if (addMenuBtn_)
 		addMenuBtn_->setVisible(full); // the Add menu: text, subtitles, audio, image, effect clip
+	if (addLibraryAct_)
+		addLibraryAct_->setVisible(full);
 	for (QAction *a : fullOnlyActs_)
 		a->setEnabled(full); // greyed, not hidden: the menus keep their shape
 	const bool canShuffle = full || m == EditMode::MultiCut;

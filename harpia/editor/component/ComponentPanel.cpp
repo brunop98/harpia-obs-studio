@@ -42,6 +42,7 @@ struct ComponentPanel::Row {
 	QVector<QLabel *> labels;
 	QSpinBox *inMs = nullptr;  // ramp-in time; null on pinned rows
 	QSpinBox *outMs = nullptr;
+	QLabel *footer = nullptr;
 };
 
 namespace {
@@ -517,6 +518,19 @@ ComponentPanel::Row *ComponentPanel::makeRow(const QString &typeId, int ordinal,
 		bv->addLayout(form);
 	}
 
+	if (pinned) {
+		// Keep this widget even when empty so informational updates never
+		// rebuild the controls under the user's cursor or keyboard focus.
+		row->footer = new QLabel(row->box);
+		if (typeId == QStringLiteral("harpia.speed"))
+			row->footer->setObjectName(QStringLiteral("componentSpeedDuration"));
+		row->footer->setWordWrap(true);
+		row->footer->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+		row->footer->setStyleSheet(QStringLiteral("border:none; color:#9aa0a8; font-size:%1px;").arg(uiCaptionPx()));
+		row->footer->hide();
+		bv->addWidget(row->footer);
+	}
+
 	// In / Out ramp times, under the properties and above the actions. Every
 	// component gets these -- they are a property of BEING a component, like
 	// the enable box, not something a type opts into. Both 0 (the default)
@@ -735,8 +749,15 @@ void ComponentPanel::pushValues()
 	};
 	int n = 0;
 	for (const PinnedRow &p : view_.pinned)
-		if (n < rows_.size())
-			apply(rows_[n++], p.values, nullptr);
+		if (n < rows_.size()) {
+			Row *row = rows_[n++];
+			apply(row, p.values, nullptr);
+			if (row->footer) {
+				row->footer->setText(p.footer);
+				row->footer->setToolTip(p.footerToolTip);
+				row->footer->setVisible(!p.footer.isEmpty());
+			}
+		}
 	for (const SharedComponent &c : view_.shared)
 		if (n < rows_.size())
 			apply(rows_[n++], c.values, &c.enabled, &c.inMs, &c.outMs);

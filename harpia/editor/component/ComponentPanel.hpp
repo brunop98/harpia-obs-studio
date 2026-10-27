@@ -69,6 +69,8 @@ public:
 		QMap<QString, Mixed> values;
 		QStringList driven; // props a transform script is computing
 		QString drivenTip;
+		QString footer; // read-only information below the property controls
+		QString footerToolTip;
 	};
 
 	// One component the whole selection shares. `ordinal` tells the second Blur

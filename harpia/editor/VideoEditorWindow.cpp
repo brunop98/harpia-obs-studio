@@ -266,6 +266,15 @@ QString previewTimeText(qint64 ms)
 	return timeTextMs(ms);
 }
 
+QString speedDurationText(qint64 ms)
+{
+	// Round integer milliseconds to hundredths before formatting, avoiding
+	// floating-point midpoint surprises such as 615 ms displaying as 0.61s.
+	const qint64 hundredths = ms / 10 + (ms % 10 >= 5 ? 1 : 0);
+	return QStringLiteral("%1.%2s").arg(hundredths / 100)
+		.arg(hundredths % 100, 2, 10, QLatin1Char('0'));
+}
+
 // Speed control: 0.1×..50×, mapped exponentially onto the slider so each step
 // multiplies by a constant factor (fine control at low speeds, like CapCut).
 constexpr double kMinSpeed = 0.1;
@@ -7036,6 +7045,17 @@ ComponentPanel::View VideoEditorWindow::buildComponentView() const
 			sp.typeId = QStringLiteral("harpia.speed");
 			sp.values = {{QStringLiteral("factor"),
 				      gather(n, [&](int i) { return clips[i]->speed; })}};
+			qint64 originalMs = 0, outputMs = 0;
+			for (const TlClip *clip : clips) {
+				originalMs += clip->srcLenMs();
+				outputMs += clip->outDurationMs();
+			}
+			sp.footer = QStringLiteral("%1 > %2").arg(speedDurationText(originalMs), speedDurationText(outputMs));
+			if (n > 1)
+				sp.footer.prepend(QStringLiteral("Total: "));
+			sp.footerToolTip = n > 1
+				? QStringLiteral("Sum of the selected clips' individual durations at 1× speed > at their current speeds.")
+				: QStringLiteral("Duration of the kept source at 1× speed > duration at the current speed.");
 			v.pinned.append(sp);
 		}
 	}

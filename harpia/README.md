@@ -110,6 +110,8 @@ Three modes, each one step up from the last:
   - **components** stacked on any clip: transform and speed, ShaderToy-style
     **shaders** (`.frag`), **JavaScript** transform scripts, typing, subtitles,
     bullets and more — written in a watched folder and picked up live;
+    Speed shows the kept duration at 1× and the resulting duration below its
+    Factor control, updating as you adjust it (totals for multiple clips);
   - **effect diagnostics**: a nonmodal preview warning names a missing or
     failed custom shader; **Details…** shows a copyable report and recovery
     steps. Repeated frames log the same problem once. Exports refuse to

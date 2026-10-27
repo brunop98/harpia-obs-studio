@@ -74,6 +74,7 @@
 #include "component/ShaderComponent.hpp"
 #include "component/TransformScriptComponent.hpp"
 #include "shader/ShaderRenderer.hpp"
+#include "shader/ShaderPresets.hpp"
 #include "timeline/TimelineCompositor.hpp"
 #include "ShortcutPanel.hpp"
 #include "ShortcutRegistry.hpp"
@@ -15219,24 +15220,22 @@ QString VideoEditorWindow::shadersDirPath()
 		shadersDir_ = base + QStringLiteral("/harpia/shaders");
 	}
 	QDir().mkpath(shadersDir_);
-	// Seed the bundled shaders when missing so there are always examples to start
-	// from (per-file, so user edits are never overwritten and new bundled shaders
-	// arrive on the next launch after an update).
+	// Seed missing examples and update only recognized stock CRT versions.
+	// User edits remain theirs; missing resources never replace existing files.
+	QMap<QString, QByteArray> bundled;
 	for (const QString &name :
 	     {QStringLiteral("adjust"), QStringLiteral("crt"), QStringLiteral("grayscale"),
 	      QStringLiteral("vignette"), QStringLiteral("sharpen"), QStringLiteral("grain"),
 	      QStringLiteral("pixelate"), QStringLiteral("backdrop"), QStringLiteral("solid"),
 	      QStringLiteral("gradient"), QStringLiteral("huecycle"), QStringLiteral("coloroverlay")}) {
-		const QString dst = shadersDir_ + QLatin1Char('/') + name + QStringLiteral(".frag");
-		if (QFile::exists(dst))
-			continue;
 		QFile res(QStringLiteral(":/shaders/") + name + QStringLiteral(".frag"));
-		if (res.open(QIODevice::ReadOnly)) {
-			QFile out(dst);
-			if (out.open(QIODevice::WriteOnly))
-				out.write(res.readAll());
-		}
+		if (res.open(QIODevice::ReadOnly))
+			bundled.insert(name + QStringLiteral(".frag"), res.readAll());
 	}
+	const ShaderPresetSeedResult seeded = ensureDefaultShaderPresets(shadersDir_, bundled);
+	for (const QString &error : seeded.errors)
+		if (!componentErrors_.contains(error))
+			componentErrors_.append(error);
 	return shadersDir_;
 }
 

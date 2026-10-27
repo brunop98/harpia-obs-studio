@@ -431,6 +431,20 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -DHARPIA_SRC="\"$H\"" -I"$H" -I"$QJ
 	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/coloroverlay_test" "$QJSLIB/libqjs.a" $LF
 
+# CRT controls preserve brightness, transparency and preview/export rendering.
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -DHARPIA_SRC="\"$H\"" -I"$H" -I"$QJS" -I"$ROOT" $CF \
+	"$HERE/crt_test.cpp" "$H/editor/shader/GpuFxGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/component/ScriptComponent.cpp" "$H/editor/component/ShaderComponent.cpp" \
+	"$H/editor/shader/ShaderRenderer.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
+	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
+	-o "$WORK/crt_test" "$QJSLIB/libqjs.a" $LF
+g++ -std=c++17 -O1 -fPIC -I"$H" $(pkg-config --cflags Qt6Core) \
+	"$HERE/shaderpresets_test.cpp" -o "$WORK/shaderpresets_test" $(pkg-config --libs Qt6Core)
+
 # Effects as components: every FxType registered, rendering pixel-for-pixel
 # what the old path did, and an unmigrated project opening with its grade.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -1240,13 +1254,20 @@ QT_QPA_PLATFORM=offscreen "$WORK/windowpicker_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regiondraw_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/stillweight_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewcache_test" || rc=1
+crt_test_status=0
 if command -v xvfb-run >/dev/null 2>&1; then
 	QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 640x480x24" "$WORK/gpufx_test" || rc=1
 	QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 640x480x24" "$WORK/coloroverlay_test" || rc=1
+	QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 640x480x24" "$WORK/crt_test" || crt_test_status=$?
 else
 	QT_QPA_PLATFORM=offscreen "$WORK/gpufx_test" || rc=1
 	QT_QPA_PLATFORM=offscreen "$WORK/coloroverlay_test" || rc=1
+	QT_QPA_PLATFORM=offscreen "$WORK/crt_test" || crt_test_status=$?
 fi
+if [ "$crt_test_status" -ne 0 ] && [ "$crt_test_status" -ne 77 ]; then
+	rc=1
+fi
+"$WORK/shaderpresets_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/assetcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectarea_test" || rc=1

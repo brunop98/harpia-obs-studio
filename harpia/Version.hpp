@@ -4,10 +4,10 @@
 // Semantic versioning: Major.Minor.Patch. Bump on every meaningful update.
 // Referenced by the window title, startup log, Error Logs headers, and any
 // diagnostic export.
-// PATCH is bumped on every commit (see the version label in the window corner).
+// Bump PATCH with each meaningful application update (see AGENTS.md).
 #define HARPIA_VERSION_MAJOR 0
 #define HARPIA_VERSION_MINOR 1
-#define HARPIA_VERSION_PATCH 448
+#define HARPIA_VERSION_PATCH 500
 
 #define HARPIA_STRINGIFY_(x) #x
 #define HARPIA_STRINGIFY(x) HARPIA_STRINGIFY_(x)

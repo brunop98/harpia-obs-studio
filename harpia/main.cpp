@@ -158,6 +158,7 @@ int main(int argc, char *argv[])
 	// keep it. What people see is HARPIA_APP_DISPLAY_NAME (AppName.hpp).
 	QApplication::setApplicationName(QStringLiteral("Harpia Recorder"));
 	QApplication::setOrganizationName(QStringLiteral("Harpia"));
+	QApplication::setApplicationVersion(QStringLiteral(HARPIA_VERSION_STRING));
 	// Window/taskbar/Alt-Tab icon (all platforms). The Windows .exe icon itself
 	// comes from resources/harpia.rc compiled into the binary.
 	QApplication::setWindowIcon(QIcon(QStringLiteral(":/harpia.png")));

@@ -12,6 +12,7 @@
 #include "../ui/ExportProgressDialog.hpp"
 #include "../ui/LoadingDialog.hpp"
 #include "../ui/RecordingVideoPicker.hpp"
+#include "../ui/MediaFileDetailsDialog.hpp"
 #include "LoadingTask.hpp"
 #include <QScopedValueRollback>
 #include "../ui/ColorField.hpp"
@@ -2052,6 +2053,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	usedLayout->setContentsMargins(0, 6, 0, 0);
 	usedLayout->setSpacing(6);
 	sourceList_ = new UrlDragList(usedTab); // rows drag out as files, onto the timeline
+	sourceList_->setObjectName(QStringLiteral("editorProjectSources"));
+	sourceList_->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(sourceList_, &QListWidget::customContextMenuRequested, this,
+		[this](const QPoint &pos) { showSourceFileMenu(sourceList_, pos); });
 	sourceList_->setIconSize(QSize(128, 72));
 	sourceList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	sourceList_->setToolTip(QStringLiteral(
@@ -2079,6 +2084,9 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	libLayout->setSpacing(6);
 	libraryList_ = new UrlDragList(libTab);
 	libraryList_->setObjectName(QStringLiteral("editorRecordingLibrary"));
+	libraryList_->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(libraryList_, &QListWidget::customContextMenuRequested, this,
+		[this](const QPoint &pos) { showSourceFileMenu(libraryList_, pos); });
 	libraryList_->setIconSize(QSize(128, 72));
 	libraryList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	libraryList_->setToolTip(QStringLiteral(
@@ -3123,6 +3131,52 @@ void VideoEditorWindow::openRecordingLibrary()
 	sourcesBtn_->setChecked(true);
 	showSourcesPanel(); // also raise it when the Sources toggle was already checked
 	libraryList_->setFocus(Qt::OtherFocusReason);
+}
+
+void VideoEditorWindow::showSourceFileMenu(QListWidget *list, const QPoint &pos)
+{
+	const QListWidgetItem *item = list ? list->itemAt(pos) : nullptr;
+	if (!item)
+		return;
+	QString path = item->data(UrlDragList::PathRole).toString();
+	if (list == sourceList_)
+		if (const EditorSource *source = sourceById(item->data(Qt::UserRole).toInt()))
+			path = source->origPath.isEmpty() ? source->path : source->origPath;
+	if (path.isEmpty())
+		return;
+	// Copy the clicked path before the menu's event loop; selection or a
+	// refreshed Library list must never redirect an action to another video.
+	const QFileInfo file(path);
+	const QString folder = file.absolutePath();
+	QMenu menu(sourcesPanel_);
+	menu.setObjectName(QStringLiteral("editorMediaFileMenu"));
+	const bool audio = ClipLibrary::isAudioPath(path) || isAudioFile(path);
+	const bool image = isImageFile(path) && !isVideoFile(path);
+	QAction *play = menu.addAction(audio ? QStringLiteral("Play audio") : image ? QStringLiteral("Open image")
+										 : QStringLiteral("Play video"));
+	play->setObjectName(QStringLiteral("mediaPlayVideo"));
+	play->setEnabled(file.isFile());
+	QAction *openFolder = menu.addAction(QStringLiteral("Open folder"));
+	openFolder->setObjectName(QStringLiteral("mediaOpenFolder"));
+	openFolder->setEnabled(QFileInfo(folder).isDir());
+	QAction *copyFolder = menu.addAction(QStringLiteral("Copy folder path"));
+	copyFolder->setObjectName(QStringLiteral("mediaCopyFolderPath"));
+	menu.addSeparator();
+	QAction *details = menu.addAction(QStringLiteral("Details…"));
+	details->setObjectName(QStringLiteral("mediaFileDetails"));
+	QAction *chosen = menu.exec(list->viewport()->mapToGlobal(pos));
+	if (chosen == copyFolder) {
+		QApplication::clipboard()->setText(QDir::toNativeSeparators(folder));
+	} else if (chosen == details) {
+		MediaFileDetailsDialog dialog(file.absoluteFilePath(), sourcesPanel_);
+		dialog.exec();
+	} else if (chosen == play || chosen == openFolder) {
+		const QString target = chosen == play ? file.absoluteFilePath() : folder;
+		if (!QDesktopServices::openUrl(QUrl::fromLocalFile(target)))
+			warnAndLog(sourcesPanel_, QStringLiteral("Open file"),
+				   chosen == play ? QStringLiteral("Could not open this file in its default application.")
+						  : QStringLiteral("Could not open the recording's folder."));
+	}
 }
 
 void VideoEditorWindow::refreshLibrary()

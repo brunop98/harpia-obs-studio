@@ -190,6 +190,8 @@ target_sources(
     ui/ClipLibraryWindow.hpp
     ui/RecordingVideoPicker.cpp
     ui/RecordingVideoPicker.hpp
+    ui/MediaFileDetailsDialog.cpp
+    ui/MediaFileDetailsDialog.hpp
     ui/PresetDelete.hpp
     ui/CrashReportDialog.cpp
     ui/CrashReportDialog.hpp

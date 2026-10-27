@@ -740,6 +740,7 @@ private:
 	bool sourcesPlaced_ = false;             // has the panel been positioned yet?
 	bool sourcesFirstShown_ = false;         // gate the one-time initial show
 	void showSourcesPanel();                 // position (first time) + show + raise
+	void showSourceFileMenu(QListWidget *list, const QPoint &pos);
 	// The "nothing loaded yet" panel: shown while there are no sources, hidden
 	// the moment one arrives, and kept centred over the preview.
 	QWidget *emptyPanel_ = nullptr;

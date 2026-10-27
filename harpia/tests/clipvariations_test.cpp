@@ -78,6 +78,90 @@ int main(int argc, char **argv)
 		   "back to clip 1, and clip 2 kept its slip");
 	}
 
+	std::printf("\n-- choosing a source and moment for one option --\n");
+	{
+		TlClip c = slot();
+		c.speed = 2.0;
+		c.fadeInMs = 80;
+		c.fadeOutMs = 120;
+		c.keys.append(TlKeyframe{});
+		ComponentInstance component;
+		component.typeId = QStringLiteral("test.effect");
+		component.instanceId = QStringLiteral("keep-effect");
+		c.components.append(component);
+		c.peaks = {0.25f, 0.75f};
+		clip_variations::add(c, 2, total(2));
+		// The shown clip has been slipped since its list entry was cached.
+		c.srcStartMs = 6500;
+		c.srcEndMs = 10500;
+		TlClip expected = c;
+		expected.clipOptions[0] = {1, 6500};
+		expected.clipOptions[1] = {1, 17000};
+		QString why = QStringLiteral("old error");
+		ok(clip_variations::setOption(c, 1, 1, 17000, total(1), &why) && why.isEmpty(),
+		   "a hidden option can choose another source and start time");
+		ok(c == expected, "only that option changes; the shown slip is synchronized and every shared field stays intact");
+		ok(c.clipShown == 0 && c.sourceId == 1 && c.srcStartMs == 6500 && c.outDurationMs() == 2000,
+		   "editing a hidden option preserves current preview, timeline time and speed-adjusted duration");
+		ok(clip_variations::setOption(c, 1, 2, 50000, total(2)) && c.clipOptions[1].srcStartMs == 2000,
+		   "a requested moment near EOF clamps to the last complete shared window");
+		ok(clip_variations::setOption(c, 1, 2, -1000, total(2)) && c.clipOptions[1].srcStartMs == 0,
+		   "negative start times clamp to the source beginning");
+		const TlClipOption other = c.clipOptions[1];
+		ok(clip_variations::setOption(c, 0, 2, 1500, total(2)) &&
+		   c.sourceId == 2 && c.srcStartMs == 1500 && c.srcEndMs == 5500 && c.clipShown == 0,
+		   "editing the shown option updates its live source window without selecting another option");
+		ok(c.clipOptions[0] == TlClipOption{2, 1500} && c.clipOptions[1] == other && c.peaks.isEmpty(),
+		   "the shown cache matches its new source, clears the old waveform, and preserves the other option");
+		c.peaks = {0.1f, 0.3f};
+		ok(clip_variations::setOption(c, 0, 2, 1800, total(2)) && c.peaks == QVector<float>({0.1f, 0.3f}),
+		   "slipping within one source preserves its whole-source waveform");
+		const auto room = clip_variations::roomOfOthers(c, total);
+		ok(room.headMs == 0 && room.tailMs == 2000,
+		   "trim limits use a hidden option's newly chosen source window");
+		TlClip shortSource = c;
+		ok(!clip_variations::setOption(c, 1, 3, 0, total(3), &why) && c == shortSource && !why.isEmpty(),
+		   "a source shorter than the shared slot is refused without changing any state");
+		for (const auto &bad : QVector<QPair<int, qint64>>{{-1, 6000}, {2, 0}, {2, -1}}) {
+			const TlClip before = c;
+			ok(!clip_variations::setOption(c, 1, bad.first, 0, bad.second, &why) && c == before && !why.isEmpty(),
+			   "an invalid source or unknown duration cannot change an option");
+		}
+		for (int badIndex : {-1, 2}) {
+			const TlClip before = c;
+			ok(!clip_variations::setOption(c, badIndex, 1, 0, total(1)) && c == before,
+			   "an invalid option index leaves the clip untouched");
+		}
+		TlClip ordinary = slot(), before = ordinary;
+		ok(!clip_variations::setOption(ordinary, 0, 1, 0, total(1)) && ordinary == before,
+		   "editing an option never silently turns an ordinary clip into a random clip");
+		ok(clip_variations::setOption(c, 1, 0, 0, 4000) && c.clipOptions[1] == TlClipOption{0, 0},
+		   "source zero is valid and a source exactly the slot length has one usable window");
+		ok(clip_variations::setOption(c, 1, 1, std::numeric_limits<qint64>::max(),
+					     std::numeric_limits<qint64>::max()) &&
+		   c.clipOptions[1].srcStartMs == std::numeric_limits<qint64>::max() - c.srcLenMs(),
+		   "a maximum timestamp clamps safely without source-end overflow");
+		TlClip invalid = c;
+		invalid.srcStartMs = std::numeric_limits<qint64>::min();
+		invalid.srcEndMs = std::numeric_limits<qint64>::max();
+		before = invalid;
+		ok(!clip_variations::setOption(invalid, 0, 1, 0, total(1)) && invalid == before,
+		   "malformed source bounds are refused before duration arithmetic");
+
+		clip_variations::setOption(c, 1, 1, 12345, total(1));
+		TimelineModel timeline;
+		TlTrack track;
+		track.clips = {c};
+		timeline.tracks = {track};
+		const auto options = text_variations::slotsOf(timeline);
+		const TimelineModel exported = text_variations::applyCombination(timeline, options, {1});
+		const TlClip &result = exported.tracks[0].clips[0];
+		ok(result.sourceId == 1 && result.srcStartMs == 12345 && result.srcEndMs == 16345 &&
+		   result.outStartMs == c.outStartMs && result.outDurationMs() == c.outDurationMs() &&
+		   result.components == c.components && result.keys == c.keys,
+		   "export variations use the chosen moment with identical slot time, speed, look and animation");
+	}
+
 	std::printf("\n-- removing one --\n");
 	{
 		TlClip c = slot();

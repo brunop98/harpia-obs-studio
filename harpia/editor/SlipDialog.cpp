@@ -8,6 +8,7 @@
 
 #include <QApplication>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QElapsedTimer>
 #include <QHBoxLayout>
 #include <QKeyEvent>
@@ -17,6 +18,7 @@
 #include <QPainterPath>
 #include <QPointer>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QThreadPool>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -349,6 +351,25 @@ SlipDialog::SlipDialog(const Input &in, QWidget *parent) : QDialog(parent), in_(
 	readout_ = new QLabel(this);
 	readout_->setObjectName(QStringLiteral("slipReadout"));
 	v->addWidget(readout_);
+	auto *sourceRow = new QHBoxLayout;
+	auto *sourceLabel = new QLabel(QStringLiteral("Source start"), this);
+	sourceStart_ = new QDoubleSpinBox(this);
+	sourceStart_->setObjectName(QStringLiteral("slipSourceStart"));
+	sourceStart_->setDecimals(3);
+	sourceStart_->setRange(std::max(0.0, (double(in_.clip.srcStartMs) + double(in_.loMs)) / 1000.0),
+			       std::max(0.0, (double(in_.clip.srcStartMs) + double(in_.hiMs)) / 1000.0));
+	sourceStart_->setSingleStep(std::max(0.001, 1.0 / std::max(1.0, in_.fps)));
+	sourceStart_->setSuffix(QStringLiteral(" s"));
+	sourceStart_->setKeyboardTracking(false);
+	sourceStart_->setToolTip(QStringLiteral("Start time in the source video. The clip keeps its timeline position and duration."));
+	sourceLabel->setBuddy(sourceStart_);
+	sourceRow->addWidget(sourceLabel);
+	sourceRow->addWidget(sourceStart_);
+	sourceRow->addStretch(1);
+	v->addLayout(sourceRow);
+	connect(sourceStart_, &QDoubleSpinBox::valueChanged, this, [this](double seconds) {
+		setDeltaMs(qint64(std::llround(seconds * 1000.0)) - in_.clip.srcStartMs);
+	});
 
 	bar_ = new SlipTrackBar(this);
 	bar_->setSource(in_.thumbs, in_.soundOnly || in_.thumbs.isEmpty() ? in_.clip.peaks : QVector<float>(),
@@ -425,6 +446,7 @@ SlipDialog::SlipDialog(const Input &in, QWidget *parent) : QDialog(parent), in_(
 	}
 
 	setFocusPolicy(Qt::StrongFocus);
+	setFocus(Qt::OtherFocusReason);
 	syncReadout();
 	render(0);
 }
@@ -445,6 +467,9 @@ void SlipDialog::stopAll()
 
 void SlipDialog::accept()
 {
+	// OK has no focus policy, so clicking it need not move focus out of the
+	// timestamp field. Commit its pending text before reading the chosen slip.
+	sourceStart_->interpretText();
 	stopAll();
 	QDialog::accept();
 }
@@ -659,10 +684,19 @@ void SlipDialog::syncReadout()
 	else if (delta_ == in_.hiMs && in_.hiMs > 0)
 		text += QStringLiteral("   ·   at the end of the footage");
 	readout_->setText(text);
+	const QSignalBlocker blocker(sourceStart_);
+	sourceStart_->setValue(double(c.srcStartMs) / 1000.0);
 }
 
 void SlipDialog::keyPressEvent(QKeyEvent *e)
 {
+	// The timestamp field owns text navigation and spin-box keys while edited.
+	// The strip's shortcuts remain available whenever the dialog has focus.
+	QWidget *focused = QApplication::focusWidget();
+	if (sourceStart_ && (focused == sourceStart_ || sourceStart_->isAncestorOf(focused))) {
+		QDialog::keyPressEvent(e);
+		return;
+	}
 	const qint64 frame = std::max<qint64>(1, qint64(std::llround(1000.0 / std::max(1.0, in_.fps))));
 	const qint64 step = (e->modifiers() & Qt::ShiftModifier) ? 1000 : frame;
 	switch (e->key()) {

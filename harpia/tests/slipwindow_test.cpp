@@ -21,9 +21,11 @@
 #include "editor/timeline/TimelineView.hpp"
 
 #include <QApplication>
+#include <QDoubleSpinBox>
 #include <QElapsedTimer>
 #include <QFileInfo>
 #include <QKeyEvent>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QProcess>
@@ -173,6 +175,38 @@ int main(int argc, char **argv)
 		ok(d.readout().contains(QStringLiteral("0:01.0")) && d.readout().contains(QStringLiteral("0:02.0")) &&
 			   d.readout().contains(QStringLiteral("0:04.0")),
 		   "it says which moment, of how long");
+		auto *sourceStart = d.findChild<QDoubleSpinBox *>(QStringLiteral("slipSourceStart"));
+		ok(sourceStart && sourceStart->decimals() == 3 && sourceStart->minimum() == 0.0 &&
+			   sourceStart->maximum() == 3.0 && sourceStart->value() == 1.0,
+		   "Source start shows milliseconds and only the source range that fits the unchanged clip");
+		if (sourceStart) {
+			sourceStart->setValue(1.237);
+			const TlClip precise = d.momentModel(false).tracks[0].clips[0];
+			ok(d.deltaMs() == 237 && precise.srcStartMs == 1237 && precise.srcLenMs() == 1000 &&
+				   counterOf(d.previewImage()) == frameAt(1237),
+			   "typing a precise source start changes the preview and retains the moment's duration");
+			ok(in.clip.srcStartMs == 1000 && in.clip.outStartMs == 5000,
+			   "choosing a timestamp leaves the caller's timeline clip unchanged until accepted");
+			sourceStart->setValue(9.0);
+			ok(d.deltaMs() == 2000 && sourceStart->value() == 3.0,
+			   "a typed start beyond the source clamps to the latest full-length moment");
+			sourceStart->setValue(-1.0);
+			ok(d.deltaMs() == -1000 && sourceStart->value() == 0.0,
+			   "a typed negative start clamps to the source beginning");
+			d.setDeltaMs(345);
+			ok(sourceStart->value() == 1.345,
+			   "slipping by strip, keyboard or reset updates the timestamp field without rounding to tenths");
+			sourceStart->setFocus();
+			if (auto *edit = sourceStart->findChild<QLineEdit *>()) {
+				edit->deselect();
+				edit->setCursorPosition(2);
+				key(edit, Qt::Key_Right);
+				ok(d.deltaMs() == 345 && edit->cursorPosition() == 3,
+				   "arrow keys navigate timestamp text while its input has focus");
+			}
+			d.setFocus();
+		}
+		d.setDeltaMs(0);
 
 		SlipTrackBar *bar = d.trackBar();
 		const double ppm = bar->pxPerMs();
@@ -181,6 +215,8 @@ int main(int argc, char **argv)
 		std::printf("     dragged 100 px left: %lld ms (%.3f px per ms)\n", (long long)d.deltaMs(), ppm);
 		ok(d.deltaMs() > 0 && std::llabs(d.deltaMs() - want) <= 1, "dragged left: later footage, as far as the pointer went");
 		ok(counterOf(d.previewImage()) == frameAt(1000 + d.deltaMs()), "and the preview shows where it now starts");
+		ok(sourceStart && std::abs(sourceStart->value() - (1000 + d.deltaMs()) / 1000.0) < 0.0001,
+		   "dragging the source strip keeps the timestamp field in sync");
 		ok(bar->windowRect().center().x() == bar->rect().center().x(), "the window stays put; the strip moved");
 
 		dragStrip(bar, 3000);
@@ -244,6 +280,18 @@ int main(int argc, char **argv)
 		ok(d.isPlaying() && d.playheadMs() < 200, "a slip while playing plays the new moment from its top");
 		key(&d, Qt::Key_Escape);
 		ok(d.result() == QDialog::Rejected && !d.isPlaying(), "Esc: closed, nothing chosen, nothing playing");
+
+		SlipDialog pending(in);
+		auto *pendingStart = pending.findChild<QDoubleSpinBox *>(QStringLiteral("slipSourceStart"));
+		auto *pendingEdit = pendingStart ? pendingStart->findChild<QLineEdit *>() : nullptr;
+		if (pendingEdit)
+			pendingEdit->setText(QStringLiteral("2.345 s"));
+		ok(pendingStart && pendingEdit && pendingStart->value() == 1.0 && pending.deltaMs() == 0,
+		   "typing a timestamp leaves a pending edit until it is committed");
+		pending.accept();
+		ok(pending.result() == QDialog::Accepted && pending.deltaMs() == 1345 &&
+			   pending.momentModel(false).tracks[0].clips[0].srcStartMs == 2345,
+		   "OK commits pending timestamp text before accepting, even without focus leaving the field");
 	}
 
 	std::printf("\n-- in the editor --\n");

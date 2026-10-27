@@ -105,6 +105,11 @@ Three modes, each one step up from the last:
     trim, playback speed and timeline position, and keeps existing markers and
     the video end. Best with steady music. Generated markers are fixed timeline
     markers; moving or retiming the music does not move them;
+  - **random clip options:** each choice has **Video…** to select its source
+    and **Slip…** to preview and choose its moment. Drag the Slip filmstrip or
+    enter **Source start** in seconds with millisecond precision. Options share
+    one timeline position, duration, speed and look, while their source times
+    stay independent. Cancel leaves the option unchanged; OK is one undo step;
   - **keyframes** per channel (position, scale, rotation, opacity) with easing
     curves, and **curved motion paths** with Bezier handles on the preview;
   - **components** stacked on any clip: transform and speed, ShaderToy-style

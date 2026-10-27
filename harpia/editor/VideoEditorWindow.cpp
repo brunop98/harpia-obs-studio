@@ -9094,8 +9094,8 @@ void VideoEditorWindow::buildRandomClipSection(QVBoxLayout *clipOuter)
 	auto *v = sec->bodyLayout();
 	v->setSpacing(5);
 	auto *intro = new QLabel(QStringLiteral("Each clip is one version of the video (Export \u2192 Variations). "
-						"They share this slot's place, length and look. Show one, then "
-						"right-click the clip \u203A Slip\u2026 to pick its moment."),
+						"They share this slot's place, length and look. Choose Video\u2026 "
+						"to change its source, or Slip\u2026 to choose its start time."),
 				 randomClipBox_);
 	intro->setWordWrap(true);
 	intro->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
@@ -9165,10 +9165,15 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 		}
 		randomClipPicks_.clear();
 		randomClipDels_.clear();
+		randomClipVideos_.clear();
+		randomClipSlips_.clear();
+		randomClipTimes_.clear();
 		for (int k = 0; k < n; ++k) {
 			auto *row = new QWidget(randomClipBox_);
-			auto *h = new QHBoxLayout(row);
-			h->setContentsMargins(0, 0, 0, 0);
+			auto *layout = new QVBoxLayout(row);
+			layout->setContentsMargins(0, 0, 0, 0);
+			layout->setSpacing(2);
+			auto *h = new QHBoxLayout;
 			h->setSpacing(4);
 			auto *pick = new QPushButton(row);
 			pick->setObjectName(QStringLiteral("randomClipOption"));
@@ -9180,16 +9185,49 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 							   "QPushButton:checked{border:2px solid #22c55e;}"));
 			connect(pick, &QPushButton::clicked, this, [this, k]() { showRandomClipOption(k); });
 			h->addWidget(pick, 1);
+			auto *video = new QPushButton(QStringLiteral("Video…"), row);
+			video->setObjectName(QStringLiteral("randomClipVideo"));
+			video->setProperty("optionIndex", k);
+			video->setToolTip(QStringLiteral("Choose this option's source and moment without changing the slot's duration."));
+			auto *sources = new QMenu(video);
+			sources->setToolTipsVisible(true);
+			connect(sources, &QMenu::aboutToShow, this,
+				[this, sources, k]() { fillRandomClipSourceMenu(sources, k); });
+			video->setMenu(sources);
+			h->addWidget(video);
 			auto *del = new QPushButton(row);
 			del->setIcon(uiIcon(Glyph::Cross, 13));
 			del->setFixedWidth(28);
 			connect(del, &QPushButton::clicked, this, [this, k]() { removeRandomClipOption(k); });
 			h->addWidget(del);
+			layout->addLayout(h);
+			auto *timeRow = new QHBoxLayout;
+			timeRow->setSpacing(4);
+			auto *time = new QLabel(row);
+			time->setObjectName(QStringLiteral("randomClipTime"));
+			time->setProperty("optionIndex", k);
+			time->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+			timeRow->addWidget(time, 1);
+			auto *slip = new QPushButton(QStringLiteral("Slip…"), row);
+			slip->setObjectName(QStringLiteral("randomClipSlip"));
+			slip->setProperty("optionIndex", k);
+			slip->setToolTip(QStringLiteral("Preview and choose this option's source start time. All options keep the same duration."));
+			connect(slip, &QPushButton::clicked, this, [this, k]() { editRandomClipOption(k); });
+			timeRow->addWidget(slip);
+			layout->addLayout(timeRow);
 			randomClipRows_->addWidget(row);
 			randomClipPicks_.append(pick);
 			randomClipDels_.append(del);
+			randomClipVideos_.append(video);
+			randomClipSlips_.append(slip);
+			randomClipTimes_.append(time);
 		}
 	}
+	const int track = timelineView_ ? timelineView_->selectedTrack() : -1;
+	const bool locked = !timelineView_ || track < 0 || track >= timelineView_->model().tracks.size() ||
+			    timelineView_->model().tracks[track].locked;
+	const bool audioLane = timelineView_ && track >= 0 && track < timelineView_->model().tracks.size() &&
+			       timelineView_->model().tracks[track].kind == TlTrack::Kind::Audio;
 	// What each row says. setText and the rest do nothing when unchanged.
 	for (int k = 0; k < n; ++k) {
 		const TlClipOption o = c.clipOptionAt(k);
@@ -9199,9 +9237,17 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 		pick->setText(full.size() > 38 ? full.left(36) + QStringLiteral("\u2026") : full);
 		pick->setChecked(k == c.clipShown);
 		pick->setToolTip(k == c.clipShown
-					 ? full + QStringLiteral("\nShowing now. Right-click the clip \u203A Slip\u2026 to pick "
-								 "its moment.")
+					 ? full + QStringLiteral("\nShowing now. Use Slip\u2026 to choose its moment.")
 					 : full + QStringLiteral("\nShow this clip in the slot."));
+		const EditorSource *source = sourceById(o.sourceId);
+		randomClipVideos_[k]->setText(audioLane ? QStringLiteral("Audio…") : QStringLiteral("Video…"));
+		randomClipVideos_[k]->setEnabled(!locked);
+		randomClipSlips_[k]->setEnabled(!locked && source && !source->missing &&
+						 source->durationMs >= c.srcLenMs() && c.srcLenMs() > 0);
+		randomClipTimes_[k]->setText(QStringLiteral("%1 s → %2 s")
+			.arg(o.srcStartMs / 1000.0, 0, 'f', 3)
+			.arg((double(o.srcStartMs) + double(c.srcLenMs())) / 1000.0, 0, 'f', 3));
+		randomClipTimes_[k]->setToolTip(QStringLiteral("Source in → source out. The timeline position and duration are shared by every option."));
 		QPushButton *del = randomClipDels_[k];
 		del->setEnabled(n > 1);
 		del->setToolTip(n > 1 ? QStringLiteral("Remove this clip")
@@ -9332,6 +9378,164 @@ void VideoEditorWindow::importRandomClipOption()
 		if (id >= 0)
 			addRandomClipOption(id);
 	}
+}
+
+void VideoEditorWindow::fillRandomClipSourceMenu(QMenu *menu, int k)
+{
+	menu->clear();
+	if (!fullEdit() || !timelineView_)
+		return;
+	const int track = timelineView_->selectedTrack();
+	const TimelineModel &model = timelineView_->model();
+	const TlClip *clip = timelineView_->selectedClipPtr();
+	if (!clip || !clip->isRandomClip() || k < 0 || k >= clip->clipOptions.size() ||
+	    track < 0 || track >= model.tracks.size() || model.tracks[track].locked)
+		return;
+	const bool audioLane = model.tracks[track].kind == TlTrack::Kind::Audio;
+	for (const EditorSource &source : sources_) {
+		if (source.missing || source.durationMs <= 0 || (!audioLane && source.width <= 0))
+			continue;
+		auto *action = menu->addAction(QStringLiteral("%1 (%2 s)")
+			.arg(sourceLabel(source.id)).arg(source.durationMs / 1000.0, 0, 'f', 1));
+		action->setData(source.id);
+		action->setCheckable(true);
+		action->setChecked(source.id == clip->clipOptionAt(k).sourceId);
+		QString why;
+		const bool fits = clip_variations::fits(*clip, source.durationMs, &why);
+		action->setEnabled(fits);
+		action->setToolTip(fits ? QStringLiteral("Choose its moment in Slip. The slot keeps its position and duration.") : why);
+		connect(action, &QAction::triggered, this,
+			[this, k, id = source.id]() { editRandomClipOption(k, id); });
+	}
+	if (!menu->isEmpty())
+		menu->addSeparator();
+	auto *import = menu->addAction(QStringLiteral("Import a file…"));
+	connect(import, &QAction::triggered, this, [this, k]() { importRandomClipOptionSource(k); });
+}
+
+void VideoEditorWindow::importRandomClipOptionSource(int k)
+{
+	if (!fullEdit() || !timelineView_)
+		return;
+	const int track = timelineView_->selectedTrack();
+	const TimelineModel &model = timelineView_->model();
+	const TlClip *clip = timelineView_->selectedClipPtr();
+	if (!clip || !clip->isRandomClip() || k < 0 || k >= clip->clipOptions.size() ||
+	    track < 0 || track >= model.tracks.size() || model.tracks[track].locked)
+		return;
+	const bool audioLane = model.tracks[track].kind == TlTrack::Kind::Audio;
+	const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Choose option source"), QString(),
+		audioLane ? audioOpenFilter()
+			  : QStringLiteral("Video files (*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.gif *.wmv *.flv *.ts);;All files (*)"));
+	if (path.isEmpty())
+		return;
+	const EditorSource *existing = sourceByPath(path);
+	const int id = existing && !existing->missing ? existing->id
+		: (audioLane && isAudioFile(path) ? addAudioSource(path) : addSource(path));
+	if (id >= 0)
+		editRandomClipOption(k, id);
+}
+
+void VideoEditorWindow::editRandomClipOption(int k, int sourceId)
+{
+	if (!fullEdit() || !timelineView_)
+		return;
+	const int track = timelineView_->selectedTrack(), index = timelineView_->selectedClip();
+	const TimelineModel &model = timelineView_->model();
+	if (track < 0 || track >= model.tracks.size() || model.tracks[track].locked ||
+	    index < 0 || index >= model.tracks[track].clips.size())
+		return;
+	const TlClip original = model.tracks[track].clips[index];
+	if (original.type != TlClip::Type::Video || !original.isRandomClip() ||
+	    k < 0 || k >= original.clipOptions.size())
+		return;
+	const TlClipOption option = original.clipOptionAt(k);
+	if (sourceId < 0)
+		sourceId = option.sourceId;
+	const EditorSource *source = sourceById(sourceId);
+	const bool audioLane = model.tracks[track].kind == TlTrack::Kind::Audio;
+	if (!source || source->missing || source->durationMs <= 0 || (!audioLane && source->width <= 0))
+		return;
+	QString why;
+	if (!clip_variations::fits(original, source->durationMs, &why)) {
+		warnAndLog(this, QStringLiteral("Random clip"), why);
+		return;
+	}
+	const qint64 length = original.srcLenMs(), total = source->durationMs;
+	if (length <= 0)
+		return;
+	const qint64 start = std::clamp(option.srcStartMs, qint64(0), total - length);
+	SlipDialog::Input input;
+	input.clip = original;
+	input.clip.sourceId = sourceId;
+	input.clip.srcStartMs = start;
+	input.clip.srcEndMs = start + length;
+	input.clip.clipOptions.clear();
+	input.clip.clipShown = 0;
+	input.clip.peaks.clear();
+	input.soundOnly = audioLane;
+	input.title = QStringLiteral("Option %1 — %2").arg(k + 1).arg(source->name);
+	input.decodePath = playbackPath_.value(sourceId, source->path);
+	input.sourceSize = QSize(source->width, source->height);
+	input.sourceMs = total;
+	input.loMs = -start;
+	input.hiMs = total - length - start;
+	input.thumbs = timelineView_->sourceThumbs(sourceId);
+	input.fps = timelineFps();
+	if (audioLane)
+		input.clip.peaks = randomClipPeaks(source->path);
+	// As with timeline Slip, moving the shown footage within the same source
+	// moves its detached sound. Editing another option leaves the shown take
+	// and its partners alone, just like switching Random clip options does.
+	QVector<QPair<int, int>> partners;
+	if (k == original.clipShown && sourceId == original.sourceId && start == original.srcStartMs &&
+	    original.soundRule == 0 && original.tts.isEmpty()) {
+		partners = timelineView_->slipPartners(track, index);
+		for (const auto &pair : partners) {
+			const TlClip &partner = model.tracks[pair.first].clips[pair.second];
+			input.partners.append(partner);
+			input.loMs = std::max(input.loMs, -std::max<qint64>(0, partner.srcStartMs));
+			input.hiMs = std::min(input.hiMs, std::max<qint64>(0, total - partner.srcEndMs));
+		}
+		// All partners use this same source. Its metadata gives the bounds
+		// even before async thumbnails have published a timeline duration.
+	}
+	QMap<int, QString> paths;
+	for (const EditorSource &item : sources_)
+		paths.insert(item.id, item.path);
+	input.mixAudio = [paths](const TimelineModel &moment) {
+		return TimelineAudio::mixToBuffer(moment, [&paths](int id) { return paths.value(id); });
+	};
+	if (playing_)
+		stopPlayback();
+	SlipDialog dialog(input, this);
+	if (dialog.exec() != QDialog::Accepted)
+		return;
+	const qint64 chosenStart = start + dialog.deltaMs();
+	if (sourceId == option.sourceId && chosenStart == option.srcStartMs)
+		return;
+	const TimelineModel &current = timelineView_->model();
+	if (track >= current.tracks.size() || current.tracks[track].locked ||
+	    index >= current.tracks[track].clips.size() || !(current.tracks[track].clips[index] == original))
+		return;
+	commitSnapshot();
+	QVector<QPair<int, int>> edits = partners;
+	const QPair<int, int> target(track, index);
+	edits.prepend(target);
+	timelineView_->editClipsAt(edits, [&](const QPair<int, int> &pair, TlClip &clip) {
+		if (pair == target) {
+			clip_variations::setOption(clip, k, sourceId, chosenStart, total);
+			if (audioLane && k == clip.clipShown)
+				clip.peaks = input.clip.peaks;
+		} else {
+			clip.srcStartMs += dialog.deltaMs();
+			clip.srcEndMs += dialog.deltaMs();
+		}
+	});
+	syncPreviewTransformTarget();
+	showTimelineFrame(timelinePlayheadMs());
+	syncClipInspector();
+	commitSnapshot();
 }
 
 int VideoEditorWindow::captionLaneForBatch() const

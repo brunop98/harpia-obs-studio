@@ -935,13 +935,16 @@ private:
 	QWidget *variationsBox_ = nullptr;
 	InspectorSection *textSection_ = nullptr; // titled "Text" or "Random text"
 	// Random clip (timeline/ClipVariations.hpp): the slot's footage choices,
-	// one version of the video each. One row per choice: its button and its
-	// remove button, made when the count changes and updated in place on
+	// one version of the video each. One row per choice with source, timestamp,
+	// preview and removal controls, made when the count changes and updated on
 	// every other sync (a slip renames the shown one on every mouse move).
 	QWidget *randomClipBox_ = nullptr;
 	QVBoxLayout *randomClipRows_ = nullptr;
 	QVector<QPushButton *> randomClipPicks_;
 	QVector<QPushButton *> randomClipDels_;
+	QVector<QPushButton *> randomClipVideos_;
+	QVector<QPushButton *> randomClipSlips_;
+	QVector<QLabel *> randomClipTimes_;
 	QLabel *randomClipCount_ = nullptr;
 	QPushButton *randomClipPrev_ = nullptr;
 	QPushButton *randomClipNext_ = nullptr;
@@ -957,6 +960,9 @@ private:
 	void removeRandomClipOption(int k);
 	void importRandomClipOption();
 	void fillRandomClipAddMenu(QMenu *menu);
+	void fillRandomClipSourceMenu(QMenu *menu, int k);
+	void editRandomClipOption(int k, int sourceId = -1);
+	void importRandomClipOptionSource(int k);
 	QString sourceLabel(int sourceId) const; // its file name, no folder
 	QLabel *textMainCap_ = nullptr;  // "Text 1", over the main text of a Random text
 	QVBoxLayout *variantListLayout_ = nullptr;

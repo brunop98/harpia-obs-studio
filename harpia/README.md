@@ -59,7 +59,9 @@ Three modes, each one step up from the last:
 
 - **Simple Trim** — keep one section, with crop and speed.
 - **Multi-Cut** — keep several sections, each at its own speed; randomise
-  their order; export them joined or **each to its own file**.
+  their order; export them joined or **each to its own file**. Use **Source
+  video** above the tracks to switch videos and keep cuts from all of them
+  in the same output; **Add video…** loads another source without removing cuts.
 - **Full Editing** — a multi-track timeline:
   - video, image, text, effect and audio clips; overlapping clips become
     **transitions**; marquee selection, groups, ripple, snapping;

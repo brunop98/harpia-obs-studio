@@ -434,7 +434,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	cutModeBtn_ = new QPushButton(QStringLiteral("Multi-Cut"), this);
 	cutModeBtn_->setCheckable(true);
 	cutModeBtn_->setToolTip(QStringLiteral(
-		"Keep several sections of one video, joined in order, each at its own speed.\n\n"
+		"Keep sections from one or more videos, joined in order, each at its own speed.\n\n"
 		"Full Editing can do all of this too — Multi-Cut is the faster route when you "
 		"only need to drop parts out."));
 	fullModeBtn_ = new QPushButton(QStringLiteral("Full Editing"), this);
@@ -721,6 +721,35 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	timeline_ = new Timeline(this);
 	tracks_ = new TrackEditor(this);
 	timelineView_ = new TimelineView(this);
+	multiCutSourceRow_ = new QWidget(bottomPane);
+	multiCutSourceRow_->setVisible(false);
+	auto *sourcePickerLayout = new QHBoxLayout(multiCutSourceRow_);
+	sourcePickerLayout->setContentsMargins(0, 0, 0, 0);
+	auto *sourcePickerLabel = new QLabel(QStringLiteral("Source video"), multiCutSourceRow_);
+	sourcePickerLayout->addWidget(sourcePickerLabel);
+	multiCutSourceCombo_ = new QComboBox(multiCutSourceRow_);
+	multiCutSourceCombo_->setObjectName(QStringLiteral("multiCutSourceSelector"));
+	multiCutSourceCombo_->setPlaceholderText(QStringLiteral("Choose a video"));
+	multiCutSourceCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+	multiCutSourceCombo_->setMinimumContentsLength(24);
+	multiCutSourceCombo_->setToolTip(QStringLiteral(
+		"Choose the video shown in the Source track. New cuts use this video; "
+		"cuts already in the Output track stay in place."));
+	sourcePickerLabel->setBuddy(multiCutSourceCombo_);
+	sourcePickerLayout->addWidget(multiCutSourceCombo_, 1);
+	connect(multiCutSourceCombo_, &QComboBox::activated, this, [this](int index) {
+		if (!multiCut() || index < 0)
+			return;
+		const int id = multiCutSourceCombo_->itemData(index).toInt();
+		if (id != activeSourceId_)
+			setActiveSource(id);
+	});
+	auto *addCutSource = new QPushButton(QStringLiteral("Add video…"), multiCutSourceRow_);
+	addCutSource->setObjectName(QStringLiteral("addMultiCutVideoButton"));
+	addCutSource->setToolTip(QStringLiteral("Add another video to cut from, keeping your existing cuts."));
+	connect(addCutSource, &QPushButton::clicked, this, &VideoEditorWindow::onAddSource);
+	sourcePickerLayout->addWidget(addCutSource);
+	bottomLayout->addWidget(multiCutSourceRow_);
 	stack_ = new QStackedWidget(this);
 	stack_->addWidget(timeline_);      // index 0 = Simple Trim
 	stack_->addWidget(tracks_);        // index 1 = Multi-Cut
@@ -2743,8 +2772,17 @@ void VideoEditorWindow::setActiveSource(int id)
 	if (!s)
 		return;
 	stopPlayback();
+	// A queued scrub still names the previous video. It must not repaint over
+	// the new source after the dropdown (or an Output cut) switches videos.
+	if (previewTimer_)
+		previewTimer_->stop();
+	pendingMs_ = -1;
 	activeSourceId_ = id;
 	seeker_ = s->seeker.get();
+	if (multiCutSourceCombo_) {
+		QSignalBlocker b(multiCutSourceCombo_);
+		multiCutSourceCombo_->setCurrentIndex(multiCutSourceCombo_->findData(id));
+	}
 	tracks_->setActiveSource(id);
 	// Simple Trim exports the active source at its own resolution, so the
 	// preview is that source. Multi-Cut assembles everything into ONE output
@@ -2774,8 +2812,25 @@ void VideoEditorWindow::setActiveSource(int id)
 	showFrame(id, 0);
 }
 
+void VideoEditorWindow::refreshMultiCutSources()
+{
+	if (!multiCutSourceCombo_)
+		return;
+	QSignalBlocker b(multiCutSourceCombo_);
+	multiCutSourceCombo_->clear();
+	for (const EditorSource &s : sources_) {
+		if (!s.seeker)
+			continue; // images and audio have no video timeline to cut from
+		multiCutSourceCombo_->addItem(s.name, s.id);
+		multiCutSourceCombo_->setItemData(multiCutSourceCombo_->count() - 1, s.path, Qt::ToolTipRole);
+	}
+	multiCutSourceCombo_->setCurrentIndex(multiCutSourceCombo_->findData(activeSourceId_));
+	multiCutSourceCombo_->setEnabled(multiCutSourceCombo_->count() > 0);
+}
+
 void VideoEditorWindow::refreshSourceList()
 {
+	refreshMultiCutSources();
 	if (!sourceList_)
 		return;
 	QSignalBlocker b(sourceList_); // rebuild must not fire selection changes
@@ -11949,6 +12004,11 @@ void VideoEditorWindow::setEditMode(EditMode m)
 	cutModeBtn_->setChecked(m == EditMode::MultiCut);
 	fullModeBtn_->setChecked(m == EditMode::Full);
 	stack_->setCurrentIndex(int(m));
+	if (multiCutSourceRow_)
+		multiCutSourceRow_->setVisible(m == EditMode::MultiCut);
+	if (m == EditMode::MultiCut && multiCutSourceCombo_ && multiCutSourceCombo_->currentIndex() < 0 &&
+	    multiCutSourceCombo_->count() > 0)
+		setActiveSource(multiCutSourceCombo_->itemData(0).toInt());
 	// The layout is the same in every mode, but in Vertical the editing area
 	// fits the mode just entered.
 	adaptEditingArea();

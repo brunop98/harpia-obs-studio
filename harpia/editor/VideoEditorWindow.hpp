@@ -730,6 +730,9 @@ private:
 	QListWidget *sourceList_ = nullptr;      // "Sources" tab of the floating panel
 	QListWidget *libraryList_ = nullptr;     // "Library" tab (existing recordings)
 	QTabWidget *sourcesTabs_ = nullptr;
+	QWidget *multiCutSourceRow_ = nullptr;  // source picker above the Multi-Cut tracks
+	QComboBox *multiCutSourceCombo_ = nullptr;
+	void refreshMultiCutSources();
 	QStringList libraryFolders_;             // app recording folders to scan
 	ThumbnailCache *thumbCache_ = nullptr;   // async thumbnails for the Library tab
 	QWidget *sourcesPanel_ = nullptr;        // floating, toggleable tool window

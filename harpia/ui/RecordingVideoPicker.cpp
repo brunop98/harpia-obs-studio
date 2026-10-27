@@ -1,24 +1,47 @@
 #include "RecordingVideoPicker.hpp"
 
 #include "library/ClipLibrary.hpp"
+#include "RecordingDelete.hpp"
 
+#include <QAction>
+#include <QApplication>
+#include <QClipboard>
+#include <QDesktopServices>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
 #include <QListWidget>
+#include <QMenu>
+#include <QMessageBox>
+#include <QMimeData>
 #include <QPainter>
 #include <QPalette>
 #include <QPixmap>
 #include <QPolygonF>
 #include <QPushButton>
+#include <QSignalBlocker>
+#include <QUrl>
 #include <QVBoxLayout>
 
 namespace harpia {
 
 namespace {
 const QSize kThumbnailSize(192, 108);
+
+QString recordingPathKey(const QString &path)
+{
+	const QFileInfo file(path);
+	QString key = file.canonicalFilePath();
+	if (key.isEmpty())
+		key = file.absoluteFilePath();
+#ifdef Q_OS_WIN
+	key = key.toCaseFolded();
+#endif
+	return key;
+}
 
 QIcon videoPlaceholder(const QPalette &palette)
 {
@@ -56,6 +79,8 @@ RecordingVideoPicker::RecordingVideoPicker(const QStringList &libraryFolders, QW
 
 	grid_ = new QListWidget(this);
 	grid_->setObjectName(QStringLiteral("recordingVideoGrid"));
+	grid_->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(grid_, &QListWidget::customContextMenuRequested, this, &RecordingVideoPicker::showContextMenu);
 	grid_->setViewMode(QListView::IconMode);
 	grid_->setResizeMode(QListView::Adjust);
 	grid_->setMovement(QListView::Static);
@@ -117,9 +142,85 @@ RecordingVideoPicker::RecordingVideoPicker(const QStringList &libraryFolders, QW
 		updateThumbnail(clip.filePath);
 		thumbnails_.ensure(clip.filePath, kThumbnailSize);
 	}
+	updateRecordingCount();
+}
+
+void RecordingVideoPicker::updateRecordingCount()
+{
 	status_->setText(itemByPath_.isEmpty()
 		? QStringLiteral("No recorded videos found. Use Import from folder… to choose a video on your computer.")
 		: QStringLiteral("%1 recorded video%2").arg(itemByPath_.size()).arg(itemByPath_.size() == 1 ? QString() : QStringLiteral("s")));
+}
+
+void RecordingVideoPicker::setProtectedPaths(const QStringList &paths)
+{
+	protectedPaths_.clear();
+	for (const QString &path : paths)
+		if (!path.isEmpty())
+			protectedPaths_.insert(recordingPathKey(path));
+}
+
+void RecordingVideoPicker::showContextMenu(const QPoint &pos)
+{
+	QListWidgetItem *item = grid_->itemAt(pos);
+	if (!item)
+		return;
+	grid_->setCurrentItem(item);
+	const QString path = item->data(Qt::UserRole).toString();
+	if (path.isEmpty())
+		return;
+	addButton_->setEnabled(!selectedVideo().isEmpty());
+	const QFileInfo file(path);
+	const QString folder = file.absolutePath();
+	const bool exists = file.isFile();
+	const bool protectedFile = protectedPaths_.contains(recordingPathKey(path));
+	QMenu menu(this);
+	menu.setObjectName(QStringLiteral("recordingVideoContextMenu"));
+	menu.setToolTipsVisible(true);
+	auto action = [&menu](const QString &text, const QString &name, bool enabled = true) {
+		QAction *entry = menu.addAction(text);
+		entry->setObjectName(name);
+		entry->setEnabled(enabled);
+		return entry;
+	};
+	QAction *play = action(QStringLiteral("Play video"), QStringLiteral("recordingPlayVideo"), exists);
+	QAction *copy = action(QStringLiteral("Copy"), QStringLiteral("recordingCopyFile"), exists);
+	QAction *copyPath = action(QStringLiteral("Copy file path"), QStringLiteral("recordingCopyPath"));
+	QAction *copyFolder = action(QStringLiteral("Copy folder path"), QStringLiteral("recordingCopyFolderPath"));
+	QAction *openFolder = action(QStringLiteral("Open folder"), QStringLiteral("recordingOpenFolder"), QFileInfo(folder).isDir());
+	menu.addSeparator();
+	QAction *remove = action(QStringLiteral("Delete"), QStringLiteral("recordingDelete"), exists && !protectedFile);
+	if (protectedFile)
+		remove->setToolTip(QStringLiteral("This video is loaded in the current project. Remove it from the project before deleting it."));
+	QAction *chosen = menu.exec(grid_->viewport()->mapToGlobal(pos));
+	if (chosen == copy) {
+		auto *mime = new QMimeData;
+		mime->setUrls({QUrl::fromLocalFile(file.absoluteFilePath())});
+		mime->setText(QDir::toNativeSeparators(file.absoluteFilePath()));
+		QApplication::clipboard()->setMimeData(mime);
+	} else if (chosen == copyPath || chosen == copyFolder) {
+		QApplication::clipboard()->setText(QDir::toNativeSeparators(chosen == copyPath ? file.absoluteFilePath() : folder));
+	} else if (chosen == play || chosen == openFolder) {
+		if (!QDesktopServices::openUrl(QUrl::fromLocalFile(chosen == play ? file.absoluteFilePath() : folder)))
+			QMessageBox::warning(this, QStringLiteral("Open"),
+				chosen == play ? QStringLiteral("Could not open the video in its default player.")
+					       : QStringLiteral("Could not open the recording's folder."));
+	} else if (chosen == remove && !protectedPaths_.contains(recordingPathKey(path))) {
+		const QStringList gone = recording_delete::confirmAndRecycle(this, {path});
+		if (gone.isEmpty())
+			return;
+		{
+			QSignalBlocker block(grid_);
+			for (const QString &removed : gone)
+				if (QListWidgetItem *row = itemByPath_.take(removed))
+					delete grid_->takeItem(grid_->row(row));
+			grid_->clearSelection();
+			grid_->setCurrentRow(-1);
+		}
+		addButton_->setEnabled(false);
+		updateRecordingCount();
+		emit recordingsDeleted(gone);
+	}
 }
 
 QString RecordingVideoPicker::selectedVideo() const

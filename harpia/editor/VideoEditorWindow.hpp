@@ -286,6 +286,7 @@ protected:
 
 signals:
 	void exported(const QString &path);
+	void recordingsDeleted(const QStringList &paths);
 
 private slots:
 	// The Ctrl+V dispatcher. Ctrl+V has two plausible meanings -- the clips you

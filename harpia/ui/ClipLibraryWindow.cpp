@@ -611,6 +611,15 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 			return;
 		}
 		connect(editor, &VideoEditorWindow::exported, this, [this]() { refresh(); });
+		connect(editor, &VideoEditorWindow::recordingsDeleted, this, [this](const QStringList &paths) {
+			for (const QString &path : paths) {
+				favorites_.remove(path);
+				recentlyViewed_.remove(path);
+			}
+			savePersistentState();
+			refresh();
+			emit recordingsDeleted(paths);
+		});
 		editor->setAttribute(Qt::WA_DeleteOnClose);
 		editor->exec();
 	} else if (oneVideo &&

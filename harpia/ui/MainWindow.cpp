@@ -2940,6 +2940,7 @@ void MainWindow::openBlankEditor()
 	// No isValid() gate: an empty editor is always valid. That check is for a
 	// launch file that could not be decoded, and there is no launch file.
 	connect(editor, &VideoEditorWindow::exported, this, [this]() { refreshClipViews(); });
+	connect(editor, &VideoEditorWindow::recordingsDeleted, this, [this]() { refreshClipViews(); });
 	editor->setAttribute(Qt::WA_DeleteOnClose);
 	// exec(), like every other way into the editor: one modal editor at a time
 	// is the rule this app already follows, and a modeless one here would be the
@@ -4726,6 +4727,7 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 			return;
 		}
 		connect(editor, &VideoEditorWindow::exported, this, [this]() { refreshClipViews(); });
+		connect(editor, &VideoEditorWindow::recordingsDeleted, this, [this]() { refreshClipViews(); });
 		editor->setAttribute(Qt::WA_DeleteOnClose);
 		editor->exec();
 	} else if (chosen == optLowAct) {

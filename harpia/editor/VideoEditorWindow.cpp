@@ -2869,6 +2869,17 @@ void VideoEditorWindow::refreshSourceList()
 void VideoEditorWindow::onAddSource()
 {
 	RecordingVideoPicker picker(libraryFolders_, this);
+	QStringList protectedPaths;
+	for (const EditorSource &source : sources_) {
+		protectedPaths << source.path;
+		if (!source.origPath.isEmpty())
+			protectedPaths << source.origPath;
+	}
+	picker.setProtectedPaths(protectedPaths);
+	connect(&picker, &RecordingVideoPicker::recordingsDeleted, this, [this](const QStringList &paths) {
+		refreshLibrary();
+		emit recordingsDeleted(paths);
+	});
 	if (picker.exec() != QDialog::Accepted)
 		return;
 	QString path = picker.selectedVideo();

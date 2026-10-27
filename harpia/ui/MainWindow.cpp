@@ -861,6 +861,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		&MainWindow::onPauseButton);
 	connect(floatingControls_.get(), &RecorderControlsOverlay::stopClicked, this,
 		&MainWindow::onPrimaryButton);
+	connect(floatingControls_.get(), &RecorderControlsOverlay::regionLockToggled, this,
+		&MainWindow::setRecordingRegionLocked);
 
 	countdownOverlay_ = std::make_unique<CountdownOverlay>();
 	connect(countdownOverlay_.get(), &CountdownOverlay::tick, this, [this](int remaining) {
@@ -2106,6 +2108,7 @@ AutoSplitSettings MainWindow::recordingSplitSettings() const
 
 void MainWindow::beginStart()
 {
+	regionFollowLocked_ = false;
 	starting_ = true;
 	// Where the guides cannot be kept out of the capture, they go now -- before
 	// the first frame, not on the next tick.
@@ -3416,14 +3419,16 @@ void MainWindow::onRegionChanged(const CaptureRegion &region)
 
 void MainWindow::syncFollowMouse()
 {
-	const Preset &p = activePreset();
 	// Armed only while a Custom Region recording is actually rolling. Paused
 	// recordings do not follow: nothing is being captured, and the user is
 	// probably mousing over to the controls -- dragging the frame along on
 	// that trip would move the framing they paused to protect.
-	const bool want = p.followMouse && captureMode_ == CaptureMode::Region &&
-			  currentRegion_.enabled && recorder_.isRecording() && !starting_ &&
-			  !stopping_ && !recorder_.isPaused();
+	const bool followTake = canLockRecordingRegion();
+	// A pause keeps the same take and the same lock. Reset before the armed
+	// early-out too: a take can finish while its follower is already disarmed.
+	if (!followTake)
+		regionFollowLocked_ = false;
+	const bool want = followTake && !recorder_.isPaused();
 	if (want == followMouse_.armed())
 		return;
 	if (!want) {
@@ -3449,7 +3454,7 @@ void MainWindow::syncFollowMouse()
 		// shortcut glides back to this.
 		followHome_ = QPoint(currentRegion_.x, currentRegion_.y);
 		followMouse_.arm(currentRegion_);
-		if (followMouse_.armed())
+		if (followMouse_.armed() && !regionFollowLocked_)
 			followTimer_->start();
 	} else {
 		followMouse_.disarm();
@@ -3457,9 +3462,42 @@ void MainWindow::syncFollowMouse()
 	}
 }
 
+bool MainWindow::canLockRecordingRegion() const
+{
+	return activePreset().followMouse && captureMode_ == CaptureMode::Region && currentRegion_.enabled &&
+	       recorder_.isRecording() && !starting_ && !stopping_ && !countingDown_;
+}
+
+void MainWindow::setRecordingRegionLocked(bool locked)
+{
+	if (!canLockRecordingRegion()) {
+		updateFloatingControls();
+		return;
+	}
+	syncFollowMouse();
+	if (regionFollowLocked_ == locked)
+		return;
+	regionFollowLocked_ = locked;
+	// A lock supersedes a return-home shortcut. Re-arm at the visible position
+	// to cancel that glide and discard old targets and elapsed chase time.
+	followSuspended_ = false;
+	if (followMouse_.armed())
+		followMouse_.arm(currentRegion_);
+	if (followTimer_) {
+		if (!locked && followMouse_.armed())
+			followTimer_->start();
+		else
+			followTimer_->stop();
+	}
+	if (floatingControls_)
+		floatingControls_->setFollowPaused(false);
+	writeMarker(locked ? QStringLiteral("Recording Area Locked") : QStringLiteral("Recording Area Unlocked"));
+	updateFloatingControls();
+}
+
 void MainWindow::tickFollowMouse()
 {
-	if (!followMouse_.armed()) {
+	if (!followMouse_.armed() || regionFollowLocked_) {
 		followTimer_->stop();
 		return;
 	}
@@ -3678,6 +3716,10 @@ void MainWindow::onFollowToggle()
 		if (p.followMouse)
 			blog(LOG_INFO, "[harpia] follow shortcut ignored: needs a Custom Region "
 				       "recording in progress");
+		return;
+	}
+	if (regionFollowLocked_) {
+		setRecordingRegionLocked(false);
 		return;
 	}
 	followSuspended_ = !followSuspended_;
@@ -4961,6 +5003,7 @@ void MainWindow::updateFloatingControls()
 	const bool active = recording || starting_ || stopping_;
 	floatingControls_->setState(active, paused, recording && !stopping_ && recorder_.canPause(),
 				    recording && !stopping_);
+	floatingControls_->setRegionLock(canLockRecordingRegion(), regionFollowLocked_);
 
 	// The panel is now on screen while idle too, holding the green Record
 	// button, so a recording can be started from wherever you are working

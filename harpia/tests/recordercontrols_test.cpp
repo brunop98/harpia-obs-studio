@@ -21,6 +21,7 @@
 
 #include <QApplication>
 #include <QPushButton>
+#include <QScreen>
 #include <QSignalSpy>
 
 #include <cstdio>
@@ -172,6 +173,68 @@ int main(int argc, char **argv)
 		buttonTipped(&hud, QStringLiteral("Stop"))->click();
 		QApplication::processEvents();
 		ok(again.count() == 1, "CONTROL: enabled again, the same click is heard");
+	}
+
+	std::printf("\n-- the region lock is a separate, synchronized recording control --\n");
+	{
+		auto *lock = hud.findChild<QPushButton *>(QStringLiteral("recordingRegionLock"));
+		ok(lock && lock->isCheckable(), "the recording area has a checkable lock control");
+		if (!lock)
+			return 1;
+		QSignalSpy toggled(&hud, &RecorderControlsOverlay::regionLockToggled);
+		QSignalSpy started(&hud, &RecorderControlsOverlay::startClicked);
+		QSignalSpy paused(&hud, &RecorderControlsOverlay::pauseClicked);
+		QSignalSpy stopped(&hud, &RecorderControlsOverlay::stopClicked);
+		hud.setRegionLock(false, false);
+		hud.setState(true, false, true, true);
+		ok(lock->isHidden() && !lock->isEnabled(), "recordings without a movable region have no lock button");
+		hud.setRegionLock(true, false);
+		ok(!lock->isHidden() && lock->isEnabled() && !lock->isChecked(),
+		   "an applicable recording offers an unlocked area button");
+		ok(!lock->icon().isNull() && lock->accessibleName() == QStringLiteral("Lock recording area"),
+		   "the icon-only control identifies its lock action accessibly");
+		lock->click();
+		ok(lock->isChecked() && toggled.count() == 1 && toggled.at(0).at(0).toBool(),
+		   "clicking locks the area with exactly one true signal");
+		ok(lock->accessibleName() == QStringLiteral("Unlock recording area"),
+		   "the locked button now offers unlocking");
+		ok(started.isEmpty() && paused.isEmpty() && stopped.isEmpty(),
+		   "locking neither pauses nor stops nor starts recording");
+		hud.setRegionLock(true, true);
+		hud.setRegionLock(true, false);
+		ok(!lock->isChecked() && toggled.count() == 1,
+		   "synchronizing recorder state never emits a user toggle");
+		lock->click();
+		lock->click();
+		ok(toggled.count() == 3 && !toggled.at(2).at(0).toBool(),
+		   "clicking again emits false to resume following");
+		hud.setState(true, true, true, true);
+		ok(lock->isEnabled(), "the area can be locked or unlocked while recording is paused");
+		hud.setState(true, false, false, true);
+		ok(lock->isEnabled(), "region locking does not require pause support");
+		hud.setState(true, false, false, false);
+		ok(!lock->isEnabled(), "starting or stopping disables the region toggle with Stop");
+		lock->click();
+		ok(toggled.count() == 3, "a disabled region lock cannot request another toggle");
+		hud.setState(false, false, false, false);
+		ok(lock->isHidden() && visibleButtons(&hud) == 1, "idle still shows only the green Record button");
+		hud.setRegionLock(false, false);
+		hud.setState(true, false, true, true);
+		ok(lock->isHidden() && !lock->isChecked(), "a subsequent unrelated recording does not inherit the lock");
+		ok(toggled.count() == 3, "hiding and resetting the control emits no recorder commands");
+	}
+
+	std::printf("\n-- adding the lock keeps the full controls reachable on screen --\n");
+	{
+		hud.setRegionLock(false, false);
+		hud.setState(true, false, true, true);
+		const QRect available = hud.screen()->availableGeometry();
+		hud.move(available.right() - hud.width() + 1, available.bottom() - hud.height() + 1);
+		QApplication::processEvents();
+		ok(available.contains(hud.frameGeometry()), "the two-button panel fits against the bottom-right edge");
+		hud.setRegionLock(true, false);
+		QApplication::processEvents();
+		ok(available.contains(hud.frameGeometry()), "showing the new lock keeps every recording control on that display");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

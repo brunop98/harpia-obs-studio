@@ -23,6 +23,10 @@ needs (see [The OBS tree](#the-obs-tree)).
   tab above it, start recording from the button under it; it stays out of the
   recording itself.
 - **Follow Mouse:** the region pans to keep the pointer in view.
+  While recording, the floating controls' **padlock** holds the area at its
+  current position so you can use sliders or other controls elsewhere. Click
+  again to resume following. The lock survives Pause/Resume and resets when
+  the take ends; it does not change the profile's Follow Mouse setting.
 - **Multiple areas:** lay out several same-size areas, across monitors; the
   recording switches to whichever one the mouse moves into. For Custom Region
   presets, select **Recording areas → Region movement → Multiple areas** in

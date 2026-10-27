@@ -366,6 +366,9 @@ private:
 	                              // crop or restart the readiness debounce
 	void tickFollowMouse();
 	void syncFollowMouse(); // start/stop the timer to match the current state
+	bool canLockRecordingRegion() const;
+	void setRecordingRegionLocked(bool locked);
+	bool regionFollowLocked_ = false; // temporary hold at the current position, survives Pause/Resume
 
 	// The Follow Mouse shortcut. Unlike Zoom and Spotlight, following is on
 	// from the first frame, so the key parks the camera rather than starting

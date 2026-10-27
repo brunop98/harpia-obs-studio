@@ -13,10 +13,14 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
 #include <QPropertyAnimation>
 #include <QPushButton>
 #include <QScreen>
 #include <QSettings>
+#include <QSignalBlocker>
+
+#include <algorithm>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -40,6 +44,35 @@ constexpr qreal kHoverOpacity = 1.0;
 QSettings hudSettings()
 {
 	return QSettings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+}
+
+QIcon regionLockIcon(bool locked)
+{
+	QIcon icon;
+	for (int scale : {1, 2, 3}) {
+		QPixmap pixels(16 * scale, 16 * scale);
+		pixels.setDevicePixelRatio(scale);
+		pixels.fill(Qt::transparent);
+		QPainter p(&pixels);
+		p.setRenderHint(QPainter::Antialiasing);
+		p.setPen(QPen(QColor(QStringLiteral("#f2f3f5")), 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+		p.setBrush(Qt::NoBrush);
+		const double offset = locked ? 0.0 : 3.0;
+		QPainterPath shackle;
+		shackle.moveTo(5 + offset, 7);
+		shackle.lineTo(5 + offset, 4.5);
+		shackle.cubicTo(5 + offset, 0.5, 11 + offset, 0.5, 11 + offset, 4.5);
+		if (locked)
+			shackle.lineTo(11, 7);
+		p.drawPath(shackle);
+		p.setBrush(QColor(QStringLiteral("#f2f3f5")));
+		p.drawRoundedRect(QRectF(3, 7, 10, 7), 1.5, 1.5);
+		p.setPen(QPen(QColor(QStringLiteral("#3a3f47")), 1.5, Qt::SolidLine, Qt::RoundCap));
+		p.drawLine(QPointF(8, 9.5), QPointF(8, 11.5));
+		p.end();
+		icon.addPixmap(pixels);
+	}
+	return icon;
 }
 } // namespace
 
@@ -95,6 +128,18 @@ RecorderControlsOverlay::RecorderControlsOverlay(QWidget *parent) : QWidget(pare
 							    "QPushButton:disabled{background:#5a2f31;}"));
 	row->addWidget(stopButton_);
 
+	regionLockButton_ = new QPushButton(this);
+	regionLockButton_->setObjectName(QStringLiteral("recordingRegionLock"));
+	regionLockButton_->setCheckable(true);
+	regionLockButton_->setCursor(Qt::PointingHandCursor);
+	regionLockButton_->setFixedSize(32, 32);
+	regionLockButton_->setStyleSheet(btnBase + QStringLiteral(
+		"QPushButton{background:#3a3f47;}QPushButton:hover{background:#474d57;}"
+		"QPushButton:checked{background:#3d65a4;}QPushButton:checked:hover{background:#4776bd;}"
+		"QPushButton:disabled{background:#2a2d33;}"));
+	updateRegionLockAppearance();
+	row->addWidget(regionLockButton_);
+
 	// The zoom chip lives at the right-hand end, after the buttons: it is a
 	// readout, not a control, and putting it before them would shove the
 	// buttons sideways every time the zoom went on or off.
@@ -137,12 +182,17 @@ RecorderControlsOverlay::RecorderControlsOverlay(QWidget *parent) : QWidget(pare
 	connect(startButton_, &QPushButton::clicked, this, &RecorderControlsOverlay::startClicked);
 	connect(pauseButton_, &QPushButton::clicked, this, &RecorderControlsOverlay::pauseClicked);
 	connect(stopButton_, &QPushButton::clicked, this, &RecorderControlsOverlay::stopClicked);
+	connect(regionLockButton_, &QPushButton::toggled, this, [this](bool locked) {
+		updateRegionLockAppearance();
+		emit regionLockToggled(locked);
+	});
 
 	// Hover tracking must include the child buttons, otherwise entering a button
 	// would read as "left the panel" and fade it out.
 	startButton_->installEventFilter(this);
 	pauseButton_->installEventFilter(this);
 	stopButton_->installEventFilter(this);
+	regionLockButton_->installEventFilter(this);
 
 	// Idle is the state it now opens in, so start there rather than showing all
 	// three for the first instant.
@@ -184,6 +234,7 @@ void RecorderControlsOverlay::setState(bool recording, bool paused, bool pauseEn
 	pauseButton_->setEnabled(pauseEnabled);
 	stopButton_->setToolTip(QStringLiteral("Stop recording"));
 	stopButton_->setEnabled(stopEnabled);
+	updateRegionLockButton();
 
 	// The pill has to follow its contents, or it keeps the two-button width with
 	// one button rattling around inside it.
@@ -191,6 +242,63 @@ void RecorderControlsOverlay::setState(bool recording, bool paused, bool pauseEn
 		adjustSize();
 	if (dotChanged)
 		update(); // the recording dot appears and disappears with the state
+}
+
+void RecorderControlsOverlay::setRegionLock(bool available, bool locked)
+{
+	regionLockAvailable_ = available;
+	if (regionLockButton_->isChecked() != locked) {
+		QSignalBlocker b(regionLockButton_);
+		regionLockButton_->setChecked(locked);
+		updateRegionLockAppearance();
+	}
+	updateRegionLockButton();
+}
+
+void RecorderControlsOverlay::updateRegionLockButton()
+{
+	const bool visible = recording_ && regionLockAvailable_;
+	const bool changed = !regionLockButton_->isHidden() != visible;
+	regionLockButton_->setVisible(visible);
+	regionLockButton_->setEnabled(visible && stopButton_->isEnabled());
+	if (changed) {
+		adjustSize();
+		keepRegionLockVisible();
+	}
+}
+
+void RecorderControlsOverlay::keepRegionLockVisible()
+{
+	if (!isVisible() || regionLockButton_->isHidden())
+		return;
+	// Adding the third button can grow a pill parked against the right edge.
+	// Keep it on that display without restoring or rewriting its saved spot.
+	const QRect frame = frameGeometry();
+	QScreen *targetScreen = QGuiApplication::screenAt(frame.topLeft());
+	if (!targetScreen)
+		targetScreen = screen();
+	if (!targetScreen)
+		return;
+	const QRect available = targetScreen->availableGeometry();
+	const QPoint clamped(std::clamp(frame.left(), available.left(),
+					std::max(available.left(), available.right() - frame.width() + 1)),
+			     std::clamp(frame.top(), available.top(),
+					std::max(available.top(), available.bottom() - frame.height() + 1)));
+	if (clamped != frame.topLeft())
+		move(pos() + clamped - frame.topLeft());
+}
+
+void RecorderControlsOverlay::updateRegionLockAppearance()
+{
+	const bool locked = regionLockButton_->isChecked();
+	static const QIcon openIcon = regionLockIcon(false);
+	static const QIcon closedIcon = regionLockIcon(true);
+	regionLockButton_->setIcon(locked ? closedIcon : openIcon);
+	regionLockButton_->setAccessibleName(locked ? QStringLiteral("Unlock recording area")
+						  : QStringLiteral("Lock recording area"));
+	regionLockButton_->setToolTip(locked
+		? QStringLiteral("Recording area locked in place. Click to unlock and resume following the mouse.")
+		: QStringLiteral("Lock the recording area at its current position while you move the mouse."));
 }
 
 void RecorderControlsOverlay::setZoom(bool zoomed, int percent)
@@ -236,6 +344,7 @@ void RecorderControlsOverlay::showControls()
 	setWindowOpacity(kIdleOpacity);
 	show();
 	raise();
+	keepRegionLockVisible();
 	excludeFromCapture(); // needs a valid winId → after show()
 	updateHover();        // in case it appears already under the cursor
 }
@@ -316,7 +425,7 @@ bool RecorderControlsOverlay::eventFilter(QObject *obj, QEvent *event)
 {
 	// The buttons' own enter/leave drive the same hover logic so moving between
 	// the background and a button never flickers the opacity.
-	if ((obj == startButton_ || obj == pauseButton_ || obj == stopButton_) &&
+	if ((obj == startButton_ || obj == pauseButton_ || obj == stopButton_ || obj == regionLockButton_) &&
 	    (event->type() == QEvent::Enter || event->type() == QEvent::Leave))
 		updateHover();
 	return QWidget::eventFilter(obj, event);

@@ -1,5 +1,6 @@
 #include "ObsContext.hpp"
 
+#include "GraphicsModuleDiagnostics.hpp"
 #include "AppAudioSource.hpp"
 #include "VideoStatus.hpp"
 
@@ -217,7 +218,12 @@ int ObsContext::resetVideo(uint32_t baseWidth, uint32_t baseHeight, int fpsNum, 
 			}
 		}
 		if (ret != OBS_VIDEO_SUCCESS) {
-			lastVideoResetError() = describeVideoResetError(first, baseWidth, baseHeight);
+			lastVideoResetError() = describeVideoResetError(first, baseWidth, baseHeight, renderModule());
+#if defined(_WIN32)
+			if (first == OBS_VIDEO_MODULE_NOT_FOUND && *renderModule())
+				lastVideoResetError() = "OBS could not load its graphics module (OBS error -5). " +
+						       inspectWindowsGraphicsModule(renderModule());
+#endif
 			blog(LOG_ERROR, "[harpia] video engine is down: %s", lastVideoResetError().c_str());
 			return first;
 		}
@@ -270,12 +276,10 @@ std::vector<std::string> ObsContext::missingDependencies() const
 		missing.push_back("the video engine's data (data/libobs/default.effect, two folders up from the program) "
 				  "-- is the program folder complete?");
 
-	// The video engine itself: without its graphics module (libobs-d3d11.dll
-	// on Windows) there is no capture, no filters and no recording, and every
-	// source fails quietly until Record crashes on the missing device.
+	// Keep the actual startup failure: a missing module and a graphics driver
+	// refusing device creation need different remedies.
 	if (!videoReady_)
-		missing.push_back(std::string("the video engine -- its graphics module (") + renderModule() +
-				  ") did not load");
+		missing.push_back(describeVideoNotReady());
 
 	// A screen-capture source for this platform (any of the accepted ids).
 #if defined(_WIN32)

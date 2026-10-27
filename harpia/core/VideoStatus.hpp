@@ -18,14 +18,34 @@ inline std::string &lastVideoResetError()
 	return s;
 }
 
-inline std::string describeVideoResetError(int code, uint32_t w, uint32_t h)
+inline std::string describeVideoNotReady()
+{
+	return lastVideoResetError().empty()
+		       ? "the video engine has not initialized -- see Error Logs for details"
+		       : "the video engine -- " + lastVideoResetError();
+}
+
+// Pass the configured renderer name; the default preserves older Windows callers.
+inline std::string describeVideoResetError(int code, uint32_t w, uint32_t h,
+					 const std::string &graphicsModule = "libobs-d3d11.dll")
 {
 	const std::string size = std::to_string(w) + "x" + std::to_string(h);
 	switch (code) {
-	case -5: // OBS_VIDEO_MODULE_NOT_FOUND
-		return "OBS could not load its graphics module (libobs-d3d11.dll next to harpia.exe). This "
-		       "happens when the app starts while a build is still copying files. Restart Harpia; if it "
-		       "happens again, rebuild or reinstall.";
+	case -5: { // OBS_VIDEO_MODULE_NOT_FOUND
+		if (graphicsModule.empty())
+			return "OBS could not load its graphics module: no renderer was configured in this build. "
+			       "Rebuild the complete application.";
+		std::string message = "OBS could not load its graphics module (" + graphicsModule + "). "
+			"The module or one of its dependencies may be missing, incompatible, or blocked. "
+			"Extract the complete Release or RelWithDebInfo package into a fresh folder and restart.";
+		if (graphicsModule.find(".dll") != std::string::npos)
+			message += " On Windows, install or repair the Microsoft Visual C++ x64 Redistributable. "
+				   "Enable Info in Error Logs and look for the preceding 'LoadLibrary failed' line "
+				   "for the Windows error number.";
+		else
+			message += " The preceding library-loader messages in Error Logs have more details.";
+		return message;
+	}
 	case -2: // OBS_VIDEO_NOT_SUPPORTED
 		return "The graphics card or driver refused to start OBS's video engine (not supported). "
 		       "Updating the graphics driver usually fixes this.";

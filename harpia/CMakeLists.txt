@@ -115,6 +115,7 @@ target_sources(
     core/FollowMouse.hpp
     core/MultiArea.hpp
     core/VideoStatus.hpp
+    core/GraphicsModuleDiagnostics.hpp
     core/ZoomMode.hpp
     core/ModeCapabilities.hpp
     core/CompositionGuides.hpp
@@ -530,41 +531,7 @@ set_target_properties_obs(
   PROPERTIES FOLDER harpia OUTPUT_NAME "$<IF:$<PLATFORM_ID:Windows>,harpia,harpia-recorder>"
 )
 
-# The recorder loads these plugins at RUNTIME (via the module loader) and the
-# ffmpeg muxer spawns the obs-ffmpeg-mux helper EXECUTABLE as a child process.
-# None of them are link dependencies, so building only the harpia-recorder target
-# would leave them (especially obs-ffmpeg-mux.exe) missing from the rundir — which
-# makes recording fail with "Unable to start the recording helper process"
-# (CreateProcessW error 2 = file not found). Depend on every runtime piece that
-# exists so a build of harpia-recorder always populates the rundir completely.
-set(_harpia_runtime_targets
-    # obs-ffmpeg-mux is the muxer helper process — the critical one.
-    obs-ffmpeg
-    obs-ffmpeg-mux
-    obs-filters
-    obs-x264
-    obs-nvenc
-    obs-qsv11
-    # Each hardware encoder first runs a small test program, next to harpia.exe,
-    # to learn what the graphics card can do. Without it the encoder is not
-    # offered at all -- obs-nvenc does not even load ("NVENC not supported"),
-    # AMD's and Intel's are skipped -- and every recording falls back to x264
-    # on the CPU. Nothing else asks for them to be built.
-    obs-nvenc-test
-    obs-amf-test
-    obs-qsv-test
-    win-capture
-    win-wasapi
-    win-dshow
-    mac-capture
-    mac-avcapture
-    linux-capture
-    linux-pipewire
-    linux-pulseaudio
-    linux-v4l2
-)
-foreach(_dep IN LISTS _harpia_runtime_targets)
-  if(TARGET ${_dep})
-    add_dependencies(harpia-recorder ${_dep})
-  endif()
-endforeach()
+# Graphics modules, capture/encoder plugins and recording helpers are loaded
+# at runtime; linking libobs does not make a targeted build include them.
+include(cmake/HarpiaRuntimeTargets.cmake)
+harpia_add_runtime_dependencies(harpia-recorder)

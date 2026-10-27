@@ -244,8 +244,22 @@ The binary lands at `build_x64\rundir\RelWithDebInfo\bin\64bit\harpia.exe`.
 This assembles `build_x64\dist\Harpia\`: `bin\64bit` (the exe, its DLLs, the
 `obs-ffmpeg-mux` helper, the NVIDIA/AMD/Intel encoder test helpers, Qt's
 plugins), `obs-plugins\64bit` and `data\`, with the Visual C++ runtime next to
-the exe, and checks that nothing it needs is missing. Zip the folder to share
-it.
+the exe. Both `-Package` and `zip-harpia.bat` validate critical runtime files,
+including `libobs-d3d11.dll`, before creating a distributable. Debug packages
+are refused because Visual Studio's debug runtime cannot be redistributed;
+use `Release` or `RelWithDebInfo`. Zip the entire folder to share it.
+
+Building only `harpia-recorder` also builds its graphics modules. On Windows,
+each build restores their copies beside the executable if they were removed.
+
+If the video engine reports error **-5**, Windows could not load its renderer
+or one of its dependencies. Extract a fresh complete package and install or
+repair Microsoft's [Visual C++ x64 Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe).
+The startup error includes a Windows loader check with the module path and
+error number. Error **126** can mean a missing dependency even when the renderer
+exists; **127** means a missing entry point, often incompatible library versions;
+**193** indicates an incompatible or invalid binary. Error **-2** is a separate
+graphics-device or driver support failure.
 
 At run time nothing auto-installs: the exe needs its DLLs, the OBS plugins and
 the Visual C++ runtime beside it, which the build `rundir` and the package
@@ -274,6 +288,8 @@ CMake — and run headless (`QT_QPA_PLATFORM=offscreen`):
 ```sh
 harpia/tests/run_units.sh  [work-dir]   # logic, widgets, compositor, file formats
 harpia/tests/run_avsync.sh [work-dir]   # export, A/V sync, and the real editor window
+python3 harpia/tests/graphicsruntime_test.py [path-to-cmake] # targeted renderer build/staging
+pwsh -File harpia/tests/windowspackage_test.ps1             # Windows package-layout fixtures
 ```
 
 Each prints `ALL PASSED (0 failures)` per program and exits non-zero on any

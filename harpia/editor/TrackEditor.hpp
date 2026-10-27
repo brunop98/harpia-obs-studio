@@ -73,6 +73,8 @@ public:
 	// the used-region overlay always reflects the shown source.
 	void setActiveSource(int id)
 	{
+		endPan();
+		cancelLeftEdit();
 		activeSourceId_ = id;
 		update();
 	}
@@ -294,6 +296,13 @@ private:
 	QCursor panPreviousCursor_;
 	bool panHadExplicitCursor_ = false;
 	void endPan();
+	QCursor editPreviousCursor_;
+	bool editHadExplicitCursor_ = false;
+	int editSegment_ = -1;
+	CutSegment editSegmentBefore_;
+	void beginLeftEdit(Mode mode, int segment = -1);
+	void restoreEditCursor();
+	void cancelLeftEdit();
 	qint64 dragStartMs_ = 0; // CreatingCut anchor (source ms)
 	qint64 dragCurMs_ = 0;
 	QPoint pressPos_;

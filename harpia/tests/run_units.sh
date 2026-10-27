@@ -47,9 +47,9 @@ EMOJI_FLAGS="$(pkg-config --cflags --libs libavcodec libswscale libavutil)"
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/ytdlp_test.cpp" "$H/editor/ytdlp/YtDlp.cpp" -o "$WORK/ytdlp_test" $LF
 
-# Multi-Cut: cut shuffling and middle-button navigation in both lanes.
+# Multi-Cut: shuffling, navigation, and hover after interrupted edits.
 "$MOC" -I"$H" "$H/editor/TrackEditor.hpp" -o "$WORK/moc_TrackEditor_mc.cpp"
-for name in multicutshuffle trackpan; do
+for name in multicutshuffle trackpan trackhover; do
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/${name}_test.cpp" "$H/editor/TrackEditor.cpp" "$WORK/moc_TrackEditor_mc.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
@@ -1153,6 +1153,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/windowscreen_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/videofolderscan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/multicutshuffle_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/trackpan_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/trackhover_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/paramslider_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1

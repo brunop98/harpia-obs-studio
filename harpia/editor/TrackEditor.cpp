@@ -162,6 +162,7 @@ void TrackEditor::setLayoutParams(const TrackLayoutParams &p)
 void TrackEditor::setDuration(qint64 ms)
 {
 	endPan();
+	cancelLeftEdit();
 	duration_ = std::max<qint64>(0, ms);
 	// Reset the SOURCE-track view (this is the video the source track shows).
 	// Leave the OUTPUT-track view intact — switching the active source must not
@@ -451,6 +452,7 @@ QList<int> TrackEditor::selectedIndices() const
 void TrackEditor::setSegments(const QVector<CutSegment> &segs)
 {
 	endPan();
+	cancelLeftEdit();
 	segs_ = segs;
 	++segsRev_;
 	selected_ = -1;
@@ -704,8 +706,10 @@ int TrackEditor::insertSlotAt(int x) const
 bool TrackEditor::event(QEvent *e)
 {
 	if (e->type() == QEvent::UngrabMouse || e->type() == QEvent::Hide ||
-	    e->type() == QEvent::WindowDeactivate)
+	    e->type() == QEvent::WindowDeactivate) {
 		endPan();
+		cancelLeftEdit();
+	}
 	return QWidget::event(e);
 }
 
@@ -970,6 +974,10 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 		e->accept();
 		return;
 	}
+	// A new left press can arrive after an earlier release was lost. Discard
+	// that unfinished gesture before anchoring another one.
+	if (e->button() == Qt::LeftButton)
+		cancelLeftEdit();
 	if (e->button() == Qt::MiddleButton) {
 		if (mode_ != Mode::None)
 			return; // a second button must not take over an edit already in progress
@@ -1026,7 +1034,7 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 		return;
 
 	if (duration_ > 0 && sourceRect().contains(pos)) {
-		mode_ = Mode::CreatingCut;
+		beginLeftEdit(Mode::CreatingCut);
 		dragStartMs_ = dragCurMs_ = xToMs(pos.x());
 		emitScrub(dragCurMs_, activeSourceId_);
 		update();
@@ -1088,7 +1096,7 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 			const bool onLeft = pos.x() - r.left() <= edgeZone;
 			const bool onRight = r.right() - pos.x() <= edgeZone;
 			if (onLeft || onRight) {
-				mode_ = onLeft ? Mode::ResizingLeft : Mode::ResizingRight;
+				beginLeftEdit(onLeft ? Mode::ResizingLeft : Mode::ResizingRight, idx);
 				resizeOrigStart_ = seg.srcStartMs;
 				resizeOrigEnd_ = seg.srcEndMs;
 				resizeSrcPerPx_ = double(seg.srcEndMs - seg.srcStartMs) /
@@ -1098,7 +1106,7 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 					double(outVisibleMs()) / double(std::max(1, outputRect().width()));
 				emitScrub(onLeft ? seg.srcStartMs : seg.srcEndMs, seg.sourceId);
 			} else {
-				mode_ = Mode::DraggingSegment;
+				beginLeftEdit(Mode::DraggingSegment);
 				// Simple click: move the output playhead to exactly where you
 				// clicked and preview that frame (not just the segment's start).
 				const double f = std::clamp(
@@ -1139,6 +1147,10 @@ void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 		e->accept();
 		return;
 	}
+	// Losing a release must not strand a reorder or turn later hovering into
+	// a live cut/trim. Recover first, then preview this same no-button move.
+	if (mode_ != Mode::None && !(e->buttons() & Qt::LeftButton))
+		cancelLeftEdit();
 
 	if (mode_ == Mode::CreatingCut) {
 		dragCurMs_ = xToMs(pos.x());
@@ -1291,6 +1303,7 @@ void TrackEditor::mouseReleaseEvent(QMouseEvent *e)
 
 	if (mode_ == Mode::CreatingCut) {
 		mode_ = Mode::None;
+		restoreEditCursor();
 		const qint64 a = std::min(dragStartMs_, dragCurMs_);
 		const qint64 b = std::max(dragStartMs_, dragCurMs_);
 		if (b - a >= kMinCutMs) {
@@ -1311,6 +1324,7 @@ void TrackEditor::mouseReleaseEvent(QMouseEvent *e)
 
 	if (mode_ == Mode::DraggingSegment) {
 		mode_ = Mode::None;
+		restoreEditCursor();
 		if (dragMoved_ && selected_ >= 0 && dragInsertSlot_ >= 0) {
 			int to = dragInsertSlot_;
 			if (to > selected_)
@@ -1328,13 +1342,13 @@ void TrackEditor::mouseReleaseEvent(QMouseEvent *e)
 		dragInsertSlot_ = -1;
 		dragGhostX_ = -1;
 		dragMoved_ = false;
-		unsetCursor(); // drop the "grabbing" cursor; hover logic re-hints
 		update();
 		return;
 	}
 
 	if (mode_ == Mode::ResizingLeft || mode_ == Mode::ResizingRight) {
 		mode_ = Mode::None;
+		restoreEditCursor();
 		if (dragMoved_) {
 			emit segmentsChanged(); // durations changed
 			if (selected_ >= 0)
@@ -1354,6 +1368,44 @@ void TrackEditor::endPan()
 		setCursor(panPreviousCursor_);
 	else
 		unsetCursor();
+}
+
+void TrackEditor::beginLeftEdit(Mode mode, int segment)
+{
+	editPreviousCursor_ = cursor();
+	editHadExplicitCursor_ = testAttribute(Qt::WA_SetCursor);
+	editSegment_ = segment;
+	if (segment >= 0)
+		editSegmentBefore_ = segs_[segment];
+	mode_ = mode;
+}
+
+void TrackEditor::restoreEditCursor()
+{
+	if (editHadExplicitCursor_)
+		setCursor(editPreviousCursor_);
+	else
+		unsetCursor();
+	editSegment_ = -1;
+}
+
+void TrackEditor::cancelLeftEdit()
+{
+	if (mode_ == Mode::None || mode_ == Mode::Panning)
+		return;
+	// Edge drags change the widget's cuts live but commit only on release.
+	// Restore their exact original bounds/speed before abandoning the edit.
+	if ((mode_ == Mode::ResizingLeft || mode_ == Mode::ResizingRight) &&
+	    editSegment_ >= 0 && editSegment_ < segs_.size()) {
+		segs_[editSegment_] = editSegmentBefore_;
+		++segsRev_;
+	}
+	mode_ = Mode::None;
+	dragInsertSlot_ = -1;
+	dragGhostX_ = -1;
+	dragMoved_ = false;
+	restoreEditCursor();
+	update();
 }
 
 void TrackEditor::keyPressEvent(QKeyEvent *e)

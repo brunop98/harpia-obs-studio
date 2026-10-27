@@ -15129,6 +15129,11 @@ void VideoEditorWindow::showFrame(int sourceId, qint64 ms)
 	// 24.4 ms a frame measured, against 1.1 ms at preview scale.
 	const QSize mcCanvas = multiCut() ? previewRenderSize(multiCutCanvasSize()) : QSize();
 	const QSize dec = multiCut() ? mcCanvas : previewRenderSize(QSize(1280, 720));
+	// These modes show one source at a time. Crossing many videos must not
+	// queue a slow seek for every video the pointer has already left. Keep
+	// cached frames, but give the newly shown source the next decode slot.
+	if (previewDecoder_ && !fullEdit() && sourceId != shownSource_)
+		previewDecoder_->cancelPending();
 	shownSource_ = sourceId;
 	shownMs_ = ms;
 
@@ -15280,6 +15285,12 @@ void VideoEditorWindow::onPreviewFrameReady(int sourceId, qint64 ms)
 	Q_UNUSED(sourceId);
 	Q_UNUSED(ms);
 	if (loadingDialog_ || !valid_ || playing_ || shownExact_ || shownMs_ < 0)
+		return;
+	// A newer hover/scrub is already waiting for the pacing timer. A decode
+	// completion belongs to the older picture on screen; retrying that picture
+	// here would overwrite the newer source/time and strand the preview there
+	// if the pointer stops moving. Let the pending request render first.
+	if (pendingMs_ >= 0)
 		return;
 	requestPreview(shownSource_, shownMs_);
 }

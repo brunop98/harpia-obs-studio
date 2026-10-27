@@ -75,7 +75,7 @@ TimelineView::TimelineView(QWidget *parent) : QWidget(parent)
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 	setToolTip(QStringLiteral("Drag clips to move · drag an edge to trim · right-click to split · "
 				  "double-click above the time ruler to add a marker · right-click the ruler for markers and video end · "
-				  "scroll to zoom, Shift+scroll to pan, Alt+scroll to move the lanes"));
+				  "scroll to zoom, middle-drag or Shift+scroll to pan, Alt+scroll to move the lanes"));
 	setAccessibleDescription(QStringLiteral("Timeline. Add markers by double-clicking the upper ruler, "
 					       "or right-click the ruler to add markers and set the video end."));
 	anim_ = new QTimer(this);
@@ -2945,6 +2945,11 @@ void TimelineView::paintEvent(QPaintEvent *)
 
 void TimelineView::mousePressEvent(QMouseEvent *e)
 {
+	// Extra button presses do not re-anchor a grab or interrupt a left edit.
+	if (mode_ == Mode::Pan || (mode_ != Mode::None && e->button() == Qt::MiddleButton)) {
+		e->accept();
+		return;
+	}
 	cancelMarkerDrag();
 	// Same reason as the hover pass: a press hit-tests several times over, and
 	// all of it happens before anything in the model moves.
@@ -2963,6 +2968,27 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	hoverMs_ = -1;
 	if (wasHovering)
 		emit hoverScrubEnded();
+
+	// Grab before ruler/marker/header hit testing: navigation must not select
+	// or edit whatever happens to be under the pointer. Middle also works over
+	// the fixed headers; Alt+left keeps its existing content-area behavior.
+	if (canPanFrom(e) && (e->button() == Qt::MiddleButton || pos.x() >= contentRect().x())) {
+		mode_ = Mode::Pan;
+		panButton_ = e->button();
+		panStartX_ = pos.x();
+		panStartView_ = viewStart_;
+		dragSpanMs_ = spanMs();
+		panMsPerPixel_ = double(visibleMs()) / std::max(1, contentRect().width());
+		if (anim_)
+			anim_->stop();
+		zoomTarget_ = zoom_;
+		viewTarget_ = viewStart_;
+		panCursor_ = cursor();
+		panHadCursor_ = testAttribute(Qt::WA_SetCursor);
+		setCursor(Qt::ClosedHandCursor);
+		e->accept();
+		return;
+	}
 
 	const bool ruler = pos.y() >= lp_.margin && pos.y() < lp_.margin + lp_.rulerH;
 	if (ruler && e->button() == Qt::RightButton) {
@@ -2994,22 +3020,6 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	if (e->button() == Qt::LeftButton && pos.x() < contentRect().x() &&
 	    pos.y() >= markerBandRect().top() && pos.y() <= markerBandRect().bottom()) {
 		addMarker(std::max<qint64>(0, playheadMs_));
-		return;
-	}
-
-	// Grab the timeline and slide it. Tested first, before the ruler and before
-	// anything under the pointer, because it has to work from anywhere: a pan
-	// that stops working over a clip is a pan you cannot trust.
-	//
-	// The middle button, because left is already spoken for twice over (empty
-	// space scrubs, a clip moves) and taking either would trade one navigation
-	// gesture for another. Alt+left does the same thing for mice and trackpads
-	// with no middle button.
-	if (canPanFrom(e) && pos.x() >= contentRect().x()) {
-		mode_ = Mode::Pan;
-		panStartX_ = pos.x();
-		panStartView_ = viewStart_;
-		setCursor(Qt::ClosedHandCursor);
 		return;
 	}
 
@@ -3490,18 +3500,20 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 	}
 
 	if (mode_ == Mode::Pan) {
+		if (!(e->buttons() & panButton_)) {
+			finishPan();
+			e->accept();
+			return;
+		}
 		// Against the pose at the press, so the grabbed instant stays under the
 		// pointer for the whole gesture however far it travels. Note the sign:
 		// dragging RIGHT shows earlier material, the way a hand on a map does.
-		const QRect c = contentRect();
-		if (c.width() > 0) {
-			const double msPerPx = double(visibleMs()) / double(c.width());
-			viewStart_ = panStartView_ -
-				     qint64(std::llround((pos.x() - panStartX_) * msPerPx));
-			clampView();
-			update();
-			notifyView();
-		}
+		viewStart_ = panStartView_ - qint64(std::llround((pos.x() - panStartX_) * panMsPerPixel_));
+		clampView();
+		viewTarget_ = viewStart_;
+		update();
+		notifyView();
+		e->accept();
 		return;
 	}
 	if (mode_ == Mode::Scrub) {
@@ -3838,6 +3850,32 @@ void TimelineView::mouseDoubleClickEvent(QMouseEvent *e)
 	commitEdit();
 }
 
+void TimelineView::finishPan()
+{
+	if (mode_ != Mode::Pan)
+		return;
+	mode_ = Mode::None;
+	panButton_ = Qt::NoButton;
+	dragSpanMs_ = -1;
+	spanCache_ = -1;
+	clampView();
+	viewTarget_ = viewStart_;
+	if (panHadCursor_)
+		setCursor(panCursor_);
+	else
+		unsetCursor();
+	update();
+	notifyView();
+}
+
+bool TimelineView::event(QEvent *e)
+{
+	if (e->type() == QEvent::UngrabMouse || e->type() == QEvent::Hide ||
+	    e->type() == QEvent::WindowDeactivate)
+		finishPan();
+	return QWidget::event(e);
+}
+
 void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 {
 	if (mode_ == Mode::MarkerDrag && e->button() == Qt::LeftButton) {
@@ -3889,9 +3927,9 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 	};
 
 	if (mode_ == Mode::Pan) {
-		mode_ = Mode::None;
-		unsetCursor();
-		releaseSpan();
+		if (e->button() == panButton_ || !(e->buttons() & panButton_))
+			finishPan();
+		e->accept();
 		return;
 	}
 	if (mode_ == Mode::Marquee) {
@@ -4058,7 +4096,7 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 
 void TimelineView::wheelEvent(QWheelEvent *e)
 {
-	if (mode_ == Mode::MarkerDrag) {
+	if (mode_ == Mode::MarkerDrag || mode_ == Mode::Pan) {
 		e->accept();
 		return;
 	}

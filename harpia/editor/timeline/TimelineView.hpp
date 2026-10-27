@@ -5,6 +5,7 @@
 #include "ClipShuffle.hpp"   // ShuffleOptions
 #include "../EditorColors.hpp"
 
+#include <QCursor>
 #include <QFont>
 
 #include <QHash>
@@ -479,6 +480,7 @@ signals:
 	void viewChanged(qint64 totalMs, qint64 startMs, qint64 visibleMs, qint64 playheadMs);
 
 protected:
+	bool event(QEvent *) override;
 	void paintEvent(QPaintEvent *) override;
 	void mousePressEvent(QMouseEvent *) override;
 	void mouseMoveEvent(QMouseEvent *) override;
@@ -775,6 +777,11 @@ private:
 	// grab is that the instant you grabbed stays under the pointer.
 	int panStartX_ = 0;
 	qint64 panStartView_ = 0;
+	double panMsPerPixel_ = 0.0;
+	Qt::MouseButton panButton_ = Qt::NoButton;
+	QCursor panCursor_;
+	bool panHadCursor_ = false;
+	void finishPan();
 	double zoomTarget_ = 1.0;
 	qint64 viewTarget_ = 0;
 	qint64 zoomAnchorMs_ = 0;

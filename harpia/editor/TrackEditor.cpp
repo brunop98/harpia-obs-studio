@@ -33,7 +33,8 @@ TrackEditor::TrackEditor(QWidget *parent) : QWidget(parent)
 	setFocusPolicy(Qt::ClickFocus); // so Delete works after clicking a segment
 	setMouseTracking(true);         // cursor hints over the tracks
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-	setToolTip(QStringLiteral("Scroll to zoom, Shift+scroll to pan (both the source and output tracks)"));
+	setToolTip(QStringLiteral("Scroll to zoom, Shift+scroll or drag with the middle mouse button to pan "
+				 "(both the source and output tracks)"));
 
 	// ~60fps easing timer for smooth panning; runs only while the view is gliding.
 	scrollAnim_ = new QTimer(this);
@@ -43,6 +44,10 @@ TrackEditor::TrackEditor(QWidget *parent) : QWidget(parent)
 
 void TrackEditor::animateScrollStep()
 {
+	if (mode_ == Mode::Panning) {
+		scrollAnim_->stop();
+		return;
+	}
 	auto easeI = [](qint64 &cur, qint64 tgt) -> bool {
 		if (cur == tgt)
 			return false;
@@ -156,6 +161,7 @@ void TrackEditor::setLayoutParams(const TrackLayoutParams &p)
 
 void TrackEditor::setDuration(qint64 ms)
 {
+	endPan();
 	duration_ = std::max<qint64>(0, ms);
 	// Reset the SOURCE-track view (this is the video the source track shows).
 	// Leave the OUTPUT-track view intact — switching the active source must not
@@ -356,6 +362,10 @@ void TrackEditor::clampOutView()
 
 void TrackEditor::wheelEvent(QWheelEvent *e)
 {
+	if (mode_ == Mode::Panning) {
+		e->accept();
+		return;
+	}
 	const QPoint pos = e->position().toPoint();
 	const bool onSource = duration_ > 0 && sourceRect().contains(pos);
 	const bool onOutput = totalOutputMs() > 0 && outputRect().contains(pos);
@@ -440,6 +450,7 @@ QList<int> TrackEditor::selectedIndices() const
 
 void TrackEditor::setSegments(const QVector<CutSegment> &segs)
 {
+	endPan();
 	segs_ = segs;
 	++segsRev_;
 	selected_ = -1;
@@ -688,6 +699,14 @@ int TrackEditor::insertSlotAt(int x) const
 			slot = i + 1;
 	}
 	return slot;
+}
+
+bool TrackEditor::event(QEvent *e)
+{
+	if (e->type() == QEvent::UngrabMouse || e->type() == QEvent::Hide ||
+	    e->type() == QEvent::WindowDeactivate)
+		endPan();
+	return QWidget::event(e);
 }
 
 void TrackEditor::paintEvent(QPaintEvent *)
@@ -947,6 +966,43 @@ void TrackEditor::paintEvent(QPaintEvent *)
 void TrackEditor::mousePressEvent(QMouseEvent *e)
 {
 	const QPoint pos = e->pos();
+	if (mode_ == Mode::Panning) {
+		e->accept();
+		return;
+	}
+	if (e->button() == Qt::MiddleButton) {
+		if (mode_ != Mode::None)
+			return; // a second button must not take over an edit already in progress
+		const QRect source = sourceRect();
+		const QRect output = outputRect();
+		const bool onSource = duration_ > 0 && source.adjusted(0, -lp_.captionH, 0, 4).contains(pos);
+		const bool onOutput = totalOutputMs() > 0 && output.adjusted(0, -lp_.captionH, 0, 4).contains(pos);
+		if (!onSource && !onOutput)
+			return;
+		mode_ = Mode::Panning;
+		panOutput_ = onOutput;
+		panStartX_ = pos.x();
+		panStartView_ = onOutput ? outViewStart_ : viewStart_;
+		panMsPerPx_ = double(onOutput ? outVisibleMs() : visibleMs()) /
+			     std::max(1, onOutput ? output.width() : source.width());
+		// Direct manipulation takes over from any wheel easing, including a
+		// queued timer tick. Neither lane should drift while one is grabbed.
+		scrollAnim_->stop();
+		viewTarget_ = viewStart_;
+		outViewTarget_ = outViewStart_;
+		zoomTarget_ = zoom_;
+		outZoomTarget_ = outZoom_;
+		hoverMs_ = -1;
+		hoverOutSeg_ = -1;
+		hoverOutX_ = -1;
+		panPreviousCursor_ = cursor();
+		panHadExplicitCursor_ = testAttribute(Qt::WA_SetCursor);
+		setCursor(Qt::ClosedHandCursor);
+		notifyView(panOutput_);
+		update();
+		e->accept();
+		return;
+	}
 
 	if (e->button() == Qt::RightButton) {
 		const int idx = segmentAt(pos);
@@ -1062,6 +1118,27 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 void TrackEditor::mouseMoveEvent(QMouseEvent *e)
 {
 	const QPoint pos = e->pos();
+	if (mode_ == Mode::Panning) {
+		if (!(e->buttons() & Qt::MiddleButton)) {
+			endPan();
+			e->accept();
+			return;
+		}
+		const qint64 next = panStartView_ - qint64(std::llround((pos.x() - panStartX_) * panMsPerPx_));
+		if (panOutput_) {
+			outViewStart_ = next;
+			clampOutView();
+			outViewTarget_ = outViewStart_;
+		} else {
+			viewStart_ = next;
+			clampView();
+			viewTarget_ = viewStart_;
+		}
+		notifyView(panOutput_);
+		update();
+		e->accept();
+		return;
+	}
 
 	if (mode_ == Mode::CreatingCut) {
 		dragCurMs_ = xToMs(pos.x());
@@ -1203,6 +1280,12 @@ void TrackEditor::leaveEvent(QEvent *)
 
 void TrackEditor::mouseReleaseEvent(QMouseEvent *e)
 {
+	if (mode_ == Mode::Panning) {
+		if (e->button() == Qt::MiddleButton || !(e->buttons() & Qt::MiddleButton))
+			endPan();
+		e->accept();
+		return;
+	}
 	if (e->button() != Qt::LeftButton)
 		return;
 
@@ -1260,6 +1343,17 @@ void TrackEditor::mouseReleaseEvent(QMouseEvent *e)
 		dragMoved_ = false;
 		update();
 	}
+}
+
+void TrackEditor::endPan()
+{
+	if (mode_ != Mode::Panning)
+		return;
+	mode_ = Mode::None;
+	if (panHadExplicitCursor_)
+		setCursor(panPreviousCursor_);
+	else
+		unsetCursor();
 }
 
 void TrackEditor::keyPressEvent(QKeyEvent *e)

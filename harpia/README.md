@@ -61,6 +61,10 @@ needs (see [The OBS tree](#the-obs-tree)).
 
 ### Editing
 
+In every timeline, hold the middle mouse button and drag left or right to pan
+the visible time window. Scroll to zoom in when the whole timeline is fitted.
+This also works in the voiceover and keyframe lanes.
+
 Three modes, each one step up from the last:
 
 - **Simple Trim** — keep one section, with crop and speed.

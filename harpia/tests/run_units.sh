@@ -35,15 +35,17 @@ EMOJI_FLAGS="$(pkg-config --cflags --libs libavcodec libswscale libavutil)"
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/ytdlp_test.cpp" "$H/editor/ytdlp/YtDlp.cpp" -o "$WORK/ytdlp_test" $LF
 
-# Multi-Cut: "Randomize order of selected cuts" among their own positions.
+# Multi-Cut: cut shuffling and middle-button navigation in both lanes.
 "$MOC" -I"$H" "$H/editor/TrackEditor.hpp" -o "$WORK/moc_TrackEditor_mc.cpp"
+for name in multicutshuffle trackpan; do
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
-	"$HERE/multicutshuffle_test.cpp" "$H/editor/TrackEditor.cpp" "$WORK/moc_TrackEditor_mc.cpp" \
+	"$HERE/${name}_test.cpp" "$H/editor/TrackEditor.cpp" "$WORK/moc_TrackEditor_mc.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
-	"$H/ui/UiText.cpp" -o "$WORK/multicutshuffle_test" $LF
+	"$H/ui/UiText.cpp" -o "$WORK/${name}_test" $LF
+done
 
 # Two commands must never end up sharing a key: Qt fires neither.
 "$MOC" -I"$H" "$H/editor/ShortcutRegistry.hpp" -o "$WORK/moc_ShortcutRegistry.cpp"
@@ -787,16 +789,19 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # A playback tick repaints only the band the playhead moves across -- in the
 # Multi-Cut track editor, the voiceover track and the Simple Trim bar -- not
-# the whole widget 30 times a second.
+# the whole widget 30 times a second. Also verify navigation in Simple Trim
+# and voiceover never changes clips, selection, trim boundaries or playhead.
 for h in editor/EditorWidgets editor/TrackEditor editor/VoiceoverTrack editor/ParamSlider; do
 	"$MOC" -I"$H" "$H/$h.hpp" -o "$WORK/moc_ph_$(basename "$h").cpp"
 done
+for name in playheadrepaint trimpan voiceoverpan; do
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
-	"$HERE/playheadrepaint_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/TrackEditor.cpp" \
+	"$HERE/${name}_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/TrackEditor.cpp" \
 	"$H/editor/VoiceoverTrack.cpp" "$H/editor/ParamSlider.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK"/moc_ph_*.cpp \
-	-o "$WORK/playheadrepaint_test" $LF
+	-o "$WORK/${name}_test" $LF
+done
 
 # Changing the project resolution must not stretch the picture. Renders the real
 # PreviewCanvas, so it links the widget and what it draws with.
@@ -1130,6 +1135,7 @@ fi
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/ytdlp_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/multicutshuffle_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/trackpan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/paramslider_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1
@@ -1165,6 +1171,8 @@ QT_QPA_PLATFORM=offscreen "$WORK/canvasfit_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewaspect_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/motionpath_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/playheadrepaint_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/trimpan_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/voiceoverpan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/gripcursor_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineoverview_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/filmstrip_test" || rc=1

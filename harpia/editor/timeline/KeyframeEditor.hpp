@@ -13,6 +13,7 @@
 #include "TimelineModel.hpp"
 #include "../component/Component.hpp"
 
+#include <QCursor>
 #include <QDialog>
 #include <QVector>
 #include <QWidget>
@@ -99,6 +100,7 @@ signals:
 	void scrubbed(qint64 clipMs);       // the user dragged the playhead
 
 protected:
+	bool event(QEvent *) override;
 	void paintEvent(QPaintEvent *) override;
 	void mousePressEvent(QMouseEvent *) override;
 	void mouseMoveEvent(QMouseEvent *) override;
@@ -148,6 +150,10 @@ private:
 	qint64 dragGrabMs_ = 0;
 	QPoint pressPos_;
 	qint64 panStart_ = 0;
+	double panMsPerPixel_ = 0.0;
+	QCursor panCursor_;
+	bool panHadCursor_ = false;
+	void finishPan();
 	bool moved_ = false;
 };
 

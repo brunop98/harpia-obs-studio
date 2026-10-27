@@ -1485,7 +1485,7 @@ Timeline::Timeline(QWidget *parent) : QWidget(parent)
 {
 	setMinimumHeight(lp_.barTop + barH() + 22);
 	setMouseTracking(true);
-	setToolTip(QStringLiteral("Scroll to zoom, Shift+scroll to pan"));
+	setToolTip(QStringLiteral("Middle-drag to pan, scroll to zoom, Shift+scroll to pan"));
 }
 
 void Timeline::setLayoutParams(const TimelineLayoutParams &p)
@@ -1513,6 +1513,7 @@ void Timeline::setTallBar(bool on)
 
 void Timeline::setDuration(qint64 ms)
 {
+	finishPan();
 	duration_ = std::max<qint64>(1, ms);
 	start_ = 0;
 	end_ = duration_;
@@ -1587,11 +1588,15 @@ qint64 Timeline::visibleMs() const
 
 void Timeline::clampView()
 {
-	viewStart_ = std::clamp<qint64>(viewStart_, 0, duration_ - visibleMs());
+	viewStart_ = std::clamp<qint64>(viewStart_, 0, std::max<qint64>(0, duration_ - visibleMs()));
 }
 
 void Timeline::wheelEvent(QWheelEvent *e)
 {
+	if (grab_ == Grab::Pan) {
+		e->accept();
+		return;
+	}
 	if (duration_ <= 0)
 		return;
 	const QPoint ad = e->angleDelta();
@@ -1743,6 +1748,26 @@ void Timeline::paintEvent(QPaintEvent *)
 
 void Timeline::mousePressEvent(QMouseEvent *e)
 {
+	if (grab_ == Grab::Pan) {
+		e->accept();
+		return;
+	}
+	if (e->button() == Qt::MiddleButton && duration_ > 0 && grab_ == Grab::None) {
+		grab_ = Grab::Pan;
+		panStartX_ = e->pos().x();
+		panStartView_ = viewStart_;
+		panMsPerPx_ = double(visibleMs()) / std::max(1, width() - 2 * lp_.pad);
+		panCursor_ = cursor();
+		panHadCursor_ = testAttribute(Qt::WA_SetCursor);
+		setCursor(Qt::ClosedHandCursor);
+		if (hoverMs_ >= 0) {
+			hoverMs_ = -1;
+			emit hoverScrubEnded();
+		}
+		update();
+		e->accept();
+		return;
+	}
 	if (e->button() != Qt::LeftButton)
 		return;
 	const int x = e->pos().x();
@@ -1758,6 +1783,17 @@ void Timeline::mousePressEvent(QMouseEvent *e)
 
 void Timeline::mouseMoveEvent(QMouseEvent *e)
 {
+	if (grab_ == Grab::Pan) {
+		if (!(e->buttons() & Qt::MiddleButton)) {
+			finishPan();
+		} else {
+			viewStart_ = panStartView_ - qint64(std::llround((e->pos().x() - panStartX_) * panMsPerPx_));
+			clampView();
+			update();
+		}
+		e->accept();
+		return;
+	}
 	if (grab_ == Grab::None || !(e->buttons() & Qt::LeftButton)) {
 		// Hover: preview the frame under the cursor without clicking. Only the
 		// old + new marker columns repaint, not the whole timeline.
@@ -1792,9 +1828,35 @@ void Timeline::mouseMoveEvent(QMouseEvent *e)
 	update();
 }
 
-void Timeline::mouseReleaseEvent(QMouseEvent *)
+void Timeline::mouseReleaseEvent(QMouseEvent *e)
 {
+	if (grab_ == Grab::Pan) {
+		if (e->button() == Qt::MiddleButton || !(e->buttons() & Qt::MiddleButton))
+			finishPan();
+		e->accept();
+		return;
+	}
+	if (e->button() == Qt::LeftButton)
+		grab_ = Grab::None;
+}
+
+void Timeline::finishPan()
+{
+	if (grab_ != Grab::Pan)
+		return;
 	grab_ = Grab::None;
+	if (panHadCursor_)
+		setCursor(panCursor_);
+	else
+		unsetCursor();
+}
+
+bool Timeline::event(QEvent *event)
+{
+	if (event->type() == QEvent::UngrabMouse || event->type() == QEvent::WindowDeactivate ||
+	    event->type() == QEvent::Hide)
+		finishPan();
+	return QWidget::event(event);
 }
 
 void Timeline::leaveEvent(QEvent *)

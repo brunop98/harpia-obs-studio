@@ -393,12 +393,22 @@ void KeyframeLane::paintEvent(QPaintEvent *)
 
 void KeyframeLane::mousePressEvent(QMouseEvent *e)
 {
+	if (drag_ == Drag::Pan || (drag_ != Drag::None && e->button() == Qt::MiddleButton)) {
+		e->accept();
+		return;
+	}
 	pressPos_ = e->pos();
 	moved_ = false;
 	if (e->button() == Qt::MiddleButton) {
 		drag_ = Drag::Pan;
 		panStart_ = viewStart_;
+		const qint64 duration = std::max<qint64>(1, clip_.outDurationMs());
+		panMsPerPixel_ = double(std::max<qint64>(1, qint64(double(duration) / zoom_))) /
+				 std::max(1, contentRect().width());
+		panCursor_ = cursor();
+		panHadCursor_ = testAttribute(Qt::WA_SetCursor);
 		setCursor(Qt::ClosedHandCursor);
+		e->accept();
 		return;
 	}
 	if (e->button() != Qt::LeftButton)
@@ -423,12 +433,15 @@ void KeyframeLane::mousePressEvent(QMouseEvent *e)
 void KeyframeLane::mouseMoveEvent(QMouseEvent *e)
 {
 	if (drag_ == Drag::Pan) {
-		const qint64 dur = std::max<qint64>(1, clip_.outDurationMs());
-		const qint64 visible = qint64(double(dur) / zoom_);
-		const double perPx = double(visible) / double(std::max(1, contentRect().width()));
-		viewStart_ = panStart_ - qint64((e->pos().x() - pressPos_.x()) * perPx);
+		if (!(e->buttons() & Qt::MiddleButton)) {
+			finishPan();
+			e->accept();
+			return;
+		}
+		viewStart_ = panStart_ - qint64(std::llround((e->pos().x() - pressPos_.x()) * panMsPerPixel_));
 		clampView();
 		update();
+		e->accept();
 		return;
 	}
 	if (drag_ == Drag::Key && dragKey_ >= 0 && dragKey_ < keyStoreSize()) {
@@ -473,9 +486,37 @@ void KeyframeLane::mouseMoveEvent(QMouseEvent *e)
 	setCursor(keyAtX(e->pos().x()) >= 0 ? Qt::SizeHorCursor : Qt::ArrowCursor);
 }
 
+void KeyframeLane::finishPan()
+{
+	if (drag_ != Drag::Pan)
+		return;
+	drag_ = Drag::None;
+	dragKey_ = -1;
+	moved_ = false;
+	if (panHadCursor_)
+		setCursor(panCursor_);
+	else
+		unsetCursor();
+}
+
+bool KeyframeLane::event(QEvent *e)
+{
+	if (e->type() == QEvent::UngrabMouse || e->type() == QEvent::Hide ||
+	    e->type() == QEvent::WindowDeactivate)
+		finishPan();
+	return QWidget::event(e);
+}
+
 void KeyframeLane::mouseReleaseEvent(QMouseEvent *e)
 {
-	Q_UNUSED(e);
+	if (drag_ == Drag::Pan) {
+		if (e->button() == Qt::MiddleButton || !(e->buttons() & Qt::MiddleButton))
+			finishPan();
+		e->accept();
+		return;
+	}
+	if (e->button() != Qt::LeftButton)
+		return;
 	if (drag_ == Drag::Key && moved_)
 		emit clipEdited(); // the finished retime is the undo step
 	drag_ = Drag::None;
@@ -507,6 +548,10 @@ void KeyframeLane::mouseDoubleClickEvent(QMouseEvent *e)
 
 void KeyframeLane::wheelEvent(QWheelEvent *e)
 {
+	if (drag_ == Drag::Pan) {
+		e->accept();
+		return;
+	}
 	const int dy = e->angleDelta().y();
 	if (dy == 0)
 		return;

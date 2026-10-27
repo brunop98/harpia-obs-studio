@@ -694,7 +694,7 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 # A caption wider than the picture wraps at a space and carries on below;
 # typed line breaks are kept and a single long word is left whole.
 # Outlines keep the same proportion in reduced previews and exports.
-for name in textwrap textstylescale; do
+for name in textwrap textstylescale textbackground; do
 g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$HERE/${name}_test.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
@@ -1256,6 +1256,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/pixelbands_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/mask_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textwrap_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textstylescale_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/textbackground_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/coverart_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/emoji_test" "$H/resources/emoji/noto-emoji.pack" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineslice_test" || rc=1

@@ -66,6 +66,7 @@ inline const QVector<Preset> &builtins()
 		instagramBox.color = QColor(0, 0, 0);
 		instagramBox.outlineWidth = 0;
 		instagramBox.boxEnabled = true;
+		instagramBox.boxShape = TlTextBoxFitText;
 		instagramBox.boxColor = QColor(255, 255, 255);
 		instagramBox.boxOpacity = 1.0;
 		instagramBox.boxPadX = 22;
@@ -81,6 +82,7 @@ inline const QVector<Preset> &builtins()
 		TlText tiktokBox = tiktok;
 		tiktokBox.outlineWidth = 0;
 		tiktokBox.boxEnabled = true;
+		tiktokBox.boxShape = TlTextBoxFitText;
 		tiktokBox.boxColor = QColor(0, 0, 0);
 		tiktokBox.boxOpacity = 1.0;
 		tiktokBox.boxPadX = 20;
@@ -108,11 +110,11 @@ inline const QVector<Preset> &builtins()
 			{QStringLiteral("instagram-classic"), QStringLiteral("Instagram Classic"),
 			 QStringLiteral("Clean white text with a fine dark outline. Every setting stays editable."), instagram},
 			{QStringLiteral("instagram-classic-box"), QStringLiteral("Instagram Classic Box"),
-			 QStringLiteral("Black text on a white rounded sticker. Every setting stays editable."), instagramBox},
+			 QStringLiteral("Black text on a white rounded background that follows each line."), instagramBox},
 			{QStringLiteral("tiktok-classic"), QStringLiteral("TikTok Classic"),
 			 QStringLiteral("Bold white text with a strong black outline. Every setting stays editable."), tiktok},
 			{QStringLiteral("tiktok-classic-box"), QStringLiteral("TikTok Classic Box"),
-			 QStringLiteral("Bold white text on a black rounded sticker. Every setting stays editable."), tiktokBox},
+			 QStringLiteral("Bold white text on a black rounded background that follows each line."), tiktokBox},
 			{QStringLiteral("youtube-classic"), QStringLiteral("YouTube Classic"),
 			 QStringLiteral("White captions on a translucent black background. Every setting stays editable."), youtube},
 			{QStringLiteral("youtube-bold"), QStringLiteral("YouTube Bold"),

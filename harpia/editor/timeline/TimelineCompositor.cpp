@@ -15,10 +15,12 @@
 
 #include <QFont>
 #include <QFontMetricsF>
+#include <QLineF>
 #include <QPainter>
 #include <QTransform>
 #include <QPainterPath>
 #include <QPainterPathStroker>
+#include <QPolygonF>
 #include <QHash>
 #include <QStringList>
 
@@ -77,6 +79,7 @@ size_t qHash(const TextPathKey &k, size_t seed = 0)
 struct CachedText {
 	QPainterPath path;
 	QRectF block;
+	QVector<QRectF> lines; // aligned line bands, including glyph/emoji overhangs
 	double strokeWidth = -1.0; // what `stroke` was built for (<0 = not built)
 	QPainterPath stroke;
 
@@ -94,7 +97,79 @@ struct CachedText {
 	// Colour emoji (see Emoji.hpp): not in the paths, drawn as pictures in
 	// these squares after the text, in the caption's space.
 	QVector<QPair<QRectF, QString>> emoji;
+	struct Background {
+		double padX = 0.0, padY = 0.0, radius = 0.0;
+		QPainterPath path;
+	};
+	QVector<Background> backgrounds; // a few padding/radius variants share the same shaped text
 };
+
+// Round the outline of the UNION, including the inside corners of a step.
+// Filling separate rounded rectangles would darken their overlapping padding
+// when the background is translucent, and leave sharp notches between lines.
+QPainterPath roundedLineBands(const QVector<QRectF> &lines, double padX, double padY, double radius)
+{
+	QPainterPath bands;
+	bands.setFillRule(Qt::WindingFill);
+	for (const QRectF &line : lines)
+		bands.addRect(line.adjusted(-padX, -padY, padX, padY));
+	const QPainterPath joined = bands.simplified();
+	if (radius <= 0.01)
+		return joined;
+	QPainterPath rounded;
+	rounded.setFillRule(Qt::OddEvenFill); // simplified() uses odd/even subpaths, including holes
+	constexpr double arc = 0.5522847498307936; // circular quarter-corner cubic
+	for (QPolygonF polygon : joined.toSubpathPolygons()) {
+		if (polygon.size() > 1 && polygon.first() == polygon.last())
+			polygon.removeLast();
+		QVector<QPointF> points;
+		for (const QPointF point : polygon)
+			if (points.isEmpty() || QLineF(points.last(), point).length() > 1e-7)
+				points.push_back(point);
+		if (points.size() > 1 && QLineF(points.first(), points.last()).length() < 1e-7)
+			points.removeLast();
+		QVector<QPointF> corners;
+		for (int i = 0; i < points.size(); ++i) {
+			const QPointF before = points[i] - points[(i + points.size() - 1) % points.size()];
+			const QPointF after = points[(i + 1) % points.size()] - points[i];
+			if (std::abs(before.x() * after.y() - before.y() * after.x()) > 1e-7 ||
+			    QPointF::dotProduct(before, after) < 0.0)
+				corners.push_back(points[i]);
+		}
+		if (corners.size() < 3)
+			continue;
+		for (int i = 0; i < corners.size(); ++i) {
+			const QPointF corner = corners[i];
+			const QPointF incoming = corners[(i + corners.size() - 1) % corners.size()] - corner;
+			const QPointF outgoing = corners[(i + 1) % corners.size()] - corner;
+			const double inLength = std::hypot(incoming.x(), incoming.y());
+			const double outLength = std::hypot(outgoing.x(), outgoing.y());
+			const double trim = std::min({radius, inLength / 2.0, outLength / 2.0});
+			const QPointF entry = corner + incoming * (trim / inLength);
+			const QPointF exit = corner + outgoing * (trim / outLength);
+			if (i == 0)
+				rounded.moveTo(entry);
+			else
+				rounded.lineTo(entry);
+			rounded.cubicTo(entry + (corner - entry) * arc, exit + (corner - exit) * arc, exit);
+		}
+		rounded.closeSubpath();
+	}
+	return rounded;
+}
+
+const QPainterPath &fittedBackground(CachedText &text, double padX, double padY, double radius)
+{
+	for (const CachedText::Background &background : text.backgrounds)
+		if (background.padX == padX && background.padY == padY && background.radius == radius)
+			return background.path;
+	// A user can sweep padding and radius through many values. Keep derivative
+	// geometry bounded while avoiding a new union on every animated frame.
+	if (text.backgrounds.size() >= 64)
+		text.backgrounds.clear();
+	text.backgrounds.push_back({padX, padY, radius, roundedLineBands(text.lines, padX, padY, radius)});
+	return text.backgrounds.last().path;
+}
 
 // The lines as DRAWN -- the case style applied here, at the one point the words
 // become geometry, so the path, the block measurement and therefore the
@@ -145,7 +220,7 @@ QStringList wrapLines(const QStringList &lines, const QFont &f, double maxW)
 // it is broken (0 = never). Emoji are left out of the path and listed in
 // `emojiOut`, each with the square it is drawn in.
 QPainterPath buildTextPath(const TlText &t, const QFont &f, double wrapW, QRectF *blockOut,
-			   QVector<QPair<QRectF, QString>> *emojiOut)
+			   QVector<QPair<QRectF, QString>> *emojiOut, QVector<QRectF> *lineRects)
 {
 	const QFontMetricsF fm(f);
 	const QStringList lines = wrapLines(textLines(t), f, wrapW);
@@ -164,16 +239,21 @@ QPainterPath buildTextPath(const TlText &t, const QFont &f, double wrapW, QRectF
 			x = -w / 2.0;
 		else if (t.align == 2)             // right
 			x = maxW / 2.0 - w;
+		QRectF line(x, y - fm.ascent(), w, lineH);
 		for (const emoji::Piece &pc : emoji::split(l)) {
 			if (pc.isEmoji()) {
+				line = line.united(emoji::square(f, x, y));
 				if (emojiOut)
 					emojiOut->push_back({emoji::square(f, x, y), pc.key});
 				x += emoji::advance(f);
 			} else {
+				line = line.united(fm.boundingRect(pc.text).translated(x, y));
 				path.addText(QPointF(x, y), f, pc.text);
 				x += fm.horizontalAdvance(pc.text);
 			}
 		}
+		if (lineRects && !l.trimmed().isEmpty())
+			lineRects->push_back(line);
 		y += lineH;
 	}
 	if (blockOut)
@@ -201,7 +281,7 @@ void buildRichText(const TlText &t, const QFont &base, QSize canvas, double wrap
 		TlText plain = t;
 		plain.text = plainText(tlDisplayText(t));
 		plain.textCase = TlCaseAsTyped; // the displayed text was already cased
-		ct.path = buildTextPath(plain, base, wrapW, &ct.block, &ct.emoji);
+		ct.path = buildTextPath(plain, base, wrapW, &ct.block, &ct.emoji, &ct.lines);
 		return;
 	}
 	const auto fontFor = [&](const Style &st) {
@@ -335,18 +415,23 @@ void buildRichText(const TlText &t, const QFont &base, QSize canvas, double wrap
 		else if (t.align == 2)  // right
 			x = maxW / 2.0 - m.w;
 		const double baseline = top + m.ascent;
+		QRectF line(x, top, m.w, m.height);
+		bool hasContent = false;
 		for (const Tok &tk : laid[li]) {
 			const QFontMetricsF fm(tk.font);
 			if (tk.st.mark.isValid())
 				ct.marks.push_back({QRectF(x, top, tk.w, m.height), tk.st.mark});
 			QPainterPath &fill = fillFor(tk.st);
 			if (!tk.space) {
+				hasContent = hasContent || !tk.text.trimmed().isEmpty();
 				double ex = x;
 				for (const emoji::Piece &pc : emoji::split(tk.text)) {
 					if (pc.isEmoji()) {
+						line = line.united(emoji::square(tk.font, ex, baseline));
 						ct.emoji.push_back({emoji::square(tk.font, ex, baseline), pc.key});
 						ex += emoji::advance(tk.font);
 					} else {
+						line = line.united(fm.boundingRect(pc.text).translated(ex, baseline));
 						fill.addText(QPointF(ex, baseline), tk.font, pc.text);
 						ex += fm.horizontalAdvance(pc.text);
 					}
@@ -359,6 +444,8 @@ void buildRichText(const TlText &t, const QFont &base, QSize canvas, double wrap
 				fill.addRect(QRectF(x, baseline - fm.strikeOutPos() - lw / 2.0, tk.w, lw));
 			x += tk.w;
 		}
+		if (hasContent)
+			ct.lines.push_back(line);
 		top += m.height;
 	}
 	ct.path = QPainterPath();
@@ -399,7 +486,7 @@ CachedText &cachedText(const TlText &t, const QFont &f, QSize canvas)
 		if (rich_text::hasTags(k.text))
 			buildRichText(t, f, canvas, canvas.width() * kWrapShare, ct);
 		else
-			ct.path = buildTextPath(t, f, canvas.width() * kWrapShare, &ct.block, &ct.emoji);
+			ct.path = buildTextPath(t, f, canvas.width() * kWrapShare, &ct.block, &ct.emoji, &ct.lines);
 		it = cache.insert(k, ct);
 	}
 	return it.value();
@@ -436,7 +523,7 @@ size_t qHash(const TextSpriteKey &k, size_t seed = 0)
 	const TlText &t = k.t;
 	return qHashMulti(seed, t.text, t.fontFamily, t.fontPx, t.bold, t.italic, t.color.rgba(), t.outlineWidth,
 			  t.outlineColor.rgba(), t.boxEnabled, t.boxColor.rgba(), t.boxOpacity, t.boxPadX, t.boxPadY,
-			  t.boxRadius, t.align, t.textCase, k.canvasW, k.canvasH, k.scale, k.phaseX, k.phaseY);
+			  t.boxRadius, t.boxShape, t.align, t.textCase, k.canvasW, k.canvasH, k.scale, k.phaseX, k.phaseY);
 }
 
 struct TextSprite {
@@ -451,10 +538,17 @@ constexpr int kTextPhaseSteps = 256;
 QSize TimelineCompositor::textNaturalSize(const TlText &t, QSize canvas)
 {
 	const QFont f = buildFont(t, canvas);
-	const QRectF block = cachedText(t, f, canvas).block;
+	CachedText &text = cachedText(t, f, canvas);
+	const QRectF block = text.block;
 	// The natural size INCLUDES the background, so the preview's selection
 	// outline and hit-testing wrap the sticker rather than just the glyphs.
 	const double k = textScale(canvas);
+	if (t.boxEnabled && t.boxShape == TlTextBoxFitText) {
+		const QRectF bounds = block.united(fittedBackground(text, t.boxPadX * k, t.boxPadY * k,
+								     t.boxRadius * k).boundingRect());
+		return QSize(std::max(1, int(std::ceil(2.0 * std::max(std::abs(bounds.left()), std::abs(bounds.right()))))),
+			     std::max(1, int(std::ceil(2.0 * std::max(std::abs(bounds.top()), std::abs(bounds.bottom()))))));
+	}
 	const double px = t.boxEnabled ? t.boxPadX * k * 2.0 : 0.0;
 	const double py = t.boxEnabled ? t.boxPadY * k * 2.0 : 0.0;
 	return QSize(std::max(1, int(std::ceil(block.width() + px))),
@@ -534,13 +628,18 @@ void TimelineCompositor::drawTextClip(QPainter &p, const TlClip &c, const TlTran
 	// The box, in the caption's own (unscaled) space.
 	const QRectF box = block.adjusted(-t.boxPadX * k, -t.boxPadY * k, t.boxPadX * k, t.boxPadY * k);
 	const double boxR = std::min(t.boxRadius * k, std::min(box.width(), box.height()) / 2.0);
+	const QPainterPath *fittedBox = t.boxEnabled && t.boxShape == TlTextBoxFitText
+		? &fittedBackground(ct, t.boxPadX * k, t.boxPadY * k, t.boxRadius * k) : nullptr;
 	const auto paintCaption = [&](QPainter &q) {
 		if (t.boxEnabled) {
 			QColor fill = t.boxColor;
 			fill.setAlphaF(float(std::clamp(t.boxOpacity, 0.0, 1.0)));
 			q.setPen(Qt::NoPen);
 			q.setBrush(fill);
-			q.drawRoundedRect(box, boxR, boxR);
+			if (fittedBox)
+				q.drawPath(*fittedBox);
+			else
+				q.drawRoundedRect(box, boxR, boxR);
 		}
 		for (const auto &mk : ct.marks)
 			q.fillRect(mk.first, mk.second);
@@ -600,7 +699,7 @@ void TimelineCompositor::drawTextClip(QPainter &p, const TlClip &c, const TlTran
 			// their scaled outline and the box.
 			QRectF local = path.boundingRect().adjusted(-outline, -outline, outline, outline);
 			if (t.boxEnabled)
-				local = local.united(box);
+				local = local.united(fittedBox ? fittedBox->boundingRect() : box);
 			for (const auto &mk : ct.marks)
 				local = local.united(mk.first);
 			for (const auto &e : ct.emoji)

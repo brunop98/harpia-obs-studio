@@ -26,6 +26,7 @@ inline QJsonObject textStyleToJson(const TlText &t)
 	o[QStringLiteral("outlineW")] = t.outlineWidth;
 	o[QStringLiteral("outlineColor")] = t.outlineColor.name(QColor::HexArgb);
 	o[QStringLiteral("box")] = t.boxEnabled;
+	o[QStringLiteral("boxShape")] = t.boxShape;
 	o[QStringLiteral("boxColor")] = t.boxColor.name(QColor::HexArgb);
 	o[QStringLiteral("boxPadX")] = t.boxPadX;
 	o[QStringLiteral("boxPadY")] = t.boxPadY;
@@ -49,6 +50,10 @@ inline void applyTextStyleFromJson(const QJsonObject &o, TlText &t)
 	t.outlineWidth = o.value(QStringLiteral("outlineW")).toDouble(3.0);
 	t.outlineColor = QColor(o.value(QStringLiteral("outlineColor")).toString());
 	t.boxEnabled = o.value(QStringLiteral("box")).toBool(false);
+	// Only a known mode opts into fitted stickers. Missing or malformed values
+	// retain the appearance of projects and styles written before this option.
+	t.boxShape = o.value(QStringLiteral("boxShape")).toDouble(0.0) == TlTextBoxFitText
+		? TlTextBoxFitText : TlTextBoxRectangle;
 	t.boxColor = QColor(o.value(QStringLiteral("boxColor")).toString());
 	// "boxPad" was one number for both axes; it seeds them both so an older
 	// preset or project keeps the spacing it was saved with.

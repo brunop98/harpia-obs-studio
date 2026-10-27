@@ -101,6 +101,9 @@ Three modes, each one step up from the last:
     silently omit the effect; restore/fix its `.frag` file or disable it;
   - **text** with presets and Unity-style **rich text** tags
     (`<b>`, `<color=#f80>`, `<size=150%>`…);
+  - text **Background → Shape → Fit text** creates a rounded sticker following
+    each line's width, including wrapped lines. Colour, opacity, padding and
+    corner radius stay editable. **Rectangle** keeps the full-block background;
   - **Random text**: one caption with several alternatives, exported as one
     video per combination (with saved lists of alternatives);
   - **Inverse Selection** masks, effect clips, **sounds for events**, tags;

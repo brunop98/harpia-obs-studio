@@ -122,6 +122,7 @@ int main(int argc, char **argv)
 		t.text.boxPadX = 21;
 		t.text.boxPadY = 13;
 		t.text.boxRadius = 17;
+		t.text.boxShape = TlTextBoxFitText;
 		t.text.align = 2;
 		ok(clipFromJson(clipToJson(t)) == t, "every text field round-trips");
 	}

@@ -7839,7 +7839,8 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		pickTextColor(QStringLiteral("Outline colour"), &TlText::outlineColor);
 	});
 
-	boxChk_ = new QCheckBox(QStringLiteral("Background box"), textBox_);
+	boxChk_ = new QCheckBox(QStringLiteral("Background"), textBox_);
+	boxChk_->setObjectName(QStringLiteral("textBackgroundEnabled"));
 	tForm->addRow(QString(), boxChk_);
 	connect(boxChk_, &QCheckBox::toggled, this, [this](bool on) {
 		// Before the syncingClip_ guard: the rows follow the CHECKBOX, whether
@@ -7848,6 +7849,21 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		if (syncingClip_)
 			return;
 		editTextStyle([on](TlClip &c) { c.text.boxEnabled = on; });
+	});
+
+	boxShapeCombo_ = new QComboBox(textBox_);
+	boxShapeCombo_->setObjectName(QStringLiteral("textBackgroundShape"));
+	boxShapeCombo_->addItem(QStringLiteral("Rectangle"), TlTextBoxRectangle);
+	boxShapeCombo_->addItem(QStringLiteral("Fit text"), TlTextBoxFitText);
+	boxShapeCombo_->setToolTip(QStringLiteral(
+		"Rectangle covers the whole text block. Fit text follows each line's width "
+		"with a joined background, like social video captions."));
+	tForm->addRow(QStringLiteral("Shape"), boxShapeCombo_);
+	connect(boxShapeCombo_, &QComboBox::currentIndexChanged, this, [this](int index) {
+		if (syncingClip_ || index < 0)
+			return;
+		const int shape = boxShapeCombo_->itemData(index).toInt();
+		editTextStyle([shape](TlClip &c) { c.text.boxShape = shape; });
 	});
 
 	boxColorBtn_ = new QPushButton(textBox_);
@@ -8079,17 +8095,13 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	into->addWidget(clipBox_);
 }
 
-// The background box's own settings only mean something when there IS a box.
-//
-// Five rows of colour, opacity, padding and radius sat under the toggle whether
-// it was on or off, so the commonest text clip -- no box -- showed five controls
-// that did nothing, and the ones that mattered were pushed off the bottom.
+// Hide background controls and their form labels together when disabled.
 void VideoEditorWindow::syncTextBoxRows()
 {
 	if (!textForm_ || !boxChk_)
 		return;
 	const bool on = boxChk_->isChecked();
-	for (QWidget *w : {static_cast<QWidget *>(boxColorBtn_),
+	for (QWidget *w : {static_cast<QWidget *>(boxShapeCombo_), static_cast<QWidget *>(boxColorBtn_),
 			   boxOpacityRow_,
 			   static_cast<QWidget *>(boxPadXSpin_), static_cast<QWidget *>(boxPadYSpin_),
 			   static_cast<QWidget *>(boxRadiusSpin_)})
@@ -8677,6 +8689,7 @@ void VideoEditorWindow::syncTextInspector(const TlClip &c)
 	titleCaseChk_->setChecked(c.text.textCase == TlCaseTitle);
 	outlineWSpin_->setValue(c.text.outlineWidth);
 	boxChk_->setChecked(c.text.boxEnabled);
+	boxShapeCombo_->setCurrentIndex(c.text.boxShape == TlTextBoxFitText ? 1 : 0);
 	// setChecked only emits when the value CHANGES, so selecting a second
 	// clip with the same box setting would leave the rows as the last one
 	// left them. Called directly, it is right either way.

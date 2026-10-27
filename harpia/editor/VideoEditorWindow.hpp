@@ -994,6 +994,7 @@ private:
 	// through the layout itself -- hiding the field leaves its label behind.
 	QFormLayout *textForm_ = nullptr;
 	QCheckBox *boxChk_ = nullptr;
+	QComboBox *boxShapeCombo_ = nullptr;
 	QPushButton *boxColorBtn_ = nullptr;
 	QSpinBox *boxPadXSpin_ = nullptr;
 	QSpinBox *boxPadYSpin_ = nullptr;

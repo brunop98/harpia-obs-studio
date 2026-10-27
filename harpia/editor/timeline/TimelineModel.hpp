@@ -114,6 +114,8 @@ inline const char *tlLaneName(int lane)
 
 // Styling for a text clip. Rendered by TimelineCompositor with QPainter, so the
 // preview and the exported frames use identical text.
+enum TlTextBoxShape { TlTextBoxRectangle = 0, TlTextBoxFitText = 1 };
+
 struct TlText {
 	QString text = QStringLiteral("Text");
 	QString fontFamily;          // empty = the app's default family
@@ -123,15 +125,15 @@ struct TlText {
 	QColor color = QColor(0xff, 0xff, 0xff);
 	double outlineWidth = 3.0;   // 0 = no outline
 	QColor outlineColor = QColor(0x00, 0x00, 0x00);
-	// Background "sticker" behind the text, the Instagram/TikTok kind: one
-	// continuous rounded shape wrapping the whole block, however many lines it
-	// has, sized from the text and re-measured whenever the text changes.
+	// A rectangular background, or a joined sticker following each line's width.
+	// Both are re-measured when the text changes, including automatic wrapping.
 	//
 	// Padding and radius are in the SAME reference units as fontPx (relative to
 	// a 1080-tall canvas) and are scaled by the same factor when rendering, so
 	// the corners and the breathing room track the text size instead of
 	// shrinking away on a big canvas.
 	bool boxEnabled = false;
+	int boxShape = TlTextBoxRectangle; // older projects keep their rectangular background
 	QColor boxColor = QColor(0, 0, 0);
 	double boxOpacity = 0.6;  // independent of boxColor, so the colour picker
 				  // and the transparency don't fight each other
@@ -167,7 +169,7 @@ struct TlText {
 		return text == o.text && variations == o.variations && random == o.random && fontFamily == o.fontFamily && fontPx == o.fontPx &&
 		       bold == o.bold && italic == o.italic && color == o.color &&
 		       outlineWidth == o.outlineWidth && outlineColor == o.outlineColor &&
-		       boxEnabled == o.boxEnabled && boxColor == o.boxColor &&
+		       boxEnabled == o.boxEnabled && boxShape == o.boxShape && boxColor == o.boxColor &&
 		       boxOpacity == o.boxOpacity && boxPadX == o.boxPadX && boxPadY == o.boxPadY &&
 		       boxRadius == o.boxRadius && align == o.align && textCase == o.textCase;
 	}

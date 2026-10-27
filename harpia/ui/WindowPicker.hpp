@@ -34,15 +34,17 @@ public:
 	explicit WindowPicker(QObject *parent = nullptr);
 	~WindowPicker() override;
 
-	// Show the layers, with the platform's window list.
-	void start();
+	// Show the layers, with the platform's window list. An editor's native
+	// handle may be allowed explicitly; all other own windows stay excluded.
+	void start(const QSet<quintptr> &allowedOwnWindows = {});
 	// The same with a given list and screens (physical rectangles): tests, and
 	// any platform that has its own way to list windows.
 	struct ScreenArea {
 		QScreen *screen = nullptr;
 		QRect physical;
 	};
-	void startWith(const QVector<DesktopWindow> &topmostFirst, const QVector<ScreenArea> &screens);
+	void startWith(const QVector<DesktopWindow> &topmostFirst, const QVector<ScreenArea> &screens,
+		       const QSet<quintptr> &allowedOwnWindows = {});
 
 	bool active() const { return !layers_.isEmpty(); }
 	void cancel();
@@ -63,6 +65,7 @@ private:
 	void close();
 
 	QVector<DesktopWindow> windows_;
+	QSet<quintptr> allowedOwnWindows_;
 	QVector<QPointer<WindowPickerLayer>> layers_;
 	int hovered_ = -1;
 };

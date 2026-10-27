@@ -1,4 +1,5 @@
 #include "UrlDownloadDialog.hpp"
+#include "../EditorFileDialog.hpp"
 
 #include "YtDlpSettingsWidget.hpp"
 #include "../../ui/EditorLog.hpp"
@@ -158,7 +159,7 @@ void UrlDownloadDialog::buildUi()
 			const QString start = settings_.cookiesFile.isEmpty()
 						      ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)
 						      : QFileInfo(settings_.cookiesFile).absolutePath();
-			const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("Choose the exported cookies.txt"),
+			const QString f = editor_dialogs::getOpenFileName(this, QStringLiteral("Choose the exported cookies.txt"),
 								       start, QStringLiteral("Cookies (*.txt);;All files (*)"));
 			if (f.isEmpty()) {
 				fillCookiesCombo(); // back to what it was
@@ -194,7 +195,7 @@ void UrlDownloadDialog::buildUi()
 	dirRow->addWidget(folder_, 1);
 	auto *changeDir = new QPushButton(QStringLiteral("Change…"), optionsBox_);
 	connect(changeDir, &QPushButton::clicked, this, [this]() {
-		const QString d = QFileDialog::getExistingDirectory(
+		const QString d = editor_dialogs::getExistingDirectory(
 			this, QStringLiteral("Download folder"),
 			settings_.downloadDir.isEmpty() ? YtDlpSettings::defaultDownloadDir() : settings_.downloadDir);
 		if (d.isEmpty())

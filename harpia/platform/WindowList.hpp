@@ -18,6 +18,7 @@
 // there is nothing to ask, the list is empty and the feature hides itself.
 
 #include <QRect>
+#include <QSet>
 #include <QSize>
 #include <QString>
 #include <QVector>
@@ -59,11 +60,16 @@ std::optional<QPoint> cursorPos();
 
 namespace window_region {
 
-// The topmost window under `p`, skipping our own; -1 if none.
-inline int windowAt(const QVector<DesktopWindow> &topmostFirst, const QPoint &p)
+// The topmost window under `p`, skipping our own unless explicitly allowed.
+// The caller can allow a particular editor window to be recorded without
+// making recorder controls and capture overlays pickable. A zero handle is
+// never an own-window exception. Returns -1 if there is no eligible window.
+inline int windowAt(const QVector<DesktopWindow> &topmostFirst, const QPoint &p,
+		    const QSet<quintptr> &allowedOwnWindows = {})
 {
 	for (int i = 0; i < topmostFirst.size(); ++i)
-		if (!topmostFirst[i].ours && topmostFirst[i].bounds.contains(p))
+		if ((!topmostFirst[i].ours || (topmostFirst[i].id != 0 && allowedOwnWindows.contains(topmostFirst[i].id))) &&
+		    topmostFirst[i].bounds.contains(p))
 			return i;
 	return -1;
 }

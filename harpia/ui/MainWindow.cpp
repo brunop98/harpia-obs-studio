@@ -702,7 +702,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(stopButton_, &QPushButton::clicked, this, &MainWindow::onStopButton);
 	connect(openFolderButton_, &QPushButton::clicked, this, &MainWindow::openOutputFolder);
 
-	// Recording hotkeys. The window-scoped QShortcuts are the FALLBACK; on
+	// Recording hotkeys. Application shortcuts cover both recorder and editor; on
 	// Windows the same keys are registered system-wide (rebindHotkeys), which
 	// is the only version that works at the moment hotkeys are for -- during a
 	// recording, when Harpia is almost never the focused window. RegisterHotKey
@@ -727,7 +727,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 			onGuidesToggle();
 	});
 	// Zoom gets the same treatment: a global hotkey where the platform allows,
-	// a window-scoped fallback otherwise. Unlike the other two its key comes
+	// an application-scoped fallback otherwise. Unlike the other two its key comes
 	// from the preset, so it is re-bound on every preset change as well as on
 	// every save (see rebindZoomHotkey).
 	zoomShortcut_ = new QShortcut(QKeySequence(), this);
@@ -738,6 +738,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(followShortcut_, &QShortcut::activated, this, &MainWindow::onFollowToggle);
 	guidesShortcut_ = new QShortcut(QKeySequence(), this);
 	connect(guidesShortcut_, &QShortcut::activated, this, &MainWindow::onGuidesToggle);
+	for (QShortcut *shortcut : {recordShortcut_, pauseShortcut_, zoomShortcut_, spotlightShortcut_,
+				     followShortcut_, guidesShortcut_})
+		shortcut->setContext(Qt::ApplicationShortcut);
 	rebindHotkeys();
 	rebindPresetHotkeys();
 
@@ -1982,10 +1985,8 @@ void MainWindow::setHotkeysSuspended(bool on)
 		return;
 	hotkeysSuspended_ = on;
 
-	// The window-scoped QShortcuts go too. They do not fire for a separate
-	// dialog window today, but they are the fallback wherever RegisterHotKey
-	// does not exist, and there a key field would have the same problem for a
-	// different reason.
+	// Application shortcuts cover the editor too. Release them while a key
+	// field or the recording profile is being edited, along with native keys.
 	for (QShortcut *s : {recordShortcut_, pauseShortcut_, zoomShortcut_, spotlightShortcut_,
 			     followShortcut_, guidesShortcut_})
 		if (s)
@@ -2017,8 +2018,8 @@ void MainWindow::rebindHotkeys()
 	const bool recGlobal = hotkeys_->bind(1, rec);
 	const bool pauseGlobal = hotkeys_->bind(2, pause);
 	blog(LOG_INFO, "[harpia] hotkeys: record=%s (%s)  pause=%s (%s)",
-	     qUtf8Printable(rec.toString()), recGlobal ? "global" : "window-only",
-	     qUtf8Printable(pause.toString()), pauseGlobal ? "global" : "window-only");
+	     qUtf8Printable(rec.toString()), recGlobal ? "global" : "app-only",
+	     qUtf8Printable(pause.toString()), pauseGlobal ? "global" : "app-only");
 	// The buttons name the keys in their tooltips; updateButtons re-applies
 	// them on its next pass.
 	const QString focusedOnly = QStringLiteral(", when Harpia is focused");
@@ -2939,17 +2940,15 @@ void MainWindow::onOpenClipLibrary()
 
 void MainWindow::openBlankEditor()
 {
-	auto *editor = new VideoEditorWindow(QString(), presetFolders(), this);
+	// An independent top-level window keeps recording controls reachable, also
+	// while an editor-owned modal dialog is open.
+	auto *editor = new VideoEditorWindow(QString(), presetFolders());
 	// No isValid() gate: an empty editor is always valid. That check is for a
 	// launch file that could not be decoded, and there is no launch file.
 	connect(editor, &VideoEditorWindow::exported, this, [this]() { refreshClipViews(); });
 	connect(editor, &VideoEditorWindow::recordingsDeleted, this, [this]() { refreshClipViews(); });
 	editor->setAttribute(Qt::WA_DeleteOnClose);
-	// exec(), like every other way into the editor: one modal editor at a time
-	// is the rule this app already follows, and a modeless one here would be the
-	// only window from which a recording could be started with the editor open
-	// -- a different and much larger question than adding a button.
-	editor->exec();
+	editor->show();
 }
 
 void MainWindow::onOpenErrorLogs()
@@ -3099,7 +3098,11 @@ void MainWindow::startWindowPick()
 	if (regionTool_ && !recorder_.isRecording())
 		regionTool_->hide();
 	updateGuides(); // they go with the frame
-	windowPicker_->start();
+	QSet<quintptr> editorWindows;
+	for (QWidget *window : QApplication::topLevelWidgets())
+		if (auto *editor = qobject_cast<VideoEditorWindow *>(window); editor && editor->isVisible())
+			editorWindows.insert(quintptr(editor->winId()));
+	windowPicker_->start(editorWindows);
 }
 
 void MainWindow::applyPickedWindow(const DesktopWindow &w)
@@ -3674,7 +3677,7 @@ void MainWindow::updateGuides()
 	// A countdown counts as underway: it is lining up the take about to start.
 	const bool show = guidesVisible(p.showGuides, p.guideKinds, modeSupportsGuides(recordMode()),
 					recorder_.isRecording() || starting_, guides_->hiddenFromCapture(),
-					VideoEditorWindow::anyOpen(), areaArranging_, areaShown,
+					VideoEditorWindow::anyOpen() && !isActiveWindow(), areaArranging_, areaShown,
 					isMinimized() && !countingDown_);
 	const QRect r = show ? recordedRectLogical() : QRect();
 	if (r.isEmpty()) {
@@ -4054,7 +4057,7 @@ void MainWindow::updateRegionToolVisibility()
 	// shows the frame: it marks what is about to be recorded.
 	const RegionOverlayState st = regionOverlayState(captureMode_ == CaptureMode::Region,
 							 recorder_.isRecording(), focused,
-							 VideoEditorWindow::anyOpen(), lingering,
+							 VideoEditorWindow::anyOpen() && !focused, lingering,
 							 isMinimized() && !starting_ && !countingDown_);
 	// The one place the preset's move-handle flag needs applying: every path that
 	// could change it -- editing the preset, switching preset, switching capture
@@ -4158,6 +4161,14 @@ void MainWindow::closeEvent(QCloseEvent *event)
 		// background — closing now would corrupt/lose it.
 		closePending_ = true;
 		statusBar()->showMessage(QStringLiteral("Finishing the recording file before closing…"));
+		event->ignore();
+		return;
+	}
+
+	// Editors are independent windows now. Honor their unsaved-work prompts
+	// before allowing this application's recorder/backend lifetime to end.
+	if (!VideoEditorWindow::closeAllWindows()) {
+		closePending_ = false;
 		event->ignore();
 		return;
 	}
@@ -4733,7 +4744,7 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 		return;
 	}
 	if (chosen == trimAct) {
-		auto *editor = new VideoEditorWindow(path, presetFolders(), this);
+		auto *editor = new VideoEditorWindow(path, presetFolders());
 		if (!editor->isValid()) {
 			QMessageBox::warning(this, QStringLiteral("Edit"),
 					     QStringLiteral("Could not open this video for editing."));
@@ -4743,7 +4754,7 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 		connect(editor, &VideoEditorWindow::exported, this, [this]() { refreshClipViews(); });
 		connect(editor, &VideoEditorWindow::recordingsDeleted, this, [this]() { refreshClipViews(); });
 		editor->setAttribute(Qt::WA_DeleteOnClose);
-		editor->exec();
+		editor->show();
 	} else if (chosen == optLowAct) {
 		ShareExportDialog::runModal(path, ShareExporter::Level::Low, this);
 		refreshClipViews();
@@ -5024,17 +5035,11 @@ void MainWindow::updateFloatingControls()
 				    recording && !stopping_);
 	floatingControls_->setRegionLock(canLockRecordingRegion(), regionFollowLocked_);
 
-	// The panel is now on screen while idle too, holding the green Record
-	// button, so a recording can be started from wherever you are working
-	// without coming back here. Two exceptions:
-	//   * the editor is a window you work INSIDE, usually maximised -- the same
-	//     reason the region overlay steps aside for it (see
-	//     updateRegionToolVisibility). A recording in progress outranks that,
-	//     since hiding it would be hiding the recording;
-	//   * "Hide until next recording" from its right-click menu, which is the
-	//     only way to be rid of a panel that otherwise never leaves.
-	const bool editorInTheWay = VideoEditorWindow::anyOpen() && !active;
-	if (active || (!floatingDismissed_ && !editorInTheWay && !floatingControls_->onlyWhileRecording()))
+	// Keep Record reachable while editing too, so the editor can be captured
+	// for a tutorial. Idle visibility still follows the user's dismissal and
+	// "Only show while recording" preference; an active take always shows its
+	// Pause/Stop controls.
+	if (active || (!floatingDismissed_ && !floatingControls_->onlyWhileRecording()))
 		floatingControls_->showControls();
 	else
 		floatingControls_->hideControls();
@@ -5094,11 +5099,9 @@ void MainWindow::tickState()
 {
 	++spinPhase_; // drive the Starting…/Stopping… spinner
 
-	// The editor opens with exec(), which spins its own event loop -- this timer
-	// keeps running inside it, and nothing else here does. So the overlay's
-	// "hide while the editor is up" rule is re-checked from the tick rather than
-	// from either of the two places an editor can be opened. setMode() and
-	// setVisible() are both no-ops when nothing has changed.
+	// Independent editor windows share this event loop with the recorder.
+	// Recheck overlays while focus and recording state change; the setters
+	// are no-ops when nothing has changed.
 	updateRegionToolVisibility();
 	// The guides' rules (the editor, a recording on a system that cannot keep
 	// them out of it) and their place, caught up four times a second.

@@ -46,6 +46,12 @@ needs (see [The OBS tree](#the-obs-tree)).
   name template, webcam, audio, region behaviour.
 - **Global hotkeys** (F9 record, F10 pause, F4 zoom), a countdown, floating
   recording controls, **idle auto-pause** and pause-when-another-app-is-focused.
+- **Record editing tutorials:** the recorder and video editor work in separate
+  windows. Keep editing while recording, and use the floating Record/Pause/Stop
+  controls or recording shortcuts with the editor focused. Editor dialogs leave
+  those controls usable. Record the monitor, draw a region, or use **Pick a
+  window…** to select the editor on supported platforms. Turn off a profile's
+  focus restriction if it is set to pause while using another application.
 - **Auto Split:** set **Auto split the recording file** under **Preset Settings
   → Recording** to split by recorded minutes or approximate file size. Each
   preset saves its own enable switch, split mode and limits across restarts.

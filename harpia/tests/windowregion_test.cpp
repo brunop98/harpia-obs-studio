@@ -47,6 +47,31 @@ int main(int argc, char **argv)
 		ok(windowAt(z, QPoint(1500, 900)) == -1, "nothing but our own overlay: no window");
 	}
 
+	std::printf("\n-- explicitly recording an editor window --\n");
+	{
+		const QVector<DesktopWindow> z = {
+			win(1, QRect(0, 0, 1920, 1080), true), // capture overlay remains excluded
+			win(2, QRect(0, 0, 80, 80), true),     // recorder remains excluded
+			win(3, QRect(100, 100, 500, 400), true), // explicitly allowed editor
+			win(4, QRect(100, 100, 500, 400)),
+			win(0, QRect(700, 100, 80, 80), true),
+		};
+		ok(windowAt(z, QPoint(200, 200)) == 3,
+		   "own editor windows remain excluded without an explicit exception");
+		ok(windowAt(z, QPoint(200, 200), {3}) == 2,
+		   "the exact allowed editor handle is pickable above a foreign window");
+		ok(windowAt(z, QPoint(20, 20), {3}) == -1,
+		   "allowing the editor keeps the recorder and full-screen capture overlay excluded");
+		ok(windowAt(z, QPoint(200, 200), {999}) == 3,
+		   "a stale allowed handle cannot permit a different own window");
+		ok(windowAt(z, QPoint(720, 120), {0, 3}) == -1,
+		   "a zero native handle never permits an own window");
+		QVector<DesktopWindow> foreground = z;
+		foreground.prepend(win(5, QRect(100, 100, 500, 400)));
+		ok(windowAt(foreground, QPoint(200, 200), {3}) == 0,
+		   "an allowed editor behind another app does not bypass native window order");
+	}
+
 	std::printf("\n-- which monitor it is on --\n");
 	{
 		const QVector<QRect> monitors = {QRect(0, 0, 1920, 1080), QRect(-1920, 0, 1920, 1080)};

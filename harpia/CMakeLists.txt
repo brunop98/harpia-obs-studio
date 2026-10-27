@@ -349,6 +349,8 @@ target_sources(
     editor/ExportOptionsDialog.hpp
     editor/VideoEditorWindow.cpp
     editor/VideoEditorWindow.hpp
+    editor/EditorDialogScope.hpp
+    editor/EditorFileDialog.hpp
     editor/LoadingTask.hpp
     editor/ClipboardPaste.cpp
     editor/ClipboardPaste.hpp

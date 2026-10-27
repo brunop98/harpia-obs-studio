@@ -108,8 +108,8 @@ bool GlobalHotkeys::bind(int id, const QKeySequence &seq)
 	}
 	return true;
 #else
-	// No global-hotkey backend on this platform: the window-scoped QShortcuts
-	// stay in charge, which is what this platform always had.
+	// No global-hotkey backend on this platform: application QShortcuts cover
+	// Harpia's recorder and editor while either is focused.
 	Q_UNUSED(id);
 	Q_UNUSED(seq);
 	return false;

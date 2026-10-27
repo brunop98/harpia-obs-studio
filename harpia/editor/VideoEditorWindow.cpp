@@ -38,6 +38,8 @@
 #include "ClipExporter.hpp"
 #include "DevPanel.hpp"
 #include "EditorWidgets.hpp"
+#include "EditorDialogScope.hpp"
+#include "EditorFileDialog.hpp"
 #include "ExportOptionsDialog.hpp"
 #include "BatchExport.hpp"
 #include "FlowLayout.hpp"
@@ -435,6 +437,34 @@ ProjectRead readProjectFile(const QString &path)
 
 int VideoEditorWindow::openCount_ = 0;
 
+bool VideoEditorWindow::closeAllWindows()
+{
+	static bool closing = false;
+	if (closing)
+		return false;
+	const QScopedValueRollback<bool> guard(closing, true);
+	QVector<QPointer<VideoEditorWindow>> editors;
+	for (QWidget *window : QApplication::topLevelWidgets())
+		if (auto *editor = qobject_cast<VideoEditorWindow *>(window))
+			editors.append(editor);
+	// Finish or cancel the editor's existing dialog first. In particular do
+	// not destroy an editor while its loading task or export is using it.
+	for (const auto &editor : editors) {
+		if (!editor)
+			continue;
+		for (QDialog *dialog : editor->findChildren<QDialog *>())
+			if (dialog->isVisible() && dialog->isModal()) {
+				dialog->raise();
+				dialog->activateWindow();
+				return false;
+			}
+	}
+	for (const auto &editor : editors)
+		if (editor && editor->isVisible() && !editor->close())
+			return false;
+	return true;
+}
+
 VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &libraryFolders,
 				     QWidget *parent)
 	: QDialog(parent), inPath_(inPath), libraryFolders_(libraryFolders)
@@ -450,6 +480,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// space and the timelines widen for finer control.
 	setWindowFlags(Qt::Window | Qt::WindowTitleHint | Qt::WindowSystemMenuHint |
 		       Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint);
+	new EditorDialogScope(this);
 	setSizeGripEnabled(true);
 	connect(this, &QDialog::finished, this, [this]() {
 		if (shownOnce_)
@@ -2995,7 +3026,7 @@ void VideoEditorWindow::onAddSource()
 	QString path = picker.selectedVideo();
 	if (picker.importFromFolderRequested()) {
 		const QString dir = activeSource() ? QFileInfo(activeSource()->path).absolutePath() : QString();
-		path = QFileDialog::getOpenFileName(
+		path = editor_dialogs::getOpenFileName(
 			this, QStringLiteral("Add video"), dir,
 			QStringLiteral("Video files (*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.gif *.wmv *.flv *.ts);;"
 				       "All files (*)"));
@@ -3561,7 +3592,7 @@ void VideoEditorWindow::addImageClip()
 {
 	if (!fullEdit())
 		setEditMode(EditMode::Full); // an image goes on the timeline, which only Full editing has
-	const QString f = QFileDialog::getOpenFileName(
+	const QString f = editor_dialogs::getOpenFileName(
 		this, QStringLiteral("Add image"), QFileInfo(inPath_).absolutePath(),
 		imageOpenFilter());
 	if (f.isEmpty())
@@ -4027,7 +4058,7 @@ int VideoEditorWindow::pickSound(const QPoint &at, QString *name)
 		return -1;
 	}
 	if (chosen == file) {
-		const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("Choose a sound"),
+		const QString f = editor_dialogs::getOpenFileName(this, QStringLiteral("Choose a sound"),
 							       QFileInfo(inPath_).absolutePath(), audioOpenFilter());
 		if (f.isEmpty())
 			return -1;
@@ -4122,7 +4153,7 @@ void VideoEditorWindow::openSoundLibrary()
 			auto *choose = new QPushButton(QStringLiteral("Choose file…"), list);
 			connect(choose, &QPushButton::clicked, &dlg, [&, i]() {
 				const QString start = lib[i].file.isEmpty() ? QString() : QFileInfo(lib[i].file).absolutePath();
-				const QString f = QFileDialog::getOpenFileName(&dlg, QStringLiteral("Sound for %1").arg(lib[i].name),
+				const QString f = editor_dialogs::getOpenFileName(&dlg, QStringLiteral("Sound for %1").arg(lib[i].name),
 									       start, audioOpenFilter());
 				if (f.isEmpty())
 					return;
@@ -4151,7 +4182,7 @@ void VideoEditorWindow::openSoundLibrary()
 	auto *add = new QPushButton(QStringLiteral("Add sound…"), &dlg);
 	add->setToolTip(QStringLiteral("A new named slot with a file of yours, e.g. Riser or Notification."));
 	connect(add, &QPushButton::clicked, &dlg, [&]() {
-		const QString f = QFileDialog::getOpenFileName(&dlg, QStringLiteral("Add a sound"), QString(), audioOpenFilter());
+		const QString f = editor_dialogs::getOpenFileName(&dlg, QStringLiteral("Add a sound"), QString(), audioOpenFilter());
 		if (f.isEmpty())
 			return;
 		bool okName = false;
@@ -4928,7 +4959,7 @@ void VideoEditorWindow::rebuildTagsSection()
 				const TlTag *t = timelineView_->model().tag(id);
 				if (!t)
 					return;
-				const QColor c = QColorDialog::getColor(t->color, this, QStringLiteral("Tag colour"));
+				const QColor c = editor_dialogs::getColor(t->color, this, QStringLiteral("Tag colour"));
 				if (!c.isValid())
 					return;
 				timelineView_->editModel([id, c](TimelineModel &mm) {
@@ -5043,7 +5074,7 @@ void VideoEditorWindow::onAddAudioClicked()
 	QAction *chosen = menu.exec(addMenuBtn_ ? addMenuBtn_->mapToGlobal(QPoint(0, addMenuBtn_->height()))
 						: QCursor::pos());
 	if (chosen == imp) {
-		const QString f = QFileDialog::getOpenFileName(
+		const QString f = editor_dialogs::getOpenFileName(
 			this, QStringLiteral("Import audio"), QFileInfo(inPath_).absolutePath(),
 			audioOpenFilter());
 		if (f.isEmpty())
@@ -7949,7 +7980,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 			  [wrapWith]() { wrapWith(QStringLiteral("<s>"), QStringLiteral("</s>")); });
 		tagButton(QStringLiteral("A"), QStringLiteral("Colour the selection: <color=#rrggbb>…</color>"),
 			  QStringLiteral("color:#ff8a3d;font-weight:bold;"), [this, wrapWith]() {
-				  const QColor c = QColorDialog::getColor(QColor(0xff, 0xd2, 0x3f), this,
+				  const QColor c = editor_dialogs::getColor(QColor(0xff, 0xd2, 0x3f), this,
 									  QStringLiteral("Text colour"),
 									  QColorDialog::ShowAlphaChannel);
 				  if (!c.isValid())
@@ -8471,7 +8502,7 @@ void VideoEditorWindow::syncTextBoxRows()
 
 // Pick one of a caption's colours, with the canvas following the picker.
 //
-// The static QColorDialog::getColor only answers on OK, so choosing a text or
+// The colour dialog only answers on OK, so choosing a text or
 // outline colour meant picking against a swatch, pressing OK, looking at the
 // result and going back in -- on a caption whose legibility is the entire point
 // of the colour. This is the live picker the Dev panel's timeline colours
@@ -8576,7 +8607,7 @@ void VideoEditorWindow::pickCaptionHighlightColor()
 	if (!inspectedClip())
 		return;
 	const QColor original = captionHighlightColor_->property("harpiaColor").value<QColor>();
-	const QColor chosen = QColorDialog::getColor(original.isValid() ? original : QColor(QStringLiteral("#ffe45e")),
+	const QColor chosen = editor_dialogs::getColor(original.isValid() ? original : QColor(QStringLiteral("#ffe45e")),
 		this, QStringLiteral("Caption highlight colour"));
 	if (!chosen.isValid())
 		return;
@@ -9368,7 +9399,7 @@ void VideoEditorWindow::importRandomClipOption()
 	const int track = timelineView_->selectedTrack();
 	const auto &tracks = timelineView_->model().tracks;
 	const bool audioLane = track >= 0 && track < tracks.size() && tracks[track].kind == TlTrack::Kind::Audio;
-	const QStringList paths = QFileDialog::getOpenFileNames(
+	const QStringList paths = editor_dialogs::getOpenFileNames(
 		this, QStringLiteral("Add clips"), QString(),
 		audioLane ? audioOpenFilter()
 			  : QStringLiteral("Video files (*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.gif *.wmv *.flv *.ts);;"
@@ -9424,7 +9455,7 @@ void VideoEditorWindow::importRandomClipOptionSource(int k)
 	    track < 0 || track >= model.tracks.size() || model.tracks[track].locked)
 		return;
 	const bool audioLane = model.tracks[track].kind == TlTrack::Kind::Audio;
-	const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Choose option source"), QString(),
+	const QString path = editor_dialogs::getOpenFileName(this, QStringLiteral("Choose option source"), QString(),
 		audioLane ? audioOpenFilter()
 			  : QStringLiteral("Video files (*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.gif *.wmv *.flv *.ts);;All files (*)"));
 	if (path.isEmpty())
@@ -13564,7 +13595,7 @@ void VideoEditorWindow::onImportAudioClicked()
 {
 	if (!valid_ || voRecording_)
 		return;
-	const QString in = QFileDialog::getOpenFileName(
+	const QString in = editor_dialogs::getOpenFileName(
 		this, QStringLiteral("Import audio"), QString(),
 		audioOpenFilter());
 	if (in.isEmpty())
@@ -13740,7 +13771,7 @@ void VideoEditorWindow::onSaveProjectAs()
 					      QStringLiteral(".harpiaproj")
 				    : uniqueProjectPath(dir, suggestedProjectStem(inPath_));
 	}
-	QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Save project as"), suggested,
+	QString path = editor_dialogs::getSaveFileName(this, QStringLiteral("Save project as"), suggested,
 						    QStringLiteral("Harpia project (*.harpiaproj)"));
 	if (path.isEmpty())
 		return;
@@ -13944,7 +13975,7 @@ void VideoEditorWindow::onOpenProject()
 	const QString startIn = QDir(defaultProjectsFolder()).exists()
 					? defaultProjectsFolder()
 					: QFileInfo(inPath_).absolutePath();
-	const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Open project"),
+	const QString path = editor_dialogs::getOpenFileName(this, QStringLiteral("Open project"),
 							  startIn,
 							  QStringLiteral("Harpia project (*.harpiaproj)"));
 	if (path.isEmpty())
@@ -14205,7 +14236,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 				// left missing rather than stopping an automated caller.
 				if (!quiet && !QFileInfo::exists(spath)) {
 					loading.hide();
-					const QString picked = QFileDialog::getOpenFileName(
+					const QString picked = editor_dialogs::getOpenFileName(
 						this,
 						QStringLiteral("Locate \"%1\"")
 							.arg(sname.isEmpty() ? QFileInfo(spath).fileName()

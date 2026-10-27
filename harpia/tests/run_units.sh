@@ -16,6 +16,12 @@ MOC="$(command -v moc || ls /usr/lib/qt6/libexec/moc /usr/lib/x86_64-linux-gnu/q
 CF="$(pkg-config --cflags Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
 LF="$(pkg-config --libs Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
 
+# Editor-owned prompts block their editor while recorder controls stay usable.
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/editordialogscope_test.cpp" -o "$WORK/editordialogscope_test" $LF
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/editorfiledialog_test.cpp" -o "$WORK/editorfiledialog_test" $LF
+
 # Window monitor identity survives display reordering; disconnected monitors
 # fall back to a usable screen, independently for recorder and editor.
 g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
@@ -1193,6 +1199,13 @@ QT_QPA_PLATFORM=offscreen "$WORK/shortcutconflict_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/crashreport_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/autopause_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/globalhotkeys_test" || rc=1
+for name in editordialogscope editorfiledialog; do
+	dialog_test_status=0
+	QT_QPA_PLATFORM=offscreen "$WORK/${name}_test" || dialog_test_status=$?
+	if [ "$dialog_test_status" -ne 0 ] && [ "$dialog_test_status" -ne 77 ]; then
+		rc=1
+	fi
+done
 QT_QPA_PLATFORM=offscreen "$WORK/sendtofull_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/autosplitdialog_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/recordingparts_test" || rc=1

@@ -1,4 +1,5 @@
 #include "ShortcutPanel.hpp"
+#include "EditorFileDialog.hpp"
 #include "../ui/EditorLog.hpp"
 
 #include "ui/ShortcutConflictDialog.hpp"
@@ -163,7 +164,7 @@ ShortcutPanel::ShortcutPanel(ShortcutRegistry *reg, QWidget *parent) : QDialog(p
 
 	auto *importBtn = new QPushButton(QStringLiteral("Import…"), this);
 	connect(importBtn, &QPushButton::clicked, this, [this]() {
-		const QString f = QFileDialog::getOpenFileName(
+		const QString f = editor_dialogs::getOpenFileName(
 			this, QStringLiteral("Import shortcuts"), QString(),
 			QStringLiteral("Shortcut profile (*.json)"));
 		if (f.isEmpty())
@@ -181,7 +182,7 @@ ShortcutPanel::ShortcutPanel(ShortcutRegistry *reg, QWidget *parent) : QDialog(p
 	row->addWidget(importBtn);
 	auto *exportBtn = new QPushButton(QStringLiteral("Export…"), this);
 	connect(exportBtn, &QPushButton::clicked, this, [this]() {
-		QString f = QFileDialog::getSaveFileName(this, QStringLiteral("Export shortcuts"),
+		QString f = editor_dialogs::getSaveFileName(this, QStringLiteral("Export shortcuts"),
 							 QStringLiteral("harpia-shortcuts.json"),
 							 QStringLiteral("Shortcut profile (*.json)"));
 		if (f.isEmpty())

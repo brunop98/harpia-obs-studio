@@ -1,4 +1,5 @@
 #include "TtsDialog.hpp"
+#include "../EditorFileDialog.hpp"
 
 #include "TtsAudio.hpp"
 #include "TtsEngine.hpp"
@@ -748,7 +749,7 @@ void TtsDialog::openTextFile()
 	const QString dir = s.value(kGrp + QStringLiteral("lastFolder"),
 				    QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation))
 				    .toString();
-	const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Open a text"), dir,
+	const QString path = editor_dialogs::getOpenFileName(this, QStringLiteral("Open a text"), dir,
 							  QStringLiteral("Text (*.txt *.md *.srt);;All files (*)"));
 	if (path.isEmpty())
 		return;

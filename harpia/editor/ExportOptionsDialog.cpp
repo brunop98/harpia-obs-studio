@@ -1,4 +1,5 @@
 #include "ExportOptionsDialog.hpp"
+#include "EditorFileDialog.hpp"
 
 #include "ExportEstimate.hpp"
 #include "../ui/UiText.hpp"
@@ -400,7 +401,7 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 
 void ExportOptionsDialog::browseFolder()
 {
-	const QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("Export to"),
+	const QString d = editor_dialogs::getExistingDirectory(this, QStringLiteral("Export to"),
 							    folderEdit_->text());
 	if (!d.isEmpty())
 		folderEdit_->setText(QDir::toNativeSeparators(d));

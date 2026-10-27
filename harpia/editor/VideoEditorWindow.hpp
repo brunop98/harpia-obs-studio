@@ -196,6 +196,9 @@ public:
 	// Clip Library), and the recorder window needs the answer without either of
 	// them having to tell it.
 	static bool anyOpen() { return openCount_ > 0; }
+	// Ask every independent editor to close before the recorder/application
+	// shuts down. Cancel, or an editor's active modal task, keeps it running.
+	static bool closeAllWindows();
 
 	// The project's output format, after resolving "Auto" against the first
 	// source. Everything that renders or encodes goes through these two, so the

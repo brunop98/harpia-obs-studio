@@ -14,6 +14,8 @@
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QKeyEvent>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QShortcut>
@@ -289,6 +291,67 @@ int main(int argc, char **argv)
 		   "one mouse Back click restores the batch trim and its complete selection");
 		sideClick(tv, Qt::ForwardButton);
 		ok(tv->model() == trimmed, "one mouse Forward click reapplies the batch trim exactly once");
+	}
+
+	std::printf("\n-- global Delete removes a selected track as one undoable edit --\n");
+	{
+		TimelineModel lanes;
+		TlTrack remove = m.tracks[0], keep = m.tracks[0], empty;
+		remove.name = QStringLiteral("Remove this lane");
+		remove.gain = 0.65;
+		keep.name = QStringLiteral("Keep this lane");
+		keep.kind = TlTrack::Kind::Audio;
+		empty.kind = TlTrack::Kind::Effect;
+		empty.name = QStringLiteral("Empty authored FX");
+		lanes.tracks = {remove, empty, keep};
+		tv->setModelAndCommit(lanes);
+		settle(60);
+		const auto header = [tv](int track) {
+			const QRect lock = tv->headerToggleRectForTest(track, 0);
+			return QPoint(lock.left() - 4, lock.center().y());
+		};
+		QShortcut *removeKey = shortcutFor(w, QKeySequence(Qt::Key_Delete));
+		QShortcut *backspace = shortcutFor(w, QKeySequence(Qt::Key_Backspace));
+		ok(removeKey && backspace, "the window owns Delete and Backspace shortcuts");
+		if (removeKey && backspace) {
+			click(tv, header(0));
+			ok(tv->selectedHeaderTrack() == 0 && !tv->hasSelection(), "a header is selected while no clips are selected");
+			emit removeKey->activated();
+			settle(60);
+			const TimelineModel deleted = tv->model();
+			ok(deleted.tracks.size() == 2 && deleted.tracks[0].name == empty.name && deleted.tracks[1].name == keep.name,
+			   "the real global Delete route removes the selected lane and every clip on it");
+			emit removeKey->activated();
+			emit backspace->activated();
+			settle(30);
+			ok(tv->model() == deleted && tv->selectedHeaderTrack() == -1,
+			   "repeated global Delete cannot accidentally take the next lane");
+			undo();
+			ok(tv->model() == lanes, "one Ctrl+Z restores the complete track, clips, settings and lane order");
+			redo();
+			ok(tv->model() == deleted, "one Ctrl+Y deletes the whole track again");
+			click(tv, header(0)); // the empty effect lane is now first
+			emit backspace->activated();
+			settle(60);
+			ok(tv->trackCount() == 1 && tv->model().tracks[0].name == keep.name,
+			   "global Backspace also removes an empty selected track");
+			undo();
+			ok(tv->model() == deleted, "one undo brings an empty authored track back");
+			click(tv, header(0));
+			QLineEdit typing(&w);
+			typing.setText(QStringLiteral("abcd"));
+			typing.show();
+			w.activateWindow();
+			typing.setFocus();
+			typing.setCursorPosition(1);
+			settle(30);
+			emit removeKey->activated(); // exercise the router's typing safety too
+			ok(tv->model() == deleted, "the global Delete callback cannot remove a selected track while a text field has focus");
+			QKeyEvent key(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+			QApplication::sendEvent(&typing, &key);
+			ok(typing.text() == QStringLiteral("acd") && tv->model() == deleted,
+			   "Delete edits the focused text and leaves the track intact");
+		}
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

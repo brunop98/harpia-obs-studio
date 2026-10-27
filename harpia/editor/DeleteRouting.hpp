@@ -21,7 +21,7 @@ enum class DeleteTarget {
 	VoiceoverTake,    // the voiceover lane's selection
 	ListKeyframe,     // the row highlighted in the Animation section's keyframe list
 	PathKeyframe,     // a key picked on the preview's motion path
-	TimelineClips,    // Full editing's selected clips
+	TimelineClips,    // Full editing's selected clips or track header
 	MultiCutSegment,  // Multi-Cut's selected cut
 };
 

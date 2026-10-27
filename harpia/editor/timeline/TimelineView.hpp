@@ -170,7 +170,7 @@ public:
 	void nudgeSelection(qint64 deltaMs);
 	// Cut every unlocked clip the playhead runs through, on every track.
 	void splitAtPlayhead();
-	void deleteSelected(); // every selected clip, honouring per-track ripple
+	void deleteSelected(); // selected track, or selected clips honouring per-track ripple
 	// Add an effect clip to a specific effect track at a specific time.
 	void addEffectClipAt(int track, qint64 atOutMs, FxType type);
 	// Overlap this clip with the next one, which is how a transition is made.

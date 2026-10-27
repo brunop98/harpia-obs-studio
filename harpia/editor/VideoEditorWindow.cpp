@@ -15529,7 +15529,8 @@ void VideoEditorWindow::deleteSelection()
 	ctx.keyListHasSel = keyList_ && keyList_->currentRow() >= 0;
 	ctx.pathKeyPicked = pathKeyPicked_ >= 0;
 	ctx.fullEdit = fullEdit();
-	ctx.timelineHasSel = timelineView_ && timelineView_->hasSelection();
+	ctx.timelineHasSel = timelineView_ &&
+		(timelineView_->hasSelection() || timelineView_->selectedHeaderTrack() >= 0);
 	ctx.multiCut = multiCut();
 	ctx.multiCutHasSel = tracks_ && tracks_->selectedIndex() >= 0;
 

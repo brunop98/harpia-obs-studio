@@ -239,6 +239,8 @@ void TimelineView::setModelQuiet(const TimelineModel &m)
 	for (int i = 0; !lanesChanged && i < m.tracks.size(); ++i)
 		lanesChanged = m.tracks[i].kind != model_.tracks[i].kind;
 	model_ = m;
+	if (selHeaderTrack_ >= model_.tracks.size())
+		selHeaderTrack_ = -1;
 	auto valid = [this](int t, int c) {
 		return t >= 0 && t < model_.tracks.size() && c >= 0 && c < model_.tracks[t].clips.size();
 	};
@@ -343,6 +345,7 @@ void TimelineView::setModel(const TimelineModel &m)
 	selectedMarkerMs_ = -1;
 	selectedEndMarker_ = false;
 	model_ = m;
+	selHeaderTrack_ = -1;
 	selTrack_ = selClip_ = -1;
 	// The extras are indices into the OLD model; a new one makes them meaningless
 	// and possibly out of range. Clearing the primary without them was how undo
@@ -700,10 +703,22 @@ void TimelineView::deleteTrack(int index)
 	if (index < 0 || index >= model_.tracks.size())
 		return;
 	model_.tracks.remove(index);
-	if (selTrack_ == index)
+	if (selHeaderTrack_ == index)
+		selHeaderTrack_ = -1;
+	else if (selHeaderTrack_ > index)
+		--selHeaderTrack_;
+	if (selTrack_ == index) {
 		selTrack_ = selClip_ = -1;
-	else if (selTrack_ > index)
+		selTransition_ = false;
+	} else if (selTrack_ > index) {
 		--selTrack_;
+	}
+	QSet<QPair<int, int>> remaining;
+	for (const auto &p : extraSel_)
+		if (p.first != index)
+			remaining.insert({p.first > index ? p.first - 1 : p.first, p.second});
+	extraSel_ = remaining;
+	hoverTrTrack_ = hoverTrClip_ = hoverSeamTrack_ = -1;
 	renumberTracks();
 	clampView();
 	updateGeometry();
@@ -1065,6 +1080,10 @@ void TimelineView::updateSelectedClip(const TlClip &c)
 // using plain clipsChanged() so they still coalesce.
 void TimelineView::commitEdit()
 {
+	// Adding/pasting a clip selects it too: a previously selected header must
+	// not remain armed for a later Delete or Copy after that edit.
+	if (hasSelection())
+		selHeaderTrack_ = -1;
 	emit clipsChanged();
 	emit editCommitted();
 }
@@ -3474,6 +3493,7 @@ TlSelection TimelineView::selectionState() const
 
 void TimelineView::setSelectionState(const TlSelection &s)
 {
+	selHeaderTrack_ = -1;
 	selectedMarkerMs_ = -1;
 	selectedEndMarker_ = false;
 	const auto valid = [this](int t, int c) {
@@ -4461,6 +4481,7 @@ bool TimelineView::isSelected(int track, int clip) const
 
 void TimelineView::selectClip(int track, int clip)
 {
+	selHeaderTrack_ = -1;
 	selectedMarkerMs_ = -1;
 	selectedEndMarker_ = false;
 	selTransition_ = false;
@@ -4478,6 +4499,7 @@ void TimelineView::selectClip(int track, int clip)
 
 void TimelineView::addToSelection(int track, int clip)
 {
+	selHeaderTrack_ = -1;
 	selectedMarkerMs_ = -1;
 	selectedEndMarker_ = false;
 	if (track < 0 || track >= model_.tracks.size() || clip < 0 ||
@@ -4500,6 +4522,7 @@ void TimelineView::addToSelection(int track, int clip)
 
 void TimelineView::selectAllClips()
 {
+	selHeaderTrack_ = -1;
 	selectedMarkerMs_ = -1;
 	selectedEndMarker_ = false;
 	extraSel_.clear();
@@ -4840,6 +4863,12 @@ void TimelineView::deleteSelected()
 	}
 	if (selectedMarkerMs_ >= 0) {
 		removeMarker(selectedMarkerMs_);
+		return;
+	}
+	if (hasSelection())
+		selHeaderTrack_ = -1;
+	if (selHeaderTrack_ >= 0 && selHeaderTrack_ < model_.tracks.size()) {
+		deleteTrack(selHeaderTrack_);
 		return;
 	}
 	// Delete on a selected transition removes the TRANSITION -- the clips stay

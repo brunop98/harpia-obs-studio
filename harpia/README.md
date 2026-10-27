@@ -67,7 +67,9 @@ Three modes, each one step up from the last:
 - **Multi-Cut** — keep several sections, each at its own speed; randomise
   their order; export them joined or **each to its own file**. Use **Source
   video** above the tracks to switch videos and keep cuts from all of them
-  in the same output; **Add video…** loads another source without removing cuts.
+  in the same output. **Add video…** opens a thumbnail grid of your recorded
+  videos; select one to load it without removing cuts. **Import from folder…**
+  at the bottom opens the system file picker for another video.
 - **Full Editing** — a multi-track timeline:
   - video, image, text, effect and audio clips; overlapping clips become
     **transitions**; marquee selection, groups, ripple, snapping;

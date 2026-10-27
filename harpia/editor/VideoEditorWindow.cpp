@@ -11,6 +11,7 @@
 #include "../ui/ExportDoneDialog.hpp"
 #include "../ui/ExportProgressDialog.hpp"
 #include "../ui/LoadingDialog.hpp"
+#include "../ui/RecordingVideoPicker.hpp"
 #include "LoadingTask.hpp"
 #include <QScopedValueRollback>
 #include "../ui/ColorField.hpp"
@@ -2859,14 +2860,21 @@ void VideoEditorWindow::refreshSourceList()
 
 void VideoEditorWindow::onAddSource()
 {
-	const QString dir = activeSource() ? QFileInfo(activeSource()->path).absolutePath() : QString();
-	const QString path = QFileDialog::getOpenFileName(
-		this, QStringLiteral("Add video"), dir,
-		QStringLiteral("Video files (*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.gif *.wmv *.flv *.ts);;"
-			       "All files (*)"));
+	RecordingVideoPicker picker(libraryFolders_, this);
+	if (picker.exec() != QDialog::Accepted)
+		return;
+	QString path = picker.selectedVideo();
+	if (picker.importFromFolderRequested()) {
+		const QString dir = activeSource() ? QFileInfo(activeSource()->path).absolutePath() : QString();
+		path = QFileDialog::getOpenFileName(
+			this, QStringLiteral("Add video"), dir,
+			QStringLiteral("Video files (*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.gif *.wmv *.flv *.ts);;"
+				       "All files (*)"));
+	}
 	if (path.isEmpty())
 		return;
-	const int id = addSource(path);
+	const EditorSource *existing = sourceByPath(path);
+	const int id = existing ? existing->id : addSource(path);
 	if (id >= 0)
 		setActiveSource(id);
 }

@@ -188,6 +188,8 @@ target_sources(
     ui/ShortcutConflictDialog.hpp
     ui/ClipLibraryWindow.cpp
     ui/ClipLibraryWindow.hpp
+    ui/RecordingVideoPicker.cpp
+    ui/RecordingVideoPicker.hpp
     ui/PresetDelete.hpp
     ui/CrashReportDialog.cpp
     ui/CrashReportDialog.hpp

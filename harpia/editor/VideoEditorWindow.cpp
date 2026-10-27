@@ -7803,16 +7803,30 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(boxColorBtn_, &QPushButton::clicked, this,
 		[this]() { pickTextColor(QStringLiteral("Box colour"), &TlText::boxColor); });
 
-	boxOpacitySpin_ = new QDoubleSpinBox(textBox_);
-	boxOpacitySpin_->setRange(0.0, 1.0);
-	boxOpacitySpin_->setSingleStep(0.05);
-	boxOpacitySpin_->setDecimals(2);
-	boxOpacitySpin_->setKeyboardTracking(false);
-	tForm->addRow(QStringLiteral("Box opacity"), boxOpacitySpin_);
-	connect(boxOpacitySpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+	boxOpacityRow_ = new QWidget(textBox_);
+	auto *boxOpacityLayout = new QHBoxLayout(boxOpacityRow_);
+	boxOpacityLayout->setContentsMargins(0, 0, 0, 0);
+	boxOpacityLayout->setSpacing(6);
+	boxOpacitySlider_ = new QSlider(Qt::Horizontal, boxOpacityRow_);
+	boxOpacitySlider_->setObjectName(QStringLiteral("textBoxOpacity"));
+	boxOpacitySlider_->setAccessibleName(QStringLiteral("Box opacity"));
+	boxOpacitySlider_->setRange(0, 100);
+	boxOpacitySlider_->setPageStep(5);
+	boxOpacitySlider_->setTracking(true);
+	boxOpacitySlider_->setMinimumWidth(40);
+	boxOpacitySlider_->setToolTip(QStringLiteral("Background box opacity: 0% is transparent, 100% is solid."));
+	boxOpacityValue_ = new QLabel(QStringLiteral("0%"), boxOpacityRow_);
+	boxOpacityValue_->setObjectName(QStringLiteral("textBoxOpacityValue"));
+	boxOpacityValue_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+	boxOpacityValue_->setMinimumWidth(boxOpacityValue_->fontMetrics().horizontalAdvance(QStringLiteral("100%")));
+	boxOpacityLayout->addWidget(boxOpacitySlider_, 1);
+	boxOpacityLayout->addWidget(boxOpacityValue_);
+	tForm->addRow(QStringLiteral("Box opacity"), boxOpacityRow_);
+	connect(boxOpacitySlider_, &QSlider::valueChanged, this, [this](int value) {
+		boxOpacityValue_->setText(QStringLiteral("%1%").arg(value));
 		if (syncingClip_)
 			return;
-		editTextStyle([v](TlClip &c) { c.text.boxOpacity = v; });
+		editTextStyle([value](TlClip &c) { c.text.boxOpacity = value / 100.0; });
 	});
 
 	// Horizontal and vertical padding separately: a caption usually wants more
@@ -8022,7 +8036,7 @@ void VideoEditorWindow::syncTextBoxRows()
 		return;
 	const bool on = boxChk_->isChecked();
 	for (QWidget *w : {static_cast<QWidget *>(boxColorBtn_),
-			   static_cast<QWidget *>(boxOpacitySpin_),
+			   boxOpacityRow_,
 			   static_cast<QWidget *>(boxPadXSpin_), static_cast<QWidget *>(boxPadYSpin_),
 			   static_cast<QWidget *>(boxRadiusSpin_)})
 		setFormRowVisible(textForm_, w, on);
@@ -8616,7 +8630,7 @@ void VideoEditorWindow::syncTextInspector(const TlClip &c)
 	boxPadXSpin_->setValue(c.text.boxPadX);
 	boxPadYSpin_->setValue(c.text.boxPadY);
 	boxRadiusSpin_->setValue(c.text.boxRadius);
-	boxOpacitySpin_->setValue(c.text.boxOpacity);
+	boxOpacitySlider_->setValue(int(std::lround(std::clamp(c.text.boxOpacity, 0.0, 1.0) * 100.0)));
 	styleSwatch(textColorBtn_, c.text.color);
 	styleSwatch(outlineColorBtn_, c.text.outlineColor);
 	styleSwatch(boxColorBtn_, c.text.boxColor);

@@ -997,7 +997,9 @@ private:
 	QSpinBox *boxPadXSpin_ = nullptr;
 	QSpinBox *boxPadYSpin_ = nullptr;
 	QSpinBox *boxRadiusSpin_ = nullptr;
-	QDoubleSpinBox *boxOpacitySpin_ = nullptr;
+	QWidget *boxOpacityRow_ = nullptr;
+	QSlider *boxOpacitySlider_ = nullptr;
+	QLabel *boxOpacityValue_ = nullptr;
 	// Subtitles from speech (Full editing): the dialog does the work and hands
 	// back aligned caption clips; the window puts them on a "Subtitles" lane as
 	// one undo step.

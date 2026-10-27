@@ -562,6 +562,7 @@ inline QJsonObject trackToJson(const TlTrack &t)
 	to[QStringLiteral("hidden")] = t.hidden;
 	to[QStringLiteral("locked")] = t.locked;
 	to[QStringLiteral("ripple")] = t.ripple;
+	to[QStringLiteral("rippleSpeed")] = t.rippleSpeed;
 	to[QStringLiteral("solo")] = t.solo;
 	to[QStringLiteral("gain")] = t.gain;
 	to[QStringLiteral("color")] = t.color.name(QColor::HexRgb);
@@ -586,6 +587,7 @@ inline TlTrack trackFromJson(const QJsonObject &to)
 	t.hidden = to.value(QStringLiteral("hidden")).toBool(false);
 	t.locked = to.value(QStringLiteral("locked")).toBool(false);
 	t.ripple = to.value(QStringLiteral("ripple")).toBool(false);
+	t.rippleSpeed = to.value(QStringLiteral("rippleSpeed")).toBool(false);
 	t.solo = to.value(QStringLiteral("solo")).toBool(false);
 	// Older projects have no gain: unity, which is what they were mixed at.
 	t.gain = std::clamp(to.value(QStringLiteral("gain")).toDouble(1.0), 0.0, 2.0);

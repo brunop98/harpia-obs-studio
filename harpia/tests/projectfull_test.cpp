@@ -297,6 +297,7 @@ static TimelineModel everything()
 	v1.name = QStringLiteral("V1 renamed");
 	v1.locked = true;
 	v1.ripple = true;
+	v1.rippleSpeed = true;
 	v1.color = QColor(0x12, 0x34, 0x56);
 	v1.clips = {v, img};
 	TlTrack music;
@@ -304,6 +305,7 @@ static TimelineModel everything()
 	music.name = QStringLiteral("Música");
 	music.muted = true;
 	music.solo = true;
+	music.rippleSpeed = true;
 	music.gain = 0.65;
 	music.clips = {a};
 	TlTrack sounds;
@@ -351,7 +353,7 @@ int main(int argc, char **argv)
 		const TlTrack &x = before.tracks[ti], &y = after.tracks[ti];
 		const QString w = QStringLiteral("track[%1]").arg(ti);
 		F(w, x, y, kind); F(w, x, y, name); F(w, x, y, muted); F(w, x, y, hidden); F(w, x, y, locked);
-		F(w, x, y, ripple); F(w, x, y, solo); F(w, x, y, gain); F(w, x, y, color); F(w, x, y, autoSounds);
+		F(w, x, y, ripple); F(w, x, y, rippleSpeed); F(w, x, y, solo); F(w, x, y, gain); F(w, x, y, color); F(w, x, y, autoSounds);
 		field(w, "clips.count", x.clips.size(), y.clips.size());
 		for (int ci = 0; ci < std::min(x.clips.size(), y.clips.size()); ++ci)
 			compareClip(QStringLiteral("%1.clip[%2]").arg(w).arg(ci), x.clips[ci], y.clips[ci]);

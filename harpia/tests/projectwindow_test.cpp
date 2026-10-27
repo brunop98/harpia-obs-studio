@@ -221,11 +221,13 @@ int main(int argc, char **argv)
 	grade.clips = {fx};
 	TlTrack v1;
 	v1.name = QStringLiteral("Main");
+	v1.rippleSpeed = true;
 	v1.color = QColor(0x22, 0x66, 0xaa);
 	v1.clips = {v, pic};
 	TlTrack a1;
 	a1.kind = TlTrack::Kind::Audio;
 	a1.name = QStringLiteral("Music");
+	a1.ripple = true;
 	a1.gain = 0.7;
 	a1.clips = {music};
 	TlTrack spare;
@@ -257,6 +259,9 @@ int main(int argc, char **argv)
 
 	std::printf("\n-- what came back --\n");
 	ok(back.tracks.size() == saved.tracks.size(), "every lane, the empty one and the Sounds lane too");
+	ok(back.tracks.size() >= 4 && back.tracks[2].rippleSpeed && !back.tracks[2].ripple &&
+	   !back.tracks[3].rippleSpeed && back.tracks[3].ripple,
+	   "speed ripple and deletion ripple stay independent through Save and Open Project");
 	ok(back.markers == saved.markers, "the markers");
 	ok(back.tags == saved.tags, "the tag list, names and colours");
 	bool rulesOk = back.soundRules.size() == saved.soundRules.size();

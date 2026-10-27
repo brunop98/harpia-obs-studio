@@ -84,6 +84,10 @@ Three modes, each one step up from the last:
 - **Full Editing** — a multi-track timeline:
   - video, image, text, effect and audio clips; overlapping clips become
     **transitions**; marquee selection, groups, ripple, snapping;
+  - **Auto ripple on speed change:** enable it in a track header's right-click
+    menu to move following clips when a clip gets faster or slower, preserving
+    existing spacing. The option saves per track; undo restores the speed and
+    shifted positions together;
   - **Add → Add from Library…** opens your recorded videos beside the current
     project. Drag a recording onto a timeline lane, or double-click to add it
     at the playhead;

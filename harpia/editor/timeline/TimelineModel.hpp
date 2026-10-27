@@ -991,11 +991,13 @@ struct TlTrack {
 	// (video keeps its audio; an effect lane stops grading), and `muted`
 	// silences the track's audio (a video track has both). `locked`
 	// blocks every edit but still previews/renders. `ripple` closes the gap when
-	// a clip is deleted from this track.
+	// a clip is deleted from this track. `rippleSpeed` moves later clips when a
+	// speed change alters a clip's duration, independently of deletion ripple.
 	bool muted = false;
 	bool hidden = false;
 	bool locked = false;
 	bool ripple = false;
+	bool rippleSpeed = false;
 	// Solo: while ANY sound-carrying lane is soloed, only soloed lanes play.
 	// Independent of `muted` -- a lane that is both is silent, as on a desk --
 	// and see TimelineModel::trackAudible for the one place that combines them.
@@ -1212,7 +1214,7 @@ struct TlTrack {
 	bool operator==(const TlTrack &o) const
 	{
 		return kind == o.kind && name == o.name && muted == o.muted && hidden == o.hidden &&
-		       locked == o.locked && ripple == o.ripple && solo == o.solo &&
+		       locked == o.locked && ripple == o.ripple && rippleSpeed == o.rippleSpeed && solo == o.solo &&
 		       qAbs(gain - o.gain) < 1e-9 && color == o.color && clips == o.clips &&
 		       autoSounds == o.autoSounds;
 	}

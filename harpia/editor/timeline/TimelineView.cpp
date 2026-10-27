@@ -63,6 +63,80 @@ constexpr qint64 kMinClipMs = 100;
 constexpr qint64 kTailMs = 5000;   // draggable space past the end
 constexpr qint64 kMinSpanMs = 8000;
 
+struct SpeedRippleTiming {
+	qint64 start = 0, duration = 0;
+	double speed = 1.0;
+};
+using SpeedRippleSnapshot = QMap<int, QVector<SpeedRippleTiming>>;
+
+SpeedRippleSnapshot captureSpeedRipple(const TimelineModel &model, const QVector<QPair<int, int>> &which)
+{
+	SpeedRippleSnapshot snapshot;
+	for (const auto &p : which) {
+		if (p.first < 0 || p.first >= model.tracks.size() || snapshot.contains(p.first))
+			continue;
+		const TlTrack &track = model.tracks[p.first];
+		if (!track.rippleSpeed || track.locked || p.second < 0 || p.second >= track.clips.size())
+			continue;
+		QVector<SpeedRippleTiming> timings;
+		timings.reserve(track.clips.size());
+		for (const TlClip &clip : track.clips)
+			timings.push_back({clip.outStartMs, clip.outDurationMs(), clip.speed});
+		snapshot.insert(p.first, std::move(timings));
+	}
+	return snapshot;
+}
+
+void applySpeedRipple(TimelineModel &model, const SpeedRippleSnapshot &snapshot)
+{
+	for (auto it = snapshot.constBegin(); it != snapshot.constEnd(); ++it) {
+		TlTrack &track = model.tracks[it.key()];
+		const auto &before = it.value();
+		if (track.locked || !track.rippleSpeed || track.clips.size() != before.size())
+			continue;
+		QSet<qint64> changedStarts;
+		for (int i = 0; i < before.size(); ++i) {
+			const TlClip &clip = track.clips[i];
+			if (clip.speed != before[i].speed)
+				changedStarts.insert(before[i].start);
+		}
+		if (changedStarts.isEmpty())
+			continue; // a normal trim or position edit never ripples
+		// Clips beginning together share one outgoing edge. Its movement is
+		// the duration change of their whole envelope, not the sum of each
+		// member's changes: an unchanged longer clip still holds that edge.
+		QMap<qint64, QPair<qint64, qint64>> cohorts;
+		for (int i = 0; i < before.size(); ++i) {
+			if (!changedStarts.contains(before[i].start))
+				continue;
+			auto &envelope = cohorts[before[i].start];
+			envelope.first = std::max(envelope.first, before[i].duration);
+			envelope.second = std::max(envelope.second, track.clips[i].outDurationMs());
+		}
+		QVector<QPair<qint64, qint64>> changes;
+		for (auto cohort = cohorts.constBegin(); cohort != cohorts.constEnd(); ++cohort) {
+			const qint64 delta = cohort.value().second - cohort.value().first;
+			if (delta != 0)
+				changes.push_back({cohort.key(), delta});
+		}
+		if (changes.isEmpty())
+			continue;
+		QVector<qint64> prefix(changes.size() + 1, 0);
+		for (int i = 0; i < changes.size(); ++i)
+			prefix[i + 1] = prefix[i] + changes[i].second;
+		// Work from the unchanged timing snapshot, not the starts shifted by
+		// an earlier selected clip. Each recipient moves once by the total
+		// duration delta before it, without sorting/replacing the clip vector.
+		for (int i = 0; i < before.size(); ++i) {
+			const auto at = std::lower_bound(changes.constBegin(), changes.constEnd(), before[i].start,
+				[](const QPair<qint64, qint64> &change, qint64 start) { return change.first < start; });
+			const qint64 shift = prefix[at - changes.constBegin()];
+			if (shift != 0)
+				track.clips[i].outStartMs = std::max<qint64>(0, track.clips[i].outStartMs + shift);
+		}
+	}
+}
+
 // Colours all live in EditorColors (cl_), edited live from the Developer Panel.
 } // namespace
 
@@ -227,6 +301,7 @@ int TimelineView::editClipsAt(const QVector<QPair<int, int>> &which,
 {
 	if (!fn)
 		return 0;
+	const SpeedRippleSnapshot before = captureSpeedRipple(model_, which);
 	int n = 0;
 	for (const auto &p : which) {
 		if (p.first < 0 || p.first >= model_.tracks.size() || model_.tracks[p.first].locked || p.second < 0 ||
@@ -236,6 +311,7 @@ int TimelineView::editClipsAt(const QVector<QPair<int, int>> &which,
 		++n;
 	}
 	if (n) {
+		applySpeedRipple(model_, before);
 		update();
 		emit clipsChanged();
 	}
@@ -531,6 +607,9 @@ bool TimelineView::fitClipToTimeline(int track, int clip)
 	if (end <= 0)
 		return false;
 	TlClip &c = t.clips[clip];
+	// Fit is an explicit layout command: it targets the existing timeline
+	// end. Moving other clips when its speed changes would move that target
+	// away again, so this operation deliberately bypasses speed ripple.
 	c.outStartMs = 0;
 	if (c.freeDuration()) {
 		// A caption, still or effect has no clock of its own: its length IS
@@ -975,14 +1054,7 @@ const TlClip *TimelineView::selectedClipPtr() const
 
 void TimelineView::updateSelectedClip(const TlClip &c)
 {
-	if (selTrack_ < 0 || selTrack_ >= model_.tracks.size())
-		return;
-	TlTrack &t = model_.tracks[selTrack_];
-	if (selClip_ < 0 || selClip_ >= t.clips.size())
-		return;
-	t.clips[selClip_] = c;
-	update();
-	emit clipsChanged();
+	editClips({{selTrack_, selClip_}}, [&c](TlClip &clip) { clip = c; });
 }
 
 // One finished, discrete edit. Emitting the extra signal is what tells the
@@ -1455,6 +1527,14 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 							     .arg(gainPercent(t.gain)))
 				    : nullptr;
 	QAction *ripple = menu.addAction(QStringLiteral("Auto ripple on delete"));
+	QAction *speedRipple = menu.addAction(QStringLiteral("Auto ripple on speed change"));
+	speedRipple->setObjectName(QStringLiteral("timelineTrackRippleSpeed"));
+	speedRipple->setCheckable(true);
+	speedRipple->setChecked(t.rippleSpeed);
+	speedRipple->setToolTip(QStringLiteral(
+		"When a clip's speed changes, following clips on this track move by its duration change. "
+		"Faster playback pulls them earlier; slower playback pushes them later. Existing gaps and overlaps are kept."));
+	menu.setToolTipsVisible(true);
 	// Close every gap now, rather than only as clips are deleted.
 	QAction *forceRip = menu.addAction(QStringLiteral("Force ripple (remove gaps)"));
 	{
@@ -1556,6 +1636,8 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 		return;
 	} else if (chosen == ripple) {
 		t.ripple = !t.ripple;
+	} else if (chosen == speedRipple) {
+		t.rippleSpeed = !t.rippleSpeed;
 	} else if (chosen == forceRip) {
 		forceRipple(track); // commits on its own
 		return;
@@ -4285,19 +4367,7 @@ int TimelineView::shuffleClips(const ShuffleOptions &opt, quint64 seed)
 
 void TimelineView::applyToSelection(const std::function<void(TlClip &)> &fn)
 {
-	const QVector<QPair<int, int>> sel = selectedPairs();
-	if (sel.isEmpty())
-		return;
-	for (const auto &p : sel) {
-		if (p.first < 0 || p.first >= model_.tracks.size())
-			continue;
-		TlTrack &t = model_.tracks[p.first];
-		if (t.locked || p.second < 0 || p.second >= t.clips.size())
-			continue;
-		fn(t.clips[p.second]);
-	}
-	update();
-	emit clipsChanged();
+	editClips(selectedPairs(), fn);
 }
 
 QVector<QPair<int, int>> TimelineView::selectedVideoClips() const

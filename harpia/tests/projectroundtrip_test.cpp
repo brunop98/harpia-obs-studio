@@ -175,19 +175,52 @@ int main(int argc, char **argv)
 		t.hidden = true;
 		t.locked = true;
 		t.ripple = true;
+		t.rippleSpeed = true;
 		t.solo = true;
 		t.gain = 0.65;
 		t.color = QColor(0x12, 0x34, 0x56);
 		t.clips.append(c);
 		ok(trackFromJson(trackToJson(t)) == t, "a track keeps its switches, colour and clips");
+		bool independentRipple = true;
+		for (bool ripple : {false, true})
+			for (bool rippleSpeed : {false, true}) {
+				TlTrack flags = t;
+				flags.ripple = ripple;
+				flags.rippleSpeed = rippleSpeed;
+				const TlTrack flagsBack = trackFromJson(trackToJson(flags));
+				independentRipple = independentRipple && flagsBack.ripple == ripple &&
+					flagsBack.rippleSpeed == rippleSpeed;
+			}
+		ok(independentRipple, "speed ripple and deletion ripple round-trip independently in every combination");
+		TlTrack other = t;
+		other.rippleSpeed = false;
+		ok(!(other == t), "track equality detects a change to speed ripple alone");
+		TimelineModel before, after;
+		before.tracks = {t};
+		after = before;
+		after.tracks[0].rippleSpeed = false;
+		ok(!(before == after), "timeline equality preserves speed ripple changes for undo history");
 		// A project from before lanes had a gain must come back at unity, not
 		// at zero: it was mixed at unity.
 		QJsonObject old = trackToJson(t);
 		old.remove(QStringLiteral("gain"));
 		old.remove(QStringLiteral("solo"));
+		old.remove(QStringLiteral("rippleSpeed"));
 		const TlTrack back = trackFromJson(old);
 		ok(qAbs(back.gain - 1.0) < 1e-9 && !back.solo,
 		   "an older project with no gain or solo opens at unity, nothing soloed");
+		ok(!back.rippleSpeed && back.ripple,
+		   "legacy projects leave speed ripple off without changing deletion ripple");
+		bool malformedDefaultsOff = true;
+		const QJsonValue malformedValues[] = {QJsonValue(QStringLiteral("true")), QJsonValue(1),
+			QJsonValue(QJsonValue::Null), QJsonValue(QJsonArray()), QJsonValue(QJsonObject())};
+		for (const QJsonValue &value : malformedValues) {
+			QJsonObject malformed = trackToJson(t);
+			malformed[QStringLiteral("rippleSpeed")] = value;
+			const TlTrack malformedBack = trackFromJson(malformed);
+			malformedDefaultsOff = malformedDefaultsOff && !malformedBack.rippleSpeed && malformedBack.ripple;
+		}
+		ok(malformedDefaultsOff, "malformed speed ripple values default off without changing deletion ripple");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

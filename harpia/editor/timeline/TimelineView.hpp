@@ -223,7 +223,7 @@ public:
 	// Returns how many clips moved; 0 changes nothing and records nothing.
 	int forceRipple(int track);
 	const TlClip *selectedClipPtr() const;
-	void updateSelectedClip(const TlClip &c); // Inspector edits push back here
+	void updateSelectedClip(const TlClip &c); // Inspector edits; respects lock and speed ripple
 
 	// Sounds for events (SoundRules). The rules live in the model, so the
 	// window edits them here: one commitEdit, one undo step.
@@ -257,6 +257,8 @@ public:
 	// Edit EVERY selected clip in one go, emitting clipsChanged once at the end.
 	// One signal, so the window takes one undo snapshot however many clips the
 	// edit touched — which is what makes a multi-clip change one Ctrl-Z.
+	// On tracks opting into speed ripple, a speed change also shifts later
+	// clips by its duration delta, keeping indices, gaps and overlaps intact.
 	void applyToSelection(const std::function<void(TlClip &)> &fn);
 
 	// Magnet: snap clip edges to the playhead, 0 and other clips while dragging.
@@ -293,6 +295,8 @@ public:
 	// still or effect is simply stretched; a media clip is re-timed by speed
 	// (clamped to the speed control's range). False, and no undo step, when
 	// there is no media to measure against or the lane is locked.
+	// This explicit placement operation leaves other clips where they are,
+	// including when the lane has auto ripple on speed change enabled.
 	bool fitClipToTimeline(int track, int clip);
 	// Where the media ends, ignoring one clip. 0 when there is none.
 	qint64 mediaEndMs(int exceptTrack = -1, int exceptClip = -1) const;

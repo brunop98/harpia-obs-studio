@@ -385,6 +385,7 @@ private:
 	// Every keyboard shortcut, registered rather than hard-wired, so the panel
 	// can list and rebind them live.
 	ShortcutRegistry *shortcuts_ = nullptr;
+	QObject *mouseHistoryFilter_ = nullptr;
 	ShortcutPanel *shortcutPanel_ = nullptr;
 	void openShortcutPanel();
 

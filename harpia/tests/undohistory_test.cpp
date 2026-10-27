@@ -56,6 +56,16 @@ static void click(QWidget *w, QPoint p, Qt::KeyboardModifiers mods = Qt::NoModif
 	settle(30);
 }
 
+static void sideClick(QWidget *widget, Qt::MouseButton button)
+{
+	const QPointF at(widget->rect().center());
+	QMouseEvent press(QEvent::MouseButtonPress, at, widget->mapToGlobal(at), button, button, Qt::NoModifier);
+	QApplication::sendEvent(widget, &press);
+	QMouseEvent release(QEvent::MouseButtonRelease, at, widget->mapToGlobal(at), button, Qt::NoButton, Qt::NoModifier);
+	QApplication::sendEvent(widget, &release);
+	settle(30);
+}
+
 static void drag(QWidget *w, QPoint from, QPoint to, Qt::KeyboardModifiers mods = Qt::NoModifier)
 {
 	mouse(w, QEvent::MouseButtonPress, from, mods);
@@ -272,6 +282,13 @@ int main(int argc, char **argv)
 		ok(tv->selectedCountForTest() == 3, "and keeps the whole selection");
 		redo();
 		ok(tv->model() == trimmed, "one Ctrl+Y reapplies the complete batch trim");
+		w.activateWindow();
+		settle(30);
+		sideClick(tv, Qt::BackButton);
+		ok(tv->model() == before && tv->selectedCountForTest() == 3,
+		   "one mouse Back click restores the batch trim and its complete selection");
+		sideClick(tv, Qt::ForwardButton);
+		ok(tv->model() == trimmed, "one mouse Forward click reapplies the batch trim exactly once");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

@@ -180,6 +180,7 @@
 #include "../library/ClipLibrary.hpp"
 #include "../library/ThumbnailCache.hpp"
 #include <QPointer>
+#include <QMouseEvent>
 #include <QThreadPool>
 #include <QTimer>
 #include <QUrl>
@@ -188,6 +189,65 @@
 namespace harpia {
 
 namespace {
+// An application filter sees child controls before they consume or propagate
+// side-button events. Keep it separate from the editor's local event filter,
+// whose canvas/console handlers must still run just once.
+class EditorMouseHistory final : public QObject {
+public:
+	EditorMouseHistory(QWidget *editor, std::function<void()> undo, std::function<void()> redo)
+		: QObject(editor), editor_(editor), undo_(std::move(undo)), redo_(std::move(redo))
+	{
+		qApp->installEventFilter(this);
+	}
+	~EditorMouseHistory() override
+	{
+		if (qApp)
+			qApp->removeEventFilter(this);
+	}
+
+protected:
+	bool eventFilter(QObject *watched, QEvent *event) override
+	{
+		const auto type = event->type();
+		if (type != QEvent::MouseButtonPress && type != QEvent::MouseButtonDblClick &&
+		    type != QEvent::MouseButtonRelease)
+			return false;
+		auto *mouse = static_cast<QMouseEvent *>(event);
+		if (mouse->button() != Qt::BackButton && mouse->button() != Qt::ForwardButton)
+			return false;
+		auto *receiver = qobject_cast<QWidget *>(watched);
+		const QWidget *modal = QApplication::activeModalWidget();
+		if (!editor_->isVisible() || !editor_->isEnabled() || !belongs(receiver) ||
+		    !belongs(QApplication::activeWindow()) || QApplication::activePopupWidget() ||
+		    (modal && modal != editor_))
+			return false;
+		mouse->accept();
+		// Swallow release as well: some preview/track handlers finish their
+		// current edit on any release. Chording a side button with a drag must
+		// neither restore history under that drag nor end it prematurely.
+		if (type != QEvent::MouseButtonRelease &&
+		    !(mouse->buttons() & (Qt::LeftButton | Qt::MiddleButton | Qt::RightButton))) {
+			const auto run = mouse->button() == Qt::BackButton ? undo_ : redo_;
+			run(); // a double-click event represents the second physical press
+		}
+		return true;
+	}
+
+private:
+	bool belongs(const QWidget *widget) const
+	{
+		// QWidget::isAncestorOf stops at a window boundary. Owned floating
+		// tools have their own window but still belong to this editor.
+		for (auto *owner = widget; owner; owner = owner->parentWidget())
+			if (owner == editor_)
+				return true;
+		return false;
+	}
+	QWidget *editor_;
+	std::function<void()> undo_;
+	std::function<void()> redo_;
+};
+
 // Shown on every caption text field: the tags it takes.
 const QString kRichTextTip = QStringLiteral(
 	"Rich text, as in Unity:\n"
@@ -2248,6 +2308,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	cmd("edit.undo", "Undo", "Editing", {QKeySequence::Undo}, [this]() { undo(); });
 	cmd("edit.redo", "Redo", "Editing",
 	    {QKeySequence::Redo, QKeySequence(Qt::CTRL | Qt::Key_Y)}, [this]() { redo(); });
+	mouseHistoryFilter_ = new EditorMouseHistory(this, [this]() { undo(); }, [this]() { redo(); });
 	cmd("playback.playPause", "Play / Pause", "Playback", {QKeySequence(Qt::Key_Space)},
 	    [this]() { onPlayPause(); });
 	// Up / Down on the selected cuts in Multi-Cut: faster / slower by the Dev
@@ -2370,6 +2431,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 
 	// Gestures the mouse owns. Listed so the panel is a complete reference,
 	// but not rebindable: the widget reads the mouse directly.
+	shortcuts_->addMouseGesture(QStringLiteral("edit.undoMouse"), QStringLiteral("Undo"),
+				    QStringLiteral("Editing"), QStringLiteral("Mouse Back (side button)"));
+	shortcuts_->addMouseGesture(QStringLiteral("edit.redoMouse"), QStringLiteral("Redo"),
+				    QStringLiteral("Editing"), QStringLiteral("Mouse Forward (side button)"));
 	shortcuts_->addMouseGesture(QStringLiteral("timeline.zoom"), QStringLiteral("Zoom timeline"),
 				    QStringLiteral("View"), QStringLiteral("Ctrl + Mouse wheel"));
 	shortcuts_->addMouseGesture(QStringLiteral("timeline.pan"), QStringLiteral("Pan timeline"),
@@ -8334,18 +8399,24 @@ void VideoEditorWindow::refreshShortcutHints()
 		QPushButton *btn;
 		const char *id;
 		const char *base;
+		const char *mouse = nullptr;
 	};
 	const Hint hints[] = {
 		{playBtn_, "playback.playPause", "Play / pause the preview"},
-		{undoBtn_, "edit.undo", "Undo"},
-		{redoBtn_, "edit.redo", "Redo"},
+		{undoBtn_, "edit.undo", "Undo", "Mouse Back"},
+		{redoBtn_, "edit.redo", "Redo", "Mouse Forward"},
 		{snapBtn_, "timeline.snap", nullptr}, // has its own on/off tooltip
 		{fitBtn_, "timeline.fit", "Zoom the timeline out so the whole edit fits"},
 	};
 	for (const Hint &h : hints) {
 		if (!h.btn || !h.base)
 			continue;
-		const QString keys = shortcuts_->displayText(QLatin1String(h.id));
+		QString keys = shortcuts_->displayText(QLatin1String(h.id));
+		if (h.mouse) {
+			if (!keys.isEmpty())
+				keys += QStringLiteral(" / ");
+			keys += QLatin1String(h.mouse);
+		}
 		h.btn->setToolTip(keys.isEmpty() ? QLatin1String(h.base)
 						 : QStringLiteral("%1 (%2)")
 							   .arg(QLatin1String(h.base), keys));
@@ -12414,6 +12485,7 @@ void VideoEditorWindow::onSegmentSelected(int index)
 
 VideoEditorWindow::~VideoEditorWindow()
 {
+	delete mouseHistoryFilter_;
 	if (isVisible())
 		window_screen::save(*this, QStringLiteral("editor"));
 	--openCount_;

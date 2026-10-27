@@ -66,6 +66,7 @@ needs (see [The OBS tree](#the-obs-tree)).
 In every timeline, hold the middle mouse button and drag left or right to pan
 the visible time window. Scroll to zoom in when the whole timeline is fitted.
 This also works in the voiceover and keyframe lanes.
+The mouse's Back and Forward side buttons run Undo and Redo in the editor.
 
 Three modes, each one step up from the last:
 

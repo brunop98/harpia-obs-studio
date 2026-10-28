@@ -70,7 +70,10 @@ jobs:
             brew install cmake
           fi
       - name: Check repository, bootstrap and packaging logic
+        id: logic_checks
+        shell: bash
         run: |
+          exec > >(tee "$RUNNER_TEMP/harpia-macos-build.log") 2>&1
           python3 harpia/tests/repository_checkout_test.py
           python3 harpia/tests/versionconfig_test.py
           python3 harpia/tests/macos_presets_test.py
@@ -94,7 +97,7 @@ jobs:
           set -o pipefail
           harpia/scripts/build-macos.sh --preset macos-ci --build-dir build_macos_ci --test --package --check-runtime 2>&1 | tee "$RUNNER_TEMP/harpia-macos-build.log"
       - name: Show the first build diagnostic
-        if: failure() && steps.native_build.outcome == 'failure'
+        if: failure() && (steps.native_build.outcome == 'failure' || steps.logic_checks.outcome == 'failure')
         run: |
           python3 - <<'PY'
           import os, re
@@ -142,7 +145,7 @@ jobs:
             build_macos_ci/dist/*.runtime.json
           if-no-files-found: error
       - uses: actions/upload-artifact@v6
-        if: always() && (steps.native_build.outcome == 'success' || steps.native_build.outcome == 'failure')
+        if: always() && (steps.native_build.outcome == 'success' || steps.native_build.outcome == 'failure' || steps.logic_checks.outcome == 'failure')
         with:
           name: Harpia-macOS-build-log
           path: ${{ runner.temp }}/harpia-macos-build.log

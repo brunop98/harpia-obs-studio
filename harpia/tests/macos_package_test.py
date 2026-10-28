@@ -276,7 +276,7 @@ class InstallationTests(unittest.TestCase):
     def setUp(self):
         scratch = tempfile.TemporaryDirectory(prefix="harpia install with spaces ")
         self.addCleanup(scratch.cleanup)
-        self.root = Path(scratch.name)
+        self.root = Path(scratch.name).resolve()
         self.source = self.root / "build/Harpia.app"
         self.destination = self.root / "Applications"
         self.target = self.destination / "Harpia.app"
@@ -364,7 +364,7 @@ class TemporaryDirectoryTests(unittest.TestCase):
             alias = root / "temporary directory link"
             alias.symlink_to(physical, target_is_directory=True)
             result = subprocess.run(
-                [sys.executable, str(Path(__file__).resolve()), "PackagingTests"],
+                [sys.executable, str(Path(__file__).resolve()), "PackagingTests", "InstallationTests"],
                 env=dict(os.environ, TMPDIR=str(alias)), text=True,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30,
             )

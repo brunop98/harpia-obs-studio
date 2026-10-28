@@ -1059,6 +1059,9 @@ void MainWindow::finishStartup()
 		if (captureModeCombo_ && captureModeCombo_->currentIndex() != mode)
 			captureModeCombo_->setCurrentIndex(mode);
 	}
+	logRecordingSetup("startup");
+	capture_.logDiagnostics("startup");
+	Logger::instance().flush();
 
 	// If the last exit was a crash, say so -- with the DESCRIPTION the crash
 	// handlers captured, not just the fact of it. Shown before the orphan
@@ -1614,6 +1617,8 @@ void MainWindow::startRecording()
 	// Readiness gate: never start while blocking warnings exist.
 	refreshReadiness();
 	if (recordingBlocked_) {
+		blog(LOG_WARNING, "[harpia] recording start blocked: %s", firstIssue_.toUtf8().constData());
+		Logger::instance().flush();
 		starting_ = false;
 		updateButtons();
 		return;
@@ -1680,8 +1685,15 @@ void MainWindow::startRecording()
 	// The first frame should already be the area under the mouse, not area 1
 	// for the quarter second until the state tick arms the switcher.
 	primeMultiArea();
+	logRecordingSetup("recording attempt after framing");
+	if (recordMode() != RecordMode::AudioOnly) {
+		obs_.logVideoDiagnostics("recording attempt");
+		capture_.logDiagnostics("recording attempt");
+	}
+	Logger::instance().flush();
 
 	if (!recorder_.start(preset, recordPath.toStdString(), split)) {
+		Logger::instance().flush();
 		if (split.enabled)
 			QDir().rmdir(tmp.absolutePath()); // only if empty; keep captured data
 		restoreAreaHome();
@@ -1845,8 +1857,12 @@ void MainWindow::beginRecordFlow()
 {
 	// Gate on readiness before showing any countdown.
 	refreshReadiness();
-	if (recordingBlocked_)
+	if (recordingBlocked_) {
+		logRecordingSetup("recording requested but blocked");
+		blog(LOG_WARNING, "[harpia] recording start blocked: %s", firstIssue_.toUtf8().constData());
+		Logger::instance().flush();
 		return;
+	}
 	if (!confirmDiskSpace())
 		return;
 
@@ -2296,6 +2312,32 @@ void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Pat
 	}));
 }
 
+void MainWindow::logRecordingSetup(const char *reason) const
+{
+	const Preset &p = activePreset();
+	blog(LOG_INFO,
+	     "[harpia] recording setup (%s): preset='%s'; mode=%s; OBS-monitor-index=%d; requested-fps=%d; zoom=%s (%d%%); framing=%s; follow=%s; follow-locked=%s; multi-area=%s (%zu spots)",
+	     reason, p.name.c_str(), recordModeTag(recordMode()), p.monitorIndex, p.fps, p.zoomEnabled ? "on" : "off",
+	     p.zoomPercent, regionByTransform_ ? "scene-transform" : "crop-filter/full-display",
+	     p.followMouse ? "on" : "off", regionFollowLocked_ ? "yes" : "no", p.multiArea ? "on" : "off",
+	     p.multiAreaSpots.size());
+	blog(LOG_INFO,
+	     "[harpia] requested region: enabled=%s; rect=(%d,%d %dx%d); coordinates=physical pixels relative to selected monitor; armed-canvas=%ux%u; armed-fps=%d",
+	     currentRegion_.enabled ? "yes" : "no", currentRegion_.x, currentRegion_.y, currentRegion_.width,
+	     currentRegion_.height, armedW_, armedH_, armedFps_);
+	if (const QScreen *screen = screenForActivePreset()) {
+		const QRect logical = screen->geometry();
+		const QRect physical = window_list::monitorRect(screen->name());
+		blog(LOG_INFO,
+		     "[harpia] selected display: Qt-name='%s'; logical-desktop-rect=(%d,%d %dx%d); device-pixel-ratio=%.3f; refresh-Hz=%.3f; physical-desktop-rect=(%d,%d %dx%d); physical-rect-known=%s",
+		     screen->name().toUtf8().constData(), logical.x(), logical.y(), logical.width(), logical.height(),
+		     screen->devicePixelRatio(), screen->refreshRate(), physical.x(), physical.y(), physical.width(),
+		     physical.height(), physical.isValid() ? "yes" : "no");
+	} else {
+		blog(LOG_WARNING, "[harpia] selected display: no matching Qt screen");
+	}
+}
+
 void MainWindow::logRecordingStart(const Preset &p, const QString &recordedPath, const QString &finalPath,
 				   const QString &webcamPath, uint32_t baseW, uint32_t baseH, int fps)
 {
@@ -2352,6 +2394,7 @@ void MainWindow::logRecordingStart(const Preset &p, const QString &recordedPath,
 	     (appCaptureEnabled_ && !appWindowValue_.isEmpty()) ? "on" : "off",
 	     p.showScreenBorder ? "on" : "off");
 	blog(LOG_INFO, "========================================");
+	Logger::instance().flush();
 }
 
 void MainWindow::onRecordPauseButton()

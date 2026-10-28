@@ -11,8 +11,9 @@ namespace harpia {
 enum class LogLevel { Error, Warning, Info, Debug };
 
 // Captures runtime log output (libobs via base_set_log_handler, and Qt via a
-// forwarded message handler) and writes it to a per-session log file, flushing
-// each line so entries survive an unexpected crash. Log files persist across
+// forwarded message handler) and writes it to a per-session log file. Errors
+// and warnings flush immediately; flush() publishes buffered diagnostic
+// snapshots without forcing a disk write for every INFO/DEBUG line. Logs persist across
 // launches under <config>/harpia-recorder/logs, so previous sessions' crashes
 // stay reviewable.
 //
@@ -29,6 +30,10 @@ public:
 
 	// Add an entry from an external source (e.g. the Qt message handler).
 	void log(LogLevel level, const std::string &text);
+
+	// Publish buffered INFO/DEBUG lines before a diagnostic snapshot is read or
+	// handed to another application. Safe before init() and after shutdown().
+	void flush();
 
 	std::string logDir() const;
 	std::string sessionFilePath() const;

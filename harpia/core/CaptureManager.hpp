@@ -78,6 +78,10 @@ public:
 	// Current captured content size (e.g. the window's size). False if unknown.
 	bool sourceSize(uint32_t &w, uint32_t &h) const;
 
+	// Emit one snapshot of the current source, crop and scene transform. Call
+	// when arming a take, never from the mouse-follow or zoom tick.
+	void logDiagnostics(const char *reason) const;
+
 	// Apply (or clear) a recording region via crop_filter. Safe to call while
 	// capturing; pass an empty/disabled region to record the full display.
 	void setRegion(const CaptureRegion &region);
@@ -144,6 +148,7 @@ private:
 
 	obs_source_t *source_ = nullptr;
 	obs_source_t *cropFilter_ = nullptr;
+	bool cropFailureLogged_ = false;
 	obs_scene_t *scene_ = nullptr;
 	obs_sceneitem_t *item_ = nullptr; // owned by scene_, not released here
 	double zoomScale_ = 1.0;
@@ -159,13 +164,15 @@ private:
 		int monitor = -1;
 		obs_source_t *source = nullptr;
 		obs_source_t *crop = nullptr;
+		bool cropFailureLogged = false;
 		obs_sceneitem_t *item = nullptr; // owned by scene_
 		CaptureRegion region;
 	};
 	std::vector<ExtraCapture> extras_;
 	int shownMonitor_ = -1; // -1: the main capture
 	obs_source_t *createDisplaySource(int monitorIndex, const char *label) const;
-	static void applyCrop(obs_source_t *source, obs_source_t *&crop, const CaptureRegion &region);
+	static void applyCrop(obs_source_t *source, obs_source_t *&crop, const CaptureRegion &region,
+			      bool &failureLogged);
 };
 
 } // namespace harpia

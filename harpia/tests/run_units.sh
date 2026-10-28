@@ -19,6 +19,9 @@ LF="$(pkg-config --libs Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
 # Module-load failures and graphics-driver failures require different recovery.
 g++ -std=c++17 -O1 -I"$H" "$HERE/videostatus_test.cpp" -o "$WORK/videostatus_test"
 g++ -std=c++17 -O1 -I"$H" "$HERE/graphicsmodulediagnostics_test.cpp" -o "$WORK/graphicsmodulediagnostics_test"
+# A diagnostic snapshot must reach disk before Error Logs reads the live file.
+g++ -std=c++17 -O1 -pthread -I"$H" -I"$ROOT/libobs" \
+	"$HERE/logger_flush_test.cpp" "$H/core/Logger.cpp" -o "$WORK/logger_flush_test"
 if [ "$(uname -s)" = Linux ]; then
 	# Compile the Windows-only probe against controlled API responses as well.
 	g++ -std=c++17 -O1 -D_WIN32 -DHARPIA_TEST_FAKE_WINDOWS -I"$HERE/support/graphics_module" -I"$H" \
@@ -1210,6 +1213,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/autopause_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/globalhotkeys_test" || rc=1
 "$WORK/videostatus_test" || rc=1
 "$WORK/graphicsmodulediagnostics_test" || rc=1
+"$WORK/logger_flush_test" || rc=1
 if [ "$(uname -s)" = Linux ]; then
 	"$WORK/graphicsmodulediagnostics_fake_test" || rc=1
 fi

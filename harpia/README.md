@@ -261,6 +261,23 @@ exists; **127** means a missing entry point, often incompatible library versions
 **193** indicates an incompatible or invalid binary. Error **-2** is a separate
 graphics-device or driver support failure.
 
+Startup and each recording attempt include diagnostic snapshots in **Error Logs**:
+OS/architecture, display positions and DPI scaling, selected monitor, region
+coordinates in device pixels, source and cropped sizes, scene transforms,
+requested/actual video settings, encoder/bitrate, audio and split settings.
+GPU model, driver and reported memory are logged when the graphics context is
+available; Windows also lists display adapters without needing the renderer.
+These snapshots are flushed to disk and do not run on every frame or mouse move.
+To report a problem, reproduce it, open **Error Logs**, keep **Info** enabled,
+then use **Copy** or **Open Log File** to include the complete current session.
+
+For `harpia_region_crop` failures, look for the preceding `[crop_filter]` error:
+it distinguishes missing `crop_filter.effect` data, an unavailable graphics
+context, and shader compilation failure (including compiler details when
+available). OBS can still print `private source ... created` after initialization
+fails because it keeps a source wrapper; the capture snapshot reports whether
+the actual plugin data is valid.
+
 At run time nothing auto-installs: the exe needs its DLLs, the OBS plugins and
 the Visual C++ runtime beside it, which the build `rundir` and the package
 both provide. The runtime comes from Visual Studio's `VC\Redist\MSVC` folder,

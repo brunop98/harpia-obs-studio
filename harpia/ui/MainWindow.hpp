@@ -220,6 +220,7 @@ private:
 	void remuxInBackground(const QString &mkvPath, const QString &mp4Path);
 	void logRecordingStart(const Preset &p, const QString &recordedPath, const QString &finalPath,
 			       const QString &webcamPath, uint32_t baseW, uint32_t baseH, int fps);
+	void logRecordingSetup(const char *reason) const;
 	void updateButtons();
 	// Open the editor for the active preset + persist. If initialPage is given
 	// (e.g. "Webcam"), the editor opens with that settings page selected.

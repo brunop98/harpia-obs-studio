@@ -44,6 +44,10 @@ public:
 	// Configure the audio graph (48kHz stereo). Returns true on success.
 	bool resetAudio();
 
+	// One bounded snapshot, for startup and recording attempts. Safe when the
+	// video engine failed; graphics queries are skipped without a live context.
+	void logVideoDiagnostics(const char *reason) const;
+
 	// After loadModules(): human-readable names of REQUIRED backend components
 	// (screen capture source, H.264 encoder, AAC encoder, ffmpeg muxer output)
 	// that failed to register — i.e. missing/blocked plugin libraries. Empty when

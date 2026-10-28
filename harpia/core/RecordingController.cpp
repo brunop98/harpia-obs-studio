@@ -11,6 +11,60 @@
 
 namespace harpia {
 
+namespace {
+
+// Keep this an allowlist: encoder settings can contain device identifiers or
+// paths, and a full JSON dump is neither needed nor useful for capture faults.
+void logEncoderConfiguration(obs_encoder_t *encoder, bool video)
+{
+	if (!encoder) {
+		return;
+	}
+	obs_data_t *settings = obs_encoder_get_settings(encoder);
+	std::string quality;
+	const char *control = obs_data_get_string(settings, "rate_control");
+	if (control && *control) {
+		quality = std::string(" rate_control=") + control;
+	}
+	for (const char *key : {"bitrate", "crf", "cqp", "qp", "keyint_sec"}) {
+		if (obs_data_has_user_value(settings, key) || obs_data_has_default_value(settings, key)) {
+			quality += std::string(" ") + key + "=" + std::to_string(obs_data_get_int(settings, key));
+		}
+	}
+	blog(LOG_INFO, "[harpia] recording configured %s encoder: id=%s%s", video ? "video" : "audio",
+	     obs_encoder_get_id(encoder), quality.c_str());
+	obs_data_release(settings);
+}
+
+void logRecordingMediaConfiguration(bool hasVideo)
+{
+	struct obs_video_info video = {};
+	if (hasVideo && obs_get_video_info(&video)) {
+		blog(LOG_INFO,
+		     "[harpia] recording video graph: canvas=%ux%u output=%ux%u fps=%u/%u (CFR) "
+		     "format=%s colorspace=%d range=%d scale=%d gpu_conversion=%s adapter=%u renderer=%s",
+		     video.base_width, video.base_height, video.output_width, video.output_height, video.fps_num,
+		     video.fps_den, get_video_format_name(video.output_format), int(video.colorspace), int(video.range),
+		     int(video.scale_type), video.gpu_conversion ? "yes" : "no", video.adapter,
+		     video.graphics_module ? video.graphics_module : "(none)");
+	} else if (hasVideo) {
+		blog(LOG_WARNING, "[harpia] recording video graph: unavailable");
+	}
+
+	struct obs_audio_info2 audio = {};
+	if (obs_get_audio_info2(&audio)) {
+		blog(LOG_INFO,
+		     "[harpia] recording audio graph: sample_rate=%uHz channels=%u speaker_layout=%d "
+		     "max_buffering=%ums fixed_buffering=%s",
+		     audio.samples_per_sec, get_audio_channels(audio.speakers), int(audio.speakers),
+		     audio.max_buffering_ms, audio.fixed_buffering ? "yes" : "no");
+	} else {
+		blog(LOG_WARNING, "[harpia] recording audio graph: unavailable");
+	}
+}
+
+} // namespace
+
 RecordingController::~RecordingController()
 {
 	teardown();
@@ -55,8 +109,10 @@ void RecordingController::teardown()
 bool RecordingController::start(const Preset &preset, const std::string &fullFilePath,
 				const AutoSplitSettings &requestedSplit)
 {
-	if (isRecording())
+	if (isRecording()) {
+		blog(LOG_WARNING, "[harpia] recording start ignored: a recording is already active");
 		return false;
+	}
 	const AutoSplitSettings split = auto_split_settings::validated(requestedSplit);
 
 	teardown(); // release any previous session's objects
@@ -70,18 +126,33 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 	activePreset_ = preset;
 	currentFilePath_ = fullFilePath;
 	usesFfmpegOutput_ = EncoderFactory::usesFfmpegOutput(preset);
+	blog(LOG_INFO,
+	     "[harpia] recording start attempt: mode=%s container=%s requested_codec=%s "
+	     "hardware_preferred=%s requested_fps=%d frame_rate_hint=%s video_bitrate=%dkbps "
+	     "(0=automatic quality) audio_bitrate=%dkbps desktop_audio=%s microphones=%zu",
+	     recordModeTag(recordModeFromInt(preset.captureMode)), formatToString(preset.format),
+	     codecToString(preset.codec), preset.gpuCompression ? "yes" : "no", preset.fps,
+	     frameRateModeToString(preset.frameRateMode), preset.videoBitrateKbps,
+	     preset.audioBitrateKbps > 0 ? preset.audioBitrateKbps : 160, preset.recordDesktopAudio ? "yes" : "no",
+	     preset.micDeviceIds.size());
+	blog(LOG_INFO, "[harpia] recording split configuration: enabled=%s mode=%s time_limit=%dmin size_limit=%dMB",
+	     split.enabled ? "yes" : "no", split.mode == AutoSplitSettings::Mode::Size ? "size" : "time", split.minutes,
+	     split.sizeMB);
 	if (split.enabled && (usesFfmpegOutput_ ||
 			      !modeUsesVideoEncoder(recordModeFromInt(preset.captureMode)))) {
 		lastStopError_ = "Auto Split supports MP4, MKV, MOV and AVI screen recordings. "
 				 "Turn off Auto Split for Audio Only or GIF recording.";
+		blog(LOG_ERROR, "[harpia] recording start refused: %s", lastStopError_.c_str());
 		return false;
 	}
+	logRecordingMediaConfiguration(modeUsesVideoEncoder(recordModeFromInt(preset.captureMode)));
 
 	// Audio Only: no output, no encoders, no video graph -- a tap straight on
 	// the audio mix. libobs will not start an FFmpeg output without a video
 	// encoder whatever is attached to it (the flag is registered by the
 	// plugin, not derived from the wiring), so this mode has to go around it.
 	if (!modeUsesVideoEncoder(recordModeFromInt(preset.captureMode))) {
+		blog(LOG_INFO, "[harpia] recording backend: audio tap, stereo PCM capture with AAC finalization");
 		tap_ = std::make_unique<AudioOnlyRecorder>();
 		tap_->onFinished = [this](const std::string &path, bool ok, const std::string &why) {
 			lastStopCode_ = ok ? 0 : -1;
@@ -125,19 +196,19 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 			// The reason obs_reset_video gave, when we have it: this used to
 			// blame the graphics DLL every time, which sent people rebuilding
 			// for a canvas the GPU had simply refused.
-			const std::string why = lastVideoResetError().empty()
-							? describeVideoResetError(-5, 0, 0)
-							: lastVideoResetError();
+			const std::string why = describeVideoNotReady();
 			lastStopError_ = "The video engine is not running, so nothing can be recorded.\n\n" + why;
 			blog(LOG_ERROR, "[harpia] recording refused: no video engine (%s)", why.c_str());
 			return false;
 		}
 	}
-
 	const std::string outputId = EncoderFactory::outputId(preset);
+	blog(LOG_INFO, "[harpia] recording backend: output=%s", outputId.c_str());
 	output_ = obs_output_create(outputId.c_str(), "harpia_file_output", nullptr, nullptr);
 	if (!output_) {
-		blog(LOG_ERROR, "[harpia] failed to create output '%s'", outputId.c_str());
+		lastStopError_ = "Failed to create recording output '" + outputId +
+				 "' (plugin missing or initialization failed).";
+		blog(LOG_ERROR, "[harpia] recording start failed: %s", lastStopError_.c_str());
 		return false;
 	}
 
@@ -167,6 +238,8 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 			}
 			obs_data_set_int(settings, "scale_width", w & ~1u);
 			obs_data_set_int(settings, "scale_height", h & ~1u);
+			blog(LOG_INFO, "[harpia] recording GIF configuration: encoder=gif output=%ux%u audio=disabled",
+			     w & ~1u, h & ~1u);
 		}
 
 		obs_output_update(output_, settings);
@@ -203,11 +276,15 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 		obs_data_release(asettings);
 
 		if ((!audioOnly && !videoEncoder_) || !audioEncoder_) {
-			blog(LOG_ERROR, "[harpia] failed to create encoders (video='%s' audio='%s')", vid.c_str(),
-			     aid.c_str());
+			lastStopError_ =
+				"Failed to create recording encoders (video='" + vid + "', audio='" + aid + "').";
+			blog(LOG_ERROR, "[harpia] recording start failed: %s video_created=%s audio_created=%s",
+			     lastStopError_.c_str(), videoEncoder_ ? "yes" : "no", audioEncoder_ ? "yes" : "no");
 			teardown();
 			return false;
 		}
+		logEncoderConfiguration(videoEncoder_, true);
+		logEncoderConfiguration(audioEncoder_, false);
 
 		if (videoEncoder_)
 			obs_encoder_set_video(videoEncoder_, obs_get_video());
@@ -228,6 +305,7 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 			const size_t dot = fullFilePath.find_last_of('.');
 			if (slash == std::string::npos || dot == std::string::npos || dot <= slash) {
 				lastStopError_ = "Auto Split requires a recording path with a folder and extension.";
+				blog(LOG_ERROR, "[harpia] recording start failed: %s", lastStopError_.c_str());
 				obs_data_release(osettings);
 				teardown();
 				return false;
@@ -371,6 +449,19 @@ bool RecordingController::isPaused() const
 void RecordingController::onStartSignal(void *data, calldata_t *)
 {
 	auto *self = static_cast<RecordingController *>(data);
+	blog(LOG_INFO, "[harpia] recording output started: output=%s can_pause=%s split=%s",
+	     self->output_ ? obs_output_get_id(self->output_) : "(none)", self->canPause() ? "yes" : "no",
+	     self->splitEnabled_ ? "yes" : "no");
+	if (self->videoEncoder_) {
+		blog(LOG_INFO, "[harpia] recording active video encoder: id=%s size=%ux%u frame_rate_divisor=%u",
+		     obs_encoder_get_id(self->videoEncoder_), obs_encoder_get_width(self->videoEncoder_),
+		     obs_encoder_get_height(self->videoEncoder_),
+		     obs_encoder_get_frame_rate_divisor(self->videoEncoder_));
+	}
+	if (self->audioEncoder_) {
+		blog(LOG_INFO, "[harpia] recording active audio encoder: id=%s sample_rate=%uHz mixer=0",
+		     obs_encoder_get_id(self->audioEncoder_), obs_encoder_get_sample_rate(self->audioEncoder_));
+	}
 	if (self->onStarted)
 		self->onStarted();
 }

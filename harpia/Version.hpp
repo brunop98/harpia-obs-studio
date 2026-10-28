@@ -7,7 +7,7 @@
 // Bump PATCH with each meaningful application update (see AGENTS.md).
 #define HARPIA_VERSION_MAJOR 0
 #define HARPIA_VERSION_MINOR 1
-#define HARPIA_VERSION_PATCH 501
+#define HARPIA_VERSION_PATCH 502
 
 #define HARPIA_STRINGIFY_(x) #x
 #define HARPIA_STRINGIFY(x) HARPIA_STRINGIFY_(x)

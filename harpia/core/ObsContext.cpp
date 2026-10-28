@@ -5,6 +5,7 @@
 #include <QString>
 #endif
 
+#include "GraphicsModuleDiagnostics.hpp"
 #include "AppAudioSource.hpp"
 #include "VideoStatus.hpp"
 
@@ -63,8 +64,36 @@ bool ObsContext::startup()
 		blog(LOG_ERROR, "[harpia] obs_startup failed");
 		return false;
 	}
+	// Capture framing uses device pixels at 1:1 scale. libobs otherwise stores
+	// scene items relative to the canvas, automatically shrinking/repositioning
+	// them when resetVideo switches from a monitor to a smaller Custom Region.
+	// Set this before creating any scene, including secondary area captures.
+	obs_data_t *sceneSettings = obs_data_create();
+	obs_data_set_bool(sceneSettings, "AbsoluteCoordinates", true);
+	obs_apply_private_data(sceneSettings);
+	obs_data_release(sceneSettings);
 
 	initialized_ = true;
+	blog(LOG_INFO, "[harpia] backend: OBS %s; renderer module='%s'; scene coordinates=absolute device pixels",
+	     obs_get_version_string(), renderModule());
+#if defined(_WIN32)
+	// This inventory does not depend on loading D3D11. It remains useful when
+	// the renderer DLL failed and there is no graphics context to ask for a GPU.
+	for (DWORD i = 0; i < 32; ++i) {
+		DISPLAY_DEVICEW display = {};
+		display.cb = sizeof(display);
+		if (!EnumDisplayDevicesW(nullptr, i, &display, 0)) {
+			break;
+		}
+		blog(LOG_INFO,
+		     "[harpia] Windows display adapter #%lu: '%s'; display='%s'; desktop=%s; primary=%s; flags=0x%lx",
+		     static_cast<unsigned long>(i), graphics_module_diagnostics::utf8(display.DeviceString).c_str(),
+		     graphics_module_diagnostics::utf8(display.DeviceName).c_str(),
+		     (display.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) ? "yes" : "no",
+		     (display.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) ? "yes" : "no",
+		     static_cast<unsigned long>(display.StateFlags));
+	}
+#endif
 	return true;
 }
 
@@ -75,6 +104,8 @@ void ObsContext::addModulePaths()
 	const char *pluginsDataPath = std::getenv("OBS_PLUGINS_DATA_PATH");
 	if (pluginsPath && pluginsDataPath) {
 		std::string dataWithModule = std::string(pluginsDataPath) + "/%module%";
+		blog(LOG_INFO, "[harpia] plugin override: binaries='%s'; data='%s'", pluginsPath,
+		     dataWithModule.c_str());
 		obs_add_module_path(pluginsPath, dataWithModule.c_str());
 	}
 
@@ -120,13 +151,16 @@ void ObsContext::addModulePaths()
 
 		const fs::path dataDir = fs::weakly_canonical(exeDir / c.dataDir, ec);
 		const std::string dataPattern = dataDir.string() + "/%module%";
+		blog(LOG_INFO, "[harpia] plugin path: binaries='%s'; data='%s'", binStr.c_str(), dataPattern.c_str());
 		obs_add_module_path(binStr.c_str(), dataPattern.c_str());
 	}
 
 	// Fallback for any unusual layout the candidates didn't match: keep the
 	// original relative registration (single entry, so still no duplication).
-	if (registered.empty())
+	if (registered.empty()) {
+		blog(LOG_WARNING, "[harpia] no plugin folder found beside executable; using relative plugin paths");
 		obs_add_module_path("obs-plugins/64bit", "data/obs-plugins/%module%");
+	}
 #endif
 }
 
@@ -146,6 +180,9 @@ void ObsContext::loadModules()
 	obs_load_all_modules2(&mfi);
 	obs_log_loaded_modules();
 	obs_post_load_modules();
+	for (size_t i = 0; i < mfi.count; ++i) {
+		blog(LOG_WARNING, "[harpia] plugin failed to load: %s", mfi.failed_modules[i]);
+	}
 	obs_module_failure_info_free(&mfi);
 	// Harpia's own: the per-app PC audio capture, where Windows has it.
 	app_audio::registerSource();
@@ -186,7 +223,13 @@ int ObsContext::resetVideo(uint32_t baseWidth, uint32_t baseHeight, int fpsNum, 
 		ovi.adapter = 0;
 		ovi.gpu_conversion = true;
 		ovi.scale_type = OBS_SCALE_BICUBIC;
-		return obs_reset_video(&ovi);
+		blog(LOG_INFO,
+		     "[harpia] video reset request: module='%s'; adapter=%u; canvas=%ux%u; output=%ux%u; fps=%u/%u; format=NV12; colorspace=709; range=partial; scale=bicubic; gpu-conversion=yes",
+		     ovi.graphics_module, ovi.adapter, bw, bh, ow, oh, ovi.fps_num, ovi.fps_den);
+		const int result = obs_reset_video(&ovi);
+		blog(result == OBS_VIDEO_SUCCESS ? LOG_INFO : LOG_WARNING,
+		     "[harpia] video reset result: %d (canvas=%ux%u; output=%ux%u)", result, bw, bh, ow, oh);
+		return result;
 	};
 
 	int ret = attempt(baseWidth, baseHeight, outWidth, outHeight);
@@ -224,7 +267,12 @@ int ObsContext::resetVideo(uint32_t baseWidth, uint32_t baseHeight, int fpsNum, 
 			}
 		}
 		if (ret != OBS_VIDEO_SUCCESS) {
-			lastVideoResetError() = describeVideoResetError(first, baseWidth, baseHeight);
+			lastVideoResetError() = describeVideoResetError(first, baseWidth, baseHeight, renderModule());
+#if defined(_WIN32)
+			if (first == OBS_VIDEO_MODULE_NOT_FOUND && *renderModule())
+				lastVideoResetError() = "OBS could not load its graphics module (OBS error -5). " +
+						       inspectWindowsGraphicsModule(renderModule());
+#endif
 			blog(LOG_ERROR, "[harpia] video engine is down: %s", lastVideoResetError().c_str());
 			return first;
 		}
@@ -236,7 +284,40 @@ int ObsContext::resetVideo(uint32_t baseWidth, uint32_t baseHeight, int fpsNum, 
 	lastOutW_ = outWidth;
 	lastOutH_ = outHeight;
 	lastFps_ = fpsNum;
+	logVideoDiagnostics("video reset completed");
 	return ret;
+}
+
+void ObsContext::logVideoDiagnostics(const char *reason) const
+{
+	const char *context = reason ? reason : "snapshot";
+	struct obs_video_info video = {};
+	if (!initialized_ || !obs_get_video_info(&video)) {
+		blog(LOG_WARNING, "[harpia] video diagnostics (%s): engine unavailable; %s", context,
+		     describeVideoNotReady().c_str());
+		return;
+	}
+	blog(LOG_INFO,
+	     "[harpia] video diagnostics (%s): module='%s'; adapter=%u; canvas=%ux%u; output=%ux%u; fps=%u/%u; format=%s; colorspace=%s; range=%s; scale=%d; gpu-conversion=%s",
+	     context, video.graphics_module ? video.graphics_module : "<unknown>", video.adapter, video.base_width,
+	     video.base_height, video.output_width, video.output_height, video.fps_num, video.fps_den,
+	     get_video_format_name(video.output_format), get_video_colorspace_name(video.colorspace),
+	     get_video_range_name(video.output_format, video.range), static_cast<int>(video.scale_type),
+	     video.gpu_conversion ? "yes" : "no");
+	obs_enter_graphics();
+	if (gs_get_context()) {
+		const char *api = gs_get_device_name();
+		const char *gpu = gs_get_renderer();
+		const char *driver = gs_get_driver_version();
+		blog(LOG_INFO,
+		     "[harpia] graphics: API='%s'; GPU='%s'; driver='%s'; dedicated-memory-MiB=%llu; shared-memory-MiB=%llu (0=unreported)",
+		     api ? api : "<unreported>", gpu ? gpu : "<unreported>", driver ? driver : "<unreported>",
+		     static_cast<unsigned long long>(gs_get_gpu_dmem() / (1024 * 1024)),
+		     static_cast<unsigned long long>(gs_get_gpu_smem() / (1024 * 1024)));
+	} else {
+		blog(LOG_WARNING, "[harpia] graphics diagnostics: no active graphics context");
+	}
+	obs_leave_graphics();
 }
 
 bool ObsContext::resetAudio()
@@ -277,12 +358,10 @@ std::vector<std::string> ObsContext::missingDependencies() const
 		missing.push_back("the video engine's data (data/libobs/default.effect, two folders up from the program) "
 				  "-- is the program folder complete?");
 
-	// The video engine itself: without its graphics module (libobs-d3d11.dll
-	// on Windows) there is no capture, no filters and no recording, and every
-	// source fails quietly until Record crashes on the missing device.
+	// Keep the actual startup failure: a missing module and a graphics driver
+	// refusing device creation need different remedies.
 	if (!videoReady_)
-		missing.push_back(std::string("the video engine -- its graphics module (") + renderModule() +
-				  ") did not load");
+		missing.push_back(describeVideoNotReady());
 
 	// A screen-capture source for this platform (any of the accepted ids).
 #if defined(_WIN32)

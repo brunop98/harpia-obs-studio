@@ -37,15 +37,20 @@ public:
 	// originalVolume scales the source audio (0..2); when duck is true the source
 	// dips under narration. Returns "" on success, else an error message. Honors
 	// *cancel if provided.
+	// A nonnegative maxOutputMs bounds the mixed audio while retaining each
+	// take's original fade envelope; -1 keeps the normal narration behavior.
 	static QString mix(const QString &videoPath, double originalVolume, bool duck,
-			   const std::vector<Take> &takes, std::atomic<bool> *cancel);
+			   const std::vector<Take> &takes, std::atomic<bool> *cancel,
+			   qint64 maxOutputMs = -1);
 
 	// Decode and place `takes` into one interleaved stereo 48 kHz float buffer,
 	// with no base track under them. Same placement, gain and fade rules mix()
 	// uses, so what the preview plays is what the export renders. Returns an
 	// empty buffer if nothing decodes or *cancel is set.
+	// maxOutputMs optionally fixes the output duration, including trailing silence.
 	static std::vector<float> renderTakes(const std::vector<Take> &takes,
-					      std::atomic<bool> *cancel = nullptr);
+					      std::atomic<bool> *cancel = nullptr,
+					      qint64 maxOutputMs = -1);
 
 	// Decode any audio file to a 16-bit PCM WAV (48 kHz stereo) at `outWav`, so an
 	// imported track becomes a normal voiceover take (waveform + trim + mix all
@@ -59,7 +64,8 @@ public:
 	static void addTake(std::vector<float> &mix, const std::vector<float> &take,
 			    long long startFrame, double volume, int fadeInFrames,
 			    int fadeOutFrames, FadeCurve inCurve = FadeCurve::Linear,
-			    FadeCurve outCurve = FadeCurve::Linear);
+			    FadeCurve outCurve = FadeCurve::Linear,
+			    long long envelopeFrames = -1);
 	static std::vector<float> duckEnvelope(long long totalFrames,
 					       const std::vector<std::pair<long long, long long>> &spans,
 					       float duckLevel, int attackFrames, int releaseFrames);

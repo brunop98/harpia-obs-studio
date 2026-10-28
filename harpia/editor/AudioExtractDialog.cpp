@@ -1,4 +1,5 @@
 #include "AudioExtractDialog.hpp"
+#include "EditorFileDialog.hpp"
 #include "../ui/EditorLog.hpp"
 
 #include "AudioPreview.hpp"
@@ -467,7 +468,7 @@ void AudioExtractDialog::onExport()
 	const QString ext = QString::fromLatin1(audioFormatExtension(fmt));
 	const QFileInfo src(sourcePath_);
 	const QString suggested = src.dir().filePath(src.completeBaseName() + QLatin1Char('.') + ext);
-	const QString out = QFileDialog::getSaveFileName(
+	const QString out = editor_dialogs::getSaveFileName(
 		this, QStringLiteral("Export audio"), suggested,
 		QStringLiteral("%1 audio (*.%2)").arg(QString::fromLatin1(audioFormatName(fmt)), ext));
 	if (out.isEmpty())

@@ -20,6 +20,9 @@ set_target_properties(
 
 set(_harpia_runtime_dir "${CMAKE_BINARY_DIR}/rundir/$<CONFIG>/bin/64bit")
 
+include("${CMAKE_CURRENT_LIST_DIR}/HarpiaRuntimeTargets.cmake")
+harpia_stage_graphics_runtime(harpia-recorder "${_harpia_runtime_dir}")
+
 add_custom_command(
   TARGET harpia-recorder
   POST_BUILD

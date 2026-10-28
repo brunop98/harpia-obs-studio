@@ -102,7 +102,9 @@ foreach(name localsend phonesharing exportdone shareexportdialog settingsisolati
     exportcadence exporttelemetry previewdecoder componentrender audioaudit previewgeometry previewinterval
     previewtransition systemaudio pcaudioapps ytdlp globalhotkeys maccoordinates macaudiopcm
     projectopenqueue remuxcompat exportencodingoptions exportencoding shareparts
-    effectwarnings previewwarning previewwarningwindow)
+    effectwarnings previewwarning previewwarningwindow
+    markersmodel beatdetector projectroundtrip componentpresets componentpresetclip
+    speedripple clipvariations markerendwindow exporthighfps)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${name}_test.cpp")
     add_executable("${name}_test" "${name}_test.cpp")
     target_compile_definitions("${name}_test" PRIVATE HARPIA_SRC="${H}" SRC_MEDIA="${MEDIA}/av_red.mp4")

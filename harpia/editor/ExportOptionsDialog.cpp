@@ -1,4 +1,5 @@
 #include "ExportOptionsDialog.hpp"
+#include "EditorFileDialog.hpp"
 
 #include "ExportEstimate.hpp"
 #include "../ui/UiText.hpp"
@@ -222,21 +223,20 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	auto *vform = new QFormLayout(videoRow_);
 	vform->setContentsMargins(0, 0, 0, 0);
 
-	// Frame rate, like the resolution: the original first, then the usual
-	// rates BELOW it. A higher one would only repeat frames, so it is left
-	// out rather than offered and quietly made of duplicates.
+	// Original follows the project; explicit rates stay available across
+	// projects. A higher output rate can retain more of a sped-up clip's source
+	// frames even when the project's original frame rate is lower.
 	fpsCombo_ = new QComboBox(videoRow_);
 	fpsCombo_->setObjectName(QStringLiteral("exportFps"));
 	fpsCombo_->addItem(QStringLiteral("Original (%1 fps)").arg(ctx_.fps, 0, 'g', 4), 0.0);
 	for (const double r : {120.0, 60.0, 60000.0 / 1001.0, 50.0, 30.0, 30000.0 / 1001.0, 25.0, 24.0,
 			       24000.0 / 1001.0, 15.0}) {
-		if (r >= ctx_.fps - 0.01)
-			continue;
 		fpsCombo_->addItem(QStringLiteral("%1 fps").arg(r, 0, 'g', 4), r);
 	}
 	fpsCombo_->setToolTip(QStringLiteral(
-		"Frames per second in the file. Lower than the original leaves frames out evenly: "
-		"smaller files, less smooth motion. 30 or 60 suit most platforms."));
+		"Sets a constant frame rate for the exported video. Higher rates can retain more "
+		"source frames in sped-up clips; lower rates skip frames. Footage with fewer "
+		"frames holds existing frames when needed. No interpolated frames are generated."));
 	vform->addRow(QStringLiteral("Frame rate"), fpsCombo_);
 	if (ctx_.offerAppleHardwareEncoding) {
 		encodingCombo_ = new QComboBox(videoRow_);
@@ -424,7 +424,7 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 
 void ExportOptionsDialog::browseFolder()
 {
-	const QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("Export to"),
+	const QString d = editor_dialogs::getExistingDirectory(this, QStringLiteral("Export to"),
 							    folderEdit_->text());
 	if (!d.isEmpty())
 		folderEdit_->setText(QDir::toNativeSeparators(d));
@@ -744,8 +744,8 @@ void ExportOptionsDialog::loadRemembered()
 	if (ri >= 0)
 		resCombo_->setCurrentIndex(ri);
 
-	// The frame rate by VALUE, like the resolution by height: the list depends
-	// on the original. One the original does not reach falls back to it.
+	// Remember the explicit output rate by value, including one above the new
+	// project's original rate. Unknown values keep the default Original choice.
 	const double fps = s.value(QLatin1String(kGroup) + QStringLiteral("fps"), 0.0).toDouble();
 	for (int i = 0; i < fpsCombo_->count(); ++i)
 		if (std::abs(fpsCombo_->itemData(i).toDouble() - fps) < 0.001) {

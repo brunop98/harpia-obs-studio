@@ -29,6 +29,9 @@
 #include <QMessageBox>
 #include <QPalette>
 #include <QSettings>
+#include <QScreen>
+#include <QSysInfo>
+#include <QThread>
 #include "editor/ProjectPaths.hpp"
 
 #include <QStandardPaths>
@@ -155,6 +158,45 @@ void saveStartupTimings(const QMap<QString, int> &measured)
 		s.setValue(QLatin1String(kTimingGroup) + it.key(), it.value());
 }
 
+void logSystemDiagnostics()
+{
+	auto &logger = harpia::Logger::instance();
+	logger.log(
+		harpia::LogLevel::Info,
+		QStringLiteral(
+			"[harpia] system: OS='%1'; kernel=%2 %3; CPU=%4; build-CPU=%5; pointer-bits=%6; logical-CPUs=%7; Qt=%8; platform=%9")
+			.arg(QSysInfo::prettyProductName(), QSysInfo::kernelType(), QSysInfo::kernelVersion(),
+			     QSysInfo::currentCpuArchitecture(), QSysInfo::buildCpuArchitecture())
+			.arg(int(sizeof(void *) * 8))
+			.arg(QThread::idealThreadCount())
+			.arg(QString::fromLatin1(qVersion()), QGuiApplication::platformName())
+			.toStdString());
+	logger.log(harpia::LogLevel::Info, QStringLiteral("[harpia] runtime: executable='%1'; working-directory='%2'")
+						   .arg(QCoreApplication::applicationFilePath(), QDir::currentPath())
+						   .toStdString());
+	const auto screens = QGuiApplication::screens();
+	logger.log(harpia::LogLevel::Info, "[harpia] Qt displays: " + std::to_string(screens.size()));
+	for (qsizetype i = 0; i < screens.size(); ++i) {
+		const QScreen *screen = screens.at(i);
+		const QRect rect = screen->geometry();
+		logger.log(
+			harpia::LogLevel::Info,
+			QStringLiteral(
+				"[harpia] Qt display #%1: name='%2'; primary=%3; logical-rect=(%4,%5 %6x%7); device-pixel-ratio=%8; refresh-Hz=%9")
+				.arg(i)
+				.arg(screen->name())
+				.arg(screen == QGuiApplication::primaryScreen() ? "yes" : "no")
+				.arg(rect.x())
+				.arg(rect.y())
+				.arg(rect.width())
+				.arg(rect.height())
+				.arg(screen->devicePixelRatio(), 0, 'f', 3)
+				.arg(screen->refreshRate(), 0, 'f', 3)
+				.toStdString());
+	}
+	logger.flush();
+}
+
 } // namespace
 
 // Entry point for the Harpia recorder. Brings up the libobs backend in the
@@ -184,6 +226,7 @@ int main(int argc, char *argv[])
 	// keep it. What people see is HARPIA_APP_DISPLAY_NAME (AppName.hpp).
 	QApplication::setApplicationName(QStringLiteral("Harpia Recorder"));
 	QApplication::setOrganizationName(QStringLiteral("Harpia"));
+	QApplication::setApplicationVersion(QStringLiteral(HARPIA_VERSION_STRING));
 	// Window/taskbar/Alt-Tab icon (all platforms). The Windows .exe icon itself
 	// comes from resources/harpia.rc compiled into the binary.
 	QApplication::setWindowIcon(QIcon(QStringLiteral(":/harpia.png")));
@@ -215,8 +258,8 @@ int main(int argc, char *argv[])
 	harpia::CrashGuard::install(resolveCrashDir());
 	base_set_crash_handler(obsCrashToReport, nullptr);
 
-	// Start logging before anything else so startup and any early crash are
-	// captured to disk (flushed per line).
+	// Start logging before the backend so startup and early failures are
+	// captured. Errors and diagnostic snapshots are flushed immediately.
 	harpia::Logger::instance().init(resolveLogDir());
 	qInstallMessageHandler(qtMessageToLogger);
 	// Editor problems (dialogs, console, subtitles, downloads) into the same log.
@@ -230,6 +273,7 @@ int main(int argc, char *argv[])
 				       std::string(HARPIA_APP_DISPLAY_NAME " v") + HARPIA_VERSION_STRING + " starting");
 	if (!osSetup.isEmpty())
 		harpia::Logger::instance().log(harpia::LogLevel::Info, osSetup.toStdString());
+	logSystemDiagnostics();
 
 	// Something on screen for the rest of this. Startup is dominated by libobs
 	// work that has to finish before the window can exist -- the graphics device
@@ -389,6 +433,7 @@ int main(int argc, char *argv[])
 			harpia::LogLevel::Info,
 			"startup " + std::to_string(timeline.totalMs()) + "ms (" +
 				timeline.summary().toStdString() + ")");
+		harpia::Logger::instance().flush();
 		saveStartupTimings(timeline.measured());
 
 		// Launching a second copy shows this one rather than doing nothing:

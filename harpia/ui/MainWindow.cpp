@@ -8,6 +8,7 @@
 
 #include "UiIcons.hpp"
 #include "UiText.hpp"
+#include "WindowScreen.hpp"
 
 #include "AudioPanel.hpp"
 #include "PcAudioAppsDialog.hpp"
@@ -42,6 +43,7 @@
 #include "WebcamPreview.hpp"
 #include "core/EncoderFactory.hpp"
 #include "core/Remuxer.hpp"
+#include "core/RecordingParts.hpp"
 #include "platform/CameraAccess.hpp"
 #include "platform/ForegroundWatcher.hpp"
 #include "core/ObsContext.hpp"
@@ -67,6 +69,7 @@
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
+#include <QDirIterator>
 #include <QEvent>
 #include <QLayoutItem>
 
@@ -703,7 +706,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(stopButton_, &QPushButton::clicked, this, &MainWindow::onStopButton);
 	connect(openFolderButton_, &QPushButton::clicked, this, &MainWindow::openOutputFolder);
 
-	// Recording hotkeys. The window-scoped QShortcuts are the FALLBACK; on
+	// Recording hotkeys. Application shortcuts cover both recorder and editor; on
 	// Windows the same keys are registered system-wide (rebindHotkeys), which
 	// is the only version that works at the moment hotkeys are for -- during a
 	// recording, when Harpia is almost never the focused window. RegisterHotKey
@@ -735,7 +738,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 			onGuidesToggle();
 	});
 	// Zoom gets the same treatment: a global hotkey where the platform allows,
-	// a window-scoped fallback otherwise. Unlike the other two its key comes
+	// an application-scoped fallback otherwise. Unlike the other two its key comes
 	// from the preset, so it is re-bound on every preset change as well as on
 	// every save (see rebindZoomHotkey).
 	zoomShortcut_ = new QShortcut(QKeySequence(), this);
@@ -746,6 +749,9 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(followShortcut_, &QShortcut::activated, this, &MainWindow::onFollowToggle);
 	guidesShortcut_ = new QShortcut(QKeySequence(), this);
 	connect(guidesShortcut_, &QShortcut::activated, this, &MainWindow::onGuidesToggle);
+	for (QShortcut *shortcut : {recordShortcut_, pauseShortcut_, zoomShortcut_, spotlightShortcut_,
+				     followShortcut_, guidesShortcut_})
+		shortcut->setContext(Qt::ApplicationShortcut);
 	rebindHotkeys();
 	rebindPresetHotkeys();
 
@@ -761,7 +767,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	// dialog because four places edit a shortcut today and nothing stops there
 	// being a fifth.
 	connect(qApp, &QApplication::focusChanged, this, [this](QWidget *, QWidget *now) {
-		setHotkeysSuspended(qobject_cast<QKeySequenceEdit *>(now) != nullptr);
+		setHotkeysSuspended(presetEditorOpen_ || qobject_cast<QKeySequenceEdit *>(now) != nullptr);
 	});
 	connect(editPresetButton_, &QPushButton::clicked, this, [this]() { editActivePreset(); });
 	connect(newPresetButton_, &QPushButton::clicked, this, &MainWindow::onNewPreset);
@@ -817,9 +823,13 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		// (or the tap's writer) thread, and lastRecordedPath_ belongs to the
 		// window. Queued before the finalize below, so it lands first.
 		const QString written = QString::fromStdString(writtenPath);
+		QStringList files;
+		for (const auto &path : recorder_.recordedFiles())
+			files.append(QString::fromStdString(path));
 		QMetaObject::invokeMethod(
 			this,
-			[this, written]() {
+			[this, written, files]() {
+				lastRecordingFiles_ = files;
 				if (written.isEmpty())
 					return;
 				lastRecordedPath_ = written;
@@ -836,6 +846,12 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 			Qt::QueuedConnection);
 		QMetaObject::invokeMethod(this, "refreshRecentList", Qt::QueuedConnection);
 		QMetaObject::invokeMethod(this, [this]() { finalizeAfterStop(); }, Qt::QueuedConnection);
+	};
+	recorder_.onFileChanged = [this](const std::string &) {
+		QMetaObject::invokeMethod(this, [this]() {
+			++recordingPart_;
+			statusBar()->showMessage(QStringLiteral("Auto split: recording part %1").arg(recordingPart_), 5000);
+		}, Qt::QueuedConnection);
 	};
 
 	mouseFx_ = std::make_unique<MouseFxOverlay>();
@@ -860,6 +876,8 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 		&MainWindow::onPauseButton);
 	connect(floatingControls_.get(), &RecorderControlsOverlay::stopClicked, this,
 		&MainWindow::onPrimaryButton);
+	connect(floatingControls_.get(), &RecorderControlsOverlay::regionLockToggled, this,
+		&MainWindow::setRecordingRegionLocked);
 
 	countdownOverlay_ = std::make_unique<CountdownOverlay>();
 	connect(countdownOverlay_.get(), &CountdownOverlay::tick, this, [this](int remaining) {
@@ -900,6 +918,7 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(regionTool_.get(), &RegionTool::saveRegionRequested, this, &MainWindow::onSaveRegionRequested);
 	connect(regionTool_.get(), &RegionTool::manageRegionsRequested, this,
 		&MainWindow::openSavedRegionsManager);
+	connect(regionTool_.get(), &RegionTool::multiAreaToggled, this, &MainWindow::setMultiAreaEnabled);
 	connect(regionTool_.get(), &RegionTool::arrangeAreasRequested, this, &MainWindow::onArrangeAreas);
 	connect(regionTool_.get(), &RegionTool::clearAreasRequested, this, [this]() { clearAllAreas(true); });
 	connect(regionTool_.get(), &RegionTool::pickWindowRequested, this, &MainWindow::startWindowPick);
@@ -1055,6 +1074,9 @@ void MainWindow::finishStartup()
 		if (captureModeCombo_ && captureModeCombo_->currentIndex() != mode)
 			captureModeCombo_->setCurrentIndex(mode);
 	}
+	logRecordingSetup("startup");
+	capture_.logDiagnostics("startup");
+	Logger::instance().flush();
 
 	// If the last exit was a crash, say so -- with the DESCRIPTION the crash
 	// handlers captured, not just the fact of it. Shown before the orphan
@@ -1091,13 +1113,15 @@ void MainWindow::finishStartup()
 	QStringList orphanPaths;
 	for (const QString &folder : presetFolders()) {
 		const QDir tmpDir(folder + QStringLiteral("/.harpia_tmp"));
-		for (const QString &f : tmpDir.entryList(QDir::Files)) {
-			const QString path = tmpDir.filePath(f);
+		QDirIterator files(tmpDir.absolutePath(), QDir::Files, QDirIterator::Subdirectories);
+		while (files.hasNext()) {
+			const QString path = files.next();
 			blog(LOG_WARNING, "[harpia] orphaned partial recording (crash/kill?): %s",
 			     path.toUtf8().constData());
-			// Tiny stubs (a header and nothing else) hold no recoverable
-			// video -- delete instead of offering a guaranteed-broken file.
-			if (QFileInfo(path).size() < 256 * 1024)
+			// Preserve small final split parts: even a few frames can be valid.
+			// Retain the legacy stub threshold for older flat temporary files.
+			const bool splitPart = QFileInfo(path).absolutePath() != tmpDir.absolutePath();
+			if (QFileInfo(path).size() == 0 || (!splitPart && QFileInfo(path).size() < 256 * 1024))
 				QFile::remove(path);
 			else
 				orphanPaths.append(path);
@@ -1139,7 +1163,7 @@ void MainWindow::offerOrphanRecovery(const QStringList &orphans)
 	// the output folder, named so it cannot collide with a live recording.
 	for (const QString &p : orphans) {
 		const QFileInfo fi(p);
-		const QString outFolder = QFileInfo(fi.absolutePath()).absolutePath(); // .harpia_tmp's parent
+		const QString outFolder = recording_parts::recoveryFolder(p);
 		const QString target = QDir(outFolder).filePath(fi.completeBaseName() +
 								QStringLiteral("_recovered.mp4"));
 		remuxInBackground(p, target);
@@ -1148,6 +1172,8 @@ void MainWindow::offerOrphanRecovery(const QStringList &orphans)
 
 MainWindow::~MainWindow()
 {
+	if (isVisible())
+		window_screen::save(*this, QStringLiteral("recorder"));
 	webcam_.stop();
 	if (recorder_.isRecording()) {
 		// stop() is asynchronous, and destroying RecordingController while the
@@ -1622,12 +1648,15 @@ void MainWindow::startRecording()
 	// Readiness gate: never start while blocking warnings exist.
 	refreshReadiness();
 	if (recordingBlocked_) {
+		blog(LOG_WARNING, "[harpia] recording start blocked: %s", firstIssue_.toUtf8().constData());
+		Logger::instance().flush();
 		starting_ = false;
 		updateButtons();
 		return;
 	}
 
 	const Preset &preset = activePreset();
+	const AutoSplitSettings split = recordingSplitSettings();
 
 	// The video pipeline. Also run at countdown start (beginRecordFlow), where
 	// its cost hides behind the countdown; the calls inside dedupe, so this
@@ -1694,8 +1723,20 @@ void MainWindow::startRecording()
 	// .harpia_tmp (see the startup sweep log).
 	QDir tmp(dir.filePath(QStringLiteral(".harpia_tmp")));
 	tmp.mkpath(QStringLiteral("."));
+	if (split.enabled) {
+		// A take owns its temporary directory: native split names and a second
+		// recording with the same filename template can never overwrite it.
+		tmp = QDir(tmp.filePath(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+		if (!tmp.mkpath(QStringLiteral("."))) {
+			QMessageBox::warning(this, QStringLiteral("Could not start the recording"),
+				QStringLiteral("Could not create the temporary recording folder:\n%1").arg(tmp.absolutePath()));
+			starting_ = false;
+			updateButtons();
+			return;
+		}
+	}
 	const QString recordPath =
-		tmp.filePath(baseName + QLatin1Char('.') +
+		tmp.filePath(baseName + (split.enabled ? QStringLiteral("_part001") : QString()) + QLatin1Char('.') +
 			     ((preset.format == RecordingFormat::MP4 &&
 			       recordMode() != RecordMode::AudioOnly)
 				      ? QStringLiteral("mkv")
@@ -1704,8 +1745,17 @@ void MainWindow::startRecording()
 	// The first frame should already be the area under the mouse, not area 1
 	// for the quarter second until the state tick arms the switcher.
 	primeMultiArea();
+	logRecordingSetup("recording attempt after framing");
+	if (recordMode() != RecordMode::AudioOnly) {
+		obs_.logVideoDiagnostics("recording attempt");
+		capture_.logDiagnostics("recording attempt");
+	}
+	Logger::instance().flush();
 
-	if (!recorder_.start(preset, recordPath.toStdString())) {
+	if (!recorder_.start(preset, recordPath.toStdString(), split)) {
+		Logger::instance().flush();
+		if (split.enabled)
+			QDir().rmdir(tmp.absolutePath()); // only if empty; keep captured data
 		restoreAreaHome();
 		// The timer label gets overwritten by the next tick — the status bar
 		// keeps the failure visible (details are in the Error Logs).
@@ -1720,6 +1770,9 @@ void MainWindow::startRecording()
 		updateButtons();
 		return;
 	}
+	lastAutoSplit_ = split.enabled;
+	lastRecordingFiles_.clear();
+	recordingPart_ = 1;
 
 	// Keep the machine awake for the life of the recording. Without this a
 	// long unattended take ends when the OS sleep timer does -- and this app's
@@ -1912,9 +1965,16 @@ void MainWindow::refreshMacCaptureExclusions(bool force)
 #if defined(Q_OS_MACOS)
 	std::vector<uint32_t> ids;
 	for (QWidget *window : QApplication::topLevelWidgets()) {
+		bool belongsToEditor = false;
+		for (QWidget *owner = window; owner; owner = owner->parentWidget())
+			if (qobject_cast<VideoEditorWindow *>(owner)) {
+				belongsToEditor = true;
+				break;
+			}
 		// Desktop mouse highlights are intentionally captured. Controls,
-		// framing and dialogs are not part of the recorded picture.
-		if (qobject_cast<MouseFxOverlay *>(window))
+		// framing and recorder dialogs are not part of the recorded picture.
+		// Editors and their dialogs remain visible for recording tutorials.
+		if (qobject_cast<MouseFxOverlay *>(window) || belongsToEditor)
 			continue;
 		if (const quint32 id = mac_platform::nativeWindowId(window))
 			ids.push_back(id);
@@ -1939,8 +1999,12 @@ void MainWindow::beginRecordFlow()
 #endif
 	// Gate on readiness before showing any countdown.
 	refreshReadiness();
-	if (recordingBlocked_)
+	if (recordingBlocked_) {
+		logRecordingSetup("recording requested but blocked");
+		blog(LOG_WARNING, "[harpia] recording start blocked: %s", firstIssue_.toUtf8().constData());
+		Logger::instance().flush();
 		return;
+	}
 	if (!confirmDiskSpace())
 		return;
 
@@ -2079,10 +2143,8 @@ void MainWindow::setHotkeysSuspended(bool on)
 		return;
 	hotkeysSuspended_ = on;
 
-	// The window-scoped QShortcuts go too. They do not fire for a separate
-	// dialog window today, but they are the fallback wherever RegisterHotKey
-	// does not exist, and there a key field would have the same problem for a
-	// different reason.
+	// Application shortcuts cover the editor too. Release them while a key
+	// field or the recording profile is being edited, along with native keys.
 	for (QShortcut *s : {recordShortcut_, pauseShortcut_, zoomShortcut_, spotlightShortcut_,
 			     followShortcut_, guidesShortcut_})
 		if (s)
@@ -2090,7 +2152,7 @@ void MainWindow::setHotkeysSuspended(bool on)
 
 	if (on) {
 		hotkeys_->unbindAll();
-		blog(LOG_INFO, "[harpia] hotkeys released while a shortcut is being edited");
+		blog(LOG_INFO, "[harpia] hotkeys released while recorder settings are being edited");
 	} else {
 		rebindHotkeys();
 		rebindPresetHotkeys();
@@ -2114,8 +2176,8 @@ void MainWindow::rebindHotkeys()
 	const bool recGlobal = hotkeys_->bind(1, rec);
 	const bool pauseGlobal = hotkeys_->bind(2, pause);
 	blog(LOG_INFO, "[harpia] hotkeys: record=%s (%s)  pause=%s (%s)",
-	     qUtf8Printable(rec.toString()), recGlobal ? "global" : "window-only",
-	     qUtf8Printable(pause.toString()), pauseGlobal ? "global" : "window-only");
+	     qUtf8Printable(rec.toString()), recGlobal ? "global" : "app-only",
+	     qUtf8Printable(pause.toString()), pauseGlobal ? "global" : "app-only");
 	// The buttons name the keys in their tooltips; updateButtons re-applies
 	// them on its next pass.
 	const QString focusedOnly = QStringLiteral(", when Harpia is focused");
@@ -2133,6 +2195,11 @@ void MainWindow::finalizeAfterStop()
 	if (stopHandled_)
 		return;
 	stopHandled_ = true;
+	if (lastAutoSplit_) {
+		finalizeRecordingParts();
+		markersPath_.clear();
+		return;
+	}
 
 	const bool needMinCheck = (lastMinSeconds_ > 0 && lastContentMs_ > 0 &&
 				   lastContentMs_ < (qint64)lastMinSeconds_ * 1000);
@@ -2145,8 +2212,65 @@ void MainWindow::finalizeAfterStop()
 	markersPath_.clear();
 }
 
+void MainWindow::finalizeRecordingParts()
+{
+	// A file_changed signal only queues a change in the muxer process. It is
+	// safe to read the parts once the output's final stop has closed them all.
+	QStringList files = lastRecordingFiles_;
+	if (files.isEmpty()) {
+		for (const auto &path : recorder_.recordedFiles())
+			files.append(QString::fromStdString(path));
+	}
+	if (files.isEmpty() && !lastRecordedPath_.isEmpty())
+		files.append(lastRecordedPath_);
+	files.removeDuplicates();
+	const bool tooShort = lastMinSeconds_ > 0 && lastContentMs_ > 0 &&
+		lastContentMs_ < qint64(lastMinSeconds_) * 1000;
+	// Apply the minimum to the complete take, including a short final part.
+	if (tooShort && !files.isEmpty() && discardShortRecording(files.first(), lastWebcamPath_,
+		markersPath_, lastContentMs_, lastMinSeconds_)) {
+		for (const QString &path : files) {
+			QFile::remove(path);
+			QDir().rmdir(QFileInfo(path).absolutePath());
+		}
+	} else {
+		int part = 0;
+		for (const QString &path : files) {
+			const QString target = recording_parts::numberedPath(lastScreenPath_, ++part);
+			if (QFileInfo(path).suffix().compare(QFileInfo(target).suffix(), Qt::CaseInsensitive) != 0) {
+				remuxInBackground(path, target);
+				continue;
+			}
+			const QString available = recording_parts::availablePath(target, pendingRecordingTargets_);
+			if (!QFile::rename(path, available)) {
+				blog(LOG_WARNING, "[harpia] auto split: could not save part %d; kept at %s", part, qUtf8Printable(path));
+				statusBar()->showMessage(QStringLiteral("Could not save recording part %1 — kept at %2").arg(part).arg(path), 15000);
+			} else {
+				QDir().rmdir(QFileInfo(path).absolutePath());
+			}
+		}
+	}
+	refreshClipViews();
+	// Schedule every part before allowing a pending close to run.
+	if (closePending_ && remuxActive_ == 0)
+		close();
+}
+
+AutoSplitSettings MainWindow::recordingSplitSettings() const
+{
+	const Preset &preset = activePreset();
+	AutoSplitSettings split;
+	split.enabled = preset.autoSplit && recordMode() != RecordMode::AudioOnly &&
+			preset.format != RecordingFormat::GIF;
+	split.mode = preset.autoSplitMode == 1 ? AutoSplitSettings::Mode::Size : AutoSplitSettings::Mode::Time;
+	split.minutes = preset.autoSplitMinutes;
+	split.sizeMB = preset.autoSplitSizeMB;
+	return auto_split_settings::validated(split);
+}
+
 void MainWindow::beginStart()
 {
+	regionFollowLocked_ = false;
 	starting_ = true;
 	// Where the guides cannot be kept out of the capture, they go now -- before
 	// the first frame, not on the next tick.
@@ -2258,9 +2382,13 @@ bool MainWindow::discardShortRecording(const QString &recordedPath, const QStrin
 
 void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Path)
 {
+	const QString target = recording_parts::availablePath(mp4Path, pendingRecordingTargets_);
+	pendingRecordingTargets_.insert(target);
+	const QString staging = QFileInfo(mkvPath).dir().filePath(
+		QStringLiteral(".save_%1.mp4").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
 	const qint64 srcSize = QFileInfo(mkvPath).size();
 	blog(LOG_INFO, "[harpia] remux: %s -> %s (%lld MB, lossless stream copy)",
-	     mkvPath.toUtf8().constData(), mp4Path.toUtf8().constData(), (long long)(srcSize / (1024 * 1024)));
+	     mkvPath.toUtf8().constData(), target.toUtf8().constData(), (long long)(srcSize / (1024 * 1024)));
 
 	// Visible feedback while the file is being finalized — otherwise the clip
 	// silently appears "late" in the recent strip and saving looks stuck.
@@ -2271,12 +2399,17 @@ void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Pat
 	QPointer<MainWindow> guard(this);
 	const qint64 startMs = QDateTime::currentMSecsSinceEpoch();
 
-	QThreadPool::globalInstance()->start(QRunnable::create([guard, mkvPath, mp4Path, srcSize, startMs]() {
-		const bool ok = Remuxer::remux(mkvPath.toStdString(), mp4Path.toStdString());
-		const qint64 outSize = ok ? QFileInfo(mp4Path).size() : 0;
+	QThreadPool::globalInstance()->start(QRunnable::create([guard, mkvPath, target, staging, srcSize, startMs]() {
+		// Publish only a completed MP4. rename refuses to overwrite a destination
+		// created externally while this worker was busy; the MKV stays intact.
+		const bool ok = Remuxer::remux(mkvPath.toStdString(), staging.toStdString()) &&
+			QFile::rename(staging, target);
+		const qint64 outSize = ok ? QFileInfo(target).size() : 0;
+		if (!ok)
+			QFile::remove(staging);
 		QMetaObject::invokeMethod(
 			qApp,
-			[guard, mkvPath, mp4Path, ok, srcSize, outSize, startMs]() {
+			[guard, mkvPath, target, ok, srcSize, outSize, startMs]() {
 				const qint64 secs =
 					(QDateTime::currentMSecsSinceEpoch() - startMs + 500) / 1000;
 				if (ok) {
@@ -2287,19 +2420,18 @@ void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Pat
 					     (long long)(srcSize / (1024 * 1024)),
 					     (long long)(outSize / (1024 * 1024)), (long long)secs);
 				} else {
-					// A failed remux may have written a partial header/trailer —
-					// remove the broken .mp4 so the library doesn't list it.
-					QFile::remove(mp4Path);
 					// Don't lose the recording: keep the .mkv beside the target.
-					const QString fallback =
-						QFileInfo(mp4Path).absolutePath() + QLatin1Char('/') +
-						QFileInfo(mp4Path).completeBaseName() + QStringLiteral(".mkv");
-					QFile::rename(mkvPath, fallback);
+					const QString fallback = recording_parts::availablePath(
+						QFileInfo(target).absolutePath() + QLatin1Char('/') +
+						QFileInfo(target).completeBaseName() + QStringLiteral(".mkv"),
+						guard ? guard->pendingRecordingTargets_ : QSet<QString>{});
+					const bool moved = QFile::rename(mkvPath, fallback);
 					blog(LOG_WARNING,
 					     "[harpia] remux FAILED — kept the recording as %s",
-					     fallback.toUtf8().constData());
+					     qUtf8Printable(moved ? fallback : mkvPath));
 				}
 				if (guard) {
+					guard->pendingRecordingTargets_.remove(target);
 					guard->remuxActive_ = std::max(0, guard->remuxActive_ - 1);
 					if (ok)
 						guard->statusBar()->showMessage(
@@ -2320,6 +2452,32 @@ void MainWindow::remuxInBackground(const QString &mkvPath, const QString &mp4Pat
 			},
 			Qt::QueuedConnection);
 	}));
+}
+
+void MainWindow::logRecordingSetup(const char *reason) const
+{
+	const Preset &p = activePreset();
+	blog(LOG_INFO,
+	     "[harpia] recording setup (%s): preset='%s'; mode=%s; OBS-monitor-index=%d; requested-fps=%d; zoom=%s (%d%%); framing=%s; follow=%s; follow-locked=%s; multi-area=%s (%zu spots)",
+	     reason, p.name.c_str(), recordModeTag(recordMode()), p.monitorIndex, p.fps, p.zoomEnabled ? "on" : "off",
+	     p.zoomPercent, regionByTransform_ ? "scene-transform" : "crop-filter/full-display",
+	     p.followMouse ? "on" : "off", regionFollowLocked_ ? "yes" : "no", p.multiArea ? "on" : "off",
+	     p.multiAreaSpots.size());
+	blog(LOG_INFO,
+	     "[harpia] requested region: enabled=%s; rect=(%d,%d %dx%d); coordinates=physical pixels relative to selected monitor; armed-canvas=%ux%u; armed-fps=%d",
+	     currentRegion_.enabled ? "yes" : "no", currentRegion_.x, currentRegion_.y, currentRegion_.width,
+	     currentRegion_.height, armedW_, armedH_, armedFps_);
+	if (const QScreen *screen = screenForActivePreset()) {
+		const QRect logical = screen->geometry();
+		const QRect physical = window_list::monitorRect(screen->name());
+		blog(LOG_INFO,
+		     "[harpia] selected display: Qt-name='%s'; logical-desktop-rect=(%d,%d %dx%d); device-pixel-ratio=%.3f; refresh-Hz=%.3f; physical-desktop-rect=(%d,%d %dx%d); physical-rect-known=%s",
+		     screen->name().toUtf8().constData(), logical.x(), logical.y(), logical.width(), logical.height(),
+		     screen->devicePixelRatio(), screen->refreshRate(), physical.x(), physical.y(), physical.width(),
+		     physical.height(), physical.isValid() ? "yes" : "no");
+	} else {
+		blog(LOG_WARNING, "[harpia] selected display: no matching Qt screen");
+	}
 }
 
 void MainWindow::logRecordingStart(const Preset &p, const QString &recordedPath, const QString &finalPath,
@@ -2378,6 +2536,7 @@ void MainWindow::logRecordingStart(const Preset &p, const QString &recordedPath,
 	     (appCaptureEnabled_ && !appWindowValue_.isEmpty()) ? "on" : "off",
 	     p.showScreenBorder ? "on" : "off");
 	blog(LOG_INFO, "========================================");
+	Logger::instance().flush();
 }
 
 void MainWindow::onRecordPauseButton()
@@ -2553,11 +2712,11 @@ void MainWindow::editActivePreset(const QString &initialPage)
 	// file. The audio panel is deliberately NOT covered -- levels and
 	// microphones are the one thing worth changing while talking, and
 	// AudioManager holds sources open for exactly that.
-	if (recorder_.isRecording() || starting_ || stopping_) {
+	if (recorder_.isRecording() || starting_ || stopping_ || countingDown_) {
 		QMessageBox::information(
 			this, QStringLiteral("Preset settings"),
-			QStringLiteral("Settings can't be changed while a recording is running.\n\n"
-				       "Stop the recording first. Audio levels and microphones can "
+			QStringLiteral("Settings can't be changed while a recording is running or counting down.\n\n"
+				       "Stop the recording or cancel the countdown first. Audio levels and microphones can "
 				       "still be adjusted from the panel below."));
 		return;
 	}
@@ -2567,7 +2726,12 @@ void MainWindow::editActivePreset(const QString &initialPage)
 	PresetEditorDialog dlg(*cur, audio_, this);
 	if (!initialPage.isEmpty())
 		dlg.showPage(initialPage);
+	const bool alreadySuspended = hotkeysSuspended_;
+	presetEditorOpen_ = true;
+	setHotkeysSuspended(true);
 	const int answer = dlg.exec();
+	presetEditorOpen_ = false;
+	setHotkeysSuspended(alreadySuspended);
 	if (answer != QDialog::Accepted) {
 		// Cancel: the Audio page has been driving the live capture, so put it
 		// back to what the active preset says.
@@ -3012,16 +3176,15 @@ void MainWindow::openProjectFile(const QString &path)
 
 void MainWindow::openBlankEditor()
 {
-	auto *editor = new VideoEditorWindow(QString(), presetFolders(), this);
+	// An independent top-level window keeps recording controls reachable, also
+	// while an editor-owned modal dialog is open.
+	auto *editor = new VideoEditorWindow(QString(), presetFolders());
 	// No isValid() gate: an empty editor is always valid. That check is for a
 	// launch file that could not be decoded, and there is no launch file.
 	connect(editor, &VideoEditorWindow::exported, this, [this]() { refreshClipViews(); });
+	connect(editor, &VideoEditorWindow::recordingsDeleted, this, [this]() { refreshClipViews(); });
 	editor->setAttribute(Qt::WA_DeleteOnClose);
-	// exec(), like every other way into the editor: one modal editor at a time
-	// is the rule this app already follows, and a modeless one here would be the
-	// only window from which a recording could be started with the editor open
-	// -- a different and much larger question than adding a button.
-	editor->exec();
+	editor->show();
 }
 
 void MainWindow::onOpenErrorLogs()
@@ -3173,7 +3336,16 @@ void MainWindow::startWindowPick()
 	if (regionTool_ && !recorder_.isRecording())
 		regionTool_->hide();
 	updateGuides(); // they go with the frame
-	windowPicker_->start();
+	QSet<quintptr> editorWindows;
+	for (QWidget *window : QApplication::topLevelWidgets())
+		if (auto *editor = qobject_cast<VideoEditorWindow *>(window); editor && editor->isVisible()) {
+#if defined(Q_OS_MACOS)
+			editorWindows.insert(quintptr(mac_platform::nativeWindowId(editor)));
+#else
+			editorWindows.insert(quintptr(editor->winId()));
+#endif
+		}
+	windowPicker_->start(editorWindows);
 }
 
 void MainWindow::applyPickedWindow(const DesktopWindow &w)
@@ -3311,10 +3483,18 @@ void MainWindow::followWindowTick()
 		return;
 	// On the display being recorded: a window dragged to another one is
 	// followed up to the edge, not across (that would mean a new capture).
+	// Keep the encoded frame size while following a resized or clipped window.
+	const bool fixedFrame = recorder_.isRecording() || starting_ || stopping_ || countingDown_;
+	const QSize outputSize = fixedFrame && armedW_ > 0 && armedH_ > 0
+		? QSize(int(armedW_), int(armedH_)) : QSize();
 #if defined(Q_OS_MACOS)
-	const std::optional<QRect> r = mac_platform::physicalRegionForWindow(pickedWindow_, s);
+	const auto physical = mac_platform::physicalRegionForWindow(pickedWindow_, s);
+	const auto display = mac_platform::displayForScreen(s);
+	const std::optional<QRect> r = physical && display && !outputSize.isEmpty()
+		? window_region::regionForWindow(*physical, QRect(QPoint(), display->pixelSize), outputSize)
+		: physical;
 #else
-	const std::optional<QRect> r = window_region::regionForWindow(*b, mon);
+	const std::optional<QRect> r = window_region::regionForWindow(*b, mon, outputSize);
 #endif
 	if (!r || (r->x() == currentRegion_.x && r->y() == currentRegion_.y && r->width() == currentRegion_.width &&
 		   r->height() == currentRegion_.height))
@@ -3528,14 +3708,16 @@ void MainWindow::onRegionChanged(const CaptureRegion &region)
 
 void MainWindow::syncFollowMouse()
 {
-	const Preset &p = activePreset();
 	// Armed only while a Custom Region recording is actually rolling. Paused
 	// recordings do not follow: nothing is being captured, and the user is
 	// probably mousing over to the controls -- dragging the frame along on
 	// that trip would move the framing they paused to protect.
-	const bool want = p.followMouse && captureMode_ == CaptureMode::Region &&
-			  currentRegion_.enabled && recorder_.isRecording() && !starting_ &&
-			  !stopping_ && !recorder_.isPaused();
+	const bool followTake = canLockRecordingRegion();
+	// A pause keeps the same take and the same lock. Reset before the armed
+	// early-out too: a take can finish while its follower is already disarmed.
+	if (!followTake)
+		regionFollowLocked_ = false;
+	const bool want = followTake && !recorder_.isPaused();
 	if (want == followMouse_.armed())
 		return;
 	if (!want) {
@@ -3561,7 +3743,7 @@ void MainWindow::syncFollowMouse()
 		// shortcut glides back to this.
 		followHome_ = QPoint(currentRegion_.x, currentRegion_.y);
 		followMouse_.arm(currentRegion_);
-		if (followMouse_.armed())
+		if (followMouse_.armed() && !regionFollowLocked_)
 			followTimer_->start();
 	} else {
 		followMouse_.disarm();
@@ -3569,9 +3751,43 @@ void MainWindow::syncFollowMouse()
 	}
 }
 
+bool MainWindow::canLockRecordingRegion() const
+{
+	return activePreset().followMouse && captureMode_ == CaptureMode::Region && currentRegion_.enabled &&
+	       recorder_.isRecording() && !starting_ && !stopping_ && !countingDown_;
+}
+
+void MainWindow::setRecordingRegionLocked(bool locked)
+{
+	if (!canLockRecordingRegion()) {
+		updateFloatingControls();
+		return;
+	}
+	syncFollowMouse();
+	if (regionFollowLocked_ == locked)
+		return;
+	regionFollowLocked_ = locked;
+	// A lock supersedes a return-home shortcut. Re-arm at the visible position
+	// to cancel that glide and discard old targets and elapsed chase time.
+	followSuspended_ = false;
+	if (followMouse_.armed())
+		followMouse_.arm(currentRegion_);
+	if (followTimer_) {
+		if (!locked && followMouse_.armed())
+			followTimer_->start();
+		else
+			followTimer_->stop();
+	}
+	if (floatingControls_)
+		floatingControls_->setFollowPaused(false);
+	writeMarker(locked ? QStringLiteral("Recording Area Locked") : QStringLiteral("Recording Area Unlocked"));
+	updateRegionToolVisibility();
+	updateFloatingControls();
+}
+
 void MainWindow::tickFollowMouse()
 {
-	if (!followMouse_.armed()) {
+	if (!followMouse_.armed() || regionFollowLocked_) {
 		followTimer_->stop();
 		return;
 	}
@@ -3743,7 +3959,7 @@ void MainWindow::updateGuides()
 	// A countdown counts as underway: it is lining up the take about to start.
 	const bool show = guidesVisible(p.showGuides, p.guideKinds, modeSupportsGuides(recordMode()),
 					recorder_.isRecording() || starting_, guides_->hiddenFromCapture(),
-					VideoEditorWindow::anyOpen(), areaArranging_, areaShown,
+					VideoEditorWindow::anyOpen() && !isActiveWindow(), areaArranging_, areaShown,
 					isMinimized() && !countingDown_);
 	const QRect r = show ? recordedRectLogical() : QRect();
 	if (r.isEmpty()) {
@@ -3790,6 +4006,10 @@ void MainWindow::onFollowToggle()
 		if (p.followMouse)
 			blog(LOG_INFO, "[harpia] follow shortcut ignored: needs a Custom Region "
 				       "recording in progress");
+		return;
+	}
+	if (regionFollowLocked_) {
+		setRecordingRegionLocked(false);
 		return;
 	}
 	followSuspended_ = !followSuspended_;
@@ -3998,6 +4218,10 @@ void MainWindow::configureZoomCanvas()
 void MainWindow::applyRegionFraming()
 {
 	if (!regionByTransform_) {
+		// A canceled countdown or failed zoom-enabled take can leave the
+		// previous region offset on this reused scene item. A cropped source
+		// already starts at (0,0); applying that offset again hides most of it.
+		capture_.clearZoomTransform();
 		capture_.setRegion(currentRegion_);
 		return;
 	}
@@ -4115,13 +4339,15 @@ void MainWindow::updateRegionToolVisibility()
 	// shows the frame: it marks what is about to be recorded.
 	const RegionOverlayState st = regionOverlayState(captureMode_ == CaptureMode::Region,
 							 recorder_.isRecording(), focused,
-							 VideoEditorWindow::anyOpen(), lingering,
+							 VideoEditorWindow::anyOpen() && !focused, lingering,
 							 isMinimized() && !starting_ && !countingDown_);
 	// The one place the preset's move-handle flag needs applying: every path that
 	// could change it -- editing the preset, switching preset, switching capture
 	// mode, startup, the 250 ms tick -- ends up here. The setter early-returns
 	// when nothing changed, so the tick costs nothing.
-	regionTool_->setMoveHandleEnabled(activePreset().regionMoveHandle);
+	// Locking stops the automatic chase, while this temporary grip lets the
+	// user place the held area without changing the profile or its frame size.
+	regionTool_->setMoveHandleEnabled(activePreset().regionMoveHandle || regionFollowLocked_);
 	regionTool_->setMode(st.mode);
 	// Never steals the foreground: showing an always-on-top window normally
 	// activates it, which would yank focus off whatever the user just clicked
@@ -4172,6 +4398,15 @@ void MainWindow::changeEvent(QEvent *event)
 		updateRegionToolVisibility();
 }
 
+void MainWindow::showEvent(QShowEvent *event)
+{
+	QMainWindow::showEvent(event);
+	if (!shownOnce_) {
+		shownOnce_ = true;
+		window_screen::restore(*this, QStringLiteral("recorder"));
+	}
+}
+
 void MainWindow::closeEvent(QCloseEvent *event)
 {
 	// A countdown hasn't recorded anything yet — cancel it and close normally.
@@ -4212,9 +4447,19 @@ void MainWindow::closeEvent(QCloseEvent *event)
 		return;
 	}
 
+	// Editors are independent windows now. Honor their unsaved-work prompts
+	// before allowing this application's recorder/backend lifetime to end.
+	if (!VideoEditorWindow::closeAllWindows()) {
+		closePending_ = false;
+		event->ignore();
+		return;
+	}
+
 	if (guides_)
 		guides_->hideGuides();
 	QMainWindow::closeEvent(event);
+	if (event->isAccepted())
+		window_screen::save(*this, QStringLiteral("recorder"));
 }
 
 void MainWindow::onIdleSettingChanged()
@@ -4781,7 +5026,7 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 		return;
 	}
 	if (chosen == trimAct) {
-		auto *editor = new VideoEditorWindow(path, presetFolders(), this);
+		auto *editor = new VideoEditorWindow(path, presetFolders());
 		if (!editor->isValid()) {
 			QMessageBox::warning(this, QStringLiteral("Edit"),
 					     QStringLiteral("Could not open this video for editing."));
@@ -4789,8 +5034,9 @@ void MainWindow::showStripContextMenu(const QPoint &pos)
 			return;
 		}
 		connect(editor, &VideoEditorWindow::exported, this, [this]() { refreshClipViews(); });
+		connect(editor, &VideoEditorWindow::recordingsDeleted, this, [this]() { refreshClipViews(); });
 		editor->setAttribute(Qt::WA_DeleteOnClose);
-		editor->exec();
+		editor->show();
 	} else if (chosen == optLowAct) {
 		ShareExportDialog::runModal(path, ShareExporter::Level::Low, this);
 		refreshClipViews();
@@ -5069,18 +5315,13 @@ void MainWindow::updateFloatingControls()
 	const bool active = recording || starting_ || stopping_;
 	floatingControls_->setState(active, paused, recording && !stopping_ && recorder_.canPause(),
 				    recording && !stopping_);
+	floatingControls_->setRegionLock(canLockRecordingRegion(), regionFollowLocked_);
 
-	// The panel is now on screen while idle too, holding the green Record
-	// button, so a recording can be started from wherever you are working
-	// without coming back here. Two exceptions:
-	//   * the editor is a window you work INSIDE, usually maximised -- the same
-	//     reason the region overlay steps aside for it (see
-	//     updateRegionToolVisibility). A recording in progress outranks that,
-	//     since hiding it would be hiding the recording;
-	//   * "Hide until next recording" from its right-click menu, which is the
-	//     only way to be rid of a panel that otherwise never leaves.
-	const bool editorInTheWay = VideoEditorWindow::anyOpen() && !active;
-	if (active || (!floatingDismissed_ && !editorInTheWay && !floatingControls_->onlyWhileRecording()))
+	// Keep Record reachable while editing too, so the editor can be captured
+	// for a tutorial. Idle visibility still follows the user's dismissal and
+	// "Only show while recording" preference; an active take always shows its
+	// Pause/Stop controls.
+	if (active || (!floatingDismissed_ && !floatingControls_->onlyWhileRecording()))
 		floatingControls_->showControls();
 	else
 		floatingControls_->hideControls();
@@ -5151,11 +5392,9 @@ void MainWindow::tickState()
 
 	++spinPhase_; // drive the Starting…/Stopping… spinner
 
-	// The editor opens with exec(), which spins its own event loop -- this timer
-	// keeps running inside it, and nothing else here does. So the overlay's
-	// "hide while the editor is up" rule is re-checked from the tick rather than
-	// from either of the two places an editor can be opened. setMode() and
-	// setVisible() are both no-ops when nothing has changed.
+	// Independent editor windows share this event loop with the recorder.
+	// Recheck overlays while focus and recording state change; the setters
+	// are no-ops when nothing has changed.
 	updateRegionToolVisibility();
 	// The guides' rules (the editor, a recording on a system that cannot keep
 	// them out of it) and their place, caught up four times a second.
@@ -5737,7 +5976,7 @@ void MainWindow::onAreasEdited(int monitor, const QVector<QPoint> &tops)
 
 void MainWindow::clearAllAreas(bool confirm)
 {
-	if (recorder_.isRecording() || starting_ || stopping_)
+	if (recorder_.isRecording() || starting_ || stopping_ || countingDown_)
 		return; // the layout is fixed for a take
 	Preset *cur = const_cast<Preset *>(presets_.find(activePresetId_));
 	if (!cur || cur->multiAreaSpots.empty())
@@ -5778,7 +6017,8 @@ void MainWindow::finishArrange()
 void MainWindow::updateAreaOverlay()
 {
 	if (regionTool_)
-		regionTool_->setMultiAreaMenu(multiAreaWanted(), int(activePreset().multiAreaSpots.size()));
+		regionTool_->setMultiAreaMenu(multiAreaWanted(), int(activePreset().multiAreaSpots.size()),
+					    !recorder_.isRecording() && !starting_ && !stopping_ && !countingDown_);
 	if (areaArranging_)
 		return;
 	const QSize size(currentRegion_.width, currentRegion_.height);
@@ -5829,16 +6069,43 @@ void MainWindow::setAreaStylePreview(int mode)
 	updateAreaOverlay();
 }
 
+void MainWindow::setMultiAreaEnabled(bool enabled)
+{
+	if (captureMode_ != CaptureMode::Region || recorder_.isRecording() || starting_ || stopping_ ||
+	    countingDown_)
+		return;
+	const Preset *cur = presets_.find(activePresetId_);
+	if (!cur)
+		return;
+	Preset updated = *cur;
+	updated.multiArea = enabled;
+	if (enabled) {
+		updated.followMouse = false;
+		setFollowWindow(false);
+	}
+	presets_.upsert(updated);
+	if (!enabled)
+		finishArrange();
+	syncFollowMouse();
+	updateRegionLeaveVisibility();
+	rebindPresetHotkeys();
+	updateRegionToolVisibility();
+	refreshReadiness();
+}
+
 void MainWindow::onArrangeAreas()
 {
+	if (recorder_.isRecording() || starting_ || stopping_ || countingDown_)
+		return; // the layout is fixed for a take
+	if (!multiAreaWanted() && captureMode_ == CaptureMode::Region && currentRegion_.enabled &&
+	    currentRegion_.width > 0 && currentRegion_.height > 0)
+		setMultiAreaEnabled(true);
 	if (!multiAreaWanted()) {
 		statusBar()->showMessage(
-			QStringLiteral("Multiple areas needs a Custom Region and the preset's Multiple areas option."),
+			QStringLiteral("Choose a Custom Region before arranging multiple areas."),
 			6000);
 		return;
 	}
-	if (recorder_.isRecording() || starting_ || stopping_)
-		return; // the layout is fixed for a take
 	areaEdit_ = multiAreaLayout();
 	areaArranging_ = true;
 	if (regionTool_)

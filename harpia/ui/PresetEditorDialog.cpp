@@ -21,6 +21,7 @@
 #include "core/SpotlightFx.hpp"     // SpotlightParams limits, shared with the overlay
 #include "core/ZoomMode.hpp"      // ZoomParams::kMinPercent / kMaxPercent
 #include "core/AudioManager.hpp" // AudioDevice
+#include "core/AutoSplitSettings.hpp"
 #include "model/FileNameTemplate.hpp"
 #include "platform/CameraAccess.hpp"
 
@@ -28,6 +29,7 @@
 #include <set>
 
 #include <algorithm>
+#include <cmath>
 
 #include <QAbstractButton>
 #include <QCheckBox>
@@ -53,6 +55,7 @@
 #include <QSet>
 #include <QScrollArea>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QSlider>
 #include <QPainter>
 #include <QSpinBox>
@@ -63,6 +66,28 @@
 namespace harpia {
 
 namespace {
+
+// Give ordinary screen-recording rates enough drag space while retaining the
+// existing high-bitrate range. Zero is Auto; the numeric field keeps exact
+// saved/custom values instead of rounding them to the slider's drag steps.
+constexpr int kBitrateSliderSteps = 1000;
+
+int bitrateAtSliderPosition(int position)
+{
+	if (position <= 0)
+		return 0;
+	const double kbps = 500.0 * std::pow(1000.0, (position - 1.0) / (kBitrateSliderSteps - 1));
+	const int step = kbps < 20000 ? 100 : kbps < 100000 ? 500 : 1000;
+	return std::clamp(int(std::lround(kbps / step)) * step, 500, 500000);
+}
+
+int sliderPositionForBitrate(int kbps)
+{
+	if (kbps <= 0)
+		return 0;
+	const double fraction = std::log(std::clamp(kbps, 500, 500000) / 500.0) / std::log(1000.0);
+	return 1 + int(std::lround(fraction * (kBitrateSliderSteps - 1)));
+}
 
 const char *codecLabel(VideoCodec c)
 {
@@ -316,6 +341,45 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	addField(v, QStringLiteral("Minimum recording length"),
 		 QStringLiteral("Shorter recordings ask before saving. Catches accidental clips."),
 		 minLengthSpin_);
+
+	autoSplitCheck_ = new QCheckBox(QStringLiteral("Auto split the recording file"), this);
+	autoSplitCheck_->setObjectName(QStringLiteral("autoSplitEnabled"));
+	autoSplitCheck_->setChecked(preset.autoSplit);
+	addCheck(v, autoSplitCheck_, QStringLiteral(
+		"Continue recording in a new file when the selected limit is reached. Saved with this profile."));
+	autoSplitOptions_ = new QWidget(this);
+	auto *splitLayout = new QVBoxLayout(autoSplitOptions_);
+	splitLayout->setContentsMargins(20, 0, 0, 0);
+	splitLayout->setSpacing(0);
+	autoSplitModeCombo_ = new QComboBox(this);
+	autoSplitModeCombo_->setObjectName(QStringLiteral("autoSplitMode"));
+	autoSplitModeCombo_->addItems({QStringLiteral("Recording time"), QStringLiteral("File size")});
+	autoSplitModeCombo_->setCurrentIndex(preset.autoSplitMode == 1 ? 1 : 0);
+	addField(splitLayout, QStringLiteral("Split by"), QString(), autoSplitModeCombo_);
+	autoSplitMinutesSpin_ = new QSpinBox(this);
+	autoSplitMinutesSpin_->setObjectName(QStringLiteral("autoSplitMinutes"));
+	autoSplitMinutesSpin_->setRange(1, auto_split_settings::maxMinutes);
+	autoSplitMinutesSpin_->setSuffix(QStringLiteral(" minutes"));
+	autoSplitMinutesSpin_->setValue(preset.autoSplitMinutes);
+	autoSplitMinutesRow_ = addField(splitLayout, QStringLiteral("Recording time per part"),
+		QStringLiteral("Recorded minutes per part. Paused time is excluded."), autoSplitMinutesSpin_);
+	autoSplitSizeSpin_ = new QSpinBox(this);
+	autoSplitSizeSpin_->setObjectName(QStringLiteral("autoSplitSizeMB"));
+	autoSplitSizeSpin_->setRange(1, auto_split_settings::maxSizeMB);
+	autoSplitSizeSpin_->setSuffix(QStringLiteral(" MB"));
+	autoSplitSizeSpin_->setValue(preset.autoSplitSizeMB);
+	autoSplitSizeRow_ = addField(splitLayout, QStringLiteral("File size per part"),
+		QStringLiteral("Approximate size per part. 1 MB here is 1,048,576 bytes."), autoSplitSizeSpin_);
+	v->addWidget(autoSplitOptions_);
+	autoSplitHelp_ = new QLabel(this);
+	autoSplitHelp_->setObjectName(QStringLiteral("autoSplitHelp"));
+	autoSplitHelp_->setWordWrap(true);
+	v->addWidget(autoSplitHelp_);
+	v->addSpacing(12);
+	connect(autoSplitCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::syncAutoSplitControls);
+	connect(autoSplitModeCombo_, &QComboBox::currentIndexChanged, this,
+		&PresetEditorDialog::syncAutoSplitControls);
+	syncAutoSplitControls();
 
 	// Focus auto-pause now lives on the main window's "Record only one
 	// application" toggle (pick the app there and it pauses when that app isn't
@@ -695,6 +759,25 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	QWidget *rightColorRow = addColorField(v, QStringLiteral("Right click color"), rightColorBtn_);
 	dependsOn(mouseClicksCheck_, {leftColorRow, rightColorRow});
 
+	mousePreview_ = new MousePreview(this);
+	addField(v, QStringLiteral("Preview"), QString(), mousePreview_);
+	connect(mouseAreaCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::updateMousePreview);
+	connect(mouseClicksCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::updateMousePreview);
+	connect(highlightSizeSlider_, &QSlider::valueChanged, this, &PresetEditorDialog::updateMousePreview);
+	v->addStretch(1);
+	addPage(QStringLiteral("Mouse"), mousePage);
+
+	// ===== Recording areas =====
+	// Area switching belongs with capture setup, rather than being buried
+	// among cursor effects on the Mouse page.
+	QWidget *recordingAreasPage = makePage(v);
+	auto *areasHint = new QLabel(
+		QStringLiteral("To record multiple areas, choose Multiple areas below and save. "
+			       "Then right-click the recording frame → Multiple areas → Arrange areas…"), this);
+	areasHint->setWordWrap(true);
+	v->addWidget(areasHint);
+	v->addSpacing(12);
+
 	// ---- Region movement: stays put / Follow Mouse / Multiple areas ----
 	// One dropdown, not two checkboxes: the two ways of moving the region are
 	// exclusive, and a pair of checkboxes that untick each other reads as a
@@ -707,6 +790,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	multiAreaCheck_->setChecked(preset.multiArea && !preset.followMouse);
 	multiAreaCheck_->hide();
 	regionMoveCombo_ = new QComboBox(this);
+	regionMoveCombo_->setObjectName(QStringLiteral("regionMovement"));
 	regionMoveCombo_->addItem(QStringLiteral("Stays put"));      // 0
 	regionMoveCombo_->addItem(QStringLiteral("Follow Mouse"));   // 1
 	regionMoveCombo_->addItem(QStringLiteral("Multiple areas")); // 2
@@ -846,7 +930,7 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	countLay->addWidget(multiAreaClearBtn_);
 	QWidget *multiAreaCountRow = addField(
 		v, QStringLiteral("Areas"),
-		QStringLiteral("Lay them out on the desktop: right-click the region frame → Arrange areas…"),
+		QStringLiteral("Lay them out on the desktop: right-click the recording frame → Multiple areas → Arrange areas…"),
 		countBox);
 	connect(multiAreaClearBtn_, &QPushButton::clicked, this, [this]() {
 		multiAreaSpots_.clear();
@@ -875,13 +959,8 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 		multiAreaCountRow->hide();
 	}
 
-	mousePreview_ = new MousePreview(this);
-	addField(v, QStringLiteral("Preview"), QString(), mousePreview_);
-	connect(mouseAreaCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::updateMousePreview);
-	connect(mouseClicksCheck_, &QCheckBox::toggled, this, &PresetEditorDialog::updateMousePreview);
-	connect(highlightSizeSlider_, &QSlider::valueChanged, this, &PresetEditorDialog::updateMousePreview);
 	v->addStretch(1);
-	addPage(QStringLiteral("Mouse"), mousePage);
+	pages.insert(1, {QStringLiteral("Recording areas"), recordingAreasPage});
 
 	// ===== Spotlight =====
 	// The recorded display's width, for the preview's scaling. Resolved here
@@ -1261,56 +1340,62 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 		QStringLiteral("CFR is safest for editing. VFR adapts frame timing, but some editors struggle with it."),
 		frameRateModeCombo_);
 
-	// Bitrate: a dropdown of common presets, plus Auto and a Custom escape hatch
-	// that reveals the numeric field below.
-	bitrateCombo_ = new QComboBox(this);
-	bitrateCombo_->setObjectName(QStringLiteral("recordingBitrate"));
-	bitrateCombo_->addItem(QStringLiteral("Auto (Recommended)"), 0); // 0 = let the encoder decide
-	for (int kbps : {4000, 6000, 8000, 10000, 12000, 16000, 20000, 30000, 40000, 50000, 80000, 100000})
-		bitrateCombo_->addItem(QStringLiteral("%L1 kbps").arg(kbps), kbps);
-	bitrateCombo_->addItem(QStringLiteral("Custom…"), -1);
-	for (int i = 0; i < bitrateCombo_->count() - 1; ++i)
-		bitrateCombo_->setItemData(i, recordingBitrateGuide(bitrateCombo_->itemData(i).toInt()), Qt::ToolTipRole);
-	bitrateCombo_->setItemData(bitrateCombo_->count() - 1,
-		QStringLiteral("Enter a bitrate to see its estimated size and recording guidance."), Qt::ToolTipRole);
-
+	auto *bitrateControl = new QWidget(this);
+	auto *bitrateControls = new QGridLayout(bitrateControl);
+	bitrateControls->setContentsMargins(0, 0, 0, 0);
+	bitrateControls->setHorizontalSpacing(8);
+	bitrateControls->setVerticalSpacing(2);
+	bitrateSlider_ = new QSlider(Qt::Horizontal, this);
+	bitrateSlider_->setObjectName(QStringLiteral("recordingBitrate"));
+	bitrateSlider_->setAccessibleName(QStringLiteral("Video bitrate"));
+	bitrateSlider_->setRange(0, kBitrateSliderSteps);
+	bitrateSlider_->setPageStep(50);
+	bitrateSlider_->setTracking(true);
+	bitrateSlider_->setToolTip(QStringLiteral(
+		"Drag to change bitrate and see the size estimate below. Far left selects Auto. Use the number box for an exact value."));
 	bitrateSpin_ = new QSpinBox(this);
 	bitrateSpin_->setObjectName(QStringLiteral("customRecordingBitrate"));
-	bitrateSpin_->setRange(500, 500000);
+	bitrateSpin_->setAccessibleName(QStringLiteral("Video bitrate in kilobits per second"));
+	bitrateSpin_->setRange(0, 500000);
+	bitrateSpin_->setSpecialValueText(QStringLiteral("Auto"));
 	bitrateSpin_->setSingleStep(500);
+	bitrateSpin_->setGroupSeparatorShown(true);
 	bitrateSpin_->setSuffix(QStringLiteral(" kbps"));
-	bitrateSpin_->setValue(preset.videoBitrateKbps > 0 ? preset.videoBitrateKbps : 12000);
-
-	// Seed the dropdown from the stored value: 0 = Auto, a listed value selects
-	// it, anything else becomes Custom with the numeric field showing the value.
-	if (preset.videoBitrateKbps <= 0) {
-		bitrateCombo_->setCurrentIndex(0);
-	} else {
-		const int idx = bitrateCombo_->findData(preset.videoBitrateKbps);
-		if (idx >= 0)
-			bitrateCombo_->setCurrentIndex(idx);
-		else
-			bitrateCombo_->setCurrentIndex(bitrateCombo_->count() - 1); // Custom…
-	}
-
-	// Also consults the format: GIF hides the whole bitrate row, and the
-	// Custom… spin box must not reappear underneath a hidden dropdown.
-	auto syncBitrate = [this]() {
-		const bool gif = RecordingFormat(formatCombo_->currentData().toInt()) == RecordingFormat::GIF;
-		bitrateSpin_->setVisible(!gif && bitrateCombo_->currentData().toInt() == -1);
-	};
-	connect(bitrateCombo_, &QComboBox::currentIndexChanged, this, syncBitrate);
-	// The note lives on the Video page and the bitrate on Advanced, so the
-	// warning has to be recomputed from here or it never appears.
-	connect(bitrateCombo_, &QComboBox::currentIndexChanged, this,
-		&PresetEditorDialog::updateValidation);
-	connect(bitrateSpin_, &QSpinBox::valueChanged, this, &PresetEditorDialog::updateValidation);
+	bitrateSpin_->setKeyboardTracking(false);
+	bitrateSpin_->setToolTip(QStringLiteral("Enter an exact bitrate from 500 to 500,000 kbps, or 0 for Auto."));
+	bitrateSpin_->setValue(preset.videoBitrateKbps > 0 ? std::max(500, preset.videoBitrateKbps) : 0);
+	bitrateSlider_->setValue(sliderPositionForBitrate(bitrateSpin_->value()));
+	bitrateControls->addWidget(bitrateSlider_, 0, 0);
+	bitrateControls->addWidget(bitrateSpin_, 0, 1);
+	bitrateControls->setColumnStretch(0, 1);
+	auto *bitrateEnds = new QWidget(this);
+	auto *bitrateEndsLayout = new QHBoxLayout(bitrateEnds);
+	bitrateEndsLayout->setContentsMargins(0, 0, 0, 0);
+	bitrateEndsLayout->addWidget(new QLabel(QStringLiteral("Auto"), this));
+	bitrateEndsLayout->addStretch();
+	bitrateEndsLayout->addWidget(new QLabel(QStringLiteral("500 Mbps"), this));
+	bitrateControls->addWidget(bitrateEnds, 1, 0);
+	connect(bitrateSlider_, &QSlider::valueChanged, this, [this](int position) {
+		// Do not map the rounded value back onto the handle mid-drag.
+		const QSignalBlocker block(bitrateSpin_);
+		bitrateSpin_->setValue(bitrateAtSliderPosition(position));
+		updateValidation();
+	});
+	connect(bitrateSpin_, &QSpinBox::valueChanged, this, [this](int kbps) {
+		if (kbps > 0 && kbps < 500) {
+			const QSignalBlocker block(bitrateSpin_);
+			bitrateSpin_->setValue(500);
+			kbps = 500;
+		}
+		const QSignalBlocker block(bitrateSlider_);
+		bitrateSlider_->setValue(sliderPositionForBitrate(kbps));
+		updateValidation();
+	});
 
 	bitrateRow_ = addField(v, QStringLiteral("Bitrate"),
 			       QStringLiteral("A numeric bitrate controls video size. Higher values leave more room for detail. Auto targets quality instead."),
-			       bitrateCombo_);
+			       bitrateControl);
 	auto *bitrateLayout = qobject_cast<QVBoxLayout *>(bitrateRow_->layout());
-	bitrateLayout->addWidget(bitrateSpin_);
 	bitrateGuide_ = new QLabel(this);
 	bitrateGuide_->setObjectName(QStringLiteral("recordingBitrateGuide"));
 	bitrateGuide_->setTextFormat(Qt::PlainText);
@@ -1319,7 +1404,6 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 	bitrateGuide_->setStyleSheet(QStringLiteral(
 		"QLabel{color:#c8ccd4; background:#22262d; border:1px solid #3a3f48; border-radius:6px; padding:10px;}"));
 	bitrateLayout->addWidget(bitrateGuide_);
-	syncBitrate();
 	v->addStretch(1);
 	addPage(QStringLiteral("Advanced"), advancedPage);
 
@@ -1352,6 +1436,8 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 			return modeUsesVideoEncoder(mode_);
 		if (title == QStringLiteral("Mouse"))
 			return modeSupportsMouseFx(mode_);
+		if (title == QStringLiteral("Recording areas"))
+			return modeUsesRegion(mode_);
 		if (title == QStringLiteral("Spotlight"))
 			return modeSupportsSpotlight(mode_);
 		if (title == QStringLiteral("Guides"))
@@ -1414,6 +1500,9 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 				text += QLatin1Char(' ') + l->text();
 			for (const QAbstractButton *b : row->findChildren<QAbstractButton *>())
 				text += QLatin1Char(' ') + b->text();
+			for (const QComboBox *combo : row->findChildren<QComboBox *>())
+				for (int item = 0; item < combo->count(); ++item)
+					text += QLatin1Char(' ') + combo->itemText(item);
 			if (auto *asLabel = qobject_cast<QLabel *>(row))
 				text += QLatin1Char(' ') + asLabel->text();
 			searchRows_.push_back({row, i, text.toLower()});
@@ -1524,6 +1613,10 @@ template <class F> void forEachPageField(const QString &page, F &&f)
 		f(&Preset::countdownSeconds);
 		f(&Preset::idleTimeoutSeconds);
 		f(&Preset::minRecordingSeconds);
+		f(&Preset::autoSplit);
+		f(&Preset::autoSplitMode);
+		f(&Preset::autoSplitMinutes);
+		f(&Preset::autoSplitSizeMB);
 		f(&Preset::showScreenBorder);
 		f(&Preset::screenBorderColor);
 		f(&Preset::screenBorderThickness);
@@ -1557,6 +1650,7 @@ template <class F> void forEachPageField(const QString &page, F &&f)
 		f(&Preset::recordMouseClicks);
 		f(&Preset::leftClickColor);
 		f(&Preset::rightClickColor);
+	} else if (page == QStringLiteral("Recording areas")) {
 		f(&Preset::followMouse);
 		f(&Preset::followPaddingPct);
 		f(&Preset::followSmoothness);
@@ -1625,16 +1719,10 @@ void PresetEditorDialog::applyFrom(const Preset &p)
 	}
 	frameRateModeCombo_->setCurrentIndex(frameRateModeCombo_->findData(int(p.frameRateMode)));
 	fpsCombo_->setCurrentText(QString::number(p.fps));
-	if (p.videoBitrateKbps <= 0) {
-		bitrateCombo_->setCurrentIndex(0);
-	} else {
-		const int idx = bitrateCombo_->findData(p.videoBitrateKbps);
-		if (idx >= 0) {
-			bitrateCombo_->setCurrentIndex(idx);
-		} else {
-			bitrateSpin_->setValue(p.videoBitrateKbps);
-			bitrateCombo_->setCurrentIndex(bitrateCombo_->count() - 1); // Custom…
-		}
+	bitrateSpin_->setValue(p.videoBitrateKbps > 0 ? std::max(500, p.videoBitrateKbps) : 0);
+	{
+		const QSignalBlocker block(bitrateSlider_);
+		bitrateSlider_->setValue(sliderPositionForBitrate(bitrateSpin_->value()));
 	}
 	folderEdit_->setText(QString::fromStdString(p.outputFolder));
 	gpuCheck_->setChecked(p.gpuCompression);
@@ -1644,6 +1732,11 @@ void PresetEditorDialog::applyFrom(const Preset &p)
 		countdownCombo_->setCurrentIndex(ci >= 0 ? ci : 0);
 	}
 	minLengthSpin_->setValue(p.minRecordingSeconds);
+	autoSplitCheck_->setChecked(p.autoSplit);
+	autoSplitModeCombo_->setCurrentIndex(p.autoSplitMode == 1 ? 1 : 0);
+	autoSplitMinutesSpin_->setValue(p.autoSplitMinutes);
+	autoSplitSizeSpin_->setValue(p.autoSplitSizeMB);
+	syncAutoSplitControls();
 	borderCheck_->setChecked(p.showScreenBorder);
 	borderColor_ = QColor(QString::fromStdString(p.screenBorderColor));
 	setButtonColor(borderColorBtn_, borderColor_);
@@ -1928,12 +2021,27 @@ void PresetEditorDialog::browseFolder()
 		folderEdit_->setText(dir);
 }
 
+void PresetEditorDialog::syncAutoSplitControls()
+{
+	const auto format = formatCombo_ ? RecordingFormat(formatCombo_->currentData().toInt()) : original_.format;
+	const bool supported = modeHasVideo(mode_) && format != RecordingFormat::GIF;
+	autoSplitCheck_->setEnabled(supported);
+	autoSplitOptions_->setVisible(supported && autoSplitCheck_->isChecked());
+	autoSplitMinutesRow_->setVisible(autoSplitModeCombo_->currentIndex() == 0);
+	autoSplitSizeRow_->setVisible(autoSplitModeCombo_->currentIndex() == 1);
+	autoSplitHelp_->setText(supported
+		? QStringLiteral("Auto Split is saved with this profile. Parts split at video keyframes, so time and size "
+				 "can exceed the limit. Paused time is excluded. A separate webcam recording stays in one file.")
+		: QStringLiteral("Auto Split is available for MP4, MKV, MOV and AVI video recordings. "
+				 "This profile's saved limits are kept while using GIF or Audio Only."));
+}
+
 void PresetEditorDialog::updateValidation()
 {
+	syncAutoSplitControls();
 	const auto format = RecordingFormat(formatCombo_->currentData().toInt());
 	const auto codec = VideoCodec(codecCombo_->currentData().toInt());
-	const int kbps = bitrateCombo_->currentData().toInt() == -1
-			 ? bitrateSpin_->value() : bitrateCombo_->currentData().toInt();
+	const int kbps = bitrateSpin_->value();
 	if (bitrateGuide_)
 		bitrateGuide_->setText(recordingBitrateGuide(kbps));
 
@@ -1950,7 +2058,6 @@ void PresetEditorDialog::updateValidation()
 	showRow(codecRow_, !isGif);
 	showRow(bitrateRow_, !isGif);
 	showRow(frameRateModeRow_, !isGif);
-	bitrateSpin_->setVisible(!isGif && bitrateCombo_->currentData().toInt() == -1);
 	showRow(audioSection_, !isGif);
 	showRow(audioBitrateRow_, !isGif);
 	if (audioGifNote_)
@@ -2036,15 +2143,7 @@ void PresetEditorDialog::collectInto(Preset &out) const
 	out.codec = VideoCodec(codecCombo_->currentData().toInt());
 	out.frameRateMode = FrameRateMode(frameRateModeCombo_->currentData().toInt());
 	out.fps = qMax(1, fpsCombo_->currentText().toInt());
-	{
-		const int sel = bitrateCombo_->currentData().toInt();
-		if (sel == 0)
-			out.videoBitrateKbps = 0; // Auto
-		else if (sel == -1)
-			out.videoBitrateKbps = bitrateSpin_->value(); // Custom
-		else
-			out.videoBitrateKbps = sel; // a listed preset
-	}
+	out.videoBitrateKbps = bitrateSpin_->value();
 
 	// Hotkeys are app-wide QSettings, written on OK like everything else here
 	// (Cancel leaves them untouched). Empty means "back to the default".
@@ -2065,6 +2164,10 @@ void PresetEditorDialog::collectInto(Preset &out) const
 	out.idleTimeoutSeconds = idleSpin_->value();
 	out.countdownSeconds = countdownCombo_->currentData().toInt();
 	out.minRecordingSeconds = minLengthSpin_->value();
+	out.autoSplit = autoSplitCheck_->isChecked();
+	out.autoSplitMode = autoSplitModeCombo_->currentIndex();
+	out.autoSplitMinutes = autoSplitMinutesSpin_->value();
+	out.autoSplitSizeMB = autoSplitSizeSpin_->value();
 	out.showScreenBorder = borderCheck_->isChecked();
 	out.screenBorderColor = borderColor_.name().toStdString();
 	out.screenBorderThickness = borderThicknessSpin_->value();

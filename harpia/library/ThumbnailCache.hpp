@@ -29,7 +29,9 @@ public:
 
 	// Ensure a thumbnail is generated for this clip. No-op if it already exists
 	// or a job is already in flight. Emits ready(videoPath) when it completes.
-	void ensure(const QString &videoPath, const QSize &target);
+	// Returns true if a worker is pending and will emit ready(), so callers can
+	// bound their outstanding requests without counting cache hits as jobs.
+	bool ensure(const QString &videoPath, const QSize &target);
 
 	// Probe a media file's duration in milliseconds (0 if unknown). Cheap — reads
 	// the container header only. Safe to call on a worker thread.

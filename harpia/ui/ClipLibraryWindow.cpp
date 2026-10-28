@@ -604,7 +604,7 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 	else if (chosen == deleteAct)
 		deleteSelected();
 	else if (oneVideo && chosen == trimAct) {
-		auto *editor = new VideoEditorWindow(sel.front(), folders(), this);
+		auto *editor = new VideoEditorWindow(sel.front(), folders());
 		if (!editor->isValid()) {
 			QMessageBox::warning(this, QStringLiteral("Edit"),
 					     QStringLiteral("Could not open this video for editing."));
@@ -612,8 +612,17 @@ void ClipLibraryWindow::showContextMenu(const QPoint &pos)
 			return;
 		}
 		connect(editor, &VideoEditorWindow::exported, this, [this]() { refresh(); });
+		connect(editor, &VideoEditorWindow::recordingsDeleted, this, [this](const QStringList &paths) {
+			for (const QString &path : paths) {
+				favorites_.remove(path);
+				recentlyViewed_.remove(path);
+			}
+			savePersistentState();
+			refresh();
+			emit recordingsDeleted(paths);
+		});
 		editor->setAttribute(Qt::WA_DeleteOnClose);
-		editor->exec();
+		editor->show();
 	} else if (oneVideo &&
 		   (chosen == optLowAct || chosen == optBalAct || chosen == optHighAct || chosen == optDiscordAct)) {
 		const auto level = chosen == optLowAct        ? ShareExporter::Level::Low

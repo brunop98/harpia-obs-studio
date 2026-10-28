@@ -19,7 +19,11 @@
 #include "editor/timeline/TimelineView.hpp"
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QMouseEvent>
+#include <QThread>
+#include <QTimer>
+#include <QWheelEvent>
 
 #include <cstdio>
 
@@ -52,9 +56,9 @@ static void release(QWidget *w, QPoint p, Qt::MouseButton b)
 }
 
 // A long timeline, zoomed in, so there is somewhere to pan TO.
-static TimelineView *build()
+static TimelineView *build(QWidget *parent = nullptr)
 {
-	auto *tv = new TimelineView;
+	auto *tv = new TimelineView(parent);
 	tv->resize(900, 300);
 	TimelineModel m;
 	TlTrack t;
@@ -273,6 +277,130 @@ int main(int argc, char **argv)
 		ok(tv->model().tracks[0].clips[0].outStartMs != start0,
 		   "and a plain left drag on a clip still moves the clip");
 		tv->deleteLater();
+	}
+
+	std::printf("\n-- a grab takes over wheel easing and keeps its original anchor --\n");
+	{
+		TimelineView *tv = build();
+		tv->setViewStartForTest(20000);
+		QWheelEvent wheel(QPointF(500, 150), tv->mapToGlobal(QPoint(500, 150)), QPoint(),
+			QPoint(0, -120), Qt::NoButton, Qt::ShiftModifier, Qt::NoScrollPhase, false);
+		QApplication::sendEvent(tv, &wheel);
+		bool wasEasing = false;
+		for (QTimer *timer : tv->findChildren<QTimer *>())
+			wasEasing = wasEasing || timer->isActive();
+		ok(wasEasing, "a wheel gesture really started smooth view movement");
+		const qint64 grabbed = tv->timeAtXForTest(600);
+		press(tv, QPoint(600, 150), Qt::MiddleButton);
+		bool stillEasing = false;
+		for (QTimer *timer : tv->findChildren<QTimer *>())
+			stillEasing = stillEasing || timer->isActive();
+		ok(!stillEasing, "middle drag stops the old wheel animation immediately");
+		moveTo(tv, QPoint(550, 150), Qt::MiddleButton);
+		// Chording another button cannot reset where this grab began.
+		QMouseEvent extra(QEvent::MouseButtonPress, QPointF(550, 150),
+			tv->mapToGlobal(QPoint(550, 150)), Qt::RightButton,
+			Qt::MiddleButton | Qt::RightButton, Qt::NoModifier);
+		QApplication::sendEvent(tv, &extra);
+		QMouseEvent unrelated(QEvent::MouseButtonRelease, QPointF(550, 150),
+			tv->mapToGlobal(QPoint(550, 150)), Qt::RightButton, Qt::MiddleButton, Qt::NoModifier);
+		QApplication::sendEvent(tv, &unrelated);
+		moveTo(tv, QPoint(400, 150), Qt::MiddleButton);
+		ok(std::llabs(tv->timeAtXForTest(400) - grabbed) <= 2,
+		   "unrelated button presses and releases do not restart or end the grab");
+		const qint64 held = tv->viewStartMs();
+		QElapsedTimer clock;
+		clock.start();
+		while (clock.elapsed() < 60) {
+			QApplication::processEvents();
+			QThread::msleep(2);
+		}
+		ok(tv->viewStartMs() == held, "old easing cannot drag the held view back later");
+		moveTo(tv, QPoint(250, 150), Qt::NoButton); // a lost release, not a drag
+		ok(tv->viewStartMs() == held && tv->cursor().shape() != Qt::ClosedHandCursor,
+		   "losing the held middle button ends the grab without one final unwanted pan");
+		moveTo(tv, QPoint(150, 150), Qt::NoButton);
+		ok(tv->viewStartMs() == held, "buttonless movement stays out of pan mode afterwards");
+		tv->deleteLater();
+	}
+
+	std::printf("\n-- panning from headers or a marker never changes the edit --\n");
+	{
+		TimelineView *tv = build();
+		tv->setViewStartForTest(20000);
+		tv->selectClip(0, 0);
+		tv->setPlayhead(12345);
+		const TimelineModel original = tv->model();
+		int edits = 0, selections = 0, scrubs = 0;
+		QObject::connect(tv, &TimelineView::clipsChanged, [&]() { ++edits; });
+		QObject::connect(tv, &TimelineView::selectionChanged, [&](int, int) { ++selections; });
+		QObject::connect(tv, &TimelineView::scrub, [&](qint64) { ++scrubs; });
+		const qint64 before = tv->viewStartMs();
+		press(tv, QPoint(35, 100), Qt::MiddleButton);
+		moveTo(tv, QPoint(-80, 100), Qt::MiddleButton);
+		release(tv, QPoint(-80, 100), Qt::MiddleButton);
+		ok(tv->viewStartMs() > before, "the fixed track-header gutter can also start a middle grab");
+		ok(tv->model() == original && tv->selectedTrack() == 0 && tv->selectedClip() == 0 &&
+		   tv->playhead() == 12345 && edits == 0 && selections == 0 && scrubs == 0,
+		   "middle navigation changes no clip, selection, playhead or edit/scrub signal");
+		tv->addMarker(25000, QStringLiteral("Keep selected"));
+		tv->setViewStartForTest(22000);
+		const QPoint marker = tv->markerHandleRectForTest(25000).center();
+		const TimelineModel withMarker = tv->model();
+		press(tv, marker, Qt::MiddleButton);
+		moveTo(tv, marker - QPoint(40, 0), Qt::MiddleButton);
+		release(tv, marker - QPoint(40, 0), Qt::MiddleButton);
+		ok(tv->model() == withMarker && tv->playhead() == 12345,
+		   "a marker under a middle grab is neither moved nor scrubbed");
+		tv->deleteSelected();
+		ok(tv->model().markers.isEmpty() && tv->model().tracks[0].clips.size() == 6,
+		   "panning preserves the selected marker rather than reverting to clip selection");
+		tv->deleteLater();
+	}
+
+	std::printf("\n-- interrupted grabs restore cursor ownership and end navigation --\n");
+	{
+		QWidget parent;
+		parent.resize(900, 300);
+		parent.setCursor(Qt::CrossCursor);
+		parent.show();
+		TimelineView *tv = build(&parent);
+		QPixmap image(16, 16);
+		image.fill(Qt::green);
+		const QCursor custom(image, 3, 4);
+		for (QEvent::Type type : {QEvent::UngrabMouse, QEvent::Hide, QEvent::WindowDeactivate}) {
+			tv->setViewStartForTest(20000);
+			const bool explicitCursor = type != QEvent::Hide;
+			if (explicitCursor)
+				tv->setCursor(custom);
+			else
+				tv->unsetCursor();
+			press(tv, QPoint(600, 150), Qt::MiddleButton);
+			moveTo(tv, QPoint(500, 150), Qt::MiddleButton);
+			const qint64 held = tv->viewStartMs();
+			QEvent interrupted(type);
+			QApplication::sendEvent(tv, &interrupted);
+			const bool restored = explicitCursor
+				? tv->testAttribute(Qt::WA_SetCursor) && tv->cursor().shape() == custom.shape() &&
+				  tv->cursor().hotSpot() == custom.hotSpot() &&
+				  tv->cursor().pixmap().toImage() == custom.pixmap().toImage()
+				: !tv->testAttribute(Qt::WA_SetCursor) && tv->cursor().shape() == Qt::CrossCursor;
+			ok(restored, "ungrab, hide and deactivation restore the original cursor and its ownership");
+			moveTo(tv, QPoint(400, 150), Qt::MiddleButton);
+			ok(tv->viewStartMs() == held, "an interrupted grab cannot resume on held-button movement");
+			release(tv, QPoint(400, 150), Qt::MiddleButton);
+		}
+		tv->setCursor(custom);
+		press(tv, QPoint(600, 150), Qt::MiddleButton);
+		release(tv, QPoint(600, 150), Qt::MiddleButton);
+		ok(tv->testAttribute(Qt::WA_SetCursor) && tv->cursor().hotSpot() == custom.hotSpot() &&
+		   tv->cursor().pixmap().toImage() == custom.pixmap().toImage(),
+		   "ordinary release also restores an explicit custom cursor");
+		tv->unsetCursor();
+		press(tv, QPoint(600, 150), Qt::MiddleButton);
+		moveTo(tv, QPoint(500, 150), Qt::NoButton);
+		ok(!tv->testAttribute(Qt::WA_SetCursor) && tv->cursor().shape() == Qt::CrossCursor,
+		   "a lost middle button restores the inherited parent cursor");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

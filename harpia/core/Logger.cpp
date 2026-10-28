@@ -154,7 +154,8 @@ void Logger::writeLine(LogLevel level, const std::string &text)
 	std::fprintf(file_, "[%s] %-7s %s\n", ts.c_str(), logLevelName(level), text.c_str());
 	// Force-flush only what a crash investigation actually needs. libobs is
 	// verbose around start/stop/encode, and a syscall per info line lands on
-	// the busiest moments; buffered lines still reach disk on close/clearAll.
+	// the busiest moments; diagnostic snapshot boundaries call flush(), and
+	// shutdown closes the file normally.
 	if (level == LogLevel::Error || level == LogLevel::Warning)
 		std::fflush(file_);
 }
@@ -183,6 +184,14 @@ void Logger::log(LogLevel level, const std::string &text)
 {
 	std::lock_guard<std::mutex> lock(mutex_);
 	writeLine(level, text);
+}
+
+void Logger::flush()
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	if (file_) {
+		std::fflush(file_);
+	}
 }
 
 std::string Logger::logDir() const

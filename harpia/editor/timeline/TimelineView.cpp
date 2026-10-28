@@ -21,6 +21,7 @@
 
 #include <QColorDialog>
 #include <QInputDialog>
+#include <QFontMetrics>
 #include <QLineEdit>
 #include <QKeyEvent>
 #include <QHash>
@@ -63,6 +64,80 @@ constexpr qint64 kMinClipMs = 100;
 constexpr qint64 kTailMs = 5000;   // draggable space past the end
 constexpr qint64 kMinSpanMs = 8000;
 
+struct SpeedRippleTiming {
+	qint64 start = 0, duration = 0;
+	double speed = 1.0;
+};
+using SpeedRippleSnapshot = QMap<int, QVector<SpeedRippleTiming>>;
+
+SpeedRippleSnapshot captureSpeedRipple(const TimelineModel &model, const QVector<QPair<int, int>> &which)
+{
+	SpeedRippleSnapshot snapshot;
+	for (const auto &p : which) {
+		if (p.first < 0 || p.first >= model.tracks.size() || snapshot.contains(p.first))
+			continue;
+		const TlTrack &track = model.tracks[p.first];
+		if (!track.rippleSpeed || track.locked || p.second < 0 || p.second >= track.clips.size())
+			continue;
+		QVector<SpeedRippleTiming> timings;
+		timings.reserve(track.clips.size());
+		for (const TlClip &clip : track.clips)
+			timings.push_back({clip.outStartMs, clip.outDurationMs(), clip.speed});
+		snapshot.insert(p.first, std::move(timings));
+	}
+	return snapshot;
+}
+
+void applySpeedRipple(TimelineModel &model, const SpeedRippleSnapshot &snapshot)
+{
+	for (auto it = snapshot.constBegin(); it != snapshot.constEnd(); ++it) {
+		TlTrack &track = model.tracks[it.key()];
+		const auto &before = it.value();
+		if (track.locked || !track.rippleSpeed || track.clips.size() != before.size())
+			continue;
+		QSet<qint64> changedStarts;
+		for (int i = 0; i < before.size(); ++i) {
+			const TlClip &clip = track.clips[i];
+			if (clip.speed != before[i].speed)
+				changedStarts.insert(before[i].start);
+		}
+		if (changedStarts.isEmpty())
+			continue; // a normal trim or position edit never ripples
+		// Clips beginning together share one outgoing edge. Its movement is
+		// the duration change of their whole envelope, not the sum of each
+		// member's changes: an unchanged longer clip still holds that edge.
+		QMap<qint64, QPair<qint64, qint64>> cohorts;
+		for (int i = 0; i < before.size(); ++i) {
+			if (!changedStarts.contains(before[i].start))
+				continue;
+			auto &envelope = cohorts[before[i].start];
+			envelope.first = std::max(envelope.first, before[i].duration);
+			envelope.second = std::max(envelope.second, track.clips[i].outDurationMs());
+		}
+		QVector<QPair<qint64, qint64>> changes;
+		for (auto cohort = cohorts.constBegin(); cohort != cohorts.constEnd(); ++cohort) {
+			const qint64 delta = cohort.value().second - cohort.value().first;
+			if (delta != 0)
+				changes.push_back({cohort.key(), delta});
+		}
+		if (changes.isEmpty())
+			continue;
+		QVector<qint64> prefix(changes.size() + 1, 0);
+		for (int i = 0; i < changes.size(); ++i)
+			prefix[i + 1] = prefix[i] + changes[i].second;
+		// Work from the unchanged timing snapshot, not the starts shifted by
+		// an earlier selected clip. Each recipient moves once by the total
+		// duration delta before it, without sorting/replacing the clip vector.
+		for (int i = 0; i < before.size(); ++i) {
+			const auto at = std::lower_bound(changes.constBegin(), changes.constEnd(), before[i].start,
+				[](const QPair<qint64, qint64> &change, qint64 start) { return change.first < start; });
+			const qint64 shift = prefix[at - changes.constBegin()];
+			if (shift != 0)
+				track.clips[i].outStartMs = std::max<qint64>(0, track.clips[i].outStartMs + shift);
+		}
+	}
+}
+
 // Colours all live in EditorColors (cl_), edited live from the Developer Panel.
 } // namespace
 
@@ -74,9 +149,12 @@ TimelineView::TimelineView(QWidget *parent) : QWidget(parent)
 	setAcceptDrops(true);
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 	setToolTip(QStringLiteral("Drag clips to move · drag an edge to trim · right-click to split · "
-				  "scroll to zoom, %1 to pan, %2 to move the lanes")
+				  "double-click above the time ruler to add a marker · right-click the ruler for markers and video end · "
+				  "scroll to zoom, middle-drag or %1 to pan, %2 to move the lanes")
 		.arg(ShortcutRegistry::mouseGesture(Qt::ShiftModifier, QStringLiteral("scroll")),
 			ShortcutRegistry::mouseGesture(Qt::AltModifier, QStringLiteral("scroll"))));
+	setAccessibleDescription(QStringLiteral("Timeline. Add markers by double-clicking the upper ruler, "
+					       "or right-click the ruler to add markers and set the video end."));
 	anim_ = new QTimer(this);
 	anim_->setInterval(16);
 	connect(anim_, &QTimer::timeout, this, &TimelineView::animateStep);
@@ -165,6 +243,8 @@ void TimelineView::setModelQuiet(const TimelineModel &m)
 	for (int i = 0; !lanesChanged && i < m.tracks.size(); ++i)
 		lanesChanged = m.tracks[i].kind != model_.tracks[i].kind;
 	model_ = m;
+	if (selHeaderTrack_ >= model_.tracks.size())
+		selHeaderTrack_ = -1;
 	auto valid = [this](int t, int c) {
 		return t >= 0 && t < model_.tracks.size() && c >= 0 && c < model_.tracks[t].clips.size();
 	};
@@ -227,6 +307,7 @@ int TimelineView::editClipsAt(const QVector<QPair<int, int>> &which,
 {
 	if (!fn)
 		return 0;
+	const SpeedRippleSnapshot before = captureSpeedRipple(model_, which);
 	int n = 0;
 	for (const auto &p : which) {
 		if (p.first < 0 || p.first >= model_.tracks.size() || model_.tracks[p.first].locked || p.second < 0 ||
@@ -236,6 +317,7 @@ int TimelineView::editClipsAt(const QVector<QPair<int, int>> &which,
 		++n;
 	}
 	if (n) {
+		applySpeedRipple(model_, before);
 		update();
 		emit clipsChanged();
 	}
@@ -263,7 +345,11 @@ void TimelineView::editSoundRules(const std::function<void(QVector<TlSoundRule> 
 
 void TimelineView::setModel(const TimelineModel &m)
 {
+	cancelMarkerDrag();
+	selectedMarkerMs_ = -1;
+	selectedEndMarker_ = false;
 	model_ = m;
+	selHeaderTrack_ = -1;
 	selTrack_ = selClip_ = -1;
 	// The extras are indices into the OLD model; a new one makes them meaningless
 	// and possibly out of range. Clearing the primary without them was how undo
@@ -528,6 +614,9 @@ bool TimelineView::fitClipToTimeline(int track, int clip)
 	if (end <= 0)
 		return false;
 	TlClip &c = t.clips[clip];
+	// Fit is an explicit layout command: it targets the existing timeline
+	// end. Moving other clips when its speed changes would move that target
+	// away again, so this operation deliberately bypasses speed ripple.
 	c.outStartMs = 0;
 	if (c.freeDuration()) {
 		// A caption, still or effect has no clock of its own: its length IS
@@ -618,10 +707,22 @@ void TimelineView::deleteTrack(int index)
 	if (index < 0 || index >= model_.tracks.size())
 		return;
 	model_.tracks.remove(index);
-	if (selTrack_ == index)
+	if (selHeaderTrack_ == index)
+		selHeaderTrack_ = -1;
+	else if (selHeaderTrack_ > index)
+		--selHeaderTrack_;
+	if (selTrack_ == index) {
 		selTrack_ = selClip_ = -1;
-	else if (selTrack_ > index)
+		selTransition_ = false;
+	} else if (selTrack_ > index) {
 		--selTrack_;
+	}
+	QSet<QPair<int, int>> remaining;
+	for (const auto &p : extraSel_)
+		if (p.first != index)
+			remaining.insert({p.first > index ? p.first - 1 : p.first, p.second});
+	extraSel_ = remaining;
+	hoverTrTrack_ = hoverTrClip_ = hoverSeamTrack_ = -1;
 	renumberTracks();
 	clampView();
 	updateGeometry();
@@ -647,7 +748,7 @@ void TimelineView::zoomToFit()
 	// draggable tail past the end and is never under kMinSpanMs -- so on a
 	// short edit Fit left half the view empty, and from the default zoom it
 	// changed nothing at all.
-	const qint64 dur = model_.durationMs();
+	const qint64 dur = timelineExtentMs();
 	const qint64 want = dur > 0 ? dur + std::max<qint64>(200, dur / 40) : spanMs();
 	zoom_ = zoomTarget_ = std::clamp(double(spanMs()) / double(want), 1.0, lp_.maxZoom);
 	viewStart_ = viewTarget_ = 0;
@@ -972,14 +1073,7 @@ const TlClip *TimelineView::selectedClipPtr() const
 
 void TimelineView::updateSelectedClip(const TlClip &c)
 {
-	if (selTrack_ < 0 || selTrack_ >= model_.tracks.size())
-		return;
-	TlTrack &t = model_.tracks[selTrack_];
-	if (selClip_ < 0 || selClip_ >= t.clips.size())
-		return;
-	t.clips[selClip_] = c;
-	update();
-	emit clipsChanged();
+	editClips({{selTrack_, selClip_}}, [&c](TlClip &clip) { clip = c; });
 }
 
 // One finished, discrete edit. Emitting the extra signal is what tells the
@@ -990,6 +1084,10 @@ void TimelineView::updateSelectedClip(const TlClip &c)
 // using plain clipsChanged() so they still coalesce.
 void TimelineView::commitEdit()
 {
+	// Adding/pasting a clip selects it too: a previously selected header must
+	// not remain armed for a later Delete or Copy after that edit.
+	if (hasSelection())
+		selHeaderTrack_ = -1;
 	emit clipsChanged();
 	emit editCommitted();
 }
@@ -1168,7 +1266,17 @@ qint64 TimelineView::spanMs() const
 	// continuously, for as long as you are dragging.
 	if (dragSpanMs_ > 0)
 		return dragSpanMs_;
-	return std::max<qint64>(kMinSpanMs, model_.durationMs() + kTailMs);
+	return std::max<qint64>(kMinSpanMs, timelineExtentMs() + kTailMs);
+}
+
+qint64 TimelineView::timelineExtentMs() const
+{
+	qint64 extent = model_.contentDurationMs();
+	if (model_.hasVideoEnd())
+		extent = std::max(extent, model_.videoEndMs);
+	for (qint64 marker : model_.markers)
+		extent = std::max(extent, marker);
+	return extent;
 }
 
 qint64 TimelineView::visibleMs() const
@@ -1442,6 +1550,14 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 							     .arg(gainPercent(t.gain)))
 				    : nullptr;
 	QAction *ripple = menu.addAction(QStringLiteral("Auto ripple on delete"));
+	QAction *speedRipple = menu.addAction(QStringLiteral("Auto ripple on speed change"));
+	speedRipple->setObjectName(QStringLiteral("timelineTrackRippleSpeed"));
+	speedRipple->setCheckable(true);
+	speedRipple->setChecked(t.rippleSpeed);
+	speedRipple->setToolTip(QStringLiteral(
+		"When a clip's speed changes, following clips on this track move by its duration change. "
+		"Faster playback pulls them earlier; slower playback pushes them later. Existing gaps and overlaps are kept."));
+	menu.setToolTipsVisible(true);
 	// Close every gap now, rather than only as clips are deleted.
 	QAction *forceRip = menu.addAction(QStringLiteral("Force ripple (remove gaps)"));
 	{
@@ -1543,6 +1659,8 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 		return;
 	} else if (chosen == ripple) {
 		t.ripple = !t.ripple;
+	} else if (chosen == speedRipple) {
+		t.rippleSpeed = !t.rippleSpeed;
 	} else if (chosen == forceRip) {
 		forceRipple(track); // commits on its own
 		return;
@@ -1792,14 +1910,19 @@ qint64 TimelineView::snap(qint64 ms, int ignoreTrack, int ignoreClip, bool *hit)
 		}
 	};
 	consider(0);
-	if (playheadMs_ >= 0)
+	if (playheadMs_ >= 0 && mode_ != Mode::MarkerDrag)
 		consider(playheadMs_);
 	// Markers. A marker is a moment you noted ON PURPOSE -- the beat, the click,
 	// the word -- so it is the strongest thing on the timeline to line something
 	// up with. Until it was a candidate here it was decoration: you could see
 	// the flag and drag a clip straight through it.
 	for (const qint64 mk : model_.markers)
-		consider(mk);
+		if (!(mode_ == Mode::MarkerDrag && !markerDragEnd_ && mk == markerDragFromMs_))
+			consider(mk);
+	// The automatic end belongs to a clip; the exclusions below must still be
+	// able to ignore that clip's own edge while it moves or trims.
+	if (model_.hasVideoEnd() && !(mode_ == Mode::MarkerDrag && markerDragEnd_))
+		consider(model_.videoEndMs);
 	// Every clip on every track is a candidate -- the magnet is deliberately
 	// cross-track, so a cut on V2 can be lined up with one on V1.
 	for (int ti = 0; ti < model_.tracks.size(); ++ti)
@@ -1857,6 +1980,130 @@ QSize TimelineView::minimumSizeHint() const
 	// whole stack, which pinned the editing area's height and left the divider
 	// above it nothing to move.
 	return QSize(320, 2 * lp_.margin + lp_.rulerH + lp_.videoLaneH + lp_.laneGap);
+}
+
+QRect TimelineView::markerBandRect() const
+{
+	const QRect content = contentRect();
+	return QRect(content.x(), lp_.margin, content.width(), std::max(10, lp_.rulerH - 14));
+}
+
+QString TimelineView::markerLabel(qint64 atMs) const
+{
+	const qint64 original = mode_ == Mode::MarkerDrag && !markerDragEnd_ && atMs == markerDragTimeMs_
+		? markerDragFromMs_ : atMs;
+	const QString custom = model_.markerLabels.value(original);
+	return custom.isEmpty() ? QStringLiteral("Marker %1").arg(std::max(0, int(model_.markers.indexOf(original))) + 1)
+				: custom;
+}
+
+QRect TimelineView::markerHandleRect(qint64 atMs, bool end) const
+{
+	const QRect band = markerBandRect();
+	QFont f = font();
+	f.setPixelSize(9);
+	const QString label = end ? (model_.hasVideoEnd() || (mode_ == Mode::MarkerDrag && markerDragEnd_)
+		? QStringLiteral("End") : QStringLiteral("End · auto")) : markerLabel(atMs);
+	int w = std::clamp(QFontMetrics(f).horizontalAdvance(label) + 18, 28, 140);
+	const int x = msToX(atMs);
+	if (!end) {
+		for (qint64 other : model_.markers) {
+			if (mode_ == Mode::MarkerDrag && !markerDragEnd_ && other == markerDragFromMs_)
+				other = markerDragTimeMs_;
+			if (other > atMs)
+				w = std::min(w, std::max(8, msToX(other) - x - 2));
+		}
+	}
+	const int left = end && x - w >= band.left() ? x - w + 4 : x - 4;
+	return QRect(left, band.top() + 1, w, std::max(8, band.height() - 2)).intersected(band);
+}
+
+TimelineView::MarkerHit TimelineView::markerAt(const QPoint &pos) const
+{
+	if (!markerBandRect().contains(pos))
+		return {};
+	MarkerHit best;
+	int distance = std::numeric_limits<int>::max();
+	for (qint64 at : model_.markers) {
+		if (!markerHandleRect(at, false).contains(pos))
+			continue;
+		const int d = std::abs(pos.x() - msToX(at));
+		if (d < distance) {
+			best = {at, false};
+			distance = d;
+		}
+	}
+	const qint64 end = model_.durationMs();
+	if (end > 0 && markerHandleRect(end, true).contains(pos) &&
+	    std::abs(pos.x() - msToX(end)) <= distance)
+		best = {end, true};
+	return best;
+}
+
+void TimelineView::drawMarkers(QPainter &p) const
+{
+	const QRect content = contentRect();
+	const QRect band = markerBandRect();
+	const qint64 end = mode_ == Mode::MarkerDrag && markerDragEnd_ ? markerDragTimeMs_ : model_.durationMs();
+	p.save();
+	p.setClipRect(content);
+	if (end > 0 && (model_.hasVideoEnd() || (mode_ == Mode::MarkerDrag && markerDragEnd_))) {
+		const int x = std::max(content.left(), msToX(end));
+		if (x <= content.right())
+			p.fillRect(QRect(x, content.top(), content.right() - x + 1, content.height()), QColor(0, 0, 0, 45));
+	}
+	for (qint64 at : model_.markers) {
+		if (mode_ == Mode::MarkerDrag && !markerDragEnd_ && at == markerDragFromMs_)
+			at = markerDragTimeMs_;
+		const int x = msToX(at);
+		p.setPen(QPen(cl_.marker, 1, Qt::DotLine));
+		p.drawLine(x, content.top(), x, content.bottom());
+	}
+	if (end > 0) {
+		p.setPen(QPen(cl_.fade, 2));
+		p.drawLine(msToX(end), content.top(), msToX(end), content.bottom());
+	}
+	p.restore();
+	p.save();
+	p.setClipRect(QRect(content.x(), lp_.margin, content.width(), lp_.rulerH));
+	p.fillRect(band, cl_.gutter.lighter(112));
+	p.setPen(cl_.border);
+	p.drawLine(band.bottomLeft(), band.bottomRight());
+	QFont labelFont = font();
+	labelFont.setPixelSize(9);
+	p.setFont(labelFont);
+	const auto drawHandle = [&](qint64 at, bool isEnd, bool selected) {
+		const int x = msToX(at);
+		if (x < content.left() || x > content.right())
+			return;
+		const QRect r = markerHandleRect(at, isEnd);
+		const QColor color = isEnd ? cl_.fade : cl_.marker;
+		QColor fill = color;
+		fill.setAlpha(selected ? 150 : 55);
+		p.setBrush(fill);
+		p.setPen(selected ? QColor(Qt::white) : color);
+		p.drawRect(r.adjusted(0, 0, -1, -1));
+		p.drawLine(x, band.top() + 1, x, band.bottom() - 1);
+		const QString label = isEnd ? (model_.hasVideoEnd() || (mode_ == Mode::MarkerDrag && markerDragEnd_)
+			? QStringLiteral("End") : QStringLiteral("End · auto")) : markerLabel(at);
+		QRect text = r.adjusted(4, 0, -4, 0);
+		p.setPen(QColor(0xef, 0xf2, 0xf5));
+		p.drawText(text, Qt::AlignVCenter | Qt::AlignLeft,
+			   QFontMetrics(labelFont).elidedText(label, Qt::ElideRight, text.width()));
+	};
+	for (qint64 at : model_.markers) {
+		const bool selected = !selectedEndMarker_ && selectedMarkerMs_ == at;
+		if (mode_ == Mode::MarkerDrag && !markerDragEnd_ && at == markerDragFromMs_)
+			at = markerDragTimeMs_;
+		drawHandle(at, false, selected);
+	}
+	if (end > 0)
+		drawHandle(end, true, selectedEndMarker_);
+	p.restore();
+	p.setFont(labelFont);
+	p.setPen(cl_.caption);
+	p.drawText(QRect(lp_.margin + 4, band.top(), gutterWidth() - 10, band.height()),
+		   Qt::AlignVCenter | Qt::AlignRight, QStringLiteral("Markers +"));
 }
 
 void TimelineView::drawRuler(QPainter &p) const
@@ -2745,25 +2992,7 @@ void TimelineView::paintEvent(QPaintEvent *)
 	p.setClipping(false);
 	drawRuler(p);
 
-	// Project markers: a flag on the ruler and a faint line down the lanes, so a
-	// noted moment stays findable while scrolling.
-	for (const qint64 mk : model_.markers) {
-		const int mx = msToX(mk);
-		const QRect c = contentRect();
-		if (mx < c.x() - 1 || mx > c.right() + 1)
-			continue;
-		p.setPen(QPen(cl_.marker, 1, Qt::DotLine));
-		p.drawLine(mx, lp_.margin + lp_.rulerH, mx, height() - lp_.margin);
-		p.setPen(Qt::NoPen);
-		p.setBrush(cl_.marker);
-		QPainterPath flag;
-		flag.moveTo(mx, lp_.margin + 2);
-		flag.lineTo(mx + 9, lp_.margin + 6);
-		flag.lineTo(mx, lp_.margin + 10);
-		flag.closeSubpath();
-		AaOn aa(p);
-		p.drawPath(flag);
-	}
+	drawMarkers(p);
 
 	// Hover marker: while the pointer is over a clip the preview follows it
 	// rather than the playhead, which is otherwise invisible and reads as the
@@ -2821,6 +3050,12 @@ void TimelineView::paintEvent(QPaintEvent *)
 
 void TimelineView::mousePressEvent(QMouseEvent *e)
 {
+	// Extra button presses do not re-anchor a grab or interrupt a left edit.
+	if (mode_ == Mode::Pan || (mode_ != Mode::None && e->button() == Qt::MiddleButton)) {
+		e->accept();
+		return;
+	}
+	cancelMarkerDrag();
 	// Same reason as the hover pass: a press hit-tests several times over, and
 	// all of it happens before anything in the model moves.
 	const SpanGuard span(this);
@@ -2839,24 +3074,62 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	if (wasHovering)
 		emit hoverScrubEnded();
 
-	// Grab the timeline and slide it. Tested first, before the ruler and before
-	// anything under the pointer, because it has to work from anywhere: a pan
-	// that stops working over a clip is a pan you cannot trust.
-	//
-	// The middle button, because left is already spoken for twice over (empty
-	// space scrubs, a clip moves) and taking either would trade one navigation
-	// gesture for another. Alt+left does the same thing for mice and trackpads
-	// with no middle button.
-	if (canPanFrom(e) && pos.x() >= contentRect().x()) {
+	// Grab before ruler/marker/header hit testing: navigation must not select
+	// or edit whatever happens to be under the pointer. Middle also works over
+	// the fixed headers; Alt+left keeps its existing content-area behavior.
+	if (canPanFrom(e) && (e->button() == Qt::MiddleButton || pos.x() >= contentRect().x())) {
 		mode_ = Mode::Pan;
+		panButton_ = e->button();
 		panStartX_ = pos.x();
 		panStartView_ = viewStart_;
+		dragSpanMs_ = spanMs();
+		panMsPerPixel_ = double(visibleMs()) / std::max(1, contentRect().width());
+		if (anim_)
+			anim_->stop();
+		zoomTarget_ = zoom_;
+		viewTarget_ = viewStart_;
+		panCursor_ = cursor();
+		panHadCursor_ = testAttribute(Qt::WA_SetCursor);
 		setCursor(Qt::ClosedHandCursor);
+		e->accept();
+		return;
+	}
+
+	const bool ruler = pos.y() >= lp_.margin && pos.y() < lp_.margin + lp_.rulerH;
+	if (ruler && e->button() == Qt::RightButton) {
+		showMarkerMenu(pos, e->globalPosition().toPoint());
+		return;
+	}
+	const MarkerHit marker = markerAt(pos);
+	if (e->button() == Qt::LeftButton && marker.valid()) {
+		selectedMarkerMs_ = marker.end ? -1 : marker.timeMs;
+		selectedEndMarker_ = marker.end;
+		markerDragFromMs_ = markerDragTimeMs_ = marker.timeMs;
+		markerDragEnd_ = marker.end;
+		pressPos_ = pos;
+		dragMoved_ = false;
+		dragSpanMs_ = spanMs();
+		mode_ = Mode::MarkerDrag;
+		if (anim_)
+			anim_->stop();
+		zoomTarget_ = zoom_;
+		viewTarget_ = viewStart_;
+		setCursor(Qt::ClosedHandCursor);
+		playheadMs_ = marker.timeMs;
+		emitScrubAt(playheadMs_);
+		update();
+		return;
+	}
+	selectedMarkerMs_ = -1;
+	selectedEndMarker_ = false;
+	if (e->button() == Qt::LeftButton && pos.x() < contentRect().x() &&
+	    pos.y() >= markerBandRect().top() && pos.y() <= markerBandRect().bottom()) {
+		addMarker(std::max<qint64>(0, playheadMs_));
 		return;
 	}
 
 	// Ruler or gutter → scrub / nothing.
-	if (pos.y() < lp_.margin + lp_.rulerH && pos.x() >= contentRect().x()) {
+	if (e->button() == Qt::LeftButton && pos.y() < lp_.margin + lp_.rulerH && pos.x() >= contentRect().x()) {
 		mode_ = Mode::Scrub;
 		playheadMs_ = xToMs(pos.x());
 		emitScrubAt(playheadMs_);
@@ -3224,6 +3497,9 @@ TlSelection TimelineView::selectionState() const
 
 void TimelineView::setSelectionState(const TlSelection &s)
 {
+	selHeaderTrack_ = -1;
+	selectedMarkerMs_ = -1;
+	selectedEndMarker_ = false;
 	const auto valid = [this](int t, int c) {
 		return t >= 0 && t < model_.tracks.size() && c >= 0 && c < model_.tracks[t].clips.size();
 	};
@@ -3306,20 +3582,44 @@ void TimelineView::applyMarquee()
 void TimelineView::mouseMoveEvent(QMouseEvent *e)
 {
 	const QPoint pos = e->pos();
+	if (mode_ == Mode::MarkerDrag) {
+		if (!(e->buttons() & Qt::LeftButton))
+			return;
+		if (!dragMoved_ && std::abs(pos.x() - pressPos_.x()) < 4)
+			return;
+		dragMoved_ = true;
+		// Use the pointer delta, rather than a clamped absolute position. The
+		// End label sits left of its anchor and must still reach time zero when
+		// it is grabbed by its middle and dragged into the gutter.
+		const qint64 delta = qint64(std::llround(double(pos.x() - pressPos_.x()) *
+						      double(visibleMs()) / std::max(1, contentRect().width())));
+		qint64 at = std::clamp<qint64>(markerDragFromMs_ + delta, markerDragEnd_ ? 1 : 0, spanMs());
+		bool hit = false;
+		if (!(e->modifiers() & Qt::AltModifier))
+			at = snap(at, -1, -1, &hit);
+		markerDragTimeMs_ = std::max<qint64>(markerDragEnd_ ? 1 : 0, at);
+		snapLineMs_ = hit ? markerDragTimeMs_ : -1;
+		playheadMs_ = markerDragTimeMs_;
+		emitScrubAt(playheadMs_);
+		update();
+		return;
+	}
 
 	if (mode_ == Mode::Pan) {
+		if (!(e->buttons() & panButton_)) {
+			finishPan();
+			e->accept();
+			return;
+		}
 		// Against the pose at the press, so the grabbed instant stays under the
 		// pointer for the whole gesture however far it travels. Note the sign:
 		// dragging RIGHT shows earlier material, the way a hand on a map does.
-		const QRect c = contentRect();
-		if (c.width() > 0) {
-			const double msPerPx = double(visibleMs()) / double(c.width());
-			viewStart_ = panStartView_ -
-				     qint64(std::llround((pos.x() - panStartX_) * msPerPx));
-			clampView();
-			update();
-			notifyView();
-		}
+		viewStart_ = panStartView_ - qint64(std::llround((pos.x() - panStartX_) * panMsPerPixel_));
+		clampView();
+		viewTarget_ = viewStart_;
+		update();
+		notifyView();
+		e->accept();
 		return;
 	}
 	if (mode_ == Mode::Scrub) {
@@ -3542,6 +3842,21 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 	// answer. Deliberately NOT held over the drag branches above: those change
 	// the model as they go, and the span has to follow them.
 	const SpanGuard hoverSpan(this);
+	if (markerBandRect().contains(pos)) {
+		const MarkerHit hit = markerAt(pos);
+		setCursor(hit.valid() ? Qt::OpenHandCursor : Qt::CrossCursor);
+		if (hoverMs_ >= 0) {
+			hoverMs_ = -1;
+			emit hoverScrubEnded();
+			update();
+		}
+		const QString tip = hit.valid() ? hit.end
+			? QStringLiteral("Video end · %1\nDrag to set where playback and full exports end. Right-click to reset.").arg(timeTextCentis(hit.timeMs))
+			: QStringLiteral("%1 · %2\nDrag to move · double-click to rename · Delete to remove.").arg(markerLabel(hit.timeMs), timeTextCentis(hit.timeMs))
+			: QStringLiteral("Double-click to add a marker. Right-click for markers and video end.");
+		QToolTip::showText(e->globalPosition().toPoint(), tip, this, markerBandRect());
+		return;
+	}
 	// A fade grip lights up under the cursor, and claims the cursor shape from
 	// the trim handle it overlaps.
 	const FadeHit fh = fadeHandleAt(pos);
@@ -3610,6 +3925,16 @@ void TimelineView::mouseDoubleClickEvent(QMouseEvent *e)
 {
 	if (e->button() != Qt::LeftButton)
 		return;
+	if (markerBandRect().contains(e->pos())) {
+		const MarkerHit hit = markerAt(e->pos());
+		cancelMarkerDrag();
+		if (hit.valid() && !hit.end)
+			editMarkerName(hit.timeMs);
+		else if (!hit.valid())
+			addMarker(xToMs(e->pos().x()));
+		e->accept();
+		return;
+	}
 	const FadeHit fh = fadeHandleAt(e->pos());
 	if (!fh.valid()) {
 		QWidget::mouseDoubleClickEvent(e);
@@ -3631,8 +3956,68 @@ void TimelineView::mouseDoubleClickEvent(QMouseEvent *e)
 	commitEdit();
 }
 
+void TimelineView::finishPan()
+{
+	if (mode_ != Mode::Pan)
+		return;
+	mode_ = Mode::None;
+	panButton_ = Qt::NoButton;
+	dragSpanMs_ = -1;
+	spanCache_ = -1;
+	clampView();
+	viewTarget_ = viewStart_;
+	if (panHadCursor_)
+		setCursor(panCursor_);
+	else
+		unsetCursor();
+	update();
+	notifyView();
+}
+
+bool TimelineView::event(QEvent *e)
+{
+	if (e->type() == QEvent::UngrabMouse || e->type() == QEvent::Hide ||
+	    e->type() == QEvent::WindowDeactivate)
+		finishPan();
+	return QWidget::event(e);
+}
+
 void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 {
+	if (mode_ == Mode::MarkerDrag && e->button() == Qt::LeftButton) {
+		const qint64 from = markerDragFromMs_;
+		const qint64 to = markerDragTimeMs_;
+		const bool end = markerDragEnd_;
+		const bool changed = dragMoved_ && to != from;
+		cancelMarkerDrag();
+		QToolTip::hideText();
+		if (!changed)
+			return;
+		if (end) {
+			setVideoEnd(to);
+			return;
+		}
+		const int index = int(model_.markers.indexOf(from));
+		if (index < 0 || model_.markers.contains(to)) {
+			playheadMs_ = from;
+			emitScrubAt(from);
+			update();
+			return;
+		}
+		const QString name = model_.markerLabels.take(from);
+		model_.markers[index] = to;
+		std::sort(model_.markers.begin(), model_.markers.end());
+		if (!name.isEmpty())
+			model_.markerLabels.insert(to, name);
+		selectedMarkerMs_ = to;
+		selectedEndMarker_ = false;
+		spanCache_ = -1;
+		clampView();
+		update();
+		notifyView();
+		commitEdit();
+		return;
+	}
 	// Before the left-button gate below: a pan is usually a MIDDLE-button drag,
 	// and that gate would leave mode_ stuck at Pan forever -- after which every
 	// mouse-move slides the view whether a button is down or not.
@@ -3648,9 +4033,9 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 	};
 
 	if (mode_ == Mode::Pan) {
-		mode_ = Mode::None;
-		unsetCursor();
-		releaseSpan();
+		if (e->button() == panButton_ || !(e->buttons() & panButton_))
+			finishPan();
+		e->accept();
 		return;
 	}
 	if (mode_ == Mode::Marquee) {
@@ -3817,6 +4202,10 @@ void TimelineView::mouseReleaseEvent(QMouseEvent *e)
 
 void TimelineView::wheelEvent(QWheelEvent *e)
 {
+	if (mode_ == Mode::MarkerDrag || mode_ == Mode::Pan) {
+		e->accept();
+		return;
+	}
 	const QPoint pos = e->position().toPoint();
 	const QPoint ad = e->angleDelta();
 	// Alt+wheel moves the lanes up and down when there are more than fit. Qt
@@ -3866,7 +4255,24 @@ void TimelineView::wheelEvent(QWheelEvent *e)
 
 void TimelineView::keyPressEvent(QKeyEvent *e)
 {
+	if (e->key() == Qt::Key_Escape && mode_ == Mode::MarkerDrag) {
+		const qint64 original = markerDragFromMs_;
+		cancelMarkerDrag();
+		playheadMs_ = original;
+		emitScrubAt(original);
+		e->accept();
+		return;
+	}
 	if (e->key() == Qt::Key_Delete || e->key() == Qt::Key_Backspace) {
+		cancelMarkerDrag();
+		if (selectedEndMarker_) {
+			resetVideoEnd();
+			return;
+		}
+		if (selectedMarkerMs_ >= 0) {
+			removeMarker(selectedMarkerMs_);
+			return;
+		}
 		deleteSelected();
 		return;
 	}
@@ -3985,19 +4391,7 @@ int TimelineView::shuffleClips(const ShuffleOptions &opt, quint64 seed)
 
 void TimelineView::applyToSelection(const std::function<void(TlClip &)> &fn)
 {
-	const QVector<QPair<int, int>> sel = selectedPairs();
-	if (sel.isEmpty())
-		return;
-	for (const auto &p : sel) {
-		if (p.first < 0 || p.first >= model_.tracks.size())
-			continue;
-		TlTrack &t = model_.tracks[p.first];
-		if (t.locked || p.second < 0 || p.second >= t.clips.size())
-			continue;
-		fn(t.clips[p.second]);
-	}
-	update();
-	emit clipsChanged();
+	editClips(selectedPairs(), fn);
 }
 
 QVector<QPair<int, int>> TimelineView::selectedVideoClips() const
@@ -4091,6 +4485,9 @@ bool TimelineView::isSelected(int track, int clip) const
 
 void TimelineView::selectClip(int track, int clip)
 {
+	selHeaderTrack_ = -1;
+	selectedMarkerMs_ = -1;
+	selectedEndMarker_ = false;
 	selTransition_ = false;
 	extraSel_.clear();
 	if (track < 0 || track >= model_.tracks.size() || clip < 0 ||
@@ -4106,6 +4503,9 @@ void TimelineView::selectClip(int track, int clip)
 
 void TimelineView::addToSelection(int track, int clip)
 {
+	selHeaderTrack_ = -1;
+	selectedMarkerMs_ = -1;
+	selectedEndMarker_ = false;
 	if (track < 0 || track >= model_.tracks.size() || clip < 0 ||
 	    clip >= model_.tracks[track].clips.size())
 		return;
@@ -4126,6 +4526,9 @@ void TimelineView::addToSelection(int track, int clip)
 
 void TimelineView::selectAllClips()
 {
+	selHeaderTrack_ = -1;
+	selectedMarkerMs_ = -1;
+	selectedEndMarker_ = false;
 	extraSel_.clear();
 	for (int t = 0; t < model_.tracks.size(); ++t)
 		for (int c = 0; c < model_.tracks[t].clips.size(); ++c) {
@@ -4226,6 +4629,151 @@ void TimelineView::nudgeSelection(qint64 deltaMs)
 	emit clipsChanged();
 }
 
+void TimelineView::addMarker(qint64 atMs, const QString &label)
+{
+	if (atMs < 0)
+		return;
+	if (model_.markers.contains(atMs)) {
+		if (!label.trimmed().isEmpty())
+			renameMarker(atMs, label);
+		return;
+	}
+	QString name = label.trimmed().left(120);
+	if (name.isEmpty()) {
+		int number = 1;
+		do {
+			name = QStringLiteral("Marker %1").arg(number++);
+		} while (model_.markerLabels.values().contains(name));
+	}
+	model_.markers.append(atMs);
+	std::sort(model_.markers.begin(), model_.markers.end());
+	model_.markerLabels.insert(atMs, name);
+	selectedMarkerMs_ = atMs;
+	selectedEndMarker_ = false;
+	spanCache_ = -1;
+	clampView();
+	update();
+	notifyView();
+	commitEdit();
+}
+
+bool TimelineView::renameMarker(qint64 atMs, const QString &label)
+{
+	if (!model_.markers.contains(atMs))
+		return false;
+	const QString name = label.trimmed().left(120);
+	if (model_.markerLabels.value(atMs) == name)
+		return false;
+	if (name.isEmpty())
+		model_.markerLabels.remove(atMs);
+	else
+		model_.markerLabels.insert(atMs, name);
+	selectedMarkerMs_ = atMs;
+	selectedEndMarker_ = false;
+	update();
+	commitEdit();
+	return true;
+}
+
+bool TimelineView::removeMarker(qint64 atMs)
+{
+	if (!model_.markers.removeOne(atMs))
+		return false;
+	model_.markerLabels.remove(atMs);
+	if (selectedMarkerMs_ == atMs)
+		selectedMarkerMs_ = -1;
+	spanCache_ = -1;
+	clampView();
+	update();
+	notifyView();
+	commitEdit();
+	return true;
+}
+
+void TimelineView::setVideoEnd(qint64 endMs)
+{
+	endMs = std::max<qint64>(1, endMs);
+	if (model_.videoEndMs == endMs)
+		return;
+	model_.videoEndMs = endMs;
+	selectedEndMarker_ = true;
+	selectedMarkerMs_ = -1;
+	spanCache_ = -1;
+	clampView();
+	update();
+	notifyView();
+	commitEdit();
+}
+
+void TimelineView::resetVideoEnd()
+{
+	if (model_.videoEndMs < 0)
+		return;
+	model_.videoEndMs = -1;
+	selectedEndMarker_ = false;
+	spanCache_ = -1;
+	clampView();
+	update();
+	notifyView();
+	commitEdit();
+}
+
+void TimelineView::editMarkerName(qint64 atMs)
+{
+	if (!model_.markers.contains(atMs))
+		return;
+	bool accepted = false;
+	const QString name = QInputDialog::getText(this, QStringLiteral("Rename marker"), QStringLiteral("Marker name"),
+		QLineEdit::Normal, markerLabel(atMs), &accepted);
+	if (accepted)
+		renameMarker(atMs, name);
+}
+
+void TimelineView::showMarkerMenu(const QPoint &pos, const QPoint &globalPos)
+{
+	const MarkerHit hit = markerAt(pos);
+	const qint64 atMs = hit.valid() ? hit.timeMs : pos.x() < contentRect().x()
+		? std::max<qint64>(0, playheadMs_) : xToMs(pos.x());
+	if (hit.valid()) {
+		selectedMarkerMs_ = hit.end ? -1 : hit.timeMs;
+		selectedEndMarker_ = hit.end;
+	}
+	QMenu menu(this);
+	QAction *add = menu.addAction(QStringLiteral("Add marker here"));
+	add->setEnabled(!model_.markers.contains(atMs));
+	connect(add, &QAction::triggered, this, [this, atMs]() { addMarker(atMs); });
+	if (hit.valid() && !hit.end) {
+		connect(menu.addAction(QStringLiteral("Rename marker…")), &QAction::triggered, this,
+			[this, atMs]() { editMarkerName(atMs); });
+		connect(menu.addAction(QStringLiteral("Delete marker")), &QAction::triggered, this,
+			[this, atMs]() { removeMarker(atMs); });
+	}
+	menu.addSeparator();
+	connect(menu.addAction(QStringLiteral("Set video end here")), &QAction::triggered, this,
+		[this, atMs]() { setVideoEnd(atMs); });
+	QAction *reset = menu.addAction(QStringLiteral("Use clips’ end (automatic)"));
+	reset->setEnabled(model_.hasVideoEnd());
+	connect(reset, &QAction::triggered, this, &TimelineView::resetVideoEnd);
+	update();
+	menu.exec(globalPos);
+}
+
+void TimelineView::cancelMarkerDrag()
+{
+	if (mode_ != Mode::MarkerDrag)
+		return;
+	mode_ = Mode::None;
+	markerDragFromMs_ = markerDragTimeMs_ = -1;
+	markerDragEnd_ = false;
+	dragMoved_ = false;
+	dragSpanMs_ = -1;
+	snapLineMs_ = -1;
+	spanCache_ = -1;
+	unsetCursor();
+	clampView();
+	update();
+}
+
 void TimelineView::toggleMarkerAtPlayhead()
 {
 	if (playheadMs_ < 0)
@@ -4235,15 +4783,10 @@ void TimelineView::toggleMarkerAtPlayhead()
 	const qint64 tol = std::max<qint64>(1, xToMs(contentRect().x() + 6) - xToMs(contentRect().x()));
 	for (int i = 0; i < model_.markers.size(); ++i)
 		if (std::llabs(model_.markers[i] - playheadMs_) <= tol) {
-			model_.markers.remove(i);
-			update();
-			commitEdit();
+			removeMarker(model_.markers[i]);
 			return;
 		}
-	model_.markers.append(playheadMs_);
-	std::sort(model_.markers.begin(), model_.markers.end());
-	update();
-	commitEdit();
+	addMarker(playheadMs_);
 }
 
 qint64 TimelineView::markerNear(qint64 fromMs, bool forward) const
@@ -4253,6 +4796,12 @@ qint64 TimelineView::markerNear(qint64 fromMs, bool forward) const
 		if (forward ? (m > fromMs + 1) : (m < fromMs - 1))
 			if (best < 0 || std::llabs(m - fromMs) < std::llabs(best - fromMs))
 				best = m;
+	}
+	if (model_.hasVideoEnd()) {
+		const qint64 end = model_.videoEndMs;
+		if ((forward ? end > fromMs + 1 : end < fromMs - 1) &&
+		    (best < 0 || std::llabs(end - fromMs) < std::llabs(best - fromMs)))
+			best = end;
 	}
 	return best;
 }
@@ -4311,6 +4860,21 @@ void TimelineView::splitAtPlayhead()
 
 void TimelineView::deleteSelected()
 {
+	cancelMarkerDrag();
+	if (selectedEndMarker_) {
+		resetVideoEnd();
+		return;
+	}
+	if (selectedMarkerMs_ >= 0) {
+		removeMarker(selectedMarkerMs_);
+		return;
+	}
+	if (hasSelection())
+		selHeaderTrack_ = -1;
+	if (selHeaderTrack_ >= 0 && selHeaderTrack_ < model_.tracks.size()) {
+		deleteTrack(selHeaderTrack_);
+		return;
+	}
 	// Delete on a selected transition removes the TRANSITION -- the clips stay
 	// and snap together. Deleting the clip under it would be a nasty surprise.
 	if (selTransition_) {
@@ -4772,9 +5336,18 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		}
 		snd->setToolTipsVisible(true);
 	}
-	// Subtitles from what this clip says: a media clip on any lane (captions,
-	// stills and effects have no speech). With a selection that includes it,
-	// every selected media clip is transcribed.
+	// Rhythm analysis reads the clicked media clip, even if its lane is muted
+	// or locked: adding timeline markers does not change the clip itself.
+	QAction *beats = nullptr;
+	if (menuClip.type == TlClip::Type::Video && menuClip.sourceId > 0) {
+		menu.addSeparator();
+		beats = menu.addAction(QStringLiteral("Detect beats…"));
+		beats->setObjectName(QStringLiteral("detectClipBeatsAction"));
+		beats->setToolTip(QStringLiteral(
+			"Find the rhythm in this clip's audio and review beat markers for snapping across the timeline."));
+	}
+	// With a selection that includes this clip, transcribe every selected
+	// media clip into captions. Stills and effects have no soundtrack.
 	QAction *subs = nullptr;
 	if (menuClip.type == TlClip::Type::Video && menuClip.soundRule == 0 && menuClip.sourceId > 0) {
 		menu.addSeparator();
@@ -4854,6 +5427,10 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	}
 	if (respeak && chosen == respeak) {
 		emit respeakRequested(track, clip, atOutMs);
+		return;
+	}
+	if (beats && chosen == beats) {
+		emit beatsRequested(track, clip);
 		return;
 	}
 	if (subs && chosen == subs) {

@@ -15,12 +15,17 @@
 #include "../ui/ExportDoneDialog.hpp"
 #include "../ui/ExportProgressDialog.hpp"
 #include "../ui/LoadingDialog.hpp"
+#include "../ui/RecordingVideoPicker.hpp"
+#include "../ui/MediaFileDetailsDialog.hpp"
+#include "../ui/WindowScreen.hpp"
 #include "LoadingTask.hpp"
 #include <QScopedValueRollback>
 #include "../ui/ColorField.hpp"
 #include "../ui/UiIcons.hpp"
 #include "component/BuiltinComponents.hpp"
 #include "component/ComponentRegistry.hpp"
+#include "component/ComponentPresets.hpp"
+#include "component/ComponentPresetClip.hpp"
 #include "component/ScriptComponent.hpp"
 #include "../ui/UiText.hpp"
 #include "../ui/InfoHint.hpp"
@@ -37,6 +42,8 @@
 #include "ClipExporter.hpp"
 #include "DevPanel.hpp"
 #include "EditorWidgets.hpp"
+#include "EditorDialogScope.hpp"
+#include "EditorFileDialog.hpp"
 #include "ExportOptionsDialog.hpp"
 #include "BatchExport.hpp"
 #include "FlowLayout.hpp"
@@ -49,6 +56,7 @@
 #include "PreviewDecoder.hpp"
 #include "PreviewRenderWarning.hpp"
 #include "ProjectPaths.hpp"
+#include "ProjectAssets.hpp"
 #include "RecentProjects.hpp"
 #include "ProxyMedia.hpp"
 #include "LevelMeter.hpp"
@@ -61,6 +69,7 @@
 #include "timeline/TextStylePresets.hpp"
 #include "SilenceTrim.hpp"
 #include "SilenceTrimDialog.hpp"
+#include "BeatDetectionDialog.hpp"
 #include "timeline/FrameSignature.hpp"
 #include "TrackEditor.hpp"
 #include "VoiceoverMixer.hpp"
@@ -73,6 +82,7 @@
 #include "component/ShaderComponent.hpp"
 #include "component/TransformScriptComponent.hpp"
 #include "shader/ShaderRenderer.hpp"
+#include "shader/ShaderPresets.hpp"
 #include "timeline/TimelineCompositor.hpp"
 #include "ShortcutPanel.hpp"
 #include "ShortcutRegistry.hpp"
@@ -180,6 +190,7 @@
 #include "../library/ClipLibrary.hpp"
 #include "../library/ThumbnailCache.hpp"
 #include <QPointer>
+#include <QMouseEvent>
 #include <QThreadPool>
 #include <QTimer>
 #include <QUrl>
@@ -188,6 +199,65 @@
 namespace harpia {
 
 namespace {
+// An application filter sees child controls before they consume or propagate
+// side-button events. Keep it separate from the editor's local event filter,
+// whose canvas/console handlers must still run just once.
+class EditorMouseHistory final : public QObject {
+public:
+	EditorMouseHistory(QWidget *editor, std::function<void()> undo, std::function<void()> redo)
+		: QObject(editor), editor_(editor), undo_(std::move(undo)), redo_(std::move(redo))
+	{
+		qApp->installEventFilter(this);
+	}
+	~EditorMouseHistory() override
+	{
+		if (qApp)
+			qApp->removeEventFilter(this);
+	}
+
+protected:
+	bool eventFilter(QObject *watched, QEvent *event) override
+	{
+		const auto type = event->type();
+		if (type != QEvent::MouseButtonPress && type != QEvent::MouseButtonDblClick &&
+		    type != QEvent::MouseButtonRelease)
+			return false;
+		auto *mouse = static_cast<QMouseEvent *>(event);
+		if (mouse->button() != Qt::BackButton && mouse->button() != Qt::ForwardButton)
+			return false;
+		auto *receiver = qobject_cast<QWidget *>(watched);
+		const QWidget *modal = QApplication::activeModalWidget();
+		if (!editor_->isVisible() || !editor_->isEnabled() || !belongs(receiver) ||
+		    !belongs(QApplication::activeWindow()) || QApplication::activePopupWidget() ||
+		    (modal && modal != editor_))
+			return false;
+		mouse->accept();
+		// Swallow release as well: some preview/track handlers finish their
+		// current edit on any release. Chording a side button with a drag must
+		// neither restore history under that drag nor end it prematurely.
+		if (type != QEvent::MouseButtonRelease &&
+		    !(mouse->buttons() & (Qt::LeftButton | Qt::MiddleButton | Qt::RightButton))) {
+			const auto run = mouse->button() == Qt::BackButton ? undo_ : redo_;
+			run(); // a double-click event represents the second physical press
+		}
+		return true;
+	}
+
+private:
+	bool belongs(const QWidget *widget) const
+	{
+		// QWidget::isAncestorOf stops at a window boundary. Owned floating
+		// tools have their own window but still belong to this editor.
+		for (auto *owner = widget; owner; owner = owner->parentWidget())
+			if (owner == editor_)
+				return true;
+		return false;
+	}
+	QWidget *editor_;
+	std::function<void()> undo_;
+	std::function<void()> redo_;
+};
+
 // Shown on every caption text field: the tags it takes.
 const QString kRichTextTip = QStringLiteral(
 	"Rich text, as in Unity:\n"
@@ -204,6 +274,15 @@ namespace {
 QString previewTimeText(qint64 ms)
 {
 	return timeTextMs(ms);
+}
+
+QString speedDurationText(qint64 ms)
+{
+	// Round integer milliseconds to hundredths before formatting, avoiding
+	// floating-point midpoint surprises such as 615 ms displaying as 0.61s.
+	const qint64 hundredths = ms / 10 + (ms % 10 >= 5 ? 1 : 0);
+	return QStringLiteral("%1.%2s").arg(hundredths / 100)
+		.arg(hundredths % 100, 2, 10, QLatin1Char('0'));
 }
 
 // Speed control: 0.1×..50×, mapped exponentially onto the slider so each step
@@ -344,11 +423,51 @@ ProjectRead readProjectFile(const QString &path)
 	if (error.error != QJsonParseError::NoError || !doc.isObject() ||
 	    !doc.object().contains(QStringLiteral("harpiaProject")))
 		return {{}, QStringLiteral("This is not a valid Harpia project file.")};
+	const QJsonValue version = doc.object().value(QStringLiteral("harpiaProject"));
+	if (!version.isDouble() || version.toDouble() < 1.0 ||
+	    std::floor(version.toDouble()) != version.toDouble())
+		return {{}, QStringLiteral("This is not a valid Harpia project version.")};
+	if (version.toDouble() > 3.0)
+		return {{}, QStringLiteral("This project requires a newer version of Harpia. "
+					  "Update Harpia before opening it to preserve its settings.")};
+	for (const char *section : {"sources", "tracks", "segments", "voiceovers", "markers", "tags", "soundRules"}) {
+		const QJsonValue value = doc.object().value(QLatin1String(section));
+		if (!value.isUndefined() && !value.isArray())
+			return {{}, QStringLiteral("The project's \"%1\" section is not valid.").arg(QLatin1String(section))};
+	}
 	return {doc.object(), {}};
 }
 } // namespace
 
 int VideoEditorWindow::openCount_ = 0;
+
+bool VideoEditorWindow::closeAllWindows()
+{
+	static bool closing = false;
+	if (closing)
+		return false;
+	const QScopedValueRollback<bool> guard(closing, true);
+	QVector<QPointer<VideoEditorWindow>> editors;
+	for (QWidget *window : QApplication::topLevelWidgets())
+		if (auto *editor = qobject_cast<VideoEditorWindow *>(window))
+			editors.append(editor);
+	// Finish or cancel the editor's existing dialog first. In particular do
+	// not destroy an editor while its loading task or export is using it.
+	for (const auto &editor : editors) {
+		if (!editor)
+			continue;
+		for (QDialog *dialog : editor->findChildren<QDialog *>())
+			if (dialog->isVisible() && dialog->isModal()) {
+				dialog->raise();
+				dialog->activateWindow();
+				return false;
+			}
+	}
+	for (const auto &editor : editors)
+		if (editor && editor->isVisible() && !editor->close())
+			return false;
+	return true;
+}
 
 VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &libraryFolders,
 				     QWidget *parent)
@@ -365,7 +484,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// space and the timelines widen for finer control.
 	setWindowFlags(Qt::Window | Qt::WindowTitleHint | Qt::WindowSystemMenuHint |
 		       Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint);
+	new EditorDialogScope(this);
 	setSizeGripEnabled(true);
+	connect(this, &QDialog::finished, this, [this]() {
+		if (shownOnce_)
+			window_screen::save(*this, QStringLiteral("editor"));
+	});
 	// The size it RESTORES to (the title bar's restore button); the editor
 	// itself opens MAXIMISED (see showEvent), because every part of it wants
 	// the room -- the preview, the track stack and the Inspector are all things
@@ -437,7 +561,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	cutModeBtn_ = new QPushButton(QStringLiteral("Multi-Cut"), this);
 	cutModeBtn_->setCheckable(true);
 	cutModeBtn_->setToolTip(QStringLiteral(
-		"Keep several sections of one video, joined in order, each at its own speed.\n\n"
+		"Keep sections from one or more videos, joined in order, each at its own speed.\n\n"
 		"Full Editing can do all of this too — Multi-Cut is the faster route when you "
 		"only need to drop parts out."));
 	fullModeBtn_ = new QPushButton(QStringLiteral("Full Editing"), this);
@@ -729,6 +853,35 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	timeline_ = new Timeline(this);
 	tracks_ = new TrackEditor(this);
 	timelineView_ = new TimelineView(this);
+	multiCutSourceRow_ = new QWidget(bottomPane);
+	multiCutSourceRow_->setVisible(false);
+	auto *sourcePickerLayout = new QHBoxLayout(multiCutSourceRow_);
+	sourcePickerLayout->setContentsMargins(0, 0, 0, 0);
+	auto *sourcePickerLabel = new QLabel(QStringLiteral("Source video"), multiCutSourceRow_);
+	sourcePickerLayout->addWidget(sourcePickerLabel);
+	multiCutSourceCombo_ = new QComboBox(multiCutSourceRow_);
+	multiCutSourceCombo_->setObjectName(QStringLiteral("multiCutSourceSelector"));
+	multiCutSourceCombo_->setPlaceholderText(QStringLiteral("Choose a video"));
+	multiCutSourceCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+	multiCutSourceCombo_->setMinimumContentsLength(24);
+	multiCutSourceCombo_->setToolTip(QStringLiteral(
+		"Choose the video shown in the Source track. New cuts use this video; "
+		"cuts already in the Output track stay in place."));
+	sourcePickerLabel->setBuddy(multiCutSourceCombo_);
+	sourcePickerLayout->addWidget(multiCutSourceCombo_, 1);
+	connect(multiCutSourceCombo_, &QComboBox::activated, this, [this](int index) {
+		if (!multiCut() || index < 0)
+			return;
+		const int id = multiCutSourceCombo_->itemData(index).toInt();
+		if (id != activeSourceId_)
+			setActiveSource(id);
+	});
+	auto *addCutSource = new QPushButton(QStringLiteral("Add video…"), multiCutSourceRow_);
+	addCutSource->setObjectName(QStringLiteral("addMultiCutVideoButton"));
+	addCutSource->setToolTip(QStringLiteral("Add another video to cut from, keeping your existing cuts."));
+	connect(addCutSource, &QPushButton::clicked, this, &VideoEditorWindow::onAddSource);
+	sourcePickerLayout->addWidget(addCutSource);
+	bottomLayout->addWidget(multiCutSourceRow_);
 	stack_ = new QStackedWidget(this);
 	stack_->addWidget(timeline_);      // index 0 = Simple Trim
 	stack_->addWidget(tracks_);        // index 1 = Multi-Cut
@@ -756,6 +909,20 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(timelineView_, &TimelineView::hoverScrubEnded, this,
 		&VideoEditorWindow::showPlayheadFrame);
 	connect(timelineView_, &TimelineView::clipsChanged, this, [this]() {
+		bool stoppedAtEnd = false;
+		if (fullEdit() && playing_ && timelineView_->model().hasVideoEnd()) {
+			qint64 playingAt = playAnchorMs_ + playClock_.elapsed();
+			if (audioPreview_ && audioPreview_->isPlaying()) {
+				const qint64 audioAt = audioPreview_->positionMs();
+				if (audioAt >= 0)
+					playingAt = audioAt;
+			}
+			const qint64 endMs = timelineView_->durationMs();
+			if (playingAt >= endMs || timelinePlayheadMs() >= endMs) {
+				stopAtTimelineEnd(endMs);
+				stoppedAtEnd = true;
+			}
+		}
 		// Sounds for events first: the rules' clips are derived from the
 		// timeline, so they are rebuilt before anything below reads it (the
 		// mix, the preview, the undo snapshot).
@@ -764,9 +931,13 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		// source is loaded — refresh it whenever the timeline changes.
 		timelineView_->setFrameRate(timelineFps());
 		updateInfoLabel();
+		updateVoiceoverAxis();
 		syncPreviewTransformTarget();
 		scriptScanDirty_ = true;
-		invalidateAudioMix(); // clips moved/trimmed: the mix no longer matches
+		// Chapter markers and their labels do not change the sound. Keep a
+		// matching mix playing while those annotations are edited.
+		if (!audioMixValid_ || audioMixKey() != audioMixKeyBuilt_)
+			invalidateAudioMix();
 		// Moving or trimming a clip on the timeline changes where the playhead
 		// falls inside it, so the pose and keyframe readout the Inspector shows
 		// have to follow along live.
@@ -791,7 +962,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		// on every mouse-move of a drag, and requestPreview renders the first
 		// one at once, paces the rest, and keeps only the newest.
 		if (fullEdit())
-			requestPreview(-1, timelinePlayheadMs());
+			requestPreview(-1, stoppedAtEnd ? std::max<qint64>(0, timelinePlayheadMs() - 1)
+						      : timelinePlayheadMs());
 		scheduleSnapshot();
 		rebuildSoundsTab();
 		rebuildTagsSection();
@@ -859,6 +1031,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		&VideoEditorWindow::onSoundForTransition);
 	connect(timelineView_, &TimelineView::soundRulesRequested, this, &VideoEditorWindow::showSoundsTab);
 	connect(timelineView_, &TimelineView::subtitlesRequested, this, &VideoEditorWindow::openSubtitles);
+	connect(timelineView_, &TimelineView::beatsRequested, this, &VideoEditorWindow::openBeatDetection);
 	connect(timelineView_, &TimelineView::respeakRequested, this, &VideoEditorWindow::respeakSentence);
 	connect(timelineView_, &TimelineView::slipRequested, this, &VideoEditorWindow::openSlip);
 	// Fit to selection (Text to speech) follows what is selected.
@@ -1238,11 +1411,19 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// place to go when you want more on the timeline, and leaves the row room
 	// for the controls you use while editing what is already there.
 	addMenuBtn_ = new QPushButton(QStringLiteral("Add  \u25BE"), this);
-	addMenuBtn_->setToolTip(QStringLiteral("Put something new on the timeline: text, subtitles, "
+	addMenuBtn_->setToolTip(QStringLiteral("Put something new on the timeline: a library recording, text, subtitles, "
 						"audio, an image, an effect clip"));
 	addMenuBtn_->setVisible(false); // Full editing only
 	auto *addMenu = new QMenu(addMenuBtn_);
 	addMenu->setToolTipsVisible(true);
+	addLibraryAct_ = addMenu->addAction(QStringLiteral("Add from Library…"));
+	addLibraryAct_->setObjectName(QStringLiteral("addFromLibraryAction"));
+	addLibraryAct_->setVisible(false); // Full editing only, including the shared menubar entry
+	addLibraryAct_->setToolTip(QStringLiteral(
+		"Open your recorded videos. Drag a recording onto a timeline lane, or double-click "
+		"to add it at the playhead in this project."));
+	connect(addLibraryAct_, &QAction::triggered, this, &VideoEditorWindow::openRecordingLibrary);
+	addMenu->addSeparator();
 	addTextAct_ = addMenu->addAction(QStringLiteral("Text"));
 	addTextAct_->setToolTip(
 		QStringLiteral("Add a text clip at the playhead (font, colour, outline and background "
@@ -1646,6 +1827,12 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// control before its replacement exists would just remove a feature.
 	componentPanel_ = new ComponentPanel(ComponentRegistry::instance(), this);
 	componentPanel_->setVisible(false);
+	connect(componentPanel_, &ComponentPanel::componentPresetSaveRequested,
+		this, &VideoEditorWindow::saveComponentPreset);
+	connect(componentPanel_, &ComponentPanel::componentPresetApplied,
+		this, &VideoEditorWindow::applyComponentPreset);
+	connect(componentPanel_, &ComponentPanel::componentPresetDeleteRequested,
+		this, &VideoEditorWindow::deleteComponentPreset);
 	// Every operation is applied to EVERY selected clip, in one edit and so one
 	// undo step. There is no single-clip path: one clip is the case where the
 	// selection has one member, which is what stops the two drifting apart.
@@ -1995,6 +2182,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	sideLayout->setContentsMargins(8, 8, 8, 8);
 	sideLayout->setSpacing(6);
 	auto *srcTabs = new QTabWidget(sourcesPanel_);
+	sourcesTabs_ = srcTabs;
+	srcTabs->setObjectName(QStringLiteral("editorSourcesTabs"));
 
 	// Tab 1 — "Sources": the videos currently loaded into this edit.
 	auto *usedTab = new QWidget(srcTabs);
@@ -2002,6 +2191,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	usedLayout->setContentsMargins(0, 6, 0, 0);
 	usedLayout->setSpacing(6);
 	sourceList_ = new UrlDragList(usedTab); // rows drag out as files, onto the timeline
+	sourceList_->setObjectName(QStringLiteral("editorProjectSources"));
+	sourceList_->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(sourceList_, &QListWidget::customContextMenuRequested, this,
+		[this](const QPoint &pos) { showSourceFileMenu(sourceList_, pos); });
 	sourceList_->setIconSize(QSize(128, 72));
 	sourceList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	sourceList_->setToolTip(QStringLiteral(
@@ -2028,6 +2221,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	libLayout->setContentsMargins(0, 6, 0, 0);
 	libLayout->setSpacing(6);
 	libraryList_ = new UrlDragList(libTab);
+	libraryList_->setObjectName(QStringLiteral("editorRecordingLibrary"));
+	libraryList_->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(libraryList_, &QListWidget::customContextMenuRequested, this,
+		[this](const QPoint &pos) { showSourceFileMenu(libraryList_, pos); });
 	libraryList_->setIconSize(QSize(128, 72));
 	libraryList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	libraryList_->setToolTip(QStringLiteral(
@@ -2155,7 +2352,11 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		return qint64(std::llround(1000.0 / (fps > 1.0 ? fps : 30.0)));
 	};
 	auto seekTo = [this](qint64 ms) {
-		const qint64 t = std::clamp<qint64>(ms, 0, timelineView_->durationMs());
+		const TimelineModel &model = timelineView_->model();
+		qint64 editingEnd = std::max(model.contentDurationMs(), model.durationMs());
+		for (qint64 marker : model.markers)
+			editingEnd = std::max(editingEnd, marker);
+		const qint64 t = std::clamp<qint64>(ms, 0, editingEnd);
 		timelineView_->setPlayhead(t);
 		onTimelineScrub(t);
 	};
@@ -2180,6 +2381,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	cmd("edit.undo", "Undo", "Editing", {QKeySequence::Undo}, [this]() { undo(); });
 	cmd("edit.redo", "Redo", "Editing",
 	    {QKeySequence::Redo, QKeySequence(Qt::CTRL | Qt::Key_Y)}, [this]() { redo(); });
+	mouseHistoryFilter_ = new EditorMouseHistory(this, [this]() { undo(); }, [this]() { redo(); });
 	cmd("playback.playPause", "Play / Pause", "Playback", {QKeySequence(Qt::Key_Space)},
 	    [this]() { onPlayPause(); });
 	// Up / Down on the selected cuts in Multi-Cut: faster / slower by the Dev
@@ -2302,6 +2504,10 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 
 	// Gestures the mouse owns. Listed so the panel is a complete reference,
 	// but not rebindable: the widget reads the mouse directly.
+	shortcuts_->addMouseGesture(QStringLiteral("edit.undoMouse"), QStringLiteral("Undo"),
+				    QStringLiteral("Editing"), QStringLiteral("Mouse Back (side button)"));
+	shortcuts_->addMouseGesture(QStringLiteral("edit.redoMouse"), QStringLiteral("Redo"),
+				    QStringLiteral("Editing"), QStringLiteral("Mouse Forward (side button)"));
 	shortcuts_->addMouseGesture(QStringLiteral("timeline.zoom"), QStringLiteral("Zoom timeline"),
 				    QStringLiteral("View"), ShortcutRegistry::mouseGesture(Qt::ControlModifier, QStringLiteral("Mouse wheel")));
 	shortcuts_->addMouseGesture(QStringLiteral("timeline.pan"), QStringLiteral("Pan timeline"),
@@ -2562,7 +2768,8 @@ EditorSource *VideoEditorWindow::sourceByPath(const QString &path)
 		return nullptr;
 	const QString want = QFileInfo(path).absoluteFilePath();
 	for (auto &s : sources_)
-		if (QFileInfo(s.path).absoluteFilePath() == want)
+		if (!s.missing && (QFileInfo(s.path).absoluteFilePath() == want ||
+			(!s.origPath.isEmpty() && QFileInfo(s.origPath).absoluteFilePath() == want)))
 			return &s;
 	return nullptr;
 }
@@ -2644,6 +2851,7 @@ int VideoEditorWindow::addSource(const QString &path)
 	src.durationMs = seeker->durationMs();
 	src.width = seeker->width();
 	src.height = seeker->height();
+	src.fps = seeker->fps();
 	const QString codecName = seeker->codecName();
 	src.seeker = std::move(seeker);
 	const int id = src.id;
@@ -2720,9 +2928,25 @@ void VideoEditorWindow::setActiveSource(int id)
 	if (!s)
 		return;
 	stopPlayback();
+	// A queued scrub still names the previous video. It must not repaint over
+	// the new source after the dropdown (or an Output cut) switches videos.
+	if (previewTimer_)
+		previewTimer_->stop();
+	pendingMs_ = -1;
 	activeSourceId_ = id;
 	seeker_ = s->seeker.get();
+	if (multiCutSourceCombo_) {
+		QSignalBlocker b(multiCutSourceCombo_);
+		multiCutSourceCombo_->setCurrentIndex(multiCutSourceCombo_->findData(id));
+	}
 	tracks_->setActiveSource(id);
+	if (s->missing) {
+		lastPreviewRaw_ = QImage();
+		canvas_->setFrame(QImage());
+		shownSource_ = -1;
+		shownMs_ = -1;
+		shownExact_ = true;
+	}
 	// Simple Trim exports the active source at its own resolution, so the
 	// preview is that source. Multi-Cut assembles everything into ONE output
 	// sized from the primary, and re-shaping the canvas to whichever source was
@@ -2734,7 +2958,7 @@ void VideoEditorWindow::setActiveSource(int id)
 	tracks_->setDuration(s->durationMs);
 	timeline_->setThumbs(s->thumbCache);
 	tracks_->setThumbs(s->thumbCache);
-	baseInfo_ = QStringLiteral("%1 × %2   %3s")
+	baseInfo_ = s->missing ? QStringLiteral("Missing media — %1").arg(s->name) : QStringLiteral("%1 × %2   %3s")
 			    .arg(s->width)
 			    .arg(s->height)
 			    .arg(s->durationMs / 1000.0, 0, 'f', 1);
@@ -2751,8 +2975,25 @@ void VideoEditorWindow::setActiveSource(int id)
 	showFrame(id, 0);
 }
 
+void VideoEditorWindow::refreshMultiCutSources()
+{
+	if (!multiCutSourceCombo_)
+		return;
+	QSignalBlocker b(multiCutSourceCombo_);
+	multiCutSourceCombo_->clear();
+	for (const EditorSource &s : sources_) {
+		if (!s.seeker && !(s.missing && sourceKindFor(s.path) == SourceKind::Video))
+			continue; // images and audio have no video timeline to cut from
+		multiCutSourceCombo_->addItem(s.missing ? QStringLiteral("Missing — %1").arg(s.name) : s.name, s.id);
+		multiCutSourceCombo_->setItemData(multiCutSourceCombo_->count() - 1, s.path, Qt::ToolTipRole);
+	}
+	multiCutSourceCombo_->setCurrentIndex(multiCutSourceCombo_->findData(activeSourceId_));
+	multiCutSourceCombo_->setEnabled(multiCutSourceCombo_->count() > 0);
+}
+
 void VideoEditorWindow::refreshSourceList()
 {
+	refreshMultiCutSources();
 	if (!sourceList_)
 		return;
 	QSignalBlocker b(sourceList_); // rebuild must not fire selection changes
@@ -2760,7 +3001,7 @@ void VideoEditorWindow::refreshSourceList()
 	for (const EditorSource &s : sources_) {
 		auto *item = new QListWidgetItem(
 			QStringLiteral("%1\n%2s · %3×%4")
-				.arg(s.name)
+				.arg(s.missing ? QStringLiteral("Missing — %1").arg(s.name) : s.name)
 				.arg(s.durationMs / 1000.0, 0, 'f', 1)
 				.arg(s.width)
 				.arg(s.height));
@@ -2781,14 +3022,32 @@ void VideoEditorWindow::refreshSourceList()
 
 void VideoEditorWindow::onAddSource()
 {
-	const QString dir = activeSource() ? QFileInfo(activeSource()->path).absolutePath() : QString();
-	const QString path = QFileDialog::getOpenFileName(
-		this, QStringLiteral("Add video"), dir,
-		QStringLiteral("Video files (*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.gif *.wmv *.flv *.ts);;"
-			       "All files (*)"));
+	RecordingVideoPicker picker(libraryFolders_, this);
+	QStringList protectedPaths;
+	for (const EditorSource &source : sources_) {
+		protectedPaths << source.path;
+		if (!source.origPath.isEmpty())
+			protectedPaths << source.origPath;
+	}
+	picker.setProtectedPaths(protectedPaths);
+	connect(&picker, &RecordingVideoPicker::recordingsDeleted, this, [this](const QStringList &paths) {
+		refreshLibrary();
+		emit recordingsDeleted(paths);
+	});
+	if (picker.exec() != QDialog::Accepted)
+		return;
+	QString path = picker.selectedVideo();
+	if (picker.importFromFolderRequested()) {
+		const QString dir = activeSource() ? QFileInfo(activeSource()->path).absolutePath() : QString();
+		path = editor_dialogs::getOpenFileName(
+			this, QStringLiteral("Add video"), dir,
+			QStringLiteral("Video files (*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.gif *.wmv *.flv *.ts);;"
+				       "All files (*)"));
+	}
 	if (path.isEmpty())
 		return;
-	const int id = addSource(path);
+	const EditorSource *existing = sourceByPath(path);
+	const int id = existing ? existing->id : addSource(path);
 	if (id >= 0)
 		setActiveSource(id);
 }
@@ -3025,6 +3284,63 @@ void VideoEditorWindow::onRemoveSource()
 			seeker_ = nullptr;
 			updateEmptyState(); // back to "Nothing loaded yet", correctly this time
 		}
+	}
+}
+
+void VideoEditorWindow::openRecordingLibrary()
+{
+	if (!fullEdit() || !sourcesTabs_ || !libraryList_)
+		return;
+	refreshLibrary(); // include recordings made since the editor was opened
+	sourcesTabs_->setCurrentWidget(libraryList_->parentWidget());
+	sourcesBtn_->setChecked(true);
+	showSourcesPanel(); // also raise it when the Sources toggle was already checked
+	libraryList_->setFocus(Qt::OtherFocusReason);
+}
+
+void VideoEditorWindow::showSourceFileMenu(QListWidget *list, const QPoint &pos)
+{
+	const QListWidgetItem *item = list ? list->itemAt(pos) : nullptr;
+	if (!item)
+		return;
+	QString path = item->data(UrlDragList::PathRole).toString();
+	if (list == sourceList_)
+		if (const EditorSource *source = sourceById(item->data(Qt::UserRole).toInt()))
+			path = source->origPath.isEmpty() ? source->path : source->origPath;
+	if (path.isEmpty())
+		return;
+	// Copy the clicked path before the menu's event loop; selection or a
+	// refreshed Library list must never redirect an action to another video.
+	const QFileInfo file(path);
+	const QString folder = file.absolutePath();
+	QMenu menu(sourcesPanel_);
+	menu.setObjectName(QStringLiteral("editorMediaFileMenu"));
+	const bool audio = ClipLibrary::isAudioPath(path) || isAudioFile(path);
+	const bool image = isImageFile(path) && !isVideoFile(path);
+	QAction *play = menu.addAction(audio ? QStringLiteral("Play audio") : image ? QStringLiteral("Open image")
+										 : QStringLiteral("Play video"));
+	play->setObjectName(QStringLiteral("mediaPlayVideo"));
+	play->setEnabled(file.isFile());
+	QAction *openFolder = menu.addAction(QStringLiteral("Open folder"));
+	openFolder->setObjectName(QStringLiteral("mediaOpenFolder"));
+	openFolder->setEnabled(QFileInfo(folder).isDir());
+	QAction *copyFolder = menu.addAction(QStringLiteral("Copy folder path"));
+	copyFolder->setObjectName(QStringLiteral("mediaCopyFolderPath"));
+	menu.addSeparator();
+	QAction *details = menu.addAction(QStringLiteral("Details…"));
+	details->setObjectName(QStringLiteral("mediaFileDetails"));
+	QAction *chosen = menu.exec(list->viewport()->mapToGlobal(pos));
+	if (chosen == copyFolder) {
+		QApplication::clipboard()->setText(QDir::toNativeSeparators(folder));
+	} else if (chosen == details) {
+		MediaFileDetailsDialog dialog(file.absoluteFilePath(), sourcesPanel_);
+		dialog.exec();
+	} else if (chosen == play || chosen == openFolder) {
+		const QString target = chosen == play ? file.absoluteFilePath() : folder;
+		if (!QDesktopServices::openUrl(QUrl::fromLocalFile(target)))
+			warnAndLog(sourcesPanel_, QStringLiteral("Open file"),
+				   chosen == play ? QStringLiteral("Could not open this file in its default application.")
+						  : QStringLiteral("Could not open the recording's folder."));
 	}
 }
 
@@ -3289,7 +3605,7 @@ void VideoEditorWindow::addImageClip()
 {
 	if (!fullEdit())
 		setEditMode(EditMode::Full); // an image goes on the timeline, which only Full editing has
-	const QString f = QFileDialog::getOpenFileName(
+	const QString f = editor_dialogs::getOpenFileName(
 		this, QStringLiteral("Add image"), QFileInfo(inPath_).absolutePath(),
 		imageOpenFilter());
 	if (f.isEmpty())
@@ -3646,7 +3962,7 @@ SoundInfo VideoEditorWindow::soundInfoFor(int sourceId)
 {
 	SoundInfo si;
 	EditorSource *s = sourceById(sourceId);
-	if (!s)
+	if (!s || s->missing)
 		return si;
 	const qint64 duration = s->durationMs;
 	const QString wav = audioProxyFor(sourceId);
@@ -3755,7 +4071,7 @@ int VideoEditorWindow::pickSound(const QPoint &at, QString *name)
 		return -1;
 	}
 	if (chosen == file) {
-		const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("Choose a sound"),
+		const QString f = editor_dialogs::getOpenFileName(this, QStringLiteral("Choose a sound"),
 							       QFileInfo(inPath_).absolutePath(), audioOpenFilter());
 		if (f.isEmpty())
 			return -1;
@@ -3850,7 +4166,7 @@ void VideoEditorWindow::openSoundLibrary()
 			auto *choose = new QPushButton(QStringLiteral("Choose file…"), list);
 			connect(choose, &QPushButton::clicked, &dlg, [&, i]() {
 				const QString start = lib[i].file.isEmpty() ? QString() : QFileInfo(lib[i].file).absolutePath();
-				const QString f = QFileDialog::getOpenFileName(&dlg, QStringLiteral("Sound for %1").arg(lib[i].name),
+				const QString f = editor_dialogs::getOpenFileName(&dlg, QStringLiteral("Sound for %1").arg(lib[i].name),
 									       start, audioOpenFilter());
 				if (f.isEmpty())
 					return;
@@ -3879,7 +4195,7 @@ void VideoEditorWindow::openSoundLibrary()
 	auto *add = new QPushButton(QStringLiteral("Add sound…"), &dlg);
 	add->setToolTip(QStringLiteral("A new named slot with a file of yours, e.g. Riser or Notification."));
 	connect(add, &QPushButton::clicked, &dlg, [&]() {
-		const QString f = QFileDialog::getOpenFileName(&dlg, QStringLiteral("Add a sound"), QString(), audioOpenFilter());
+		const QString f = editor_dialogs::getOpenFileName(&dlg, QStringLiteral("Add a sound"), QString(), audioOpenFilter());
 		if (f.isEmpty())
 			return;
 		bool okName = false;
@@ -4656,7 +4972,7 @@ void VideoEditorWindow::rebuildTagsSection()
 				const TlTag *t = timelineView_->model().tag(id);
 				if (!t)
 					return;
-				const QColor c = QColorDialog::getColor(t->color, this, QStringLiteral("Tag colour"));
+				const QColor c = editor_dialogs::getColor(t->color, this, QStringLiteral("Tag colour"));
 				if (!c.isValid())
 					return;
 				timelineView_->editModel([id, c](TimelineModel &mm) {
@@ -4771,7 +5087,7 @@ void VideoEditorWindow::onAddAudioClicked()
 	QAction *chosen = menu.exec(addMenuBtn_ ? addMenuBtn_->mapToGlobal(QPoint(0, addMenuBtn_->height()))
 						: QCursor::pos());
 	if (chosen == imp) {
-		const QString f = QFileDialog::getOpenFileName(
+		const QString f = editor_dialogs::getOpenFileName(
 			this, QStringLiteral("Import audio"), QFileInfo(inPath_).absolutePath(),
 			audioOpenFilter());
 		if (f.isEmpty())
@@ -4795,7 +5111,7 @@ void VideoEditorWindow::addActiveSourceToTimeline()
 	c.sourceId = s->id;
 	c.srcStartMs = 0;
 	c.srcEndMs = s->durationMs;
-	c.outStartMs = timelineView_->durationMs();
+	c.outStartMs = timelineView_->model().contentDurationMs();
 	timelineView_->addClip(TlTrack::Kind::Video, c);
 	if (!fullEdit())
 		setEditMode(EditMode::Full);
@@ -4808,6 +5124,8 @@ double VideoEditorWindow::timelineFps() const
 	// like the canvas size does.
 	if (projFps_ >= 1.0)
 		return projFps_;
+	if (!sources_.empty() && sources_.front().fps >= 1.0)
+		return sources_.front().fps;
 	if (!sources_.empty() && sources_.front().seeker && sources_.front().seeker->fps() > 1.0)
 		return sources_.front().seeker->fps();
 	return 30.0;
@@ -6218,7 +6536,9 @@ void VideoEditorWindow::doAutosave()
 	const QFileInfo fi(projectPath_);
 	const QString side = fi.absolutePath() + QLatin1Char('/') + fi.completeBaseName() +
 			     QStringLiteral("_autosave.harpiaproj");
-	saveProjectTo(side, /*quiet=*/true);
+	const QString error = saveProjectTo(side, /*quiet=*/true);
+	if (!error.isEmpty())
+		qWarning("Project autosave failed for \"%s\": %s", qUtf8Printable(side), qUtf8Printable(error));
 	refreshProjectInspector();
 }
 
@@ -6804,6 +7124,17 @@ ComponentPanel::View VideoEditorWindow::buildComponentView() const
 			sp.typeId = QStringLiteral("harpia.speed");
 			sp.values = {{QStringLiteral("factor"),
 				      gather(n, [&](int i) { return clips[i]->speed; })}};
+			qint64 originalMs = 0, outputMs = 0;
+			for (const TlClip *clip : clips) {
+				originalMs += clip->srcLenMs();
+				outputMs += clip->outDurationMs();
+			}
+			sp.footer = QStringLiteral("%1 > %2").arg(speedDurationText(originalMs), speedDurationText(outputMs));
+			if (n > 1)
+				sp.footer.prepend(QStringLiteral("Total: "));
+			sp.footerToolTip = n > 1
+				? QStringLiteral("Sum of the selected clips' individual durations at 1× speed > at their current speeds.")
+				: QStringLiteral("Duration of the kept source at 1× speed > duration at the current speed.");
 			v.pinned.append(sp);
 		}
 	}
@@ -6995,6 +7326,231 @@ void VideoEditorWindow::afterComponentEdit()
 	showTimelineFrame(timelinePlayheadMs());
 	syncComponentPanel();
 	scheduleSnapshot();
+}
+
+void VideoEditorWindow::saveComponentPreset(const QString &typeId, int ordinal)
+{
+	if (!fullEdit() || !timelineView_)
+		return;
+	const TlClip *clip = timelineView_->selectedClipPtr();
+	if (!clip)
+		return;
+	ComponentInstance saved;
+	if (ordinal < 0 && component_presets::isPinnedComponentType(typeId)) {
+		saved = component_presets::snapshotPinnedComponent(*clip, typeId);
+	} else {
+		int seen = 0;
+		for (const ComponentInstance &ci : clip->components)
+			if (ci.typeId == typeId && seen++ == ordinal) {
+				saved = ci;
+				break;
+			}
+	}
+	if (saved.typeId.isEmpty())
+		return;
+	component_presets::Store store;
+	QString error;
+	const auto presets = store.load(&error);
+	if (!error.isEmpty()) {
+		QMessageBox::warning(this, QStringLiteral("Save component preset"), error);
+		return;
+	}
+	const ComponentType *type = ComponentRegistry::instance().find(typeId);
+	bool accepted = false;
+	const QString name = QInputDialog::getText(
+		this, QStringLiteral("Save component preset"),
+		timelineView_->selectedPairs().size() > 1
+			? QStringLiteral("Preset name (uses the primary clip's settings and animation):")
+			: QStringLiteral("Preset name (includes settings and animation):"),
+		QLineEdit::Normal, type ? type->displayName : typeId, &accepted).trimmed();
+	if (!accepted || name.isEmpty())
+		return;
+	for (const auto &preset : presets)
+		if (preset.name.compare(name, Qt::CaseInsensitive) == 0 &&
+		    preset.component.value(QStringLiteral("type")).toString() == typeId) {
+			if (QMessageBox::question(this, QStringLiteral("Replace component preset"),
+				QStringLiteral("Replace the saved preset \"%1\"?").arg(preset.name)) != QMessageBox::Yes)
+				return;
+			break;
+		}
+	// A sound's numeric source id belongs to this project. Keep an immutable
+	// WAV beside the preset file, then import/remap it when another project
+	// applies the preset. Session audio remains reusable after this editor closes.
+	project_assets::SaveTransaction assets(store.path());
+	// This directory is shared by editor windows. Once published, another
+	// window may already reference an asset; failed JSON saves must leave it.
+	assets.retain();
+	if (typeId == QLatin1String(kSoundComponentId)) {
+		QJsonObject sounds;
+		for (const char *field : {"inSound", "outSound"}) {
+			const QString key = QString::fromLatin1(field);
+			const int sourceId = saved.props.value(key, 0).toInt();
+			if (sourceId > 0) {
+				const EditorSource *source = sourceById(sourceId);
+				if (!source || source->missing) {
+					error = QStringLiteral("The selected %1 is missing. Choose its audio again before saving this preset.")
+						.arg(key == QLatin1String("inSound") ? QStringLiteral("In sound") : QStringLiteral("Out sound"));
+					break;
+				}
+				const QString slot = source->librarySlot, label = source->name;
+				const QString wav = audioProxyFor(sourceId);
+				QString relative;
+				error = assets.voiceover(wav, &relative);
+				if (!error.isEmpty())
+					break;
+				sounds.insert(key, QJsonObject{
+					{QStringLiteral("path"), QDir(QFileInfo(store.path()).absolutePath()).filePath(relative)},
+					{QStringLiteral("slot"), slot}, {QStringLiteral("name"), label}});
+			}
+			saved.props.insert(key, 0);
+			saved.keys.remove(key);
+		}
+		saved.unknown.insert(QStringLiteral("presetSoundAssets"), sounds);
+	}
+	if (error.isEmpty())
+		store.save(name, saved, ComponentRegistry::instance(), &error);
+	if (!error.isEmpty()) {
+		QMessageBox::warning(this, QStringLiteral("Save component preset"), error);
+		return;
+	}
+}
+
+void VideoEditorWindow::applyComponentPreset(const QString &presetId, const QString &typeId, int ordinal)
+{
+	if (!fullEdit() || !timelineView_)
+		return;
+	QString error;
+	const auto presets = component_presets::Store().load(&error);
+	if (!error.isEmpty()) {
+		QMessageBox::warning(this, QStringLiteral("Apply component preset"), error);
+		return;
+	}
+	QJsonObject record;
+	for (const auto &preset : presets)
+		if (preset.id == presetId) {
+			record = preset.component;
+			break;
+		}
+	if (record.isEmpty())
+		return; // removed in another editor since the menu opened
+	ComponentInstance saved = componentFromJson(record, ComponentRegistry::instance());
+	if (!typeId.isEmpty() && saved.typeId != typeId)
+		return;
+	const ComponentType *type = ComponentRegistry::instance().find(saved.typeId);
+	const bool pinned = component_presets::isPinnedComponentType(saved.typeId);
+	if (!type && typeId.isEmpty()) {
+		QMessageBox::warning(this, QStringLiteral("Apply component preset"),
+			QStringLiteral("This preset requires a component that is not installed: %1").arg(saved.typeId));
+		return;
+	}
+	// Recheck the selection when executing, including locks, before importing
+	// sound assets or creating an undo entry.
+	bool applicable = false;
+	const TimelineModel &model = timelineView_->model();
+	for (const auto &pair : timelineView_->selectedPairs()) {
+		const TlTrack &track = model.tracks[pair.first];
+		const TlClip &clip = track.clips[pair.second];
+		if (track.locked)
+			continue;
+		const unsigned kind = clip.type == TlClip::Type::Text ? ClipKindText
+			: clip.type == TlClip::Type::Image ? ClipKindImage
+			: clip.type == TlClip::Type::Effect ? ClipKindEffect : ClipKindVideo;
+		if (type && (type->clipKinds & kind) == 0u)
+			return; // a preset must fit the entire editable selection
+		if (saved.typeId == QLatin1String("harpia.speed") && clip.freeDuration())
+			continue;
+		if (pinned || typeId.isEmpty()) {
+			applicable = true;
+		} else {
+			int seen = 0;
+			for (const auto &component : clip.components)
+				if (component.typeId == saved.typeId && seen++ == ordinal)
+					applicable = true;
+		}
+	}
+	if (!applicable)
+		return;
+	QStringList missingSounds;
+	if (saved.typeId == QLatin1String(kSoundComponentId)) {
+		const QJsonObject sounds = saved.unknown.take(QStringLiteral("presetSoundAssets")).toObject();
+		for (const char *field : {"inSound", "outSound"}) {
+			const QString key = QString::fromLatin1(field);
+			const QJsonObject sound = sounds.value(key).toObject();
+			const bool hadSound = saved.props.value(key, 0).toInt() > 0 || !sound.isEmpty();
+			int sourceId = -1;
+			if (!sound.isEmpty()) {
+				// SoundRules uses zero as "no sound", even in an otherwise
+				// empty caption-only project with no source zero yet.
+				nextSourceId_ = std::max(nextSourceId_, 1);
+				const QString slot = sound.value(QStringLiteral("slot")).toString();
+				if (!slot.isEmpty()) {
+					sourceId = librarySoundSource(slot);
+					const EditorSource *source = sourceById(sourceId);
+					if (!source || source->missing)
+						sourceId = -1;
+				}
+				if (sourceId <= 0) {
+					const QString path = sound.value(QStringLiteral("path")).toString();
+					if (QFileInfo(path).isFile()) {
+						const EditorSource *existing = sourceByPath(path);
+						sourceId = existing && !existing->missing && existing->id > 0
+							? existing->id : addAudioSource(path);
+						if (EditorSource *source = sourceById(sourceId))
+							source->name = sound.value(QStringLiteral("name")).toString(source->name);
+					}
+				}
+			}
+			saved.props.insert(key, std::max(sourceId, 0));
+			saved.keys.remove(key); // these hidden ids are never animatable
+			if (hadSound && sourceId <= 0)
+				missingSounds.append(key == QLatin1String("inSound") ? QStringLiteral("In sound") : QStringLiteral("Out sound"));
+		}
+	}
+	commitSnapshot();
+	timelineView_->applyToSelection([&](TlClip &clip) {
+		if (pinned) {
+			component_presets::applyPinnedComponentPreset(clip, saved);
+		} else if (typeId.isEmpty()) {
+			pasteComponentInto(clip.components, saved,
+				QUuid::createUuid().toString(QUuid::WithoutBraces));
+		} else {
+			int seen = 0;
+			for (ComponentInstance &component : clip.components)
+				if (component.typeId == saved.typeId && seen++ == ordinal) {
+					const QString identity = component.instanceId;
+					component = saved;
+					component.instanceId = identity;
+					break;
+				}
+		}
+	});
+	afterComponentEdit();
+	syncClipInspector();
+	commitSnapshot(); // every menu choice is one discrete undo step
+	if (!missingSounds.isEmpty())
+		QMessageBox::warning(this, QStringLiteral("Preset audio missing"),
+			QStringLiteral("The preset was applied, but these audio files could not be found: %1. "
+				       "Choose them again using the Sound component's buttons.").arg(missingSounds.join(QStringLiteral(", "))));
+}
+
+void VideoEditorWindow::deleteComponentPreset(const QString &presetId)
+{
+	component_presets::Store store;
+	QString error;
+	const auto presets = store.load(&error);
+	if (error.isEmpty()) {
+		for (const auto &preset : presets)
+			if (preset.id == presetId) {
+				if (QMessageBox::question(this, QStringLiteral("Delete component preset"),
+					QStringLiteral("Delete the saved preset \"%1\"? Components already applied to clips will keep their settings.")
+						.arg(preset.name)) != QMessageBox::Yes)
+					return;
+				store.remove(presetId, &error);
+				break;
+			}
+	}
+	if (!error.isEmpty())
+		QMessageBox::warning(this, QStringLiteral("Delete component preset"), error);
 }
 
 void VideoEditorWindow::syncSpotlightInspector()
@@ -7437,7 +7993,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 			  [wrapWith]() { wrapWith(QStringLiteral("<s>"), QStringLiteral("</s>")); });
 		tagButton(QStringLiteral("A"), QStringLiteral("Colour the selection: <color=#rrggbb>…</color>"),
 			  QStringLiteral("color:#ff8a3d;font-weight:bold;"), [this, wrapWith]() {
-				  const QColor c = QColorDialog::getColor(QColor(0xff, 0xd2, 0x3f), this,
+				  const QColor c = editor_dialogs::getColor(QColor(0xff, 0xd2, 0x3f), this,
 									  QStringLiteral("Text colour"),
 									  QColorDialog::ShowAlphaChannel);
 				  if (!c.isValid())
@@ -7629,9 +8185,6 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	auto *styleRow = new FlowLayout(nullptr, 10, 2); // wraps in a narrow panel
 	boldChk_ = new QCheckBox(QStringLiteral("Bold"), textBox_);
 	italicChk_ = new QCheckBox(QStringLiteral("Italic"), textBox_);
-	// Title case as a switch beside Bold and Italic: the Case dropdown below
-	// still has it, with the other cases; this is the one people reach for.
-	// The two are one setting, and stay in step.
 	titleCaseChk_ = new QCheckBox(QStringLiteral("Title Case"), textBox_);
 	titleCaseChk_->setToolTip(QStringLiteral(
 		"Draw Every Word With A Capital. A style, not a rewrite: your typed wording is kept."));
@@ -7656,13 +8209,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(titleCaseChk_, &QCheckBox::toggled, this, [this](bool on) {
 		if (syncingClip_)
 			return;
-		// On: Title Case. Off: back to As typed -- not to whichever other case
-		// was set, since a switch has two states and "off" has to mean one thing.
 		editTextStyle([on](TlClip &c) { c.text.textCase = on ? TlCaseTitle : TlCaseAsTyped; });
-		if (caseCombo_) {
-			QSignalBlocker b(caseCombo_);
-			caseCombo_->setCurrentIndex(on ? TlCaseTitle : TlCaseAsTyped);
-		}
 	});
 
 	alignCombo_ = new QComboBox(textBox_);
@@ -7672,26 +8219,6 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		if (syncingClip_)
 			return;
 		editTextStyle([i](TlClip &c) { c.text.align = i; });
-	});
-
-	// Case is a STYLE, not an edit: the box above keeps the words as typed and
-	// this changes how they are drawn. Right under Align, since both are about
-	// how the block reads rather than what it says.
-	caseCombo_ = new QComboBox(textBox_);
-	caseCombo_->addItems({QStringLiteral("As typed"), QStringLiteral("Title Case"),
-			      QStringLiteral("ALL UPPER"), QStringLiteral("all lower")});
-	caseCombo_->setToolTip(QStringLiteral(
-		"Changes how the caption is drawn, not what it says. Your typed wording "
-		"is kept, so going back to As typed restores your own capitalisation."));
-	tForm->addRow(QStringLiteral("Case"), caseCombo_);
-	connect(caseCombo_, &QComboBox::currentIndexChanged, this, [this](int i) {
-		if (syncingClip_)
-			return;
-		editTextStyle([i](TlClip &c) { c.text.textCase = i; });
-		if (titleCaseChk_) {
-			QSignalBlocker b(titleCaseChk_);
-			titleCaseChk_->setChecked(i == TlCaseTitle);
-		}
 	});
 
 	textColorBtn_ = new QPushButton(textBox_);
@@ -7717,7 +8244,8 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		pickTextColor(QStringLiteral("Outline colour"), &TlText::outlineColor);
 	});
 
-	boxChk_ = new QCheckBox(QStringLiteral("Background box"), textBox_);
+	boxChk_ = new QCheckBox(QStringLiteral("Background"), textBox_);
+	boxChk_->setObjectName(QStringLiteral("textBackgroundEnabled"));
 	tForm->addRow(QString(), boxChk_);
 	connect(boxChk_, &QCheckBox::toggled, this, [this](bool on) {
 		// Before the syncingClip_ guard: the rows follow the CHECKBOX, whether
@@ -7728,6 +8256,21 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 		editTextStyle([on](TlClip &c) { c.text.boxEnabled = on; });
 	});
 
+	boxShapeCombo_ = new QComboBox(textBox_);
+	boxShapeCombo_->setObjectName(QStringLiteral("textBackgroundShape"));
+	boxShapeCombo_->addItem(QStringLiteral("Rectangle"), TlTextBoxRectangle);
+	boxShapeCombo_->addItem(QStringLiteral("Fit text"), TlTextBoxFitText);
+	boxShapeCombo_->setToolTip(QStringLiteral(
+		"Rectangle covers the whole text block. Fit text follows each line's width "
+		"with a joined background, like social video captions."));
+	tForm->addRow(QStringLiteral("Shape"), boxShapeCombo_);
+	connect(boxShapeCombo_, &QComboBox::currentIndexChanged, this, [this](int index) {
+		if (syncingClip_ || index < 0)
+			return;
+		const int shape = boxShapeCombo_->itemData(index).toInt();
+		editTextStyle([shape](TlClip &c) { c.text.boxShape = shape; });
+	});
+
 	boxColorBtn_ = new QPushButton(textBox_);
 	tForm->addRow(QStringLiteral("Box colour"), boxColorBtn_);
 	// No alpha channel in the picker: the transparency is its own control below,
@@ -7735,16 +8278,30 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	connect(boxColorBtn_, &QPushButton::clicked, this,
 		[this]() { pickTextColor(QStringLiteral("Box colour"), &TlText::boxColor); });
 
-	boxOpacitySpin_ = new QDoubleSpinBox(textBox_);
-	boxOpacitySpin_->setRange(0.0, 1.0);
-	boxOpacitySpin_->setSingleStep(0.05);
-	boxOpacitySpin_->setDecimals(2);
-	boxOpacitySpin_->setKeyboardTracking(false);
-	tForm->addRow(QStringLiteral("Box opacity"), boxOpacitySpin_);
-	connect(boxOpacitySpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+	boxOpacityRow_ = new QWidget(textBox_);
+	auto *boxOpacityLayout = new QHBoxLayout(boxOpacityRow_);
+	boxOpacityLayout->setContentsMargins(0, 0, 0, 0);
+	boxOpacityLayout->setSpacing(6);
+	boxOpacitySlider_ = new QSlider(Qt::Horizontal, boxOpacityRow_);
+	boxOpacitySlider_->setObjectName(QStringLiteral("textBoxOpacity"));
+	boxOpacitySlider_->setAccessibleName(QStringLiteral("Box opacity"));
+	boxOpacitySlider_->setRange(0, 100);
+	boxOpacitySlider_->setPageStep(5);
+	boxOpacitySlider_->setTracking(true);
+	boxOpacitySlider_->setMinimumWidth(40);
+	boxOpacitySlider_->setToolTip(QStringLiteral("Background box opacity: 0% is transparent, 100% is solid."));
+	boxOpacityValue_ = new QLabel(QStringLiteral("0%"), boxOpacityRow_);
+	boxOpacityValue_->setObjectName(QStringLiteral("textBoxOpacityValue"));
+	boxOpacityValue_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+	boxOpacityValue_->setMinimumWidth(boxOpacityValue_->fontMetrics().horizontalAdvance(QStringLiteral("100%")));
+	boxOpacityLayout->addWidget(boxOpacitySlider_, 1);
+	boxOpacityLayout->addWidget(boxOpacityValue_);
+	tForm->addRow(QStringLiteral("Box opacity"), boxOpacityRow_);
+	connect(boxOpacitySlider_, &QSlider::valueChanged, this, [this](int value) {
+		boxOpacityValue_->setText(QStringLiteral("%1%").arg(value));
 		if (syncingClip_)
 			return;
-		editTextStyle([v](TlClip &c) { c.text.boxOpacity = v; });
+		editTextStyle([value](TlClip &c) { c.text.boxOpacity = value / 100.0; });
 	});
 
 	// Horizontal and vertical padding separately: a caption usually wants more
@@ -7943,18 +8500,14 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 	into->addWidget(clipBox_);
 }
 
-// The background box's own settings only mean something when there IS a box.
-//
-// Five rows of colour, opacity, padding and radius sat under the toggle whether
-// it was on or off, so the commonest text clip -- no box -- showed five controls
-// that did nothing, and the ones that mattered were pushed off the bottom.
+// Hide background controls and their form labels together when disabled.
 void VideoEditorWindow::syncTextBoxRows()
 {
 	if (!textForm_ || !boxChk_)
 		return;
 	const bool on = boxChk_->isChecked();
-	for (QWidget *w : {static_cast<QWidget *>(boxColorBtn_),
-			   static_cast<QWidget *>(boxOpacitySpin_),
+	for (QWidget *w : {static_cast<QWidget *>(boxShapeCombo_), static_cast<QWidget *>(boxColorBtn_),
+			   boxOpacityRow_,
 			   static_cast<QWidget *>(boxPadXSpin_), static_cast<QWidget *>(boxPadYSpin_),
 			   static_cast<QWidget *>(boxRadiusSpin_)})
 		setFormRowVisible(textForm_, w, on);
@@ -7962,7 +8515,7 @@ void VideoEditorWindow::syncTextBoxRows()
 
 // Pick one of a caption's colours, with the canvas following the picker.
 //
-// The static QColorDialog::getColor only answers on OK, so choosing a text or
+// The colour dialog only answers on OK, so choosing a text or
 // outline colour meant picking against a swatch, pressing OK, looking at the
 // result and going back in -- on a caption whose legibility is the entire point
 // of the colour. This is the live picker the Dev panel's timeline colours
@@ -8067,7 +8620,7 @@ void VideoEditorWindow::pickCaptionHighlightColor()
 	if (!inspectedClip())
 		return;
 	const QColor original = captionHighlightColor_->property("harpiaColor").value<QColor>();
-	const QColor chosen = QColorDialog::getColor(original.isValid() ? original : QColor(QStringLiteral("#ffe45e")),
+	const QColor chosen = editor_dialogs::getColor(original.isValid() ? original : QColor(QStringLiteral("#ffe45e")),
 		this, QStringLiteral("Caption highlight colour"));
 	if (!chosen.isValid())
 		return;
@@ -8170,18 +8723,24 @@ void VideoEditorWindow::refreshShortcutHints()
 		QPushButton *btn;
 		const char *id;
 		const char *base;
+		const char *mouse = nullptr;
 	};
 	const Hint hints[] = {
 		{playBtn_, "playback.playPause", "Play / pause the preview"},
-		{undoBtn_, "edit.undo", "Undo"},
-		{redoBtn_, "edit.redo", "Redo"},
+		{undoBtn_, "edit.undo", "Undo", "Mouse Back"},
+		{redoBtn_, "edit.redo", "Redo", "Mouse Forward"},
 		{snapBtn_, "timeline.snap", nullptr}, // has its own on/off tooltip
 		{fitBtn_, "timeline.fit", "Zoom the timeline out so the whole edit fits"},
 	};
 	for (const Hint &h : hints) {
 		if (!h.btn || !h.base)
 			continue;
-		const QString keys = shortcuts_->displayText(QLatin1String(h.id));
+		QString keys = shortcuts_->displayText(QLatin1String(h.id));
+		if (h.mouse) {
+			if (!keys.isEmpty())
+				keys += QStringLiteral(" / ");
+			keys += QLatin1String(h.mouse);
+		}
 		h.btn->setToolTip(keys.isEmpty() ? QLatin1String(h.base)
 						 : QStringLiteral("%1 (%2)")
 							   .arg(QLatin1String(h.base), keys));
@@ -8551,10 +9110,10 @@ void VideoEditorWindow::syncTextInspector(const TlClip &c)
 	boldChk_->setChecked(c.text.bold);
 	italicChk_->setChecked(c.text.italic);
 	alignCombo_->setCurrentIndex(std::clamp(c.text.align, 0, 2));
-	caseCombo_->setCurrentIndex(std::clamp(c.text.textCase, 0, kTlTextCaseCount - 1));
 	titleCaseChk_->setChecked(c.text.textCase == TlCaseTitle);
 	outlineWSpin_->setValue(c.text.outlineWidth);
 	boxChk_->setChecked(c.text.boxEnabled);
+	boxShapeCombo_->setCurrentIndex(c.text.boxShape == TlTextBoxFitText ? 1 : 0);
 	// setChecked only emits when the value CHANGES, so selecting a second
 	// clip with the same box setting would leave the rows as the last one
 	// left them. Called directly, it is right either way.
@@ -8562,7 +9121,7 @@ void VideoEditorWindow::syncTextInspector(const TlClip &c)
 	boxPadXSpin_->setValue(c.text.boxPadX);
 	boxPadYSpin_->setValue(c.text.boxPadY);
 	boxRadiusSpin_->setValue(c.text.boxRadius);
-	boxOpacitySpin_->setValue(c.text.boxOpacity);
+	boxOpacitySlider_->setValue(int(std::lround(std::clamp(c.text.boxOpacity, 0.0, 1.0) * 100.0)));
 	styleSwatch(textColorBtn_, c.text.color);
 	styleSwatch(outlineColorBtn_, c.text.outlineColor);
 	styleSwatch(boxColorBtn_, c.text.boxColor);
@@ -8592,8 +9151,8 @@ void VideoEditorWindow::buildRandomClipSection(QVBoxLayout *clipOuter)
 	auto *v = sec->bodyLayout();
 	v->setSpacing(5);
 	auto *intro = new QLabel(QStringLiteral("Each clip is one version of the video (Export \u2192 Variations). "
-						"They share this slot's place, length and look. Show one, then "
-						"right-click the clip \u203A Slip\u2026 to pick its moment."),
+						"They share this slot's place, length and look. Choose Video\u2026 "
+						"to change its source, or Slip\u2026 to choose its start time."),
 				 randomClipBox_);
 	intro->setWordWrap(true);
 	intro->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
@@ -8663,10 +9222,15 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 		}
 		randomClipPicks_.clear();
 		randomClipDels_.clear();
+		randomClipVideos_.clear();
+		randomClipSlips_.clear();
+		randomClipTimes_.clear();
 		for (int k = 0; k < n; ++k) {
 			auto *row = new QWidget(randomClipBox_);
-			auto *h = new QHBoxLayout(row);
-			h->setContentsMargins(0, 0, 0, 0);
+			auto *layout = new QVBoxLayout(row);
+			layout->setContentsMargins(0, 0, 0, 0);
+			layout->setSpacing(2);
+			auto *h = new QHBoxLayout;
 			h->setSpacing(4);
 			auto *pick = new QPushButton(row);
 			pick->setObjectName(QStringLiteral("randomClipOption"));
@@ -8678,16 +9242,49 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 							   "QPushButton:checked{border:2px solid #22c55e;}"));
 			connect(pick, &QPushButton::clicked, this, [this, k]() { showRandomClipOption(k); });
 			h->addWidget(pick, 1);
+			auto *video = new QPushButton(QStringLiteral("Video…"), row);
+			video->setObjectName(QStringLiteral("randomClipVideo"));
+			video->setProperty("optionIndex", k);
+			video->setToolTip(QStringLiteral("Choose this option's source and moment without changing the slot's duration."));
+			auto *sources = new QMenu(video);
+			sources->setToolTipsVisible(true);
+			connect(sources, &QMenu::aboutToShow, this,
+				[this, sources, k]() { fillRandomClipSourceMenu(sources, k); });
+			video->setMenu(sources);
+			h->addWidget(video);
 			auto *del = new QPushButton(row);
 			del->setIcon(uiIcon(Glyph::Cross, 13));
 			del->setFixedWidth(28);
 			connect(del, &QPushButton::clicked, this, [this, k]() { removeRandomClipOption(k); });
 			h->addWidget(del);
+			layout->addLayout(h);
+			auto *timeRow = new QHBoxLayout;
+			timeRow->setSpacing(4);
+			auto *time = new QLabel(row);
+			time->setObjectName(QStringLiteral("randomClipTime"));
+			time->setProperty("optionIndex", k);
+			time->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+			timeRow->addWidget(time, 1);
+			auto *slip = new QPushButton(QStringLiteral("Slip…"), row);
+			slip->setObjectName(QStringLiteral("randomClipSlip"));
+			slip->setProperty("optionIndex", k);
+			slip->setToolTip(QStringLiteral("Preview and choose this option's source start time. All options keep the same duration."));
+			connect(slip, &QPushButton::clicked, this, [this, k]() { editRandomClipOption(k); });
+			timeRow->addWidget(slip);
+			layout->addLayout(timeRow);
 			randomClipRows_->addWidget(row);
 			randomClipPicks_.append(pick);
 			randomClipDels_.append(del);
+			randomClipVideos_.append(video);
+			randomClipSlips_.append(slip);
+			randomClipTimes_.append(time);
 		}
 	}
+	const int track = timelineView_ ? timelineView_->selectedTrack() : -1;
+	const bool locked = !timelineView_ || track < 0 || track >= timelineView_->model().tracks.size() ||
+			    timelineView_->model().tracks[track].locked;
+	const bool audioLane = timelineView_ && track >= 0 && track < timelineView_->model().tracks.size() &&
+			       timelineView_->model().tracks[track].kind == TlTrack::Kind::Audio;
 	// What each row says. setText and the rest do nothing when unchanged.
 	for (int k = 0; k < n; ++k) {
 		const TlClipOption o = c.clipOptionAt(k);
@@ -8697,9 +9294,17 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 		pick->setText(full.size() > 38 ? full.left(36) + QStringLiteral("\u2026") : full);
 		pick->setChecked(k == c.clipShown);
 		pick->setToolTip(k == c.clipShown
-					 ? full + QStringLiteral("\nShowing now. Right-click the clip \u203A Slip\u2026 to pick "
-								 "its moment.")
+					 ? full + QStringLiteral("\nShowing now. Use Slip\u2026 to choose its moment.")
 					 : full + QStringLiteral("\nShow this clip in the slot."));
+		const EditorSource *source = sourceById(o.sourceId);
+		randomClipVideos_[k]->setText(audioLane ? QStringLiteral("Audio…") : QStringLiteral("Video…"));
+		randomClipVideos_[k]->setEnabled(!locked);
+		randomClipSlips_[k]->setEnabled(!locked && source && !source->missing &&
+						 source->durationMs >= c.srcLenMs() && c.srcLenMs() > 0);
+		randomClipTimes_[k]->setText(QStringLiteral("%1 s → %2 s")
+			.arg(o.srcStartMs / 1000.0, 0, 'f', 3)
+			.arg((double(o.srcStartMs) + double(c.srcLenMs())) / 1000.0, 0, 'f', 3));
+		randomClipTimes_[k]->setToolTip(QStringLiteral("Source in → source out. The timeline position and duration are shared by every option."));
 		QPushButton *del = randomClipDels_[k];
 		del->setEnabled(n > 1);
 		del->setToolTip(n > 1 ? QStringLiteral("Remove this clip")
@@ -8820,7 +9425,7 @@ void VideoEditorWindow::importRandomClipOption()
 	const int track = timelineView_->selectedTrack();
 	const auto &tracks = timelineView_->model().tracks;
 	const bool audioLane = track >= 0 && track < tracks.size() && tracks[track].kind == TlTrack::Kind::Audio;
-	const QStringList paths = QFileDialog::getOpenFileNames(
+	const QStringList paths = editor_dialogs::getOpenFileNames(
 		this, QStringLiteral("Add clips"), QString(),
 		audioLane ? audioOpenFilter()
 			  : QStringLiteral("Video files (*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.gif *.wmv *.flv *.ts);;"
@@ -8830,6 +9435,164 @@ void VideoEditorWindow::importRandomClipOption()
 		if (id >= 0)
 			addRandomClipOption(id);
 	}
+}
+
+void VideoEditorWindow::fillRandomClipSourceMenu(QMenu *menu, int k)
+{
+	menu->clear();
+	if (!fullEdit() || !timelineView_)
+		return;
+	const int track = timelineView_->selectedTrack();
+	const TimelineModel &model = timelineView_->model();
+	const TlClip *clip = timelineView_->selectedClipPtr();
+	if (!clip || !clip->isRandomClip() || k < 0 || k >= clip->clipOptions.size() ||
+	    track < 0 || track >= model.tracks.size() || model.tracks[track].locked)
+		return;
+	const bool audioLane = model.tracks[track].kind == TlTrack::Kind::Audio;
+	for (const EditorSource &source : sources_) {
+		if (source.missing || source.durationMs <= 0 || (!audioLane && source.width <= 0))
+			continue;
+		auto *action = menu->addAction(QStringLiteral("%1 (%2 s)")
+			.arg(sourceLabel(source.id)).arg(source.durationMs / 1000.0, 0, 'f', 1));
+		action->setData(source.id);
+		action->setCheckable(true);
+		action->setChecked(source.id == clip->clipOptionAt(k).sourceId);
+		QString why;
+		const bool fits = clip_variations::fits(*clip, source.durationMs, &why);
+		action->setEnabled(fits);
+		action->setToolTip(fits ? QStringLiteral("Choose its moment in Slip. The slot keeps its position and duration.") : why);
+		connect(action, &QAction::triggered, this,
+			[this, k, id = source.id]() { editRandomClipOption(k, id); });
+	}
+	if (!menu->isEmpty())
+		menu->addSeparator();
+	auto *import = menu->addAction(QStringLiteral("Import a file…"));
+	connect(import, &QAction::triggered, this, [this, k]() { importRandomClipOptionSource(k); });
+}
+
+void VideoEditorWindow::importRandomClipOptionSource(int k)
+{
+	if (!fullEdit() || !timelineView_)
+		return;
+	const int track = timelineView_->selectedTrack();
+	const TimelineModel &model = timelineView_->model();
+	const TlClip *clip = timelineView_->selectedClipPtr();
+	if (!clip || !clip->isRandomClip() || k < 0 || k >= clip->clipOptions.size() ||
+	    track < 0 || track >= model.tracks.size() || model.tracks[track].locked)
+		return;
+	const bool audioLane = model.tracks[track].kind == TlTrack::Kind::Audio;
+	const QString path = editor_dialogs::getOpenFileName(this, QStringLiteral("Choose option source"), QString(),
+		audioLane ? audioOpenFilter()
+			  : QStringLiteral("Video files (*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.gif *.wmv *.flv *.ts);;All files (*)"));
+	if (path.isEmpty())
+		return;
+	const EditorSource *existing = sourceByPath(path);
+	const int id = existing && !existing->missing ? existing->id
+		: (audioLane && isAudioFile(path) ? addAudioSource(path) : addSource(path));
+	if (id >= 0)
+		editRandomClipOption(k, id);
+}
+
+void VideoEditorWindow::editRandomClipOption(int k, int sourceId)
+{
+	if (!fullEdit() || !timelineView_)
+		return;
+	const int track = timelineView_->selectedTrack(), index = timelineView_->selectedClip();
+	const TimelineModel &model = timelineView_->model();
+	if (track < 0 || track >= model.tracks.size() || model.tracks[track].locked ||
+	    index < 0 || index >= model.tracks[track].clips.size())
+		return;
+	const TlClip original = model.tracks[track].clips[index];
+	if (original.type != TlClip::Type::Video || !original.isRandomClip() ||
+	    k < 0 || k >= original.clipOptions.size())
+		return;
+	const TlClipOption option = original.clipOptionAt(k);
+	if (sourceId < 0)
+		sourceId = option.sourceId;
+	const EditorSource *source = sourceById(sourceId);
+	const bool audioLane = model.tracks[track].kind == TlTrack::Kind::Audio;
+	if (!source || source->missing || source->durationMs <= 0 || (!audioLane && source->width <= 0))
+		return;
+	QString why;
+	if (!clip_variations::fits(original, source->durationMs, &why)) {
+		warnAndLog(this, QStringLiteral("Random clip"), why);
+		return;
+	}
+	const qint64 length = original.srcLenMs(), total = source->durationMs;
+	if (length <= 0)
+		return;
+	const qint64 start = std::clamp(option.srcStartMs, qint64(0), total - length);
+	SlipDialog::Input input;
+	input.clip = original;
+	input.clip.sourceId = sourceId;
+	input.clip.srcStartMs = start;
+	input.clip.srcEndMs = start + length;
+	input.clip.clipOptions.clear();
+	input.clip.clipShown = 0;
+	input.clip.peaks.clear();
+	input.soundOnly = audioLane;
+	input.title = QStringLiteral("Option %1 — %2").arg(k + 1).arg(source->name);
+	input.decodePath = playbackPath_.value(sourceId, source->path);
+	input.sourceSize = QSize(source->width, source->height);
+	input.sourceMs = total;
+	input.loMs = -start;
+	input.hiMs = total - length - start;
+	input.thumbs = timelineView_->sourceThumbs(sourceId);
+	input.fps = timelineFps();
+	if (audioLane)
+		input.clip.peaks = randomClipPeaks(source->path);
+	// As with timeline Slip, moving the shown footage within the same source
+	// moves its detached sound. Editing another option leaves the shown take
+	// and its partners alone, just like switching Random clip options does.
+	QVector<QPair<int, int>> partners;
+	if (k == original.clipShown && sourceId == original.sourceId && start == original.srcStartMs &&
+	    original.soundRule == 0 && original.tts.isEmpty()) {
+		partners = timelineView_->slipPartners(track, index);
+		for (const auto &pair : partners) {
+			const TlClip &partner = model.tracks[pair.first].clips[pair.second];
+			input.partners.append(partner);
+			input.loMs = std::max(input.loMs, -std::max<qint64>(0, partner.srcStartMs));
+			input.hiMs = std::min(input.hiMs, std::max<qint64>(0, total - partner.srcEndMs));
+		}
+		// All partners use this same source. Its metadata gives the bounds
+		// even before async thumbnails have published a timeline duration.
+	}
+	QMap<int, QString> paths;
+	for (const EditorSource &item : sources_)
+		paths.insert(item.id, item.path);
+	input.mixAudio = [paths](const TimelineModel &moment) {
+		return TimelineAudio::mixToBuffer(moment, [&paths](int id) { return paths.value(id); });
+	};
+	if (playing_)
+		stopPlayback();
+	SlipDialog dialog(input, this);
+	if (dialog.exec() != QDialog::Accepted)
+		return;
+	const qint64 chosenStart = start + dialog.deltaMs();
+	if (sourceId == option.sourceId && chosenStart == option.srcStartMs)
+		return;
+	const TimelineModel &current = timelineView_->model();
+	if (track >= current.tracks.size() || current.tracks[track].locked ||
+	    index >= current.tracks[track].clips.size() || !(current.tracks[track].clips[index] == original))
+		return;
+	commitSnapshot();
+	QVector<QPair<int, int>> edits = partners;
+	const QPair<int, int> target(track, index);
+	edits.prepend(target);
+	timelineView_->editClipsAt(edits, [&](const QPair<int, int> &pair, TlClip &clip) {
+		if (pair == target) {
+			clip_variations::setOption(clip, k, sourceId, chosenStart, total);
+			if (audioLane && k == clip.clipShown)
+				clip.peaks = input.clip.peaks;
+		} else {
+			clip.srcStartMs += dialog.deltaMs();
+			clip.srcEndMs += dialog.deltaMs();
+		}
+	});
+	syncPreviewTransformTarget();
+	showTimelineFrame(timelinePlayheadMs());
+	syncClipInspector();
+	commitSnapshot();
 }
 
 int VideoEditorWindow::captionLaneForBatch() const
@@ -9181,6 +9944,13 @@ void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
 	silence->setObjectName(QStringLiteral("trimSilenceAction"));
 	silence->setToolTip(QStringLiteral("Review long pauses, preview the trimmed result, then ripple-cut every track together as one undo action."));
 	connect(silence, &QAction::triggered, this, &VideoEditorWindow::openSilenceTrim);
+	QAction *beats = fullOnly(tools->addAction(QStringLiteral("Detect beats…")));
+	beats->setObjectName(QStringLiteral("detectBeatsAction"));
+	beats->setToolTip(QStringLiteral("Find musical beats in the selected audio or video clip, then add snapping markers."));
+	connect(beats, &QAction::triggered, this, [this]() {
+		openBeatDetection(timelineView_ ? timelineView_->selectedTrack() : -1,
+				  timelineView_ ? timelineView_->selectedClip() : -1);
+	});
 	tools->addSeparator();
 	connect(keyed(tools->addAction(QStringLiteral("Keyboard shortcuts…")), "view.shortcuts"), &QAction::triggered,
 		this, &VideoEditorWindow::openShortcutPanel);
@@ -9229,6 +9999,65 @@ void VideoEditorWindow::refreshMenuLabels()
 		const QString base = a->text().section(QLatin1Char('\t'), 0, 0);
 		a->setText(withShortcut(base, shortcuts_->displayText(pr.second)));
 	}
+}
+
+void VideoEditorWindow::openBeatDetection(int track, int clip)
+{
+	if (!fullEdit() || !timelineView_ || track < 0 || track >= timelineView_->model().tracks.size() ||
+	    clip < 0 || clip >= timelineView_->model().tracks[track].clips.size()) {
+		QMessageBox::information(this, QStringLiteral("Detect beats"),
+			QStringLiteral("Select a music or video clip on the Full Editing timeline first."));
+		return;
+	}
+	const TlClip target = timelineView_->model().tracks[track].clips[clip];
+	if (target.type != TlClip::Type::Video || target.sourceId <= 0 || target.srcLenMs() <= 0) {
+		QMessageBox::information(this, QStringLiteral("Detect beats"),
+			QStringLiteral("Choose an audio or video clip with a soundtrack to find its beats."));
+		return;
+	}
+	const EditorSource *source = sourceById(target.sourceId);
+	const QString path = source ? source->path : QString();
+	stopPlayback();
+	commitSnapshot();
+	const TimelineModel original = timelineView_->model();
+	BeatDetectionDialog dialog(path, target, this);
+	if (dialog.exec() != QDialog::Accepted)
+		return;
+	// Analysis uses a snapshot. Timers and queued callbacks still run while a
+	// modal window is open, so do not apply stale source positions to a new edit.
+	if (timelineView_->model() != original) {
+		warnAndLog(this, QStringLiteral("Detect beats"),
+			QStringLiteral("The timeline changed during analysis. Detect beats again to align the markers with the current clip."));
+		return;
+	}
+	TimelineModel next = original;
+	QMap<qint64, bool> positions;
+	for (qint64 at : original.markers)
+		positions.insert(at, true);
+	int added = 0;
+	int number = 0;
+	for (qint64 at : dialog.selectedBeatTimes()) {
+		++number;
+		if (at < 0 || at < target.outStartMs || at >= target.outEndMs())
+			continue;
+		// Rerunning detection, or a nearby hand-placed section marker, should
+		// not produce doubled snap targets or overwrite a marker's name.
+		const auto after = positions.lowerBound(at);
+		if ((after != positions.end() && after.key() - at <= 20) ||
+		    (after != positions.begin() && at - std::prev(after).key() <= 20))
+			continue;
+		positions.insert(at, true);
+		next.markers.append(at);
+		next.markerLabels.insert(at, QStringLiteral("Beat %1").arg(number));
+		++added;
+	}
+	if (added > 0) {
+		std::sort(next.markers.begin(), next.markers.end());
+		timelineView_->setModelAndCommit(next);
+	}
+	if (infoLabel_)
+		infoLabel_->setText(added > 0 ? QStringLiteral("Added %1 beat markers. Undo removes them together.").arg(added)
+					     : QStringLiteral("These beats already have nearby markers."));
 }
 
 void VideoEditorWindow::openSilenceTrim()
@@ -10330,6 +11159,7 @@ void VideoEditorWindow::showEvent(QShowEvent *e)
 	// window the user has resized back to maximised.
 	if (!shownOnce_) {
 		shownOnce_ = true;
+		window_screen::restore(*this, QStringLiteral("editor"));
 		QTimer::singleShot(0, this, [this]() {
 			if (!isMaximized() && !isFullScreen())
 				showMaximized();
@@ -10906,8 +11736,13 @@ bool VideoEditorWindow::hasUnsavedEdits() const
 		return true;
 	if (voTrack_ && !voTrack_->isEmpty())
 		return true; // recorded narration would be lost
-	if (timelineView_ && !timelineView_->model().isEmpty())
-		return true; // Full-editing timeline in progress
+	if (timelineView_) {
+		const TimelineModel &model = timelineView_->model();
+		if (!model.isEmpty() || !model.tags.isEmpty() || !model.soundRules.isEmpty() ||
+		    !model.markers.isEmpty() || model.hasVideoEnd() ||
+		    (fullEdit() && !model.tracks.isEmpty()))
+			return true; // track layouts and timeline metadata are edits too
+	}
 	if (projCanvas_.isValid() || projFps_ >= 1.0)
 		return true; // a pinned output format is a decision worth keeping
 	return false;
@@ -11842,7 +12677,7 @@ void VideoEditorWindow::sendToFullEditing()
 
 	// Append, never overwrite: sending twice piles clips up, which is visible
 	// and undoable, whereas sending ON TOP of Full-editing work is neither.
-	const qint64 at = timelineView_->durationMs();
+	const qint64 at = timelineView_->model().contentDurationMs();
 	QVector<TlClip> clips;
 	if (multiCut()) {
 		clips = clipsFromSegments(tracks_->segments(), at);
@@ -11895,6 +12730,11 @@ void VideoEditorWindow::setEditMode(EditMode m)
 	cutModeBtn_->setChecked(m == EditMode::MultiCut);
 	fullModeBtn_->setChecked(m == EditMode::Full);
 	stack_->setCurrentIndex(int(m));
+	if (multiCutSourceRow_)
+		multiCutSourceRow_->setVisible(m == EditMode::MultiCut);
+	if (m == EditMode::MultiCut && multiCutSourceCombo_ && multiCutSourceCombo_->currentIndex() < 0 &&
+	    multiCutSourceCombo_->count() > 0)
+		setActiveSource(multiCutSourceCombo_->itemData(0).toInt());
 	// The layout is the same in every mode, but in Vertical the editing area
 	// fits the mode just entered.
 	adaptEditingArea();
@@ -11981,6 +12821,8 @@ void VideoEditorWindow::setEditMode(EditMode m)
 	}
 	if (addMenuBtn_)
 		addMenuBtn_->setVisible(full); // the Add menu: text, subtitles, audio, image, effect clip
+	if (addLibraryAct_)
+		addLibraryAct_->setVisible(full);
 	for (QAction *a : fullOnlyActs_)
 		a->setEnabled(full); // greyed, not hidden: the menus keep their shape
 	const bool canShuffle = full || m == EditMode::MultiCut;
@@ -12192,6 +13034,9 @@ void VideoEditorWindow::onSegmentSelected(int index)
 
 VideoEditorWindow::~VideoEditorWindow()
 {
+	delete mouseHistoryFilter_;
+	if (isVisible())
+		window_screen::save(*this, QStringLiteral("editor"));
 	--openCount_;
 	stopPlayback();
 	if (voRecorder_ && voRecorder_->isRecording())
@@ -12250,7 +13095,7 @@ QString VideoEditorWindow::voiceoverTempDir()
 	if (voTempDir_.isEmpty()) {
 		const QString base =
 			QDir::tempPath() + QStringLiteral("/harpia_voiceover_") +
-			QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss"));
+			QUuid::createUuid().toString(QUuid::WithoutBraces);
 		QDir().mkpath(base);
 		voTempDir_ = base;
 	}
@@ -12813,7 +13658,7 @@ void VideoEditorWindow::onImportAudioClicked()
 {
 	if (!valid_ || voRecording_)
 		return;
-	const QString in = QFileDialog::getOpenFileName(
+	const QString in = editor_dialogs::getOpenFileName(
 		this, QStringLiteral("Import audio"), QString(),
 		audioOpenFilter());
 	if (in.isEmpty())
@@ -12989,7 +13834,7 @@ void VideoEditorWindow::onSaveProjectAs()
 					      QStringLiteral(".harpiaproj")
 				    : uniqueProjectPath(dir, suggestedProjectStem(inPath_));
 	}
-	QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Save project as"), suggested,
+	QString path = editor_dialogs::getSaveFileName(this, QStringLiteral("Save project as"), suggested,
 						    QStringLiteral("Harpia project (*.harpiaproj)"));
 	if (path.isEmpty())
 		return;
@@ -13007,16 +13852,13 @@ void VideoEditorWindow::onSaveProjectAs()
 QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 {
 	const EditorSnapshot s = snapshot();
-	const QString projDir = QFileInfo(path).absolutePath();
-	const QString assetsRel = QFileInfo(path).completeBaseName() + QStringLiteral("_assets");
-	const QString assetsDir = projDir + QLatin1Char('/') + assetsRel;
+	project_assets::SaveTransaction assets(path);
 
 	QJsonObject root;
 	root[QStringLiteral("harpiaProject")] = 2; // v2: multiple sources
 	// Project metadata (shown in the Inspector's Project section).
-	if (!projectCreated_.isValid())
-		projectCreated_ = QDateTime::currentDateTime();
-	root[QStringLiteral("created")] = projectCreated_.toString(Qt::ISODate);
+	const QDateTime created = projectCreated_.isValid() ? projectCreated_ : QDateTime::currentDateTime();
+	root[QStringLiteral("created")] = created.toString(Qt::ISODate);
 	root[QStringLiteral("saved")] = QDateTime::currentDateTime().toString(Qt::ISODate);
 	if (!projectAuthor_.isEmpty())
 		root[QStringLiteral("author")] = projectAuthor_;
@@ -13031,20 +13873,45 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 		root[QStringLiteral("fps")] = projFps_;
 	// All sources (index by stable id; segments reference these ids).
 	QJsonArray srcArr;
+	QHash<int, QString> savedOwnedOriginals;
+	const QString currentAssets = projectPath_.isEmpty() ? QString()
+		: QDir(QFileInfo(projectPath_).absolutePath()).filePath(
+			QFileInfo(projectPath_).completeBaseName() + QStringLiteral("_assets"));
 	for (const EditorSource &es : sources_) {
 		QJsonObject so;
 		so[QStringLiteral("id")] = es.id;
 		// The original for an audio source, whose `path` is a session decode in
 		// a temp folder: saving that meant saving a file that would not exist
 		// the next time the project was opened.
-		so[QStringLiteral("path")] = QDir::toNativeSeparators(
-			es.origPath.isEmpty() ? es.path : es.origPath);
+		QString original = es.origPath.isEmpty() ? es.path : es.origPath;
+		// Full-editing microphone takes are media-pool sources, rather than
+		// VoiceoverTrack clips. Their originals still live in the session dir
+		// deleted on close, so preserve them alongside the other narration.
+		// Ordinary imported audio keeps its external original; its session WAV
+		// is only a decode cache and does not need a project-owned copy.
+		// A reopened project's own assets remain owned too: Save As/autosave
+		// must carry them to the new assets folder, with a relative reference.
+		// These app-owned originals are WAV narration. A user-imported image
+		// or video in the same directory must keep its own media classification.
+		const bool ownedWav = QFileInfo(original).suffix().compare(QStringLiteral("wav"), Qt::CaseInsensitive) == 0 &&
+			(project_assets::isWithinDirectory(original, voTempDir_) ||
+			 project_assets::isWithinDirectory(original, currentAssets));
+		if (ownedWav) {
+			QString relativePath;
+			if (const QString error = assets.voiceover(original, &relativePath); !error.isEmpty())
+				return error;
+			savedOwnedOriginals.insert(es.id, QDir(QFileInfo(path).absolutePath()).filePath(relativePath));
+			original = relativePath;
+		}
+		so[QStringLiteral("path")] = QDir::toNativeSeparators(original);
 		so[QStringLiteral("name")] = es.name;
 		if (!es.librarySlot.isEmpty())
 			so[QStringLiteral("librarySlot")] = es.librarySlot;
 		so[QStringLiteral("durationMs")] = double(es.durationMs);
 		so[QStringLiteral("width")] = es.width;
 		so[QStringLiteral("height")] = es.height;
+		if (std::isfinite(es.fps) && es.fps > 0.0)
+			so[QStringLiteral("fps")] = es.fps;
 		srcArr.append(so);
 	}
 	root[QStringLiteral("sources")] = srcArr;
@@ -13074,18 +13941,13 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 
 	// Copy each voiceover WAV into the project's assets folder so it's portable.
 	QJsonArray voArr;
-	if (!s.voiceClips.isEmpty())
-		QDir().mkpath(assetsDir);
-	bool copyOk = true;
 	for (int i = 0; i < s.voiceClips.size(); ++i) {
 		const VoiceoverClip &v = s.voiceClips[i];
-		const QString dstName = QStringLiteral("vo_%1.wav").arg(i, 3, 10, QLatin1Char('0'));
-		const QString dst = assetsDir + QLatin1Char('/') + dstName;
-		QFile::remove(dst);
-		if (!QFile::copy(v.path, dst))
-			copyOk = false;
+		QString relativePath;
+		if (const QString error = assets.voiceover(v.path, &relativePath); !error.isEmpty())
+			return error;
 		QJsonObject o;
-		o[QStringLiteral("file")] = assetsRel + QLatin1Char('/') + dstName;
+		o[QStringLiteral("file")] = relativePath;
 		o[QStringLiteral("outStart")] = double(v.outStartMs);
 		o[QStringLiteral("duration")] = double(v.durationMs);
 		o[QStringLiteral("srcStart")] = double(v.srcStartMs);
@@ -13127,11 +13989,18 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 	// is written with the clip that carries it. The reader still understands the
 	// old key and migrates it -- see applyProjectJson.
 
-	QFile f(path);
+	QSaveFile f(path);
 	if (!f.open(QIODevice::WriteOnly))
 		return QStringLiteral("Could not write the project file.");
-	f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-	f.close();
+	const QByteArray json = QJsonDocument(root).toJson(QJsonDocument::Indented);
+	if (f.write(json) != json.size()) {
+		f.cancelWriting();
+		return QStringLiteral("Could not write the complete project file.");
+	}
+	if (!f.commit())
+		return QStringLiteral("Could not finalize the project file.");
+	assets.retain();
+	projectCreated_ = created;
 
 	if (quiet) { // autosave sidecar — don't adopt it as the project file
 		// Save when closing also uses quiet mode, but writes the actual
@@ -13143,9 +14012,13 @@ QString VideoEditorWindow::saveProjectTo(const QString &path, bool quiet)
 		return QString();
 	}
 	projectPath_ = path;
+	// Save As changes which assets directory this editor owns. Keep originals
+	// of the copied narration on that new project too; otherwise another Save
+	// would serialize an absolute reference back into the previous project.
+	for (EditorSource &source : sources_)
+		if (const auto saved = savedOwnedOriginals.constFind(source.id); saved != savedOwnedOriginals.cend())
+			source.origPath = saved.value();
 	rememberRecentProject(path);
-	if (!copyOk)
-		return QStringLiteral("Project saved, but some voiceover audio could not be copied.");
 	QMessageBox::information(this, QStringLiteral("Save project"), QStringLiteral("Project saved."));
 	return QString();
 }
@@ -13165,7 +14038,7 @@ void VideoEditorWindow::onOpenProject()
 	const QString startIn = QDir(defaultProjectsFolder()).exists()
 					? defaultProjectsFolder()
 					: QFileInfo(inPath_).absolutePath();
-	const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Open project"),
+	const QString path = editor_dialogs::getOpenFileName(this, QStringLiteral("Open project"),
 							  startIn,
 							  QStringLiteral("Harpia project (*.harpiaproj)"));
 	if (path.isEmpty())
@@ -13237,6 +14110,104 @@ QHash<QString, QVector<float>> VideoEditorWindow::decodePeaks(const QStringList 
 	return out;
 }
 
+void VideoEditorWindow::clearProjectMedia()
+{
+	if (previewTimer_)
+		previewTimer_->stop();
+	pendingMs_ = shownMs_ = -1;
+	pendingSource_ = shownSource_ = -1;
+	shownExact_ = true;
+	setHoverInspect(-1);
+	if (histTimer_)
+		histTimer_->stop();
+	history_.clear();
+	histIndex_ = -1;
+	histJustPushed_ = false;
+	clipboard_.clear();
+	trackClipboard_ = TlTrack();
+	haveTrackClipboard_ = false;
+	trackCopiedFrom_ = -1;
+	copySeq_ = trackCopySeq_ = 0;
+	if (audioPremixTimer_)
+		audioPremixTimer_->stop();
+	audioMixCancel_.store(true);
+	audioMixValid_ = false;
+	audioMixKeyBuilt_.clear();
+	startAudioWhenReady_ = false;
+	if (audioPreview_)
+		audioPreview_->clear();
+	if (soundPreview_)
+		soundPreview_->stop();
+	if (previewDecoder_)
+		previewDecoder_->clear();
+	if (proxyBuilder_)
+		proxyBuilder_->cancelAll();
+	// Source IDs intentionally remain monotonic: queued thumbnail/proxy
+	// completions from the old document can never name a new source.
+	for (const EditorSource &source : sources_) {
+		if (source.thumbs) {
+			disconnect(source.thumbs, nullptr, this, nullptr);
+			source.thumbs->deleteLater();
+		}
+		tracks_->setSourceThumbs(source.id, {}, 0);
+		timelineView_->setSourceThumbs(source.id, {}, 0);
+	}
+	seeker_ = nullptr;
+	activeSourceId_ = -1;
+	sources_.clear();
+	inPath_.clear();
+	stillImages_.clear();
+	stillSizes_.clear();
+	stillPreview_.clear();
+	stillPreviewFor_ = QSize();
+	audioProxy_.clear();
+	soundPeaks_.clear();
+	randomClipPeaks_.clear();
+	playSeekers_.clear();
+	playbackPath_.clear();
+	pendingPlaybackProxy_.clear();
+	proxyProgress_.clear();
+	proxyPending_.clear();
+	proxied_.clear();
+	updateProxyStatus();
+	invalidatePreviewCache();
+	lastPreviewRaw_ = QImage();
+	canvas_->setFrame(QImage());
+	tracks_->setSegments({});
+	tracks_->setDuration(0);
+	tracks_->setThumbs({});
+	timeline_->setDuration(0);
+	timeline_->setThumbs({});
+	timelineView_->setModel(TimelineModel());
+	timelineView_->setPlayhead(0);
+	timelineSeeded_ = false;
+	voTrack_->setClips({});
+	refreshSourceList();
+}
+
+int VideoEditorWindow::addMissingProjectSource(const QJsonObject &source, const QString &path)
+{
+	EditorSource missing;
+	missing.id = nextSourceId_++;
+	missing.path = path;
+	missing.name = source.value(QStringLiteral("name")).toString(QFileInfo(path).fileName());
+	if (missing.name.isEmpty())
+		missing.name = QStringLiteral("Missing source %1").arg(source.value(QStringLiteral("id")).toInt());
+	missing.librarySlot = source.value(QStringLiteral("librarySlot")).toString();
+	missing.durationMs = std::max<qint64>(0, qint64(source.value(QStringLiteral("durationMs")).toDouble()));
+	missing.width = std::max(0, source.value(QStringLiteral("width")).toInt());
+	missing.height = std::max(0, source.value(QStringLiteral("height")).toInt());
+	missing.fps = source.value(QStringLiteral("fps")).toDouble();
+	missing.missing = true;
+	const int id = missing.id;
+	if (inPath_.isEmpty())
+		inPath_ = path;
+	if (!loadFailures_.contains(missing.name))
+		loadFailures_.append(missing.name);
+	sources_.push_back(std::move(missing));
+	return id;
+}
+
 void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString &path, bool quiet,
 					 bool showSuccess)
 {
@@ -13257,13 +14228,16 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	loadFailures_.clear();
 
 	const int ver = root.value(QStringLiteral("harpiaProject")).toInt(1);
+	const bool replaceMedia = ver >= 2;
+	if (replaceMedia)
+		clearProjectMedia();
 
 	// v2 projects carry their own list of sources — open (or relink) each and
 	// map its saved id onto the editor's live source id. v1 projects (single
 	// source) fall back to the primary source and the "different file" hint.
 	QHash<int, int> srcMap; // project source id -> editor source id
 	int defaultSrcId = sources_.empty() ? 0 : sources_.front().id;
-	if (ver >= 2 && root.value(QStringLiteral("sources")).isArray()) {
+	if (replaceMedia) {
 		// Which sources anything actually USES. A project can list a source no
 		// clip refers to -- delete the last clip that used a file and the entry
 		// stays -- and stopping the whole load to hunt for a file nothing needs
@@ -13276,8 +14250,10 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 				const QJsonObject co = cv.toObject();
 				const QString cty = co.value(QStringLiteral("type")).toString();
 				// A caption carries a source id it never reads.
-				if (cty != QLatin1String("text"))
+				if (cty != QLatin1String("text") && cty != QLatin1String("effect"))
 					used.insert(co.value(QStringLiteral("source")).toInt());
+				for (const QJsonValue option : co.value(QStringLiteral("clipOptions")).toArray())
+					used.insert(option.toObject().value(QStringLiteral("source")).toInt());
 			}
 		for (const QJsonValue sv : root.value(QStringLiteral("segments")).toArray())
 			used.insert(sv.toObject().value(QStringLiteral("source")).toInt());
@@ -13296,6 +14272,11 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 			const QJsonObject so = jv.toObject();
 			const int pid = so.value(QStringLiteral("id")).toInt();
 			QString spath = so.value(QStringLiteral("path")).toString();
+			const bool foreignAbsolute = (spath.size() >= 3 && spath[0].isLetter() &&
+				spath[1] == QLatin1Char(':') && (spath[2] == QLatin1Char('/') || spath[2] == QLatin1Char('\\'))) ||
+				spath.startsWith(QStringLiteral("\\\\"));
+			if (!spath.isEmpty() && !foreignAbsolute && QDir::isRelativePath(spath))
+				spath = QDir(QFileInfo(path).absolutePath()).absoluteFilePath(spath);
 			const QString sname = so.value(QStringLiteral("name")).toString();
 			// A library slot plays whatever file the slot has NOW, on this
 			// machine: that is how swapping a slot reaches old projects.
@@ -13303,6 +14284,10 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 				const int sid = librarySoundSource(slot);
 				if (sid >= 0) {
 					srcMap.insert(pid, sid);
+					if (first) {
+						defaultSrcId = sid;
+						first = false;
+					}
 					continue;
 				}
 			}
@@ -13315,7 +14300,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 				// left missing rather than stopping an automated caller.
 				if (!quiet && !QFileInfo::exists(spath)) {
 					loading.hide();
-					const QString picked = QFileDialog::getOpenFileName(
+					const QString picked = editor_dialogs::getOpenFileName(
 						this,
 						QStringLiteral("Locate \"%1\"")
 							.arg(sname.isEmpty() ? QFileInfo(spath).fileName()
@@ -13358,7 +14343,21 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 				case SourceKind::Video: eid = addSource(spath); break;
 				}
 			}
+			if (eid < 0 && used.contains(pid))
+				eid = addMissingProjectSource(so, spath);
 			if (eid >= 0) {
+				// Embedded media filenames need not be their human names. The
+				// first declaration of a decoded path owns its label; a later
+				// alias of the same file must not rename that shared source.
+				if (!known)
+					if (EditorSource *loaded = sourceById(eid)) {
+						if (!sname.isEmpty())
+							loaded->name = sname;
+						// An unconfigured library slot can still open its saved
+						// fallback file. Keep the binding for when that slot is
+						// configured later or the project returns to its machine.
+						loaded->librarySlot = so.value(QStringLiteral("librarySlot")).toString();
+					}
 				srcMap.insert(pid, eid);
 				if (first) {
 					defaultSrcId = eid;
@@ -13366,6 +14365,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 				}
 			}
 		}
+		refreshSourceList();
 	} else {
 		const QString projSourceName = root.value(QStringLiteral("sourceName")).toString();
 		if (!quiet && !projSourceName.isEmpty() &&
@@ -13382,6 +14382,16 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 		}
 	}
 
+	const auto mapSource = [&](int projectId) {
+		if (!replaceMedia)
+			return defaultSrcId;
+		if (srcMap.contains(projectId))
+			return srcMap.value(projectId);
+		// A dangling reference still must never become an unrelated video.
+		const int id = addMissingProjectSource(QJsonObject{{QStringLiteral("id"), projectId}}, QString());
+		srcMap.insert(projectId, id);
+		return id;
+	};
 	loadingTotal_ = 0;
 	loading.stage(QStringLiteral("Preparing timeline…"), path);
 	EditorSnapshot s;
@@ -13406,7 +14416,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 		// Remap the project's source id onto the live editor source (v1 has no
 		// per-segment source → the primary).
 		const int pid = o.value(QStringLiteral("source")).toInt(defaultSrcId);
-		c.sourceId = srcMap.isEmpty() ? defaultSrcId : srcMap.value(pid, defaultSrcId);
+		c.sourceId = mapSource(pid);
 		s.segments.push_back(c);
 	}
 	const QString projDir = QFileInfo(path).absolutePath();
@@ -13431,13 +14441,14 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	// onto whatever those files became in this session's media pool.
 	for (TlTrack &t : s.timeline.tracks)
 		for (TlClip &c : t.clips) {
-			c.sourceId = srcMap.isEmpty() ? defaultSrcId : srcMap.value(c.sourceId, defaultSrcId);
+			c.sourceId = (c.type == TlClip::Type::Video || c.type == TlClip::Type::Image)
+				? mapSource(c.sourceId) : srcMap.value(c.sourceId, defaultSrcId);
 			// A Random clip's other choices name files the same way.
 			for (TlClipOption &o : c.clipOptions)
-				o.sourceId = srcMap.isEmpty() ? defaultSrcId : srcMap.value(o.sourceId, defaultSrcId);
+				o.sourceId = mapSource(o.sourceId);
 		}
 	for (TlSoundRule &r : s.timeline.soundRules)
-		r.sourceId = srcMap.isEmpty() ? r.sourceId : srcMap.value(r.sourceId, 0);
+		r.sourceId = replaceMedia ? mapSource(r.sourceId) : r.sourceId;
 
 	// Waveforms are a derived cache, so they are not stored in the project — but
 	// they DO have to be rebuilt, or an audio clip reopens as a blank bar. Every
@@ -13581,9 +14592,10 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	int activeSrc = defaultSrcId;
 	if (root.contains(QStringLiteral("activeSource"))) {
 		const int pid = root.value(QStringLiteral("activeSource")).toInt();
-		if (srcMap.contains(pid))
-			activeSrc = srcMap.value(pid);
+		if (replaceMedia)
+			activeSrc = mapSource(pid);
 	}
+	refreshSourceList();
 	loading.stage(QStringLiteral("Restoring timeline…"), path);
 	setActiveSource(activeSrc);
 	restoreSnapshot(s);
@@ -13622,7 +14634,8 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 
 	// Open in the mode the project was saved in; older projects say nothing,
 	// and are opened in the mode their contents suggest.
-	if (!s.timeline.isEmpty())
+	if (!s.timeline.isEmpty() || root.contains(QStringLiteral("tracks")) ||
+	    root.value(QStringLiteral("editMode")).toString() == QLatin1String("full"))
 		timelineSeeded_ = true; // don't seed over the loaded timeline
 	const QString savedMode = root.value(QStringLiteral("editMode")).toString();
 	EditMode want = mode();
@@ -13638,12 +14651,12 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 		want = EditMode::MultiCut;
 	if (want != mode())
 		setEditMode(want);
-	captureSnapshot(); // make the load an undo step
-	updateUndoRedoButtons();
 
 	// A loaded project IS a working editor, whatever state this window was in
 	// before -- including the one where its launch file would not open.
 	valid_ = true;
+	captureSnapshot(); // the loaded document starts its own undo history
+	updateUndoRedoButtons();
 	rememberRecentProject(path);
 	// And the project may have brought in no SOURCES at all: a caption, a
 	// still or an effect needs none. updateEmptyState was only ever reached
@@ -13660,6 +14673,8 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	updateInspector();
 	if (fullEdit())
 		showTimelineFrame(timelinePlayheadMs());
+	else
+		showPlayheadFrame();
 	loading.hide();
 	if (!quiet) {
 		// One message, whatever went wrong, and only once the editor is whole
@@ -13675,7 +14690,8 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 				this, QStringLiteral("Open project"),
 				QStringLiteral("The project opened, but %1 of its files could not "
 					       "be read:\n\n%2\n\nIts clips are still on the "
-					       "timeline. Use Add video to relink them.")
+					       "timeline. Restore the files at their original locations, or reopen "
+					       "the project and locate them when prompted.")
 					.arg(loadFailures_.size())
 					.arg(loadFailures_.join(QStringLiteral("\n"))));
 		}
@@ -14274,6 +15290,18 @@ void VideoEditorWindow::stopPlayback()
 	playSeekers_.clear();
 }
 
+void VideoEditorWindow::stopAtTimelineEnd(qint64 endMs)
+{
+	stopPlayback();
+	timelineView_->setPlayhead(endMs);
+	cursorTimeLabel_->setText(previewTimeText(endMs));
+	syncPreviewTransformTarget(false);
+	syncComponentPanel();
+	// The marker names the first instant outside the output. Hold the final
+	// in-range frame while leaving the playhead exactly on that boundary.
+	showTimelineFrame(std::max<qint64>(0, endMs - 1));
+}
+
 void VideoEditorWindow::onPlayTick()
 {
 	if (!playing_ || !valid_)
@@ -14300,7 +15328,12 @@ void VideoEditorWindow::onPlayTick()
 				playClock_.restart();
 			}
 		}
-		if (outPos >= total) { // loop
+		if (outPos >= total) {
+			if (timelineView_->model().hasVideoEnd()) {
+				stopAtTimelineEnd(total);
+				return;
+			}
+			// Automatic duration keeps the existing whole-timeline loop.
 			playAnchorMs_ = 0;
 			playClock_.restart();
 			outPos = 0;
@@ -14724,24 +15757,22 @@ QString VideoEditorWindow::shadersDirPath()
 		shadersDir_ = base + QStringLiteral("/harpia/shaders");
 	}
 	QDir().mkpath(shadersDir_);
-	// Seed the bundled shaders when missing so there are always examples to start
-	// from (per-file, so user edits are never overwritten and new bundled shaders
-	// arrive on the next launch after an update).
+	// Seed missing examples and update only recognized stock CRT versions.
+	// User edits remain theirs; missing resources never replace existing files.
+	QMap<QString, QByteArray> bundled;
 	for (const QString &name :
 	     {QStringLiteral("adjust"), QStringLiteral("crt"), QStringLiteral("grayscale"),
 	      QStringLiteral("vignette"), QStringLiteral("sharpen"), QStringLiteral("grain"),
 	      QStringLiteral("pixelate"), QStringLiteral("backdrop"), QStringLiteral("solid"),
 	      QStringLiteral("gradient"), QStringLiteral("huecycle"), QStringLiteral("coloroverlay")}) {
-		const QString dst = shadersDir_ + QLatin1Char('/') + name + QStringLiteral(".frag");
-		if (QFile::exists(dst))
-			continue;
 		QFile res(QStringLiteral(":/shaders/") + name + QStringLiteral(".frag"));
-		if (res.open(QIODevice::ReadOnly)) {
-			QFile out(dst);
-			if (out.open(QIODevice::WriteOnly))
-				out.write(res.readAll());
-		}
+		if (res.open(QIODevice::ReadOnly))
+			bundled.insert(name + QStringLiteral(".frag"), res.readAll());
 	}
+	const ShaderPresetSeedResult seeded = ensureDefaultShaderPresets(shadersDir_, bundled);
+	for (const QString &error : seeded.errors)
+		if (!componentErrors_.contains(error))
+			componentErrors_.append(error);
 	return shadersDir_;
 }
 
@@ -14825,6 +15856,14 @@ void VideoEditorWindow::showFrame(int sourceId, qint64 ms)
 	previewRenderWarning_->clearFailure();
 	if (!sourceById(sourceId))
 		sourceId = activeSourceId_; // fall back to the active source
+	if (const EditorSource *source = sourceById(sourceId); source && source->missing) {
+		lastPreviewRaw_ = QImage();
+		canvas_->setFrame(QImage());
+		shownSource_ = sourceId;
+		shownMs_ = ms;
+		shownExact_ = true;
+		return;
+	}
 	// Trim / Multi-Cut show one source frame; the same quality setting applies,
 	// against the 720p these modes have always previewed at.
 	//
@@ -14836,6 +15875,11 @@ void VideoEditorWindow::showFrame(int sourceId, qint64 ms)
 	// 24.4 ms a frame measured, against 1.1 ms at preview scale.
 	const QSize mcCanvas = multiCut() ? previewRenderSize(multiCutCanvasSize()) : QSize();
 	const QSize dec = multiCut() ? mcCanvas : previewRenderSize(QSize(1280, 720));
+	// These modes show one source at a time. Crossing many videos must not
+	// queue a slow seek for every video the pointer has already left. Keep
+	// cached frames, but give the newly shown source the next decode slot.
+	if (previewDecoder_ && !fullEdit() && sourceId != shownSource_)
+		previewDecoder_->cancelPending();
 	shownSource_ = sourceId;
 	shownMs_ = ms;
 
@@ -14862,7 +15906,7 @@ void VideoEditorWindow::showFrame(int sourceId, qint64 ms)
 // refer to the original file, which is the only one that will be encoded.
 void VideoEditorWindow::onProxyReady(int sourceId, const QString &proxyPath)
 {
-	if (!previewDecoder_)
+	if (!previewDecoder_ || !sourceById(sourceId))
 		return;
 	previewDecoder_->setProxy(sourceId, proxyPath);
 	proxyProgress_.remove(sourceId);
@@ -14988,6 +16032,12 @@ void VideoEditorWindow::onPreviewFrameReady(int sourceId, qint64 ms)
 	Q_UNUSED(ms);
 	if (loadingDialog_ || !valid_ || playing_ || shownExact_ || shownMs_ < 0)
 		return;
+	// A newer hover/scrub is already waiting for the pacing timer. A decode
+	// completion belongs to the older picture on screen; retrying that picture
+	// here would overwrite the newer source/time and strand the preview there
+	// if the pointer stops moving. Let the pending request render first.
+	if (pendingMs_ >= 0)
+		return;
 	requestPreview(shownSource_, shownMs_);
 }
 
@@ -15015,7 +16065,8 @@ void VideoEditorWindow::deleteSelection()
 	ctx.keyListHasSel = keyList_ && keyList_->currentRow() >= 0;
 	ctx.pathKeyPicked = pathKeyPicked_ >= 0;
 	ctx.fullEdit = fullEdit();
-	ctx.timelineHasSel = timelineView_ && timelineView_->hasSelection();
+	ctx.timelineHasSel = timelineView_ &&
+		(timelineView_->hasSelection() || timelineView_->selectedHeaderTrack() >= 0);
 	ctx.multiCut = multiCut();
 	ctx.multiCutHasSel = tracks_ && tracks_->selectedIndex() >= 0;
 
@@ -15099,11 +16150,10 @@ void VideoEditorWindow::onSave()
 		ec.fps = timelineFps();
 		ec.seconds = timelineView_->durationMs() / 1000.0;
 		ec.previewFrame = canvas_->currentFrame();
-		// Offer the range only when it is actually a smaller thing than the
-		// project. A "Selection" entry that covers everything is a choice with
-		// one outcome, which is worse than no choice at all.
+		// Offer the chosen range when its bounds differ from the full output.
+		// An explicit selection can include clips past the video-end marker.
 		span.fromMs = std::max<qint64>(0, span.fromMs);
-		span.toMs = std::min(span.toMs, timelineView_->durationMs());
+		span.toMs = std::min(span.toMs, timelineView_->model().contentDurationMs());
 		// Text variations: every combination is a version (Variations tab).
 		{
 			const QVector<text_variations::Slot> vs = text_variations::slotsOf(
@@ -15124,7 +16174,7 @@ void VideoEditorWindow::onSave()
 				ec.variantLabels << parts.join(QStringLiteral("  ·  "));
 			}
 		}
-		if (span.isValid() && span.durationMs() < timelineView_->durationMs()) {
+		if (span.isValid() && (span.fromMs != 0 || span.toMs != timelineView_->durationMs())) {
 			ec.rangeSeconds = span.durationMs() / 1000.0;
 			ec.rangeLabel = QStringLiteral("Selection  (%1 – %2)")
 						.arg(timeTextCentis(span.fromMs),

@@ -148,6 +148,9 @@ void ErrorLogsPanel::onSessionChanged()
 
 void ErrorLogsPanel::loadSelectedFile()
 {
+	// INFO/DEBUG diagnostics are buffered during recording. Publish the live
+	// session before reading it so Refresh and session selection show them.
+	Logger::instance().flush();
 	lines_.clear();
 	const QString path = sessionCombo_->currentData().toString();
 	pathLabel_->setText(path);
@@ -207,6 +210,7 @@ void ErrorLogsPanel::applyFilter()
 
 void ErrorLogsPanel::openLogFile()
 {
+	Logger::instance().flush();
 	const QString path = sessionCombo_->currentData().toString();
 	if (!path.isEmpty())
 		QDesktopServices::openUrl(QUrl::fromLocalFile(path));
@@ -214,6 +218,7 @@ void ErrorLogsPanel::openLogFile()
 
 void ErrorLogsPanel::openLogFolder()
 {
+	Logger::instance().flush();
 	const QString dir = QString::fromStdString(Logger::instance().logDir());
 	if (!dir.isEmpty())
 		QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
@@ -221,6 +226,7 @@ void ErrorLogsPanel::openLogFolder()
 
 void ErrorLogsPanel::copyToClipboard()
 {
+	loadSelectedFile(); // include newly published diagnostics in the copy
 	QApplication::clipboard()->setText(view_->toPlainText());
 }
 

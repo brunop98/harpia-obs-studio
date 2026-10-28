@@ -33,13 +33,44 @@ static void *crop_filter_create(obs_data_t *settings, obs_source_t *context)
 {
 	struct crop_filter_data *filter = bzalloc(sizeof(*filter));
 	char *effect_path = obs_module_file("crop_filter.effect");
+	const char *source_name = obs_source_get_name(context);
+	if (!source_name)
+		source_name = "<unnamed>";
 
 	filter->context = context;
 
+	if (!effect_path) {
+		const char *data_path = obs_get_module_data_path(obs_current_module());
+		blog(LOG_ERROR,
+		     "[crop_filter] source '%s': cannot find crop_filter.effect in module data directory '%s' "
+		     "(missing or inaccessible plugin data). Restore the complete application package, including "
+		     "data/obs-plugins/obs-filters.",
+		     source_name, data_path ? data_path : "<unavailable>");
+		bfree(filter);
+		return NULL;
+	}
+
+	char *errors = NULL;
 	obs_enter_graphics();
-	filter->effect = gs_effect_create_from_file(effect_path, NULL);
+	if (!gs_get_context()) {
+		blog(LOG_ERROR,
+		     "[crop_filter] source '%s': cannot load effect '%s': no graphics context. "
+		     "Check earlier video engine / graphics module errors.",
+		     source_name, effect_path);
+	} else {
+		filter->effect = gs_effect_create_from_file(effect_path, &errors);
+		if (!filter->effect) {
+			const char *details =
+				errors && *errors
+					? errors
+					: "no compiler details returned; check file access and earlier graphics errors";
+			blog(LOG_ERROR, "[crop_filter] source '%s': failed to load or compile effect '%s': %s",
+			     source_name, effect_path, details);
+		}
+	}
 	obs_leave_graphics();
 
+	bfree(errors);
 	bfree(effect_path);
 
 	if (!filter->effect) {

@@ -101,10 +101,8 @@ void *os_dlopen(const char *path)
 	if (!h_library) {
 		DWORD error = GetLastError();
 
-		/* don't print error for libraries that aren't meant to be
-		 * dynamically linked */
-		if (error == ERROR_PROC_NOT_FOUND)
-			return NULL;
+		/* A missing entry point (ERROR_PROC_NOT_FOUND) can also mean an
+		 * incompatible dependency. Keep that failure visible in the log. */
 
 		char *message = NULL;
 

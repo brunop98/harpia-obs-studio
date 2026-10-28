@@ -114,6 +114,27 @@ int main(int argc, char **argv)
 	settle(50);
 	ok(cancelled.size() == 2 && !picker.active() && picked.size() == 1, "a right-click cancels too");
 
+	std::printf("\n-- an explicit editor exception --\n");
+	const QVector<DesktopWindow> tutorialWindows = {
+		win(10, QRect(0, 0, 800, 600), QStringLiteral("Recording controls"), true),
+		win(11, QRect(100, 100, 300, 200), QStringLiteral("Video Editor"), true),
+		win(12, QRect(0, 0, 800, 600), QStringLiteral("Browser")),
+	};
+	picker.startWith(tutorialWindows, {{screen, phys}}, {11});
+	settle(50);
+	picker.hoverPhysical(QPoint(200, 150));
+	ok(picker.hovered() == 1, "only the explicitly allowed own editor is outlined");
+	picker.pickPhysical(QPoint(200, 150));
+	ok(picked.size() == 2 && picked.last().at(0).value<DesktopWindow>().id == 11 &&
+	   picked.last().at(0).value<DesktopWindow>().ours,
+	   "the selected editor keeps its native ownership and exact handle");
+	ok(!picker.active(), "picking the editor closes the capture layer normally");
+	picker.startWith(tutorialWindows, {{screen, phys}});
+	settle(50);
+	picker.hoverPhysical(QPoint(200, 150));
+	ok(picker.hovered() == 2, "a later picker session drops the prior own-window exception");
+	picker.cancel();
+
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
 }

@@ -72,6 +72,10 @@ int main()
 	pin("gpuCompression", [](Preset &p) { p.gpuCompression = !p.gpuCompression; });
 	pin("videoBitrateKbps", [](Preset &p) { p.videoBitrateKbps += 1000; });
 	pin("audioBitrateKbps", [](Preset &p) { p.audioBitrateKbps += 32; });
+	pin("autoSplit", [](Preset &p) { p.autoSplit = !p.autoSplit; });
+	pin("autoSplitMode", [](Preset &p) { p.autoSplitMode = 1; });
+	pin("autoSplitMinutes", [](Preset &p) { p.autoSplitMinutes += 1; });
+	pin("autoSplitSizeMB", [](Preset &p) { p.autoSplitSizeMB += 1; });
 	pin("recordDesktopAudio", [](Preset &p) { p.recordDesktopAudio = !p.recordDesktopAudio; });
 	pin("micDeviceIds", [](Preset &p) { p.micDeviceIds.push_back("mic-1"); });
 	pin("desktopVolume", [](Preset &p) { p.desktopVolume = 0.5; });

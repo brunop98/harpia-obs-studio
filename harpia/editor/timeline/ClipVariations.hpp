@@ -90,6 +90,44 @@ inline int add(TlClip &c, int sourceId, qint64 totalMs, QString *why = nullptr)
 	return int(c.clipOptions.size()) - 1;
 }
 
+// Replace one choice's source and moment without changing which choice is
+// showing. A known source length lets the Slip picker keep the entire shared
+// window inside the file. All validation happens before syncShown mutates the
+// cached list, so a refused choice leaves the clip exactly as it was.
+inline bool setOption(TlClip &c, int k, int sourceId, qint64 startMs, qint64 totalMs,
+		      QString *why = nullptr)
+{
+	if (why)
+		why->clear();
+	const auto no = [why](const QString &reason) {
+		if (why)
+			*why = reason;
+		return false;
+	};
+	if (!c.isRandomClip() || k < 0 || k >= c.clipOptions.size())
+		return no(QStringLiteral("This Random clip option no longer exists."));
+	if (sourceId < 0 || totalMs <= 0)
+		return no(QStringLiteral("Choose a readable video or audio file with a known duration."));
+	// These checks also make end - start safe for malformed input: both are
+	// non-negative and end is no smaller than start.
+	if (c.srcStartMs < 0 || c.srcEndMs <= c.srcStartMs)
+		return no(QStringLiteral("This clip has no source duration to preserve."));
+	const qint64 length = c.srcEndMs - c.srcStartMs;
+	if (!fits(c, totalMs, why))
+		return false;
+	const qint64 start = std::clamp<qint64>(startMs, 0, totalMs - length);
+	syncShown(c);
+	c.clipOptions[k] = {sourceId, start};
+	if (k == c.clipShown) {
+		if (c.sourceId != sourceId)
+			c.peaks.clear();
+		c.sourceId = sourceId;
+		c.srcStartMs = start;
+		c.srcEndMs = start + length; // bounded above by totalMs
+	}
+	return true;
+}
+
 // Remove choice `k`. The last one stays (Make normal clip is how a Random
 // clip stops being one); removing the shown one shows its neighbour.
 inline bool remove(TlClip &c, int k)

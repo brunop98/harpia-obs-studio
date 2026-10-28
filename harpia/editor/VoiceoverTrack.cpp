@@ -1,4 +1,5 @@
 #include "VoiceoverTrack.hpp"
+#include "TimeText.hpp"
 
 #include <QAction>
 #include <QFile>
@@ -8,6 +9,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -19,6 +21,7 @@ namespace {
 // Layout values live in VoiceoverLayoutParams (lp_) so the Developer Panel can
 // tweak them at runtime; only non-layout constants remain here.
 constexpr qint64 kMinClipMs = 100; // shortest a clip can be trimmed to
+constexpr double kMaxZoom = 32.0;
 
 // Colours all live in EditorColors (cl_), edited live from the Developer Panel.
 } // namespace
@@ -29,7 +32,8 @@ VoiceoverTrack::VoiceoverTrack(QWidget *parent) : QWidget(parent)
 	setMouseTracking(true);
 	setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 	setToolTip(QStringLiteral(
-		"Voiceover — drag to move, drag an edge to trim, right-click to split, Del to remove"));
+		"Voiceover — drag to move, drag an edge to trim, right-click to split, Del to remove. "
+		"Scroll to zoom; middle-drag or Shift+scroll to pan."));
 }
 
 QSize VoiceoverTrack::sizeHint() const
@@ -51,7 +55,13 @@ void VoiceoverTrack::setLayoutParams(const VoiceoverLayoutParams &p)
 
 void VoiceoverTrack::setOutputDuration(qint64 ms)
 {
-	outputMs_ = std::max<qint64>(0, ms);
+	const qint64 duration = std::max<qint64>(0, ms);
+	if (duration != outputMs_)
+		finishPan();
+	outputMs_ = duration;
+	if (outputMs_ <= 0)
+		zoom_ = 1.0;
+	clampView();
 	update();
 }
 
@@ -215,7 +225,10 @@ int VoiceoverTrack::msToX(qint64 ms) const
 	const QRect r = trackRect();
 	if (outputMs_ <= 0)
 		return r.x();
-	return r.x() + int(double(ms) / double(outputMs_) * r.width());
+	// Limit off-screen coordinates before converting to int. A far-away clip
+	// must not overflow its QRect after the view has been zoomed or panned.
+	const double x = r.x() + (double(ms) - double(viewStart_)) / double(visibleMs()) * r.width();
+	return int(std::clamp(x, -16777216.0, 16777216.0));
 }
 
 qint64 VoiceoverTrack::xToMs(int x) const
@@ -224,7 +237,64 @@ qint64 VoiceoverTrack::xToMs(int x) const
 	if (outputMs_ <= 0 || r.width() <= 0)
 		return 0;
 	const double t = double(x - r.x()) / double(r.width());
-	return std::clamp<qint64>(qint64(std::llround(t * outputMs_)), 0, outputMs_);
+	return std::clamp<qint64>(viewStart_ + qint64(std::llround(t * visibleMs())), 0, outputMs_);
+}
+
+qint64 VoiceoverTrack::visibleMs() const
+{
+	return std::max<qint64>(1, qint64(outputMs_ / zoom_));
+}
+
+void VoiceoverTrack::clampView()
+{
+	viewStart_ = std::clamp<qint64>(viewStart_, 0, std::max<qint64>(0, outputMs_ - visibleMs()));
+}
+
+void VoiceoverTrack::finishPan()
+{
+	if (!panning_)
+		return;
+	panning_ = false;
+	if (panHadCursor_)
+		setCursor(panCursor_);
+	else
+		unsetCursor();
+}
+
+bool VoiceoverTrack::event(QEvent *event)
+{
+	if (event->type() == QEvent::UngrabMouse || event->type() == QEvent::Hide ||
+	    event->type() == QEvent::WindowDeactivate)
+		finishPan();
+	return QWidget::event(event);
+}
+
+void VoiceoverTrack::wheelEvent(QWheelEvent *e)
+{
+	if (panning_ || mode_ != Mode::None) {
+		e->accept();
+		return;
+	}
+	if (outputMs_ <= 0)
+		return;
+	const QPoint delta = e->angleDelta();
+	const bool pan = (e->modifiers() & Qt::ShiftModifier) || std::abs(delta.x()) > std::abs(delta.y());
+	const int amount = pan ? (delta.x() != 0 ? delta.x() : delta.y()) : delta.y();
+	if (amount == 0)
+		return;
+	const double steps = amount / 120.0;
+	if (pan) {
+		viewStart_ -= qint64(steps * visibleMs() * 0.15);
+	} else {
+		const QRect track = trackRect();
+		const qint64 anchor = xToMs(int(e->position().x()));
+		const double fraction = std::clamp((e->position().x() - track.x()) / std::max(1, track.width()), 0.0, 1.0);
+		zoom_ = std::clamp(zoom_ * std::pow(1.3, steps), 1.0, kMaxZoom);
+		viewStart_ = anchor - qint64(fraction * visibleMs());
+	}
+	clampView();
+	update();
+	e->accept();
 }
 
 QVector<QRect> VoiceoverTrack::clipRects() const
@@ -264,7 +334,8 @@ void VoiceoverTrack::paintEvent(QPaintEvent *)
 
 	p.setPen(cl_.caption);
 	p.drawText(QRect(r.x(), lp_.margin, r.width(), lp_.captionH), Qt::AlignVCenter | Qt::AlignLeft,
-		   QStringLiteral("Voiceover"));
+		   zoom_ > 1.0 ? QStringLiteral("Voiceover — %1–%2").arg(timeTextRuler(viewStart_), timeTextRuler(viewStart_ + visibleMs()))
+			       : QStringLiteral("Voiceover"));
 
 	p.setPen(cl_.border);
 	p.setBrush(cl_.panelBg);
@@ -277,8 +348,12 @@ void VoiceoverTrack::paintEvent(QPaintEvent *)
 	}
 
 	const QVector<QRect> rects = clipRects();
+	p.save();
+	p.setClipRect(r.adjusted(1, 1, -1, -1));
 	for (int i = 0; i < rects.size(); ++i) {
 		const QRect cr = rects[i];
+		if (!cr.intersects(r))
+			continue;
 		const bool sel = (i == selected_);
 		QPainterPath clip;
 		clip.addRoundedRect(cr, 4, 4);
@@ -292,11 +367,13 @@ void VoiceoverTrack::paintEvent(QPaintEvent *)
 		const QVector<float> &pk = vc.peaks;
 		if (!pk.isEmpty() && cr.width() > 2 && vc.srcTotalMs > 0) {
 			p.save();
-			p.setClipPath(clip);
+			p.setClipPath(clip, Qt::IntersectClip);
 			p.setPen(QPen(cl_.waveform, 1));
 			const int midY = cr.center().y();
 			const int halfH = cr.height() / 2 - 2;
-			for (int x = cr.left() + 1; x < cr.right() - 1; ++x) {
+			const int from = std::max(cr.left() + 1, r.left());
+			const int through = std::min(cr.right() - 2, r.right());
+			for (int x = from; x <= through; ++x) {
 				const double t = double(x - cr.left()) / std::max(1, cr.width());
 				const double srcFrac =
 					double(vc.srcStartMs + t * vc.durationMs) / double(vc.srcTotalMs);
@@ -318,10 +395,28 @@ void VoiceoverTrack::paintEvent(QPaintEvent *)
 		p.setPen(QPen(cl_.playhead, 2));
 		p.drawLine(px, r.top() + 1, px, r.bottom() - 1);
 	}
+	p.restore();
 }
 
 void VoiceoverTrack::mousePressEvent(QMouseEvent *e)
 {
+	if (panning_) {
+		e->accept();
+		return;
+	}
+	if (e->button() == Qt::MiddleButton) {
+		if (mode_ != Mode::None || outputMs_ <= 0)
+			return;
+		panning_ = true;
+		panStartX_ = int(e->position().x());
+		panStartView_ = viewStart_;
+		panMsPerPixel_ = double(visibleMs()) / std::max(1, trackRect().width());
+		panHadCursor_ = testAttribute(Qt::WA_SetCursor);
+		panCursor_ = cursor();
+		setCursor(Qt::ClosedHandCursor);
+		e->accept();
+		return;
+	}
 	// Build the rects once and reuse for both hit-testing and edge detection.
 	const QVector<QRect> rects = clipRects();
 	int idx = -1;
@@ -371,6 +466,17 @@ void VoiceoverTrack::mousePressEvent(QMouseEvent *e)
 
 void VoiceoverTrack::mouseMoveEvent(QMouseEvent *e)
 {
+	if (panning_) {
+		if (!(e->buttons() & Qt::MiddleButton)) {
+			finishPan();
+		} else {
+			viewStart_ = panStartView_ - qint64(std::llround((e->position().x() - panStartX_) * panMsPerPixel_));
+			clampView();
+			update();
+		}
+		e->accept();
+		return;
+	}
 	if (selected_ >= 0 && (e->buttons() & Qt::LeftButton) && mode_ != Mode::None) {
 		if (!dragMoved_ && std::abs(e->pos().x() - pressPos_.x()) > 3)
 			dragMoved_ = true;
@@ -421,6 +527,12 @@ void VoiceoverTrack::mouseMoveEvent(QMouseEvent *e)
 
 void VoiceoverTrack::mouseReleaseEvent(QMouseEvent *e)
 {
+	if (panning_) {
+		if (e->button() == Qt::MiddleButton || !(e->buttons() & Qt::MiddleButton))
+			finishPan();
+		e->accept();
+		return;
+	}
 	if (e->button() != Qt::LeftButton)
 		return;
 	if (mode_ != Mode::None && dragMoved_)

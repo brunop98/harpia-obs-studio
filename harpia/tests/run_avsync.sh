@@ -104,6 +104,13 @@ build "$HERE/exporttelemetry_test.cpp" exporttelemetry_test
 # Every frame once: sources that number their frames, read the way an export
 # reads them and exported from a two-track 60 fps timeline.
 build "$HERE/exportcadence_test.cpp" exportcadence_test
+# Explicit 60/120 fps preserves sped-up source frames and holds slower footage.
+build "$HERE/exporthighfps_test.cpp" exporthighfps_test
+build "$HERE/markerexport_test.cpp" markerexport_test
+# Beat analysis seeks the kept source range, preserving timestamp offsets.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/beatdecode_test.cpp" "$H/editor/BeatAudio.cpp" \
+	-o "$WORK/beatdecode_test" $LF
 build "$HERE/timelinemix_test.cpp" timelinemix_test
 build "$HERE/swsoverrun_test.cpp" swsoverrun_test
 # The export window: what it says is what it asks for -- resolution, frame
@@ -183,7 +190,7 @@ if [ ! -f "$QJSLIB/libqjs.a" ]; then # the same one-time build run_units.sh does
 fi
 mkdir -p "$WORK/win/obj" "$WORK/win/moc"
 ( cd "$H"
-  WSRCS=$(ls editor/*.cpp editor/*/*.cpp ui/*.cpp library/*.cpp core/ShareExporter.cpp core/ShareSplitter.cpp core/ExportVideoEncoder.cpp core/AudioFileWriter.cpp platform/OsIntegrationStub.cpp tests/support/logger_stub.cpp | grep -v -E "ui/MainWindow.cpp|ui/WebcamPreview.cpp")
+  WSRCS=$(ls editor/*.cpp editor/*/*.cpp ui/*.cpp library/*.cpp core/ShareExporter.cpp core/ShareSplitter.cpp core/ExportVideoEncoder.cpp core/AudioFileWriter.cpp core/LocalSend.cpp platform/PhoneSharingNativeStub.cpp platform/OsIntegrationStub.cpp tests/support/logger_stub.cpp | grep -v -E "ui/MainWindow.cpp|ui/WebcamPreview.cpp")
   for h in $(grep -l Q_OBJECT editor/*.hpp editor/*/*.hpp ui/*.hpp library/*.hpp core/ShareExporter.hpp | grep -v -E "ui/MainWindow.hpp|ui/WebcamPreview.hpp"); do
 	"$MOC" -I"$H" "$h" -o "$WORK/win/moc/moc_$(echo "$h" | tr '/' '_' | sed 's/.hpp$//').cpp"
   done
@@ -198,7 +205,7 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
 	-o "$WORK/shareexportdialog_test" $WLF
 # Render diagnostics and regressions from the preview audit.
-for name in loadingwindow inspectorreuse silencetrimdialog socialfeatureswindow silencetrimav textstylepresetswindow rendererrors exporterrorwindow previewwarningwindow audioaudit previewgeometry previewinterval previewcontrols previewtransition previewlegacypacing; do
+for name in loadingwindow inspectorreuse silencetrimdialog socialfeatureswindow silencetrimav textstylepresetswindow rendererrors exporterrorwindow previewwarningwindow audioaudit previewgeometry previewinterval previewcontrols previewtransition previewlegacypacing markerendwindow beatmarkerswindow; do
 	g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 		"$HERE/${name}_test.cpp" \
 		-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
@@ -231,6 +238,16 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	"$HERE/projectstate_test.cpp" \
 	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
 	-o "$WORK/projectstate_test" $WLF
+# Reopening documents must preserve media references and narration assets;
+# rejected documents must leave the active project intact.
+# Reusable component presets must preserve native poses and apply across projects.
+# Random clip options retain independent source windows within one shared slot.
+for name in projectvalidation projectassets projectload projectmigrate componentpresetclip componentpresetswindow randomclipoptionswindow; do
+	g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
+		-DSRC_MEDIA="\"$WORK/av_red.mp4\"" "$HERE/${name}_test.cpp" \
+		-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
+		-o "$WORK/${name}_test" $WLF
+done
 # Undo through the real Ctrl+Z / Ctrl+Y: selection steps, a selection box as
 # one step, a group drag, Force ripple, and an edit through clipsChanged.
 g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
@@ -334,6 +351,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/exportcolor_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/batchexport_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exporttelemetry_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportcadence_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/exporthighfps_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelinemix_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/swsoverrun_test" "$WORK" || rc=1
 HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
@@ -362,6 +380,12 @@ for name in audioaudit previewgeometry previewinterval previewtransition; do
 done
 XDG_CONFIG_HOME="$WORK/preview-audit-config" XDG_DATA_HOME="$WORK/preview-audit-data" QT_QPA_PLATFORM=offscreen \
 	"$WORK/previewcontrols_test" || rc=1
+XDG_CONFIG_HOME="$WORK/marker-end-config" XDG_DATA_HOME="$WORK/marker-end-data" QT_QPA_PLATFORM=offscreen \
+	"$WORK/markerendwindow_test" "$WORK" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/markerexport_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/beatdecode_test" || rc=1
+XDG_CONFIG_HOME="$WORK/beat-markers-config" XDG_DATA_HOME="$WORK/beat-markers-data" QT_QPA_PLATFORM=offscreen \
+	"$WORK/beatmarkerswindow_test" || rc=1
 XDG_CONFIG_HOME="$WORK/legacy-pacing-config" XDG_DATA_HOME="$WORK/legacy-pacing-data" QT_QPA_PLATFORM=offscreen \
 	"$WORK/previewlegacypacing_test" || rc=1
 XDG_CONFIG_HOME="$WORK/error-test-config" XDG_DATA_HOME="$WORK/error-test-data" QT_QPA_PLATFORM=offscreen \
@@ -379,6 +403,14 @@ HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen
 	"$WORK/undohistory_test" "$WORK" || rc=1
 HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
 	"$WORK/projectstate_test" "$WORK" || rc=1
+for name in projectvalidation projectassets projectload projectmigrate componentpresetclip componentpresetswindow randomclipoptionswindow; do
+	project_test_status=0
+	XDG_CONFIG_HOME="$WORK/${name}-config" XDG_DATA_HOME="$WORK/${name}-data" QT_QPA_PLATFORM=offscreen \
+		"$WORK/${name}_test" "$WORK" || project_test_status=$?
+	if [ "$project_test_status" -ne 0 ] && [ "$project_test_status" -ne 77 ]; then
+		rc=1
+	fi
+done
 HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \
 	"$WORK/variationpresets_test" "$WORK" || rc=1
 HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" QT_QPA_PLATFORM=offscreen \

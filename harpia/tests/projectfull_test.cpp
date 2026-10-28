@@ -52,7 +52,7 @@ static void compareText(const QString &w, const TlText &a, const TlText &b)
 	F(w, a, b, text); F(w, a, b, fontFamily); F(w, a, b, fontPx); F(w, a, b, bold); F(w, a, b, italic);
 	F(w, a, b, color); F(w, a, b, outlineWidth); F(w, a, b, outlineColor); F(w, a, b, boxEnabled);
 	F(w, a, b, boxColor); F(w, a, b, boxOpacity); F(w, a, b, boxPadX); F(w, a, b, boxPadY);
-	F(w, a, b, boxRadius); F(w, a, b, align); F(w, a, b, textCase); F(w, a, b, variations); F(w, a, b, random);
+	F(w, a, b, boxRadius); F(w, a, b, boxShape); F(w, a, b, align); F(w, a, b, textCase); F(w, a, b, variations); F(w, a, b, random);
 }
 
 static void compareClip(const QString &w, const TlClip &a, const TlClip &b)
@@ -233,6 +233,7 @@ static TimelineModel everything()
 	txt.text.boxPadX = 21;
 	txt.text.boxPadY = 13;
 	txt.text.boxRadius = 17;
+	txt.text.boxShape = TlTextBoxFitText;
 	txt.text.align = 2;
 	txt.text.textCase = 2;
 	txt.text.random = true;
@@ -296,6 +297,7 @@ static TimelineModel everything()
 	v1.name = QStringLiteral("V1 renamed");
 	v1.locked = true;
 	v1.ripple = true;
+	v1.rippleSpeed = true;
 	v1.color = QColor(0x12, 0x34, 0x56);
 	v1.clips = {v, img};
 	TlTrack music;
@@ -303,6 +305,7 @@ static TimelineModel everything()
 	music.name = QStringLiteral("Música");
 	music.muted = true;
 	music.solo = true;
+	music.rippleSpeed = true;
 	music.gain = 0.65;
 	music.clips = {a};
 	TlTrack sounds;
@@ -350,7 +353,7 @@ int main(int argc, char **argv)
 		const TlTrack &x = before.tracks[ti], &y = after.tracks[ti];
 		const QString w = QStringLiteral("track[%1]").arg(ti);
 		F(w, x, y, kind); F(w, x, y, name); F(w, x, y, muted); F(w, x, y, hidden); F(w, x, y, locked);
-		F(w, x, y, ripple); F(w, x, y, solo); F(w, x, y, gain); F(w, x, y, color); F(w, x, y, autoSounds);
+		F(w, x, y, ripple); F(w, x, y, rippleSpeed); F(w, x, y, solo); F(w, x, y, gain); F(w, x, y, color); F(w, x, y, autoSounds);
 		field(w, "clips.count", x.clips.size(), y.clips.size());
 		for (int ci = 0; ci < std::min(x.clips.size(), y.clips.size()); ++ci)
 			compareClip(QStringLiteral("%1.clip[%2]").arg(w).arg(ci), x.clips[ci], y.clips[ci]);
@@ -422,6 +425,124 @@ int main(int argc, char **argv)
 		unsorted[QStringLiteral("markers")] = QJsonArray{9000, 100, 5000};
 		ok(timelineFromProject(unsorted).markers == QVector<qint64>({100, 5000, 9000}),
 		   "markers come back in time order");
+	}
+
+	std::printf("\n-- authored settings before clips are added --\n");
+	{
+		TimelineModel layout;
+		TlTrack picture;
+		picture.name = QStringLiteral("B-roll reserved");
+		picture.color = QColor(16, 80, 160);
+		picture.hidden = true;
+		picture.locked = true;
+		TlTrack audio;
+		audio.kind = TlTrack::Kind::Audio;
+		audio.name = QStringLiteral("Narration reserved");
+		audio.muted = true;
+		audio.solo = true;
+		audio.gain = 0.65;
+		layout.tracks = {picture, audio};
+		QJsonObject saved;
+		timelineToProject(layout, saved);
+		const TimelineModel opened = timelineFromProject(
+			QJsonDocument::fromJson(QJsonDocument(saved).toJson()).object());
+		ok(opened == layout && saved.value(QStringLiteral("harpiaProject")).toInt() == 3,
+		   "an authored empty lane layout keeps its names, order, switches and audio levels");
+		QJsonObject reused = root;
+		timelineToProject(layout, reused);
+		ok(timelineFromProject(reused) == layout,
+		   "rewriting a root removes old markers, tags and sound rules from the new layout");
+		timelineToProject(TimelineModel(), reused);
+		ok(!reused.contains(QStringLiteral("tracks")) && !reused.contains(QStringLiteral("tags")) &&
+		   !reused.contains(QStringLiteral("soundRules")) && timelineFromProject(reused) == TimelineModel(),
+		   "clearing the timeline cannot resurrect old tracks or metadata in a reused project root");
+	}
+	{
+		TlClip plain;
+		plain.type = TlClip::Type::Text;
+		plain.srcEndMs = 2500;
+		plain.text.text = QStringLiteral("<b>Hello</b> <color=#ff800080>world ★</color>\n<mark=#ffff0080>again</mark>");
+		plain.text.variations = {QStringLiteral("Unused alternative")};
+		plain.text.random = false;
+		QJsonObject saved = clipToJson(plain);
+		const TlClip opened = clipFromJson(
+			QJsonDocument::fromJson(QJsonDocument(saved).toJson()).object());
+		ok(opened == plain && !opened.text.random,
+		   "plain text retains rich tags and alternatives without becoming Random Text on reopen");
+		QJsonObject legacyText = saved.value(QStringLiteral("textStyle")).toObject();
+		legacyText.remove(QStringLiteral("random"));
+		saved[QStringLiteral("textStyle")] = legacyText;
+		ok(clipFromJson(saved).text.random,
+		   "legacy captions with alternatives and no kind flag still reopen as Random Text");
+	}
+	{
+		ComponentRegistry &registry = ComponentRegistry::instance();
+		const QJsonObject unknown = QJsonDocument::fromJson(R"({
+			"type":"missing.projectEffect", "id":"effect1", "version":7,
+			"enabled":false, "inMs":40, "outMs":80,
+			"props":{"amount":0.37,"label":"My look","palette":[1,2,3],
+			         "config":{"mode":"soft","enabled":true},"optional":null},
+			"keys":{"amount":[{"t":0,"v":0.25,"ease":2,"futureCurve":{"shape":[1,2,3]}},
+			                  {"t":100,"v":0.75,"ease":99,"futureHandle":"keep me"}],
+			        "palette":[{"t":0,"v":[1,0,0,1],"futureBlend":"linear-light"}],
+			        "futureTrack":{"samples":[1,2,3]}},
+			"futureField":"keep this"
+		})").object();
+		const ComponentInstance missing = componentFromJson(unknown, registry);
+		const QJsonObject reopened = QJsonDocument::fromJson(QJsonDocument(
+			componentToJson(missing, registry)).toJson()).object();
+		ok(reopened == unknown,
+		   "an unavailable component retains its version, typed properties and future key payload exactly");
+		ComponentInstance edited = missing;
+		edited.enabled = true;
+		edited.inMs = 0;
+		edited.outMs = 150;
+		edited.props[QStringLiteral("label")] = QStringLiteral("Renamed look");
+		edited.keys[QStringLiteral("amount")][0].v = 0.5;
+		const QJsonObject edits = componentToJson(edited, registry);
+		const QJsonObject editedKeys = edits.value(QStringLiteral("keys")).toObject();
+		const QJsonArray editedAmount = editedKeys.value(QStringLiteral("amount")).toArray();
+		ok(!edits.contains(QStringLiteral("enabled")) && !edits.contains(QStringLiteral("inMs")) &&
+		   edits.value(QStringLiteral("outMs")).toInt() == 150 &&
+		   edits.value(QStringLiteral("props")).toObject().value(QStringLiteral("label")).toString() == QStringLiteral("Renamed look") &&
+		   editedAmount[0].toObject().value(QStringLiteral("v")).toDouble() == 0.5 &&
+		   editedAmount[0].toObject().value(QStringLiteral("futureCurve")) ==
+		       unknown.value(QStringLiteral("keys")).toObject().value(QStringLiteral("amount")).toArray()[0].toObject().value(QStringLiteral("futureCurve")) &&
+		   editedAmount[1] == unknown.value(QStringLiteral("keys")).toObject().value(QStringLiteral("amount")).toArray()[1] &&
+		   editedKeys.value(QStringLiteral("palette")) == unknown.value(QStringLiteral("keys")).toObject().value(QStringLiteral("palette")) &&
+		   editedKeys.value(QStringLiteral("futureTrack")) == unknown.value(QStringLiteral("keys")).toObject().value(QStringLiteral("futureTrack")),
+		   "common edits apply to an unavailable component while opaque key data stays intact");
+		edited.keys.remove(QStringLiteral("amount"));
+		ok(!componentToJson(edited, registry).value(QStringLiteral("keys")).toObject().contains(QStringLiteral("amount")),
+		   "deleting an unavailable component's numeric keys does not restore a stale raw copy");
+		QJsonObject known = unknown;
+		known[QStringLiteral("type")] = QStringLiteral("harpia.blur");
+		const ComponentType *type = registry.find(QStringLiteral("harpia.blur"));
+		const QJsonObject knownSaved = componentToJson(componentFromJson(known, registry), registry);
+		ok(type && knownSaved.value(QStringLiteral("version")).toInt() == type->version,
+		   "a registered component continues to save its current schema version");
+		ComponentRegistry newlyInstalled;
+		ComponentType plugin = *type;
+		plugin.id = QStringLiteral("missing.projectEffect");
+		plugin.version = 8;
+		bool migrationSawOriginal = false;
+		plugin.migrate = [&](int version, QJsonObject &payload) {
+			migrationSawOriginal = version == 7 && payload.value(QStringLiteral("keys")) == unknown.value(QStringLiteral("keys"));
+			payload[QStringLiteral("enabled")] = true;
+			payload[QStringLiteral("inMs")] = 55;
+			payload[QStringLiteral("outMs")] = 95;
+			QJsonObject props = payload.value(QStringLiteral("props")).toObject();
+			props[QStringLiteral("migrated")] = true;
+			payload[QStringLiteral("props")] = props;
+		};
+		newlyInstalled.add(plugin);
+		const QJsonObject beforeMigration = componentToJson(missing, newlyInstalled);
+		const ComponentInstance migrated = componentFromJson(beforeMigration, newlyInstalled);
+		ok(beforeMigration.value(QStringLiteral("version")).toInt() == 7 && migrationSawOriginal &&
+		   migrated.enabled && migrated.inMs == 55 && migrated.outMs == 95 &&
+		   migrated.props.value(QStringLiteral("migrated")).toBool() &&
+		   componentToJson(migrated, newlyInstalled).value(QStringLiteral("version")).toInt() == 8,
+		   "installing a missing plugin preserves the old schema until its migration reads the original payload");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

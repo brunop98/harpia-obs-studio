@@ -107,7 +107,7 @@ private:
 	QComboBox *codecCombo_ = nullptr;
 	QComboBox *fpsCombo_ = nullptr;
 	QComboBox *frameRateModeCombo_ = nullptr;
-	QComboBox *bitrateCombo_ = nullptr;
+	QSlider *bitrateSlider_ = nullptr;
 	QComboBox *audioBitrateCombo_ = nullptr;
 	QSpinBox *bitrateSpin_ = nullptr;
 	QLabel *bitrateGuide_ = nullptr;
@@ -116,6 +116,15 @@ private:
 	QSpinBox *idleSpin_ = nullptr;
 	QComboBox *countdownCombo_ = nullptr;
 	QSpinBox *minLengthSpin_ = nullptr;
+	QCheckBox *autoSplitCheck_ = nullptr;
+	QComboBox *autoSplitModeCombo_ = nullptr;
+	QSpinBox *autoSplitMinutesSpin_ = nullptr;
+	QSpinBox *autoSplitSizeSpin_ = nullptr;
+	QWidget *autoSplitOptions_ = nullptr;
+	QWidget *autoSplitMinutesRow_ = nullptr;
+	QWidget *autoSplitSizeRow_ = nullptr;
+	QLabel *autoSplitHelp_ = nullptr;
+	void syncAutoSplitControls();
 
 	// Recording border (Full Screen)
 	QCheckBox *borderCheck_ = nullptr;
@@ -171,7 +180,7 @@ private:
 	QPushButton *leftColorBtn_ = nullptr;
 	QPushButton *rightColorBtn_ = nullptr;
 	MousePreview *mousePreview_ = nullptr;
-	// How the region moves while recording (Custom Region only): one dropdown
+	// Recording areas page (Custom Region only): one movement dropdown
 	// -- Stays put / Follow Mouse / Multiple areas -- because the two features
 	// are exclusive. followCheck_ / multiAreaCheck_ are the hidden state it
 	// drives, so the rows that depend on each (dependsOn) work unchanged.

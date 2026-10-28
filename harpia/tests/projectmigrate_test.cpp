@@ -23,7 +23,9 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QPushButton>
+#include <QSettings>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QThread>
 
 #include <cstdio>
@@ -75,6 +77,12 @@ int main(int argc, char **argv)
 {
 	std::setvbuf(stdout, nullptr, _IONBF, 0);
 	QApplication app(argc, argv);
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+	std::printf("SKIP: native editor settings cannot be redirected safely on this platform\n");
+	return 77;
+#else
+	QTemporaryDir settings;
+	QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, settings.path());
 
 	// The bundled shaders are seeded from Qt resources, which this test binary
 	// does not link -- so without this the shader half of the migration would
@@ -196,4 +204,5 @@ int main(int argc, char **argv)
 	QFile::remove(shadersDir + QStringLiteral("/migratetest.frag"));
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
+#endif
 }

@@ -17,6 +17,7 @@ extern "C" {
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <optional>
 
@@ -25,6 +26,21 @@ namespace harpia {
 namespace {
 constexpr int kRate = 48000;
 constexpr int kCh = 2;
+
+// Bound conversion before multiplying: a malformed imported end time must
+// not overflow a frame count or the interleaved sample allocation.
+std::optional<long long> outputFrameLimit(qint64 ms)
+{
+	if (ms < 0)
+		return -1;
+	const auto maximum = static_cast<long long>(std::min<size_t>(
+		std::vector<float>().max_size() / kCh,
+		size_t(std::numeric_limits<long long>::max() / kCh)));
+	if (ms / 1000 > maximum / kRate)
+		return std::nullopt;
+	const long long frames = (ms / 1000) * kRate + (ms % 1000) * kRate / 1000;
+	return frames <= maximum ? std::optional<long long>(frames) : std::nullopt;
+}
 
 // Decode any audio file to interleaved stereo float @ 48 kHz. Empty vector if the
 // file has no audio stream or can't be decoded (caller treats that as silence).
@@ -128,7 +144,8 @@ std::pair<long long, long long> takeSpan(long long totalFrames, qint64 srcStartM
 // every mix, made a re-mix take seconds -- and the preview's sound waits for
 // it. The samples convert exactly as libswresample converts s16 to float, so
 // the result is the same to the sample, only without the decode.
-std::optional<std::vector<float>> canonicalWavSpan(const QString &path, qint64 srcStartMs, qint64 playMs)
+std::optional<std::vector<float>> canonicalWavSpan(const QString &path, qint64 srcStartMs, qint64 playMs,
+						 long long maxFrames = -1, long long *envelopeFrames = nullptr)
 {
 	constexpr int kHeader = 44, kFrameBytes = kCh * 2;
 	QFile f(path);
@@ -147,12 +164,17 @@ std::optional<std::vector<float>> canonicalWavSpan(const QString &path, qint64 s
 	qint64 bytes = f.size() - kHeader;
 	if (bytes <= 0xffffffffLL)
 		bytes = std::min<qint64>(bytes, qint64(u32(40)));
-	const auto [s0, len] = takeSpan(bytes / kFrameBytes, srcStartMs, playMs);
+	const auto [s0, spanFrames] = takeSpan(bytes / kFrameBytes, srcStartMs, playMs);
+	if (envelopeFrames)
+		*envelopeFrames = spanFrames;
+	const long long len = maxFrames >= 0 ? std::min(spanFrames, maxFrames) : spanFrames;
 	std::vector<float> out;
 	if (len <= 0 || !f.seek(kHeader + s0 * kFrameBytes))
 		return out;
 	const QByteArray raw = f.read(len * kFrameBytes);
 	const qsizetype n = raw.size() / 2;
+	if (envelopeFrames && maxFrames < 0)
+		*envelopeFrames = n / kCh;
 	out.resize(size_t(n));
 	const auto *in = reinterpret_cast<const uchar *>(raw.constData());
 	for (qsizetype i = 0; i < n; ++i)
@@ -329,9 +351,11 @@ bool VoiceoverMixer::decodeToWav(const QString &inPath, const QString &outWav, d
 
 void VoiceoverMixer::addTake(std::vector<float> &mix, const std::vector<float> &take,
 			     long long startFrame, double volume, int fadeInFrames,
-			     int fadeOutFrames, FadeCurve inCurve, FadeCurve outCurve)
+			     int fadeOutFrames, FadeCurve inCurve, FadeCurve outCurve,
+			     long long envelopeFrames)
 {
 	const long long frames = (long long)take.size() / kCh;
+	const long long fadeLength = envelopeFrames >= 0 ? envelopeFrames : frames;
 	for (long long j = 0; j < frames; ++j) {
 		const long long o = startFrame + j;
 		if (o < 0)
@@ -341,8 +365,8 @@ void VoiceoverMixer::addTake(std::vector<float> &mix, const std::vector<float> &
 		double f = 1.0;
 		if (fadeInFrames > 0 && j < fadeInFrames)
 			f *= fadeGain(inCurve, double(j) / fadeInFrames);
-		if (fadeOutFrames > 0 && j >= frames - fadeOutFrames)
-			f *= fadeGain(outCurve, double(frames - 1 - j) / fadeOutFrames);
+		if (fadeOutFrames > 0 && j >= fadeLength - fadeOutFrames)
+			f *= fadeGain(outCurve, double(fadeLength - 1 - j) / fadeOutFrames);
 		const float g = float(volume * std::clamp(f, 0.0, 1.0));
 		for (int c = 0; c < kCh; ++c)
 			mix[o * kCh + c] += take[j * kCh + c] * g;
@@ -375,19 +399,24 @@ std::vector<float> VoiceoverMixer::duckEnvelope(long long totalFrames,
 }
 
 std::vector<float> VoiceoverMixer::renderTakes(const std::vector<Take> &takes,
-					      std::atomic<bool> *cancel)
+					      std::atomic<bool> *cancel, qint64 maxOutputMs)
 {
 	auto canceled = [&]() { return cancel && cancel->load(); };
+	const auto frameLimit = outputFrameLimit(maxOutputMs);
+	if (!frameLimit || *frameLimit == 0)
+		return {};
 	struct Rendered {
 		std::vector<float> samples;
 		long long startFrame = 0;
 		double volume = 1.0;
 		int fadeIn = 0, fadeOut = 0;
+		long long envelopeFrames = 0;
 		FadeCurve inCurve = FadeCurve::Linear, outCurve = FadeCurve::Linear;
 	};
 	std::vector<Rendered> rendered;
 	rendered.reserve(takes.size());
 	long long totalFrames = 0;
+	const long long limit = *frameLimit;
 
 	// Files the fast path cannot read, decoded once per mix however many
 	// takes cut from them.
@@ -396,8 +425,13 @@ std::vector<float> VoiceoverMixer::renderTakes(const std::vector<Take> &takes,
 		if (canceled())
 			return {};
 		Rendered r;
+		r.startFrame = t.outStartMs * kRate / 1000;
+		if (limit >= 0 && r.startFrame >= limit)
+			continue;
+		const long long remaining = limit >= 0 ? limit - r.startFrame : -1;
 		// Honor trim/split: take only [srcStart, srcStart+play] of the source.
-		if (std::optional<std::vector<float>> span = canonicalWavSpan(t.path, t.srcStartMs, t.playMs)) {
+		if (std::optional<std::vector<float>> span = canonicalWavSpan(
+			    t.path, t.srcStartMs, t.playMs, remaining, &r.envelopeFrames)) {
 			r.samples = std::move(*span);
 		} else {
 			auto it = decoded.find(t.path);
@@ -405,13 +439,14 @@ std::vector<float> VoiceoverMixer::renderTakes(const std::vector<Take> &takes,
 				it = decoded.emplace(t.path, decodeToFloat(t.path)).first;
 			const std::vector<float> &full = it->second;
 			const auto [s0, len] = takeSpan((long long)full.size() / kCh, t.srcStartMs, t.playMs);
-			if (len > 0)
-				r.samples.assign(full.begin() + s0 * kCh, full.begin() + (s0 + len) * kCh);
+			r.envelopeFrames = len;
+			const long long keep = remaining >= 0 ? std::min(len, remaining) : len;
+			if (keep > 0)
+				r.samples.assign(full.begin() + s0 * kCh, full.begin() + (s0 + keep) * kCh);
 		}
 		const long long len = (long long)r.samples.size() / kCh;
 		if (len <= 0)
 			continue;
-		r.startFrame = t.outStartMs * kRate / 1000;
 		r.volume = t.volume;
 		r.fadeIn = std::max(0, t.fadeInMs) * kRate / 1000;
 		r.fadeOut = std::max(0, t.fadeOutMs) * kRate / 1000;
@@ -422,13 +457,15 @@ std::vector<float> VoiceoverMixer::renderTakes(const std::vector<Take> &takes,
 	}
 	if (totalFrames <= 0)
 		return {};
+	if (limit >= 0)
+		totalFrames = limit; // include requested trailing silence
 
 	std::vector<float> mixbuf(size_t(totalFrames) * kCh, 0.0f);
 	for (const Rendered &r : rendered) {
 		if (canceled())
 			return {};
 		addTake(mixbuf, r.samples, r.startFrame, r.volume, r.fadeIn, r.fadeOut,
-			r.inCurve, r.outCurve);
+			r.inCurve, r.outCurve, r.envelopeFrames);
 	}
 	for (float &s : mixbuf)
 		s = std::clamp(s, -1.0f, 1.0f);
@@ -436,19 +473,25 @@ std::vector<float> VoiceoverMixer::renderTakes(const std::vector<Take> &takes,
 }
 
 QString VoiceoverMixer::mix(const QString &videoPath, double originalVolume, bool duck,
-			    const std::vector<Take> &takes, std::atomic<bool> *cancel)
+			    const std::vector<Take> &takes, std::atomic<bool> *cancel,
+			    qint64 maxOutputMs)
 {
 	auto canceled = [&]() { return cancel && cancel->load(); };
+	const auto frameLimit = outputFrameLimit(maxOutputMs);
+	if (!frameLimit || *frameLimit == 0)
+		return QStringLiteral("The audio output duration is out of range.");
 
 	// 1) Decode the base audio and every take to float @ 48k stereo.
 	std::vector<float> base = decodeToFloat(videoPath);
 	long long totalFrames = (long long)base.size() / kCh;
+	const long long limit = *frameLimit;
 
 	struct Rendered {
 		std::vector<float> samples;
 		long long startFrame = 0;
 		double volume = 1.0;
 		int fadeIn = 0, fadeOut = 0;
+		long long envelopeFrames = 0;
 		FadeCurve inCurve = FadeCurve::Linear, outCurve = FadeCurve::Linear;
 	};
 	std::vector<Rendered> rendered;
@@ -457,18 +500,25 @@ QString VoiceoverMixer::mix(const QString &videoPath, double originalVolume, boo
 		if (canceled())
 			return QStringLiteral("Canceled.");
 		Rendered r;
-		std::vector<float> full = decodeToFloat(t.path);
-		if (full.empty())
+		r.startFrame = t.outStartMs * kRate / 1000;
+		if (limit >= 0 && r.startFrame >= limit)
 			continue;
+		const long long remaining = limit >= 0 ? limit - r.startFrame : -1;
 		// Honor trim/split: take only [srcStart, srcStart+play] of the source.
-		const long long totalF = (long long)full.size() / kCh;
-		long long s0 = std::clamp<long long>(t.srcStartMs * kRate / 1000, 0, totalF);
-		long long len = t.playMs > 0 ? t.playMs * kRate / 1000 : totalF - s0;
-		len = std::clamp<long long>(len, 0, totalF - s0);
+		if (std::optional<std::vector<float>> span = canonicalWavSpan(
+			    t.path, t.srcStartMs, t.playMs, remaining, &r.envelopeFrames)) {
+			r.samples = std::move(*span);
+		} else {
+			const std::vector<float> full = decodeToFloat(t.path);
+			const auto [s0, len] = takeSpan((long long)full.size() / kCh, t.srcStartMs, t.playMs);
+			r.envelopeFrames = len;
+			const long long keep = remaining >= 0 ? std::min(len, remaining) : len;
+			if (keep > 0)
+				r.samples.assign(full.begin() + s0 * kCh, full.begin() + (s0 + keep) * kCh);
+		}
+		const long long len = (long long)r.samples.size() / kCh;
 		if (len <= 0)
 			continue;
-		r.samples.assign(full.begin() + s0 * kCh, full.begin() + (s0 + len) * kCh);
-		r.startFrame = t.outStartMs * kRate / 1000;
 		r.volume = t.volume;
 		r.fadeIn = std::max(0, t.fadeInMs) * kRate / 1000;
 		r.fadeOut = std::max(0, t.fadeOutMs) * kRate / 1000;
@@ -481,6 +531,8 @@ QString VoiceoverMixer::mix(const QString &videoPath, double originalVolume, boo
 	}
 	if (totalFrames <= 0)
 		return QStringLiteral("Nothing to mix.");
+	if (limit >= 0)
+		totalFrames = limit;
 
 	// 2) Build the mixed buffer: base * original volume * (duck envelope), then
 	//    add each take.
@@ -503,7 +555,7 @@ QString VoiceoverMixer::mix(const QString &videoPath, double originalVolume, boo
 	}
 	for (const Rendered &r : rendered)
 		addTake(mixbuf, r.samples, r.startFrame, r.volume, r.fadeIn, r.fadeOut,
-			r.inCurve, r.outCurve);
+			r.inCurve, r.outCurve, r.envelopeFrames);
 	for (float &s : mixbuf)
 		s = std::clamp(s, -1.0f, 1.0f);
 	base.clear();

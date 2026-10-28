@@ -7,4 +7,5 @@ std::string Logger::logDir() const { return std::string(); }
 std::string Logger::sessionFilePath() const { return std::string(); }
 std::vector<std::string> Logger::sessionFiles() const { return {}; }
 void Logger::clearAll() {}
+void Logger::flush() {}
 } // namespace harpia

@@ -2,6 +2,7 @@
 
 #include "EditorColors.hpp"
 
+#include <QCursor>
 #include <QHash>
 #include <QImage>
 #include <QPixmap>
@@ -72,6 +73,8 @@ public:
 	// the used-region overlay always reflects the shown source.
 	void setActiveSource(int id)
 	{
+		endPan();
+		cancelLeftEdit();
 		activeSourceId_ = id;
 		update();
 	}
@@ -161,6 +164,7 @@ signals:
 	void inspectRequested();          // "Show in inspector" from a cut's menu
 
 protected:
+	bool event(QEvent *) override;
 	void paintEvent(QPaintEvent *) override;
 	void mousePressEvent(QMouseEvent *) override;
 	void mouseMoveEvent(QMouseEvent *) override;
@@ -283,8 +287,22 @@ private:
 	int hoverOutSeg_ = -1; // hovered output segment (marker there too)
 	int hoverOutX_ = -1;   // marker x within that segment
 
-	enum class Mode { None, CreatingCut, DraggingSegment, ResizingLeft, ResizingRight };
+	enum class Mode { None, CreatingCut, DraggingSegment, ResizingLeft, ResizingRight, Panning };
 	Mode mode_ = Mode::None;
+	bool panOutput_ = false;
+	int panStartX_ = 0;
+	qint64 panStartView_ = 0;
+	double panMsPerPx_ = 0.0;
+	QCursor panPreviousCursor_;
+	bool panHadExplicitCursor_ = false;
+	void endPan();
+	QCursor editPreviousCursor_;
+	bool editHadExplicitCursor_ = false;
+	int editSegment_ = -1;
+	CutSegment editSegmentBefore_;
+	void beginLeftEdit(Mode mode, int segment = -1);
+	void restoreEditCursor();
+	void cancelLeftEdit();
 	qint64 dragStartMs_ = 0; // CreatingCut anchor (source ms)
 	qint64 dragCurMs_ = 0;
 	QPoint pressPos_;

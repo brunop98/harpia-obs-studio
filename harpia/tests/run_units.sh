@@ -26,6 +26,42 @@ LF="$(pkg-config --libs Qt6Widgets Qt6Gui Qt6Core Qt6Test Qt6OpenGL Qt6Network)"
 "$MOC" -I"$H" "$H/editor/ShortcutRegistry.hpp" -o "$WORK/moc_ShortcutRegistry.cpp"
 g++ -std=c++17 -O1 -fPIC -I"$H" $CF -c "$H/editor/ShortcutRegistry.cpp" -o "$WORK/ShortcutRegistry.o"
 g++ -std=c++17 -O1 -fPIC -I"$H" $CF -c "$WORK/moc_ShortcutRegistry.cpp" -o "$WORK/moc_ShortcutRegistry.o"
+# Module-load failures and graphics-driver failures require different recovery.
+g++ -std=c++17 -O1 -I"$H" "$HERE/videostatus_test.cpp" -o "$WORK/videostatus_test"
+g++ -std=c++17 -O1 -I"$H" "$HERE/graphicsmodulediagnostics_test.cpp" -o "$WORK/graphicsmodulediagnostics_test"
+# A diagnostic snapshot must reach disk before Error Logs reads the live file.
+g++ -std=c++17 -O1 -pthread -I"$H" -I"$ROOT/libobs" \
+	"$HERE/logger_flush_test.cpp" "$H/core/Logger.cpp" -o "$WORK/logger_flush_test"
+if [ "$(uname -s)" = Linux ]; then
+	# Compile the Windows-only probe against controlled API responses as well.
+	g++ -std=c++17 -O1 -D_WIN32 -DHARPIA_TEST_FAKE_WINDOWS -I"$HERE/support/graphics_module" -I"$H" \
+		"$HERE/graphicsmodulediagnostics_test.cpp" -o "$WORK/graphicsmodulediagnostics_fake_test"
+fi
+
+# Editor-owned prompts block their editor while recorder controls stay usable.
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/editordialogscope_test.cpp" -o "$WORK/editordialogscope_test" $LF
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/editorfiledialog_test.cpp" -o "$WORK/editorfiledialog_test" $LF
+
+# Window monitor identity survives display reordering; disconnected monitors
+# fall back to a usable screen, independently for recorder and editor.
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/windowscreen_test.cpp" "$H/ui/WindowScreen.cpp" -o "$WORK/windowscreen_test" $LF
+
+# Recursive video discovery streams bounded GUI batches and discards canceled
+# or superseded results without blocking close or tab changes.
+"$MOC" -I"$H" "$H/library/VideoFolderScanner.hpp" -o "$WORK/moc_VideoFolderScanner.cpp"
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/videofolderscan_test.cpp" "$H/library/VideoFolderScanner.cpp" \
+	"$WORK/moc_VideoFolderScanner.cpp" -o "$WORK/videofolderscan_test" $LF
+
+# Recording split preferences, one-time overrides, dialog state and safe paths.
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/autosplitdialog_test.cpp" "$H/ui/AutoSplitDialog.cpp" -o "$WORK/autosplitdialog_test" $LF
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/recordingparts_test.cpp" -o "$WORK/recordingparts_test" $LF
+
 # Preview failures stay visible and copyable without interrupting playback or
 # logging the same compiler failure on every frame.
 g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
@@ -39,15 +75,17 @@ EMOJI_FLAGS="$(pkg-config --cflags --libs libavcodec libswscale libavutil)"
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/ytdlp_test.cpp" "$H/editor/ytdlp/YtDlp.cpp" -o "$WORK/ytdlp_test" $LF
 
-# Multi-Cut: "Randomize order of selected cuts" among their own positions.
+# Multi-Cut: shuffling, navigation, and hover after interrupted edits.
 "$MOC" -I"$H" "$H/editor/TrackEditor.hpp" -o "$WORK/moc_TrackEditor_mc.cpp"
+for name in multicutshuffle trackpan trackhover; do
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
-	"$HERE/multicutshuffle_test.cpp" "$H/editor/TrackEditor.cpp" "$WORK/moc_TrackEditor_mc.cpp" \
+	"$HERE/${name}_test.cpp" "$H/editor/TrackEditor.cpp" "$WORK/moc_TrackEditor_mc.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Spotlight.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
-	"$H/ui/UiText.cpp" -o "$WORK/multicutshuffle_test" $LF
+	"$H/ui/UiText.cpp" -o "$WORK/${name}_test" $LF
+done
 
 # Two commands must never end up sharing a key: Qt fires neither.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -320,6 +358,25 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/silencetrim_test.cpp" "$H/editor/SilenceTrim.cpp" -o "$WORK/silencetrim_test" $LF
 
+# Musical pulse detection rejects silence/steady tones and follows real attacks.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/beatdetector_test.cpp" "$H/editor/BeatDetector.cpp" -o "$WORK/beatdetector_test" $LF
+
+# Named timeline markers and the output end survive saves, slices and ripple edits.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/markersmodel_test.cpp" "$H/editor/SilenceTrim.cpp" \
+	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	-o "$WORK/markersmodel_test" $LF
+
+# An explicit video end bounds the audio prefix without shifting its fades.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF $AVCF \
+	"$HERE/markeraudio_test.cpp" "$H/editor/TimelineAudio.cpp" \
+	"$H/editor/VoiceoverMixer.cpp" "$H/editor/AudioRetimer.cpp" \
+	-o "$WORK/markeraudio_test" $LF $AVLF
+
 # Social media text styles use installed fonts and preserve caption content
 # when applied or saved through the existing style/project JSON format.
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
@@ -400,6 +457,23 @@ g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -DHARPIA_SRC="\"$H\"" -I"$H" -I"$QJ
 	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
 	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" "$H/editor/script/TransformScript.cpp" \
 	-o "$WORK/coloroverlay_test" "$QJSLIB/libqjs.a" $LF
+
+# CRT controls preserve brightness, transparency and preview/export rendering.
+g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -DHARPIA_SRC="\"$H\"" -I"$H" -I"$QJS" -I"$ROOT" $CF \
+	"$HERE/crt_test.cpp" "$H/editor/shader/GpuFxGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/ComponentStack.cpp" "$H/editor/component/BuiltinComponents.cpp" \
+	"$H/editor/component/ScriptComponent.cpp" "$H/editor/component/ShaderComponent.cpp" \
+	"$H/editor/shader/ShaderRenderer.cpp" \
+	"$H/editor/timeline/TimelineCompositor.cpp" "$H/editor/timeline/Emoji.cpp" $EMOJI_FLAGS "$H/editor/timeline/Spotlight.cpp" \
+	"$H/editor/timeline/EffectClip.cpp" "$H/editor/timeline/Transitions.cpp" \
+	"$H/editor/shader/SpotlightGl.cpp" "$H/editor/script/TransformScript.cpp" \
+	-o "$WORK/crt_test" "$QJSLIB/libqjs.a" $LF
+g++ -std=c++17 -O1 -fPIC -I"$H" $(pkg-config --cflags Qt6Core) \
+	"$HERE/shaderpresets_test.cpp" -o "$WORK/shaderpresets_test" $(pkg-config --libs Qt6Core)
+g++ -std=c++17 -O1 -fPIC -I"$H" $CF \
+	"$HERE/componentpresets_test.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	-o "$WORK/componentpresets_test" $LF
 
 # Effects as components: every FxType registered, rendering pixel-for-pixel
 # what the old path did, and an unmigrated project opening with its grade.
@@ -499,14 +573,17 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/
 
 # One duration for selected videos: trim at each clip's speed, cap at the
 # shortest clip, preserve the selection, and accept/cancel through the menu.
+# Speed changes ripple later clips only on tracks that opted in.
+for name in clipduration speedripple; do
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
-	"$HERE/clipduration_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
+	"$HERE/${name}_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
 	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
 	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
-	-o "$WORK/clipduration_test" $LF
+	-o "$WORK/${name}_test" $LF
+done
 
 # Sounds for events: a rule per kind of thing ("every crossfade plays this
 # whoosh"), its clips derived and rebuilt on every change on a locked Sounds
@@ -596,6 +673,16 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
 	-o "$WORK/timelinekeys_test" $LF
 
+# The ruler marker row uses real pointer gestures and commits each drag once.
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/markers_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
+	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
+	"$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+	"$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
+	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
+	-o "$WORK/markers_test" $LF
+
 # Where a clip was split: the drawn shapes leave a gap the eye can see, the hit
 # rects still tile so the gap is not a dead strip, and only a REAL split -- one
 # whose halves would rejoin seamlessly -- gets the seam mark.
@@ -668,7 +755,7 @@ g++ -std=c++17 -O2 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 # A caption wider than the picture wraps at a space and carries on below;
 # typed line breaks are kept and a single long word is left whole.
 # Outlines keep the same proportion in reduced previews and exports.
-for name in textwrap textstylescale; do
+for name in textwrap textstylescale textbackground; do
 g++ -std=c++17 -O1 -fPIC -DHARPIA_HAVE_QJS=1 -I"$H" -I"$ROOT" -I"$QJS" $CF \
 	"$HERE/${name}_test.cpp" \
 	"$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
@@ -761,16 +848,19 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # A playback tick repaints only the band the playhead moves across -- in the
 # Multi-Cut track editor, the voiceover track and the Simple Trim bar -- not
-# the whole widget 30 times a second.
+# the whole widget 30 times a second. Also verify navigation in Simple Trim
+# and voiceover never changes clips, selection, trim boundaries or playhead.
 for h in editor/EditorWidgets editor/TrackEditor editor/VoiceoverTrack editor/ParamSlider; do
 	"$MOC" -I"$H" "$H/$h.hpp" -o "$WORK/moc_ph_$(basename "$h").cpp"
 done
+for name in playheadrepaint trimpan voiceoverpan; do
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF "$WORK/ShortcutRegistry.o" "$WORK/moc_ShortcutRegistry.o" \
-	"$HERE/playheadrepaint_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/TrackEditor.cpp" \
+	"$HERE/${name}_test.cpp" "$H/editor/EditorWidgets.cpp" "$H/editor/TrackEditor.cpp" \
 	"$H/editor/VoiceoverTrack.cpp" "$H/editor/ParamSlider.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/shader/SpotlightGl.cpp" "$H/editor/shader/EditorGlSurface.cpp" \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK"/moc_ph_*.cpp \
-	-o "$WORK/playheadrepaint_test" $LF
+	-o "$WORK/${name}_test" $LF
+done
 
 # Changing the project resolution must not stretch the picture. Renders the real
 # PreviewCanvas, so it links the widget and what it draws with.
@@ -1103,7 +1193,11 @@ else
 fi
 QT_QPA_PLATFORM=offscreen "$WORK/shortcut_dupkey_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/ytdlp_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/windowscreen_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/videofolderscan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/multicutshuffle_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/trackpan_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/trackhover_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/keylist_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/paramslider_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/uitext_test" || rc=1
@@ -1126,7 +1220,22 @@ QT_QPA_PLATFORM=offscreen "$WORK/shortcutconflict_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/crashreport_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/autopause_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/globalhotkeys_test" || rc=1
+"$WORK/videostatus_test" || rc=1
+"$WORK/graphicsmodulediagnostics_test" || rc=1
+"$WORK/logger_flush_test" || rc=1
+if [ "$(uname -s)" = Linux ]; then
+	"$WORK/graphicsmodulediagnostics_fake_test" || rc=1
+fi
+for name in editordialogscope editorfiledialog; do
+	dialog_test_status=0
+	QT_QPA_PLATFORM=offscreen "$WORK/${name}_test" || dialog_test_status=$?
+	if [ "$dialog_test_status" -ne 0 ] && [ "$dialog_test_status" -ne 77 ]; then
+		rc=1
+	fi
+done
 QT_QPA_PLATFORM=offscreen "$WORK/sendtofull_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/autosplitdialog_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/recordingparts_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/componentenvelope_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/envelopestack_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regionoverlay_test" || rc=1
@@ -1137,6 +1246,8 @@ QT_QPA_PLATFORM=offscreen "$WORK/canvasfit_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewaspect_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/motionpath_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/playheadrepaint_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/trimpan_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/voiceoverpan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/gripcursor_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineoverview_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/filmstrip_test" || rc=1
@@ -1169,6 +1280,10 @@ QT_QPA_PLATFORM=offscreen "$WORK/colorswatch_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/loadingtask_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/loadingdialog_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/silencetrim_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/beatdetector_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/markersmodel_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/markeraudio_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/markers_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/socialsafeareas_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textstylepresets_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/curvepath_test" || rc=1
@@ -1182,13 +1297,21 @@ QT_QPA_PLATFORM=offscreen "$WORK/windowpicker_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/regiondraw_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/stillweight_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/previewcache_test" || rc=1
+crt_test_status=0
 if command -v xvfb-run >/dev/null 2>&1; then
 	QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 640x480x24" "$WORK/gpufx_test" || rc=1
 	QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 640x480x24" "$WORK/coloroverlay_test" || rc=1
+	QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 640x480x24" "$WORK/crt_test" || crt_test_status=$?
 else
 	QT_QPA_PLATFORM=offscreen "$WORK/gpufx_test" || rc=1
 	QT_QPA_PLATFORM=offscreen "$WORK/coloroverlay_test" || rc=1
+	QT_QPA_PLATFORM=offscreen "$WORK/crt_test" || crt_test_status=$?
 fi
+if [ "$crt_test_status" -ne 0 ] && [ "$crt_test_status" -ne 77 ]; then
+	rc=1
+fi
+"$WORK/shaderpresets_test" || rc=1
+"$WORK/componentpresets_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/assetcomponent_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/effectarea_test" || rc=1
@@ -1202,6 +1325,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/captionlane_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/tracks_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/slip_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/clipduration_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/speedripple_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/soundrules_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/soundlibrary_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/clipshuffle_test" || rc=1
@@ -1224,6 +1348,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/pixelbands_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/mask_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textwrap_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textstylescale_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/textbackground_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/coverart_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/emoji_test" "$H/resources/emoji/noto-emoji.pack" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/timelineslice_test" || rc=1

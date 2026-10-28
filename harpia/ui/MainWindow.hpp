@@ -4,6 +4,7 @@
 #include "ui/MainLayoutParams.hpp"
 #include "core/CaptureManager.hpp"
 #include "core/RecordingController.hpp"
+#include "core/AutoSplitSettings.hpp"
 #include "core/DiskSpace.hpp"
 #include "core/FollowMouse.hpp"
 #include "core/MultiArea.hpp"
@@ -27,6 +28,7 @@
 #include <QPoint>
 #include <QMainWindow>
 #include <QSize>
+#include <QSet>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -207,6 +209,8 @@ private:
 	// De-duplicate a preset name against the other presets ("Name (2)"…).
 	std::string uniquePresetName(const std::string &wanted, const std::string &selfId) const;
 	void startRecording();
+	AutoSplitSettings recordingSplitSettings() const;
+	void finalizeRecordingParts();
 	void applyLiveCapture(); // (re)bind the live capture to the current mode
 	void beginRecordFlow(); // readiness gate -> countdown or immediate start
 	void beginStart();      // enter Starting… and kick off the recording
@@ -226,6 +230,7 @@ private:
 	void remuxInBackground(const QString &mkvPath, const QString &mp4Path);
 	void logRecordingStart(const Preset &p, const QString &recordedPath, const QString &finalPath,
 			       const QString &webcamPath, uint32_t baseW, uint32_t baseH, int fps);
+	void logRecordingSetup(const char *reason) const;
 	void updateButtons();
 	// Open the editor for the active preset + persist. If initialPage is given
 	// (e.g. "Webcam"), the editor opens with that settings page selected.
@@ -260,6 +265,7 @@ private:
 	void openDevPanel();
 
 protected:
+	void showEvent(QShowEvent *event) override;
 	void changeEvent(QEvent *event) override; // track window activation
 	// Windows: WM_DEVICECHANGE forces an immediate hardware re-probe, so the
 	// periodic probe can be lazy without missing a plugged-in camera or mic.
@@ -277,6 +283,7 @@ protected:
 	void resizeEvent(QResizeEvent *event) override; // drives applyResponsiveLayout
 
 private:
+	bool shownOnce_ = false;
 	// How the screen is captured (a global tool, not part of a preset).
 	// Mirrors RecordMode in core/ModeCapabilities.hpp, which owns the rules for
 	// what each mode supports. Kept as a separate enum only because this one is
@@ -359,6 +366,7 @@ private:
 	// which is precisely what the conflict dialog asks for.
 	void setHotkeysSuspended(bool on);
 	bool hotkeysSuspended_ = false;
+	bool presetEditorOpen_ = false; // recording settings stay fixed until Save or Cancel
 
 	FollowMouse followMouse_;
 	QTimer *followTimer_ = nullptr;
@@ -371,6 +379,9 @@ private:
 	                              // crop or restart the readiness debounce
 	void tickFollowMouse();
 	void syncFollowMouse(); // start/stop the timer to match the current state
+	bool canLockRecordingRegion() const;
+	void setRecordingRegionLocked(bool locked);
+	bool regionFollowLocked_ = false; // temporary hold at the current position, survives Pause/Resume
 
 	// The Follow Mouse shortcut. Unlike Zoom and Spotlight, following is on
 	// from the first frame, so the key parks the camera rather than starting
@@ -441,6 +452,7 @@ private:
 	void syncMultiArea();
 	void tickMultiArea();
 	void updateAreaOverlay();
+	void setMultiAreaEnabled(bool enabled);
 	void onArrangeAreas();
 	// The area from a window: point and click (WindowPicker), then optionally
 	// keep the area on that window as it moves or resizes.
@@ -658,6 +670,7 @@ private:
 	// a bool would be cleared by whichever finished first while the rest were
 	// still writing.
 	int remuxActive_ = 0;
+	QSet<QString> pendingRecordingTargets_;
 
 	// Pre-recording countdown state.
 	bool countingDown_ = false;
@@ -681,6 +694,9 @@ private:
 	QString lastRecordedPath_;
 	QString lastScreenPath_;
 	QString lastWebcamPath_;
+	QStringList lastRecordingFiles_;
+	bool lastAutoSplit_ = false;
+	int recordingPart_ = 1;
 	qint64 lastContentMs_ = 0;
 	int lastMinSeconds_ = 0;
 };

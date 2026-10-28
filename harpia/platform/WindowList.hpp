@@ -20,9 +20,12 @@
 // there is nothing to ask, the list is empty and the feature hides itself.
 
 #include <QRect>
+#include <QSet>
+#include <QSize>
 #include <QString>
 #include <QVector>
 
+#include <algorithm>
 #include <optional>
 
 namespace harpia {
@@ -59,11 +62,16 @@ std::optional<QPoint> cursorPos();
 
 namespace window_region {
 
-// The topmost window under `p`, skipping our own; -1 if none.
-inline int windowAt(const QVector<DesktopWindow> &topmostFirst, const QPoint &p)
+// The topmost window under `p`, skipping our own unless explicitly allowed.
+// The caller can allow a particular editor window to be recorded without
+// making recorder controls and capture overlays pickable. A zero handle is
+// never an own-window exception. Returns -1 if there is no eligible window.
+inline int windowAt(const QVector<DesktopWindow> &topmostFirst, const QPoint &p,
+		    const QSet<quintptr> &allowedOwnWindows = {})
 {
 	for (int i = 0; i < topmostFirst.size(); ++i)
-		if (!topmostFirst[i].ours && topmostFirst[i].bounds.contains(p))
+		if ((!topmostFirst[i].ours || (topmostFirst[i].id != 0 && allowedOwnWindows.contains(topmostFirst[i].id))) &&
+		    topmostFirst[i].bounds.contains(p))
 			return i;
 	return -1;
 }
@@ -89,8 +97,22 @@ inline int monitorFor(const QRect &window, const QVector<QRect> &monitors)
 // relative to the monitor's top-left (the crop's space), with an even width
 // and height (the encoders' 4:2:0 needs them). nullopt when too little of it
 // is on that monitor to record (under 16 px either way).
-inline std::optional<QRect> regionForWindow(const QRect &window, const QRect &monitor)
+// During a take, fixedSize keeps the already chosen output dimensions while
+// following the window's position. Shrinking the window or moving it partly
+// offscreen must not shrink the capture source inside a larger encoded frame.
+inline std::optional<QRect> regionForWindow(const QRect &window, const QRect &monitor,
+					   QSize fixedSize = {})
 {
+	if (fixedSize != QSize()) {
+		if (fixedSize.width() < 16 || fixedSize.height() < 16 ||
+		    fixedSize.width() > monitor.width() || fixedSize.height() > monitor.height() ||
+		    !window.intersects(monitor))
+			return std::nullopt;
+		QPoint top = window.topLeft() - monitor.topLeft();
+		top.setX(std::clamp(top.x(), 0, monitor.width() - fixedSize.width()));
+		top.setY(std::clamp(top.y(), 0, monitor.height() - fixedSize.height()));
+		return QRect(top, fixedSize);
+	}
 	QRect r = window.intersected(monitor);
 	if (r.width() < 16 || r.height() < 16)
 		return std::nullopt;

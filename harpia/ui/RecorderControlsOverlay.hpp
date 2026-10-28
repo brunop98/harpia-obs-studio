@@ -41,6 +41,10 @@ public:
 	// do -- and there are never two dead buttons sitting on the desktop.
 	void setState(bool recording, bool paused, bool pauseEnabled, bool stopEnabled);
 
+	// Hold the current capture region in place. The owner decides which takes
+	// support this; starting/stopping disables the toggle with the Stop button.
+	void setRegionLock(bool available, bool locked);
+
 	// Automatic Zoom: show a "2×" chip while the recording is zoomed in, and
 	// nothing at all otherwise. The pill is the only thing on screen that is
 	// guaranteed to be visible and guaranteed NOT to be in the file, which
@@ -64,6 +68,7 @@ signals:
 	void startClicked();
 	void pauseClicked();
 	void stopClicked();
+	void regionLockToggled(bool locked);
 	// "Hide until next recording" from the right-click menu. The panel is on
 	// screen whenever the app is, so it needs a way to be got rid of that does
 	// not mean quitting.
@@ -88,6 +93,9 @@ private:
 	void restorePosition();        // last saved pos, clamped onto a visible screen
 	void savePosition();
 	void excludeFromCapture(); // Windows: WDA_EXCLUDEFROMCAPTURE
+	void updateRegionLockButton();
+	void updateRegionLockAppearance();
+	void keepRegionLockVisible();
 
 	QLabel *zoomChip_ = nullptr;
 	QLabel *spotChip_ = nullptr;
@@ -95,11 +103,13 @@ private:
 	QPushButton *startButton_ = nullptr;
 	QPushButton *pauseButton_ = nullptr;
 	QPushButton *stopButton_ = nullptr;
+	QPushButton *regionLockButton_ = nullptr;
 	QPropertyAnimation *fade_ = nullptr;
 	QPoint dragOffset_;
 	bool dragging_ = false;
 	bool paused_ = false;
 	bool recording_ = false;
+	bool regionLockAvailable_ = false;
 	bool stateApplied_ = false; // setState has run at least once
 };
 

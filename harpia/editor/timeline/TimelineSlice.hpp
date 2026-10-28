@@ -65,6 +65,9 @@ inline TimelineModel sliceTimeline(const TimelineModel &src, qint64 fromMs, qint
 	fromMs = std::max<qint64>(0, fromMs);
 	if (toMs <= fromMs)
 		return out; // an empty window is empty, not the whole project
+	// A chosen export range owns its boundary, including a trailing gap or a
+	// selection beyond the project's end marker. The source remains untouched.
+	out.videoEndMs = toMs - fromMs;
 
 	out.tracks.reserve(src.tracks.size());
 	for (const TlTrack &t : src.tracks) {
@@ -128,8 +131,11 @@ inline TimelineModel sliceTimeline(const TimelineModel &src, qint64 fromMs, qint
 	}
 
 	for (qint64 m : src.markers)
-		if (m >= fromMs && m < toMs)
+		if (m >= fromMs && m < toMs) {
 			out.markers.append(m - fromMs);
+			if (src.markerLabels.contains(m))
+				out.markerLabels.insert(m - fromMs, src.markerLabels.value(m));
+		}
 
 	return out;
 }

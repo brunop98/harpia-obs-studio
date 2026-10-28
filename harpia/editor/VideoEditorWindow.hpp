@@ -158,6 +158,8 @@ struct EditorSource {
 	qint64 durationMs = 0;
 	int width = 0;
 	int height = 0;
+	double fps = 0.0; // original video rate, retained when media is unavailable
+	bool missing = false; // project reference retained without a decoded source
 	std::unique_ptr<FrameSeeker> seeker;
 	TimelineThumbs *thumbs = nullptr; // parented to the window
 	QVector<QImage> thumbCache;       // last emitted filmstrip
@@ -196,6 +198,9 @@ public:
 	// Clip Library), and the recorder window needs the answer without either of
 	// them having to tell it.
 	static bool anyOpen() { return openCount_ > 0; }
+	// Ask every independent editor to close before the recorder/application
+	// shuts down. Cancel, or an editor's active modal task, keeps it running.
+	static bool closeAllWindows();
 
 	// The project's output format, after resolving "Auto" against the first
 	// source. Everything that renders or encodes goes through these two, so the
@@ -288,6 +293,7 @@ protected:
 
 signals:
 	void exported(const QString &path);
+	void recordingsDeleted(const QStringList &paths);
 
 private slots:
 	// The Ctrl+V dispatcher. Ctrl+V has two plausible meanings -- the clips you
@@ -337,6 +343,7 @@ private:
 private slots:
 	void onExportFinished(bool ok, bool canceled, const QString &err);
 	void openSilenceTrim();
+	void openBeatDetection(int track, int clip);
 	void onPlayPause();
 	void onResetMarker(); // move the playhead back to the start
 	void onPlayTick();
@@ -355,6 +362,7 @@ private slots:
 	void onSourceRowChanged();   // sidebar selection → setActiveSource
 	void onSourceDoubleClicked(QListWidgetItem *item); // append whole clip as a cut
 	void onRemoveSource();       // remove the selected source (if unused)
+	void openRecordingLibrary(); // Add > Add from Library (Full editing only)
 	void refreshLibrary();       // rescan the library folders into the Library tab
 	void onLibraryDoubleClicked(QListWidgetItem *item); // add a library clip as a source
 	void onThumbReady(const QString &path);             // library thumbnail decoded
@@ -384,6 +392,7 @@ private:
 	// Every keyboard shortcut, registered rather than hard-wired, so the panel
 	// can list and rebind them live.
 	ShortcutRegistry *shortcuts_ = nullptr;
+	QObject *mouseHistoryFilter_ = nullptr;
 	ShortcutPanel *shortcutPanel_ = nullptr;
 	void openShortcutPanel();
 
@@ -519,6 +528,7 @@ private:
 	QString exportSettingsSummary(const ClipExporter::Options &options) const;
 	void startPlayback();
 	void stopPlayback();
+	void stopAtTimelineEnd(qint64 endMs);
 	// The three editor modes map 1:1 onto stack_ page indices.
 	enum class EditMode { Trim = 0, MultiCut = 1, Full = 2 };
 	void setEditMode(EditMode mode);
@@ -632,6 +642,7 @@ private:
 	// The Add menu (Full editing): one button, everything that puts something
 	// new on the timeline as its entries.
 	QPushButton *addMenuBtn_ = nullptr;
+	QAction *addLibraryAct_ = nullptr;
 	QAction *addTextAct_ = nullptr;
 	QAction *addRandomTextAct_ = nullptr;
 	QAction *subtitleAct_ = nullptr;
@@ -727,6 +738,10 @@ private:
 	int nextSourceId_ = 0;
 	QListWidget *sourceList_ = nullptr;      // "Sources" tab of the floating panel
 	QListWidget *libraryList_ = nullptr;     // "Library" tab (existing recordings)
+	QTabWidget *sourcesTabs_ = nullptr;
+	QWidget *multiCutSourceRow_ = nullptr;  // source picker above the Multi-Cut tracks
+	QComboBox *multiCutSourceCombo_ = nullptr;
+	void refreshMultiCutSources();
 	QStringList libraryFolders_;             // app recording folders to scan
 	ThumbnailCache *thumbCache_ = nullptr;   // async thumbnails for the Library tab
 	QWidget *sourcesPanel_ = nullptr;        // floating, toggleable tool window
@@ -734,6 +749,7 @@ private:
 	bool sourcesPlaced_ = false;             // has the panel been positioned yet?
 	bool sourcesFirstShown_ = false;         // gate the one-time initial show
 	void showSourcesPanel();                 // position (first time) + show + raise
+	void showSourceFileMenu(QListWidget *list, const QPoint &pos);
 	// The "nothing loaded yet" panel: shown while there are no sources, hidden
 	// the moment one arrives, and kept centred over the preview.
 	QWidget *emptyPanel_ = nullptr;
@@ -925,13 +941,16 @@ private:
 	QWidget *variationsBox_ = nullptr;
 	InspectorSection *textSection_ = nullptr; // titled "Text" or "Random text"
 	// Random clip (timeline/ClipVariations.hpp): the slot's footage choices,
-	// one version of the video each. One row per choice: its button and its
-	// remove button, made when the count changes and updated in place on
+	// one version of the video each. One row per choice with source, timestamp,
+	// preview and removal controls, made when the count changes and updated on
 	// every other sync (a slip renames the shown one on every mouse move).
 	QWidget *randomClipBox_ = nullptr;
 	QVBoxLayout *randomClipRows_ = nullptr;
 	QVector<QPushButton *> randomClipPicks_;
 	QVector<QPushButton *> randomClipDels_;
+	QVector<QPushButton *> randomClipVideos_;
+	QVector<QPushButton *> randomClipSlips_;
+	QVector<QLabel *> randomClipTimes_;
 	QLabel *randomClipCount_ = nullptr;
 	QPushButton *randomClipPrev_ = nullptr;
 	QPushButton *randomClipNext_ = nullptr;
@@ -947,6 +966,9 @@ private:
 	void removeRandomClipOption(int k);
 	void importRandomClipOption();
 	void fillRandomClipAddMenu(QMenu *menu);
+	void fillRandomClipSourceMenu(QMenu *menu, int k);
+	void editRandomClipOption(int k, int sourceId = -1);
+	void importRandomClipOptionSource(int k);
 	QString sourceLabel(int sourceId) const; // its file name, no folder
 	QLabel *textMainCap_ = nullptr;  // "Text 1", over the main text of a Random text
 	QVBoxLayout *variantListLayout_ = nullptr;
@@ -978,9 +1000,8 @@ private:
 	QSpinBox *fontSizeSpin_ = nullptr;
 	QCheckBox *boldChk_ = nullptr;
 	QCheckBox *italicChk_ = nullptr;
-	QCheckBox *titleCaseChk_ = nullptr; // Title Case, in step with caseCombo_
+	QCheckBox *titleCaseChk_ = nullptr;
 	QComboBox *alignCombo_ = nullptr;
-	QComboBox *caseCombo_ = nullptr; // As typed / Title Case / ALL UPPER / all lower
 	QPushButton *textColorBtn_ = nullptr;
 	QDoubleSpinBox *outlineWSpin_ = nullptr;
 	QPushButton *outlineColorBtn_ = nullptr;
@@ -989,11 +1010,14 @@ private:
 	// through the layout itself -- hiding the field leaves its label behind.
 	QFormLayout *textForm_ = nullptr;
 	QCheckBox *boxChk_ = nullptr;
+	QComboBox *boxShapeCombo_ = nullptr;
 	QPushButton *boxColorBtn_ = nullptr;
 	QSpinBox *boxPadXSpin_ = nullptr;
 	QSpinBox *boxPadYSpin_ = nullptr;
 	QSpinBox *boxRadiusSpin_ = nullptr;
-	QDoubleSpinBox *boxOpacitySpin_ = nullptr;
+	QWidget *boxOpacityRow_ = nullptr;
+	QSlider *boxOpacitySlider_ = nullptr;
+	QLabel *boxOpacityValue_ = nullptr;
 	// Subtitles from speech (Full editing): the dialog does the work and hands
 	// back aligned caption clips; the window puts them on a "Subtitles" lane as
 	// one undo step.
@@ -1118,6 +1142,8 @@ private:
 	// question and the "Project loaded" confirmation. openProjectAt() is quiet.
 	void applyProjectJson(const QJsonObject &root, const QString &path, bool quiet,
 			      bool showSuccess = true);
+	void clearProjectMedia();
+	int addMissingProjectSource(const QJsonObject &source, const QString &path);
 	// Waveform peaks for many files at once, on every core. See the .cpp:
 	// loadPeaks is a pure function of its path, so the calls are independent.
 	static QHash<QString, QVector<float>> decodePeaks(const QStringList &paths);
@@ -1203,6 +1229,9 @@ private:
 	void editSharedComponent(const QString &typeId, int ordinal,
 				 const std::function<void(ComponentInstance &)> &fn);
 	void afterComponentEdit();
+	void saveComponentPreset(const QString &typeId, int ordinal);
+	void applyComponentPreset(const QString &presetId, const QString &typeId = QString(), int ordinal = -1);
+	void deleteComponentPreset(const QString &presetId);
 	// A component's own time for the clip it is on. Keys are clip-relative, and
 	// with several clips selected each has its own offset.
 	qint64 componentEditTimeFor(const ComponentInstance &ci) const;

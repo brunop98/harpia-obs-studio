@@ -17,13 +17,24 @@ needs (see [The OBS tree](#the-obs-tree)).
   Regions can be saved and reused by name.
 - **Pick a window:** point at any window and click — the area becomes that
   window as you see it (without its invisible border or shadow). Optionally
-  **follow** it as it moves or resizes, even while recording.
+  **follow** it as it moves or resizes. During a recording the frame moves
+  with the window while keeping the take's original dimensions.
 - **Region frame on the desktop:** resize from its handles, move it from the
   tab above it, start recording from the button under it; it stays out of the
   recording itself.
 - **Follow Mouse:** the region pans to keep the pointer in view.
+  While recording, the floating controls' **padlock** holds the area at its
+  current position so you can use sliders or other controls elsewhere. Drag
+  the grip above the locked area to reposition it; it stays locked at the new
+  position. Click the padlock again to resume following. The lock survives
+  Pause/Resume and resets when the take ends; it does not change the profile's
+  Follow Mouse setting.
 - **Multiple areas:** lay out several same-size areas, across monitors; the
-  recording switches to whichever one the mouse moves into.
+  recording switches to whichever one the mouse moves into. For Custom Region
+  presets, select **Recording areas → Region movement → Multiple areas** in
+  Preset Settings. Or right-click the recording frame and choose **Multiple
+  areas → Arrange areas…** to enable it and place areas directly. Switching it
+  off keeps the layout for next time; layout changes are locked during a take.
 - **Zoom** (F4) and **spotlight** effects while recording; click ripples and a
   cursor highlight.
 - **Webcam** recorded alongside as its own file, with a live preview.
@@ -35,29 +46,101 @@ needs (see [The OBS tree](#the-obs-tree)).
   name template, webcam, audio, region behaviour.
 - **Global hotkeys** (F9 record, F10 pause, F4 zoom), a countdown, floating
   recording controls, **idle auto-pause** and pause-when-another-app-is-focused.
+- **Record editing tutorials:** the recorder and video editor work in separate
+  windows. Keep editing while recording, and use the floating Record/Pause/Stop
+  controls or recording shortcuts with the editor focused. Editor dialogs leave
+  those controls usable. Record the monitor, draw a region, or use **Pick a
+  window…** to select the editor on supported platforms. Turn off a profile's
+  focus restriction if it is set to pause while using another application.
+- **Auto Split:** set **Auto split the recording file** under **Preset Settings
+  → Recording** to split by recorded minutes or approximate file size. Each
+  preset saves its own enable switch, split mode and limits across restarts.
+  Existing saved Auto Split preferences are carried over to existing presets.
+  Capture continues while the muxer opens the next file. After stopping, all
+  parts are saved as `_part001`, `_part002`, and so on, including the shorter
+  final part. Paused time is excluded. Supports MP4, MKV, MOV and AVI video;
+  a separate webcam file stays continuous and recording markers cover the full
+  take. Splits wait for video keyframes; file sizes also include container
+  overhead, so limits are approximate. For a strict Discord upload cap,
+  use **Optimize for sharing → Discord** after recording.
 - **Multi-monitor** with per-preset display choice, and per-monitor DPI.
+  The recorder and editor each reopen on their last monitor, with a fallback
+  to an available screen when that monitor is disconnected.
 
 ### Editing
+
+In every timeline, hold the middle mouse button and drag left or right to pan
+the visible time window. Scroll to zoom in when the whole timeline is fitted.
+This also works in the voiceover and keyframe lanes.
+The mouse's Back and Forward side buttons run Undo and Redo in the editor.
 
 Three modes, each one step up from the last:
 
 - **Simple Trim** — keep one section, with crop and speed.
 - **Multi-Cut** — keep several sections, each at its own speed; randomise
-  their order; export them joined or **each to its own file**.
+  their order; export them joined or **each to its own file**. Use **Source
+  video** above the tracks to switch videos and keep cuts from all of them
+  in the same output. **Add video…** opens a thumbnail grid with **Harpia
+  Editor**, **Downloads**, and **Videos** tabs. Each scans its folders and
+  subfolders in the background; thumbnails load as they come into view.
+  The picker remembers your last selected tab across launches.
+  Use **Order by** to sort by newest date, largest size, or name (A to Z).
+  Select a video to load it without removing cuts. **Import from folder…**
+  at the bottom opens the system file picker for another video.
 - **Full Editing** — a multi-track timeline:
   - video, image, text, effect and audio clips; overlapping clips become
     **transitions**; marquee selection, groups, ripple, snapping;
+  - **Auto ripple on speed change:** enable it in a track header's right-click
+    menu to move following clips when a clip gets faster or slower, preserving
+    existing spacing. The option saves per track; undo restores the speed and
+    shifted positions together;
+  - **Add → Add from Library…** opens your recorded videos beside the current
+    project. Drag a recording onto a timeline lane, or double-click to add it
+    at the playhead;
+  - **markers** in the ruler above the tracks: double-click to add one,
+    drag to move it, or right-click to rename/delete it. Named markers draw
+    dotted guides across every track and provide snap points. Drag the
+    yellow **End** marker, or choose **Set video end here**, to set the end
+    of playback and full-timeline exports. Later clips remain editable;
+    **Reset video end** restores the automatic end. Markers and the end
+    boundary are saved with the project and support undo/redo;
+  - **beat markers:** right-click a music or video clip and choose **Detect
+    beats…**, or use **Tools → Detect beats…**. Review the estimated tempo and
+    add every beat, every second beat or every fourth beat in one undo step.
+    Analysis runs locally on the kept source range (up to 30 minutes), respects
+    trim, playback speed and timeline position, and keeps existing markers and
+    the video end. Best with steady music. Generated markers are fixed timeline
+    markers; moving or retiming the music does not move them;
+  - **random clip options:** each choice has **Video…** to select its source
+    and **Slip…** to preview and choose its moment. Drag the Slip filmstrip or
+    enter **Source start** in seconds with millisecond precision. Options share
+    one timeline position, duration, speed and look, while their source times
+    stay independent. Cancel leaves the option unchanged; OK is one undo step;
   - **keyframes** per channel (position, scale, rotation, opacity) with easing
     curves, and **curved motion paths** with Bezier handles on the preview;
   - **components** stacked on any clip: transform and speed, ShaderToy-style
     **shaders** (`.frag`), **JavaScript** transform scripts, typing, subtitles,
     bullets and more — written in a watched folder and picked up live;
+    Speed shows the kept duration at 1× and the resulting duration below its
+    Factor control, updating as you adjust it (totals for multiple clips);
+    [CRT](CRT_EFFECT.md) has brightness-preserving scanlines, beam controls,
+    phosphor masks, glow, brightness and gamma controls;
+  - **component presets:** open a component's chevron menu and choose **Save
+    as preset…** to reuse its settings, keyframes and In/Out timings in any
+    project. Use **Apply preset** on an existing component, or **Add Component
+    → Presets** to find saved looks by name. Transform and Speed support presets
+    too. Applying to several selected clips is one undo step; locked tracks are
+    respected. Sound presets retain their audio. Custom shaders and scripts
+    still need to be installed;
   - **effect diagnostics**: a nonmodal preview warning names a missing or
     failed custom shader; **Details…** shows a copyable report and recovery
     steps. Repeated frames log the same problem once. Exports refuse to
     silently omit the effect; restore/fix its `.frag` file or disable it;
   - **text** with presets and Unity-style **rich text** tags
     (`<b>`, `<color=#f80>`, `<size=150%>`…);
+  - text **Background → Shape → Fit text** creates a rounded sticker following
+    each line's width, including wrapped lines. Colour, opacity, padding and
+    corner radius stay editable. **Rectangle** keeps the full-block background;
   - **Random text**: one caption with several alternatives, exported as one
     video per combination (with saved lists of alternatives);
   - **Inverse Selection** masks, effect clips, **sounds for events**, tags;
@@ -161,8 +244,39 @@ The binary lands at `build_x64\rundir\RelWithDebInfo\bin\64bit\harpia.exe`.
 This assembles `build_x64\dist\Harpia\`: `bin\64bit` (the exe, its DLLs, the
 `obs-ffmpeg-mux` helper, the NVIDIA/AMD/Intel encoder test helpers, Qt's
 plugins), `obs-plugins\64bit` and `data\`, with the Visual C++ runtime next to
-the exe, and checks that nothing it needs is missing. Zip the folder to share
-it.
+the exe. Both `-Package` and `zip-harpia.bat` validate critical runtime files,
+including `libobs-d3d11.dll`, before creating a distributable. Debug packages
+are refused because Visual Studio's debug runtime cannot be redistributed;
+use `Release` or `RelWithDebInfo`. Zip the entire folder to share it.
+
+Building only `harpia-recorder` also builds its graphics modules. On Windows,
+each build restores their copies beside the executable if they were removed.
+
+If the video engine reports error **-5**, Windows could not load its renderer
+or one of its dependencies. Extract a fresh complete package and install or
+repair Microsoft's [Visual C++ x64 Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe).
+The startup error includes a Windows loader check with the module path and
+error number. Error **126** can mean a missing dependency even when the renderer
+exists; **127** means a missing entry point, often incompatible library versions;
+**193** indicates an incompatible or invalid binary. Error **-2** is a separate
+graphics-device or driver support failure.
+
+Startup and each recording attempt include diagnostic snapshots in **Error Logs**:
+OS/architecture, display positions and DPI scaling, selected monitor, region
+coordinates in device pixels, source and cropped sizes, scene transforms,
+requested/actual video settings, encoder/bitrate, audio and split settings.
+GPU model, driver and reported memory are logged when the graphics context is
+available; Windows also lists display adapters without needing the renderer.
+These snapshots are flushed to disk and do not run on every frame or mouse move.
+To report a problem, reproduce it, open **Error Logs**, keep **Info** enabled,
+then use **Copy** or **Open Log File** to include the complete current session.
+
+For `harpia_region_crop` failures, look for the preceding `[crop_filter]` error:
+it distinguishes missing `crop_filter.effect` data, an unavailable graphics
+context, and shader compilation failure (including compiler details when
+available). OBS can still print `private source ... created` after initialization
+fails because it keeps a source wrapper; the capture snapshot reports whether
+the actual plugin data is valid.
 
 At run time nothing auto-installs: the exe needs its DLLs, the OBS plugins and
 the Visual C++ runtime beside it, which the build `rundir` and the package
@@ -226,6 +340,8 @@ The legacy Linux shell runners use `g++`, Qt 6 and FFmpeg directly:
 ```sh
 harpia/tests/run_units.sh  [work-dir]   # logic, widgets, compositor, file formats
 harpia/tests/run_avsync.sh [work-dir]   # export, A/V sync, and the real editor window
+python3 harpia/tests/graphicsruntime_test.py [path-to-cmake] # targeted renderer build/staging
+pwsh -File harpia/tests/windowspackage_test.ps1             # Windows package-layout fixtures
 ```
 
 They print results per program and exit non-zero on failures. Editor window

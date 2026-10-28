@@ -359,18 +359,25 @@ protected:
 	void mouseReleaseEvent(QMouseEvent *) override;
 	void wheelEvent(QWheelEvent *) override;
 	void leaveEvent(QEvent *) override;
+	bool event(QEvent *) override;
 
 private:
 	int msToX(qint64 ms) const;
 	qint64 xToMs(int x) const;
 	qint64 visibleMs() const; // duration / zoom
 	void clampView();
+	void finishPan();
 	// (Re)render the bar background + filmstrip into stripCache_ when the view
 	// changed — repaints then blit it instead of rescaling every tile.
 	void ensureStripCache(const QRect &bar);
 
-	enum class Grab { None, Start, End, Playhead };
+	enum class Grab { None, Start, End, Playhead, Pan };
 	Grab grab_ = Grab::None;
+	int panStartX_ = 0;
+	qint64 panStartView_ = 0;
+	double panMsPerPx_ = 0.0;
+	QCursor panCursor_;
+	bool panHadCursor_ = false;
 
 	TimelineLayoutParams lp_;
 	bool tallBar_ = false;

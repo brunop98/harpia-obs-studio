@@ -150,7 +150,7 @@ void RegionDraw::paintEvent(QPaintEvent *)
 		p.drawLine(QPointF(pointer_.x() + 0.5, 0), QPointF(pointer_.x() + 0.5, height()));
 	}
 	if (!sel.isEmpty()) {
-		p.setPen(QPen(kGreen, 2));
+		p.setPen(QPen(kGreen, 2, Qt::DotLine, Qt::FlatCap));
 		p.setBrush(Qt::NoBrush);
 		p.drawRect(QRectF(sel).adjusted(1, 1, -1, -1));
 		// The size it will record at, beside the pointer, kept on screen.

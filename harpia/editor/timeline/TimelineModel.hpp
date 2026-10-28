@@ -114,6 +114,8 @@ inline const char *tlLaneName(int lane)
 
 // Styling for a text clip. Rendered by TimelineCompositor with QPainter, so the
 // preview and the exported frames use identical text.
+enum TlTextBoxShape { TlTextBoxRectangle = 0, TlTextBoxFitText = 1 };
+
 struct TlText {
 	QString text = QStringLiteral("Text");
 	QString fontFamily;          // empty = the app's default family
@@ -123,15 +125,15 @@ struct TlText {
 	QColor color = QColor(0xff, 0xff, 0xff);
 	double outlineWidth = 3.0;   // 0 = no outline
 	QColor outlineColor = QColor(0x00, 0x00, 0x00);
-	// Background "sticker" behind the text, the Instagram/TikTok kind: one
-	// continuous rounded shape wrapping the whole block, however many lines it
-	// has, sized from the text and re-measured whenever the text changes.
+	// A rectangular background, or a joined sticker following each line's width.
+	// Both are re-measured when the text changes, including automatic wrapping.
 	//
 	// Padding and radius are in the SAME reference units as fontPx (relative to
 	// a 1080-tall canvas) and are scaled by the same factor when rendering, so
 	// the corners and the breathing room track the text size instead of
 	// shrinking away on a big canvas.
 	bool boxEnabled = false;
+	int boxShape = TlTextBoxRectangle; // older projects keep their rectangular background
 	QColor boxColor = QColor(0, 0, 0);
 	double boxOpacity = 0.6;  // independent of boxColor, so the colour picker
 				  // and the transparency don't fight each other
@@ -167,7 +169,7 @@ struct TlText {
 		return text == o.text && variations == o.variations && random == o.random && fontFamily == o.fontFamily && fontPx == o.fontPx &&
 		       bold == o.bold && italic == o.italic && color == o.color &&
 		       outlineWidth == o.outlineWidth && outlineColor == o.outlineColor &&
-		       boxEnabled == o.boxEnabled && boxColor == o.boxColor &&
+		       boxEnabled == o.boxEnabled && boxShape == o.boxShape && boxColor == o.boxColor &&
 		       boxOpacity == o.boxOpacity && boxPadX == o.boxPadX && boxPadY == o.boxPadY &&
 		       boxRadius == o.boxRadius && align == o.align && textCase == o.textCase;
 	}
@@ -477,6 +479,13 @@ struct TlClip {
 	{
 		const qint64 off = std::clamp<qint64>(outMs - outStartMs, 0, outDurationMs());
 		return srcStartMs + qint64(std::llround(double(off) * (speed > 0.01 ? speed : 1.0)));
+	}
+	// An export's frame clock can fall between milliseconds. Keep that
+	// fraction through speed changes, then round only the source decode time.
+	double srcAtOutputTime(double outMs) const
+	{
+		const double off = std::clamp(outMs - double(outStartMs), 0.0, double(outDurationMs()));
+		return double(srcStartMs) + off * (speed > 0.01 ? speed : 1.0);
 	}
 
 	TlTransform baseTransform() const
@@ -989,11 +998,13 @@ struct TlTrack {
 	// (video keeps its audio; an effect lane stops grading), and `muted`
 	// silences the track's audio (a video track has both). `locked`
 	// blocks every edit but still previews/renders. `ripple` closes the gap when
-	// a clip is deleted from this track.
+	// a clip is deleted from this track. `rippleSpeed` moves later clips when a
+	// speed change alters a clip's duration, independently of deletion ripple.
 	bool muted = false;
 	bool hidden = false;
 	bool locked = false;
 	bool ripple = false;
+	bool rippleSpeed = false;
 	// Solo: while ANY sound-carrying lane is soloed, only soloed lanes play.
 	// Independent of `muted` -- a lane that is both is silent, as on a desk --
 	// and see TimelineModel::trackAudible for the one place that combines them.
@@ -1210,7 +1221,7 @@ struct TlTrack {
 	bool operator==(const TlTrack &o) const
 	{
 		return kind == o.kind && name == o.name && muted == o.muted && hidden == o.hidden &&
-		       locked == o.locked && ripple == o.ripple && solo == o.solo &&
+		       locked == o.locked && ripple == o.ripple && rippleSpeed == o.rippleSpeed && solo == o.solo &&
 		       qAbs(gain - o.gain) < 1e-9 && color == o.color && clips == o.clips &&
 		       autoSounds == o.autoSounds;
 	}
@@ -1280,9 +1291,13 @@ struct TimelineModel {
 	// the clip spans the timeline, which the clip form covers by being dragged
 	// that wide.
 
-	// Points of interest on the output timeline, sorted, in ms. Purely for
-	// navigation — nothing about the render depends on them.
+	// Points of interest on the output timeline, sorted, in ms. Labels are
+	// optional so existing projects' numeric marker positions remain valid.
 	QVector<qint64> markers;
+	QMap<qint64, QString> markerLabels;
+	// An output boundary, not a destructive trim: clips after it stay editable.
+	// Only a positive value overrides the last clip's automatic end.
+	qint64 videoEndMs = -1;
 
 	QVector<TlTrack> tracks;
 
@@ -1440,7 +1455,7 @@ struct TimelineModel {
 		return t.solo || !anySolo();
 	}
 
-	qint64 durationMs() const
+	qint64 contentDurationMs() const
 	{
 		qint64 d = 0;
 		for (const TlTrack &t : tracks)
@@ -1448,6 +1463,9 @@ struct TimelineModel {
 				d = std::max(d, c.outEndMs());
 		return d;
 	}
+
+	bool hasVideoEnd() const { return videoEndMs > 0; }
+	qint64 durationMs() const { return hasVideoEnd() ? videoEndMs : contentDurationMs(); }
 
 	bool isEmpty() const
 	{
@@ -1459,7 +1477,8 @@ struct TimelineModel {
 
 	bool operator==(const TimelineModel &o) const
 	{
-		return tracks == o.tracks && markers == o.markers && soundRules == o.soundRules && tags == o.tags;
+		return tracks == o.tracks && markers == o.markers && markerLabels == o.markerLabels &&
+		       videoEndMs == o.videoEndMs && soundRules == o.soundRules && tags == o.tags;
 	}
 	bool operator!=(const TimelineModel &o) const { return !(*this == o); }
 };

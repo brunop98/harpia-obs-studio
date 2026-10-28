@@ -38,7 +38,8 @@ public:
 							    const QString &workDir);
 
 	// Identity of the model inputs used by buildTakes(), including overlap
-	// geometry, fade shapes and transition toggles. Empty when nothing can
+	// geometry, fade shapes, transition toggles and an explicit video end.
+	// Navigation marker times/labels do not affect the identity. Empty when nothing can
 	// contribute audio. When supplied, pathFor also identifies each source by
 	// path, size and modification time. A worker mixing an older identity must
 	// be discarded.
@@ -55,7 +56,9 @@ public:
 	}
 
 	// The whole timeline as one interleaved stereo 48 kHz float buffer, ready to
-	// play. Empty when the timeline has no audio. Honors *cancel.
+	// play. An explicit video end cuts it without moving any clip's fade, or
+	// pads its audible mix with silence when the end extends past the clips.
+	// Empty when the timeline has no audio. Honors *cancel.
 	static std::vector<float> mixToBuffer(const TimelineModel &m, const SourceLookup &pathFor,
 					      std::atomic<bool> *cancel = nullptr);
 

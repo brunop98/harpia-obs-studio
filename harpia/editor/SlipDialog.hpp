@@ -30,6 +30,7 @@
 
 class QLabel;
 class QPushButton;
+class QDoubleSpinBox;
 
 namespace harpia {
 
@@ -103,6 +104,7 @@ private:
 	SlipPreview *preview_ = nullptr;
 	SlipTrackBar *bar_ = nullptr;
 	QLabel *readout_ = nullptr;
+	QDoubleSpinBox *sourceStart_ = nullptr;
 	QPushButton *playBtn_ = nullptr;
 };
 

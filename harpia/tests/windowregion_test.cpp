@@ -47,6 +47,31 @@ int main(int argc, char **argv)
 		ok(windowAt(z, QPoint(1500, 900)) == -1, "nothing but our own overlay: no window");
 	}
 
+	std::printf("\n-- explicitly recording an editor window --\n");
+	{
+		const QVector<DesktopWindow> z = {
+			win(1, QRect(0, 0, 1920, 1080), true), // capture overlay remains excluded
+			win(2, QRect(0, 0, 80, 80), true),     // recorder remains excluded
+			win(3, QRect(100, 100, 500, 400), true), // explicitly allowed editor
+			win(4, QRect(100, 100, 500, 400)),
+			win(0, QRect(700, 100, 80, 80), true),
+		};
+		ok(windowAt(z, QPoint(200, 200)) == 3,
+		   "own editor windows remain excluded without an explicit exception");
+		ok(windowAt(z, QPoint(200, 200), {3}) == 2,
+		   "the exact allowed editor handle is pickable above a foreign window");
+		ok(windowAt(z, QPoint(20, 20), {3}) == -1,
+		   "allowing the editor keeps the recorder and full-screen capture overlay excluded");
+		ok(windowAt(z, QPoint(200, 200), {999}) == 3,
+		   "a stale allowed handle cannot permit a different own window");
+		ok(windowAt(z, QPoint(720, 120), {0, 3}) == -1,
+		   "a zero native handle never permits an own window");
+		QVector<DesktopWindow> foreground = z;
+		foreground.prepend(win(5, QRect(100, 100, 500, 400)));
+		ok(windowAt(foreground, QPoint(200, 200), {3}) == 0,
+		   "an allowed editor behind another app does not bypass native window order");
+	}
+
 	std::printf("\n-- which monitor it is on --\n");
 	{
 		const QVector<QRect> monitors = {QRect(0, 0, 1920, 1080), QRect(-1920, 0, 1920, 1080)};
@@ -67,6 +92,35 @@ int main(int argc, char **argv)
 		   "only a sliver on this monitor: no area");
 		const auto max = regionForWindow(QRect(0, 0, 1920, 1040), QRect(0, 0, 1920, 1080));
 		ok(max && *max == QRect(0, 0, 1920, 1040), "a maximised window: the screen above the taskbar");
+	}
+
+	std::printf("\n-- following a window during a fixed-size recording --\n");
+	{
+		const QRect monitor(0, 0, 1920, 1080);
+		const QSize frame(800, 600);
+		const QRect smallWindow(300, 200, 160, 90);
+		const auto fixed = regionForWindow(smallWindow, monitor, frame);
+		ok(fixed && *fixed == QRect(300, 200, 800, 600),
+		   "a shrinking window keeps the original recording width and height");
+		const auto idle = regionForWindow(smallWindow, monitor);
+		ok(idle && *idle == smallWindow, "before recording the area still follows the window's new size");
+		const auto edge = regionForWindow(QRect(1800, 1000, 300, 200), monitor, frame);
+		ok(edge && *edge == QRect(1120, 480, 800, 600),
+		   "a window crossing the right and bottom edges keeps the whole recording frame onscreen");
+		const auto topLeft = regionForWindow(QRect(-300, -50, 1000, 600), monitor, frame);
+		ok(topLeft && *topLeft == QRect(0, 0, 800, 600),
+		   "crossing the top and left edges clamps position without clipping the frame");
+		const auto left = regionForWindow(QRect(-1500, 100, 160, 90), QRect(-1920, 0, 1920, 1080), frame);
+		ok(left && *left == QRect(420, 100, 800, 600),
+		   "fixed-size following stays relative to a monitor left of the primary display");
+		ok(!regionForWindow(QRect(2000, 100, 300, 200), monitor, frame),
+		   "a window wholly on another monitor does not move this recording frame");
+		ok(!regionForWindow(smallWindow, monitor, QSize(2000, 600)) &&
+		   !regionForWindow(smallWindow, monitor, QSize(800, 1200)),
+		   "a recording frame that no longer fits the monitor is rejected rather than shrunk");
+		ok(!regionForWindow(smallWindow, monitor, QSize(0, 0)) &&
+		   !regionForWindow(smallWindow, monitor, QSize(800, -1)),
+		   "an invalid fixed output size cannot silently fall back to resizing the capture");
 	}
 
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");

@@ -14,7 +14,7 @@ REM  moves into its own folder at start-up, where libobs looks for its data.
 REM
 REM  Usage:
 REM    zip-harpia.bat          zip RelWithDebInfo build
-REM    zip-harpia.bat Debug    zip a different config
+REM    zip-harpia.bat Release  zip a different release config
 REM ===========================================================================
 setlocal
 set "CONFIG=%~1"
@@ -29,13 +29,10 @@ set "SRC=%REPO%\build_x64\rundir\%CONFIG%"
 set "DIST=%REPO%\build_x64\dist"
 set "LAUNCHER_SRC=%SCRIPT_DIR%launcher.cs"
 
-if not exist "%SRC%\bin\64bit\harpia.exe" (
-  echo ERROR: no build found for config "%CONFIG%":
-  echo        %SRC%\bin\64bit\harpia.exe
-  echo Build it first ^(build-harpia.bat %CONFIG%^).
-  pause
-  exit /b 1
-)
+REM Validate before writing the launcher or archive, using the package builder's
+REM checks too. Debug builds cannot be shared without Visual Studio's debug CRT.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%Test-HarpiaPackage.ps1" -PackageRoot "%SRC%" -Configuration "%CONFIG%"
+if errorlevel 1 ( echo ERROR: the build cannot be packaged. & pause & exit /b 1 )
 
 REM --- Build the root launcher Harpia.exe with the .NET C# compiler ---------
 set "CSC=%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
@@ -53,8 +50,9 @@ if not exist "%DIST%" mkdir "%DIST%"
 echo ==^> Zipping %CONFIG% build ...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ts = Get-Date -Format 'yyyyMMdd-HHmmss';" ^
-  "$zip = Join-Path '%DIST%' ('harpia-%CONFIG%-' + $ts + '.zip');" ^
-  "Compress-Archive -Path (Join-Path '%SRC%' '*') -DestinationPath $zip -Force;" ^
+  "$zip = Join-Path $env:DIST ('harpia-' + $env:CONFIG + '-' + $ts + '.zip');" ^
+  "$items = @(Get-ChildItem -LiteralPath $env:SRC -Force | ForEach-Object { $_.FullName });" ^
+  "Compress-Archive -LiteralPath $items -DestinationPath $zip -Force;" ^
   "Write-Host ('    Created: ' + $zip);" ^
   "Start-Process explorer.exe -ArgumentList ('/select,\"' + $zip + '\"')"
 if errorlevel 1 ( echo ERROR: zip failed. & pause & exit /b 1 )

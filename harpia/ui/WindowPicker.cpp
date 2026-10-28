@@ -146,18 +146,20 @@ WindowPicker::~WindowPicker()
 	close();
 }
 
-void WindowPicker::start()
+void WindowPicker::start(const QSet<quintptr> &allowedOwnWindows)
 {
 	QVector<ScreenArea> screens;
 	for (QScreen *s : QGuiApplication::screens())
 		screens.push_back({s, window_list::monitorRect(s->name())});
-	startWith(window_list::windows(), screens);
+	startWith(window_list::windows(), screens, allowedOwnWindows);
 }
 
-void WindowPicker::startWith(const QVector<DesktopWindow> &topmostFirst, const QVector<ScreenArea> &screens)
+void WindowPicker::startWith(const QVector<DesktopWindow> &topmostFirst, const QVector<ScreenArea> &screens,
+			     const QSet<quintptr> &allowedOwnWindows)
 {
 	close();
 	windows_ = topmostFirst;
+	allowedOwnWindows_ = allowedOwnWindows;
 	hovered_ = -1;
 	for (const ScreenArea &s : screens) {
 		auto *layer = new WindowPickerLayer(this, s.screen, s.physical);
@@ -182,7 +184,7 @@ QVector<QWidget *> WindowPicker::layersForTest() const
 
 void WindowPicker::hoverPhysical(const QPoint &p)
 {
-	const int h = window_region::windowAt(windows_, p);
+	const int h = window_region::windowAt(windows_, p, allowedOwnWindows_);
 	if (h == hovered_)
 		return;
 	hovered_ = h;
@@ -193,7 +195,7 @@ void WindowPicker::hoverPhysical(const QPoint &p)
 
 void WindowPicker::pickPhysical(const QPoint &p)
 {
-	const int h = window_region::windowAt(windows_, p);
+	const int h = window_region::windowAt(windows_, p, allowedOwnWindows_);
 	if (h < 0)
 		return; // nothing there to pick: keep picking
 	const DesktopWindow w = windows_[h];

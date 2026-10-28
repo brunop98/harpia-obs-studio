@@ -5,6 +5,7 @@
 #include "ClipShuffle.hpp"   // ShuffleOptions
 #include "../EditorColors.hpp"
 
+#include <QCursor>
 #include <QFont>
 
 #include <QHash>
@@ -169,7 +170,7 @@ public:
 	void nudgeSelection(qint64 deltaMs);
 	// Cut every unlocked clip the playhead runs through, on every track.
 	void splitAtPlayhead();
-	void deleteSelected(); // every selected clip, honouring per-track ripple
+	void deleteSelected(); // selected track, or selected clips honouring per-track ripple
 	// Add an effect clip to a specific effect track at a specific time.
 	void addEffectClipAt(int track, qint64 atOutMs, FxType type);
 	// Overlap this clip with the next one, which is how a transition is made.
@@ -178,6 +179,16 @@ public:
 	qint64 overlapWith(int track, int a, int b) const;     // ms, 0 when apart
 	// Markers: add one at the playhead, or remove the one already there.
 	void toggleMarkerAtPlayhead();
+	void addMarker(qint64 atMs, const QString &label = QString());
+	bool renameMarker(qint64 atMs, const QString &label);
+	bool removeMarker(qint64 atMs);
+	void setVideoEnd(qint64 endMs);
+	void resetVideoEnd();
+	QRect markerBandRectForTest() const { return markerBandRect(); }
+	QRect markerHandleRectForTest(qint64 atMs, bool end = false) const
+	{
+		return markerHandleRect(atMs, end);
+	}
 	// Nearest marker before/after `fromMs`, or -1 when there is none that way.
 	qint64 markerNear(qint64 fromMs, bool forward) const;
 	bool isSelected(int track, int clip) const;
@@ -212,7 +223,7 @@ public:
 	// Returns how many clips moved; 0 changes nothing and records nothing.
 	int forceRipple(int track);
 	const TlClip *selectedClipPtr() const;
-	void updateSelectedClip(const TlClip &c); // Inspector edits push back here
+	void updateSelectedClip(const TlClip &c); // Inspector edits; respects lock and speed ripple
 
 	// Sounds for events (SoundRules). The rules live in the model, so the
 	// window edits them here: one commitEdit, one undo step.
@@ -246,6 +257,8 @@ public:
 	// Edit EVERY selected clip in one go, emitting clipsChanged once at the end.
 	// One signal, so the window takes one undo snapshot however many clips the
 	// edit touched — which is what makes a multi-clip change one Ctrl-Z.
+	// On tracks opting into speed ripple, a speed change also shifts later
+	// clips by its duration delta, keeping indices, gaps and overlaps intact.
 	void applyToSelection(const std::function<void(TlClip &)> &fn);
 
 	// Magnet: snap clip edges to the playhead, 0 and other clips while dragging.
@@ -282,6 +295,8 @@ public:
 	// still or effect is simply stretched; a media clip is re-timed by speed
 	// (clamped to the speed control's range). False, and no undo step, when
 	// there is no media to measure against or the lane is locked.
+	// This explicit placement operation leaves other clips where they are,
+	// including when the lane has auto ripple on speed change enabled.
 	bool fitClipToTimeline(int track, int clip);
 	// Where the media ends, ignoring one clip. 0 when there is none.
 	qint64 mediaEndMs(int exceptTrack = -1, int exceptClip = -1) const;
@@ -451,6 +466,8 @@ signals:
 	// "Generate subtitles…" from a media clip or an audio lane: the view has
 	// set the selection to what should be transcribed.
 	void subtitlesRequested();
+	// Analyze this clip's audio, then review beat markers in output time.
+	void beatsRequested(int track, int clip);
 	// "Re-speak this sentence" on a text-to-speech narration's caption (or its
 	// audio, at atOutMs): the editor makes a new take of that sentence.
 	void respeakRequested(int track, int clip, qint64 atOutMs);
@@ -467,6 +484,7 @@ signals:
 	void viewChanged(qint64 totalMs, qint64 startMs, qint64 visibleMs, qint64 playheadMs);
 
 protected:
+	bool event(QEvent *) override;
 	void paintEvent(QPaintEvent *) override;
 	void mousePressEvent(QMouseEvent *) override;
 	void mouseMoveEvent(QMouseEvent *) override;
@@ -502,6 +520,7 @@ private:
 	int laneScroll_ = 0;
 	QScrollBar *laneBar_ = nullptr;
 	qint64 spanMs() const;                 // total axis length (duration + tail)
+	qint64 timelineExtentMs() const;       // all editable clips/markers, including beyond the video end
 	qint64 visibleMs() const;              // spanMs / zoom
 
 	// spanMs() asks the model for its duration, which walks every clip in the
@@ -568,6 +587,19 @@ private:
 	void commitEdit(); // clipsChanged + editCommitted, for a finished action
 
 	void drawRuler(QPainter &p) const;
+	void drawMarkers(QPainter &p) const;
+	QRect markerBandRect() const;
+	QRect markerHandleRect(qint64 atMs, bool end) const;
+	QString markerLabel(qint64 atMs) const;
+	struct MarkerHit {
+		qint64 timeMs = -1;
+		bool end = false;
+		bool valid() const { return timeMs >= 0; }
+	};
+	MarkerHit markerAt(const QPoint &pos) const;
+	void showMarkerMenu(const QPoint &pos, const QPoint &globalPos);
+	void editMarkerName(qint64 atMs);
+	void cancelMarkerDrag();
 	void drawClip(QPainter &p, int track, int clip, bool silent) const;
 
 	// ---- fade handles (audio clips) ----
@@ -749,6 +781,11 @@ private:
 	// grab is that the instant you grabbed stays under the pointer.
 	int panStartX_ = 0;
 	qint64 panStartView_ = 0;
+	double panMsPerPixel_ = 0.0;
+	Qt::MouseButton panButton_ = Qt::NoButton;
+	QCursor panCursor_;
+	bool panHadCursor_ = false;
+	void finishPan();
 	double zoomTarget_ = 1.0;
 	qint64 viewTarget_ = 0;
 	qint64 zoomAnchorMs_ = 0;
@@ -762,8 +799,13 @@ private:
 	// drags the playhead across a still view. Both are "navigating", and mixing
 	// them up is why it needs its own mode rather than a flag on Scrub.
 	// TrackDrag is a header being dragged up or down to reorder the lanes.
-	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan, KeyDrag, Volume, TrackDrag, Marquee };
+	enum class Mode { None, Move, ResizeLeft, ResizeRight, Scrub, Fade, Pan, KeyDrag, Volume, TrackDrag, Marquee, MarkerDrag };
 	Mode mode_ = Mode::None;
+	qint64 selectedMarkerMs_ = -1;
+	bool selectedEndMarker_ = false;
+	qint64 markerDragFromMs_ = -1;
+	qint64 markerDragTimeMs_ = -1;
+	bool markerDragEnd_ = false;
 	// The lane whose header is being dragged, and the slot (an insertion index,
 	// "before lane N", clamped into the lane's own kind group) it would land in
 	// if released now. -1 = none yet.

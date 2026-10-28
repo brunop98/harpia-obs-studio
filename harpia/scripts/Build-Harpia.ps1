@@ -47,6 +47,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+if ($Package -and $Configuration -eq 'Debug') {
+    throw 'Debug builds require the non-redistributable Visual Studio debug runtime. Share a Release or RelWithDebInfo build instead.'
+}
+
 # Repo root is two levels up from this script (harpia/scripts -> repo root).
 $RepoRoot = Resolve-Path -Path "$PSScriptRoot/../.."
 $BuildDir = Join-Path $RepoRoot 'build_x64'
@@ -172,9 +176,9 @@ try {
         Write-Host '==> Packaging a self-contained distributable...' -ForegroundColor Cyan
 
         $runDir = Join-Path $BuildDir "rundir/$Configuration"
-        if (-not (Test-Path (Join-Path $runDir 'bin/64bit/harpia.exe'))) {
-            throw "rundir not found or incomplete: $runDir"
-        }
+        # Validate before replacing the previous distributable. An incomplete
+        # targeted build must not become a ZIP that only fails on another PC.
+        & "$PSScriptRoot/Test-HarpiaPackage.ps1" -PackageRoot $runDir -Configuration $Configuration
 
         $dist = Join-Path $BuildDir 'dist/Harpia'
         if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
@@ -189,16 +193,8 @@ try {
         # which holds whatever version some other program installed.
         Copy-Item -Recurse -Force -Path (Join-Path $runDir '*') -Destination $dist
 
-        # Check it before calling it done: a missing piece here is a Harpia that
-        # does not start, or does not record, on someone else's PC.
-        $required = @(
-            @{ Path = 'bin/64bit/harpia.exe'; Why = 'the program' },
-            @{ Path = 'bin/64bit/obs-ffmpeg-mux.exe'; Why = 'the recording helper: no recording starts without it' },
-            @{ Path = 'data/libobs/default.effect'; Why = "the video engine's data" },
-            @{ Path = 'bin/64bit/vcruntime140.dll'; Why = 'the Visual C++ runtime (not found in Visual Studio; see the configure warning)' },
-            @{ Path = 'bin/64bit/vcruntime140_1.dll'; Why = 'the Visual C++ runtime' },
-            @{ Path = 'bin/64bit/msvcp140.dll'; Why = 'the Visual C++ runtime' }
-        )
+        & "$PSScriptRoot/Test-HarpiaPackage.ps1" -PackageRoot $dist -Configuration $Configuration
+
         $expected = @(
             @{ Path = 'bin/64bit/obs-nvenc-test.exe'; Why = 'NVIDIA hardware encoding' },
             @{ Path = 'bin/64bit/obs-amf-test.exe'; Why = 'AMD hardware encoding' },
@@ -210,14 +206,6 @@ try {
                 Write-Host "    WARNING: $($item.Path) is missing: no $($item.Why) in this package." -ForegroundColor Yellow
             }
         }
-        $missing = @($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $dist $_.Path)) })
-        if ($missing.Count -gt 0) {
-            foreach ($item in $missing) {
-                Write-Host "    MISSING: $($item.Path) -- $($item.Why)" -ForegroundColor Red
-            }
-            throw "The package in $dist is incomplete (see above)."
-        }
-
         Write-Host "==> Distributable ready: $dist" -ForegroundColor Green
         Write-Host "    Contents: bin/64bit (harpia.exe, its DLLs, the Visual C++ runtime, the helpers), obs-plugins/64bit, data/"
         Write-Host "    Zip the '$dist' folder to share it; run bin/64bit/harpia.exe on the other machine."

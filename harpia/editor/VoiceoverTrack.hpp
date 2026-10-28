@@ -2,6 +2,7 @@
 
 #include "EditorColors.hpp"
 
+#include <QCursor>
 #include <QString>
 #include <QVector>
 #include <QWidget>
@@ -92,10 +93,12 @@ signals:
 	void clipSelected(int index);  // -1 = none
 
 protected:
+	bool event(QEvent *) override;
 	void paintEvent(QPaintEvent *) override;
 	void mousePressEvent(QMouseEvent *) override;
 	void mouseMoveEvent(QMouseEvent *) override;
 	void mouseReleaseEvent(QMouseEvent *) override;
+	void wheelEvent(QWheelEvent *) override;
 	void keyPressEvent(QKeyEvent *) override;
 	QSize sizeHint() const override;
 	QSize minimumSizeHint() const override;
@@ -104,6 +107,9 @@ private:
 	QRect trackRect() const;
 	int msToX(qint64 ms) const;
 	qint64 xToMs(int x) const;
+	qint64 visibleMs() const;
+	void clampView();
+	void finishPan();
 	QVector<QRect> clipRects() const;
 	int clipAt(const QPoint &p) const;
 	void splitClip(int index, qint64 outMs); // split at an output-time position
@@ -115,6 +121,14 @@ private:
 	qint64 outputMs_ = 0;
 	qint64 playheadMs_ = -1;
 	int selected_ = -1;
+	double zoom_ = 1.0;
+	qint64 viewStart_ = 0;
+	bool panning_ = false;
+	int panStartX_ = 0;
+	qint64 panStartView_ = 0;
+	double panMsPerPixel_ = 0.0;
+	QCursor panCursor_;
+	bool panHadCursor_ = false;
 
 	enum class Mode { None, Moving, ResizingLeft, ResizingRight };
 	Mode mode_ = Mode::None;

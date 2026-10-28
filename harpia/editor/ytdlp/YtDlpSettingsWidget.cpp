@@ -1,4 +1,5 @@
 #include "YtDlpSettingsWidget.hpp"
+#include "../EditorFileDialog.hpp"
 #include "../../ui/InfoHint.hpp"
 
 #include <QCheckBox>
@@ -35,7 +36,7 @@ YtDlpSettingsWidget::YtDlpSettingsWidget(QWidget *parent) : QWidget(parent)
 	exeRow->addWidget(exePath_, 1);
 	auto *browseExe = new QPushButton(QStringLiteral("Browse…"), this);
 	connect(browseExe, &QPushButton::clicked, this, [this]() {
-		const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("yt-dlp executable"));
+		const QString f = editor_dialogs::getOpenFileName(this, QStringLiteral("yt-dlp executable"));
 		if (!f.isEmpty())
 			exePath_->setText(f);
 	});
@@ -65,7 +66,7 @@ YtDlpSettingsWidget::YtDlpSettingsWidget(QWidget *parent) : QWidget(parent)
 	ckRow->addWidget(cookiesFile_, 1);
 	auto *browseCk = new QPushButton(QStringLiteral("Browse…"), this);
 	connect(browseCk, &QPushButton::clicked, this, [this]() {
-		const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("Cookies file"), QString(),
+		const QString f = editor_dialogs::getOpenFileName(this, QStringLiteral("Cookies file"), QString(),
 							       QStringLiteral("Cookies (*.txt);;All files (*)"));
 		if (!f.isEmpty())
 			cookiesFile_->setText(f);
@@ -79,7 +80,7 @@ YtDlpSettingsWidget::YtDlpSettingsWidget(QWidget *parent) : QWidget(parent)
 	dirRow->addWidget(downloadDir_, 1);
 	auto *browseDir = new QPushButton(QStringLiteral("Browse…"), this);
 	connect(browseDir, &QPushButton::clicked, this, [this]() {
-		const QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("Download folder"),
+		const QString d = editor_dialogs::getExistingDirectory(this, QStringLiteral("Download folder"),
 								    downloadDir_->text());
 		if (!d.isEmpty())
 			downloadDir_->setText(d);

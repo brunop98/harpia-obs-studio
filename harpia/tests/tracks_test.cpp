@@ -22,6 +22,7 @@
 #include "editor/TimelineAudio.hpp" // takeVolume: header-only, so no decoder needed
 
 #include <QApplication>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
 
@@ -66,6 +67,16 @@ static void click(QWidget *w, QPoint p)
 {
 	press(w, p);
 	release(w, p);
+}
+static QPoint headerAt(const TimelineView &view, int track)
+{
+	const QRect lock = view.headerToggleRectForTest(track, 0);
+	return QPoint(lock.left() - 4, lock.center().y()); // before the toggle chips, on every lane kind
+}
+static void deleteKey(QWidget *widget, int key = Qt::Key_Delete)
+{
+	QKeyEvent event(QEvent::KeyPress, key, Qt::NoModifier);
+	QApplication::sendEvent(widget, &event);
 }
 
 static TlClip clipAt(qint64 outMs, int source = 7)
@@ -484,6 +495,76 @@ int main(int argc, char **argv)
 		release(&v, far);
 		ok(v.model().tracks[3].kind == TlTrack::Kind::Audio && src(2) == 2,
 		   "a header dragged below the audio stops at the bottom of the picture group");
+	}
+
+	std::printf("\n-- Delete on a selected track header --\n");
+	{
+		TimelineModel model = threeLanes();
+		for (int i = 0; i < model.tracks.size(); ++i)
+			model.tracks[i].clips[0].sourceId = 100 + i;
+		v.setModel(model);
+		click(&v, headerAt(v, 0));
+		ok(v.selectedHeaderTrack() == 0 && !v.hasSelection(), "a header selects its lane without pretending clips are selected");
+		changes = 0;
+		deleteKey(&v);
+		ok(v.trackCount() == 2 && v.model().tracks[0].clips[0].sourceId == 101 &&
+		   v.model().tracks[1].clips[0].sourceId == 102 && v.model().tracks[0].clips[0].outStartMs == 10000,
+		   "Delete removes the selected lane and its clips without moving any other clip");
+		ok(changes == 1 && v.selectedHeaderTrack() == -1 && !v.hasSelection(),
+		   "track deletion commits once and clears the deleted header selection");
+		deleteKey(&v);
+		deleteKey(&v, Qt::Key_Backspace);
+		ok(v.trackCount() == 2 && changes == 1, "repeated Delete and Backspace do not fall through to another lane");
+
+		TlTrack empty = track(TlTrack::Kind::Effect, "Empty FX");
+		model.tracks = {empty, track(TlTrack::Kind::Video, "Empty video"), track(TlTrack::Kind::Audio, "Empty audio")};
+		v.setModel(model);
+		changes = 0;
+		for (int i = 0; i < 3; ++i) {
+			click(&v, headerAt(v, 0));
+			deleteKey(&v, i == 1 ? Qt::Key_Backspace : Qt::Key_Delete);
+		}
+		ok(v.trackCount() == 0 && changes == 3, "empty effect, video and audio tracks can each be deleted, including the last lane");
+	}
+
+	std::printf("\n-- header selection cannot survive a different model or clip selection --\n");
+	{
+		const TimelineModel model = threeLanes();
+		v.setModel(model);
+		click(&v, headerAt(v, 0));
+		v.setModel(model);
+		changes = 0;
+		deleteKey(&v);
+		ok(v.selectedHeaderTrack() == -1 && v.trackCount() == 3 && changes == 0,
+		   "replacing the model clears a stale header before Delete can affect the new document");
+		click(&v, headerAt(v, 0));
+		v.setSelectionState(TlSelection());
+		deleteKey(&v);
+		ok(v.selectedHeaderTrack() == -1 && v.trackCount() == 3 && changes == 0,
+		   "restoring a cleared selection also clears any old header target");
+		click(&v, headerAt(v, 0));
+		v.selectClip(2, 0);
+		deleteKey(&v);
+		ok(v.selectedHeaderTrack() == -1 && v.trackCount() == 3 && v.model().tracks[2].clips.isEmpty() &&
+		   v.model().tracks[0].clips.size() == 1,
+		   "programmatically selecting a clip makes Delete remove that clip instead of a stale selected track");
+		v.setModel(model);
+		click(&v, headerAt(v, 0));
+		v.addToSelection(1, 0);
+		ok(v.selectedHeaderTrack() == -1 && v.isSelected(1, 0), "adding a clip to the selection releases the header selection");
+		click(&v, headerAt(v, 0));
+		v.selectAllClips();
+		ok(v.selectedHeaderTrack() == -1 && v.selectedCountForTest() == 3,
+		   "Select All chooses clips and releases the selected header");
+		v.setModel(model);
+		v.selectClip(2, 0);
+		v.addToSelection(1, 0);
+		v.deleteTrack(0); // the menu/API can delete a lane before a multi-selection
+		ok(v.selectedTrack() == 1 && v.isSelected(0, 0) && v.isSelected(1, 0) && v.selectedCountForTest() == 2,
+		   "deleting an earlier lane remaps primary and extra clip selections together");
+		deleteKey(&v);
+		ok(v.trackCount() == 2 && v.model().tracks[0].clips.isEmpty() && v.model().tracks[1].clips.isEmpty(),
+		   "Delete after lane removal affects the remapped clips safely");
 	}
 
 	std::printf("\n-- fit to whole timeline --\n");

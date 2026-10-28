@@ -252,6 +252,98 @@ obs_source_t *CaptureManager::shownSource() const
 	return source_;
 }
 
+namespace {
+const char *yesNo(bool value)
+{
+	return value ? "yes" : "no";
+}
+
+void logCapturePart(const char *label, int monitor, obs_source_t *source, obs_source_t *crop, obs_sceneitem_t *item,
+		    const CaptureRegion &region)
+{
+	const bool valid = source && !obs_obj_invalid(source);
+	const bool cropValid = crop && !obs_obj_invalid(crop);
+	const uint32_t baseW = valid ? obs_source_get_base_width(source) : 0;
+	const uint32_t baseH = valid ? obs_source_get_base_height(source) : 0;
+	blog(LOG_INFO,
+	     "[harpia] capture %s: monitor=%d source=%s type=%s plugin-data=%s base=%ux%u filtered=%ux%u "
+	     "enabled=%s active=%s showing=%s",
+	     label, monitor, source ? obs_source_get_name(source) : "none", source ? obs_source_get_id(source) : "none",
+	     valid ? "ready" : "invalid-or-absent", baseW, baseH, valid ? obs_source_get_width(source) : 0,
+	     valid ? obs_source_get_height(source) : 0, yesNo(source && obs_source_enabled(source)),
+	     yesNo(source && obs_source_active(source)), yesNo(source && obs_source_showing(source)));
+#ifdef _WIN32
+	if (source) {
+		obs_data_t *settings = obs_source_get_settings(source);
+		blog(LOG_INFO,
+		     "[harpia] capture %s Windows settings: method=%lld capture_cursor=%s cursor=%s "
+		     "compatibility=%s client_area=%s",
+		     label, (long long)obs_data_get_int(settings, "method"),
+		     yesNo(obs_data_get_bool(settings, "capture_cursor")), yesNo(obs_data_get_bool(settings, "cursor")),
+		     yesNo(obs_data_get_bool(settings, "compatibility")),
+		     yesNo(obs_data_get_bool(settings, "client_area")));
+		obs_data_release(settings);
+	}
+#endif
+	blog(LOG_INFO,
+	     "[harpia] capture %s region: enabled=%s x=%d y=%d width=%d height=%d "
+	     "space=monitor-device-pixels crop-present=%s crop-plugin-data=%s crop-enabled=%s "
+	     "(source/filter sizes may settle on the next video tick)",
+	     label, yesNo(region.enabled), region.x, region.y, region.width, region.height, yesNo(crop),
+	     cropValid ? "ready" : "invalid-or-absent", yesNo(crop && obs_source_enabled(crop)));
+	if (crop) {
+		obs_data_t *settings = obs_source_get_settings(crop);
+		blog(LOG_INFO,
+		     "[harpia] capture %s crop settings: relative=%s left=%lld top=%lld right=%lld "
+		     "bottom=%lld cx=%lld cy=%lld",
+		     label, yesNo(obs_data_get_bool(settings, "relative")),
+		     (long long)obs_data_get_int(settings, "left"), (long long)obs_data_get_int(settings, "top"),
+		     (long long)obs_data_get_int(settings, "right"), (long long)obs_data_get_int(settings, "bottom"),
+		     (long long)obs_data_get_int(settings, "cx"), (long long)obs_data_get_int(settings, "cy"));
+		obs_data_release(settings);
+	}
+	if (region.enabled && baseW && baseH &&
+	    (region.x < 0 || region.y < 0 || int64_t(region.x) + region.width > baseW ||
+	     int64_t(region.y) + region.height > baseH)) {
+		blog(LOG_WARNING,
+		     "[harpia] capture %s: requested crop extends outside the %ux%u source; pixels outside "
+		     "the source can be black",
+		     label, baseW, baseH);
+	}
+	if (item) {
+		vec2 pos{}, scale{}, bounds{};
+		obs_sceneitem_get_pos(item, &pos);
+		obs_sceneitem_get_scale(item, &scale);
+		obs_sceneitem_get_bounds(item, &bounds);
+		obs_sceneitem_crop itemCrop{};
+		obs_sceneitem_get_crop(item, &itemCrop);
+		blog(LOG_INFO,
+		     "[harpia] capture %s scene item: visible=%s pos=(%.3f,%.3f) scale=(%.5f,%.5f) "
+		     "rotation=%.3f alignment=%u bounds-type=%d bounds=(%.3f,%.3f) "
+		     "item-crop=(left=%d,top=%d,right=%d,bottom=%d)",
+		     label, yesNo(obs_sceneitem_visible(item)), double(pos.x), double(pos.y), double(scale.x),
+		     double(scale.y), double(obs_sceneitem_get_rot(item)), obs_sceneitem_get_alignment(item),
+		     int(obs_sceneitem_get_bounds_type(item)), double(bounds.x), double(bounds.y), itemCrop.left,
+		     itemCrop.top, itemCrop.right, itemCrop.bottom);
+	}
+}
+} // namespace
+
+void CaptureManager::logDiagnostics(const char *reason) const
+{
+	const bool outputBound = scene_ ? channelShows(kVideoChannel, obs_scene_get_source(scene_))
+					: source_ && channelShows(kVideoChannel, source_);
+	blog(LOG_INFO,
+	     "[harpia] capture snapshot (%s): scene=%s main-item=%s output-channel=%u bound=%s "
+	     "main-monitor=%d shown-monitor=%d cursor=%s extra-monitors=%zu",
+	     reason ? reason : "unspecified", yesNo(scene_), yesNo(item_), kVideoChannel, yesNo(outputBound),
+	     monitorIndex_, shownMonitor_ < 0 ? monitorIndex_ : shownMonitor_, yesNo(captureCursor_), extras_.size());
+	logCapturePart("main", monitorIndex_, source_, cropFilter_, item_, region_);
+	for (const ExtraCapture &extra : extras_) {
+		logCapturePart("extra", extra.monitor, extra.source, extra.crop, extra.item, extra.region);
+	}
+}
+
 CaptureManager::~CaptureManager()
 {
 	stopCapture();
@@ -260,6 +352,7 @@ CaptureManager::~CaptureManager()
 bool CaptureManager::startWindowCapture(const std::string &windowValue, bool captureCursor)
 {
 	stopCapture();
+	captureCursor_ = captureCursor;
 
 	const char *id = platformWindowCaptureId();
 	if (!id) {
@@ -295,6 +388,8 @@ bool CaptureManager::startWindowCapture(const std::string &windowValue, bool cap
 		blog(LOG_ERROR, "[harpia] failed to create window capture source '%s'", id);
 		return false;
 	}
+	blog(LOG_INFO, "[harpia] window capture created: type=%s target-specified=%s cursor=%s plugin-data=%s", id,
+	     yesNo(!windowValue.empty()), yesNo(captureCursor), obs_obj_invalid(source_) ? "invalid" : "ready");
 
 	bindSceneToOutput();
 	return true;
@@ -360,6 +455,16 @@ obs_source_t *CaptureManager::createDisplaySource(int monitorIndex, const char *
 			obs_data_set_string(settings, m.key.c_str(), m.strValue.c_str());
 		else
 			obs_data_set_int(settings, m.key.c_str(), m.intValue);
+		blog(LOG_INFO,
+		     "[harpia] display capture request: type=%s monitor=%d available=%zu selector=%s "
+		     "selector-kind=%s cursor=%s",
+		     id, monitorIndex, monitors.size(), m.key.c_str(), m.isString ? "string" : "integer",
+		     yesNo(captureCursor_));
+	} else {
+		blog(LOG_WARNING,
+		     "[harpia] display capture request: type=%s monitor=%d available=%zu; no matching "
+		     "monitor selector, using source default; cursor=%s",
+		     id, monitorIndex, monitors.size(), yesNo(captureCursor_));
 	}
 
 	// libobs destroys released sources on a later video tick, so a freshly
@@ -371,6 +476,8 @@ obs_source_t *CaptureManager::createDisplaySource(int monitorIndex, const char *
 	const std::string sourceName = label + std::to_string(creationCounter.fetch_add(1));
 	obs_source_t *src = obs_source_create(id, sourceName.c_str(), settings, nullptr);
 	obs_data_release(settings);
+	blog(LOG_INFO, "[harpia] display capture result: source=%s plugin-data=%s", sourceName.c_str(),
+	     src && !obs_obj_invalid(src) ? "ready" : "invalid-or-absent");
 	return src;
 }
 
@@ -420,7 +527,7 @@ void CaptureManager::setExtraRegion(int monitorIndex, const CaptureRegion &regio
 		if (region == e.region && e.crop)
 			return; // the 60 Hz tick often repeats itself
 		e.region = region;
-		applyCrop(e.source, e.crop, region);
+		applyCrop(e.source, e.crop, region, e.cropFailureLogged);
 		return;
 	}
 }
@@ -507,6 +614,8 @@ void CaptureManager::bindSceneToOutput()
 	zoomScale_ = 1.0;
 	zoomPosX_ = zoomPosY_ = 0.0;
 	obs_set_output_source(kVideoChannel, obs_scene_get_source(scene_));
+	blog(LOG_INFO, "[harpia] capture scene bound: scene=%s item=%s output-channel=%u", name.c_str(), yesNo(item_),
+	     kVideoChannel);
 }
 
 void CaptureManager::releaseScene()
@@ -553,10 +662,11 @@ void CaptureManager::setRegion(const CaptureRegion &region)
 	if (!source_)
 		return;
 
-	applyCrop(source_, cropFilter_, region);
+	applyCrop(source_, cropFilter_, region, cropFailureLogged_);
 }
 
-void CaptureManager::applyCrop(obs_source_t *source, obs_source_t *&crop, const CaptureRegion &region)
+void CaptureManager::applyCrop(obs_source_t *source, obs_source_t *&crop, const CaptureRegion &region,
+			       bool &failureLogged)
 {
 	if (!source)
 		return;
@@ -567,6 +677,7 @@ void CaptureManager::applyCrop(obs_source_t *source, obs_source_t *&crop, const 
 			obs_source_release(crop);
 			crop = nullptr;
 		}
+		failureLogged = false;
 		return;
 	}
 
@@ -581,6 +692,21 @@ void CaptureManager::applyCrop(obs_source_t *source, obs_source_t *&crop, const 
 
 	if (!crop) {
 		crop = obs_source_create_private("crop_filter", "harpia_region_crop", settings);
+		if ((!crop || obs_obj_invalid(crop)) && !failureLogged) {
+			blog(LOG_ERROR,
+			     "[harpia] capture crop initialization failed: source=%s "
+			     "x=%d y=%d width=%d height=%d filter-wrapper=%s plugin-data=invalid; "
+			     "a non-null OBS source wrapper does not mean the crop plugin initialized. "
+			     "Check the preceding crop_filter.effect/graphics errors and the obs-filters "
+			     "data directory in the complete application package",
+			     obs_source_get_name(source), region.x, region.y, region.width, region.height, yesNo(crop));
+			failureLogged = true;
+		} else if (crop && !obs_obj_invalid(crop)) {
+			blog(LOG_INFO,
+			     "[harpia] capture crop initialized: source=%s absolute=yes x=%d y=%d width=%d "
+			     "height=%d",
+			     obs_source_get_name(source), region.x, region.y, region.width, region.height);
+		}
 		obs_source_filter_add(source, crop);
 	} else {
 		obs_source_update(crop, settings);
@@ -602,6 +728,7 @@ void CaptureManager::stopCapture()
 	}
 
 	monitorIndex_ = -1; // no live source; the next startCapture must build one
+	cropFailureLogged_ = false;
 	if (source_) {
 		obs_source_release(source_);
 		source_ = nullptr;

@@ -123,6 +123,7 @@ QString TimelineAudio::mixKey(const TimelineModel &m, const SourceLookup &pathFo
 	QByteArray bytes;
 	QDataStream out(&bytes, QIODevice::WriteOnly);
 	out.setVersion(QDataStream::Qt_6_0);
+	out << qint64(m.hasVideoEnd() ? m.videoEndMs : -1);
 	bool hasAudioClip = false;
 	QSet<int> sourceIdentities;
 	for (const TlTrack &track : m.tracks) {
@@ -174,6 +175,8 @@ std::vector<VoiceoverMixer::Take> TimelineAudio::buildTakes(const TimelineModel 
 			if (c.type == TlClip::Type::Text || c.type == TlClip::Type::Image ||
 			    c.type == TlClip::Type::Effect)
 				continue; // captions, stills and effects have no audio
+			if (m.hasVideoEnd() && c.outStartMs >= m.videoEndMs)
+				continue; // never decode sources used only beyond the video end
 			const double speed = (c.speed > 0.01) ? c.speed : 1.0;
 			const auto key = std::make_pair(c.sourceId, speed);
 			auto it = wavCache.find(key);
@@ -266,7 +269,7 @@ std::vector<float> TimelineAudio::mixToBuffer(const TimelineModel &m, const Sour
 	const std::vector<VoiceoverMixer::Take> takes = buildTakes(m, pathFor, tmp.path());
 	if (takes.empty() || (cancel && cancel->load()))
 		return {};
-	return VoiceoverMixer::renderTakes(takes, cancel);
+	return VoiceoverMixer::renderTakes(takes, cancel, m.hasVideoEnd() ? m.videoEndMs : -1);
 }
 
 } // namespace harpia

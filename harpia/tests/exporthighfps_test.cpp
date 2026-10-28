@@ -30,7 +30,7 @@ QByteArray command(const QString &program, const QStringList &arguments, bool *o
 	if (okay)
 		*okay = good;
 	if (!good)
-		std::printf("%s failed: %s\n", qPrintable(program), process.readAllStandardError().constData());
+		std::printf("FAIL command %s: %s\n", qPrintable(program), process.readAllStandardError().constData());
 	return process.readAllStandardOutput();
 }
 bool counter(const QString &path, int offset = 0, bool wholeFrameClock = false)
@@ -65,7 +65,7 @@ QVector<int> frames(const QString &path)
 {
 	bool okay = false;
 	const QByteArray raw = command("ffmpeg", {"-v", "error", "-i", path, "-map", "0:v:0", "-vf", "scale=64:64",
-		"-vsync", "0", "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1"}, &okay);
+		"-fps_mode", "passthrough", "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1"}, &okay);
 	QVector<int> result;
 	if (!okay || raw.size() % (64 * 64))
 		return result;

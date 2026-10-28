@@ -155,6 +155,9 @@ int main(int argc, char **argv)
 	QTemporaryDir settings;
 	qputenv("XDG_CONFIG_HOME", settings.path().toUtf8());
 	qputenv("XDG_DATA_HOME", (settings.path() + QStringLiteral("/data")).toUtf8());
+	// The automation responds through QWidget buttons; native macOS sheets
+	// are driven by the OS and do not expose those buttons to this test.
+	QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
 	QApplication app(argc, argv);
 	QCoreApplication::setOrganizationName(QStringLiteral("HarpiaTextStylesTest"));
 	QCoreApplication::setApplicationName(QStringLiteral("Inspector"));

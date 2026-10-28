@@ -6,6 +6,13 @@ cmake_minimum_required(VERSION 3.28)
 if(APPLE)
   set(CMAKE_SKIP_RPATH FALSE)
   unset(CMAKE_XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS)
+  # libobs has private SDK dependencies that are not direct link dependencies
+  # of encoderquality_test. Its app-oriented runpaths cannot find those here.
+  foreach(prefix IN LISTS CMAKE_PREFIX_PATH)
+    if(IS_DIRECTORY "${prefix}/lib")
+      list(APPEND CMAKE_BUILD_RPATH "${prefix}/lib")
+    endif()
+  endforeach()
   # Tests load development SDK libraries instead of the fully re-signed app
   # bundle. App hardened-runtime/library-validation settings do not apply.
   foreach(configuration Release RelWithDebInfo MinSizeRel)

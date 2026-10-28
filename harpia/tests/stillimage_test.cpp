@@ -33,8 +33,7 @@ static void ok(bool c, const char *w)
 		++failures;
 }
 
-// Written with ffmpeg rather than Qt, so the WebP case is a genuinely foreign
-// file and not something Qt made and can therefore obviously read back.
+// PNG/JPEG fixtures are written with FFmpeg, independently of the Qt reader.
 static bool makeWith(const QString &tool, const QStringList &args)
 {
 	QProcess p;
@@ -64,7 +63,13 @@ int main(int argc, char **argv)
 				  QStringLiteral("-y")};
 	const bool havePng = makeWith(QStringLiteral("ffmpeg"), QStringList(base) << png);
 	const bool haveJpg = makeWith(QStringLiteral("ffmpeg"), QStringList(base) << jpg);
-	const bool haveWebp = makeWith(QStringLiteral("ffmpeg"), QStringList(base) << webp);
+	// A 320x180 lossless WebP, encoded independently with Pillow/libwebp.
+	// Decoder coverage must not require Homebrew FFmpeg's optional WebP encoder.
+	const QByteArray webpBytes = QByteArray::fromBase64(
+		"UklGRiQAAABXRUJQVlA4TBgAAAAvP8EsAAdQxlKUu/8BAEX6/58i+p/6/wM=");
+	QFile webpFile(webp);
+	const bool haveWebp = webpFile.open(QIODevice::WriteOnly) && webpFile.write(webpBytes) == webpBytes.size();
+	webpFile.close();
 	ok(havePng && haveJpg && haveWebp, "made a png, a jpg and a webp to read");
 	if (!havePng || !haveJpg || !haveWebp)
 		return 1;

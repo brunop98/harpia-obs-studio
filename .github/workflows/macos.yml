@@ -116,12 +116,14 @@ jobs:
           print('::error title=macOS build diagnostic::' + annotation)
           current_test = ''
           test_failures = []
-          for line in lines:
+          for index, line in enumerate(lines):
               start = re.search(r'Start\s+\d+:\s+(\S+)', line)
               if start:
                   current_test = start.group(1)
               if re.search(r'^\s*FAIL\b|^\s*\d+/\d+.*\*\*\*|Image fixture command failed', line):
                   test_failures.append(current_test + ': ' + line.strip())
+                  if re.search(r'Subprocess aborted|Exception|Timeout', line, re.I):
+                      test_failures.extend(current_test + ': ' + detail[:800] for detail in lines[index + 1:index + 9])
           if test_failures:
               details = '\n'.join(test_failures[:40])[:6000]
               details = details.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')

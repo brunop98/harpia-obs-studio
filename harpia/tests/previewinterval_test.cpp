@@ -161,8 +161,10 @@ static void checkInvalidation(const QString &folder)
 		return;
 	}
 	QFile redFile(red), greenFile(green);
-	redFile.open(QIODevice::ReadOnly);
-	greenFile.open(QIODevice::ReadOnly);
+	if (!redFile.open(QIODevice::ReadOnly))
+		qFatal("Could not open the test fixture file.");
+	if (!greenFile.open(QIODevice::ReadOnly))
+		qFatal("Could not open the test fixture file.");
 	const QByteArray oldBytes = redFile.readAll(), newBytes = greenFile.readAll();
 	for (bool proxy : {false, true}) {
 		const QString oldPath = folder + (proxy ? "/old-proxy.ts" : "/old-source.ts");

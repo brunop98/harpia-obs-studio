@@ -399,7 +399,8 @@ int main(int argc, char **argv)
 	const QString malformed = temp.filePath(QStringLiteral("broken.harpiaproj"));
 	{
 		QFile file(malformed);
-		file.open(QIODevice::WriteOnly);
+		if (!file.open(QIODevice::WriteOnly))
+			qFatal("Could not open the test fixture file.");
 		file.write("{ definitely not JSON");
 	}
 	observer.clear();

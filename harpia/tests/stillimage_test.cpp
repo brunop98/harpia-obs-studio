@@ -126,7 +126,8 @@ int main(int argc, char **argv)
 		const QString junk = dir.filePath(QStringLiteral("notes.png"));
 		{
 			QFile f(junk);
-			f.open(QIODevice::WriteOnly);
+			if (!f.open(QIODevice::WriteOnly))
+				qFatal("Could not open the test fixture file.");
 			f.write("this is not a picture, whatever the extension says\n");
 		}
 		why.clear();

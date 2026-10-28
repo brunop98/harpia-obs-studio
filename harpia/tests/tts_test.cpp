@@ -48,7 +48,8 @@ static QByteArray silentWav(int ms)
 	const QString path = d.filePath(QStringLiteral("s.wav"));
 	tts_audio::writeWav16(path, p);
 	QFile f(path);
-	f.open(QIODevice::ReadOnly);
+	if (!f.open(QIODevice::ReadOnly))
+		qFatal("Could not open the test fixture file.");
 	return f.readAll();
 }
 

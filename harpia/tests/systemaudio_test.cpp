@@ -54,7 +54,8 @@ static void writeWav(const QString &path, int rate, int channels, const std::vec
 	std::memcpy(h.data() + 36, "data", 4);
 	putU32(h.data() + 40, quint32(samples.size() * 2));
 	QFile f(path);
-	f.open(QIODevice::WriteOnly);
+	if (!f.open(QIODevice::WriteOnly))
+		qFatal("Could not open the test fixture file.");
 	f.write(h);
 	f.write(reinterpret_cast<const char *>(samples.data()), qint64(samples.size() * 2));
 }
@@ -77,7 +78,8 @@ static std::vector<qint16> take(int rate, int channels, int silentMs, int toneMs
 static qint64 dataBytes(const QString &path)
 {
 	QFile f(path);
-	f.open(QIODevice::ReadOnly);
+	if (!f.open(QIODevice::ReadOnly))
+		qFatal("Could not open the test fixture file.");
 	const QByteArray a = f.readAll();
 	if (a.size() < 44)
 		return -1;
@@ -148,13 +150,15 @@ int main(int argc, char **argv)
 		writeWav(p, 48000, 2, take(48000, 2, 4000, 0, 0));
 		const QByteArray before = [&p]() {
 			QFile f(p);
-			f.open(QIODevice::ReadOnly);
+			if (!f.open(QIODevice::ReadOnly))
+				qFatal("Could not open the test fixture file.");
 			return f.readAll();
 		}();
 		const WavTrim t = trimWavSilence(p);
 		ok(t.ok && t.silent, "all silence: said so (the video was paused, or muted)");
 		QFile f(p);
-		f.open(QIODevice::ReadOnly);
+		if (!f.open(QIODevice::ReadOnly))
+			qFatal("Could not open the test fixture file.");
 		ok(f.readAll() == before, "and the file is left alone");
 	}
 	{
@@ -174,7 +178,8 @@ int main(int argc, char **argv)
 	{
 		const QString p = dir.filePath(QStringLiteral("junk.wav"));
 		QFile f(p);
-		f.open(QIODevice::WriteOnly);
+		if (!f.open(QIODevice::WriteOnly))
+			qFatal("Could not open the test fixture file.");
 		f.write("not a wav file at all, just some text that is long enough to have a header");
 		f.close();
 		ok(!trimWavSilence(p).ok, "not a WAV: not touched");

@@ -60,7 +60,8 @@ int main(int argc, char **argv)
 	const QString path = tmp.path() + QStringLiteral("/my clip_clip.mp4");
 	{
 		QFile f(path);
-		f.open(QIODevice::WriteOnly);
+		if (!f.open(QIODevice::WriteOnly))
+			qFatal("Could not open the test fixture file.");
 		f.write(QByteArray(4096, 'x'));
 	}
 

@@ -234,7 +234,8 @@ int main(int argc, char **argv)
 		const QString wav = dir.filePath(QStringLiteral("t.wav"));
 		ok(AudioForSpeech::writeWav16k(wav, QVector<qint16>(16000, 1000)), "a second of 16 kHz WAV writes");
 		QFile f(wav);
-		f.open(QIODevice::ReadOnly);
+		if (!f.open(QIODevice::ReadOnly))
+			qFatal("Could not open the test fixture file.");
 		const QByteArray b = f.readAll();
 		ok(b.size() == 44 + 32000 && b.startsWith("RIFF") && b.mid(24, 4) == QByteArray::fromHex("803e0000"),
 		   "44-byte header, 16000 Hz, 32 KB of samples");

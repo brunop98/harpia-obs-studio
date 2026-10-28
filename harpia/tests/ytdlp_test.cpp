@@ -253,7 +253,8 @@ int main(int argc, char **argv)
 		s.exePath = dir.filePath(QStringLiteral("nowhere/yt-dlp"));
 		ok(YtDlp::locate(s).isEmpty(), "a set path that does not exist finds nothing (and does not fall back)");
 		QFile f(dir.filePath(QStringLiteral("yt-dlp")));
-		f.open(QIODevice::WriteOnly);
+		if (!f.open(QIODevice::WriteOnly))
+			qFatal("Could not open the test fixture file.");
 		f.write("#!/bin/sh\necho 2026.09.01\n");
 		f.close();
 		f.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner | QFile::ReadGroup | QFile::ExeGroup);

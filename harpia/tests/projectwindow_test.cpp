@@ -315,8 +315,10 @@ int main(int argc, char **argv)
 		const QString proj2 = media + QStringLiteral("/roundtrip2.harpiaproj");
 		w2.saveProjectTo(proj2, /*quiet=*/true);
 		QFile f1(proj), f2(proj2);
-		f1.open(QIODevice::ReadOnly);
-		f2.open(QIODevice::ReadOnly);
+		if (!f1.open(QIODevice::ReadOnly))
+			qFatal("Could not open the test fixture file.");
+		if (!f2.open(QIODevice::ReadOnly))
+			qFatal("Could not open the test fixture file.");
 		QJsonObject j1 = QJsonDocument::fromJson(f1.readAll()).object();
 		QJsonObject j2 = QJsonDocument::fromJson(f2.readAll()).object();
 		for (const char *k : {"saved", "created", "sourceName"}) {
@@ -348,7 +350,8 @@ int main(int argc, char **argv)
 		// Start from the file editor one saved, and add everything the
 		// timeline does not cover.
 		w1.saveProjectTo(proj, /*quiet=*/true);
-		f1.open(QIODevice::ReadOnly);
+		if (!f1.open(QIODevice::ReadOnly))
+			qFatal("Could not open the test fixture file.");
 		QJsonObject j = QJsonDocument::fromJson(f1.readAll()).object();
 		f1.close();
 		int vidPid = -1;
@@ -380,7 +383,8 @@ int main(int argc, char **argv)
 		const QString rich = media + QStringLiteral("/rich.harpiaproj");
 		{
 			QFile o(rich);
-			o.open(QIODevice::WriteOnly);
+			if (!o.open(QIODevice::WriteOnly))
+				qFatal("Could not open the test fixture file.");
 			o.write(QJsonDocument(j).toJson());
 		}
 		VideoEditorWindow w3{QString()};
@@ -394,7 +398,8 @@ int main(int argc, char **argv)
 		const QString again = media + QStringLiteral("/rich2.harpiaproj");
 		w3.saveProjectTo(again, /*quiet=*/true);
 		QFile o2(again);
-		o2.open(QIODevice::ReadOnly);
+		if (!o2.open(QIODevice::ReadOnly))
+			qFatal("Could not open the test fixture file.");
 		const QJsonObject k = QJsonDocument::fromJson(o2.readAll()).object();
 		QStringList differ;
 		for (const char *key : {"canvasW", "canvasH", "fps", "author", "trimStart", "trimEnd", "speed", "crop"})

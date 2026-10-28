@@ -37,7 +37,7 @@ bool counter(const QString &path, int offset = 0, bool wholeFrameClock = false)
 {
 	QStringList arguments = {"-v", "error", "-f", "lavfi", "-i",
 		QStringLiteral("nullsrc=s=64x64:r=30:d=4,format=yuv420p,"
-			"geq=lum='16+219*mod(floor((N+%1)/pow(2\\,floor(X/8)))\\,2)':cb=128:cr=128").arg(offset)};
+			"geq=lum='16+219*mod(floor((floor(T*30+0.000001)+%1)/pow(2\\,floor(X/8)))\\,2)':cb=128:cr=128").arg(offset)};
 	if (!wholeFrameClock)
 		arguments << "-f" << "lavfi" << "-i" << "sine=frequency=440:sample_rate=48000:duration=4";
 	arguments << "-c:v" << (wholeFrameClock ? "ffv1" : "libx264") << "-g" << "1";
@@ -104,7 +104,8 @@ void inspect(const QString &path, const QVector<int> &want, double fps, const QS
 				++printed;
 			}
 	}
-	check(got == want, name + QStringLiteral(": correct source frame at every output tick"));
+	check(got == want, name + QStringLiteral(": correct source frame at every output tick (first=%1, expected=%2, count=%3/%4)")
+		.arg(got.value(0, -1)).arg(want.value(0, -1)).arg(got.size()).arg(want.size()));
 	const QJsonObject metadata = probe(path, "v:0", "stream=avg_frame_rate,duration:frame=best_effort_timestamp_time");
 	const QJsonObject stream = metadata["streams"].toArray().at(0).toObject();
 	const QStringList rate = stream["avg_frame_rate"].toString().split('/');
@@ -139,6 +140,12 @@ int main(int argc, char **argv)
 	const QString coarse = dir.filePath("coarse.mkv"), whole = dir.filePath("whole.avi");
 	check(counter(first) && counter(second, 128) && counter(whole, 0, true),
 	      QStringLiteral("made numbered 30fps MP4/AAC sources and an all-keyframe 1/30-clock AVI"));
+	// Filter frame counters can differ between FFmpeg versions. Number the
+	// fixture from timestamps, then verify it independently before exporting.
+	const auto sourceFrames = frames(first);
+	check(sourceFrames == expected(0.0, 1.0, 30.0, 4.0),
+	      QStringLiteral("source counter matches its timestamps (first=%1, expected=0, frames=%2)")
+		.arg(sourceFrames.value(0, -1)).arg(sourceFrames.size()));
 	bool remuxed = false;
 	command("ffmpeg", {"-v", "error", "-i", first, "-map", "0:v:0", "-an", "-c:v", "copy", "-y", coarse}, &remuxed);
 	check(remuxed && probe(coarse, "v:0", "stream=time_base")["streams"].toArray().at(0).toObject()["time_base"] == "1/1000" &&

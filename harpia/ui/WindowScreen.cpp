@@ -1,4 +1,5 @@
 #include "WindowScreen.hpp"
+#include "core/RecorderSettings.hpp"
 
 #include <QGuiApplication>
 #include <QScreen>
@@ -66,7 +67,7 @@ QPoint centeredTopLeft(const QSize &frameSize, const QRect &available)
 
 bool restore(QWidget &window, const QString &key)
 {
-	QSettings settings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	auto settings = recorderSettings();
 	settings.beginGroup(QStringLiteral("windowScreens/") + key);
 	if (!settings.contains(QStringLiteral("name")))
 		return false; // first launch keeps the platform's normal placement
@@ -101,7 +102,7 @@ void save(QWidget &window, const QString &key)
 	if (!screen)
 		return;
 	const Screen current = describe(*screen);
-	QSettings settings(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	auto settings = recorderSettings();
 	settings.beginGroup(QStringLiteral("windowScreens/") + key);
 	settings.setValue(QStringLiteral("name"), current.name);
 	settings.setValue(QStringLiteral("manufacturer"), current.manufacturer);

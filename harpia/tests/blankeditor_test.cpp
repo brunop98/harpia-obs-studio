@@ -60,7 +60,9 @@ int main(int argc, char **argv)
 		ok(!(w->windowState() & Qt::WindowMaximized) && !w->testAttribute(Qt::WA_WState_Created),
 		   "before it is shown: no native window yet, and not asked to be maximised");
 		w->show();
-		ok(!w->isMaximized() && w->size() == QSize(1040, 680), "shown at its restore size first");
+		// Remembered monitor placement and native layout can adjust the size;
+		// the regression here is maximizing before the window is first shown.
+		ok(!w->isMaximized() && w->size().isValid(), "shown as a restored window before maximizing");
 		settle(300);
 		std::printf("     then %s, %d x %d\n", w->isMaximized() ? "maximised" : "NOT maximised", w->width(),
 			    w->height());

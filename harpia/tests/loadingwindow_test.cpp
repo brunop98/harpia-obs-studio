@@ -69,6 +69,7 @@ public:
 		fileDialogs = 0;
 		modal = true;
 		sawApplicationModal = false;
+		sawWindowModal = false;
 		loadingDuringError = false;
 	}
 
@@ -114,6 +115,7 @@ public:
 	int fileDialogs = 0;
 	bool modal = true;
 	bool sawApplicationModal = false;
+	bool sawWindowModal = false;
 	bool loadingDuringError = false;
 
 private:
@@ -131,6 +133,7 @@ private:
 	{
 		modal = modal && dialog->windowModality() != Qt::NonModal;
 		sawApplicationModal = sawApplicationModal || dialog->windowModality() == Qt::ApplicationModal;
+		sawWindowModal = sawWindowModal || dialog->windowModality() == Qt::WindowModal;
 		auto *stage = dialog->findChild<QLabel *>(QStringLiteral("loadingStage"));
 		auto *detail = dialog->findChild<QLineEdit *>(QStringLiteral("loadingDetail"));
 		auto *progress = dialog->findChild<QProgressBar *>(QStringLiteral("loadingProgress"));
@@ -487,8 +490,8 @@ int main(int argc, char **argv)
 	{
 		VideoEditorWindow launched(video);
 		check(launched.isValid() && observer.saw(QStringLiteral("video"), QFileInfo(video).fileName()) &&
-		      observer.sawApplicationModal && noLoadingDialog(launched),
-		      "opening a Library video shows application-modal loading before the editor itself is visible");
+		      observer.sawWindowModal && !observer.sawApplicationModal && noLoadingDialog(launched),
+		      "opening a Library video scopes loading to its editor and leaves the recorder usable");
 	}
 
 	std::printf("\n%d failures\n", failures);

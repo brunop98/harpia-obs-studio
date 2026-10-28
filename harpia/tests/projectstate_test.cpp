@@ -234,7 +234,7 @@ int main(int argc, char **argv)
 		ok(w.saveProjectTo(plain, true).isEmpty(), "a plain project saved");
 	}
 
-	for (const QString mode : {QStringLiteral("multicut"), QStringLiteral("trim")}) {
+	for (const QString &mode : {QStringLiteral("multicut"), QStringLiteral("trim")}) {
 		std::printf("\n-- %s project, second source active --\n", qPrintable(mode));
 		const QString name = QStringLiteral("rich_%1").arg(mode);
 		const QString first = dir.filePath(name + ".harpiaproj");

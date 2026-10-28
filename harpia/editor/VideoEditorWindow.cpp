@@ -9962,6 +9962,7 @@ void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
 	// ---- Help ----
 	QMenu *help = menuBar_->addMenu(QStringLiteral("&Help"));
 	QAction *logs = help->addAction(QStringLiteral("Error logs…"));
+	logs->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_L));
 	logs->setToolTip(QStringLiteral("This session's log: recorder and editor errors, warnings and info."));
 	connect(logs, &QAction::triggered, this, [this]() {
 		// A child window of the editor: the editor runs modally, so a
@@ -9971,10 +9972,11 @@ void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
 			errorLogs_->setWindowFlags(Qt::Window);
 			errorLogs_->setAttribute(Qt::WA_DeleteOnClose);
 		}
-		errorLogs_->show();
+		if (errorLogs_->isVisible())
+			errorLogs_->refresh();
+		errorLogs_->showNormal();
 		errorLogs_->raise();
 		errorLogs_->activateWindow();
-		errorLogs_->refresh();
 	});
 	help->addSeparator();
 	connect(help->addAction(QStringLiteral("About Harpia…")), &QAction::triggered, this, &VideoEditorWindow::showAbout);

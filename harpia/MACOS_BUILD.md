@@ -82,6 +82,17 @@ library validation can reject bundled FFmpeg/Qt libraries at launch. Builds
 using a Developer ID identity retain hardened runtime and sign all nested code
 with that identity. No system security settings need to be changed.
 
+Screen capture is deferred until a recording/countdown starts, then released
+after stopping, cancellation or a failed start. Keeping the recorder or editor
+open while idle does not run a full-resolution ScreenCaptureKit video stream.
+
+Open diagnostics with **Command+Shift+L** in the recorder or editor. If the UI
+is busy, double-click `harpia/scripts/open-harpia-logs.command` in Finder; it
+opens `~/Library/Application Support/harpia-recorder/logs` without launching
+Harpia. The in-app viewer shows the last 512 KiB of large sessions to keep it
+responsive; Open Log File gives access to the complete log. Large UI event-loop
+delays are logged on Mac (sleep/wake can also produce these warnings).
+
 Outputs:
 
 - `build_macos/harpia/RelWithDebInfo/Harpia.app`

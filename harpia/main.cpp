@@ -32,6 +32,7 @@
 #include <QScreen>
 #include <QSysInfo>
 #include <QThread>
+#include <QTimer>
 #include "editor/ProjectPaths.hpp"
 
 #include <QStandardPaths>
@@ -326,6 +327,7 @@ int main(int argc, char *argv[])
 		for (const auto &item : obs.missingDependencies())
 			missing.append(QString::fromStdString(item));
 		bool propertiesSafe = true;
+		bool cropReady = true;
 #if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
 		const auto probeProperties = [&propertiesSafe](const char *id) {
 			if (!obs_source_get_display_name(id))
@@ -336,6 +338,12 @@ int main(int argc, char *argv[])
 		};
 #endif
 #if defined(Q_OS_MACOS)
+		// Loading obs-filters alone doesn't compile its shaders. Probe the real
+		// filter so a missing relative #include fails CI/package verification
+		// without opening a screen capture stream or requesting permissions.
+		obs_source_t *crop = obs_source_create_private("crop_filter", "harpia_runtime_crop_probe", nullptr);
+		cropReady = crop && !obs_obj_invalid(crop);
+		obs_source_release(crop);
 		for (const char *id : {"screen_capture", "sck_audio_capture"}) {
 			if (!obs_source_get_display_name(id))
 				missing.append(QString::fromUtf8(id));
@@ -352,13 +360,14 @@ int main(int argc, char *argv[])
 		// deliberately avoids creating capture streams on every platform.
 		const int displays = QGuiApplication::screens().size();
 #endif
-		QJsonObject report{{QStringLiteral("runtimeOk"), missing.isEmpty() && propertiesSafe},
+		QJsonObject report{{QStringLiteral("runtimeOk"), missing.isEmpty() && propertiesSafe && cropReady},
 			{QStringLiteral("missingDependencies"), missing},
+			{QStringLiteral("cropFilterReady"), cropReady},
 			{QStringLiteral("capturePropertiesSafe"), propertiesSafe},
 			{QStringLiteral("displayCount"), displays}};
 		const QByteArray json = QJsonDocument(report).toJson();
 		std::fwrite(json.constData(), 1, size_t(json.size()), stdout);
-		return missing.isEmpty() && propertiesSafe ? 0 : 1;
+		return missing.isEmpty() && propertiesSafe && cropReady ? 0 : 1;
 	}
 
 	// Dependency self-check: if required backend plugins didn't load (missing or
@@ -441,6 +450,28 @@ int main(int argc, char *argv[])
 		// the app, which is the whole point of refusing the second instance.
 		QObject::connect(&instance, &harpia::SingleInstance::anotherInstanceStarted, &win,
 				 [&win]() { harpia::raiseWindowToFront(&win); });
+#if defined(Q_OS_MACOS)
+		// Distinguish a stalled Harpia UI from system-wide cursor/compositor
+		// trouble. Only report large delays; no per-frame or mouse-event logs.
+		QElapsedTimer responsivenessClock;
+		responsivenessClock.start();
+		qint64 previousTick = 0;
+		qint64 lastWarning = -10000;
+		QTimer responsiveness;
+		responsiveness.setInterval(500);
+		QObject::connect(&responsiveness, &QTimer::timeout, &win, [&]() {
+			const qint64 now = responsivenessClock.elapsed();
+			const qint64 elapsed = now - previousTick;
+			previousTick = now;
+			if (elapsed > 1500 && now - lastWarning >= 10000) {
+				lastWarning = now;
+				harpia::Logger::instance().log(harpia::LogLevel::Warning,
+					"[harpia] UI event loop delayed " + std::to_string(elapsed) +
+					" ms (expected 500 ms; sleep/wake can also cause this)");
+			}
+		});
+		responsiveness.start();
+#endif
 		rc = app.exec();
 	}
 

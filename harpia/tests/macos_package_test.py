@@ -76,6 +76,30 @@ class PackagingTests(unittest.TestCase):
         (self.app / "Contents/readme").write_text("not an executable")
         self.assertEqual(deploy.macho_files(self.app), sorted([self.executable, real]))
 
+    def test_crop_effect_has_its_shared_include_beside_it_and_refreshes_on_redeploy(self):
+        resources = self.app / "Contents/PlugIns/obs-filters.plugin/Contents/Resources"
+        resources.mkdir(parents=True)
+        shutil.copy2(SOURCE.parent / "plugins/obs-filters/data/crop_filter.effect", resources)
+        core = self.deployer.frameworks / "libobs.framework/Resources"
+        core.mkdir(parents=True)
+        shutil.copy2(SOURCE.parent / "libobs/data/color.effect", core)
+        deploy.stage_crop_shader(self.deployer)
+        # Follow actual shader includes, rather than just checking the copy's name.
+        import re
+        for include in re.findall(r'^#include "([^"]+)"', (resources / "crop_filter.effect").read_text(), re.M):
+            self.assertTrue((resources / include).is_file(), include)
+        self.assertEqual((resources / "color.effect").read_bytes(), (core / "color.effect").read_bytes())
+        (core / "color.effect").write_text("updated core shader")
+        deploy.stage_crop_shader(self.deployer)
+        self.assertEqual((resources / "color.effect").read_text(), "updated core shader")
+
+    def test_missing_shared_crop_shader_fails_deployment(self):
+        effect = self.app / "Contents/PlugIns/obs-filters.plugin/Contents/Resources/crop_filter.effect"
+        effect.parent.mkdir(parents=True)
+        effect.write_text('#include "color.effect"')
+        with self.assertRaisesRegex(RuntimeError, "Missing shared crop shader include"):
+            deploy.stage_crop_shader(self.deployer)
+
     def test_copied_dylib_resolves_original_loader_relative_dependencies(self):
         original = binary(self.root / "SDK with spaces/lib/first.dylib")
         neighbor = binary(original.parent / "second.dylib")

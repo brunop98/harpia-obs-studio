@@ -157,6 +157,13 @@ void ErrorLogsPanel::loadSelectedFile()
 	if (!path.isEmpty()) {
 		QFile f(path);
 		if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+			// Avoid rendering an entire long session on the GUI thread. The full
+			// file remains available through Open Log File/Folder.
+			constexpr qint64 maxViewBytes = 512 * 1024;
+			if (f.size() > maxViewBytes && f.seek(f.size() - maxViewBytes)) {
+				f.readLine(); // discard the partial line at the seek position
+				lines_ << QStringLiteral("[Showing the last 512 KiB; Open Log File for the complete session.]");
+			}
 			QTextStream in(&f);
 			while (!in.atEnd())
 				lines_ << in.readLine();

@@ -295,6 +295,18 @@ def replace_directory(source: Path, destination: Path) -> None:
     shutil.copytree(source, destination, symlinks=True)
 
 
+def stage_crop_shader(deployer: Deployer) -> None:
+    # Effect #includes resolve relative to the effect file, not libobs's data
+    # directory. The plugin bundle needs the shared color functions beside it.
+    resources = deployer.app / "Contents/PlugIns/obs-filters.plugin/Contents/Resources"
+    if not (resources / "crop_filter.effect").is_file():
+        return  # Partial/helper-only fixture; verify_layout checks full apps.
+    color = deployer.frameworks / "libobs.framework/Resources/color.effect"
+    if not color.is_file():
+        raise RuntimeError(f"Missing shared crop shader include: {color}")
+    shutil.copy2(color, resources / "color.effect")
+
+
 def stage(args: argparse.Namespace, deployer: Deployer) -> None:
     for source in args.framework:
         destination = deployer.frameworks / source.name
@@ -311,6 +323,7 @@ def stage(args: argparse.Namespace, deployer: Deployer) -> None:
         destination = deployer.frameworks / source.name
         shutil.copy2(source, destination)
         deployer.record_copy(source, destination)
+    stage_crop_shader(deployer)
     for source in args.helper:
         if not source.is_file() or not is_macho(source):
             raise RuntimeError(f"Missing or non-native OBS helper: {source}")
@@ -381,6 +394,8 @@ def verify_layout(deployer: Deployer) -> None:
     os_version(deployer.minimum_os)
     required = [deployer.macos / info["CFBundleExecutable"], deployer.macos / "obs-ffmpeg-mux",
                 deployer.frameworks / "libobs.framework/Resources/default.effect",
+                deployer.app / "Contents/PlugIns/obs-filters.plugin/Contents/Resources/crop_filter.effect",
+                deployer.app / "Contents/PlugIns/obs-filters.plugin/Contents/Resources/color.effect",
                 deployer.app / "Contents/Resources/noto-emoji.pack",
                 deployer.app / "Contents/Resources/Harpia.icns",
                 deployer.app / "Contents/PlugIns/platforms/libqcocoa.dylib"]

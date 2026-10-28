@@ -201,9 +201,11 @@ std::optional<QRect> physicalRegionForWindow(quintptr windowId, const QScreen *s
 
 quint32 nativeWindowId(QWidget *widget)
 {
-	if (!widget)
+	// Query only: winId() would create native windows for hidden dialogs while
+	// scanning exclusions, producing more WinIdChange events and SCK refreshes.
+	if (!widget || !widget->internalWinId())
 		return 0;
-	NSView *view = reinterpret_cast<NSView *>(widget->winId());
+	NSView *view = reinterpret_cast<NSView *>(widget->internalWinId());
 	NSWindow *window = view.window;
 	return window && window.windowNumber > 0 ? quint32(window.windowNumber) : 0;
 }

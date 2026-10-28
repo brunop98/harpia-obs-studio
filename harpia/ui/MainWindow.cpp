@@ -676,7 +676,10 @@ MainWindow::MainWindow(ObsContext &obs, PresetStore &presets, QString defaultFol
 	connect(editorButton, &QPushButton::clicked, this, &MainWindow::openBlankEditor);
 
 	errorLogsButton_ = new QPushButton(QStringLiteral("Error Logs"), this);
-	errorLogsButton_->setToolTip(QStringLiteral("View recent warnings and errors written by the recorder."));
+	const QKeySequence logsKey(Qt::CTRL | Qt::SHIFT | Qt::Key_L);
+	errorLogsButton_->setToolTip(QStringLiteral("Open logs (%1)").arg(logsKey.toString(QKeySequence::NativeText)));
+	auto *logsShortcut = new QShortcut(logsKey, this);
+	connect(logsShortcut, &QShortcut::activated, this, &MainWindow::onOpenErrorLogs);
 	errorLogsButton_->setFlat(true);
 	errorLogsButton_->setCursor(Qt::PointingHandCursor);
 	errorLogsButton_->setStyleSheet(QStringLiteral(
@@ -3191,10 +3194,11 @@ void MainWindow::onOpenErrorLogs()
 {
 	if (!errorLogsPanel_)
 		errorLogsPanel_ = std::make_unique<ErrorLogsPanel>();
-	errorLogsPanel_->show();
+	if (errorLogsPanel_->isVisible())
+		errorLogsPanel_->refresh();
+	errorLogsPanel_->showNormal();
 	errorLogsPanel_->raise();
 	errorLogsPanel_->activateWindow();
-	errorLogsPanel_->refresh();
 }
 
 void MainWindow::onCaptureModeChanged()
@@ -3553,6 +3557,15 @@ void MainWindow::openSavedRegionsManager()
 void MainWindow::applyLiveCapture()
 {
 #if defined(Q_OS_MACOS)
+	// SCK captures a full Retina display even when the recorder has no preview
+	// to show. Keep that WindowServer/GPU work out of idle/editor-only use.
+	// armVideoPipeline starts the stream at countdown/record time and the Mac
+	// readiness gate waits for the first frame before starting the encoder.
+	if (!recorder_.isRecording() && !starting_ && !countingDown_ && !stopping_) {
+		capture_.stopCapture();
+		updateRegionToolVisibility();
+		return;
+	}
 	if (mac_platform::screenCaptureStatus() != mac_platform::PermissionStatus::Granted) {
 		capture_.stopCapture();
 		return;
@@ -5380,6 +5393,12 @@ void MainWindow::updateStatusChip()
 void MainWindow::tickState()
 {
 #if defined(Q_OS_MACOS)
+	// Also covers cancelled countdowns and failed starts. Never tear down a
+	// stream while an output is starting, paused, stopping or being finalized.
+	if (!recorder_.isRecording() && !starting_ && !countingDown_ && !stopping_ && capture_.source()) {
+		capture_.stopCapture();
+		blog(LOG_INFO, "[harpia] macOS screen capture released while recorder is idle");
+	}
 	if (recorder_.isRecording() && !stopping_ &&
 	    ((modeUsesVideoEncoder(recordMode()) && capture_.captureFailed()) || !audio_.pcCaptureFailure().empty())) {
 		beginStop();

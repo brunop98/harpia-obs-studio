@@ -63,8 +63,14 @@ cd "$repo_dir"
 app="$build_dir/harpia/$configuration/Harpia.app"
 [[ -d "$app" ]] || { echo "The deployed app was not produced at: $app" >&2; exit 1; }
 if $run_tests; then
+  # Collect independent test compilation errors in one run when Xcode offers
+  # this option. The native build still returns failure when any target fails.
+  native_test_args=()
+  if [[ "$(xcodebuild -help 2>&1 || true)" == *-continueBuildingAfterErrors* ]]; then
+    native_test_args=(-- -continueBuildingAfterErrors)
+  fi
   "$HARPIA_MAC_CMAKE" --build "$build_dir" --config "$configuration" --target harpia-tests \
-    --parallel "${HARPIA_BUILD_JOBS:-4}"
+    --parallel "${HARPIA_BUILD_JOBS:-4}" ${native_test_args[@]+"${native_test_args[@]}"}
   "$HARPIA_MAC_CTEST" --test-dir "$build_dir" -C "$configuration" --output-on-failure --no-tests=error
 fi
 if $package_app; then

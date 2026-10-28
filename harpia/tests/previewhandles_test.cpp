@@ -212,8 +212,6 @@ int main(int argc, char **argv)
 	if (h.size() != 9)
 		return 1;
 	const QPoint tl = h[0].toPoint();       // top-left
-	const QPoint rot = h[8].toPoint();      // the rotate knob
-	const QPointF centre = (h[0] + h[7]) / 2.0; // TL and BR average to the centre
 
 	std::printf("\n-- dragging a corner grip scales, it does not slide --\n");
 	{

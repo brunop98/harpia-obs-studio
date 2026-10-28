@@ -36,7 +36,9 @@ QString sinkError(QAudio::Error error)
 	switch (error) {
 	case QAudio::OpenError: return QStringLiteral("The audio output device could not be opened.");
 	case QAudio::IOError: return QStringLiteral("The audio output device stopped accepting sound.");
+#if QT_VERSION < QT_VERSION_CHECK(6, 11, 0)
 	case QAudio::UnderrunError: return QStringLiteral("The audio output device ran out of data.");
+#endif
 	case QAudio::FatalError: return QStringLiteral("The audio output device reported a fatal error.");
 	default: return QStringLiteral("The audio output device could not start playback.");
 	}

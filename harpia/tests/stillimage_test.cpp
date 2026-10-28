@@ -41,8 +41,9 @@ static bool makeWith(const QString &tool, const QStringList &args)
 	p.start(tool, args);
 	const bool success = p.waitForFinished(30000) && p.exitStatus() == QProcess::NormalExit && p.exitCode() == 0;
 	if (!success)
-		std::fprintf(stderr, "Image fixture command failed: %s %s\n%s\n", qPrintable(tool),
-			     qPrintable(args.join(QLatin1Char(' '))), p.readAllStandardError().constData());
+		std::fprintf(stderr, "Image fixture command failed: %s %s (%s)\n%s\n", qPrintable(tool),
+			     qPrintable(args.join(QLatin1Char(' '))), qPrintable(p.errorString()),
+			     p.readAllStandardError().constData());
 	return success;
 }
 

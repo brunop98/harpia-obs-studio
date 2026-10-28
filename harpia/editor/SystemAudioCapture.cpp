@@ -686,11 +686,12 @@ QByteArray SystemAudioCapture::take()
 		return QByteArray();
 #if defined(__APPLE__)
 	return d_->mac.take();
-#endif
+#else
 	std::lock_guard<std::mutex> lock(d_->bufMutex);
 	QByteArray out;
 	out.swap(d_->buf);
 	return out;
+#endif
 }
 
 QString SystemAudioCapture::failure() const
@@ -699,9 +700,10 @@ QString SystemAudioCapture::failure() const
 		return QString();
 #if defined(__APPLE__)
 	return d_->mac.failure();
-#endif
+#else
 	std::lock_guard<std::mutex> lock(d_->bufMutex);
 	return d_->failure;
+#endif
 }
 
 } // namespace harpia

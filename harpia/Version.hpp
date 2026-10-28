@@ -7,7 +7,7 @@
 // PATCH is bumped on every commit (see the version label in the window corner).
 #define HARPIA_VERSION_MAJOR 0
 #define HARPIA_VERSION_MINOR 1
-#define HARPIA_VERSION_PATCH 448
+#define HARPIA_VERSION_PATCH 503
 
 #define HARPIA_STRINGIFY_(x) #x
 #define HARPIA_STRINGIFY(x) HARPIA_STRINGIFY_(x)

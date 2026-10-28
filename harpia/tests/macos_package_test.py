@@ -16,6 +16,9 @@ SOURCE = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("harpia_deploy", SOURCE / "scripts/deploy-macos.py")
 deploy = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(deploy)
+INSTALL_SPEC = importlib.util.spec_from_file_location("harpia_install", SOURCE / "scripts/install-macos.py")
+installer = importlib.util.module_from_spec(INSTALL_SPEC)
+INSTALL_SPEC.loader.exec_module(installer)
 
 
 def binary(path, content=b"body"):
@@ -267,6 +270,87 @@ class PackagingTests(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=True):
             with self.assertRaisesRegex(RuntimeError, "standalone Mac executable"):
                 deploy.stage(args, self.deployer)
+
+
+class InstallationTests(unittest.TestCase):
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory(prefix="harpia install with spaces ")
+        self.addCleanup(scratch.cleanup)
+        self.root = Path(scratch.name)
+        self.source = self.root / "build/Harpia.app"
+        self.destination = self.root / "Applications"
+        self.target = self.destination / "Harpia.app"
+        self.make_app(self.source, b"new")
+        self.commands = []
+
+    def make_app(self, path, payload):
+        binary(path / "Contents/MacOS/Harpia", payload)
+        (path / "Contents/Info.plist").write_bytes(plistlib.dumps({
+            "CFBundleIdentifier": installer.BUNDLE_ID, "CFBundleExecutable": "Harpia"}))
+
+    def command(self, arguments):
+        self.commands.append(arguments)
+        if arguments[0] == "/usr/bin/ditto":
+            shutil.copytree(arguments[1], arguments[2], symlinks=True)
+        return ""
+
+    def test_install_verifies_and_returns_installed_copy_without_modifying_build(self):
+        with patch.object(installer, "run", side_effect=self.command):
+            result = installer.install(self.source, self.destination)
+        self.assertEqual(result, self.target)
+        self.assertEqual((self.target / "Contents/MacOS/Harpia").read_bytes(),
+                         (self.source / "Contents/MacOS/Harpia").read_bytes())
+        self.assertEqual(len([c for c in self.commands if "--verify" in c]), 2)
+
+    def test_update_replaces_old_bundle_and_leaves_no_staging_files(self):
+        self.make_app(self.target, b"old")
+        (self.target / "obsolete").touch()
+        with patch.object(installer, "run", side_effect=self.command):
+            installer.install(self.source, self.destination)
+        self.assertFalse((self.target / "obsolete").exists())
+        self.assertEqual(list(self.destination.iterdir()), [self.target])
+
+    def test_running_app_is_not_overwritten_or_quit(self):
+        self.make_app(self.target, b"old")
+        with patch.object(installer, "run", return_value=str(self.target / "Contents/MacOS/Harpia")):
+            with self.assertRaisesRegex(RuntimeError, "Quit Harpia"):
+                installer.install(self.source, self.destination)
+        self.assertTrue((self.target / "Contents/MacOS/Harpia").read_bytes().endswith(b"old"))
+
+    def test_invalid_staged_signature_keeps_existing_install(self):
+        self.make_app(self.target, b"old")
+        def fail_verification(arguments):
+            if "--verify" in arguments and ".harpia-install-" in arguments[-1]:
+                raise RuntimeError("bad staged signature")
+            return self.command(arguments)
+        with patch.object(installer, "run", side_effect=fail_verification):
+            with self.assertRaisesRegex(RuntimeError, "bad staged signature"):
+                installer.install(self.source, self.destination)
+        self.assertTrue((self.target / "Contents/MacOS/Harpia").read_bytes().endswith(b"old"))
+
+    def test_failed_final_rename_restores_old_install(self):
+        self.make_app(self.target, b"old")
+        rename = Path.rename
+        def fail_swap(path, target):
+            if path.name == "Harpia.app" and path.parent.name.startswith(".harpia-install-"):
+                raise OSError("simulated failed swap")
+            return rename(path, target)
+        with patch.object(installer, "run", side_effect=self.command), patch.object(Path, "rename", fail_swap):
+            with self.assertRaisesRegex(OSError, "failed swap"):
+                installer.install(self.source, self.destination)
+        self.assertTrue((self.target / "Contents/MacOS/Harpia").read_bytes().endswith(b"old"))
+
+    def test_other_application_and_symlink_are_not_replaced(self):
+        self.make_app(self.target, b"other app")
+        (self.target / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "other"}))
+        with patch.object(installer, "run", side_effect=self.command):
+            with self.assertRaisesRegex(RuntimeError, "Not a Harpia"):
+                installer.install(self.source, self.destination)
+        shutil.rmtree(self.target)
+        self.target.symlink_to(self.source, target_is_directory=True)
+        with patch.object(installer, "run", side_effect=self.command):
+            with self.assertRaisesRegex(RuntimeError, "symlink"):
+                installer.install(self.source, self.destination)
 
 
 class TemporaryDirectoryTests(unittest.TestCase):

@@ -80,10 +80,9 @@ void screen_capture_build_content_list(struct screen_capture *sc, bool display_c
         if (error == nil && sc->shareable_content_available != NULL) {
             sc->shareable_content = [shareable_content retain];
         } else {
-#ifdef DEBUG
-            MACCAP_ERR("screen_capture_properties: Failed to get shareable content with error %s\n",
-                       [[error localizedFailureReason] cStringUsingEncoding:NSUTF8StringEncoding]);
-#endif
+            MACCAP_ERR("screen_capture_properties: Failed to get shareable content: domain=%s code=%ld description=%s\n",
+                       error ? error.domain.UTF8String : "<none>", (long) error.code,
+                       error ? error.localizedDescription.UTF8String : "capture source is closing");
             MACCAP_LOG(LOG_WARNING, "Unable to get list of available applications or windows. "
                                     "Please check if OBS has necessary screen capture permissions.");
         }

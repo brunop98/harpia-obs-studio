@@ -13,9 +13,12 @@ package_app=false
 run_tests=false
 check_runtime=false
 check_tools=false
+install_app=false
+install_dir=
 usage() {
   echo "Usage: build-macos.sh [--arch arm64|x86_64|universal] [--configuration Release|RelWithDebInfo|Debug|MinSizeRel]"
   echo "                      [--build-dir path] [--preset macos|macos-ci] [--identity codesign-id] [--test] [--package] [--check-runtime] [--check-tools] [--run]"
+  echo "                      [--install] [--install-dir directory]"
 }
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -29,6 +32,8 @@ while [[ $# -gt 0 ]]; do
     --check-tools) check_tools=true; shift ;;
     --package) package_app=true; shift ;;
     --run) run_app=true; shift ;;
+    --install) install_app=true; shift ;;
+    --install-dir) install_app=true; install_dir=${2:?Missing installation directory}; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -79,4 +84,10 @@ if $package_app; then
   "$script_dir/package-macos.sh" "${package_args[@]}"
 fi
 echo "Deployed application: $app"
+if $install_app; then
+  install_args=(--app "$app")
+  if [[ -n "$install_dir" ]]; then install_args+=(--destination "$install_dir"); fi
+  app=$("$HARPIA_MAC_PYTHON" "$script_dir/install-macos.py" "${install_args[@]}")
+  echo "Installed application: $app"
+fi
 if $run_app; then open "$app"; fi

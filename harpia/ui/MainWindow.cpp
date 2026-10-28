@@ -1922,6 +1922,12 @@ bool MainWindow::ensureMacPermissions(std::function<void()> resume, bool screen,
 	using namespace mac_platform;
 	if (macPermissionPending_)
 		return false;
+	blog(LOG_INFO, "[harpia] macOS permission check: screen-needed=%s screen-granted=%s "
+	     "microphone-needed=%s microphone-status=%d camera-needed=%s camera-status=%d app='%s'",
+	     screen ? "yes" : "no", screenCaptureStatus() == PermissionStatus::Granted ? "yes" : "no",
+	     microphone ? "yes" : "no", int(microphoneStatus()), camera ? "yes" : "no", int(cameraStatus()),
+	     QCoreApplication::applicationFilePath().toUtf8().constData());
+	Logger::instance().flush();
 	const auto ask = [this, resume](const QString &label, const QString &pane, auto request) {
 		macPermissionPending_ = true;
 		updateButtons();
@@ -1944,10 +1950,32 @@ bool MainWindow::ensureMacPermissions(std::function<void()> resume, bool screen,
 				QStringLiteral("Allow %1 for Harpia in System Settings > Privacy & Security, "
 					       "then try again. If macOS asks you to quit and reopen Harpia, do so first.").arg(label),
 				QMessageBox::Close, this);
+			if (pane == QStringLiteral("ScreenCapture"))
+				box.setInformativeText(QStringLiteral(
+					"Enable Harpia in the combined Screen & System Audio Recording list. "
+					"It does not need an entry in System Audio Recording Only. "
+					"If Harpia is already enabled, quit all Harpia windows and reopen the installed app. "
+					"A rebuilt or moved development copy may need permission granted again."));
+			else if (pane == QStringLiteral("Microphone"))
+				box.setInformativeText(QStringLiteral(
+					"Microphone permission is separate from system audio. Allow Harpia under Microphone, "
+					"or turn off the selected microphones in Harpia if you only want computer audio."));
+			box.setDetailedText(QStringLiteral("Running executable:\n%1\n\n"
+				"Screen/system audio preflight: %2\nMicrophone status: %3\nCamera status: %4")
+				.arg(QCoreApplication::applicationFilePath())
+				.arg(screenCaptureStatus() == PermissionStatus::Granted ? "granted" : "not granted")
+				.arg(int(microphoneStatus())).arg(int(cameraStatus())));
 			QPushButton *settings = box.addButton(QStringLiteral("Open System Settings"), QMessageBox::ActionRole);
+			QPushButton *folder = box.addButton(QStringLiteral("Show Application Folder"), QMessageBox::ActionRole);
+			QPushButton *logs = box.addButton(QStringLiteral("Open Logs"), QMessageBox::ActionRole);
 			box.exec();
 			if (box.clickedButton() == settings)
 				QDesktopServices::openUrl(QUrl(QStringLiteral("x-apple.systempreferences:com.apple.preference.security?Privacy_") + pane));
+			else if (box.clickedButton() == folder)
+				QDesktopServices::openUrl(QUrl::fromLocalFile(QDir(QCoreApplication::applicationDirPath())
+					.absoluteFilePath(QStringLiteral("../../.."))));
+			else if (box.clickedButton() == logs)
+				onOpenErrorLogs();
 		});
 		return false;
 	};

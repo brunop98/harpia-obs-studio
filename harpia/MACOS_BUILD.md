@@ -93,6 +93,29 @@ Harpia. The in-app viewer shows the last 512 KiB of large sessions to keep it
 responsive; Open Log File gives access to the complete log. Large UI event-loop
 delays are logged on Mac (sleep/wake can also produce these warnings).
 
+To install a build into Applications and launch that copy, quit Harpia and run:
+
+```sh
+bash harpia/scripts/build-and-run-harpia.sh --install
+```
+
+The installer uses `/Applications` if writable, otherwise `~/Applications`
+(your personal Applications folder), and prints the installed path. Use
+`--install-dir /path/to/Applications` to choose the folder explicitly. It checks
+signatures before replacing an existing Harpia bundle and refuses to update a
+running copy. Regular builds without `--install` still launch from the build
+directory; CI does not install anything.
+
+System audio uses the **Screen & System Audio Recording** permission. Harpia
+does not need a separate entry under **System Audio Recording Only**. Microphone
+input has its own permission under **Microphone**. If an enabled switch is not
+recognized after installing/rebuilding, quit all copies and reopen the installed
+app, then retry Record. If it still reports denied access, remove the stale
+Harpia entry in the relevant Privacy & Security list, add the installed app with
+the `+` button, enable it, then quit/reopen when macOS requests it. Development
+ad-hoc builds can require a new grant after rebuilding; Developer ID signing
+provides a more stable identity for distribution.
+
 Outputs:
 
 - `build_macos/harpia/RelWithDebInfo/Harpia.app`

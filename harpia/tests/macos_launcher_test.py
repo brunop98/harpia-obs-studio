@@ -259,6 +259,21 @@ harpia_macos_check_tools "$2" "$3"
         self.assertEqual(result.returncode, 41, result.stdout + result.stderr)
         self.assertFalse(self.trace("open"))
 
+    def test_install_option_launches_installed_app_instead_of_build_copy(self):
+        destination = self.root / "User Applications"
+        (self.scripts / "install-macos.py").write_text(
+            "import sys\nfrom pathlib import Path\n"
+            "print(Path(sys.argv[sys.argv.index('--destination') + 1]) / 'Harpia.app')\n")
+        result = self.run_script("build-and-run-harpia.sh", "--install-dir", str(destination))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.trace("open")[-1]["arguments"], [str(destination / "Harpia.app")])
+
+    def test_install_failure_does_not_launch_the_build_copy(self):
+        (self.scripts / "install-macos.py").write_text("raise SystemExit(17)\n")
+        result = self.run_script("build-and-run-harpia.sh", "--install")
+        self.assertEqual(result.returncode, 17, result.stdout + result.stderr)
+        self.assertFalse(self.trace("open"))
+
     def test_finder_command_delegates_arguments_and_preserves_noninteractive_failure(self):
         self.save_configuration(configure_exit=43)
         result = self.run_script("build-and-run-harpia.command", "Debug")

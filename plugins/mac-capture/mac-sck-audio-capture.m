@@ -241,8 +241,11 @@ API_AVAILABLE(macos(13.0)) static bool init_audio_screen_stream(struct screen_ca
         os_atomic_store_bool(&sc->audio_routing_pending,
                              !did_stream_start || routing_revision != os_atomic_load_long(&sc->audio_routing_revision));
         if (!did_stream_start) {
-            MACCAP_ERR("init_audio_screen_stream: Failed to start capture with error %s\n",
-                       [[error localizedFailureReason] cStringUsingEncoding:NSUTF8StringEncoding]);
+            // This callback's error2 explains the failed start. The outer
+            // 'error' belongs to addStreamOutput and is normally nil here.
+            MACCAP_ERR("init_audio_screen_stream: Failed to start capture: domain=%s code=%ld description=%s\n",
+                       error2 ? error2.domain.UTF8String : "<none>", (long) error2.code,
+                       error2 ? error2.localizedDescription.UTF8String : "stream failed before completion");
             // Clean up disp so it isn't stopped
             [sc->disp release];
             sc->disp = NULL;

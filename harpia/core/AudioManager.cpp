@@ -218,7 +218,9 @@ std::string AudioManager::pcCaptureFailure() const
 		return pcFailure_;
 #if defined(__APPLE__)
 	if (pcOn_ && !pcPlan_.empty() && !mac_audio::permissionGranted())
-		return "Screen & System Audio Recording permission was revoked in macOS. Grant it again before recording.";
+		return "macOS reports no Screen & System Audio Recording access for this copy of Harpia. "
+		       "If Harpia is already enabled in the combined list, quit and reopen the installed app. "
+		       "The separate System Audio Recording Only list is not required.";
 	for (const auto &meter : pc_) {
 		if (!meter || !meter->source)
 			continue;
@@ -290,8 +292,11 @@ void AudioManager::rebuildPc()
 		obs_data_release(settings);
 		if (!m && pcFailure_.empty())
 			pcFailure_ = c.wholeMix()
-				? "macOS could not start system audio. Allow Screen & System Audio Recording in System Settings."
-				: "macOS could not record the selected app's audio. Start the app and allow Screen & System Audio Recording in System Settings.";
+				? "macOS could not start system audio. Check the preceding native error in Logs. "
+				  "The combined Screen & System Audio Recording permission covers this capture; "
+				  "System Audio Recording Only does not need a separate entry."
+				: "macOS could not record the selected app's audio. Start the selected app and check Logs "
+				  "for the native error. The combined Screen & System Audio Recording permission covers this capture.";
 #else
 		if (c.wholeMix()) {
 			m = makeMeter(outputCaptureId(), name.c_str(), "default", kPcChannels[i]);

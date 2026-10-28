@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.28)
 
+# Standalone test executables do not have the application's Frameworks bundle.
+# Let CMake record the imported Qt/FFmpeg build paths instead of inheriting
+# OBS's app-only Xcode runpath override. Directory scope keeps the app unchanged.
+if(APPLE)
+  set(CMAKE_SKIP_RPATH FALSE)
+  unset(CMAKE_XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS)
+endif()
+
 # May also be configured directly for editor checks without building libobs.
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   project(HarpiaTests LANGUAGES C CXX)

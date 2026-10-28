@@ -101,7 +101,7 @@ jobs:
           from pathlib import Path
           log = Path(os.environ['RUNNER_TEMP']) / 'harpia-macos-build.log'
           lines = log.read_text(errors='replace').splitlines() if log.exists() else ['The build log was not created.']
-          first = next((i for i, line in enumerate(lines) if re.search(r'\berror:|^\s*CMake Error', line, re.I)), None)
+          first = next((i for i, line in enumerate(lines) if re.search(r'\berror:|^\s*CMake Error|Library not loaded:|Subprocess aborted|^\s*FAIL\b', line, re.I)), None)
           title = 'First compiler/build diagnostic' if first is not None else 'Build log tail (no error marker found)'
           excerpt = '\n'.join(line[:1500] for line in (lines[first:first + 60] if first is not None else lines[-60:]))
           # Include other failed translation units before verbose include

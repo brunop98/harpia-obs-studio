@@ -76,7 +76,11 @@ The build downloads the dependency versions/hashes in `CMakePresets.json`.
 `harpia-deploy` builds the recorder and runtime modules, creates `Harpia.app`,
 deploys Qt plus OBS/FFmpeg dependencies, repairs load paths and signs the nested
 code/application. Re-running this target also refreshes plugin-only changes.
-The development signing default is ad-hoc (`-`).
+The development signing default is ad-hoc (`-`). These local builds explicitly
+clear hardened runtime flags: ad-hoc signatures have no Team ID, so hardened
+library validation can reject bundled FFmpeg/Qt libraries at launch. Builds
+using a Developer ID identity retain hardened runtime and sign all nested code
+with that identity. No system security settings need to be changed.
 
 Outputs:
 

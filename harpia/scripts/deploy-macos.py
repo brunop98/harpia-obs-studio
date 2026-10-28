@@ -402,7 +402,12 @@ def verify_layout(deployer: Deployer) -> None:
 
 def sign(app: Path, identity: str, entitlements: Path,
          helper_entitlements: dict[Path, dict[str, bool]] | None = None) -> None:
-    flags = ["--force", "--sign", identity, "--options", "runtime"]
+    # Ad-hoc signatures have no Team ID. Hardened runtime's library validation
+    # can therefore reject even our freshly re-signed bundled FFmpeg/Qt code.
+    # Explicitly clear the flags for local builds, including on incremental
+    # rebuilds of a bundle previously signed with runtime. Distribution builds
+    # keep hardened runtime and re-sign every dependency with the same identity.
+    flags = ["--force", "--sign", identity, "--options", "0" if identity == "-" else "runtime"]
     if identity != "-":
         flags += ["--timestamp"]
     with tempfile.TemporaryDirectory(prefix="harpia-sign-") as signing:

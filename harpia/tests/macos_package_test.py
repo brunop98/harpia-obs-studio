@@ -195,6 +195,35 @@ class PackagingTests(unittest.TestCase):
         self.assertNotIn("com.apple.security.cs.allow-jit", entitlements)
         self.assertNotIn("com.apple.security.app-sandbox", entitlements)
 
+    def test_local_signatures_clear_runtime_flags_on_every_nested_binary_and_bundle(self):
+        # Real dependency shapes, including a previously vendor-signed dylib,
+        # must all use the local policy when re-signing an incremental build.
+        binary(self.app / "Contents/Frameworks/libavcodec.dylib")
+        binary(self.app / "Contents/Frameworks/F.framework/Versions/A/F")
+        binary(self.app / "Contents/PlugIns/P.plugin/Contents/MacOS/P")
+        commands = []
+        with patch.object(deploy, "run", side_effect=lambda args, **kwargs: commands.append(args) or ""):
+            deploy.sign(self.app, "-", SOURCE / "resources/macos/entitlements.plist")
+        signed = [command for command in commands if "--sign" in command]
+        self.assertGreaterEqual(len(signed), 7)
+        for command in signed:
+            self.assertEqual(command[command.index("--options") + 1], "0")
+            self.assertEqual(command[command.index("--sign") + 1], "-")
+            self.assertNotIn("--timestamp", command)
+
+    def test_developer_id_keeps_runtime_timestamp_and_same_identity_for_dependencies(self):
+        binary(self.app / "Contents/Frameworks/libavcodec.dylib")
+        identity = "Developer ID Application: Harpia Test (TESTTEAMID)"
+        commands = []
+        with patch.object(deploy, "run", side_effect=lambda args, **kwargs: commands.append(args) or ""):
+            deploy.sign(self.app, identity, SOURCE / "resources/macos/entitlements.plist")
+        signed = [command for command in commands if "--sign" in command]
+        self.assertEqual(len(signed), 3)
+        for command in signed:
+            self.assertEqual(command[command.index("--options") + 1], "runtime")
+            self.assertEqual(command[command.index("--sign") + 1], identity)
+            self.assertIn("--timestamp", command)
+
     def test_runtime_entitlements_are_scoped_to_helpers_and_survive_redeployment(self):
         deno = binary(self.app / "Contents/Helpers/deno")
         ytdlp = binary(self.app / "Contents/Helpers/yt-dlp")

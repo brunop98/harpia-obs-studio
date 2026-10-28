@@ -268,7 +268,9 @@ int main(int argc, char **argv)
 	      "the saved copy becomes the active removable preset");
 	const DialogResult deletedCopy = runDialog([&]() { remove->click(); }, [](QWidget *widget) {
 		auto *dialog = qobject_cast<QMessageBox *>(widget);
-		if (!dialog || dialog->windowTitle() != QStringLiteral("Delete style"))
+		// QMessageBox ignores window titles on macOS. Identify the actual
+		// question and action instead of depending on that platform decoration.
+		if (!dialog || dialog->text() != QStringLiteral("Delete the text style \"My YouTube Copy\"?"))
 			return false;
 		if (auto *yes = dialog->button(QMessageBox::Yes))
 			yes->click();

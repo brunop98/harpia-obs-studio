@@ -1,6 +1,12 @@
 name: macOS build and package
 on:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: macOS runner pool (Intel avoids the current hosted arm64 capacity failures)
+        type: choice
+        default: macos-15-intel
+        options: [macos-15-intel, macos-latest]
   push:
     branches: [master, codex/macos-support]
     paths: ['harpia/**', 'libobs/**', 'libobs-opengl/**', 'plugins/**', 'cmake/**', 'CMakeLists.txt', 'CMakePresets.json', '.gitmodules', '.github/workflows/macos.yml']
@@ -13,7 +19,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
-    runs-on: macos-latest
+    # The latest arm64 job failed before acquiring a runner. Keep that pool
+    # available manually, while pushes use the separate Intel hosted pool.
+    runs-on: ${{ inputs.runner || 'macos-15-intel' }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
@@ -53,6 +61,8 @@ jobs:
               message = f'Native build was NOT RUN: this hosted runner has no Xcode {minimum}+ with macOS SDK {minimum_sdk}+. Use a runner with that toolchain; the repository requirement was not weakened.'
               print('::notice::' + message)
               with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output: output.write('## macOS validation unavailable\n\n' + message + '\n')
+              # A skipped native build must never look like a passing build.
+              raise SystemExit(1)
           PY
       - name: Ensure CMake for bootstrap regression checks
         run: |
@@ -95,6 +105,10 @@ jobs:
           title = 'First compiler/build diagnostic' if first is not None else 'Build log tail (no error marker found)'
           excerpt = '\n'.join(line[:1500] for line in (lines[first:first + 60] if first is not None else lines[-60:]))
           print(title + '\n' + excerpt)
+          # Annotations remain visible even when downloading logs requires
+          # signing in. Publish the same bounded excerpt used in the summary.
+          annotation = excerpt[:6000].replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          print('::error title=macOS build diagnostic::' + annotation)
           fence = '`' * max(3, max((len(match[0]) + 1 for match in re.finditer(r'`+', excerpt)), default=3))
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
               output.write(f'## {title}\n\nDownload the **Harpia-macOS-build-log** artifact for the complete output.\n\n{fence}text\n{excerpt}\n{fence}\n')

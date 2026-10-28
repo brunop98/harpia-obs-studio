@@ -96,6 +96,10 @@ elif name == "python3":
         os.execv("PYTHON", ["PYTHON"] + arguments)
 elif name == "git":
     print("git version 2.49.0")
+elif name == "security":
+    if arguments != ["find-identity", "-v", "-p", "codesigning"]:
+        raise SystemExit("The launcher must not create or modify keychain entries")
+    print(configuration.get("signing_identities", "0 valid identities found"))
 elif name == "clang":
     print("Apple clang version 17.0.0")
 elif name == "ffmpeg":
@@ -131,7 +135,7 @@ class LauncherTests(unittest.TestCase):
         self.mock.chmod(0o755)
         for name in ("uname", "xcode-select", "xcodebuild", "xcrun", "cmake", "ctest", "python3", "git", "clang",
                      "codesign", "sips", "iconutil", "otool", "install_name_tool", "lipo", "ditto", "open", "ffmpeg",
-                     "brew", "sudo"):
+                     "brew", "sudo", "security"):
             (self.tools / name).symlink_to(self.mock)
         # Keep PATH deliberately small: a missing mocked tool must not be
         # accidentally supplied by this Linux host's ordinary development PATH.
@@ -273,6 +277,29 @@ harpia_macos_check_tools "$2" "$3"
         result = self.run_script("build-and-run-harpia.sh", "--install")
         self.assertEqual(result.returncode, 17, result.stdout + result.stderr)
         self.assertFalse(self.trace("open"))
+
+    def test_auto_signing_uses_an_existing_apple_identity_for_stable_permissions(self):
+        identity = "0123456789ABCDEF0123456789ABCDEF01234567"
+        self.save_configuration(signing_identities=f'1) {identity} "Apple Development: Local Developer (TEAMID)"')
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        configure = next(c for c in self.trace("cmake") if "--preset" in c["arguments"])
+        self.assertIn("-DHARPIA_MAC_CODESIGN_IDENTITY=" + identity, configure["arguments"])
+        self.assertEqual(len(self.trace("security")), 1)
+
+    def test_auto_signing_does_not_use_unrelated_certificates(self):
+        identity = "0123456789ABCDEF0123456789ABCDEF01234567"
+        self.save_configuration(signing_identities=f'1) {identity} "Unrelated self-signed certificate"')
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        configure = next(c for c in self.trace("cmake") if "--preset" in c["arguments"])
+        self.assertIn("-DHARPIA_MAC_CODESIGN_IDENTITY=-", configure["arguments"])
+        self.assertIn("privacy grants may need renewal", result.stderr)
+
+    def test_explicit_ad_hoc_signing_never_queries_the_keychain(self):
+        result = self.run_script("build-and-run-harpia.sh", "--identity", "-")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.trace("security"))
 
     def test_finder_command_delegates_arguments_and_preserves_noninteractive_failure(self):
         self.save_configuration(configure_exit=43)

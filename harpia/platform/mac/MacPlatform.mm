@@ -3,22 +3,72 @@
 #include "platform/WindowList.hpp"
 
 #include <QCoreApplication>
+#include <QDebug>
 #include <QGuiApplication>
 #include <QMetaObject>
 #include <QPointer>
 #include <QScreen>
+#include <QStringList>
 #include <QThread>
 #include <QWidget>
 
 #include <algorithm>
+#include <atomic>
+#include <mutex>
+#include <utility>
 #include <vector>
 
 #import <AVFoundation/AVFoundation.h>
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <ScreenCaptureKit/ScreenCaptureKit.h>
+#import <Security/Security.h>
 
 namespace harpia::mac_platform {
 namespace {
+std::atomic<bool> screenCaptureKitAuthorized{false};
+std::atomic<unsigned> screenAuthorizationGeneration{0};
+std::mutex screenAuthorizationMutex;
+QString lastScreenProbe = QStringLiteral("not requested in this process");
+#if defined(HARPIA_TEST_SETTINGS)
+std::function<bool()> testScreenPreflight;
+std::function<void(std::function<void(bool, QString)>)> testScreenProbe;
+#endif
+
+bool quartzScreenPreflight()
+{
+#if defined(HARPIA_TEST_SETTINGS)
+	if (testScreenPreflight)
+		return testScreenPreflight();
+#endif
+	return CGPreflightScreenCaptureAccess();
+}
+
+void probeScreenCapture(std::function<void(bool, QString)> completion)
+{
+#if defined(HARPIA_TEST_SETTINGS)
+	if (testScreenProbe) {
+		testScreenProbe(std::move(completion));
+		return;
+	}
+#endif
+	// This is an explicit user request, never a startup/readiness poll. SCK
+	// checks TCC for the running process and prompts when macOS permits it.
+	[SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO
+		completionHandler:^(SCShareableContent *content, NSError *error) {
+			const bool granted = content != nil && error == nil;
+			QString details;
+			if (error)
+				details = QStringLiteral("domain=%1 code=%2: %3")
+					.arg(QString::fromUtf8(error.domain.UTF8String))
+					.arg(qlonglong(error.code))
+					.arg(QString::fromUtf8(error.localizedDescription.UTF8String));
+			else if (!content)
+				details = QStringLiteral("ScreenCaptureKit returned no shareable content");
+			completion(granted, details);
+		}];
+}
+
 QString string(NSString *value)
 {
 	return value ? QString::fromUtf8(value.UTF8String) : QString();
@@ -226,8 +276,79 @@ QString foregroundApplicationId()
 
 PermissionStatus screenCaptureStatus()
 {
-	return CGPreflightScreenCaptureAccess() ? PermissionStatus::Granted : PermissionStatus::Denied;
+	return quartzScreenPreflight() || screenCaptureKitAuthorized.load()
+		? PermissionStatus::Granted : PermissionStatus::Denied;
 }
+
+void invalidateScreenCaptureAuthorization()
+{
+	std::lock_guard<std::mutex> lock(screenAuthorizationMutex);
+	++screenAuthorizationGeneration;
+	screenCaptureKitAuthorized.store(false);
+}
+
+QString screenCaptureDiagnostics()
+{
+	QStringList lines;
+	QString probeDetails;
+	{
+		std::lock_guard<std::mutex> lock(screenAuthorizationMutex);
+		probeDetails = lastScreenProbe;
+	}
+	lines << QStringLiteral("Running executable: %1").arg(QCoreApplication::applicationFilePath())
+	      << QStringLiteral("Bundle path: %1").arg(string(NSBundle.mainBundle.bundlePath))
+	      << QStringLiteral("Bundle identifier: %1").arg(string(NSBundle.mainBundle.bundleIdentifier))
+	      << QStringLiteral("Quartz preflight: %1").arg(quartzScreenPreflight() ? "granted" : "not granted")
+	      << QStringLiteral("ScreenCaptureKit verified in this process: %1")
+		     .arg(screenCaptureKitAuthorized.load() ? "yes" : "no")
+	      << QStringLiteral("Last ScreenCaptureKit check: %1").arg(probeDetails);
+	SecCodeRef code = nullptr;
+	const OSStatus selfStatus = SecCodeCopySelf(kSecCSDefaultFlags, &code);
+	if (selfStatus != errSecSuccess || !code) {
+		lines << QStringLiteral("Could not read process signing identity: %1").arg(selfStatus);
+		return lines.join(QLatin1Char('\n'));
+	}
+	lines << QStringLiteral("Running code signature validity status: %1 (0 = valid)")
+		     .arg(SecCodeCheckValidity(code, kSecCSDefaultFlags, nullptr));
+	CFDictionaryRef info = nullptr;
+	const OSStatus infoStatus = SecCodeCopySigningInformation(code,
+		kSecCSSigningInformation | kSecCSRequirementInformation, &info);
+	if (infoStatus == errSecSuccess && info) {
+		const auto identifier = (CFStringRef)CFDictionaryGetValue(info, kSecCodeInfoIdentifier);
+		const auto team = (CFStringRef)CFDictionaryGetValue(info, kSecCodeInfoTeamIdentifier);
+		const auto certificates = (CFArrayRef)CFDictionaryGetValue(info, kSecCodeInfoCertificates);
+		const auto hash = (CFDataRef)CFDictionaryGetValue(info, kSecCodeInfoUnique);
+		lines << QStringLiteral("Signing identifier: %1").arg(string((__bridge NSString *)identifier))
+		      << QStringLiteral("Team identifier: %1").arg(team ? string((__bridge NSString *)team) : QStringLiteral("none"))
+		      << QStringLiteral("Signing mode: %1").arg(certificates && CFArrayGetCount(certificates)
+			     ? "certificate" : "ad-hoc (identity may change when rebuilt)");
+		if (hash)
+			lines << QStringLiteral("Code directory hash: %1").arg(QString::fromLatin1(
+				QByteArray(reinterpret_cast<const char *>(CFDataGetBytePtr(hash)),
+					   qsizetype(CFDataGetLength(hash))).toHex()));
+		const auto requirement = (SecRequirementRef)CFDictionaryGetValue(info, kSecCodeInfoDesignatedRequirement);
+		CFStringRef requirementText = nullptr;
+		if (requirement && SecRequirementCopyString(requirement, kSecCSDefaultFlags, &requirementText) == errSecSuccess && requirementText) {
+			lines << QStringLiteral("Designated requirement: %1").arg(string((__bridge NSString *)requirementText));
+			CFRelease(requirementText);
+		}
+		CFRelease(info);
+	} else {
+		lines << QStringLiteral("Could not read signing details: %1").arg(infoStatus);
+	}
+	CFRelease(code);
+	return lines.join(QLatin1Char('\n'));
+}
+
+#if defined(HARPIA_TEST_SETTINGS)
+void setScreenCaptureTestBackend(std::function<bool()> preflight,
+    std::function<void(std::function<void(bool, QString)>)> probe)
+{
+	testScreenPreflight = std::move(preflight);
+	testScreenProbe = std::move(probe);
+	invalidateScreenCaptureAuthorization();
+}
+#endif
 
 PermissionStatus cameraStatus()
 {
@@ -242,10 +363,25 @@ PermissionStatus microphoneStatus()
 void requestScreenCapture(QObject *receiver, std::function<void(bool)> callback)
 {
 	QPointer<QObject> guard(receiver);
+	const unsigned generation = screenAuthorizationGeneration.load();
 	if (auto *application = QCoreApplication::instance())
-		QMetaObject::invokeMethod(application, [guard, callback = std::move(callback)]() {
-			if (guard)
-				complete(guard, callback, CGRequestScreenCaptureAccess());
+		QMetaObject::invokeMethod(application, [guard, generation, callback = std::move(callback)]() {
+			if (!guard)
+				return;
+			probeScreenCapture([guard, generation, callback](bool granted, const QString &details) {
+				bool current;
+				{
+					std::lock_guard<std::mutex> lock(screenAuthorizationMutex);
+					current = generation == screenAuthorizationGeneration.load();
+					if (current) {
+						screenCaptureKitAuthorized.store(granted);
+						lastScreenProbe = granted ? QStringLiteral("granted") : details;
+					}
+				}
+				qInfo().noquote() << QStringLiteral("[harpia] ScreenCaptureKit authorization: granted=%1 current=%2; %3")
+					.arg(granted ? "yes" : "no", current ? "yes" : "no", details);
+				complete(guard, callback, current && granted);
+			});
 		}, Qt::QueuedConnection);
 }
 

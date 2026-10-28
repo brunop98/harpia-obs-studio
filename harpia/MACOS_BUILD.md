@@ -76,7 +76,17 @@ The build downloads the dependency versions/hashes in `CMakePresets.json`.
 `harpia-deploy` builds the recorder and runtime modules, creates `Harpia.app`,
 deploys Qt plus OBS/FFmpeg dependencies, repairs load paths and signs the nested
 code/application. Re-running this target also refreshes plugin-only changes.
-The development signing default is ad-hoc (`-`). These local builds explicitly
+The build launcher defaults to `--identity auto`: it uses an existing valid
+Apple Development or Developer ID Application identity from the keychain when
+available. This supplies a certificate-backed identity that can survive rebuilds
+in macOS privacy permissions. It does not create certificates or change the
+keychain. `--identity <name-or-hash>` or `CODESIGN_IDENT` overrides selection;
+`--identity -` explicitly selects ad-hoc signing. Without a suitable identity,
+auto falls back to ad-hoc and prints a permission-persistence warning. You can
+create an Apple Development certificate through Xcode's account settings, or
+list existing signing identities with `security find-identity -v -p codesigning`.
+
+Ad-hoc local builds explicitly
 clear hardened runtime flags: ad-hoc signatures have no Team ID, so hardened
 library validation can reject bundled FFmpeg/Qt libraries at launch. Builds
 using a Developer ID identity retain hardened runtime and sign all nested code
@@ -115,6 +125,16 @@ Harpia entry in the relevant Privacy & Security list, add the installed app with
 the `+` button, enable it, then quit/reopen when macOS requests it. Development
 ad-hoc builds can require a new grant after rebuilding; Developer ID signing
 provides a more stable identity for distribution.
+
+An explicit Record action verifies access through ScreenCaptureKit when Quartz
+preflight reports no access. A successful native check authorizes the recorder
+and audio gates for that attempt; native denials remain failures. Read-only
+startup/readiness checks never initiate the native request. Results are cleared
+for a new Record attempt or after a failed stream. Permission diagnostics now
+include the actual SCK result, bundle path/identifier, running code signature
+validity, signing identifier, Team ID, code hash and designated requirement.
+These help distinguish a preflight mismatch from a grant attached to another
+signed build. Privacy & Security settings are never reset automatically.
 
 Outputs:
 

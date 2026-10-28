@@ -50,13 +50,25 @@ quint64 foregroundProcessId();
 QString foregroundApplicationId();
 
 PermissionStatus screenCaptureStatus();
+// Forget a prior successful ScreenCaptureKit check after a stream fails or a
+// user explicitly retries authorization. This does not change macOS settings.
+void invalidateScreenCaptureAuthorization();
+QString screenCaptureDiagnostics();
 PermissionStatus cameraStatus();
 PermissionStatus microphoneStatus();
 // Requests run on the GUI thread. Completion is always queued to the GUI and
-// is suppressed if the receiver was destroyed. Screen Recording's public query
-// cannot distinguish "not requested" from "denied"; false reports Denied.
+// is suppressed if the receiver was destroyed. The read-only status uses Quartz
+// plus successful SCK authorization observed in this process. An explicit screen
+// request uses ScreenCaptureKit, so a false Quartz preflight is not a final denial.
 void requestScreenCapture(QObject *receiver, std::function<void(bool)> completion);
 void requestCamera(QObject *receiver, std::function<void(bool)> completion);
 void requestMicrophone(QObject *receiver, std::function<void(bool)> completion);
+
+#if defined(HARPIA_TEST_SETTINGS)
+// Native endpoints only: tests exercise the real asynchronous request/status
+// path without querying the CI user's privacy settings or raising OS prompts.
+void setScreenCaptureTestBackend(std::function<bool()> preflight,
+    std::function<void(std::function<void(bool, QString)>)> probe);
+#endif
 
 } // namespace harpia::mac_platform

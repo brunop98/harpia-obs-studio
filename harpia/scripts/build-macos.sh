@@ -7,7 +7,7 @@ configuration=RelWithDebInfo
 architecture=$(uname -m)
 build_dir="$repo_dir/build_macos"
 preset=macos
-identity=${CODESIGN_IDENT:--}
+identity=${CODESIGN_IDENT:-auto}
 run_app=false
 package_app=false
 run_tests=false
@@ -17,7 +17,7 @@ install_app=false
 install_dir=
 usage() {
   echo "Usage: build-macos.sh [--arch arm64|x86_64|universal] [--configuration Release|RelWithDebInfo|Debug|MinSizeRel]"
-  echo "                      [--build-dir path] [--preset macos|macos-ci] [--identity codesign-id] [--test] [--package] [--check-runtime] [--check-tools] [--run]"
+  echo "                      [--build-dir path] [--preset macos|macos-ci] [--identity auto|codesign-id|-] [--test] [--package] [--check-runtime] [--check-tools] [--run]"
   echo "                      [--install] [--install-dir directory]"
 }
 while [[ $# -gt 0 ]]; do
@@ -49,6 +49,27 @@ case "$preset" in macos|macos-ci) ;; *) echo "Choose the macos or macos-ci prese
 source "$script_dir/macos-tools.sh"
 harpia_macos_check_tools "$repo_dir" "$run_tests" || exit 1
 if $check_tools; then exit 0; fi
+# Prefer an existing Apple signing identity so TCC can recognize rebuilt apps
+# by their certificate-backed requirement instead of an ad-hoc code hash. No
+# certificate/keychain is created or modified. Explicit identities always win.
+if [[ $identity == auto ]]; then
+  identity=-
+  if command -v security >/dev/null 2>&1; then
+    while IFS= read -r candidate; do
+      if [[ $candidate == *'"Apple Development:'* || $candidate == *'"Developer ID Application:'* ]]; then
+        if [[ $candidate =~ ([[:xdigit:]]{40}) ]]; then
+          identity=${BASH_REMATCH[1]}
+          break
+        fi
+      fi
+    done <<< "$(security find-identity -v -p codesigning 2>/dev/null || true)"
+  fi
+fi
+if [[ $identity == - ]]; then
+  echo 'Harpia: ad-hoc signing; privacy grants may need renewal after rebuilding. A stable Apple Development or Developer ID identity can be selected with --identity.' >&2
+else
+  echo "Harpia: using signing identity $identity" >&2
+fi
 test_args=()
 if $run_tests; then test_args=("-DHARPIA_TEST_FFMPEG=$HARPIA_MAC_FFMPEG"); fi
 mkdir -p "$build_dir"

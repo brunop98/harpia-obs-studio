@@ -1907,13 +1907,19 @@ void MainWindow::onPrimaryButton()
 {
 	// Ignore clicks while a transition is in flight (the button is disabled then
 	// anyway, but guard against races).
-	if (starting_ || stopping_ || countingDown_)
+	if (starting_ || stopping_ || countingDown_ || macPermissionPending_)
 		return;
 
 	if (recorder_.isRecording())
 		beginStop();
-	else
+	else {
+#if defined(Q_OS_MACOS)
+		// Recheck negative Quartz results through SCK once per new attempt,
+		// while permission-dialog resumes keep the result of that same check.
+		mac_platform::invalidateScreenCaptureAuthorization();
+#endif
 		beginRecordFlow();
+	}
 }
 
 bool MainWindow::ensureMacPermissions(std::function<void()> resume, bool screen, bool microphone, bool camera)
@@ -1938,6 +1944,11 @@ bool MainWindow::ensureMacPermissions(std::function<void()> resume, bool screen,
 			monitorScreens_.clear();
 			refreshReadiness();
 			updateButtons();
+			if (pane == QStringLiteral("ScreenCapture")) {
+				Logger::instance().log(granted ? LogLevel::Info : LogLevel::Warning,
+					screenCaptureDiagnostics().toStdString());
+				Logger::instance().flush();
+			}
 			if (granted) {
 				audio_.refreshCapture();
 				audioPanel_->rescanDevices();
@@ -1960,10 +1971,7 @@ bool MainWindow::ensureMacPermissions(std::function<void()> resume, bool screen,
 				box.setInformativeText(QStringLiteral(
 					"Microphone permission is separate from system audio. Allow Harpia under Microphone, "
 					"or turn off the selected microphones in Harpia if you only want computer audio."));
-			box.setDetailedText(QStringLiteral("Running executable:\n%1\n\n"
-				"Screen/system audio preflight: %2\nMicrophone status: %3\nCamera status: %4")
-				.arg(QCoreApplication::applicationFilePath())
-				.arg(screenCaptureStatus() == PermissionStatus::Granted ? "granted" : "not granted")
+			box.setDetailedText(screenCaptureDiagnostics() + QStringLiteral("\nMicrophone status: %1\nCamera status: %2")
 				.arg(int(microphoneStatus())).arg(int(cameraStatus())));
 			QPushButton *settings = box.addButton(QStringLiteral("Open System Settings"), QMessageBox::ActionRole);
 			QPushButton *folder = box.addButton(QStringLiteral("Show Application Folder"), QMessageBox::ActionRole);
@@ -5429,6 +5437,7 @@ void MainWindow::tickState()
 	}
 	if (recorder_.isRecording() && !stopping_ &&
 	    ((modeUsesVideoEncoder(recordMode()) && capture_.captureFailed()) || !audio_.pcCaptureFailure().empty())) {
+		mac_platform::invalidateScreenCaptureAuthorization();
 		beginStop();
 		QMessageBox::warning(this, QStringLiteral("Recording interrupted"),
 			QStringLiteral("macOS stopped a capture stream. The recording is being saved. "

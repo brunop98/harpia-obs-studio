@@ -1,6 +1,7 @@
 #include "MacSystemAudioCapture.hpp"
 #include "MacAudioPcm.hpp"
 #include "MacAudioPermissions.hpp"
+#include "MacPlatform.hpp"
 
 #import <AppKit/AppKit.h>
 #import <AudioToolbox/AudioToolbox.h>
@@ -264,7 +265,7 @@ bool available()
 
 bool permissionGranted()
 {
-	return available() && CGPreflightScreenCaptureAccess();
+	return available() && mac_platform::screenCaptureStatus() == mac_platform::PermissionStatus::Granted;
 }
 
 QVector<SystemAudioApp> runningApps()
@@ -473,8 +474,8 @@ bool Capture::start(const QString &bundleId, QString *error)
 	};
 	if (!available())
 		return fail(QStringLiteral("Recording system or application audio requires macOS 13 or newer."));
-	if (!CGPreflightScreenCaptureAccess())
-		return fail(QStringLiteral("Allow Harpia in System Settings > Privacy & Security > Screen & System Audio Recording, then start a new take."));
+	// start() is an explicit recording action. Let SCK's actual source query
+	// below check permission; Quartz preflight alone can disagree with SCK.
 	if (@available(macOS 13.0, *)) {
 		const auto state = std::make_shared<State>();
 		state->bundleId = bundleId;

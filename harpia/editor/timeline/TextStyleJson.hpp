@@ -52,7 +52,7 @@ inline void applyTextStyleFromJson(const QJsonObject &o, TlText &t)
 	t.boxEnabled = o.value(QStringLiteral("box")).toBool(false);
 	// Only a known mode opts into fitted stickers. Missing or malformed values
 	// retain the appearance of projects and styles written before this option.
-	t.boxShape = o.value(QStringLiteral("boxShape")).toDouble(0.0) == TlTextBoxFitText
+	t.boxShape = o.value(QStringLiteral("boxShape")).toDouble(0.0) == double(TlTextBoxFitText)
 		? TlTextBoxFitText : TlTextBoxRectangle;
 	t.boxColor = QColor(o.value(QStringLiteral("boxColor")).toString());
 	// "boxPad" was one number for both axes; it seeds them both so an older

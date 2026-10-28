@@ -6,6 +6,11 @@ cmake_minimum_required(VERSION 3.28)
 if(APPLE)
   set(CMAKE_SKIP_RPATH FALSE)
   unset(CMAKE_XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS)
+  # Tests load development SDK libraries instead of the fully re-signed app
+  # bundle. App hardened-runtime/library-validation settings do not apply.
+  foreach(configuration Release RelWithDebInfo MinSizeRel)
+    set(CMAKE_XCODE_ATTRIBUTE_ENABLE_HARDENED_RUNTIME[variant=${configuration}] NO)
+  endforeach()
 endif()
 
 # May also be configured directly for editor checks without building libobs.

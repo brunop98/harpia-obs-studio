@@ -112,7 +112,7 @@ static void stopPlaybackTimer(VideoEditorWindow &editor)
 			timer->stop();
 }
 
-static bool pictureMatches(VideoEditorWindow &editor, TimelineView &timeline, PreviewCanvas &canvas,
+static bool pictureMatches(VideoEditorWindow &, TimelineView &timeline, PreviewCanvas &canvas,
 			   std::array<FrameSeeker, 2> &reference)
 {
 	const qint64 outMs = timeline.playhead();

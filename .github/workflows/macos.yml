@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
     inputs:
       runner:
-        description: macOS runner pool (Intel avoids the current hosted arm64 capacity failures)
+        description: macOS runner pool (requires Xcode 26.5 and SDK 26.5 or newer)
         type: choice
-        default: macos-15-intel
+        default: macos-latest
         options: [macos-15-intel, macos-latest]
   push:
     branches: [master, codex/macos-support]
@@ -19,9 +19,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
-    # The latest arm64 job failed before acquiring a runner. Keep that pool
-    # available manually, while pushes use the separate Intel hosted pool.
-    runs-on: ${{ inputs.runner || 'macos-15-intel' }}
+    # Intel macOS 15 runners currently lack the required 26.5 SDK. The arm64
+    # pool has the required toolchain; capacity failures need a fresh run.
+    runs-on: ${{ inputs.runner || 'macos-latest' }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6

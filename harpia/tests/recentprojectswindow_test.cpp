@@ -163,7 +163,11 @@ int main(int argc, char **argv)
 		if (empty) {
 			QWidget *preview = empty->parentWidget();
 			const QSize original = preview->size();
-			preview->resize(original.width(), 240);
+			const QSize originalMinimum = preview->minimumSize();
+			const QSize originalMaximum = preview->maximumSize();
+			// The parent layout may undo resize(), and native font metrics may
+			// fit all entries into 240 px. Force a genuinely constrained viewport.
+			preview->setFixedSize(original.width(), 140);
 			settle();
 			ok(preview->rect().contains(empty->geometry()),
 			   "the opening panel also fits a short preview");
@@ -178,6 +182,8 @@ int main(int argc, char **argv)
 					   recentButton(editor, 3)->mapTo(scroll->viewport(), QPoint()),
 					   recentButton(editor, 3)->size())),
 			   "the third project can be reached by scrolling");
+			preview->setMinimumSize(originalMinimum);
+			preview->setMaximumSize(originalMaximum);
 			preview->resize(original);
 			settle();
 		}

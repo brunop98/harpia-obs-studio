@@ -114,6 +114,18 @@ jobs:
           # signing in. Publish the same bounded excerpt used in the summary.
           annotation = excerpt[:6000].replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
           print('::error title=macOS build diagnostic::' + annotation)
+          current_test = ''
+          test_failures = []
+          for line in lines:
+              start = re.search(r'Start\s+\d+:\s+(\S+)', line)
+              if start:
+                  current_test = start.group(1)
+              if re.search(r'^\s*FAIL\b|^\s*\d+/\d+.*\*\*\*|Image fixture command failed', line):
+                  test_failures.append(current_test + ': ' + line.strip())
+          if test_failures:
+              details = '\n'.join(test_failures[:40])[:6000]
+              details = details.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+              print('::error title=macOS test failures::' + details)
           fence = '`' * max(3, max((len(match[0]) + 1 for match in re.finditer(r'`+', excerpt)), default=3))
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
               output.write(f'## {title}\n\nDownload the **Harpia-macOS-build-log** artifact for the complete output.\n\n{fence}text\n{excerpt}\n{fence}\n')

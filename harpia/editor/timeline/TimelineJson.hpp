@@ -247,7 +247,7 @@ inline QJsonObject clipToJson(const TlClip &c)
 			fo[QStringLiteral("spot")] = spotlightToJson(c.fx.spot);
 		co[QStringLiteral("fx")] = fo;
 	}
-	if (!c.components.isEmpty())
+	if (!c.components.isEmpty() || c.type == TlClip::Type::Effect)
 		co[QStringLiteral("components")] =
 			componentsToJson(c.components, ComponentRegistry::instance());
 	if (!c.scripts.isEmpty()) {
@@ -449,7 +449,7 @@ inline TlClip clipFromJson(const QJsonObject &co)
 	// Effect clips only. Guarding on co.contains("fx") alone was wrong: the fx
 	// block is not even PARSED for other clip types, so a stray key on a video
 	// clip would have produced a spurious Brightness out of default values.
-	if (c.type == TlClip::Type::Effect && c.components.isEmpty() &&
+	if (c.type == TlClip::Type::Effect && !co.contains(QStringLiteral("components")) && c.components.isEmpty() &&
 	    c.fx.type != FxType::InverseSelection && co.contains(QStringLiteral("fx"))) {
 		ComponentInstance ci;
 		ci.typeId = effectComponentId(c.fx.type);

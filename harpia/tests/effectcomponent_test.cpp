@@ -185,6 +185,18 @@ int main(int argc, char **argv)
 		ok(again.components.size() == 1, "a second open does not duplicate it");
 	}
 
+	{
+		TlClip empty;
+		empty.type = TlClip::Type::Effect;
+		empty.fx.enabled = false;
+		empty.srcEndMs = 3000;
+		const QJsonObject saved = clipToJson(empty);
+		ok(saved.contains(QStringLiteral("components")) && saved.value(QStringLiteral("components")).toArray().isEmpty(),
+		   "an intentionally empty effect stack is saved explicitly");
+		const TlClip reopened = clipFromJson(saved);
+		ok(reopened.components.isEmpty() && !reopened.fx.enabled,
+		   "opening an empty effect does not resurrect legacy Brightness");
+	}
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
 }

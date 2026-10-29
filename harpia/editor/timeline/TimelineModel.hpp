@@ -354,7 +354,7 @@ struct TlClip {
 		if (!fx.name.isEmpty())
 			return fx.name; // a name the user typed always wins
 		if (components.isEmpty())
-			return QString::fromLatin1(fxTypeName(fx.type));
+			return fx.enabled ? QString::fromLatin1(fxTypeName(fx.type)) : QStringLiteral("Empty effect");
 		QStringList parts;
 		for (const ComponentInstance &ci : components)
 			parts << nameOf(ci.typeId);

@@ -1896,6 +1896,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 				for (int i = 0; i < c.components.size(); ++i)
 					if (c.components[i].typeId == t && seen++ == o) {
 						c.components.remove(i);
+						if (c.type == TlClip::Type::Effect)
+							c.fx.enabled = false; // never resurrect the legacy effect
 						return;
 					}
 			});
@@ -3807,10 +3809,7 @@ void VideoEditorWindow::addEffectClip()
 	c.srcStartMs = 0;
 	c.srcEndMs = 3000; // freely stretchable, like a caption
 	c.outStartMs = timelinePlayheadMs();
-	c.fx.type = FxType::Brightness;
-	c.fx.params = fxDefaults(c.fx.type);
-	c.components.append(TlClip::newEffectComponent(effectComponentId(c.fx.type),
-						       fxDefaults(c.fx.type)));
+	c.fx.enabled = false; // an empty carrier until the user adds components
 	timelineView_->addClip(TlTrack::Kind::Effect, c);
 	updateInfoLabel();
 	showTimelineFrame(timelinePlayheadMs());
@@ -7328,6 +7327,7 @@ qint64 VideoEditorWindow::componentEditTimeFor(const ComponentInstance &ci) cons
 
 void VideoEditorWindow::afterComponentEdit()
 {
+	invalidatePreviewCache();
 	syncPreviewTransformTarget();
 	showTimelineFrame(timelinePlayheadMs());
 	syncComponentPanel();

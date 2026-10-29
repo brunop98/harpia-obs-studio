@@ -3297,12 +3297,13 @@ void VideoEditorWindow::onRemoveSource()
 
 void VideoEditorWindow::openRecordingLibrary()
 {
+	const QPoint clickPosition = QCursor::pos();
 	if (!fullEdit() || !sourcesTabs_ || !libraryList_)
 		return;
 	refreshLibrary(); // include recordings made since the editor was opened
 	sourcesTabs_->setCurrentWidget(libraryList_->parentWidget());
 	sourcesBtn_->setChecked(true);
-	showSourcesPanel(); // also raise it when the Sources toggle was already checked
+	showSourcesPanel(clickPosition); // also relocate a panel already open elsewhere
 	libraryList_->setFocus(Qt::OtherFocusReason);
 }
 
@@ -11169,8 +11170,9 @@ void VideoEditorWindow::dropEvent(QDropEvent *e)
 	e->acceptProposedAction();
 }
 
-void VideoEditorWindow::showSourcesPanel()
+void VideoEditorWindow::showSourcesPanel(std::optional<QPoint> clickPosition)
 {
+	const QPoint origin = clickPosition.value_or(QCursor::pos());
 	if (!sourcesPanel_)
 		return;
 	if (!sourcesPlaced_) {
@@ -11186,8 +11188,11 @@ void VideoEditorWindow::showSourcesPanel()
 			sourcesPanel_->resize(560, std::max(sourcesPanel_->height(), 620));
 		sourcesPlaced_ = true;
 	}
-	sourcesPanel_->show();
+	window_screen::placeAtClick(*sourcesPanel_, origin, this);
+	sourcesPanel_->showNormal();
+	window_screen::placeAtClick(*sourcesPanel_, origin, this);
 	sourcesPanel_->raise();
+	sourcesPanel_->activateWindow();
 }
 
 void VideoEditorWindow::showEvent(QShowEvent *e)

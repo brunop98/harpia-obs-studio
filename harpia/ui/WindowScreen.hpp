@@ -23,6 +23,8 @@ struct Screen {
 // breaks ties between displays with the same reported identity.
 int findScreen(const Screen &saved, const QVector<Screen> &screens);
 QPoint centeredTopLeft(const QSize &frameSize, const QRect &available);
+// Explicit popup actions follow the click, rather than remembered placement.
+void placeAtClick(QWidget &window, const QPoint &globalClick, QWidget *fallback = nullptr);
 
 // Separate keys let the recorder and editor remember different monitors.
 // Restore on the first show, after QDialog's parent-relative positioning but

@@ -1,6 +1,9 @@
 #include "RecordingVideoPicker.hpp"
 
 #include "RecordingDelete.hpp"
+#include "WindowScreen.hpp"
+#include <QCursor>
+#include <QShowEvent>
 
 #include <QAction>
 #include <QApplication>
@@ -107,6 +110,7 @@ QIcon videoPlaceholder(const QPalette &palette)
 RecordingVideoPicker::RecordingVideoPicker(const QStringList &libraryFolders, QWidget *parent)
 	: QDialog(parent), libraryFolders_(libraryFolders), thumbnails_(this), scanner_(this)
 {
+	openingPosition_ = QCursor::pos();
 	setObjectName(QStringLiteral("recordingVideoPicker"));
 	setWindowTitle(QStringLiteral("Add video"));
 	setWindowFlags(Qt::Dialog | Qt::WindowTitleHint | Qt::WindowSystemMenuHint |
@@ -484,6 +488,15 @@ void RecordingVideoPicker::updateThumbnail(const QString &path)
 	const QImage image = thumbnails_.cached(path, kThumbnailSize);
 	if (!image.isNull())
 		item->setIcon(QIcon(QPixmap::fromImage(image)));
+}
+
+void RecordingVideoPicker::showEvent(QShowEvent *event)
+{
+	QDialog::showEvent(event);
+	if (!placed_) {
+		placed_ = true;
+		window_screen::placeAtClick(*this, openingPosition_, parentWidget());
+	}
 }
 
 } // namespace harpia

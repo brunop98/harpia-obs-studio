@@ -946,7 +946,7 @@ private:
 	QVBoxLayout *randomClipRows_ = nullptr;
 	QVector<QToolButton *> randomClipPicks_;
 	QVector<QPushButton *> randomClipDels_;
-	QVector<QLabel *> randomClipThumbs_;
+	QVector<QToolButton *> randomClipThumbs_;
 	QVector<QPushButton *> randomClipSlips_;
 	QVector<QPushButton *> randomClipPositions_;
 	QVector<QLabel *> randomClipTimes_;

@@ -13,6 +13,7 @@
 #include "editor/SlipDialog.hpp"
 #include "editor/RandomClipCompareDialog.hpp"
 #include "editor/InspectorSection.hpp"
+#include "editor/EditorWidgets.hpp"
 #include "editor/component/ComponentPanel.hpp"
 #include "editor/timeline/ClipVariations.hpp"
 #include "editor/timeline/TextVariations.hpp"
@@ -21,6 +22,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <QTest>
 
 using namespace harpia;
 namespace {
@@ -314,9 +316,9 @@ int main(int argc, char **argv)
 	window.sourceById(blue)->thumbCache = {blueFrame};
 	window.refreshRandomClipThumbnails();
 	const auto thumbs = window.randomClipThumbs_;
-	check(thumbs.size() == 3 && thumbs[0]->pixmap().toImage().pixelColor(20, 16) == QColor(Qt::red) &&
-	      thumbs[1]->pixmap().toImage().pixelColor(20, 16) == QColor(Qt::blue) &&
-	      thumbs[2]->pixmap().toImage().pixelColor(20, 16) == QColor(Qt::green),
+	check(thumbs.size() == 3 && thumbs[0]->icon().pixmap(62, 34).toImage().pixelColor(20, 16) == QColor(Qt::red) &&
+		      thumbs[1]->icon().pixmap(62, 34).toImage().pixelColor(20, 16) == QColor(Qt::blue) &&
+		      thumbs[2]->icon().pixmap(62, 34).toImage().pixelColor(20, 16) == QColor(Qt::green),
 	      "cached thumbnails follow each option's own source and timestamp, including duplicate sources");
 	const QIcon redIcon = sourceAction(optionButton(window, "randomClipVideo", 1), red)->icon();
 	const QIcon blueIcon = sourceAction(optionButton(window, "randomClipVideo", 1), blue)->icon();
@@ -515,13 +517,47 @@ int main(int argc, char **argv)
 	optionButton(window, "randomClipVideo", 1)->click();
 	check(optionButton(window, "randomClipVideo", 1)->isChecked(),
 	      "clicking the shown option keeps its selected highlight");
+	const TimelineModel beforeThumbClick = window.timelineView_->model();
+	TimelineModel expectedThumbClick = beforeThumbClick;
+	clip_variations::show(expectedThumbClick.tracks[0].clips[0], 0);
+	QTest::mouseClick(optionButton(window, "randomClipThumbnail", 0), Qt::LeftButton);
+	check(window.timelineView_->model() == expectedThumbClick,
+	      "clicking a thumbnail selects that footage in the full project without changing other tracks or options");
+	const auto previewColour = [&]() {
+		const auto &image = window.canvas_->currentFrame();
+		if (image.isNull()) {
+			return QColor();
+		}
+		const auto pose = current(window).positionedTransformAt(window.timelinePlayheadMs());
+		return image.pixelColor(std::clamp(int(pose.posX * image.width()), 0, image.width() - 1),
+					std::clamp(int(pose.posY * image.height()), 0, image.height() - 1));
+	};
+	check(QTest::qWaitFor([&]() { return previewColour().red() > 180 && previewColour().blue() < 50; }, 2000),
+	      "the main timeline renders the footage selected through its thumbnail");
+	QTest::mouseClick(optionButton(window, "randomClipThumbnail", 1), Qt::LeftButton);
+	check(current(window).clipShown == 1 &&
+	      QTest::qWaitFor([&]() { return previewColour().blue() > 180 && previewColour().red() < 50; }, 2000) &&
+		      optionButton(window, "randomClipThumbnail", 1)->isChecked() &&
+		      !optionButton(window, "randomClipThumbnail", 0)->isChecked() &&
+		      optionButton(window, "randomClipVideo", 1)->isChecked(),
+	      "another thumbnail switches the rendered video and synchronizes both selection highlights");
+	QTest::mouseClick(optionButton(window, "randomClipThumbnail", 1), Qt::LeftButton);
+	check(current(window).clipShown == 1 && optionButton(window, "randomClipThumbnail", 1)->isChecked(),
+	      "clicking the current thumbnail keeps its option selected");
+	QTest::keyClick(optionButton(window, "randomClipThumbnail", 0), Qt::Key_Space);
+	check(current(window).clipShown == 0 && optionButton(window, "randomClipThumbnail", 0)->isChecked(),
+	      "thumbnail choices also support keyboard activation");
+	optionButton(window, "randomClipThumbnail", 1)->click();
 	TimelineModel locked = window.timelineView_->model();
 	locked.tracks[0].locked = true;
 	install(window, locked);
 	check(!optionButton(window, "randomClipVideo", 1)->isEnabled() &&
+		      !optionButton(window, "randomClipThumbnail", 1)->isEnabled() &&
 		      !optionButton(window, "randomClipSlip", 1)->isEnabled() &&
 		      !optionButton(window, "randomClipPosition", 1)->isEnabled(),
 	      "locked tracks disable source, timestamp and independent position controls");
+	QTest::mouseClick(optionButton(window, "randomClipThumbnail", 0), Qt::LeftButton);
+	check(window.timelineView_->model() == locked, "thumbnail selection respects the track lock");
 	window.showRandomClipPositionMenu(1, QPoint(100, 100));
 	settle();
 	check(window.timelineView_->model() == locked &&

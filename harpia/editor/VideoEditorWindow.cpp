@@ -9172,7 +9172,7 @@ void VideoEditorWindow::buildRandomClipSection(QVBoxLayout *clipOuter)
 	sec->header()->setToolTip(
 		QStringLiteral("Each clip is one version of the video (Export \u2192 Variations). "
 			       "They share this slot's place, length and look. "
-			       "Use the video name to preview a choice, its arrow to change the source, "
+			       "Click the thumbnail or video name to preview a choice, its arrow to change the source, "
 			       "Slip\u2026 to choose its start time, or XY to position only this choice."));
 	auto *rows = new QWidget(randomClipBox_);
 	randomClipRows_ = new QVBoxLayout(rows);
@@ -9257,12 +9257,23 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 			auto *layout = new QHBoxLayout(row);
 			layout->setContentsMargins(0, 0, 0, 0);
 			layout->setSpacing(7);
-			auto *thumb = new QLabel(row);
+			auto *thumb = new QToolButton(row);
 			thumb->setObjectName(QStringLiteral("randomClipThumbnail"));
 			thumb->setProperty("optionIndex", k);
 			thumb->setFixedSize(64, 36);
-			thumb->setAlignment(Qt::AlignCenter);
-			thumb->setStyleSheet(QStringLiteral("background:#151619; border:1px solid #464a52; border-radius:3px;"));
+			thumb->setIconSize(QSize(62, 34));
+			thumb->setToolButtonStyle(Qt::ToolButtonIconOnly);
+			thumb->setCheckable(true);
+			thumb->setFocusPolicy(Qt::StrongFocus);
+			thumb->setCursor(Qt::PointingHandCursor);
+			thumb->setStyleSheet(QStringLiteral(
+				"QToolButton{background:#151619; border:1px solid #464a52; border-radius:3px; padding:0px;}"
+				"QToolButton:hover,QToolButton:focus{border-color:#8d98aa;}"
+				"QToolButton:checked{border:2px solid #22c55e;}"));
+			connect(thumb, &QToolButton::clicked, this, [this, thumb, k]() {
+				showRandomClipOption(k);
+				thumb->setChecked(true);
+			});
 			layout->addWidget(thumb, 0, Qt::AlignVCenter);
 			auto *details = new QVBoxLayout;
 			details->setSpacing(3);
@@ -9359,6 +9370,9 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 		pick->setToolTip(full + QStringLiteral("\nClick the name to preview this option; use the arrow to choose its source.") +
 			(source ? QLatin1Char('\n') + (source->origPath.isEmpty() ? source->path : source->origPath) : QString()));
 		pick->setEnabled(!locked);
+		randomClipThumbs_[k]->setEnabled(!locked);
+		randomClipThumbs_[k]->setChecked(k == c.clipShown);
+		randomClipThumbs_[k]->setAccessibleName(QStringLiteral("Preview %1 in the timeline").arg(full));
 		randomClipPositions_[k]->setEnabled(!locked);
 		randomClipPositions_[k]->setVisible(!audioLane);
 		randomClipPositions_[k]->setToolTip(
@@ -9438,7 +9452,7 @@ void VideoEditorWindow::refreshRandomClipThumbnails(int sourceId)
 		const TlClipOption option = clip->clipOptionAt(k);
 		if (sourceId >= 0 && option.sourceId != sourceId)
 			continue;
-		QLabel *thumb = randomClipThumbs_[k];
+		QToolButton *thumb = randomClipThumbs_[k];
 		const EditorSource *source = sourceById(option.sourceId);
 		const QImage *image = nullptr;
 		if (source && !source->missing && !source->thumbCache.isEmpty() && source->durationMs > 0) {
@@ -9464,10 +9478,11 @@ void VideoEditorWindow::refreshRandomClipThumbnails(int sourceId)
 		thumb->setProperty("frameKey", frameKey);
 		thumb->setProperty("missing", missing);
 		thumb->setProperty("video", video);
-		thumb->setPixmap(image ? QPixmap::fromImage(*image).scaled(62, 34, Qt::KeepAspectRatio, Qt::SmoothTransformation)
-			: uiIcon(missing ? Glyph::Warning : (video ? Glyph::Play : Glyph::Speaker), 20).pixmap(20, 20));
-		thumb->setToolTip(missing ? QStringLiteral("Source media is missing") :
-			QStringLiteral("Preview near this option's source start; updates as thumbnails load."));
+		thumb->setIcon(image ? QIcon(QPixmap::fromImage(*image).scaled(62, 34, Qt::KeepAspectRatio,
+									       Qt::SmoothTransformation))
+				     : uiIcon(missing ? Glyph::Warning : (video ? Glyph::Play : Glyph::Speaker), 20));
+		thumb->setToolTip(missing ? QStringLiteral("Source media is missing")
+					  : QStringLiteral("Click to use this option in the full timeline preview."));
 	}
 }
 

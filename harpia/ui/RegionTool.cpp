@@ -2,6 +2,10 @@
 
 #include "NativeWindowOps.hpp"
 
+#if defined(Q_OS_MACOS)
+#include "platform/mac/MacPlatform.hpp"
+#endif
+
 #include <QContextMenuEvent>
 #include <QGuiApplication>
 #include <QKeyEvent>
@@ -105,6 +109,7 @@ void RegionTool::showEvent(QShowEvent *e)
 {
 	QWidget::showEvent(e);
 	excludeFromCapture();
+	applyNativeInputMode();
 }
 
 void RegionTool::setScreen(QScreen *screen)
@@ -777,7 +782,21 @@ void RegionTool::setMode(Mode m)
 	// up against the app underneath, which is the entire point of it.
 	setWindowOpacity(m == Mode::Recording ? 0.28 : m == Mode::Watching ? 0.75 : 1.0);
 	rebuildMask();
+	applyNativeInputMode();
 	update();
+}
+
+void RegionTool::applyNativeInputMode()
+{
+#if defined(Q_OS_MACOS)
+	// QWidget::setMask describes the intended frame-only input region, but a
+	// transparent top-level NSWindow can still intercept clicks anywhere in its
+	// rectangular bounds. While recording, interaction with the app underneath
+	// is more important than live-dragging the frame, so make the native window
+	// fully input-transparent without recreating it or changing its SCK ID.
+	if (isVisible())
+		mac_platform::setWindowInputPassthrough(this, mode_ == Mode::Recording);
+#endif
 }
 
 void RegionTool::setPaused(bool paused)

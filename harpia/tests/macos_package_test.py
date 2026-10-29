@@ -37,6 +37,8 @@ class PackagingTests(unittest.TestCase):
         self.root = Path(self.scratch.name).resolve()
         self.app = self.root / "Harpia.app"
         self.executable = binary(self.app / "Contents/MacOS/Harpia")
+        with (self.app / "Contents/Info.plist").open("wb") as file:
+            plistlib.dump({"CFBundleIdentifier": "com.harpia.recorder"}, file)
         self.deployer = deploy.Deployer(self.app, [], ["arm64"])
 
     def test_otool_parser_preserves_spaces_weak_dependencies_and_fat_repeats(self):
@@ -208,6 +210,11 @@ class PackagingTests(unittest.TestCase):
         sign_commands = [x for x in commands if "--sign" in x]
         self.assertEqual(sign_commands[-1][-1], str(self.app))
         self.assertIn("--entitlements", sign_commands[-1])
+        self.assertEqual(sign_commands[-1][sign_commands[-1].index("--identifier") + 1],
+                         "com.harpia.recorder")
+        self.assertEqual(sign_commands[-1][sign_commands[-1].index("--requirements") + 1],
+                         '=designated => identifier "com.harpia.recorder"')
+        self.assertTrue(all("--requirements" not in command for command in sign_commands[:-1]))
         self.assertTrue(any(x[-1].endswith("P.plugin") for x in sign_commands[:-1]))
         self.assertFalse(any("--timestamp" in x for x in sign_commands))
         self.assertIn("--verify", commands[-1])
@@ -250,6 +257,7 @@ class PackagingTests(unittest.TestCase):
             self.assertEqual(command[command.index("--options") + 1], "runtime")
             self.assertEqual(command[command.index("--sign") + 1], identity)
             self.assertIn("--timestamp", command)
+            self.assertNotIn("--requirements", command)
 
     def test_runtime_entitlements_are_scoped_to_helpers_and_survive_redeployment(self):
         deno = binary(self.app / "Contents/Helpers/deno")

@@ -46,6 +46,13 @@ std::optional<QRect> physicalRegionForWindow(quintptr windowId, const QString &s
 std::optional<QRect> physicalRegionForWindow(quintptr windowId, const QScreen *screen);
 quint32 nativeWindowId(QWidget *widget);
 
+// AppKit input passthrough for top-level overlay windows. A shaped Qt window
+// mask is not a reliable cross-application input region on macOS; during a
+// recording the region frame uses this to stay visible without intercepting
+// clicks anywhere inside its rectangular native window.
+bool setWindowInputPassthrough(QWidget *widget, bool passthrough);
+bool windowInputPassthrough(const QWidget *widget);
+
 quint64 foregroundProcessId();
 QString foregroundApplicationId();
 

@@ -25,7 +25,10 @@ namespace harpia {
 //    dragged to move.
 //  - Recording: the interior becomes click-through (mask = border+handles only)
 //    and opacity drops, so it acts as a subtle recording indicator while apps
-//    under the region stay usable; handles/border remain grabbable to live-edit.
+//    under the region stay usable; handles/border remain grabbable to live-edit
+//    where the window system supports shaped input. On macOS the whole native
+//    frame becomes input-transparent during recording because AppKit otherwise
+//    intercepts clicks across the transparent rectangular interior.
 //
 // Coordinates: regionChanged() reports device-pixel coordinates relative to the
 // target screen's top-left — the space crop_filter expects.
@@ -91,7 +94,9 @@ public:
 	// exists for -- lining the frame up against the app you are about to record,
 	// with that app in front -- and equally while recording. The tab lives
 	// outside the region, so it can stay inside the input mask without covering a
-	// single captured pixel.
+	// single captured pixel. On macOS the whole frame is deliberately
+	// input-transparent during recording, so the tab is an indicator until the
+	// take stops; this prevents the transparent interior blocking recorded apps.
 	//
 	// Off unless the active preset asks for it. Idempotent: the owner calls this
 	// from a 250 ms tick.
@@ -189,6 +194,7 @@ private:
 	Zone zoneAt(const QPoint &localPos) const;
 	void applyGeometry(const QRect &globalRect); // clamp to screen, set geometry, emit
 	void rebuildMask();
+	void applyNativeInputMode();
 	void emitRegion();
 	// The region from Qt's own coordinates -- where Qt works out the window is.
 	CaptureRegion arithmeticRegion() const;

@@ -294,7 +294,7 @@ harpia_macos_check_tools "$2" "$3"
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         configure = next(c for c in self.trace("cmake") if "--preset" in c["arguments"])
         self.assertIn("-DHARPIA_MAC_CODESIGN_IDENTITY=-", configure["arguments"])
-        self.assertIn("privacy grants may need renewal", result.stderr)
+        self.assertIn("stable development requirement", result.stderr)
 
     def test_explicit_ad_hoc_signing_never_queries_the_keychain(self):
         result = self.run_script("build-and-run-harpia.sh", "--identity", "-")

@@ -260,6 +260,32 @@ quint32 nativeWindowId(QWidget *widget)
 	return window && window.windowNumber > 0 ? quint32(window.windowNumber) : 0;
 }
 
+bool setWindowInputPassthrough(QWidget *widget, bool passthrough)
+{
+	// Use the existing native view only. Creating or recreating this window here
+	// would change its ScreenCaptureKit ID after the exclusion filter was built.
+	// Tests may use Qt's offscreen plugin on macOS; its WId is not an NSView.
+	if (QGuiApplication::platformName() != QStringLiteral("cocoa") ||
+	    !widget || !widget->internalWinId())
+		return false;
+	NSView *view = reinterpret_cast<NSView *>(widget->internalWinId());
+	NSWindow *window = view.window;
+	if (!window)
+		return false;
+	window.ignoresMouseEvents = passthrough ? YES : NO;
+	return window.ignoresMouseEvents == (passthrough ? YES : NO);
+}
+
+bool windowInputPassthrough(const QWidget *widget)
+{
+	if (QGuiApplication::platformName() != QStringLiteral("cocoa") ||
+	    !widget || !widget->internalWinId())
+		return false;
+	NSView *view = reinterpret_cast<NSView *>(widget->internalWinId());
+	NSWindow *window = view.window;
+	return window && window.ignoresMouseEvents == YES;
+}
+
 quint64 foregroundProcessId()
 {
 	@autoreleasepool {
@@ -318,20 +344,32 @@ QString screenCaptureDiagnostics()
 		const auto team = (CFStringRef)CFDictionaryGetValue(info, kSecCodeInfoTeamIdentifier);
 		const auto certificates = (CFArrayRef)CFDictionaryGetValue(info, kSecCodeInfoCertificates);
 		const auto hash = (CFDataRef)CFDictionaryGetValue(info, kSecCodeInfoUnique);
+		const auto requirement =
+			(SecRequirementRef)CFDictionaryGetValue(info, kSecCodeInfoDesignatedRequirement);
+		QString requirementDescription;
+		CFStringRef requirementText = nullptr;
+		if (requirement &&
+		    SecRequirementCopyString(requirement, kSecCSDefaultFlags, &requirementText) == errSecSuccess &&
+		    requirementText) {
+			requirementDescription = string((__bridge NSString *)requirementText);
+			CFRelease(requirementText);
+		}
+		const bool certificateSigned = certificates && CFArrayGetCount(certificates);
+		const bool hashOnlyRequirement = requirementDescription.startsWith(QStringLiteral("cdhash "));
+		const QString signingMode = certificateSigned
+			? QStringLiteral("certificate")
+			: hashOnlyRequirement
+				? QStringLiteral("ad-hoc (permission identity tied to this build)")
+				: QStringLiteral("ad-hoc (explicit development requirement)");
 		lines << QStringLiteral("Signing identifier: %1").arg(string((__bridge NSString *)identifier))
 		      << QStringLiteral("Team identifier: %1").arg(team ? string((__bridge NSString *)team) : QStringLiteral("none"))
-		      << QStringLiteral("Signing mode: %1").arg(certificates && CFArrayGetCount(certificates)
-			     ? "certificate" : "ad-hoc (identity may change when rebuilt)");
+		      << QStringLiteral("Signing mode: %1").arg(signingMode);
 		if (hash)
 			lines << QStringLiteral("Code directory hash: %1").arg(QString::fromLatin1(
 				QByteArray(reinterpret_cast<const char *>(CFDataGetBytePtr(hash)),
 					   qsizetype(CFDataGetLength(hash))).toHex()));
-		const auto requirement = (SecRequirementRef)CFDictionaryGetValue(info, kSecCodeInfoDesignatedRequirement);
-		CFStringRef requirementText = nullptr;
-		if (requirement && SecRequirementCopyString(requirement, kSecCSDefaultFlags, &requirementText) == errSecSuccess && requirementText) {
-			lines << QStringLiteral("Designated requirement: %1").arg(string((__bridge NSString *)requirementText));
-			CFRelease(requirementText);
-		}
+		if (!requirementDescription.isEmpty())
+			lines << QStringLiteral("Designated requirement: %1").arg(requirementDescription);
 		CFRelease(info);
 	} else {
 		lines << QStringLiteral("Could not read signing details: %1").arg(infoStatus);

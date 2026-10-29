@@ -66,7 +66,7 @@ if [[ $identity == auto ]]; then
   fi
 fi
 if [[ $identity == - ]]; then
-  echo 'Harpia: ad-hoc signing; privacy grants may need renewal after rebuilding. A stable Apple Development or Developer ID identity can be selected with --identity.' >&2
+  echo 'Harpia: ad-hoc local signing with a stable development requirement. An existing grant from an older hash-only build may need one refresh; use an Apple Development or Developer ID identity for distribution.' >&2
 else
   echo "Harpia: using signing identity $identity" >&2
 fi

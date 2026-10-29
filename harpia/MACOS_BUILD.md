@@ -82,9 +82,13 @@ available. This supplies a certificate-backed identity that can survive rebuilds
 in macOS privacy permissions. It does not create certificates or change the
 keychain. `--identity <name-or-hash>` or `CODESIGN_IDENT` overrides selection;
 `--identity -` explicitly selects ad-hoc signing. Without a suitable identity,
-auto falls back to ad-hoc and prints a permission-persistence warning. You can
-create an Apple Development certificate through Xcode's account settings, or
-list existing signing identities with `security find-identity -v -p codesigning`.
+auto falls back to an ad-hoc local signature whose explicit designated
+requirement uses Harpia's stable bundle identifier. This lets macOS recognize
+rebuilds in privacy permissions instead of tying each build to a new code hash.
+The identifier-only requirement is for local development, not public
+distribution. You can create an Apple Development certificate through Xcode's
+account settings, or list existing signing identities with
+`security find-identity -v -p codesigning`.
 
 Ad-hoc local builds explicitly
 clear hardened runtime flags: ad-hoc signatures have no Team ID, so hardened
@@ -123,8 +127,10 @@ recognized after installing/rebuilding, quit all copies and reopen the installed
 app, then retry Record. If it still reports denied access, remove the stale
 Harpia entry in the relevant Privacy & Security list, add the installed app with
 the `+` button, enable it, then quit/reopen when macOS requests it. Development
-ad-hoc builds can require a new grant after rebuilding; Developer ID signing
-provides a more stable identity for distribution.
+builds made before version 0.1.512 used a hash-only ad-hoc identity and require
+this one-time regrant after upgrading. Later local rebuilds keep the explicit
+bundle-identifier requirement. Developer ID signing remains the appropriate
+stable identity for distribution.
 
 An explicit Record action verifies access through ScreenCaptureKit when Quartz
 preflight reports no access. A successful native check authorizes the recorder
@@ -196,7 +202,9 @@ and command-line overrides.
   auto-pause. Global Carbon hotkeys support keyboard-layout changes and retain
   focused-window fallback when registration conflicts with another shortcut.
 - Recording controls, framing, guides and dialogs are selectively excluded from
-  SCK display capture while intended mouse effects remain visible.
+  SCK display capture while intended mouse effects remain visible. During a
+  Custom Region take, the visible region frame is natively input-transparent so
+  its rectangular AppKit window cannot block clicks inside the recorded area.
 - H.264/HEVC VideoToolbox encoders are advertised only after opening a hardware
   session. Auto uses constant quality where supported; otherwise it logs and uses
   a resolution/frame-rate-based bitrate target. Explicit bitrates remain target

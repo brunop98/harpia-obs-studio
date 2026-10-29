@@ -438,7 +438,24 @@ def sign(app: Path, identity: str, entitlements: Path,
                and p.suffix in {".framework", ".plugin", ".bundle", ".app"}]
     for bundle in sorted(bundles, key=lambda p: len(p.parts), reverse=True):
         run(["/usr/bin/codesign", *flags, str(bundle)])
-    run(["/usr/bin/codesign", *flags, "--entitlements", str(entitlements), str(app)])
+    app_identity_flags = []
+    if identity == "-":
+        # codesign's default designated requirement for ad-hoc code is only its
+        # cdhash. That hash changes on every rebuild, so TCC treats each local
+        # build as a new application and ignores the previously enabled Screen
+        # Recording switch. Give the outer development app a stable requirement
+        # based on its bundle identifier. Certificate-backed distribution builds
+        # keep codesign's stronger certificate/team requirement.
+        with (app / "Contents/Info.plist").open("rb") as file:
+            bundle_identifier = plistlib.load(file).get("CFBundleIdentifier", "")
+        if (not isinstance(bundle_identifier, str) or
+                not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", bundle_identifier)):
+            raise RuntimeError("Cannot create a stable local signing requirement for bundle identifier: "
+                               f"{bundle_identifier!r}")
+        app_identity_flags = ["--identifier", bundle_identifier, "--requirements",
+                              f'=designated => identifier "{bundle_identifier}"']
+    run(["/usr/bin/codesign", *flags, *app_identity_flags,
+         "--entitlements", str(entitlements), str(app)])
     run(["/usr/bin/codesign", "--verify", "--deep", "--strict", "--verbose=2", str(app)])
 
 

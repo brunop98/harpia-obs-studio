@@ -19,6 +19,10 @@
 //     the overlay is what deactivates the main window.
 #include "ui/RegionTool.hpp"
 
+#if defined(Q_OS_MACOS)
+#include "platform/mac/MacPlatform.hpp"
+#endif
+
 #include <QApplication>
 #include <QImage>
 #include <QMouseEvent>
@@ -211,13 +215,24 @@ int main(int argc, char **argv)
 		ok(!interiorGrabsMouse(t), "click-through, so the recorded app stays usable");
 		std::printf("     opacity %.2f\n", t->windowOpacity());
 		ok(t->windowOpacity() < 0.5, "and dimmer than Watching, since it is passive now");
+#if defined(Q_OS_MACOS)
+		if (QGuiApplication::platformName() == QStringLiteral("cocoa")) {
+			ok(mac_platform::windowInputPassthrough(t),
+			   "macOS makes the whole native frame input-transparent while recording");
+			t->setMode(RegionTool::Mode::Watching);
+			QApplication::processEvents();
+			ok(!mac_platform::windowInputPassthrough(t),
+			   "and restores frame controls after recording stops");
+		}
+#endif
 		t->deleteLater();
 	}
 
 	std::printf("\n-- the border and handles stay live in every mode --\n");
 	{
-		// Whatever else changes, the frame has to remain grabbable: resizing the
-		// region while another app is in front is exactly what this is for.
+		// Whatever else changes, the shaped mask keeps the frame controls. On
+		// macOS the native window deliberately overrides the entire shape only
+		// during recording so transparent pixels cannot intercept app clicks.
 		for (auto m : {RegionTool::Mode::Editing, RegionTool::Mode::Watching,
 			       RegionTool::Mode::Recording}) {
 			RegionTool *t = build();

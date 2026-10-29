@@ -101,7 +101,7 @@ foreach(name localsend phonesharing exportdone shareexportdialog settingsisolati
     audiodrop blankeditor previewhandles previewpacing previewcontrols stillimage stillweight
     textstylepresetswindow subtitles tts captionanimation captionperf socialfeatureswindow exportprogress
     exportcadence exporttelemetry previewdecoder componentrender audioaudit previewgeometry previewinterval
-    previewtransition systemaudio pcaudioapps ytdlp globalhotkeys maccoordinates macaudiopcm
+    previewtransition systemaudio pcaudioapps ytdlp globalhotkeys maccoordinates macaudiopcm regionoverlay
     projectopenqueue remuxcompat exportencodingoptions exportencoding shareparts
     effectwarnings previewwarning previewwarningwindow
     markersmodel beatdetector projectroundtrip componentpresets componentpresetclip

@@ -15,6 +15,7 @@
 // The source numbers its own frames (eight black or white bands, one per
 // bit), so "the preview shows frame 60" is something the test can read.
 #include "editor/AudioPreview.hpp"
+#include "editor/FrameSeeker.hpp"
 #include "editor/SlipDialog.hpp"
 #include "editor/TimelineAudio.hpp"
 #include "editor/VideoEditorWindow.hpp"
@@ -75,6 +76,21 @@ static bool makeSource(const QString &path)
 		  QStringLiteral("aac"), QStringLiteral("-shortest"), QStringLiteral("-y"), path});
 	ff.waitForFinished(60000);
 	return ff.exitCode() == 0 && QFileInfo::exists(path);
+}
+
+// Ten minutes of real seekable media without encoding 36,000 frames/audio:
+// one numbered frame per second is enough to verify late absolute seeks.
+static bool makeLongSource(const QString &path)
+{
+	QProcess ff;
+	ff.start(QStringLiteral("ffmpeg"),
+		{QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error"),
+		 QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"),
+		 QStringLiteral("nullsrc=s=64x64:r=1:d=600,format=yuv420p,"
+			"geq=lum='16+219*mod(floor(N/pow(2\\,floor(X/8)))\\,2)':cb=128:cr=128"),
+		 QStringLiteral("-c:v"), QStringLiteral("libx264"), QStringLiteral("-g"), QStringLiteral("24"),
+		 QStringLiteral("-crf"), QStringLiteral("8"), QStringLiteral("-y"), path});
+	return ff.waitForFinished(30000) && ff.exitStatus() == QProcess::NormalExit && ff.exitCode() == 0;
 }
 
 // The frame number the picture shows; -1 for none. Read across the whole
@@ -151,6 +167,73 @@ int main(int argc, char **argv)
 	QTemporaryDir dir;
 	const QString src = dir.filePath(QStringLiteral("count.mp4"));
 	ok(makeSource(src), "made a 4 s, 60 fps source that numbers its frames, with sound");
+	{
+		const QString longSource = dir.filePath(QStringLiteral("ten-minutes.mp4"));
+		ok(makeLongSource(longSource), "made a real ten-minute source for overview seeking");
+		SlipDialog::Input input;
+		input.clip = media(1, 5000, 1000, 2000);
+		input.title = QStringLiteral("Ten-minute overview verification");
+		input.decodePath = longSource;
+		input.sourceSize = QSize(64, 64);
+		input.sourceMs = 600000;
+		input.loMs = -1000;
+		input.hiMs = 598000;
+		FrameSeeker thumbnails;
+		ok(thumbnails.open(longSource), "ten-minute source opens for cached overview thumbnails");
+		for (int second = 0; second < 600; second += 60)
+			input.thumbs.append(thumbnails.frameAt(second * 1000, 64, 36));
+		SlipDialog dialog(input);
+		dialog.resize(900, 640);
+		dialog.show();
+		settle(50);
+		SlipTrackBar *overview = dialog.overviewBar();
+		const QPoint late(int(std::lround(6 + 0.75 * (overview->width() - 12))), 25);
+		QElapsedTimer seekTimer;
+		seekTimer.start();
+		mouse(overview, QEvent::MouseButtonPress, late, Qt::LeftButton);
+		mouse(overview, QEvent::MouseButtonRelease, late, Qt::NoButton);
+		const qint64 start = dialog.momentModel(false).tracks[0].clips[0].srcStartMs;
+		std::printf("     overview seek to %.3f s took %lld ms\n", start / 1000.0, (long long)seekTimer.elapsed());
+		ok(std::llabs(start - 450000) < 1000 && counterOf(dialog.previewImage()) == int(start / 1000) % 256,
+		   "overview jumps near 7:30 and decodes the actual late source frame");
+		dialog.setDeltaMs(449000);
+		ok(counterOf(dialog.previewImage()) == 450 % 256 && overview->delta() == 449000,
+		   "precise timing at 7:30 updates the decoded frame and overview together");
+		// Optional manual-review artifact, from the actual production dialog.
+		if (argc == 3 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--snapshot"))
+			ok(dialog.grab().save(QString::fromLocal8Bit(argv[2])), "saved the real Slip overview screenshot");
+		mouse(overview, QEvent::MouseButtonPress, late, Qt::LeftButton);
+		mouse(overview, QEvent::MouseButtonRelease, QPoint(overview->width() + 40, 25), Qt::NoButton);
+		ok(dialog.deltaMs() == 598000 && counterOf(dialog.previewImage()) == 599 % 256,
+		   "the overview reaches the final complete moment of real ten-minute media");
+		dialog.reject();
+		ok(dialog.result() == QDialog::Rejected && input.clip.srcStartMs == 1000,
+		   "cancelling long-source navigation leaves the input clip unchanged");
+	}
+	{
+		SlipDialog::Input input;
+		input.soundOnly = true;
+		input.clip = media(1, 9000, 1000, 2000);
+		input.clip.speed = 2.0;
+		input.clip.peaks = QVector<float>(100, 0.6f);
+		input.sourceMs = 600000;
+		input.loMs = -250; // narrower than the video, e.g. linked sound bounds
+		input.hiMs = 1250;
+		SlipDialog dialog(input);
+		dialog.show();
+		settle(20);
+		auto *overview = dialog.overviewBar();
+		mouse(overview, QEvent::MouseButtonPress, QPoint(overview->width() - 6, 25), Qt::LeftButton);
+		mouse(overview, QEvent::MouseButtonRelease, QPoint(overview->width() - 6, 25), Qt::NoButton);
+		const TlClip moment = dialog.momentModel(false).tracks[0].clips[0];
+		ok(dialog.deltaMs() == 1250 && moment.srcStartMs == 2250 && moment.srcLenMs() == 1000 && moment.outDurationMs() == 500,
+		   "coarse audio seeking respects partner limits and retains source length and speed");
+		mouse(overview, QEvent::MouseButtonPress, QPoint(6, 25), Qt::LeftButton);
+		mouse(overview, QEvent::MouseButtonRelease, QPoint(6, 25), Qt::NoButton);
+		ok(dialog.deltaMs() == -250 && dialog.trackBar()->delta() == -250 && !dialog.previewImage().isNull(),
+		   "waveform overview clamps at the partner's earliest valid source time");
+		dialog.reject();
+	}
 
 	std::printf("\n-- the window on its own --\n");
 	{
@@ -304,6 +387,19 @@ int main(int argc, char **argv)
 		}
 		dragStrip(bar, -30);
 		ok(d.isPlaying() && d.playheadMs() < 200, "a slip while playing plays the new moment from its top");
+		const QPoint overviewDragStart(int(6 + 0.4 * (overview->width() - 12)), 25);
+		const QPoint overviewDragEnd(int(6 + 0.6 * (overview->width() - 12)), 25);
+		mouse(overview, QEvent::MouseButtonPress, overviewDragStart, Qt::LeftButton);
+		const int heldFrame = counterOf(d.previewImage());
+		settle(120);
+		ok(d.isPlaying() && counterOf(d.previewImage()) == heldFrame,
+		   "overview dragging holds the chosen frame while preserving the playback intent");
+		mouse(overview, QEvent::MouseMove, overviewDragEnd, Qt::LeftButton);
+		mouse(overview, QEvent::MouseButtonRelease, overviewDragEnd, Qt::NoButton);
+		const int releasedFrame = counterOf(d.previewImage());
+		settle(120);
+		ok(d.isPlaying() && overview->delta() == bar->delta() && counterOf(d.previewImage()) > releasedFrame,
+		   "releasing an overview drag resumes playback from the newly chosen moment");
 		key(&d, Qt::Key_Escape);
 		ok(d.result() == QDialog::Rejected && !d.isPlaying(), "Esc: closed, nothing chosen, nothing playing");
 

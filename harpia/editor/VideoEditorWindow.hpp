@@ -49,6 +49,7 @@ class QListWidgetItem;
 class QProgressDialog;
 class QUrl;
 class QPushButton;
+class QToolButton;
 class QSlider;
 class QTabWidget;
 class QSplitter;
@@ -943,9 +944,9 @@ private:
 	// every other sync (a slip renames the shown one on every mouse move).
 	QWidget *randomClipBox_ = nullptr;
 	QVBoxLayout *randomClipRows_ = nullptr;
-	QVector<QPushButton *> randomClipPicks_;
+	QVector<QToolButton *> randomClipPicks_;
 	QVector<QPushButton *> randomClipDels_;
-	QVector<QPushButton *> randomClipVideos_;
+	QVector<QLabel *> randomClipThumbs_;
 	QVector<QPushButton *> randomClipSlips_;
 	QVector<QLabel *> randomClipTimes_;
 	QLabel *randomClipCount_ = nullptr;
@@ -954,6 +955,7 @@ private:
 	QPushButton *randomClipAdd_ = nullptr;
 	void buildRandomClipSection(QVBoxLayout *clipOuter);
 	void syncRandomClipInspector(const TlClip &c);
+	void refreshRandomClipThumbnails(int sourceId = -1);
 	void showRandomClipOption(int k);
 	// A file's waveform (loadPeaks at 600), kept: flipping through a Random
 	// clip's choices on an audio lane reads each file once, not every time.

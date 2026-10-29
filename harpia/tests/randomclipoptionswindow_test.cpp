@@ -11,6 +11,7 @@
 #include "editor/VideoEditorWindow.hpp"
 #undef private
 #include "editor/SlipDialog.hpp"
+#include "editor/InspectorSection.hpp"
 #include "editor/timeline/ClipVariations.hpp"
 #include "editor/timeline/TextVariations.hpp"
 
@@ -40,19 +41,20 @@ bool video(const QString &path, const QString &colour, int seconds)
 		 QStringLiteral("yuv420p"), QStringLiteral("-y"), path});
 	return ffmpeg.waitForFinished(15000) && ffmpeg.exitStatus() == QProcess::NormalExit && ffmpeg.exitCode() == 0;
 }
-QPushButton *optionButton(VideoEditorWindow &window, const char *name, int option)
+QAbstractButton *optionButton(VideoEditorWindow &window, const char *name, int option)
 {
-	for (auto *button : window.findChildren<QPushButton *>(QLatin1String(name)))
+	for (auto *button : window.findChildren<QAbstractButton *>(QLatin1String(name)))
 		if (button->property("optionIndex").toInt() == option)
 			return button;
 	return nullptr;
 }
-QAction *sourceAction(QPushButton *button, int source)
+QAction *sourceAction(QAbstractButton *button, int source)
 {
-	if (!button || !button->menu())
+	auto *picker = qobject_cast<QToolButton *>(button);
+	if (!picker || !picker->menu())
 		return nullptr;
-	emit button->menu()->aboutToShow();
-	for (auto *action : button->menu()->actions())
+	emit picker->menu()->aboutToShow();
+	for (auto *action : picker->menu()->actions())
 		if (action->data().isValid() && action->data().toInt() == source)
 			return action;
 	return nullptr;
@@ -189,6 +191,41 @@ int main(int argc, char **argv)
 	install(window, initial);
 	check(optionButton(window, "randomClipVideo", 1) && optionButton(window, "randomClipSlip", 1),
 	      "every random choice offers its own video selector and Slip button");
+	const auto *picker = qobject_cast<QToolButton *>(optionButton(window, "randomClipVideo", 1));
+	check(picker && picker->text().contains(QStringLiteral("blue")) && picker->menu() &&
+	      picker->popupMode() == QToolButton::MenuButtonPopup,
+	      "one named source control provides both option preview and its source dropdown");
+	const auto *section = static_cast<InspectorSection *>(window.randomClipBox_);
+	bool visibleIntro = false;
+	for (auto *label : section->findChildren<QLabel *>())
+		visibleIntro |= label->text().startsWith(QStringLiteral("Each clip is one version"));
+	check(!visibleIntro && section->header()->toolTip().contains(QStringLiteral("Each clip is one version")),
+	      "the explanation lives in the section header tooltip");
+	const auto redFrames = window.sourceById(red)->thumbCache;
+	const auto blueFrames = window.sourceById(blue)->thumbCache;
+	QImage redFrame(64, 36, QImage::Format_RGB32), greenFrame = redFrame, blueFrame = redFrame;
+	redFrame.fill(Qt::red);
+	greenFrame.fill(Qt::green);
+	blueFrame.fill(Qt::blue);
+	window.sourceById(red)->thumbCache = {redFrame, greenFrame, blueFrame};
+	window.sourceById(blue)->thumbCache = {blueFrame};
+	window.refreshRandomClipThumbnails();
+	const auto thumbs = window.randomClipThumbs_;
+	check(thumbs.size() == 3 && thumbs[0]->pixmap().toImage().pixelColor(20, 16) == QColor(Qt::red) &&
+	      thumbs[1]->pixmap().toImage().pixelColor(20, 16) == QColor(Qt::blue) &&
+	      thumbs[2]->pixmap().toImage().pixelColor(20, 16) == QColor(Qt::green),
+	      "cached thumbnails follow each option's own source and timestamp, including duplicate sources");
+	window.sourceById(red)->thumbCache = redFrames;
+	window.sourceById(blue)->thumbCache = blueFrames;
+	window.refreshRandomClipThumbnails();
+	auto *slipButton = optionButton(window, "randomClipSlip", 1);
+	auto *removeButton = optionButton(window, "randomClipRemove", 1);
+	auto *row = slipButton->parentWidget();
+	row->resize(320, 60);
+	row->layout()->activate();
+	check(removeButton && std::abs(removeButton->geometry().center().y() - slipButton->geometry().center().y()) <= 1 &&
+	      removeButton->x() > slipButton->x(),
+	      "Slip and Remove sit beside one another on the same row");
 	QAction *tooShort = sourceAction(optionButton(window, "randomClipVideo", 1), shortSource);
 	check(tooShort && !tooShort->isEnabled(), "source selector disables videos too short to fill the shared source window");
 	QAction *chooseGreen = sourceAction(optionButton(window, "randomClipVideo", 1), green);
@@ -284,6 +321,12 @@ int main(int argc, char **argv)
 		      loaded.clipOptionAt(2).srcStartMs == 3500 && loaded.speed == 2 && loaded.outDurationMs() == 1000,
 		      "reopened options retain the selected videos, independent exact starts and shared duration");
 	}
+	optionButton(window, "randomClipVideo", 1)->click();
+	check(current(window).clipShown == 1 && current(window).sourceId == blue,
+	      "clicking the merged source name still previews that random option");
+	optionButton(window, "randomClipVideo", 1)->click();
+	check(optionButton(window, "randomClipVideo", 1)->isChecked(),
+	      "clicking the shown option keeps its selected highlight");
 	TimelineModel locked = window.timelineView_->model();
 	locked.tracks[0].locked = true;
 	install(window, locked);

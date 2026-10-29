@@ -206,12 +206,9 @@ void ComponentPanel::setView(const View &v)
 	loadErrors_->setVisible(!v.loadErrors.isEmpty());
 	warnings_->setText(v.warnings.join(QChar('\n')));
 	warnings_->setVisible(!v.warnings.isEmpty());
-	empty_->setText(v.clipCount > 1
-				? QStringLiteral("These clips have no components in common. Adding "
-						 "one puts it on all of them.")
-				: QStringLiteral("No components. Add one to change how this clip "
-						 "plays, moves or looks."));
-	empty_->setVisible(v.shared.isEmpty() && v.notShared.isEmpty() && v.clipCount > 0);
+	empty_->setText(QStringLiteral("These clips have no components in common. Adding "
+				      "one puts it on all of them."));
+	empty_->setVisible(v.shared.isEmpty() && v.notShared.isEmpty() && v.clipCount > 1);
 	notShared_->setText(
 		v.notShared.isEmpty()
 			? QString()

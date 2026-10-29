@@ -12,8 +12,11 @@
 #undef private
 #include "editor/SlipDialog.hpp"
 #include "editor/InspectorSection.hpp"
+#include "editor/component/ComponentPanel.hpp"
 #include "editor/timeline/ClipVariations.hpp"
 #include "editor/timeline/TextVariations.hpp"
+#include "editor/timeline/TimelineCompositor.hpp"
+#include "editor/timeline/FrameSignature.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -29,6 +32,7 @@ void check(bool condition, const char *description)
 void settle()
 {
 	QApplication::processEvents();
+	QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 bool video(const QString &path, const QString &colour, int seconds)
 {
@@ -119,6 +123,79 @@ void install(VideoEditorWindow &window, const TimelineModel &model)
 	window.commitSnapshot();
 	settle();
 }
+
+void checkRenderedPositions()
+{
+	class Frames final : public TimelineCompositor::FrameProvider {
+	public:
+		QImage frameFor(int id, qint64) override
+		{
+			QImage frame(64, 48, QImage::Format_RGBA8888);
+			frame.fill(id == 0 ? Qt::red : Qt::blue);
+			return frame;
+		}
+		QSize sourceSize(int) override { return {64, 48}; }
+	} frames;
+	const auto bounds = [](const QImage &image) {
+		QRect result;
+		for (int y = 0; y < image.height(); ++y) {
+			for (int x = 0; x < image.width(); ++x) {
+				const QColor colour = image.pixelColor(x, y);
+				if (colour.red() > 100 || colour.blue() > 100) {
+					result |= QRect(x, y, 1, 1);
+				}
+			}
+		}
+		return result;
+	};
+	TlClip clip;
+	clip.srcEndMs = 1000;
+	clip.scale = 0.2;
+	clip.clipOptions = {{0, 0, -0.25, 0.0}, {1, 0, 0.25, -0.25}};
+	TlTrack track;
+	track.clips = {clip};
+	TimelineModel model;
+	model.tracks = {track};
+	const QSize canvas(160, 120);
+	const auto choices = text_variations::slotsOf(model);
+	const auto first = text_variations::applyCombination(model, choices, {0});
+	const auto second = text_variations::applyCombination(model, choices, {1});
+	const QImage previewA = TimelineCompositor::compose(first, 300, canvas, frames);
+	const QImage previewB = TimelineCompositor::compose(second, 300, canvas, frames);
+	const QImage exportB = TimelineCompositor::composeAtTime(second, 300.0, canvas, frames);
+	const QRect a = bounds(previewA), b = bounds(previewB);
+	check(!a.isEmpty() && !b.isEmpty() && b.x() - a.x() == 80 && b.y() - a.y() == -30 && a.size() == b.size(),
+	      "real composited frames place each variation at its independent X/Y offset with identical size");
+	check(previewB == exportB && previewA != previewB,
+	      "preview and export clocks render the same independently positioned variation");
+	const auto reduced = TimelineCompositor::compose(second, 300, QSize(80, 60), frames, nullptr, 30.0, canvas);
+	const QRect reducedBounds = bounds(reduced);
+	check(std::abs(reducedBounds.x() * 2 - b.x()) <= 1 && std::abs(reducedBounds.y() * 2 - b.y()) <= 1,
+	      "option position is consistent between reduced preview and full export resolution");
+	check(timelineFrameSignature(first, 300, canvas, canvas, 0) !=
+		      timelineFrameSignature(second, 300, canvas, canvas, 0),
+	      "preview frame caching distinguishes per-option placement");
+	TimelineModel moved = first;
+	moved.tracks[0].clips[0].clipOptions[0].offsetX += 0.1;
+	check(timelineFrameSignature(first, 300, canvas, canvas, 0) !=
+		      timelineFrameSignature(moved, 300, canvas, canvas, 0),
+	      "editing the position invalidates the previously cached frame at the same timestamp");
+	const TlClip serialized = second.tracks[0].clips[0];
+	QJsonObject json = clipToJson(serialized);
+	check(clipFromJson(json) == serialized, "project JSON round trips all option positions");
+	QJsonArray options = json.value(QStringLiteral("clipOptions")).toArray();
+	for (int i = 0; i < options.size(); ++i) {
+		QJsonObject option = options[i].toObject();
+		option.remove(QStringLiteral("offsetX"));
+		option.remove(QStringLiteral("offsetY"));
+		options[i] = option;
+	}
+	json[QStringLiteral("clipOptions")] = options;
+	const TlClip legacy = clipFromJson(json);
+	check(legacy.optionPositionOffset().isNull() && legacy.clipOptions[0].offsetX == 0.0 &&
+	      legacy.posX == serialized.posX && legacy.posY == serialized.posY,
+	      "older projects default to zero offsets and keep their original framing");
+}
 }
 
 int main(int argc, char **argv)
@@ -143,6 +220,7 @@ int main(int argc, char **argv)
 		QSettings::setPath(format, QSettings::UserScope, temporary.path());
 		QSettings::setPath(format, QSettings::SystemScope, temporary.filePath("system"));
 	}
+	checkRenderedPositions();
 	const QString redPath = temporary.filePath("red.mp4"), bluePath = temporary.filePath("blue.mp4"),
 		greenPath = temporary.filePath("green.mp4"), shortPath = temporary.filePath("short.mp4");
 	check(video(redPath, QStringLiteral("red"), 6) && video(bluePath, QStringLiteral("blue"), 6) &&
@@ -215,6 +293,30 @@ int main(int argc, char **argv)
 	      thumbs[1]->pixmap().toImage().pixelColor(20, 16) == QColor(Qt::blue) &&
 	      thumbs[2]->pixmap().toImage().pixelColor(20, 16) == QColor(Qt::green),
 	      "cached thumbnails follow each option's own source and timestamp, including duplicate sources");
+	const QIcon redIcon = sourceAction(optionButton(window, "randomClipVideo", 1), red)->icon();
+	const QIcon blueIcon = sourceAction(optionButton(window, "randomClipVideo", 1), blue)->icon();
+	check(!redIcon.isNull() && !blueIcon.isNull() &&
+		      redIcon.pixmap(48, 48).toImage().pixelColor(20, 12) == QColor(Qt::red) &&
+		      blueIcon.pixmap(48, 48).toImage().pixelColor(20, 12) == QColor(Qt::blue),
+	      "source dropdown actions show distinct video thumbnails alongside their names");
+	window.sourceById(blue)->thumbCache = {greenFrame};
+	window.refreshRandomClipSourceIcons(blue);
+	const QIcon updatedIcon = picker->menu()->actions()[1]->icon();
+	check(updatedIcon.pixmap(48, 48).toImage().pixelColor(20, 12) == QColor(Qt::green),
+	      "an already populated dropdown updates when asynchronous source thumbnails arrive");
+	picker->menu()->popup(QPoint(100, 100));
+	settle();
+	check(picker->menu()->actionGeometry(picker->menu()->actions().front()).height() >= 36,
+	      "the opened source dropdown reserves enough row height for recognizable thumbnails");
+	const QStringList arguments = QCoreApplication::arguments();
+	const int snapshot = arguments.indexOf(QStringLiteral("--snapshot"));
+	if (snapshot >= 0 && snapshot + 1 < arguments.size())
+		check(picker->menu()->grab().save(arguments[snapshot + 1]), "source dropdown screenshot saves successfully");
+	picker->menu()->close();
+	settle();
+	emit window.randomClipAdd_->menu()->aboutToShow();
+	check(!window.randomClipAdd_->menu()->actions().front()->icon().isNull(),
+	      "the Add clip dropdown also shows source thumbnails");
 	window.sourceById(red)->thumbCache = redFrames;
 	window.sourceById(blue)->thumbCache = blueFrames;
 	window.refreshRandomClipThumbnails();
@@ -309,6 +411,65 @@ int main(int argc, char **argv)
 	      version.tracks[0].clips[0].srcStartMs == 3500 && version.tracks[0].clips[0].srcEndMs == 5500 &&
 	      version.tracks[0].clips[0].outDurationMs() == 1000,
 	      "export variations use each option's own timestamp for the shared slot duration");
+	const auto near = [](double a, double b) {
+		return std::abs(a - b) < 1e-9;
+	};
+	const TimelineModel beforePosition = window.timelineView_->model();
+	optionButton(window, "randomClipPosition", 1)->click();
+	QPointer<QMenu> positionMenu = window.findChild<QMenu *>(QStringLiteral("randomClipPositionMenu"));
+	auto *offsetX = positionMenu ? positionMenu->findChild<QDoubleSpinBox *>(QStringLiteral("randomClipOffsetX"))
+				     : nullptr;
+	auto *offsetY = positionMenu ? positionMenu->findChild<QDoubleSpinBox *>(QStringLiteral("randomClipOffsetY"))
+				     : nullptr;
+	check(offsetX && offsetY, "each choice exposes its own X and Y position popup");
+	if (!offsetX || !offsetY) {
+		return 1;
+	}
+	offsetX->setValue(12.5);
+	offsetY->setValue(-7.5);
+	positionMenu->close();
+	settle();
+	const TlClip positioned = current(window);
+	check(positioned.clipShown == 0 && positioned.clipOptions[1].offsetX == 0.125 &&
+		      positioned.clipOptions[1].offsetY == -0.075 && positioned.clipOptions[0].offsetX == 0 &&
+		      positioned.keys == slot.keys && positioned.posX == slot.posX &&
+		      window.timelineView_->model().tracks[1] == beforePosition.tracks[1],
+	      "positioning a hidden option leaves the current preview, shared keys and linked audio unchanged");
+	window.undo();
+	check(window.timelineView_->model() == beforePosition, "Undo restores the independent position edit");
+	window.redo();
+	check(current(window) == positioned, "Redo restores the option's X and Y offsets");
+	optionButton(window, "randomClipPosition", 1)->click();
+	positionMenu = window.findChild<QMenu *>(QStringLiteral("randomClipPositionMenu"));
+	if (positionMenu) {
+		positionMenu->findChild<QPushButton *>(QStringLiteral("resetRandomClipPosition"))->click();
+		positionMenu->close();
+	}
+	settle();
+	check(current(window).clipOptions[1].offsetX == 0 && current(window).clipOptions[1].offsetY == 0 &&
+	      current(window).clipShown == 0,
+	      "Reset position clears only the chosen option's offsets");
+	window.undo();
+	check(current(window) == positioned, "resetting an option position is undoable");
+	window.timelineView_->setPlayhead(1300);
+	window.autoKeyframe_ = true;
+	window.onPreviewTransformDrag(0.125, -0.05);
+	TlClip dragged = current(window);
+	check(near(dragged.clipOptions[0].offsetX, 0.125) && near(dragged.clipOptions[0].offsetY, -0.05) &&
+		      dragged.clipOptions[1] == positioned.clipOptions[1] && dragged.keys == positioned.keys &&
+		      dragged.posX == positioned.posX,
+	      "preview dragging moves only the shown option even with auto-key enabled");
+	window.componentPanel_->pinnedEdited(QStringLiteral("harpia.transform"), QStringLiteral("posX"), 0.7);
+	dragged = current(window);
+	check(near(dragged.positionedTransformAt(1300).posX, 0.7) && dragged.keys == positioned.keys &&
+		      dragged.clipOptions[1] == positioned.clipOptions[1],
+	      "the main Position inspector also edits the shown option without altering shared animation");
+	const auto offsets = dragged.clipOptions;
+	window.componentPanel_->pinnedEdited(QStringLiteral("harpia.transform"), QStringLiteral("scale"), 1.25);
+	check(current(window).clipOptions == offsets,
+	      "editing shared scale never bakes an option offset into every choice");
+	window.commitSnapshot();
+	const auto savedOffsets = current(window).clipOptions;
 	const QString project = temporary.filePath("random-options.harpiaproj");
 	check(window.saveProjectTo(project, true).isEmpty(), "edited random source choices and timestamps save successfully");
 	{
@@ -320,6 +481,8 @@ int main(int argc, char **argv)
 		      loaded.clipOptionAt(0).srcStartMs == 2345 && loaded.clipOptionAt(1).srcStartMs == noSlip.resultingStart &&
 		      loaded.clipOptionAt(2).srcStartMs == 3500 && loaded.speed == 2 && loaded.outDurationMs() == 1000,
 		      "reopened options retain the selected videos, independent exact starts and shared duration");
+		check(loaded.clipOptions == savedOffsets,
+		      "saving and reopening preserves every independent position offset");
 	}
 	optionButton(window, "randomClipVideo", 1)->click();
 	check(current(window).clipShown == 1 && current(window).sourceId == blue,
@@ -331,7 +494,14 @@ int main(int argc, char **argv)
 	locked.tracks[0].locked = true;
 	install(window, locked);
 	check(!optionButton(window, "randomClipVideo", 1)->isEnabled() &&
-	      !optionButton(window, "randomClipSlip", 1)->isEnabled(), "locked tracks disable source and timestamp editing controls");
+		      !optionButton(window, "randomClipSlip", 1)->isEnabled() &&
+		      !optionButton(window, "randomClipPosition", 1)->isEnabled(),
+	      "locked tracks disable source, timestamp and independent position controls");
+	window.showRandomClipPositionMenu(1, QPoint(100, 100));
+	settle();
+	check(window.timelineView_->model() == locked &&
+		      !window.findChild<QMenu *>(QStringLiteral("randomClipPositionMenu")),
+	      "direct position editing also respects a locked track");
 	const auto blocked = slip([&]() { window.editRandomClipOption(1, green); }, 1700, true);
 	check(!blocked.seen && window.timelineView_->model() == locked, "direct option edits also respect a locked track");
 	std::printf("%s\n", failures ? "FAILED" : "ALL PASSED");

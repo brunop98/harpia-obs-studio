@@ -4,8 +4,8 @@
 // one per version of the video, the way a Random text has its texts.
 //
 // The slot is the clip: its place, its length, its framing, effects, keys and
-// fades are set once and shared. What differs between versions is which file
-// plays and from where (TlClipOption). The clip itself always plays one of
+// fades are set once and shared. Each version chooses its file, source start
+// and an independent canvas position offset (TlClipOption). The clip plays one of
 // them (TlClip::clipShown); every rule below keeps that one and the list in
 // step, so the rest of the editor -- the timeline, the preview, Slip, the
 // exporter -- sees an ordinary clip.
@@ -30,7 +30,8 @@ inline void syncShown(TlClip &c)
 	if (!c.isRandomClip())
 		return;
 	c.clipShown = std::clamp(c.clipShown, 0, int(c.clipOptions.size()) - 1);
-	c.clipOptions[c.clipShown] = {c.sourceId, c.srcStartMs};
+	c.clipOptions[c.clipShown].sourceId = c.sourceId;
+	c.clipOptions[c.clipShown].srcStartMs = c.srcStartMs;
 }
 
 // An ordinary media clip becomes a Random clip of one: itself.
@@ -45,6 +46,13 @@ inline void makeRandom(TlClip &c)
 // Back to an ordinary clip, playing whatever it shows now.
 inline void makeOrdinary(TlClip &c)
 {
+	const QPointF offset = c.optionPositionOffset();
+	c.posX += offset.x();
+	c.posY += offset.y();
+	for (TlKeyframe &key : c.keys) {
+		key.tf.posX += offset.x();
+		key.tf.posY += offset.y();
+	}
 	c.clipOptions.clear();
 	c.clipShown = 0;
 }
@@ -117,7 +125,8 @@ inline bool setOption(TlClip &c, int k, int sourceId, qint64 startMs, qint64 tot
 		return false;
 	const qint64 start = std::clamp<qint64>(startMs, 0, totalMs - length);
 	syncShown(c);
-	c.clipOptions[k] = {sourceId, start};
+	c.clipOptions[k].sourceId = sourceId;
+	c.clipOptions[k].srcStartMs = start;
 	if (k == c.clipShown) {
 		if (c.sourceId != sourceId)
 			c.peaks.clear();

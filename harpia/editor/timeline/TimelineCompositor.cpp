@@ -1133,6 +1133,8 @@ QImage TimelineCompositor::composeAtTime(const TimelineModel &m, double exactOut
 					tf = eval->apply(ClipScript{s.name, s.params}, tf, c, outMs, sctx);
 				}
 			}
+			// Per-option framing follows the shared animation/components/scripts.
+			tf = c.withOptionPosition(tf);
 			// Pixel stage, on the clip's own frame before it is placed on the
 			// canvas — so a component blurs the clip, not everything under it.
 			// Text clips have no frame to hand over; they are drawn straight to

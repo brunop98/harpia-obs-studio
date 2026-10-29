@@ -948,6 +948,7 @@ private:
 	QVector<QPushButton *> randomClipDels_;
 	QVector<QLabel *> randomClipThumbs_;
 	QVector<QPushButton *> randomClipSlips_;
+	QVector<QPushButton *> randomClipPositions_;
 	QVector<QLabel *> randomClipTimes_;
 	QLabel *randomClipCount_ = nullptr;
 	QPushButton *randomClipPrev_ = nullptr;
@@ -956,6 +957,8 @@ private:
 	void buildRandomClipSection(QVBoxLayout *clipOuter);
 	void syncRandomClipInspector(const TlClip &c);
 	void refreshRandomClipThumbnails(int sourceId = -1);
+	void refreshRandomClipSourceIcons(int sourceId = -1);
+	void showRandomClipPositionMenu(int option, const QPoint &position);
 	void showRandomClipOption(int k);
 	// A file's waveform (loadPeaks at 600), kept: flipping through a Random
 	// clip's choices on an audio lane reads each file once, not every time.

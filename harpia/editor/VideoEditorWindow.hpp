@@ -954,7 +954,9 @@ private:
 	QPushButton *randomClipPrev_ = nullptr;
 	QPushButton *randomClipNext_ = nullptr;
 	QPushButton *randomClipAdd_ = nullptr;
+	QPushButton *randomClipCompare_ = nullptr;
 	void buildRandomClipSection(QVBoxLayout *clipOuter);
+	void compareRandomClipOptions();
 	void syncRandomClipInspector(const TlClip &c);
 	void refreshRandomClipThumbnails(int sourceId = -1);
 	void refreshRandomClipSourceIcons(int sourceId = -1);

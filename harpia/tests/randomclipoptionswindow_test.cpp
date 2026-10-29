@@ -11,6 +11,7 @@
 #include "editor/VideoEditorWindow.hpp"
 #undef private
 #include "editor/SlipDialog.hpp"
+#include "editor/RandomClipCompareDialog.hpp"
 #include "editor/InspectorSection.hpp"
 #include "editor/component/ComponentPanel.hpp"
 #include "editor/timeline/ClipVariations.hpp"
@@ -267,6 +268,30 @@ int main(int argc, char **argv)
 	TimelineModel initial;
 	initial.tracks = {track, audio};
 	install(window, initial);
+	bool comparisonSeen = false, comparisonScoped = false;
+	QTimer closeComparison;
+	QObject::connect(&closeComparison, &QTimer::timeout, [&]() {
+		if (auto *comparison = dynamic_cast<RandomClipCompareDialog *>(QApplication::activeModalWidget())) {
+			comparisonSeen = comparison->optionCount() == 3 && comparison->isPlaying();
+			comparisonScoped = comparison->parentWidget() == &window &&
+					   comparison->windowModality() == Qt::WindowModal;
+			comparison->reject();
+		}
+	});
+	const auto beforeComparison = window.timelineView_->model();
+	const int historyBeforeComparison = window.histIndex_;
+	auto *compare = window.findChild<QPushButton *>(QStringLiteral("compareRandomClipButton"));
+	check(compare && compare->isEnabled(),
+	      "the Random Clip component offers Compare variations for multiple options");
+	closeComparison.start(10);
+	if (compare) {
+		compare->click();
+	}
+	closeComparison.stop();
+	check(comparisonSeen && comparisonScoped,
+	      "Compare opens an editor-scoped grid that starts all options together");
+	check(window.timelineView_->model() == beforeComparison && window.histIndex_ == historyBeforeComparison,
+	      "opening and closing comparison leaves the project and undo history unchanged");
 	check(optionButton(window, "randomClipVideo", 1) && optionButton(window, "randomClipSlip", 1),
 	      "every random choice offers its own video selector and Slip button");
 	const auto *picker = qobject_cast<QToolButton *>(optionButton(window, "randomClipVideo", 1));

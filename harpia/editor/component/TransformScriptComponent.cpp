@@ -25,7 +25,6 @@ struct ScriptSource {
 	QVector<ShaderParam> params;
 	int generation = 0;
 };
-QMap<QString, ScriptSource> g_sources; // by component id
 
 // One TransformEvaluator per thread: a QuickJS runtime is not thread-safe, and
 // the preview renders on the GUI thread while the exporter renders on its
@@ -68,20 +67,19 @@ private:
 
 class TransformScriptComponent : public IComponent {
 public:
-	explicit TransformScriptComponent(QString id) : id_(std::move(id)) {}
+	explicit TransformScriptComponent(ScriptSource source) : source_(std::move(source)) {}
 
 	void evaluate(const EvalContext &ctx, ClipState &io) const override
 	{
-		const auto it = g_sources.constFind(id_);
-		if (it == g_sources.constEnd())
-			return;
-		TransformEvaluator *ev = ThreadEval::get().ready(*it);
+		// A component instance owns its immutable source. Workers can keep a
+		// registry snapshot while GUI hot reload installs a new generation.
+		TransformEvaluator *ev = ThreadEval::get().ready(source_);
 		if (!ev)
 			return;
 
 		ClipScript cs;
-		cs.name = it->name;
-		for (const ShaderParam &p : it->params)
+		cs.name = source_.name;
+		for (const ShaderParam &p : source_.params)
 			cs.params.insert(p.uniform,
 					 ctx.f(p.uniform.toLatin1().constData(), p.def));
 
@@ -102,7 +100,7 @@ public:
 	}
 
 private:
-	QString id_;
+	ScriptSource source_;
 };
 
 } // namespace
@@ -135,7 +133,6 @@ int TransformScriptComponents::loadFolder(const QString &folder, ComponentRegist
 		src.source = source;
 		src.params = parseShaderParams(source);
 		src.generation = gen;
-		g_sources.insert(id, src);
 
 		ComponentType t;
 		t.id = id;
@@ -163,8 +160,8 @@ int TransformScriptComponents::loadFolder(const QString &folder, ComponentRegist
 			d.keyframeable = true;
 			t.props.append(d);
 		}
-		t.make = [id] {
-			return std::unique_ptr<IComponent>(new TransformScriptComponent(id));
+		t.make = [src] {
+			return std::unique_ptr<IComponent>(new TransformScriptComponent(src));
 		};
 		reg.add(t);
 		++n;

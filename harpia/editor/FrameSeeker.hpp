@@ -47,7 +47,9 @@ public:
 	// makes seeking through long GOPs expensive — invisible at thumbnail size,
 	// and it can land a few frames off the request. Never use it for the
 	// preview, which must show the exact frame asked for.
-	bool open(const QString &path, bool fastThumbnails = false);
+	// decoderThreads = 0 uses the CPU default; comparison grids use 1 so each
+	// additional video does not create another full decoder thread pool.
+	bool open(const QString &path, bool fastThumbnails = false, int decoderThreads = 0);
 	bool isOpen() const { return fmt_ != nullptr; }
 	void close();
 

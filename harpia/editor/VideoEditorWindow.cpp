@@ -33,6 +33,7 @@
 
 #include "AudioRecorder.hpp"
 #include "SlipDialog.hpp"
+#include "RandomClipCompareDialog.hpp"
 #include "SystemAudioCapture.hpp"
 #include "WavSilence.hpp"
 #include "ClipExporter.hpp"
@@ -9190,6 +9191,12 @@ void VideoEditorWindow::buildRandomClipSection(QVBoxLayout *clipOuter)
 	connect(menu, &QMenu::aboutToShow, this, [this, menu]() { fillRandomClipAddMenu(menu); });
 	randomClipAdd_->setMenu(menu);
 	v->addWidget(randomClipAdd_);
+	randomClipCompare_ = new QPushButton(QStringLiteral("Compare variations…"), randomClipBox_);
+	randomClipCompare_->setObjectName(QStringLiteral("compareRandomClipButton"));
+	randomClipCompare_->setToolTip(
+		QStringLiteral("Play this clip's options together in a low-resolution comparison grid."));
+	connect(randomClipCompare_, &QPushButton::clicked, this, &VideoEditorWindow::compareRandomClipOptions);
+	v->addWidget(randomClipCompare_);
 
 	auto *row = new QHBoxLayout;
 	randomClipPrev_ = new QPushButton(randomClipBox_);
@@ -9337,6 +9344,8 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 			    timelineView_->model().tracks[track].locked;
 	const bool audioLane = timelineView_ && track >= 0 && track < timelineView_->model().tracks.size() &&
 			       timelineView_->model().tracks[track].kind == TlTrack::Kind::Audio;
+	randomClipCompare_->setVisible(!audioLane);
+	randomClipCompare_->setEnabled(n > 1 && !audioLane);
 	// What each row says. setText and the rest do nothing when unchanged.
 	for (int k = 0; k < n; ++k) {
 		const TlClipOption o = c.clipOptionAt(k);
@@ -9373,6 +9382,49 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 	randomClipCount_->setText(QStringLiteral("Clip %1 of %2").arg(c.clipShown + 1).arg(n));
 	randomClipPrev_->setEnabled(n > 1);
 	randomClipNext_->setEnabled(n > 1);
+}
+
+void VideoEditorWindow::compareRandomClipOptions()
+{
+	if (!fullEdit() || !timelineView_) {
+		return;
+	}
+	const TlClip *clip = timelineView_->selectedClipPtr();
+	const int track = timelineView_->selectedTrack();
+	if (!clip || clip->type != TlClip::Type::Video || clip->clipOptions.size() < 2 || track < 0 ||
+	    timelineView_->model().tracks[track].kind == TlTrack::Kind::Audio) {
+		return;
+	}
+	RandomClipCompareDialog::Input input;
+	input.clip = *clip;
+	input.canvas = timelineCanvasSize();
+	input.fps = timelineFps();
+	QSet<int> ids;
+	for (int k = 0; k < clip->clipOptions.size(); ++k) {
+		ids.insert(clip->clipOptionAt(k).sourceId);
+	}
+	for (const EditorSource &source : sources_) {
+		if (ids.contains(source.id)) {
+			input.sources.append({source.id, sourceLabel(source.id),
+					      playbackPath_.value(source.id, source.path),
+					      QSize(source.width, source.height), source.missing});
+		}
+	}
+	for (const TlScript &script : clip->scripts) {
+		if (script.name.isEmpty() || input.scripts.contains(script.name)) {
+			continue;
+		}
+		QFile file(scriptsDirPath() + QLatin1Char('/') + script.name + QStringLiteral(".js"));
+		if (file.open(QIODevice::ReadOnly)) {
+			input.scripts.insert(script.name, QString::fromUtf8(file.readAll()));
+		}
+	}
+	if (playing_) {
+		stopPlayback();
+	}
+	RandomClipCompareDialog dialog(input, this);
+	window_screen::placeAtClick(dialog, QCursor::pos(), this);
+	dialog.exec();
 }
 
 void VideoEditorWindow::refreshRandomClipThumbnails(int sourceId)

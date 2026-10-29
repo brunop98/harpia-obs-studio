@@ -19,6 +19,8 @@ class QPainter;
 
 namespace harpia {
 
+class ComponentRegistry;
+
 class TimelineCompositor {
 public:
 	struct RenderError {
@@ -76,16 +78,20 @@ public:
 	// same on screen as it will in the export. Defaults to `canvas`.
 	// On failure, `error` identifies the render stage and affected clip. It is
 	// cleared on every call, including successful renders.
+	// A worker may pass an immutable registry snapshot so effect hot reloads
+	// cannot mutate the component definitions while it renders.
 	static QImage compose(const TimelineModel &m, qint64 outMs, QSize canvas, FrameProvider &fp,
 			      class TransformEvaluator *eval = nullptr, double fps = 30.0,
-			      QSize logicalCanvas = QSize(), RenderError *error = nullptr);
+			      QSize logicalCanvas = QSize(), RenderError *error = nullptr,
+			      const ComponentRegistry *registry = nullptr);
 	// Export clock: retain fractional milliseconds until clip speed and Time
 	// components have mapped the position into the source. The preview keeps
 	// using compose(); keyframes and component envelopes use their usual
 	// millisecond clock in both paths.
 	static QImage composeAtTime(const TimelineModel &m, double outMs, QSize canvas, FrameProvider &fp,
 				    class TransformEvaluator *eval = nullptr, double fps = 30.0,
-				    QSize logicalCanvas = QSize(), RenderError *error = nullptr);
+				    QSize logicalCanvas = QSize(), RenderError *error = nullptr,
+				    const ComponentRegistry *registry = nullptr);
 
 	// Where a clip is drawn on the canvas at this pose, in canvas pixels. Used by
 	// the preview to hit-test and drag the selected clip. `srcSize` is the clip's

@@ -134,6 +134,20 @@ int main(int argc, char **argv)
 {
 	std::setvbuf(stdout, nullptr, _IONBF, 0);
 	QApplication app(argc, argv);
+	{
+		SlipTrackBar overview;
+		overview.setOverview(true);
+		overview.resize(612, 44);
+		overview.setSource({}, {}, 600000); // ten-minute source, one-second clip
+		overview.setWindow(1000, 1000, -1000, 598000);
+		mouse(&overview, QEvent::MouseButtonPress, QPoint(456, 25), Qt::LeftButton);
+		mouse(&overview, QEvent::MouseButtonRelease, QPoint(456, 25), Qt::NoButton);
+		ok(overview.delta() == 449000, "overview jumps straight to 7:30 in a ten-minute video");
+		mouse(&overview, QEvent::MouseButtonPress, QPoint(6, 25), Qt::LeftButton);
+		ok(overview.delta() == -1000, "overview reaches the beginning without scrolling");
+		mouse(&overview, QEvent::MouseButtonRelease, QPoint(900, 25), Qt::NoButton);
+		ok(overview.delta() == 598000, "overview clamps the final source window inside the video even on an outside release");
+	}
 	QTemporaryDir dir;
 	const QString src = dir.filePath(QStringLiteral("count.mp4"));
 	ok(makeSource(src), "made a 4 s, 60 fps source that numbers its frames, with sound");
@@ -209,6 +223,18 @@ int main(int argc, char **argv)
 		d.setDeltaMs(0);
 
 		SlipTrackBar *bar = d.trackBar();
+		SlipTrackBar *overview = d.overviewBar();
+		ok(overview && overview->height() < bar->height() && overview->width() == bar->width(),
+		   "full-source overview spans the same width at a smaller height");
+		const QPoint middle(6 + (overview->width() - 12) / 2, 25);
+		mouse(overview, QEvent::MouseButtonPress, middle, Qt::LeftButton);
+		mouse(overview, QEvent::MouseButtonRelease, middle, Qt::NoButton);
+		ok(std::llabs(d.deltaMs() - 1000) < 10 && bar->delta() == d.deltaMs(),
+		   "overview seeking updates the precision strip and selected source start");
+		ok(counterOf(d.previewImage()) == frameAt(1000 + d.deltaMs()),
+		   "overview navigation renders the newly selected source frame");
+		d.setDeltaMs(0);
+		ok(overview->delta() == 0, "precise changes and Reset keep the overview selection synchronized");
 		const double ppm = bar->pxPerMs();
 		dragStrip(bar, -100);
 		const qint64 want = qint64(std::llround(100.0 / ppm));

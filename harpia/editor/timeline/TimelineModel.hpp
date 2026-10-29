@@ -282,12 +282,17 @@ inline QVector<TlScript> reorderScriptsByLabel(const QStringList &labels,
 // TlClip::soundRule on a clip placed by a Sound component rather than a rule.
 inline constexpr int kSoundFromComponent = -1;
 
-// One footage choice of a Random clip: which file, and where in it to start.
+// One footage choice of a Random clip: its file, source start and position offset.
 // Its length is the clip's own, so every choice fills exactly the same slot.
 struct TlClipOption {
 	int sourceId = 0;
 	qint64 srcStartMs = 0;
-	bool operator==(const TlClipOption &o) const { return sourceId == o.sourceId && srcStartMs == o.srcStartMs; }
+	double offsetX = 0.0, offsetY = 0.0; // canvas fractions, independent of shared animation
+	bool operator==(const TlClipOption &o) const
+	{
+		return sourceId == o.sourceId && srcStartMs == o.srcStartMs && offsetX == o.offsetX &&
+		       offsetY == o.offsetY;
+	}
 	bool operator!=(const TlClipOption &o) const { return !(*this == o); }
 };
 
@@ -354,7 +359,7 @@ struct TlClip {
 		if (!fx.name.isEmpty())
 			return fx.name; // a name the user typed always wins
 		if (components.isEmpty())
-			return QString::fromLatin1(fxTypeName(fx.type));
+			return fx.enabled ? QString::fromLatin1(fxTypeName(fx.type)) : QStringLiteral("Empty effect");
 		QStringList parts;
 		for (const ComponentInstance &ci : components)
 			parts << nameOf(ci.typeId);
@@ -404,18 +409,36 @@ struct TlClip {
 	// for THAT entry the clip's own sourceId and srcStartMs are the truth -- the
 	// entry is refreshed from them when another is shown -- so slipping,
 	// trimming and previewing the shown footage need nothing special.
-	// Everything else (place, length, framing, effects, keys, fades, speed) is
-	// one setting shared by every choice.
+	// Each entry also has its own position offset on the canvas. Timeline place,
+	// length, scale, rotation, effects, keys, fades and speed are shared.
 	QVector<TlClipOption> clipOptions;
 	int clipShown = 0;
 	bool isRandomClip() const { return !clipOptions.isEmpty(); }
 	// Choice `k` as it stands: the shown one read from the clip itself.
 	TlClipOption clipOptionAt(int k) const
 	{
-		if (k == clipShown)
-			return {sourceId, srcStartMs};
-		return k >= 0 && k < clipOptions.size() ? clipOptions[k] : TlClipOption{};
+		TlClipOption option = k >= 0 && k < clipOptions.size() ? clipOptions[k] : TlClipOption{};
+		if (k == clipShown) {
+			option.sourceId = sourceId;
+			option.srcStartMs = srcStartMs;
+		}
+		return option;
 	}
+	QPointF optionPositionOffset() const
+	{
+		if (clipShown < 0 || clipShown >= clipOptions.size()) {
+			return {};
+		}
+		return {clipOptions[clipShown].offsetX, clipOptions[clipShown].offsetY};
+	}
+	TlTransform withOptionPosition(TlTransform pose) const
+	{
+		const QPointF offset = optionPositionOffset();
+		pose.posX += offset.x();
+		pose.posY += offset.y();
+		return pose;
+	}
+	TlTransform positionedTransformAt(qint64 outMs) const { return withOptionPosition(transformAt(outMs)); }
 
 	// Tags (TlTag ids, see TimelineModel::tags): what this clip IS to you --
 	// "intro", "callout", "b-roll". A sound rule can fire on a tag, and

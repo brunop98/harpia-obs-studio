@@ -65,6 +65,24 @@ QPoint centeredTopLeft(const QSize &frameSize, const QRect &available)
 					  std::max(0, (available.height() - frameSize.height()) / 2));
 }
 
+void placeAtClick(QWidget &window, const QPoint &globalClick, QWidget *fallback)
+{
+	QScreen *target = QGuiApplication::screenAt(globalClick);
+	if (!target && fallback)
+		target = fallback->screen();
+	if (!target)
+		target = QGuiApplication::primaryScreen();
+	if (!target || !target->availableGeometry().isValid())
+		return;
+	if (QWindow *handle = window.windowHandle())
+		handle->setScreen(target);
+	const QRect available = target->availableGeometry();
+	const QSize decoration = window.frameGeometry().size() - window.size();
+	const QSize maximum = (available.size() - decoration).expandedTo(QSize(1, 1));
+	window.resize(window.size().boundedTo(maximum).expandedTo(window.minimumSize()));
+	window.move(centeredTopLeft(window.frameGeometry().size(), available));
+}
+
 bool restore(QWidget &window, const QString &key)
 {
 	auto settings = recorderSettings();

@@ -157,7 +157,7 @@ inline TimelineModel applyCombination(const TimelineModel &m, const QVector<Slot
 			// slot's own length. Picture and sound come from it alike.
 			const qint64 len = c.srcLenMs();
 			if (c.clipShown >= 0 && c.clipShown < c.clipOptions.size())
-				c.clipOptions[c.clipShown] = {c.sourceId, c.srcStartMs}; // the list stays whole
+				c.clipOptions[c.clipShown] = c.clipOptionAt(c.clipShown); // preserve position offsets
 			c.sourceId = s.clips[k].sourceId;
 			c.srcStartMs = s.clips[k].srcStartMs;
 			c.srcEndMs = c.srcStartMs + len;

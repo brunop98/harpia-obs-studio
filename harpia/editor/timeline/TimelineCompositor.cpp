@@ -830,16 +830,17 @@ QSize logicalScriptSize(const TlClip &clip, QSize original, QSize canvas)
 } // namespace
 
 QImage TimelineCompositor::compose(const TimelineModel &m, qint64 outMs, QSize canvas, FrameProvider &fp,
-				   TransformEvaluator *eval, double fps, QSize logicalCanvas,
-				   RenderError *error)
+				   TransformEvaluator *eval, double fps, QSize logicalCanvas, RenderError *error,
+				   const ComponentRegistry *registry)
 {
-	return composeAtTime(m, double(outMs), canvas, fp, eval, fps, logicalCanvas, error);
+	return composeAtTime(m, double(outMs), canvas, fp, eval, fps, logicalCanvas, error, registry);
 }
 
 QImage TimelineCompositor::composeAtTime(const TimelineModel &m, double exactOutMs, QSize canvas, FrameProvider &fp,
-					 TransformEvaluator *eval, double fps, QSize logicalCanvas,
-					 RenderError *error)
+					 TransformEvaluator *eval, double fps, QSize logicalCanvas, RenderError *error,
+					 const ComponentRegistry *registry)
 {
+	const ComponentRegistry &registryRef = registry ? *registry : ComponentRegistry::instance();
 	const qint64 outMs = qint64(std::llround(exactOutMs));
 	// Integer clip boundaries must not be crossed early by rounding an output
 	// tick, e.g. 66.667 ms into a clip that starts at 67 ms.
@@ -903,8 +904,7 @@ QImage TimelineCompositor::composeAtTime(const TimelineModel &m, double exactOut
 				// No conflict scan: this runs per frame and the
 				// composite never reads warnings(). The Inspector
 				// does its own, once, when the selection changes.
-				stack.reset(new ComponentStack(
-					ec.components, ComponentRegistry::instance(), false));
+				stack.reset(new ComponentStack(ec.components, registryRef, false));
 				ectx.tMs = outMs - ec.outStartMs;
 				ectx.outMs = outMs;
 				ectx.durMs = std::max<qint64>(1, ec.outDurationMs());
@@ -1020,8 +1020,7 @@ QImage TimelineCompositor::composeAtTime(const TimelineModel &m, double exactOut
 			EvalContext ectx;
 			if (hasComponents) {
 				// As above: no conflict scan on the render path.
-				stack.reset(new ComponentStack(
-					c.components, ComponentRegistry::instance(), false));
+				stack.reset(new ComponentStack(c.components, registryRef, false));
 				ectx.tMs = outMs - c.outStartMs;
 				ectx.outMs = outMs;
 				ectx.durMs = std::max<qint64>(1, c.outDurationMs());
@@ -1045,7 +1044,7 @@ QImage TimelineCompositor::composeAtTime(const TimelineModel &m, double exactOut
 						if (!inst.enabled || !inst.typeId.startsWith(QLatin1String("harpia.shader.")) ||
 						    envelopeIsEmpty(componentWeight(ectx.tMs, ectx.durMs, inst.inMs, inst.outMs)))
 							continue;
-						const ComponentType *type = ComponentRegistry::instance().find(inst.typeId);
+						const ComponentType *type = registryRef.find(inst.typeId);
 						fail("TL-EFFECT-TARGET", QStringLiteral("Shader effect \"%1\" [%2] cannot render directly on a text clip. "
 							"Move it to an effect clip above the text, or disable/remove the shader.")
 							.arg(type ? type->displayName : inst.typeId.mid(14), inst.typeId), ti, ci);
@@ -1133,6 +1132,8 @@ QImage TimelineCompositor::composeAtTime(const TimelineModel &m, double exactOut
 					tf = eval->apply(ClipScript{s.name, s.params}, tf, c, outMs, sctx);
 				}
 			}
+			// Per-option framing follows the shared animation/components/scripts.
+			tf = c.withOptionPosition(tf);
 			// Pixel stage, on the clip's own frame before it is placed on the
 			// canvas — so a component blurs the clip, not everything under it.
 			// Text clips have no frame to hand over; they are drawn straight to

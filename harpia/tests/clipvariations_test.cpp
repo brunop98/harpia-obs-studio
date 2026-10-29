@@ -11,6 +11,7 @@
 //     each version plays its own clip, named after the file and its moment.
 #include "editor/timeline/ClipVariations.hpp"
 #include "editor/timeline/TextVariations.hpp"
+#include "editor/timeline/MotionPath.hpp"
 
 #include <QCoreApplication>
 
@@ -160,6 +161,62 @@ int main(int argc, char **argv)
 		   result.outStartMs == c.outStartMs && result.outDurationMs() == c.outDurationMs() &&
 		   result.components == c.components && result.keys == c.keys,
 		   "export variations use the chosen moment with identical slot time, speed, look and animation");
+	}
+
+	std::printf("\n-- independent option positions --\n");
+	{
+		const auto near = [](double a, double b) {
+			return std::abs(a - b) < 1e-9;
+		};
+		TlClip c = slot();
+		TlKeyframe first, last;
+		first.tf.posX = 0.3;
+		last.tf.posX = 0.5;
+		last.tMs = 3000;
+		c.keys = {first, last};
+		clip_variations::add(c, 2, total(2));
+		c.clipOptions[0].offsetX = -0.1;
+		c.clipOptions[0].offsetY = 0.15;
+		c.clipOptions[1].offsetX = 0.2;
+		c.clipOptions[1].offsetY = -0.05;
+		const auto keys = c.keys;
+		const auto before = c.positionedTransformAt(3500);
+		ok(near(before.posX, 0.3) && near(before.posY, 0.65),
+		   "the shown option offsets the shared interpolated pose");
+		c.srcStartMs = 6000;
+		c.srcEndMs = 10000;
+		clip_variations::syncShown(c);
+		ok(c.clipOptionAt(0) == TlClipOption{1, 6000, -0.1, 0.15},
+		   "synchronizing slipped footage preserves its independent position");
+		clip_variations::show(c, 1);
+		const auto after = c.positionedTransformAt(3500);
+		ok(near(after.posX, 0.6) && near(after.posY, 0.45) && c.keys == keys && c.posX == 0.3,
+		   "switching options changes placement without rewriting shared keys or base pose");
+		clip_variations::setOption(c, 1, 1, 15000, total(1));
+		ok(c.clipOptionAt(1) == TlClipOption{1, 15000, 0.2, -0.05},
+		   "choosing a new source and timestamp retains that option's placement");
+		TimelineModel m;
+		TlTrack track;
+		track.clips = {c};
+		m.tracks = {track};
+		const auto choices = text_variations::slotsOf(m);
+		const auto version = text_variations::applyCombination(m, choices, {0});
+		ok(version.tracks[0].clips[0].optionPositionOffset() == QPointF(-0.1, 0.15) &&
+			   version.tracks[0].clips[0].keys == keys && version.tracks[0].clips[0].srcStartMs == 6000,
+		   "variation exports choose the option's position as well as its footage");
+		const MotionPath path = buildMotionPath(c, 30.0);
+		ok(near(path.keys[0].pos.x(), 0.5) && near(path.keys[0].pos.y(), 0.45) &&
+			   near(path.frames.front().x(), 0.5),
+		   "the preview motion path follows the shown option's translated animation");
+		const auto pose = c.positionedTransformAt(3500);
+		clip_variations::remove(c, 0);
+		ok(c.clipShown == 0 && c.optionPositionOffset() == QPointF(0.2, -0.05),
+		   "removing an earlier choice preserves the shown option's position");
+		clip_variations::makeOrdinary(c);
+		const auto ordinary = c.positionedTransformAt(3500);
+		ok(!c.isRandomClip() && near(ordinary.posX, pose.posX) && near(ordinary.posY, pose.posY) &&
+			   near(c.posX, 0.5) && near(c.keys[0].tf.posX, 0.5),
+		   "Make normal clip preserves placement by baking the offset into its base and animation keys");
 	}
 
 	std::printf("\n-- removing one --\n");

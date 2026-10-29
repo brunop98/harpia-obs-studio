@@ -4,6 +4,7 @@
 #include "library/VideoFolderScanner.hpp"
 
 #include <QDialog>
+#include <QPoint>
 #include <QHash>
 #include <QSet>
 #include <QStringList>
@@ -36,6 +37,7 @@ signals:
 	void recordingsDeleted(const QStringList &paths);
 
 protected:
+	void showEvent(QShowEvent *event) override;
 	bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
@@ -49,6 +51,8 @@ private:
 	void showContextMenu(const QPoint &pos);
 	void updateRecordingCount();
 
+	QPoint openingPosition_;
+	bool placed_ = false;
 	QListWidget *grid_ = nullptr;
 	QTabBar *tabs_ = nullptr;
 	QComboBox *orderBy_ = nullptr;

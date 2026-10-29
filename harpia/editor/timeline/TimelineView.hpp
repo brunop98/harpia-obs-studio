@@ -172,7 +172,7 @@ public:
 	void splitAtPlayhead();
 	void deleteSelected(); // selected track, or selected clips honouring per-track ripple
 	// Add an effect clip to a specific effect track at a specific time.
-	void addEffectClipAt(int track, qint64 atOutMs, FxType type);
+	void addEffectClipAt(int track, qint64 atOutMs, FxType type = FxType::Count);
 	// Overlap this clip with the next one, which is how a transition is made.
 	void makeTransitionWithNext(int track, int clip);
 	int clipAfter(int track, int clip) const;              // by start time, or -1

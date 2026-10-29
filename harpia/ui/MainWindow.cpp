@@ -3183,6 +3183,7 @@ void MainWindow::refreshReadiness()
 
 void MainWindow::onOpenClipLibrary()
 {
+	const QPoint clickPosition = QCursor::pos();
 	// Braces matter here: without them the connect ran on EVERY open, so the
 	// second time the library was opened, "Extract Audio Only" opened two
 	// dialogs, the third time three.
@@ -3193,7 +3194,9 @@ void MainWindow::onOpenClipLibrary()
 		connect(clipWindow_.get(), &ClipLibraryWindow::recordingsDeleted, this,
 			[this](const QStringList &) { refreshRecentList(); });
 	}
-	clipWindow_->show();
+	window_screen::placeAtClick(*clipWindow_, clickPosition, this);
+	clipWindow_->showNormal();
+	window_screen::placeAtClick(*clipWindow_, clickPosition, this);
 	clipWindow_->raise();
 	clipWindow_->activateWindow();
 	clipWindow_->refresh();

@@ -31,6 +31,7 @@
 class QLabel;
 class QPushButton;
 class QDoubleSpinBox;
+class QPainter;
 
 namespace harpia {
 
@@ -66,6 +67,7 @@ public:
 
 	// For tests.
 	SlipTrackBar *trackBar() const { return bar_; }
+	SlipTrackBar *overviewBar() const { return overview_; }
 	QImage previewImage() const;
 	bool isPlaying() const { return playing_; }
 	void setPlaying(bool on);
@@ -103,6 +105,7 @@ private:
 
 	SlipPreview *preview_ = nullptr;
 	SlipTrackBar *bar_ = nullptr;
+	SlipTrackBar *overview_ = nullptr;
 	QLabel *readout_ = nullptr;
 	QDoubleSpinBox *sourceStart_ = nullptr;
 	QPushButton *playBtn_ = nullptr;
@@ -117,6 +120,7 @@ public:
 	void setSource(const QVector<QImage> &thumbs, const QVector<float> &peaks, qint64 sourceMs);
 	void setWindow(qint64 baseStartMs, qint64 lenMs, qint64 loMs, qint64 hiMs);
 	void setDelta(qint64 d);
+	void setOverview(bool on);
 	qint64 delta() const { return delta_; }
 	// Where playback is within the window, 0..1; < 0 hides the playhead.
 	void setPlayFraction(double f);
@@ -138,6 +142,8 @@ protected:
 
 private:
 	qint64 clampDelta(qint64 d) const;
+	qint64 overviewDelta(double x) const;
+	void paintOverview(QPainter &p);
 	double xOf(qint64 srcMs) const; // a source time, on screen
 
 	QVector<QImage> thumbs_;
@@ -147,6 +153,7 @@ private:
 	qint64 delta_ = 0;
 	double playFrac_ = -1.0;
 	bool dragging_ = false;
+	bool overview_ = false;
 	int pressX_ = 0;
 	qint64 pressDelta_ = 0;
 };

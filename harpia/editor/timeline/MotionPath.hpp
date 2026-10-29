@@ -52,7 +52,7 @@ inline MotionPath buildMotionPath(const TlClip &c, double fps, int maxFrames = 1
 		MotionPathKey pk;
 		pk.keyIndex = i;
 		pk.tMs = k.tMs;
-		pk.pos = QPointF(k.tf.posX, k.tf.posY);
+		pk.pos = QPointF(k.tf.posX, k.tf.posY) + c.optionPositionOffset();
 		mp.keys.append(pk);
 	}
 	if (mp.keys.size() < 2)
@@ -76,7 +76,7 @@ inline MotionPath buildMotionPath(const TlClip &c, double fps, int maxFrames = 1
 	const qint64 t0 = mp.keys.first().tMs, t1 = mp.keys.last().tMs;
 	const double step = std::max(1000.0 / std::max(1.0, fps), double(t1 - t0) / std::max(1, maxFrames));
 	for (double t = double(t0); t <= double(t1) + 0.5; t += step) {
-		const TlTransform tf = c.transformAt(c.outStartMs + qint64(std::llround(t)));
+		const TlTransform tf = c.positionedTransformAt(c.outStartMs + qint64(std::llround(t)));
 		mp.frames.append(QPointF(tf.posX, tf.posY));
 	}
 	return mp;
@@ -98,7 +98,7 @@ inline PathHandles pathHandlesFor(const TlClip &c, int keyIndex)
 	const QVector<int> pk = c.keysOnLane(TlLanePos);
 	const int j = int(pk.indexOf(keyIndex));
 	const TlKeyframe &k = c.keys[keyIndex];
-	const QPointF at(k.tf.posX, k.tf.posY);
+	const QPointF at = QPointF(k.tf.posX, k.tf.posY) + c.optionPositionOffset();
 	QPointF in, out;
 	c.pathHandles(keyIndex, in, out);
 	h.out = k.curvedPath && j + 1 < pk.size();

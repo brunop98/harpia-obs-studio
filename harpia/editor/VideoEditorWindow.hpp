@@ -49,6 +49,7 @@ class QListWidgetItem;
 class QProgressDialog;
 class QUrl;
 class QPushButton;
+class QToolButton;
 class QSlider;
 class QTabWidget;
 class QSplitter;
@@ -748,7 +749,7 @@ private:
 	QPushButton *sourcesBtn_ = nullptr;      // toolbar toggle
 	bool sourcesPlaced_ = false;             // has the panel been positioned yet?
 	bool sourcesFirstShown_ = false;         // gate the one-time initial show
-	void showSourcesPanel();                 // position (first time) + show + raise
+	void showSourcesPanel(std::optional<QPoint> clickPosition = std::nullopt);
 	void showSourceFileMenu(QListWidget *list, const QPoint &pos);
 	// The "nothing loaded yet" panel: shown while there are no sources, hidden
 	// the moment one arrives, and kept centred over the preview.
@@ -946,17 +947,23 @@ private:
 	// every other sync (a slip renames the shown one on every mouse move).
 	QWidget *randomClipBox_ = nullptr;
 	QVBoxLayout *randomClipRows_ = nullptr;
-	QVector<QPushButton *> randomClipPicks_;
+	QVector<QToolButton *> randomClipPicks_;
 	QVector<QPushButton *> randomClipDels_;
-	QVector<QPushButton *> randomClipVideos_;
+	QVector<QLabel *> randomClipThumbs_;
 	QVector<QPushButton *> randomClipSlips_;
+	QVector<QPushButton *> randomClipPositions_;
 	QVector<QLabel *> randomClipTimes_;
 	QLabel *randomClipCount_ = nullptr;
 	QPushButton *randomClipPrev_ = nullptr;
 	QPushButton *randomClipNext_ = nullptr;
 	QPushButton *randomClipAdd_ = nullptr;
+	QPushButton *randomClipCompare_ = nullptr;
 	void buildRandomClipSection(QVBoxLayout *clipOuter);
+	void compareRandomClipOptions();
 	void syncRandomClipInspector(const TlClip &c);
+	void refreshRandomClipThumbnails(int sourceId = -1);
+	void refreshRandomClipSourceIcons(int sourceId = -1);
+	void showRandomClipPositionMenu(int option, const QPoint &position);
 	void showRandomClipOption(int k);
 	// A file's waveform (loadPeaks at 600), kept: flipping through a Random
 	// clip's choices on an audio lane reads each file once, not every time.

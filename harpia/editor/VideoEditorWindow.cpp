@@ -37,6 +37,7 @@
 
 #include "AudioRecorder.hpp"
 #include "SlipDialog.hpp"
+#include "RandomClipCompareDialog.hpp"
 #include "SystemAudioCapture.hpp"
 #include "WavSilence.hpp"
 #include "ClipExporter.hpp"
@@ -185,6 +186,11 @@
 #include <QListWidget>
 #include <QMimeData>
 #include <QPixmap>
+#include <QStylePainter>
+#include <QProxyStyle>
+#include <QWidgetAction>
+#include <QStyleOptionToolButton>
+#include <QToolButton>
 #include <QTabWidget>
 
 #include "../library/ClipLibrary.hpp"
@@ -199,6 +205,28 @@
 namespace harpia {
 
 namespace {
+class RandomClipMenuStyle final : public QProxyStyle {
+public:
+	int pixelMetric(PixelMetric metric, const QStyleOption *option, const QWidget *widget) const override
+	{
+		return metric == PM_SmallIconSize ? 64 : QProxyStyle::pixelMetric(metric, option, widget);
+	}
+};
+// Keep the full source name for accessibility/tooltips; elide only its painted
+// label so a long filename never widens the Inspector or covers the menu arrow.
+class RandomClipSourceButton final : public QToolButton {
+public:
+	using QToolButton::QToolButton;
+protected:
+	void paintEvent(QPaintEvent *) override
+	{
+		QStyleOptionToolButton option;
+		initStyleOption(&option);
+		option.text = fontMetrics().elidedText(text(), Qt::ElideRight, std::max(0, width() - 36));
+		QStylePainter(this).drawComplexControl(QStyle::CC_ToolButton, option);
+	}
+};
+
 // An application filter sees child controls before they consume or propagate
 // side-button events. Keep it separate from the editor's local event filter,
 // whose canvas/console handlers must still run just once.
@@ -1125,7 +1153,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 				stopPlayback();
 			if (!xfGestureActive_) {
 				xfGestureActive_ = true;
-				xfGestureBase_ = sel->transformAt(timelinePlayheadMs());
+				xfGestureBase_ = sel->positionedTransformAt(timelinePlayheadMs());
 			}
 			TlTransform tf = xfGestureBase_;
 			tf.scale = std::clamp(xfGestureBase_.scale * factor, 0.05, 20.0);
@@ -1139,7 +1167,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 			stopPlayback();
 		if (!xfGestureActive_) {
 			xfGestureActive_ = true;
-			xfGestureBase_ = sel->transformAt(timelinePlayheadMs());
+			xfGestureBase_ = sel->positionedTransformAt(timelinePlayheadMs());
 		}
 		TlTransform tf = xfGestureBase_;
 		tf.rotation = deg;
@@ -1188,8 +1216,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		editSelectedClip([keyId, nx, ny](TlClip &c) {
 			if (keyId < 0 || keyId >= c.keys.size())
 				return;
-			c.keys[keyId].tf.posX = nx;
-			c.keys[keyId].tf.posY = ny;
+			c.keys[keyId].tf.posX = nx - c.optionPositionOffset().x();
+			c.keys[keyId].tf.posY = ny - c.optionPositionOffset().y();
 		});
 	});
 	// A curve handle dragged on the preview. The first drag turns the key's
@@ -1215,7 +1243,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 					k.outY = out.y();
 				}
 				k.handlesBroken = k.handlesBroken || breakHandles;
-				const QPointF off = QPointF(nx, ny) - QPointF(k.tf.posX, k.tf.posY);
+				const QPointF off =
+					QPointF(nx, ny) - c.optionPositionOffset() - QPointF(k.tf.posX, k.tf.posY);
 				if (outHandle) {
 					k.outX = off.x();
 					k.outY = off.y();
@@ -1889,6 +1918,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 				for (int i = 0; i < c.components.size(); ++i)
 					if (c.components[i].typeId == t && seen++ == o) {
 						c.components.remove(i);
+						if (c.type == TlClip::Type::Effect)
+							c.fx.enabled = false; // never resurrect the legacy effect
 						return;
 					}
 			});
@@ -2058,7 +2089,18 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 				return;
 			}
 			timelineView_->applyToSelection([&](TlClip &c) {
-				TlTransform tf = c.transformAt(timelinePlayheadMs());
+				const TlTransform shared = c.transformAt(timelinePlayheadMs());
+				if (c.isRandomClip() && c.clipShown >= 0 && c.clipShown < c.clipOptions.size() &&
+				    (key == QStringLiteral("posX") || key == QStringLiteral("posY"))) {
+					auto &option = c.clipOptions[c.clipShown];
+					if (key == QStringLiteral("posX")) {
+						option.offsetX = v - shared.posX;
+					} else {
+						option.offsetY = v - shared.posY;
+					}
+					return;
+				}
+				TlTransform tf = shared;
 				if (key == QStringLiteral("posX"))
 					tf.posX = v;
 				else if (key == QStringLiteral("posY"))
@@ -2897,6 +2939,8 @@ int VideoEditorWindow::addSource(const QString &path)
 			timeline_->setThumbs(s->thumbCache);
 			tracks_->setThumbs(s->thumbCache);
 		}
+		refreshRandomClipThumbnails(id);
+		refreshRandomClipSourceIcons(id);
 	});
 	// The filmstrip is sixty evenly-spaced frames, and on a heavy source that is
 	// sixty full-size seeks on a background thread while you are trying to work:
@@ -3289,12 +3333,13 @@ void VideoEditorWindow::onRemoveSource()
 
 void VideoEditorWindow::openRecordingLibrary()
 {
+	const QPoint clickPosition = QCursor::pos();
 	if (!fullEdit() || !sourcesTabs_ || !libraryList_)
 		return;
 	refreshLibrary(); // include recordings made since the editor was opened
 	sourcesTabs_->setCurrentWidget(libraryList_->parentWidget());
 	sourcesBtn_->setChecked(true);
-	showSourcesPanel(); // also raise it when the Sources toggle was already checked
+	showSourcesPanel(clickPosition); // also relocate a panel already open elsewhere
 	libraryList_->setFocus(Qt::OtherFocusReason);
 }
 
@@ -3801,10 +3846,7 @@ void VideoEditorWindow::addEffectClip()
 	c.srcStartMs = 0;
 	c.srcEndMs = 3000; // freely stretchable, like a caption
 	c.outStartMs = timelinePlayheadMs();
-	c.fx.type = FxType::Brightness;
-	c.fx.params = fxDefaults(c.fx.type);
-	c.components.append(TlClip::newEffectComponent(effectComponentId(c.fx.type),
-						       fxDefaults(c.fx.type)));
+	c.fx.enabled = false; // an empty carrier until the user adds components
 	timelineView_->addClip(TlTrack::Kind::Effect, c);
 	updateInfoLabel();
 	showTimelineFrame(timelinePlayheadMs());
@@ -7101,7 +7143,9 @@ ComponentPanel::View VideoEditorWindow::buildComponentView() const
 	{
 		ComponentPanel::PinnedRow pose;
 		pose.typeId = QStringLiteral("harpia.transform");
-		auto at = [&](int i) { return clips[i]->transformAt(ph); };
+		auto at = [&](int i) {
+			return clips[i]->positionedTransformAt(ph);
+		};
 		pose.values = {
 			{QStringLiteral("posX"), gather(n, [&](int i) { return at(i).posX; })},
 			{QStringLiteral("posY"), gather(n, [&](int i) { return at(i).posY; })},
@@ -7322,6 +7366,7 @@ qint64 VideoEditorWindow::componentEditTimeFor(const ComponentInstance &ci) cons
 
 void VideoEditorWindow::afterComponentEdit()
 {
+	invalidatePreviewCache();
 	syncPreviewTransformTarget();
 	showTimelineFrame(timelinePlayheadMs());
 	syncComponentPanel();
@@ -9150,13 +9195,11 @@ void VideoEditorWindow::buildRandomClipSection(QVBoxLayout *clipOuter)
 	clipOuter->insertWidget(2, randomClipBox_);
 	auto *v = sec->bodyLayout();
 	v->setSpacing(5);
-	auto *intro = new QLabel(QStringLiteral("Each clip is one version of the video (Export \u2192 Variations). "
-						"They share this slot's place, length and look. Choose Video\u2026 "
-						"to change its source, or Slip\u2026 to choose its start time."),
-				 randomClipBox_);
-	intro->setWordWrap(true);
-	intro->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
-	v->addWidget(intro);
+	sec->header()->setToolTip(
+		QStringLiteral("Each clip is one version of the video (Export \u2192 Variations). "
+			       "They share this slot's place, length and look. "
+			       "Use the video name to preview a choice, its arrow to change the source, "
+			       "Slip\u2026 to choose its start time, or XY to position only this choice."));
 	auto *rows = new QWidget(randomClipBox_);
 	randomClipRows_ = new QVBoxLayout(rows);
 	randomClipRows_->setContentsMargins(0, 0, 0, 0);
@@ -9167,10 +9210,19 @@ void VideoEditorWindow::buildRandomClipSection(QVBoxLayout *clipOuter)
 	randomClipAdd_->setObjectName(QStringLiteral("addRandomClipButton"));
 	randomClipAdd_->setToolTip(QStringLiteral("Another clip for this slot: from the project's media, or a file"));
 	auto *menu = new QMenu(randomClipAdd_);
+	auto *menuStyle = new RandomClipMenuStyle;
+	menuStyle->setParent(menu);
+	menu->setStyle(menuStyle);
 	menu->setToolTipsVisible(true);
 	connect(menu, &QMenu::aboutToShow, this, [this, menu]() { fillRandomClipAddMenu(menu); });
 	randomClipAdd_->setMenu(menu);
 	v->addWidget(randomClipAdd_);
+	randomClipCompare_ = new QPushButton(QStringLiteral("Compare variations…"), randomClipBox_);
+	randomClipCompare_->setObjectName(QStringLiteral("compareRandomClipButton"));
+	randomClipCompare_->setToolTip(
+		QStringLiteral("Play this clip's options together in a low-resolution comparison grid."));
+	connect(randomClipCompare_, &QPushButton::clicked, this, &VideoEditorWindow::compareRandomClipOptions);
+	v->addWidget(randomClipCompare_);
 
 	auto *row = new QHBoxLayout;
 	randomClipPrev_ = new QPushButton(randomClipBox_);
@@ -9222,61 +9274,94 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 		}
 		randomClipPicks_.clear();
 		randomClipDels_.clear();
-		randomClipVideos_.clear();
+		randomClipThumbs_.clear();
 		randomClipSlips_.clear();
+		randomClipPositions_.clear();
 		randomClipTimes_.clear();
 		for (int k = 0; k < n; ++k) {
 			auto *row = new QWidget(randomClipBox_);
-			auto *layout = new QVBoxLayout(row);
+			auto *layout = new QHBoxLayout(row);
 			layout->setContentsMargins(0, 0, 0, 0);
-			layout->setSpacing(2);
-			auto *h = new QHBoxLayout;
-			h->setSpacing(4);
-			auto *pick = new QPushButton(row);
-			pick->setObjectName(QStringLiteral("randomClipOption"));
+			layout->setSpacing(7);
+			auto *thumb = new QLabel(row);
+			thumb->setObjectName(QStringLiteral("randomClipThumbnail"));
+			thumb->setProperty("optionIndex", k);
+			thumb->setFixedSize(64, 36);
+			thumb->setAlignment(Qt::AlignCenter);
+			thumb->setStyleSheet(QStringLiteral("background:#151619; border:1px solid #464a52; border-radius:3px;"));
+			layout->addWidget(thumb, 0, Qt::AlignVCenter);
+			auto *details = new QVBoxLayout;
+			details->setSpacing(3);
+			auto *pick = new RandomClipSourceButton(row);
+			pick->setObjectName(QStringLiteral("randomClipVideo"));
+			pick->setProperty("optionIndex", k);
 			pick->setCheckable(true);
-			// Never wider than the Inspector: a long file name is cut, in full on hover.
+			pick->setToolButtonStyle(Qt::ToolButtonTextOnly);
+			pick->setPopupMode(QToolButton::MenuButtonPopup);
 			pick->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
 			pick->setMinimumWidth(60);
-			pick->setStyleSheet(QStringLiteral("QPushButton{text-align:left; padding:4px 8px;}"
-							   "QPushButton:checked{border:2px solid #22c55e;}"));
-			connect(pick, &QPushButton::clicked, this, [this, k]() { showRandomClipOption(k); });
-			h->addWidget(pick, 1);
-			auto *video = new QPushButton(QStringLiteral("Video…"), row);
-			video->setObjectName(QStringLiteral("randomClipVideo"));
-			video->setProperty("optionIndex", k);
-			video->setToolTip(QStringLiteral("Choose this option's source and moment without changing the slot's duration."));
-			auto *sources = new QMenu(video);
+			pick->setMinimumHeight(28);
+			pick->setStyleSheet(QStringLiteral(
+				"QToolButton{text-align:left; background:#303338; color:#e6e6e6; border:1px solid #464a52;"
+				"border-radius:4px; padding:4px 22px 4px 7px;}"
+				"QToolButton:hover{background:#3b3f45;}"
+				"QToolButton:checked{border:2px solid #22c55e; background:#27362f;}"
+				"QToolButton:disabled{color:#747b85; background:#292c30;}"
+				"QToolButton::menu-button{width:20px; border-left:1px solid #464a52;}"));
+			connect(pick, &QToolButton::clicked, this, [this, pick, k]() {
+				showRandomClipOption(k);
+				// A click on the already shown choice must keep its highlight.
+				pick->setChecked(true);
+			});
+			auto *sources = new QMenu(pick);
+			auto *menuStyle = new RandomClipMenuStyle;
+			menuStyle->setParent(sources);
+			sources->setStyle(menuStyle);
 			sources->setToolTipsVisible(true);
 			connect(sources, &QMenu::aboutToShow, this,
 				[this, sources, k]() { fillRandomClipSourceMenu(sources, k); });
-			video->setMenu(sources);
-			h->addWidget(video);
-			auto *del = new QPushButton(row);
-			del->setIcon(uiIcon(Glyph::Cross, 13));
-			del->setFixedWidth(28);
-			connect(del, &QPushButton::clicked, this, [this, k]() { removeRandomClipOption(k); });
-			h->addWidget(del);
-			layout->addLayout(h);
+			pick->setMenu(sources);
+			details->addWidget(pick);
 			auto *timeRow = new QHBoxLayout;
 			timeRow->setSpacing(4);
 			auto *time = new QLabel(row);
 			time->setObjectName(QStringLiteral("randomClipTime"));
 			time->setProperty("optionIndex", k);
 			time->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
+			time->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
 			timeRow->addWidget(time, 1);
 			auto *slip = new QPushButton(QStringLiteral("Slip…"), row);
 			slip->setObjectName(QStringLiteral("randomClipSlip"));
 			slip->setProperty("optionIndex", k);
+			slip->setFixedWidth(56);
 			slip->setToolTip(QStringLiteral("Preview and choose this option's source start time. All options keep the same duration."));
 			connect(slip, &QPushButton::clicked, this, [this, k]() { editRandomClipOption(k); });
 			timeRow->addWidget(slip);
-			layout->addLayout(timeRow);
+			auto *position = new QPushButton(QStringLiteral("XY"), row);
+			position->setObjectName(QStringLiteral("randomClipPosition"));
+			position->setProperty("optionIndex", k);
+			position->setFixedWidth(32);
+			position->setToolTip(QStringLiteral(
+				"Position only this option. You can also drag the shown option in the preview."));
+			connect(position, &QPushButton::clicked, this, [this, position, k]() {
+				showRandomClipPositionMenu(k, position->mapToGlobal(QPoint(0, position->height())));
+			});
+			timeRow->addWidget(position);
+			auto *del = new QPushButton(row);
+			del->setObjectName(QStringLiteral("randomClipRemove"));
+			del->setProperty("optionIndex", k);
+			del->setIcon(uiIcon(Glyph::Cross, 13));
+			del->setFixedWidth(28);
+			connect(del, &QPushButton::clicked, this, [this, k]() { removeRandomClipOption(k); });
+			timeRow->addWidget(del);
+			details->addLayout(timeRow);
+			layout->addLayout(details, 1);
 			randomClipRows_->addWidget(row);
 			randomClipPicks_.append(pick);
 			randomClipDels_.append(del);
-			randomClipVideos_.append(video);
+			randomClipThumbs_.append(thumb);
 			randomClipSlips_.append(slip);
+			randomClipPositions_.append(position);
 			randomClipTimes_.append(time);
 		}
 	}
@@ -9285,20 +9370,28 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 			    timelineView_->model().tracks[track].locked;
 	const bool audioLane = timelineView_ && track >= 0 && track < timelineView_->model().tracks.size() &&
 			       timelineView_->model().tracks[track].kind == TlTrack::Kind::Audio;
+	randomClipCompare_->setVisible(!audioLane);
+	randomClipCompare_->setEnabled(n > 1 && !audioLane);
 	// What each row says. setText and the rest do nothing when unchanged.
 	for (int k = 0; k < n; ++k) {
 		const TlClipOption o = c.clipOptionAt(k);
-		const QString full =
-			QStringLiteral("%1.  %2").arg(k + 1).arg(clip_variations::label(sourceLabel(o.sourceId), o));
-		QPushButton *pick = randomClipPicks_[k];
-		pick->setText(full.size() > 38 ? full.left(36) + QStringLiteral("\u2026") : full);
-		pick->setChecked(k == c.clipShown);
-		pick->setToolTip(k == c.clipShown
-					 ? full + QStringLiteral("\nShowing now. Use Slip\u2026 to choose its moment.")
-					 : full + QStringLiteral("\nShow this clip in the slot."));
 		const EditorSource *source = sourceById(o.sourceId);
-		randomClipVideos_[k]->setText(audioLane ? QStringLiteral("Audio…") : QStringLiteral("Video…"));
-		randomClipVideos_[k]->setEnabled(!locked);
+		const QString full =
+			QStringLiteral("%1.  %2").arg(k + 1).arg(source ? sourceLabel(o.sourceId) : QStringLiteral("Missing source"));
+		QToolButton *pick = randomClipPicks_[k];
+		pick->setText(full);
+		pick->setAccessibleName(full);
+		pick->setChecked(k == c.clipShown);
+		pick->setToolTip(full + QStringLiteral("\nClick the name to preview this option; use the arrow to choose its source.") +
+			(source ? QLatin1Char('\n') + (source->origPath.isEmpty() ? source->path : source->origPath) : QString()));
+		pick->setEnabled(!locked);
+		randomClipPositions_[k]->setEnabled(!locked);
+		randomClipPositions_[k]->setVisible(!audioLane);
+		randomClipPositions_[k]->setToolTip(
+			QStringLiteral(
+				"Position only this option: X %1%, Y %2%.\nYou can also drag the shown option in the preview.")
+				.arg(o.offsetX * 100.0, 0, 'f', 1)
+				.arg(o.offsetY * 100.0, 0, 'f', 1));
 		randomClipSlips_[k]->setEnabled(!locked && source && !source->missing &&
 						 source->durationMs >= c.srcLenMs() && c.srcLenMs() > 0);
 		randomClipTimes_[k]->setText(QStringLiteral("%1 s → %2 s")
@@ -9306,14 +9399,227 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 			.arg((double(o.srcStartMs) + double(c.srcLenMs())) / 1000.0, 0, 'f', 3));
 		randomClipTimes_[k]->setToolTip(QStringLiteral("Source in → source out. The timeline position and duration are shared by every option."));
 		QPushButton *del = randomClipDels_[k];
-		del->setEnabled(n > 1);
+		del->setEnabled(n > 1 && !locked);
 		del->setToolTip(n > 1 ? QStringLiteral("Remove this clip")
 				      : QStringLiteral("The last clip stays. To stop this being a Random clip, "
 						       "right-click it \u203A Make normal clip."));
 	}
+	refreshRandomClipThumbnails();
 	randomClipCount_->setText(QStringLiteral("Clip %1 of %2").arg(c.clipShown + 1).arg(n));
 	randomClipPrev_->setEnabled(n > 1);
 	randomClipNext_->setEnabled(n > 1);
+}
+
+void VideoEditorWindow::compareRandomClipOptions()
+{
+	if (!fullEdit() || !timelineView_) {
+		return;
+	}
+	const TlClip *clip = timelineView_->selectedClipPtr();
+	const int track = timelineView_->selectedTrack();
+	if (!clip || clip->type != TlClip::Type::Video || clip->clipOptions.size() < 2 || track < 0 ||
+	    timelineView_->model().tracks[track].kind == TlTrack::Kind::Audio) {
+		return;
+	}
+	RandomClipCompareDialog::Input input;
+	input.clip = *clip;
+	input.canvas = timelineCanvasSize();
+	input.fps = timelineFps();
+	QSet<int> ids;
+	for (int k = 0; k < clip->clipOptions.size(); ++k) {
+		ids.insert(clip->clipOptionAt(k).sourceId);
+	}
+	for (const EditorSource &source : sources_) {
+		if (ids.contains(source.id)) {
+			input.sources.append({source.id, sourceLabel(source.id),
+					      playbackPath_.value(source.id, source.path),
+					      QSize(source.width, source.height), source.missing});
+		}
+	}
+	for (const TlScript &script : clip->scripts) {
+		if (script.name.isEmpty() || input.scripts.contains(script.name)) {
+			continue;
+		}
+		QFile file(scriptsDirPath() + QLatin1Char('/') + script.name + QStringLiteral(".js"));
+		if (file.open(QIODevice::ReadOnly)) {
+			input.scripts.insert(script.name, QString::fromUtf8(file.readAll()));
+		}
+	}
+	if (playing_) {
+		stopPlayback();
+	}
+	RandomClipCompareDialog dialog(input, this);
+	window_screen::placeAtClick(dialog, QCursor::pos(), this);
+	dialog.exec();
+}
+
+void VideoEditorWindow::refreshRandomClipThumbnails(int sourceId)
+{
+	if (!randomClipBox_ || randomClipBox_->isHidden() || !timelineView_)
+		return;
+	const TlClip *clip = timelineView_->selectedClipPtr();
+	if (!clip || !clip->isRandomClip())
+		return;
+	for (int k = 0; k < clip->clipOptions.size() && k < randomClipThumbs_.size(); ++k) {
+		const TlClipOption option = clip->clipOptionAt(k);
+		if (sourceId >= 0 && option.sourceId != sourceId)
+			continue;
+		QLabel *thumb = randomClipThumbs_[k];
+		const EditorSource *source = sourceById(option.sourceId);
+		const QImage *image = nullptr;
+		if (source && !source->missing && !source->thumbCache.isEmpty() && source->durationMs > 0) {
+			const auto &frames = source->thumbCache;
+			const int at = int(std::clamp(double(option.srcStartMs) / double(source->durationMs) * double(frames.size()),
+				0.0, double(frames.size() - 1)));
+			// Reuse the nearest available filmstrip frame while async decoding
+			// catches up. Never perform a synchronous seek from the Inspector.
+			for (int distance = 0; distance < frames.size() && !image; ++distance) {
+				for (const int index : {at - distance, at + distance})
+					if (index >= 0 && index < frames.size() && !frames[index].isNull()) {
+						image = &frames[index];
+						break;
+					}
+			}
+		}
+		const qulonglong frameKey = image ? image->cacheKey() : 0;
+		const bool missing = !source || source->missing;
+		const bool video = source && source->width > 0;
+		if (thumb->property("frameKey").isValid() && thumb->property("frameKey").toULongLong() == frameKey &&
+		    thumb->property("missing").toBool() == missing && thumb->property("video").toBool() == video)
+			continue;
+		thumb->setProperty("frameKey", frameKey);
+		thumb->setProperty("missing", missing);
+		thumb->setProperty("video", video);
+		thumb->setPixmap(image ? QPixmap::fromImage(*image).scaled(62, 34, Qt::KeepAspectRatio, Qt::SmoothTransformation)
+			: uiIcon(missing ? Glyph::Warning : (video ? Glyph::Play : Glyph::Speaker), 20).pixmap(20, 20));
+		thumb->setToolTip(missing ? QStringLiteral("Source media is missing") :
+			QStringLiteral("Preview near this option's source start; updates as thumbnails load."));
+	}
+}
+
+void VideoEditorWindow::refreshRandomClipSourceIcons(int sourceId)
+{
+	QVector<QMenu *> menus;
+	if (randomClipAdd_ && randomClipAdd_->menu()) {
+		menus.append(randomClipAdd_->menu());
+	}
+	for (const QToolButton *pick : randomClipPicks_) {
+		if (pick->menu()) {
+			menus.append(pick->menu());
+		}
+	}
+	for (QMenu *menu : menus) {
+		for (QAction *action : menu->actions()) {
+			if (!action->data().isValid()) {
+				continue; // separators and Import are not source choices
+			}
+			const int id = action->data().toInt();
+			if (sourceId >= 0 && sourceId != id) {
+				continue;
+			}
+			const EditorSource *source = sourceById(id);
+			const QImage *image = nullptr;
+			if (source && !source->missing) {
+				for (const QImage &frame : source->thumbCache) {
+					if (!frame.isNull()) {
+						image = &frame;
+						break;
+					}
+				}
+			}
+			const qulonglong frameKey = image ? image->cacheKey() : 0;
+			const bool missing = !source || source->missing;
+			if (action->property("frameKey").isValid() &&
+			    action->property("frameKey").toULongLong() == frameKey &&
+			    action->property("missing").toBool() == missing) {
+				continue;
+			}
+			action->setProperty("frameKey", frameKey);
+			action->setProperty("missing", missing);
+			action->setIconVisibleInMenu(true);
+			// Reuse asynchronous filmstrip frames; opening a menu never seeks a
+			// decoder. Its icon updates when the background thumbnail arrives.
+			action->setIcon(image ? QIcon(QPixmap::fromImage(*image).scaled(64, 36, Qt::KeepAspectRatio,
+											Qt::SmoothTransformation))
+					      : uiIcon(missing ? Glyph::Warning
+							       : (source->width > 0 ? Glyph::Play : Glyph::Speaker),
+						       32));
+		}
+	}
+}
+
+void VideoEditorWindow::showRandomClipPositionMenu(int option, const QPoint &position)
+{
+	if (!fullEdit() || !timelineView_) {
+		return;
+	}
+	const int track = timelineView_->selectedTrack(), index = timelineView_->selectedClip();
+	const auto &tracks = timelineView_->model().tracks;
+	const TlClip *clip = timelineView_->selectedClipPtr();
+	if (!clip || !clip->isRandomClip() || option < 0 || option >= clip->clipOptions.size() || track < 0 ||
+	    track >= tracks.size() || tracks[track].locked || tracks[track].kind == TlTrack::Kind::Audio) {
+		return;
+	}
+	if (playing_) {
+		stopPlayback();
+	}
+	commitSnapshot();
+	auto expected = std::make_shared<TlClip>(*clip);
+	auto *menu = new QMenu(this);
+	menu->setObjectName(QStringLiteral("randomClipPositionMenu"));
+	menu->setAttribute(Qt::WA_DeleteOnClose);
+	auto *action = new QWidgetAction(menu);
+	auto *body = new QWidget(menu);
+	auto *form = new QFormLayout(body);
+	form->addRow(new QLabel(QStringLiteral("Option %1 position").arg(option + 1), body));
+	auto *x = new QDoubleSpinBox(body);
+	auto *y = new QDoubleSpinBox(body);
+	x->setObjectName(QStringLiteral("randomClipOffsetX"));
+	y->setObjectName(QStringLiteral("randomClipOffsetY"));
+	for (QDoubleSpinBox *spin : {x, y}) {
+		spin->setRange(-1000.0, 1000.0);
+		spin->setDecimals(2);
+		spin->setSingleStep(1.0);
+		spin->setSuffix(QStringLiteral("%"));
+		spin->setKeyboardTracking(false);
+		spin->setToolTip(QStringLiteral(
+			"Offset from the shared position, as a percentage of the canvas size. Only this option moves; its timing and shared animation stay the same."));
+	}
+	x->setValue(clip->clipOptions[option].offsetX * 100.0);
+	y->setValue(clip->clipOptions[option].offsetY * 100.0);
+	form->addRow(QStringLiteral("X offset"), x);
+	form->addRow(QStringLiteral("Y offset"), y);
+	auto *reset = new QPushButton(QStringLiteral("Reset position"), body);
+	reset->setObjectName(QStringLiteral("resetRandomClipPosition"));
+	form->addRow(reset);
+	const auto apply = [this, track, index, option, expected, x, y]() {
+		const TlClip *current = timelineView_->selectedClipPtr();
+		// A model replacement or selection change must not redirect a popup
+		// that was opened for another clip. Track locks are checked by editClips.
+		if (!fullEdit() || timelineView_->selectedTrack() != track || timelineView_->selectedClip() != index ||
+		    !current || !(*current == *expected)) {
+			return;
+		}
+		editSelectedClip([&](TlClip &c) {
+			c.clipOptions[option].offsetX = x->value() / 100.0;
+			c.clipOptions[option].offsetY = y->value() / 100.0;
+		});
+		*expected = *timelineView_->selectedClipPtr();
+	};
+	for (QDoubleSpinBox *spin : {x, y}) {
+		connect(spin, &QDoubleSpinBox::valueChanged, menu, [apply](double) { apply(); });
+	}
+	connect(reset, &QPushButton::clicked, menu, [this, apply, x, y]() {
+		const QSignalBlocker bx(x), by(y);
+		x->setValue(0);
+		y->setValue(0);
+		apply();
+		commitSnapshot();
+	});
+	connect(menu, &QMenu::aboutToHide, this, &VideoEditorWindow::commitSnapshot);
+	action->setDefaultWidget(body);
+	menu->addAction(action);
+	menu->popup(position);
 }
 
 void VideoEditorWindow::showRandomClipOption(int k)
@@ -9404,6 +9710,7 @@ void VideoEditorWindow::fillRandomClipAddMenu(QMenu *menu)
 		QAction *a = menu->addAction(QStringLiteral("%1  (%2 s)")
 						     .arg(sourceLabel(es.id))
 						     .arg(es.durationMs / 1000.0, 0, 'f', 1));
+		a->setData(es.id);
 		QString why;
 		const bool ok = clip_variations::fits(*sel, es.durationMs, &why);
 		a->setEnabled(ok);
@@ -9411,6 +9718,7 @@ void VideoEditorWindow::fillRandomClipAddMenu(QMenu *menu)
 		const int id = es.id;
 		connect(a, &QAction::triggered, this, [this, id]() { addRandomClipOption(id); });
 	}
+	refreshRandomClipSourceIcons();
 	if (!menu->isEmpty())
 		menu->addSeparator();
 	connect(menu->addAction(QStringLiteral("Import a file…")), &QAction::triggered, this,
@@ -9464,6 +9772,7 @@ void VideoEditorWindow::fillRandomClipSourceMenu(QMenu *menu, int k)
 		connect(action, &QAction::triggered, this,
 			[this, k, id = source.id]() { editRandomClipOption(k, id); });
 	}
+	refreshRandomClipSourceIcons();
 	if (!menu->isEmpty())
 		menu->addSeparator();
 	auto *import = menu->addAction(QStringLiteral("Import a file…"));
@@ -10650,7 +10959,7 @@ void VideoEditorWindow::addZoomAtPreviewPoint(double canvasXNorm, double canvasY
 	// The click is a point on the CANVAS; the generator wants one in the clip.
 	// They differ the moment the clip is already zoomed, which is exactly when
 	// someone reaches for this a second time.
-	const QPointF inClip = clipPointFromCanvas(sel->transformAt(at), canvasSize, natural,
+	const QPointF inClip = clipPointFromCanvas(sel->positionedTransformAt(at), canvasSize, natural,
 						   QPointF(canvasXNorm, canvasYNorm));
 
 	TlClip c = *sel;
@@ -10703,7 +11012,7 @@ void VideoEditorWindow::syncPreviewTransformTarget(bool refreshPath)
 	// Outline the clip where it currently sits on the canvas.
 	const QSize canvasSize = timelineCanvasSize();
 	const qint64 ph = timelinePlayheadMs();
-	const TlTransform tf = c->transformAt(ph);
+	const TlTransform tf = c->positionedTransformAt(ph);
 	const QSize natural = clipNaturalSize(*c);
 	// The rotation goes across separately: clipRectOnCanvas returns the box
 	// BEFORE it is turned, and handing the canvas a bounding box instead would
@@ -10913,7 +11222,7 @@ void VideoEditorWindow::alignSelectedClip(int how)
 	if (canvas.width() <= 0 || canvas.height() <= 0)
 		return;
 	const QSize natural = clipNaturalSize(*sel);
-	TlTransform tf = sel->transformAt(timelinePlayheadMs());
+	TlTransform tf = sel->positionedTransformAt(timelinePlayheadMs());
 	const double cw = canvas.width(), ch = canvas.height();
 	auto rectFor = [&](const TlTransform &t) {
 		return TimelineCompositor::clipRectOnCanvas(t, canvas, natural);
@@ -10957,7 +11266,18 @@ void VideoEditorWindow::applySelectedClipTransform(const TlTransform &tf)
 		return;
 	// Keyframed clips (or auto-key) record the pose at `at` so the zoom
 	// animates; otherwise the clip's static pose moves.
-	const auto pose = [this](TlClip &c, qint64 at, const TlTransform &t) {
+	const auto pose = [this](TlClip &c, qint64 at, TlTransform t) {
+		if (c.isRandomClip() && c.clipShown >= 0 && c.clipShown < c.clipOptions.size()) {
+			const TlTransform shared = c.transformAt(at);
+			auto &option = c.clipOptions[c.clipShown];
+			option.offsetX = t.posX - shared.posX;
+			option.offsetY = t.posY - shared.posY;
+			t.posX = shared.posX;
+			t.posY = shared.posY;
+			if (t.scale == shared.scale && t.rotation == shared.rotation && t.opacity == shared.opacity) {
+				return; // reframe this choice without changing shared animation keys
+			}
+		}
 		if (autoKeyframe_ || !c.keys.isEmpty()) {
 			if (c.keys.isEmpty()) {
 				// Seed the animation with the current static pose at the clip start so
@@ -10982,7 +11302,7 @@ void VideoEditorWindow::applySelectedClipTransform(const TlTransform &tf)
 		// takes the same CHANGE the clicked one did -- the same offset, the
 		// same factor, the same turn -- so the group keeps its layout rather
 		// than piling onto one spot.
-		const TlTransform was = sel->transformAt(timelinePlayheadMs());
+		const TlTransform was = sel->positionedTransformAt(timelinePlayheadMs());
 		const double dx = tf.posX - was.posX, dy = tf.posY - was.posY;
 		const double k = tf.scale / std::max(0.0001, was.scale);
 		const double turn = tf.rotation - was.rotation;
@@ -10996,7 +11316,7 @@ void VideoEditorWindow::applySelectedClipTransform(const TlTransform &tf)
 			// Its own pose where it is: at the playhead when that is over
 			// it, else at its nearest end.
 			const qint64 when = std::clamp<qint64>(ph, o.outStartMs, std::max(o.outStartMs, o.outEndMs() - 1));
-			TlTransform t = o.transformAt(when);
+			TlTransform t = o.positionedTransformAt(when);
 			t.posX += dx;
 			t.posY += dy;
 			t.scale = std::clamp(t.scale * k, 0.05, 20.0);
@@ -11033,7 +11353,7 @@ void VideoEditorWindow::onPreviewTransformDrag(double dxNorm, double dyNorm)
 	// the clip appears not to follow the mouse. Pause first, like scrubbing does.
 	if (playing_)
 		stopPlayback();
-	TlTransform tf = sel->transformAt(timelinePlayheadMs());
+	TlTransform tf = sel->positionedTransformAt(timelinePlayheadMs());
 	tf.posX += dxNorm;
 	tf.posY += dyNorm;
 	// Snap does for the picture what it already does for clip edges on the
@@ -11056,7 +11376,7 @@ void VideoEditorWindow::onPreviewTransformZoom(double factor, double cursorXNorm
 		return;
 	if (playing_) // see onPreviewTransformDrag: reframe against a still playhead
 		stopPlayback();
-	TlTransform tf = sel->transformAt(timelinePlayheadMs());
+	TlTransform tf = sel->positionedTransformAt(timelinePlayheadMs());
 	const double newScale = std::clamp(tf.scale * factor, 0.05, 20.0);
 	const double k = newScale / std::max(0.0001, tf.scale); // actual applied factor
 	// Hold the point under the cursor fixed: c' = cursor - k * (cursor - c).
@@ -11121,8 +11441,9 @@ void VideoEditorWindow::dropEvent(QDropEvent *e)
 	e->acceptProposedAction();
 }
 
-void VideoEditorWindow::showSourcesPanel()
+void VideoEditorWindow::showSourcesPanel(std::optional<QPoint> clickPosition)
 {
+	const QPoint origin = clickPosition.value_or(QCursor::pos());
 	if (!sourcesPanel_)
 		return;
 	if (!sourcesPlaced_) {
@@ -11138,8 +11459,11 @@ void VideoEditorWindow::showSourcesPanel()
 			sourcesPanel_->resize(560, std::max(sourcesPanel_->height(), 620));
 		sourcesPlaced_ = true;
 	}
-	sourcesPanel_->show();
+	window_screen::placeAtClick(*sourcesPanel_, origin, this);
+	sourcesPanel_->showNormal();
+	window_screen::placeAtClick(*sourcesPanel_, origin, this);
 	sourcesPanel_->raise();
+	sourcesPanel_->activateWindow();
 }
 
 void VideoEditorWindow::showEvent(QShowEvent *e)

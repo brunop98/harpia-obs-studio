@@ -118,6 +118,59 @@ void SlipTrackBar::setDelta(qint64 d)
 	update();
 }
 
+void SlipTrackBar::setOverview(bool on)
+{
+	overview_ = on;
+	setFixedHeight(on ? 44 : 84);
+	setToolTip(on ? QStringLiteral("The whole source. Click or drag to jump; use the larger strip below for precise timing.")
+		: QStringLiteral("Drag the strip to pick another moment: the window keeps the clip's length"));
+	update();
+}
+
+qint64 SlipTrackBar::overviewDelta(double x) const
+{
+	const qint64 total = std::max<qint64>(1, sourceMs_ > 0 ? sourceMs_ : baseStart_ + len_ + hi_);
+	const double fraction = std::clamp((x - 6.0) / std::max(1, width() - 12), 0.0, 1.0);
+	return clampDelta(qint64(std::llround(fraction * double(total))) - baseStart_);
+}
+
+void SlipTrackBar::paintOverview(QPainter &p)
+{
+	const qint64 total = std::max<qint64>(1, sourceMs_ > 0 ? sourceMs_ : baseStart_ + len_ + hi_);
+	const QRect strip(6, 17, std::max(1, width() - 12), height() - 21);
+	p.fillRect(rect(), QColor(0x15, 0x17, 0x1a));
+	p.fillRect(strip, QColor(0x2a, 0x2f, 0x37));
+	p.save();
+	p.setClipRect(strip);
+	if (!thumbs_.isEmpty()) {
+		for (int x = 0; x < strip.width(); x += 32) {
+			const int index = std::clamp(int((x + 16.0) / strip.width() * thumbs_.size()), 0, int(thumbs_.size()) - 1);
+			if (!thumbs_[index].isNull())
+				p.drawImage(QRect(strip.x() + x, strip.y(), 32, strip.height()), thumbs_[index]);
+		}
+	} else if (!peaks_.isEmpty()) {
+		p.setPen(QColor(0x5e, 0xa8, 0xd8));
+		for (int x = 0; x < strip.width(); ++x) {
+			const int index = std::min(int(peaks_.size()) - 1, int(double(x) / strip.width() * peaks_.size()));
+			const double amplitude = std::clamp(double(peaks_[index]), 0.0, 1.0) * strip.height() / 2;
+			p.drawLine(QPointF(strip.x() + x, strip.center().y() - amplitude),
+				QPointF(strip.x() + x, strip.center().y() + amplitude));
+		}
+	}
+	const double start = double(baseStart_ + delta_) / double(total);
+	const double span = double(len_) / double(total);
+	const QRectF selection(strip.x() + start * strip.width(), strip.y(),
+		std::max(3.0, span * strip.width()), strip.height());
+	p.fillRect(selection, QColor(0x22, 0xc5, 0x5e, 70));
+	p.setPen(QPen(QColor(0x22, 0xc5, 0x5e), 2));
+	p.drawRect(selection.adjusted(0, 1, -1, -1));
+	p.restore();
+	p.setPen(QColor(0xb0, 0xb7, 0xc2));
+	p.drawText(QRect(6, 0, width() - 12, 16), Qt::AlignLeft | Qt::AlignVCenter,
+		QStringLiteral("Whole video · 0:00"));
+	p.drawText(QRect(6, 0, width() - 12, 16), Qt::AlignRight | Qt::AlignVCenter, timeText(total));
+}
+
 void SlipTrackBar::setPlayFraction(double f)
 {
 	if (f == playFrac_)
@@ -158,6 +211,10 @@ double SlipTrackBar::xOf(qint64 srcMs) const
 void SlipTrackBar::paintEvent(QPaintEvent *)
 {
 	QPainter p(this);
+	if (overview_) {
+		paintOverview(p);
+		return;
+	}
 	p.fillRect(rect(), QColor(0x15, 0x17, 0x1a));
 	const QRect win = windowRect();
 	const qint64 total = sourceMs_ > 0 ? sourceMs_ : baseStart_ + len_ + hi_;
@@ -245,6 +302,10 @@ void SlipTrackBar::mousePressEvent(QMouseEvent *e)
 	dragging_ = true;
 	pressX_ = int(e->position().x());
 	pressDelta_ = delta_;
+	if (overview_) {
+		delta_ = overviewDelta(e->position().x());
+		update();
+	}
 	setCursor(Qt::ClosedHandCursor);
 	if (changed)
 		changed(delta_, true);
@@ -257,7 +318,8 @@ void SlipTrackBar::mouseMoveEvent(QMouseEvent *e)
 	// The footage follows the pointer: drag left and later footage slides
 	// into the window, drag right and earlier footage does.
 	const double moved = e->position().x() - pressX_;
-	const qint64 d = clampDelta(pressDelta_ - qint64(std::llround(moved / pxPerMs())));
+	const qint64 d = overview_ ? overviewDelta(e->position().x())
+		: clampDelta(pressDelta_ - qint64(std::llround(moved / pxPerMs())));
 	if (d == delta_)
 		return;
 	delta_ = d;
@@ -270,6 +332,8 @@ void SlipTrackBar::mouseReleaseEvent(QMouseEvent *e)
 {
 	if (e->button() != Qt::LeftButton || !dragging_)
 		return;
+	if (overview_)
+		mouseMoveEvent(e);
 	dragging_ = false;
 	setCursor(Qt::OpenHandCursor);
 	if (changed)
@@ -372,9 +436,17 @@ SlipDialog::SlipDialog(const Input &in, QWidget *parent) : QDialog(parent), in_(
 	});
 
 	bar_ = new SlipTrackBar(this);
+	bar_->setObjectName(QStringLiteral("slipFineTrack"));
 	bar_->setSource(in_.thumbs, in_.soundOnly || in_.thumbs.isEmpty() ? in_.clip.peaks : QVector<float>(),
 			in_.sourceMs);
 	bar_->setWindow(in_.clip.srcStartMs, in_.clip.srcLenMs(), in_.loMs, in_.hiMs);
+	overview_ = new SlipTrackBar(this);
+	overview_->setObjectName(QStringLiteral("slipOverview"));
+	overview_->setAccessibleName(QStringLiteral("Whole video overview"));
+	overview_->setOverview(true);
+	overview_->setSource(in_.thumbs, in_.soundOnly || in_.thumbs.isEmpty() ? in_.clip.peaks : QVector<float>(), in_.sourceMs);
+	overview_->setWindow(in_.clip.srcStartMs, in_.clip.srcLenMs(), in_.loMs, in_.hiMs);
+	v->addWidget(overview_);
 	v->addWidget(bar_);
 
 	auto *row = new QHBoxLayout;
@@ -406,6 +478,7 @@ SlipDialog::SlipDialog(const Input &in, QWidget *parent) : QDialog(parent), in_(
 
 	bar_->changed = [this](qint64 delta, bool dragging) {
 		delta_ = delta;
+		overview_->setDelta(delta);
 		syncReadout();
 		if (dragging) {
 			// While the strip moves, the preview shows where the moment now
@@ -430,6 +503,10 @@ SlipDialog::SlipDialog(const Input &in, QWidget *parent) : QDialog(parent), in_(
 		}
 	};
 
+	overview_->changed = [this](qint64 delta, bool dragging) {
+		bar_->setDelta(delta);
+		bar_->changed(bar_->delta(), dragging);
+	};
 	d_->timer.setTimerType(Qt::PreciseTimer);
 	d_->timer.setInterval(std::max(8, int(1000.0 / std::clamp(in_.fps, 10.0, 60.0))));
 	connect(&d_->timer, &QTimer::timeout, this, [this]() { tick(); });

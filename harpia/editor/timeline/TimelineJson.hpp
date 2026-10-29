@@ -247,7 +247,7 @@ inline QJsonObject clipToJson(const TlClip &c)
 			fo[QStringLiteral("spot")] = spotlightToJson(c.fx.spot);
 		co[QStringLiteral("fx")] = fo;
 	}
-	if (!c.components.isEmpty())
+	if (!c.components.isEmpty() || c.type == TlClip::Type::Effect)
 		co[QStringLiteral("components")] =
 			componentsToJson(c.components, ComponentRegistry::instance());
 	if (!c.scripts.isEmpty()) {
@@ -305,6 +305,8 @@ inline QJsonObject clipToJson(const TlClip &c)
 			QJsonObject oo;
 			oo[QStringLiteral("source")] = o.sourceId;
 			oo[QStringLiteral("srcStart")] = double(o.srcStartMs);
+			oo[QStringLiteral("offsetX")] = o.offsetX;
+			oo[QStringLiteral("offsetY")] = o.offsetY;
 			opts.append(oo);
 		}
 		co[QStringLiteral("clipOptions")] = opts;
@@ -339,8 +341,11 @@ inline TlClip clipFromJson(const QJsonObject &co)
 	c.tts = co.value(QStringLiteral("tts")).toString();
 	for (const QJsonValue ov : co.value(QStringLiteral("clipOptions")).toArray()) {
 		const QJsonObject oo = ov.toObject();
+		const double x = oo.value(QStringLiteral("offsetX")).toDouble(0.0);
+		const double y = oo.value(QStringLiteral("offsetY")).toDouble(0.0);
 		c.clipOptions.append({oo.value(QStringLiteral("source")).toInt(0),
-				      qint64(oo.value(QStringLiteral("srcStart")).toDouble())});
+				      qint64(oo.value(QStringLiteral("srcStart")).toDouble()),
+				      std::isfinite(x) ? x : 0.0, std::isfinite(y) ? y : 0.0});
 	}
 	c.clipShown = c.clipOptions.isEmpty()
 			      ? 0
@@ -449,7 +454,7 @@ inline TlClip clipFromJson(const QJsonObject &co)
 	// Effect clips only. Guarding on co.contains("fx") alone was wrong: the fx
 	// block is not even PARSED for other clip types, so a stray key on a video
 	// clip would have produced a spurious Brightness out of default values.
-	if (c.type == TlClip::Type::Effect && c.components.isEmpty() &&
+	if (c.type == TlClip::Type::Effect && !co.contains(QStringLiteral("components")) && c.components.isEmpty() &&
 	    c.fx.type != FxType::InverseSelection && co.contains(QStringLiteral("fx"))) {
 		ComponentInstance ci;
 		ci.typeId = effectComponentId(c.fx.type);

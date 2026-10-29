@@ -29,6 +29,7 @@
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
+#include <QToolButton>
 
 #include <cstdio>
 #include <cstdlib>
@@ -214,7 +215,7 @@ int main(int argc, char **argv)
 	ok(c.clipOptions.size() == 3 && c.sourceId == greenId, "then green");
 	// Counted, not checked for visibility: the Clip tab need not be on screen
 	// in a test window, and rows made under a hidden tab show with it.
-	const int rows = int(w.findChildren<QPushButton *>(QStringLiteral("randomClipOption")).size());
+	const int rows = int(w.findChildren<QToolButton *>(QStringLiteral("randomClipVideo")).size());
 	ok(rows == 3, "three rows in the list");
 
 	QPushButton *prev = nullptr;

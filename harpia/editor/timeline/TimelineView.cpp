@@ -1606,22 +1606,7 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 	if (!chosen)
 		return;
 	if (addFxClip && chosen == addFxClip) {
-		QVector<PickItem> items;
-		for (int i = 0; i < kFxTypeCount; ++i) {
-			const FxType ft = FxType(i);
-			// Inverse Selection is configured in the Spotlight panel, not by
-			// dropping a clip, so offering it here would lead nowhere.
-			if (ft == FxType::InverseSelection)
-				continue;
-			PickItem pi;
-			pi.id = QString::number(i);
-			pi.name = QString::fromLatin1(fxTypeName(ft));
-			pi.category = QStringLiteral("Effect");
-			items.append(pi);
-		}
-		const QString picked = SearchPicker::pick(items, globalPos, this);
-		if (!picked.isEmpty())
-			addEffectClipAt(track, atOutMs, FxType(picked.toInt()));
+		addEffectClipAt(track, atOutMs);
 		return;
 	}
 	// Anything set on a lane from here makes it the user's: a lane you have
@@ -2828,6 +2813,13 @@ void TimelineView::paintEvent(QPaintEvent *)
 		// Colour chip down the left edge of the header.
 		p.setBrush(t.color);
 		p.drawRect(QRect(hdr.x(), hdr.y() + 1, 4, hdr.height() - 2));
+		// The visible grip marks the header's drag-to-reorder area.
+		p.setPen(QPen(cl_.caption, 2, Qt::SolidLine, Qt::RoundCap));
+		for (int y = -4; y <= 4; y += 4) {
+			p.drawPoint(hdr.x() + 9, hdr.y() + 10 + y);
+			p.drawPoint(hdr.x() + 13, hdr.y() + 10 + y);
+		}
+		p.setPen(Qt::NoPen);
 		// A selected header, so Ctrl+C has something visible to act on. Without
 		// a mark, "copy the track" would be a shortcut whose target the user has
 		// to remember rather than see.
@@ -2841,7 +2833,7 @@ void TimelineView::paintEvent(QPaintEvent *)
 		const bool silent = TlTrack::kindHasSound(t.kind) && !model_.trackAudible(t);
 		p.setPen((t.hidden || silent) ? cl_.caption : QColor(0xe8, 0xea, 0xed));
 		p.setFont(hdrFont_);
-		p.drawText(hdr.adjusted(10, 2, -4, 0), Qt::AlignTop | Qt::AlignLeft, t.name);
+		p.drawText(hdr.adjusted(20, 2, -4, 0), Qt::AlignTop | Qt::AlignLeft, t.name);
 		// The lane's level, only when it is not unity: at 100% there is nothing
 		// to say, and a header that always read "100%" would teach you to stop
 		// looking at the corner where the one that matters appears.
@@ -3888,7 +3880,12 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 
 	int track = -1;
 	const int clip = clipAtPoint(pos, &track);
-	if (clip >= 0) {
+	if (pos.x() < contentRect().x() && laneAtY(pos.y()) >= 0 &&
+	    headerHitAt(laneAtY(pos.y()), pos) == HeaderHit::None) {
+		setCursor(Qt::OpenHandCursor);
+		QToolTip::showText(e->globalPosition().toPoint(),
+			QStringLiteral("Drag this track header up or down to reorder tracks in its group."), this);
+	} else if (clip >= 0) {
 		const QRect r = clipRect(track, clip);
 		const int edge = std::min(8, r.width() / 3);
 		if (vh.valid())
@@ -4959,10 +4956,13 @@ void TimelineView::addEffectClipAt(int track, qint64 atOutMs, FxType type)
 	c.outStartMs = std::max<qint64>(0, atOutMs);
 	// The fx field is still filled in so the clip's LABEL and the older
 	// readers keep working; what actually renders is the component.
-	c.fx.type = type;
-	c.fx.params = fxDefaults(type);
-	c.components.append(
-		TlClip::newEffectComponent(effectComponentId(type), fxDefaults(type)));
+	c.fx.enabled = false;
+	if (type != FxType::Count) {
+		c.fx.type = type;
+		c.fx.params = fxDefaults(type);
+		c.components.append(
+			TlClip::newEffectComponent(effectComponentId(type), fxDefaults(type)));
+	}
 	t.clips.append(c);
 	selTrack_ = track;
 	selClip_ = t.clips.size() - 1;

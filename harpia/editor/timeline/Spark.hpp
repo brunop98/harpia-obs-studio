@@ -3,6 +3,7 @@
 // A Spark export is a copy of the timeline with footage blocks sequenced in
 // a unique order. Planning and generation never mutate the editor's model.
 #include "TimelineJson.hpp"
+#include "TimelineSlice.hpp"
 #include "SparkLimits.hpp"
 
 #include <QJsonDocument>
@@ -21,6 +22,7 @@ struct Block {
 	QByteArray fingerprint;
 };
 struct Plan {
+	TimelineModel timeline; // export snapshot, cut at the project end before planning
 	QVector<Block> blocks;
 	int favoriteCount = 0;
 	qint64 uniqueOrders = 0;
@@ -78,19 +80,39 @@ inline qint64 permutationCount(const QVector<QByteArray> &keys)
 	return count;
 }
 
-inline Plan buildPlan(const TimelineModel &m)
+inline Plan buildPlan(const TimelineModel &original)
 {
 	Plan plan;
+	plan.timeline = original.hasVideoEnd() ? sliceTimeline(original, 0, original.videoEndMs) : original;
+	// Range slicing omits project metadata; Spark still needs tags and sound
+	// rules when the exporter rebuilds derived sounds after rearranging footage.
+	plan.timeline.tags = original.tags;
+	plan.timeline.soundRules = original.soundRules;
+	const TimelineModel &m = plan.timeline;
+	QHash<QPair<int, int>, QPair<int, int>> kept;
+	for (int ti = 0; ti < original.tracks.size(); ++ti) {
+		int next = 0;
+		for (int ci = 0; ci < original.tracks[ti].clips.size(); ++ci) {
+			const TlClip &c = original.tracks[ti].clips[ci];
+			if (original.hasVideoEnd() && (c.outStartMs >= original.videoEndMs || c.outEndMs() <= 0))
+				continue;
+			kept.insert({ti, ci}, {ti, next++});
+		}
+	}
 	QSet<QPair<int, int>> seen;
-	for (int ti = 0; ti < m.tracks.size(); ++ti) {
-		const TlTrack &track = m.tracks[ti];
+	for (int ti = 0; ti < original.tracks.size(); ++ti) {
+		const TlTrack &track = original.tracks[ti];
 		if (track.hidden || track.kind != TlTrack::Kind::Video) continue;
 		for (int ci = 0; ci < track.clips.size(); ++ci) {
 			const TlClip &clip = track.clips[ci];
-			if (seen.contains({ti, ci}) || clip.soundRule ||
+			if (!kept.contains({ti, ci}) || seen.contains(kept.value({ti, ci})) || clip.soundRule ||
 			    (clip.type != TlClip::Type::Video && clip.type != TlClip::Type::Image)) continue;
 			Block b;
-			b.members = m.relatedClips({{ti, ci}});
+			// Resolve membership before cutting, so removing a linked member
+			// beyond the marker cannot split the remaining part of its block.
+			for (const auto &p : original.relatedClips({{ti, ci}}))
+				if (kept.contains(p))
+					b.members.append(kept.value(p));
 			b.startMs = std::numeric_limits<qint64>::max();
 			qint64 end = 0;
 			for (const auto &p : b.members) {
@@ -115,7 +137,10 @@ inline Plan buildPlan(const TimelineModel &m)
 		(b.favorite ? favorites : ordinary).append(b.fingerprint);
 	plan.uniqueOrders = plan.blocks.isEmpty() ? 0 :
 		std::min(kOrderCountCap, permutationCount(favorites) * permutationCount(ordinary));
-	if (plan.blocks.isEmpty()) plan.error = QStringLiteral("Add visible video or image clips to use Spark.");
+	if (plan.blocks.isEmpty())
+		plan.error = original.hasVideoEnd()
+			? QStringLiteral("Add visible video or image clips before the end marker to use Spark.")
+			: QStringLiteral("Add visible video or image clips to use Spark.");
 	return plan;
 }
 
@@ -169,19 +194,17 @@ inline QVector<QVector<int>> generateOrders(const Plan &plan, int requested, qui
 	return out;
 }
 
-inline TimelineModel applyOrder(const TimelineModel &original, const Plan &plan, const QVector<int> &order)
+inline TimelineModel applyOrder(const Plan &plan, const QVector<int> &order)
 {
-	TimelineModel copy = original;
+	TimelineModel copy = plan.timeline;
 	qint64 at = 0;
 	for (int index : order) {
 		const Block &b = plan.blocks[index];
 		for (const auto &p : b.members)
 			copy.tracks[p.first].clips[p.second].outStartMs =
-				original.tracks[p.first].clips[p.second].outStartMs - b.startMs + at;
+				plan.timeline.tracks[p.first].clips[p.second].outStartMs - b.startMs + at;
 		at += b.durationMs;
 	}
-	if (copy.hasVideoEnd())
-		copy.videoEndMs = std::max(copy.videoEndMs, copy.contentDurationMs());
 	return copy;
 }
 

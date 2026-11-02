@@ -535,9 +535,11 @@ void ExportOptionsDialog::buildSparkTab()
 	auto *page = new QWidget(this);
 	auto *layout = new QVBoxLayout(page);
 	auto *hint = new QLabel(QStringLiteral(
-		"Spark exports the whole timeline in unique footage orders, with starred blocks first. "
-		"Groups and linked media stay together. Background sound and separate text stay at their original times. "
-		"The editor stays unchanged. Format, quality, size, frame rate, folder and audio come from Single video."), page);
+		"Spark shuffles footage before the end marker into unique orders, with starred blocks first. "
+		"Clips and groups crossing the marker are cut there; exports stop at that marker. "
+		"Without an end marker, all footage is used. Groups and linked media stay together. "
+		"Background sound and separate text keep their times. The editor stays unchanged. "
+		"Format, quality, size, frame rate, folder and audio come from Single video."), page);
 	hint->setWordWrap(true);
 	layout->addWidget(hint);
 	auto *form = new QFormLayout;

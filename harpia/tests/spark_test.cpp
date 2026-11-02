@@ -31,7 +31,7 @@ int main(int argc, char **argv)
 	ok(orders == spark::generateOrders(plan, 100, 42), "fixed seed reproduces orders");
 	ok(spark::generateOrders(plan, 0).isEmpty(), "zero requested orders returns immediately");
 	for (const auto &order : orders) {
-		const auto copy = spark::applyOrder(m, plan, order);
+		const auto copy = spark::applyOrder(plan, order);
 		ok(copy.tracks[0].clips[2].outStartMs == 0 && copy.contentDurationMs() == 3000, "Spark closes independent gaps and starts at zero");
 		ok(copy.tracks[0].clips[0].srcStartMs == 100 && copy.tracks[0].clips[0].srcEndMs == 1100, "Spark retains source trims");
 	}
@@ -52,7 +52,7 @@ int main(int argc, char **argv)
 	plan = spark::buildPlan(m);
 	ok(plan.blocks.size() == 2 && plan.blocks[0].members.size() == 4 && plan.blocks[0].favorite,
 	   "groups and media links combine transitively into favorite blocks");
-	const auto groupedCopy = spark::applyOrder(m, plan, {0, 1});
+	const auto groupedCopy = spark::applyOrder(plan, {0, 1});
 	ok(groupedCopy.tracks[0].clips[1].outStartMs == 2500 && groupedCopy.tracks[1].clips[0].outStartMs == 200,
 	   "grouped blocks retain their internal gaps and offsets");
 	ok(groupedCopy.tracks[0].clips[0].speed == 2 && groupedCopy.tracks[0].clips[0].srcStartMs == 100,
@@ -66,8 +66,76 @@ int main(int argc, char **argv)
 	m.tracks[0].hidden = true; ok(!spark::buildPlan(m).available(), "hidden footage is excluded");
 	m.tracks[0].hidden = false; m.videoEndMs = 100;
 	plan = spark::buildPlan(m);
-	const auto extended = spark::applyOrder(m, plan, {0, 1});
-	ok(extended.videoEndMs >= extended.contentDurationMs(), "early video end expands to include all footage");
+	ok(!plan.available() && plan.blocks.isEmpty() && plan.uniqueOrders == 0,
+	   "no footage before the marker disables Spark instead of expanding the end");
+	TimelineModel bounded;
+	TlTrack footage;
+	footage.clips = {clip(1, 0, 5, 9), clip(2, 1200, 5), clip(3, 1500, 5), clip(4, 500)};
+	footage.clips[1].speed = 2;
+	footage.clips[2].favorite = true; // starts exactly at the marker: excluded
+	footage.clips[3].type = TlClip::Type::Image;
+	footage.clips[3].speed = 0.5;
+	TlTrack linked;
+	linked.kind = TlTrack::Kind::Audio;
+	linked.clips = {clip(1, 300, 0, 9)};
+	TlTrack past;
+	past.locked = true;
+	past.clips = {clip(3, 1700, 5)};
+	TlTrack music;
+	music.kind = TlTrack::Kind::Audio;
+	music.locked = true;
+	music.clips = {clip(99, 0)};
+	music.clips[0].srcEndMs = 5100;
+	bounded.tracks = {footage, linked, past, music};
+	bounded.videoEndMs = 1500;
+	bounded.tags = {{1, QStringLiteral("Keep my sound rule")}};
+	TlSoundRule rule;
+	rule.id = 1; rule.sourceId = 99; rule.trigger = TlSoundRule::Trigger::VideoStarts;
+	bounded.soundRules = {rule};
+	bounded.markers = {500, 1600};
+	const TimelineModel unchanged = bounded;
+	plan = spark::buildPlan(bounded);
+	ok(plan.available() && plan.blocks.size() == 2 && plan.favoriteCount == 0 && plan.uniqueOrders == 2,
+	   "marker excludes later footage, stars and locked members before counting orders");
+	ok(plan.timeline.tracks[0].clips.size() == 3 && plan.timeline.tracks[2].clips.isEmpty(),
+	   "clips at or beyond the marker are removed from the export snapshot");
+	ok(plan.timeline.tracks[0].clips[1].srcEndMs == 700 &&
+	   plan.timeline.tracks[0].clips[1].outDurationMs() == 300,
+	   "group member crossing the marker is cut in source time at its playback speed");
+	ok(plan.timeline.tracks[0].clips[2].outDurationMs() == 1000,
+	   "image crossing the marker is cut rather than excluded");
+	ok(plan.blocks[0].members.size() == 3 && plan.blocks[0].durationMs == 1500,
+	   "cut group retains surviving linked partners and internal timing");
+	ok(plan.timeline.tags == bounded.tags && plan.timeline.soundRules == bounded.soundRules,
+	   "clipped snapshot retains tags and event-sound rules");
+	ok(plan.timeline.tracks[3].clips[0].outStartMs == 0 &&
+	   plan.timeline.tracks[3].clips[0].outDurationMs() == 1500,
+	   "background music keeps its position and is cut at the same boundary");
+	ok(plan.timeline.markers == QVector<qint64>{500}, "markers beyond the export boundary are excluded");
+	for (const auto &order : spark::generateOrders(plan, 10, 42)) {
+		auto copy = spark::applyOrder(plan, order);
+		ok(copy.videoEndMs == 1500 && copy.durationMs() == 1500,
+		   "overlapping blocks sequenced end to end never extend the end marker");
+		SoundRules::apply(copy, [](int) { return SoundInfo{3000, {}}; });
+		ok(copy.durationMs() == 1500 && copy.contentDurationMs() > 1500,
+		   "rebuilt event sounds cannot lengthen the export past the marker");
+	}
+	ok(bounded == unchanged, "cutting and shuffling leave the editor timeline and marker unchanged");
+	TimelineModel bridges;
+	TlTrack bridgeTrack;
+	bridgeTrack.clips = {clip(1, 0, 11), clip(2, 500, 12), clip(3, 2000, 11, 99), clip(4, 3000, 12, 99)};
+	bridges.tracks = {bridgeTrack}; bridges.videoEndMs = 1000;
+	const auto bridgePlan = spark::buildPlan(bridges);
+	ok(bridgePlan.blocks.size() == 1 && bridgePlan.blocks[0].members.size() == 2,
+	   "cutting off link bridges does not split surviving members of the original block");
+	TimelineModel equivalentCuts;
+	TlTrack cutTrack;
+	cutTrack.clips = {clip(1, 0), clip(1, 0)};
+	cutTrack.clips[1].srcEndMs = 2100;
+	equivalentCuts.tracks = {cutTrack}; equivalentCuts.videoEndMs = 500;
+	ok(spark::buildPlan(equivalentCuts).uniqueOrders == 1,
+	   "unique counts compare clips after cutting them at the marker");
+
 	TimelineModel equivalent; TlTrack e; e.kind = TlTrack::Kind::Video;
 	e.clips = {clip(1, 1000, 7, 4), clip(2, 2500, 7), clip(2, 6500, 8), clip(1, 5000, 8, 5)};
 	equivalent.tracks = {e};

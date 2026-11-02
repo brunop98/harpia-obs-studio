@@ -16470,7 +16470,7 @@ void VideoEditorWindow::onSave()
 		ec.sparkError = sparkPlan.error;
 		QVector<int> originalOrder(sparkPlan.blocks.size());
 		std::iota(originalOrder.begin(), originalOrder.end(), 0);
-		ec.sparkSeconds = spark::applyOrder(sparkOriginal, sparkPlan, originalOrder).durationMs() / 1000.0;
+		ec.sparkSeconds = spark::applyOrder(sparkPlan, originalOrder).durationMs() / 1000.0;
 		ec.sourceSize = timelineCanvasSize();
 		ec.fps = timelineFps();
 		ec.seconds = timelineView_->durationMs() / 1000.0;
@@ -16670,10 +16670,8 @@ void VideoEditorWindow::onSave()
 			BatchExporter::Item item;
 			item.name = batch_export::clipName(prefix, items.size() + 1, orders.size());
 			item.useTimeline = true;
-			item.timeline = spark::applyOrder(sparkOriginal, sparkPlan, order);
+			item.timeline = spark::applyOrder(sparkPlan, order);
 			SoundRules::apply(item.timeline, [this](int id) { return soundInfoFor(id); });
-			if (item.timeline.hasVideoEnd())
-				item.timeline.videoEndMs = std::max(item.timeline.videoEndMs, item.timeline.contentDurationMs());
 			items.append(item);
 		}
 		o.timeline = sparkOriginal;

@@ -9,6 +9,7 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QLineEdit>
+#include <QLabel>
 #include <QMessageBox>
 #include <QProcess>
 #include <QPushButton>
@@ -58,7 +59,7 @@ int main(int argc, char **argv)
 		TlClip c; c.sourceId = i + 1; c.srcEndMs = 1000; c.outStartMs = i * 2000;
 		track.clips.append(c);
 	}
-	m.tracks = {track}; m.videoEndMs = 1000; // Spark must expand this early end.
+	m.tracks = {track}; // No marker: keep the original all-footage regression.
 	QJsonObject root{{"harpiaProject", 3}, {"editMode", "full"}, {"canvasW", 160}, {"canvasH", 90}, {"fps", 10}, {"sources", sources}};
 	timelineToProject(m, root);
 	const QString project = work.filePath("spark.harpia");
@@ -80,6 +81,8 @@ int main(int argc, char **argv)
 	view->selectClip(0, 0); // offer a one-second Selection scope
 	const TimelineModel original = view->model();
 	bool accepted = false;
+	QString prefix = QStringLiteral("my_video_spark");
+	bool markerExport = false;
 	QTimer dialogs;
 	dialogs.setInterval(20);
 	QObject::connect(&dialogs, &QTimer::timeout, [&]() {
@@ -87,13 +90,20 @@ int main(int argc, char **argv)
 			if (auto *dlg = qobject_cast<ExportOptionsDialog *>(top); dlg && dlg->isVisible() && !accepted) {
 				dlg->setSparkTabForTest(true);
 				dlg->findChild<QSpinBox *>(QStringLiteral("sparkRequested"))->setValue(100);
-				dlg->findChild<QLineEdit *>(QStringLiteral("sparkPrefix"))->setText("my_video_spark");
+				dlg->findChild<QLineEdit *>(QStringLiteral("sparkPrefix"))->setText(prefix);
 				dlg->findChild<QLineEdit *>(QStringLiteral("exportFolder"))->setText(work.path());
 				dlg->findChild<QCheckBox *>(QStringLiteral("sparkOpenFolder"))->setChecked(false);
 				for (auto *combo : dlg->findChildren<QComboBox *>())
 					if (combo->findText(QStringLiteral("MP4 (H.264)")) >= 0)
 						combo->setCurrentIndex(combo->findText(QStringLiteral("MP4 (H.264)")));
-				ok(dlg->sparkCount() == 2 && !dlg->batchMode() && !dlg->exportRange(), "requesting 100 chooses only two unique full-timeline Spark exports");
+				ok(dlg->sparkCount() == 2 && !dlg->batchMode() && !dlg->exportRange(), "requesting 100 chooses only two unique Spark exports");
+				if (markerExport) {
+					ok(std::abs(dlg->exportSeconds() - 3.0) < 0.001,
+					   "Spark estimate uses two exports of the 1.5-second marked range");
+					ok(dlg->findChild<QLabel *>(QStringLiteral("sparkStats"))->text().startsWith(
+					   QStringLiteral("2 footage blocks · 0 favorites")),
+					   "dialog excludes starred footage beyond the end marker");
+				}
 				accepted = true; dlg->accept();
 			} else if (auto *box = qobject_cast<QMessageBox *>(top); box && box->isVisible()) {
 				std::printf("Dialog: %s\n", qPrintable(box->text())); box->accept();
@@ -119,6 +129,47 @@ int main(int argc, char **argv)
 	}
 	ok(encoded.contains("BRG"), "encoded MP4 contains Blue then Red then Green");
 	ok(encoded.contains("BGR") && encoded.size() == 2, "encoded MP4 contains Blue then Green then Red without duplicates");
-	ok(view->model() == original, "export preserves original timeline and early end marker");
+	ok(view->model() == original, "export preserves original timeline");
+	TimelineModel marked = original;
+	marked.tracks[0].clips[1].outStartMs = 1000;
+	marked.videoEndMs = 1500; // cut green in half; exclude starred blue entirely
+	TlSoundRule sound;
+	sound.id = 1;
+	sound.sourceId = marked.tracks[0].clips[0].sourceId;
+	sound.trigger = TlSoundRule::Trigger::VideoStarts;
+	marked.soundRules.append(sound);
+	view->setModelAndCommit(marked);
+	settle(100);
+	view->selectClip(0, 0);
+	const TimelineModel markedOriginal = view->model();
+	prefix = QStringLiteral("marker_spark"); markerExport = true; accepted = false;
+	QMetaObject::invokeMethod(&w, "onSave", Qt::DirectConnection);
+	deadline.restart();
+	while (deadline.elapsed() < 60000) {
+		settle(50);
+		if (!w.findChild<BatchExporter *>()) break;
+	}
+	const QDir markedFolder(work.filePath(prefix));
+	const QStringList markedFiles = markedFolder.entryList({"*.mp4"}, QDir::Files, QDir::Name);
+	ok(accepted && markedFiles.size() == 2, "marked-range export writes only its two unique orders");
+	QSet<QByteArray> markedOrders;
+	for (const QString &file : markedFiles) {
+		const QString path = markedFolder.filePath(file);
+		QProcess probe;
+		probe.start(QStringLiteral("ffprobe"), {"-v", "error", "-select_streams", "v:0",
+			"-show_entries", "stream=duration", "-of", "json", path});
+		probe.waitForFinished(20000);
+		const auto streams = QJsonDocument::fromJson(probe.readAllStandardOutput()).object()
+			.value(QStringLiteral("streams")).toArray();
+		const double duration = streams.isEmpty() ? -1 : streams[0].toObject()
+			.value(QStringLiteral("duration")).toString().toDouble();
+		ok(std::abs(duration - 1.5) < 0.001, "encoded picture stops at the 1.5-second marker despite event-sound tails");
+		QByteArray order;
+		for (int ms : {250, 750, 1250}) order.append(colorAt(path, ms));
+		markedOrders.insert(order);
+	}
+	ok(markedOrders == QSet<QByteArray>{"RRG", "GRR"},
+	   "only pre-marker red and trimmed green are shuffled; blue never enters an export");
+	ok(view->model() == markedOriginal, "marked-range export preserves original uncut clips and marker");
 	return failures ? 1 : 0;
 }

@@ -177,9 +177,12 @@ Three modes, each one step up from the last:
 - **Export:** MP4, MKV, MOV, WebM or GIF; size, quality, 4:4:4 chroma, a
   selected range only, batch export of cuts, and text variations.
   **Full Editing → Export → Spark** exports unique footage orders from copies
-  of the whole timeline, even if Single video's scope is Selection. Groups and
-  media links form blocks that keep their internal timing, tracks, trims and
-  speeds. Starred blocks shuffle first, followed by ordinary blocks. Independent
+  of the timeline before its end marker, even if Single video's scope is Selection.
+  Clips and groups crossing that marker are cut there before shuffling; footage
+  and stars at or after it are excluded from the block and unique-order counts.
+  Every export stops at the unchanged marker. Without an end marker, Spark uses
+  all footage. Groups and media links form blocks that keep their internal timing,
+  tracks, trims and speeds. Starred blocks shuffle first, followed by ordinary blocks. Independent
   blocks start end to end at zero; unrelated background audio, text/effects and
   separate voiceover stay at their original times. Event sounds are rebuilt to
   follow the new footage. Locked footage blocks disable Spark with an explanation;
@@ -188,8 +191,7 @@ Three modes, each one step up from the last:
   and exports at most that many. Format, quality, resolution, frame rate, folder
   and audio come from Single video. Files use a new unique folder and numbered
   names such as `my_video_spark/my_video_spark_01.mp4`. Exporting leaves the
-  editor unchanged and expands an early video-end marker in export copies. Render
-  failures include [error codes and copyable diagnostic details](EXPORT_ERRORS.md).
+  editor unchanged and respects its video-end marker. Render failures include [error codes and copyable diagnostic details](EXPORT_ERRORS.md).
 
 ### Library and sharing
 
@@ -360,7 +362,8 @@ OBS_LIB_DIR=/path/to/build/libobs xvfb-run -a harpia/tests/run_avsync.sh [work-d
 Spark's end-to-end test opens red, green and blue footage in the real editor,
 stars blue, requests 100 videos, and inspects the only two unique encoded orders:
 Blue → Red → Green and Blue → Green → Red. It also checks star Undo/Redo,
-numbered output names, and preservation of the original timeline. For recording
+numbered output names, preservation of the original timeline, and a 1.5-second
+marked range that cuts green, excludes starred blue, and caps event-sound tails. For recording
 validation, build with NVENC enabled on Windows and repeat record/stop on the
 RTX 3050; the Linux test build does not validate NVIDIA hardware or establish
 why a muxer helper originally failed.

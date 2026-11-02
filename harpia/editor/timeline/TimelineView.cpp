@@ -2,6 +2,7 @@
 #include "PastePlacement.hpp"
 
 #include "SoundRules.hpp"
+#include "SeparateClips.hpp"
 #include "TextVariations.hpp"
 
 #include "editor/Filmstrip.hpp"
@@ -5238,6 +5239,13 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	exportSel->setToolTip(QStringLiteral(
 		"Opens the usual Export window for just this stretch of the timeline — every "
 		"track inside it, so the excerpt looks like what you were watching."));
+	const auto separate = separate_clips::targets(model_, selectedPairs());
+	auto *exportSeparate = menu.addAction(QStringLiteral("Export clips separately…  (%1 clips)").arg(separate.size()));
+	exportSeparate->setObjectName(QStringLiteral("exportClipsSeparatelyAction"));
+	exportSeparate->setEnabled(!separate.isEmpty());
+	exportSeparate->setToolTip(QStringLiteral(
+		"One file per selected picture clip with its own trims, speed, effects and linked audio. "
+		"Choose filenames and quality settings for the batch. The project end marker does not limit these files."));
 	// Two or more clips selected, and this is one of them: offer to shuffle
 	// just those. The window runs it with the Randomize panel's other options
 	// (keep, strength, avoid-same) and "only the selected clips" forced on, so
@@ -5616,6 +5624,10 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	}
 	if (chosen == inspect) {
 		emit inspectClipRequested();
+		return;
+	}
+	if (chosen == exportSeparate) {
+		emit exportClipsSeparatelyRequested();
 		return;
 	}
 	if (chosen == exportSel) {

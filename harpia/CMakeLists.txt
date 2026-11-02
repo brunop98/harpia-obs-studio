@@ -417,6 +417,7 @@ target_sources(
     editor/shader/ShaderRenderer.hpp
     # "Full editing" multi-track NLE timeline.
     editor/timeline/TimelineModel.hpp
+    editor/timeline/SeparateClips.hpp
     editor/timeline/Spark.hpp
     editor/timeline/SparkLimits.hpp
     editor/timeline/TextStylePresets.hpp

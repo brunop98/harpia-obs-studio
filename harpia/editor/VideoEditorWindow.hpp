@@ -319,6 +319,7 @@ private slots:
 	// "Export this clip…" from the timeline's right-click menu: the same Export
 	// window, opened with the sub-range pre-selected.
 	void onExportRangeRequested(qint64 fromMs, qint64 toMs);
+	void onExportClipsSeparatelyRequested();
 	void onExportProgress(int pct, qint64 etaMs, qint64 bytes);
 	// Batch export (each Multi-Cut cut to its own file; see BatchExport.hpp).
 	void startBatchExport(const ClipExporter::Options &base, const QVector<int> &selection,
@@ -1446,6 +1447,7 @@ private:
 	// second one that would have to be kept in step with it. Invalid = the
 	// Export button, which offers the selection but does not assume it.
 	TlSpan pendingExportSpan_;
+	QVector<QPair<int, int>> pendingSeparateClips_;
 
 	// Auto-cut (scene detection) runs on a worker thread.
 	std::thread sceneThread_;

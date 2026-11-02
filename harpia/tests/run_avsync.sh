@@ -188,6 +188,14 @@ mkdir -p "$WORK/win/obj" "$WORK/win/moc"
 	"$H" "$WCF" "$WORK" )
 rm -f "$WORK/win/libeditor.a"
 ar rcs "$WORK/win/libeditor.a" "$WORK"/win/obj/*.o
+# Per-clip exports: isolated media/linked audio, names, shared quality and real files.
+for name in separateclips separateexport; do
+ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
+  "$HERE/${name}_test.cpp" \
+  -Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
+  -o "$WORK/${name}_test" $WLF
+done
+
 # File > New project reuses the reset path without losing work on Cancel.
 g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	"$HERE/newprojectwindow_test.cpp" \
@@ -354,6 +362,8 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	-o "$WORK/cliplibrarydelete_test" $WLF
 
 rc=0
+QT_QPA_PLATFORM=offscreen "$WORK/separateclips_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/separateexport_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/newprojectwindow_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/sparkexport_test" "$WORK" || rc=1
 if [ -n "${OBS_LIB_DIR:-}" ]; then

@@ -13,6 +13,8 @@ class QLabel;
 class QLineEdit;
 class QListWidget;
 class QTabWidget;
+class QTableWidget;
+class QVBoxLayout;
 class QPushButton;
 class QSlider;
 class QSpinBox;
@@ -86,10 +88,20 @@ public:
 		qint64 sparkUniqueOrders = 0;
 		double sparkSeconds = 0.0; // one sequenced full-timeline export
 		QString sparkError;
+		struct SeparateClip {
+			QString label;
+			qint64 startMs = 0;
+			qint64 durationMs = 0;
+		};
+		// Dedicated export window: shared quality controls and editable filenames.
+		QVector<SeparateClip> separateClips;
 	};
 
 	explicit ExportOptionsDialog(const Context &ctx, QWidget *parent = nullptr);
 
+	void accept() override;
+	QStringList separateNames() const;
+	bool separateOpenFolder() const;
 	QString fileName() const; // base name, no extension
 	QString folder() const;   // where to write it
 	// Folder + name + the format's extension: what the caller should actually
@@ -149,6 +161,12 @@ private:
 	double effectiveFps() const;
 
 	Context ctx_;
+	void buildSeparateNames(QVBoxLayout *layout);
+	void updateSeparateNames(bool replaceAll = false);
+	QString separateNameError() const;
+	QTableWidget *separateTable_ = nullptr;
+	QLabel *separateError_ = nullptr;
+	QCheckBox *separateOpen_ = nullptr;
 
 	QComboBox *scopeCombo_ = nullptr; // null when no range was offered
 	QLineEdit *nameEdit_ = nullptr;

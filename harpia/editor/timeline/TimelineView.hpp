@@ -483,6 +483,7 @@ signals:
 	// dialog and the media pool, so the view only says which slice of output
 	// time was asked for.
 	void exportRangeRequested(qint64 fromMs, qint64 toMs);
+	void exportClipsSeparatelyRequested();
 	// The window being LOOKED AT moved -- a zoom, a scroll, a pan, a scrub.
 	// Drives the floating overview that says where you are in a long project.
 	// Deliberately not emitted by playback: the overview is for navigating.

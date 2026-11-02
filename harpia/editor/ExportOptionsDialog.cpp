@@ -1,5 +1,7 @@
 #include "ExportOptionsDialog.hpp"
 #include "timeline/SparkLimits.hpp"
+#include "timeline/SeparateClips.hpp"
+#include "BatchExport.hpp"
 #include "EditorFileDialog.hpp"
 
 #include "ExportEstimate.hpp"
@@ -9,6 +11,9 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QTabWidget>
+#include <QTableWidget>
+#include <QHeaderView>
+#include <QSignalBlocker>
 #include <QListWidget>
 #include <QDir>
 #include <QFileDialog>
@@ -107,7 +112,8 @@ QString formatName(ClipExporter::Format f)
 ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	: QDialog(parent), ctx_(ctx)
 {
-	setWindowTitle(QStringLiteral("Export clip"));
+	setWindowTitle(ctx_.separateClips.isEmpty() ? QStringLiteral("Export clip")
+					     : QStringLiteral("Export clips separately"));
 	setModal(true);
 
 	auto *root = new QVBoxLayout(this);
@@ -156,10 +162,12 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	}
 
 	nameEdit_ = new QLineEdit(this);
+	nameEdit_->setObjectName(QStringLiteral("exportBaseName"));
 	nameEdit_->setText(exportRange() && !ctx_.rangeName.isEmpty() ? ctx_.rangeName
 								     : ctx_.defaultName);
 	nameEdit_->setPlaceholderText(QStringLiteral("Output file name"));
-	form->addRow(QStringLiteral("File name"), nameEdit_);
+	form->addRow(ctx_.separateClips.isEmpty() ? QStringLiteral("File name")
+					       : QStringLiteral("Shared clip name"), nameEdit_);
 
 	// Where it lands. The old dialog wrote silently beside the SOURCE file,
 	// which is not where anyone keeps their exports and was nowhere on screen.
@@ -182,12 +190,15 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	formatCombo_->addItem(QStringLiteral("MOV (H.264)"), int(ClipExporter::Format::Mov));
 	if (ClipExporter::webmAvailable())
 		formatCombo_->addItem(QStringLiteral("WebM (VP9)"), int(ClipExporter::Format::WebM));
+	if (!ctx_.separateClips.isEmpty())
+		formatCombo_->setCurrentIndex(formatCombo_->findData(int(ClipExporter::Format::Mp4)));
 	form->addRow(QStringLiteral("Format"), formatCombo_);
 
 	// Resolution presets, built from the SOURCE: offering 1080p for a 720p clip
 	// would be an upscale nobody asked for, so anything taller than the source
 	// is left out rather than shown and silently ignored.
 	resCombo_ = new QComboBox(this);
+	resCombo_->setObjectName(QStringLiteral("exportResolution"));
 	const QSize src = ctx_.sourceSize;
 	resCombo_->addItem(src.isValid()
 				   ? QStringLiteral("Original (%1×%2)").arg(src.width()).arg(src.height())
@@ -209,10 +220,12 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	auto *cl = new QHBoxLayout(customRow_);
 	cl->setContentsMargins(0, 0, 0, 0);
 	customW_ = new QSpinBox(customRow_);
+	customW_->setObjectName(QStringLiteral("exportWidth"));
 	customW_->setRange(16, 7680);
 	customW_->setSingleStep(2);
 	customW_->setValue(src.isValid() ? src.width() : 1920);
 	customH_ = new QSpinBox(customRow_);
+	customH_->setObjectName(QStringLiteral("exportHeight"));
 	customH_->setRange(16, 4320);
 	customH_->setSingleStep(2);
 	customH_->setValue(src.isValid() ? src.height() : 1080);
@@ -246,6 +259,7 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	auto *ql = new QHBoxLayout(qrow);
 	ql->setContentsMargins(0, 0, 0, 0);
 	qualitySlider_ = new QSlider(Qt::Horizontal, qrow);
+	qualitySlider_->setObjectName(QStringLiteral("exportQuality"));
 	qualitySlider_->setRange(0, 100);
 	qualitySlider_->setValue(sliderForCrf(kDefaultCrf));
 	ql->addWidget(qualitySlider_, 1);
@@ -336,6 +350,8 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	summary_->setTextFormat(Qt::PlainText);
 	summary_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
 	rl->addWidget(summary_);
+	if (!ctx_.separateClips.isEmpty())
+		buildSeparateNames(rl);
 	rl->addStretch(1);
 	auto *sizeCap = new QLabel(QStringLiteral("Estimated size"), rightBox);
 	sizeCap->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
@@ -355,7 +371,7 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 		"spend whatever bits the picture needs, so busy footage comes out larger "
 		"than this and a static screen recording much smaller."));
 	rl->addWidget(sizeValue_);
-	rightBox->setMinimumWidth(220);
+	rightBox->setMinimumWidth(ctx_.separateClips.isEmpty() ? 220 : 620);
 	columns->addWidget(rightBox, 2);
 
 	// ---- Buttons ----------------------------------------------------------
@@ -403,7 +419,19 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	}
 
 	onFormatChanged();
-	setMinimumWidth(600);
+	if (separateTable_) {
+		connect(nameEdit_, &QLineEdit::textChanged, this, [this]() { updateSeparateNames(); refresh(); });
+		connect(separateTable_, &QTableWidget::itemChanged, this, [this](QTableWidgetItem *item) {
+			if (item->column() == 3) {
+				const QSignalBlocker block(separateTable_);
+				item->setData(Qt::UserRole, true);
+			}
+			refresh();
+		});
+		setMinimumSize(1120, 700);
+	} else {
+		setMinimumWidth(600);
+	}
 }
 
 void ExportOptionsDialog::browseFolder()
@@ -449,6 +477,98 @@ QString mmss(qint64 ms)
 		.arg((ms % 1000) / 100);
 }
 } // namespace
+
+void ExportOptionsDialog::buildSeparateNames(QVBoxLayout *layout)
+{
+	auto *hint = new QLabel(QStringLiteral(
+		"One file per selected video, image or text clip, using its full trimmed duration and linked audio. "
+		"Other layers, background audio and separate voiceover are excluded. The project end marker does not limit these files. "
+		"Quality settings on the left apply to every file. Files go into a new folder named after the shared clip name."), this);
+	hint->setWordWrap(true);
+	layout->addWidget(hint);
+	separateTable_ = new QTableWidget(ctx_.separateClips.size(), 4, this);
+	separateTable_->setObjectName(QStringLiteral("separateClipNames"));
+	separateTable_->setHorizontalHeaderLabels({QStringLiteral("Clip"), QStringLiteral("Timeline range"),
+		QStringLiteral("Duration"), QStringLiteral("File name (without extension)")});
+	separateTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+	separateTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Interactive);
+	separateTable_->setColumnWidth(0, 140);
+	separateTable_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+	separateTable_->verticalHeader()->hide();
+	separateTable_->setMinimumSize(580, 220);
+	separateTable_->setWordWrap(false);
+	for (int i = 0; i < ctx_.separateClips.size(); ++i) {
+		const auto &clip = ctx_.separateClips[i];
+		const QString range = QStringLiteral("%1 – %2 s").arg(clip.startMs / 1000.0, 0, 'f', 3)
+			.arg((clip.startMs + clip.durationMs) / 1000.0, 0, 'f', 3);
+		const QStringList values{clip.label, range, QStringLiteral("%1 s").arg(clip.durationMs / 1000.0, 0, 'f', 3), QString()};
+		for (int col = 0; col < 4; ++col) {
+			auto *item = new QTableWidgetItem(values[col]);
+			item->setToolTip(values[col]);
+			if (col != 3) item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+			separateTable_->setItem(i, col, item);
+		}
+	}
+	layout->addWidget(separateTable_, 1);
+	updateSeparateNames(true);
+	auto *apply = new QPushButton(QStringLiteral("Apply shared name to all clips"), this);
+	apply->setObjectName(QStringLiteral("applySeparateNames"));
+	connect(apply, &QPushButton::clicked, this, [this]() { updateSeparateNames(true); refresh(); });
+	layout->addWidget(apply);
+	separateError_ = new QLabel(this);
+	separateError_->setObjectName(QStringLiteral("separateNamesError"));
+	separateError_->setWordWrap(true);
+	separateError_->setStyleSheet(QStringLiteral("color:#e5484d;"));
+	layout->addWidget(separateError_);
+	separateOpen_ = new QCheckBox(QStringLiteral("Open the folder when finished"), this);
+	separateOpen_->setObjectName(QStringLiteral("separateOpenFolder"));
+	separateOpen_->setChecked(true);
+	layout->addWidget(separateOpen_);
+}
+
+void ExportOptionsDialog::updateSeparateNames(bool replaceAll)
+{
+	if (!separateTable_) return;
+	const QSignalBlocker block(separateTable_);
+	for (int i = 0; i < separateTable_->rowCount(); ++i) {
+		auto *item = separateTable_->item(i, 3);
+		if (replaceAll || !item->data(Qt::UserRole).toBool()) {
+			item->setText(batch_export::clipName(nameEdit_->text(), i + 1, separateTable_->rowCount()));
+			item->setData(Qt::UserRole, false);
+		}
+	}
+}
+
+QStringList ExportOptionsDialog::separateNames() const
+{
+	QStringList names;
+	if (separateTable_)
+		for (int i = 0; i < separateTable_->rowCount(); ++i)
+			names.append(separateTable_->item(i, 3)->text());
+	return names;
+}
+
+bool ExportOptionsDialog::separateOpenFolder() const
+{
+	return separateOpen_ && separateOpen_->isChecked();
+}
+
+QString ExportOptionsDialog::separateNameError() const
+{
+	if (!separate_clips::nameError({batch_export::safePrefix(fileName())}).isEmpty())
+		return QStringLiteral("Choose a different shared clip name; this name is reserved for a system folder.");
+	return separate_clips::nameError(separateNames());
+}
+
+void ExportOptionsDialog::accept()
+{
+	if (separateTable_ && !separateNameError().isEmpty()) {
+		refresh();
+		separateTable_->setFocus();
+		return;
+	}
+	QDialog::accept();
+}
 
 void ExportOptionsDialog::buildBatchTab()
 {
@@ -719,6 +839,13 @@ void ExportOptionsDialog::refresh()
 	if (sparkMode()) {
 		exportBtn_->setText(QStringLiteral("Export %1 Spark videos").arg(sparkCount()));
 		exportBtn_->setEnabled(sparkCount() > 0);
+	}
+	if (separateTable_) {
+		const QString error = separateNameError();
+		separateError_->setText(error);
+		separateError_->setVisible(!error.isEmpty());
+		exportBtn_->setText(QStringLiteral("Export %1 clips").arg(separateTable_->rowCount()));
+		exportBtn_->setEnabled(error.isEmpty());
 	}
 	const QSize out = outputSize().isValid() ? outputSize() : ctx_.sourceSize;
 	if (qualityLabel_)

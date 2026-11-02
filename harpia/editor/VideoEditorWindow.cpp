@@ -43,6 +43,7 @@
 #include "EditorFileDialog.hpp"
 #include "ExportOptionsDialog.hpp"
 #include "timeline/Spark.hpp"
+#include "timeline/SeparateClips.hpp"
 #include "BatchExport.hpp"
 #include "FlowLayout.hpp"
 #include "InspectorSection.hpp"
@@ -1064,6 +1065,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// "Export this clip…" — the ordinary Export window, aimed at one stretch.
 	connect(timelineView_, &TimelineView::exportRangeRequested, this,
 		&VideoEditorWindow::onExportRangeRequested);
+	connect(timelineView_, &TimelineView::exportClipsSeparatelyRequested, this,
+		&VideoEditorWindow::onExportClipsSeparatelyRequested);
 	// Right-click the picture: "Zoom here". Full-editing only, since it writes
 	// keyframes onto a timeline clip and the other two modes have none.
 	connect(canvas_, &PreviewCanvas::contextRequested, this,
@@ -14113,6 +14116,7 @@ void VideoEditorWindow::onNewProject()
 	// selection, clipboard and undo history all belong to the new document.
 	lastAutosave_ = QDateTime();
 	pendingExportSpan_ = TlSpan();
+	pendingSeparateClips_.clear();
 	outPath_.clear();
 	const QJsonObject blank{{QStringLiteral("harpiaProject"), 3},
 			       {QStringLiteral("editMode"), QStringLiteral("full")},
@@ -16421,11 +16425,23 @@ void VideoEditorWindow::onExportRangeRequested(qint64 fromMs, qint64 toMs)
 	onSave();
 }
 
+void VideoEditorWindow::onExportClipsSeparatelyRequested()
+{
+	if (!valid_ || !fullEdit() || exporter_ || batch_)
+		return;
+	pendingSeparateClips_ = separate_clips::targets(timelineView_->model(), timelineView_->selectedPairs());
+	if (!pendingSeparateClips_.isEmpty())
+		onSave();
+}
+
 void VideoEditorWindow::onSave()
 {
 	if (!valid_ || exporter_ || batch_) // ignore while an export is already running
 		return;
 	stopPlayback();
+	const auto separate = pendingSeparateClips_;
+	pendingSeparateClips_.clear();
+	const bool separateExport = !separate.isEmpty();
 
 	// What the dialog may offer as an alternative to the whole timeline. Taken
 	// from the clip menu when it came from there, otherwise from whatever is
@@ -16444,7 +16460,7 @@ void VideoEditorWindow::onSave()
 	}
 
 	const TimelineModel sparkOriginal = fullEdit() ? timelineView_->model() : TimelineModel{};
-	const spark::Plan sparkPlan = fullEdit() ? spark::buildPlan(sparkOriginal) : spark::Plan{};
+	const spark::Plan sparkPlan = fullEdit() && !separateExport ? spark::buildPlan(sparkOriginal) : spark::Plan{};
 	const bool cuts = multiCut();
 	if (cuts && tracks_->segments().isEmpty()) {
 		QMessageBox::information(
@@ -16463,7 +16479,7 @@ void VideoEditorWindow::onSave()
 	ec.defaultFolder = QFileInfo(inPath_).absolutePath();
 	ec.allowGif = !cuts;
 	if (fullEdit()) {
-		ec.allowSpark = true;
+		ec.allowSpark = !separateExport;
 		ec.sparkBlocks = sparkPlan.blocks.size();
 		ec.sparkFavorites = sparkPlan.favoriteCount;
 		ec.sparkUniqueOrders = sparkPlan.uniqueOrders;
@@ -16475,41 +16491,52 @@ void VideoEditorWindow::onSave()
 		ec.fps = timelineFps();
 		ec.seconds = timelineView_->durationMs() / 1000.0;
 		ec.previewFrame = canvas_->currentFrame();
-		// Offer the chosen range when its bounds differ from the full output.
-		// An explicit selection can include clips past the video-end marker.
-		span.fromMs = std::max<qint64>(0, span.fromMs);
-		span.toMs = std::min(span.toMs, timelineView_->model().contentDurationMs());
-		// Text variations: every combination is a version (Variations tab).
-		{
-			const QVector<text_variations::Slot> vs = text_variations::slotsOf(
-				timelineView_->model(), [this](int id) { return sourceLabel(id); });
-			const qint64 n = text_variations::combinationCount(vs);
-			constexpr qint64 kListMax = 2000;
-			if (n > kListMax)
-				QMessageBox::information(
-					this, QStringLiteral("Variations"),
-					QStringLiteral("The Random texts and clips make %1 versions; the Variations tab "
-						       "lists the first %2.")
-						.arg(n)
-						.arg(kListMax));
-			for (qint64 i = 0; i < std::min(n, kListMax); ++i) {
-				QStringList parts;
-				for (const QString &t : text_variations::textsAt(vs, text_variations::combinationAt(vs, i)))
-					parts << rich_text::plainText(t).simplified();
-				ec.variantLabels << parts.join(QStringLiteral("  ·  "));
+		if (separateExport) {
+			ec.defaultName = QFileInfo(inPath_).completeBaseName() + QStringLiteral("_clips");
+			ec.seconds = 0;
+			ec.previewFrame = QImage();
+			for (const auto &p : separate) {
+				const TlClip &clip = sparkOriginal.tracks[p.first].clips[p.second];
+				ec.separateClips.append({clipLabel(clip), clip.outStartMs, clip.outDurationMs()});
+				ec.seconds += clip.outDurationMs() / 1000.0;
 			}
-		}
-		if (span.isValid() && (span.fromMs != 0 || span.toMs != timelineView_->durationMs())) {
-			ec.rangeSeconds = span.durationMs() / 1000.0;
-			ec.rangeLabel = QStringLiteral("Selection  (%1 – %2)")
-						.arg(timeTextCentis(span.fromMs),
-						     timeTextCentis(span.toMs));
-			ec.rangeDefault = spanFromMenu;
-			// A distinct name, so an excerpt cannot quietly overwrite the
-			// full export sitting in the same folder.
-			ec.rangeName = base + QStringLiteral("_part");
 		} else {
-			span = TlSpan();
+			// Offer the chosen range when its bounds differ from the full output.
+			// An explicit selection can include clips past the video-end marker.
+			span.fromMs = std::max<qint64>(0, span.fromMs);
+			span.toMs = std::min(span.toMs, timelineView_->model().contentDurationMs());
+			// Text variations: every combination is a version (Variations tab).
+			{
+				const QVector<text_variations::Slot> vs = text_variations::slotsOf(
+					timelineView_->model(), [this](int id) { return sourceLabel(id); });
+				const qint64 n = text_variations::combinationCount(vs);
+				constexpr qint64 kListMax = 2000;
+				if (n > kListMax)
+					QMessageBox::information(
+						this, QStringLiteral("Variations"),
+						QStringLiteral("The Random texts and clips make %1 versions; the Variations tab "
+							       "lists the first %2.")
+							.arg(n)
+							.arg(kListMax));
+				for (qint64 i = 0; i < std::min(n, kListMax); ++i) {
+					QStringList parts;
+					for (const QString &t : text_variations::textsAt(vs, text_variations::combinationAt(vs, i)))
+						parts << rich_text::plainText(t).simplified();
+					ec.variantLabels << parts.join(QStringLiteral("  ·  "));
+				}
+			}
+			if (span.isValid() && (span.fromMs != 0 || span.toMs != timelineView_->durationMs())) {
+				ec.rangeSeconds = span.durationMs() / 1000.0;
+				ec.rangeLabel = QStringLiteral("Selection  (%1 – %2)")
+							.arg(timeTextCentis(span.fromMs),
+							     timeTextCentis(span.toMs));
+				ec.rangeDefault = spanFromMenu;
+				// A distinct name, so an excerpt cannot quietly overwrite the
+				// full export sitting in the same folder.
+				ec.rangeName = base + QStringLiteral("_part");
+			} else {
+				span = TlSpan();
+			}
 		}
 	} else if (cuts) {
 		// Through the same answer the preview uses, so the dialog cannot quote
@@ -16654,12 +16681,28 @@ void VideoEditorWindow::onSave()
 
 	// Voiceover: mixed onto the finished output (skipped for GIF, which has no
 	// audio). Each take's output-time position + volume + fades carry through.
-	if (fmt != ClipExporter::Format::Gif && !voTrack_->isEmpty()) {
+	if (!separateExport && fmt != ClipExporter::Format::Gif && !voTrack_->isEmpty()) {
 		for (const VoiceoverClip &vc : voTrack_->clips())
 			o.voiceovers.push_back({vc.path, vc.outStartMs, vc.srcStartMs, vc.durationMs,
 						vc.volume, vc.fadeInMs, vc.fadeOutMs});
 		o.originalVolume = voOrigVol_->value() / 100.0;
 		o.duckOriginal = voDuck_->isChecked();
+	}
+
+	if (separateExport) {
+		const auto names = dlg.separateNames();
+		QVector<BatchExporter::Item> items;
+		for (int i = 0; i < separate.size(); ++i) {
+			BatchExporter::Item item;
+			item.name = names[i];
+			item.useTimeline = true;
+			item.timeline = separate_clips::isolate(sparkOriginal, separate[i]);
+			SoundRules::apply(item.timeline, [this](int id) { return soundInfoFor(id); });
+			items.append(item);
+		}
+		o.voiceovers.clear();
+		startBatchItems(o, items, dlg.fileName(), dlg.folder(), dlg.separateOpenFolder());
+		return;
 	}
 
 	if (fullEdit() && dlg.sparkMode()) {

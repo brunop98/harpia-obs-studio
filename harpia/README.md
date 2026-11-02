@@ -176,6 +176,22 @@ Three modes, each one step up from the last:
   The opening screen offers the three most recent projects to continue with one click.
 - **Export:** MP4, MKV, MOV, WebM or GIF; size, quality, 4:4:4 chroma, a
   selected range only, batch export of cuts, and text variations.
+  **Full Editing → right-click selected clips → Export clips separately…**
+  writes one file for each selected video, image or text clip, with that clip's
+  trims, speed, crop, transforms, effects and linked audio. Each file starts at
+  zero and uses the clip's full trimmed duration, including beyond the project
+  end marker. Other picture layers, background music, and separate voiceover
+  are excluded. Normal group selection exports its picture members separately;
+  Alt-click selects one member. Locked tracks can export without being edited.
+  The window shows each clip's timeline range and duration, creates numbered
+  names from a shared clip name, and lets you edit individual filenames. Changing
+  the shared name keeps manual edits; **Apply shared name to all clips** resets
+  the list. Duplicate names (ignoring case), empty names and invalid filenames
+  must be fixed before exporting. Format, quality, resolution, frame rate and
+  audio settings apply to the whole batch. The files go into a new folder named
+  after the shared clip name; an existing folder is kept and a numbered folder
+  is created instead. Export progress, cancellation and optional opening of the
+  finished folder use the normal batch workflow. The editor remains unchanged.
   **Full Editing → Export → Spark** exports unique footage orders from copies
   of the timeline before its end marker, even if Single video's scope is Selection.
   Clips and groups crossing that marker are cut there before shuffling; footage

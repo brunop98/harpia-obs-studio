@@ -188,6 +188,12 @@ mkdir -p "$WORK/win/obj" "$WORK/win/moc"
 	"$H" "$WCF" "$WORK" )
 rm -f "$WORK/win/libeditor.a"
 ar rcs "$WORK/win/libeditor.a" "$WORK"/win/obj/*.o
+# File > New project reuses the reset path without losing work on Cancel.
+g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
+	"$HERE/newprojectwindow_test.cpp" \
+	-Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
+	-o "$WORK/newprojectwindow_test" $WLF
+
 # Spark goes through the real Export dialog, batch runner, and encoded frames.
 g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
  "$HERE/sparkexport_test.cpp" \
@@ -348,6 +354,7 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	-o "$WORK/cliplibrarydelete_test" $WLF
 
 rc=0
+QT_QPA_PLATFORM=offscreen "$WORK/newprojectwindow_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/sparkexport_test" "$WORK" || rc=1
 if [ -n "${OBS_LIB_DIR:-}" ]; then
  QT_QPA_PLATFORM=offscreen "$WORK/presetgpu_test" || rc=1

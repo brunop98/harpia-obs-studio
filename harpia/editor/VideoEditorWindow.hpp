@@ -1140,6 +1140,7 @@ private:
 	void refreshProjectInspector();
 	void syncProjectFormatControls(); // push the current values into the widgets
 	void applyProjectFormat();        // read the widgets, re-render, re-measure
+	void onNewProject();
 	void onSaveProjectAs();
 	void openProjectWithDialogs(const QString &path, bool showSuccess = true);
 	// `quiet` suppresses every dialog: the relink picker, the wrong-source

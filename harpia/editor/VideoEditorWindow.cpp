@@ -2439,6 +2439,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	       [this]() { stepSelectedSpeed(+5.0 * speedStep_); });
 	cutCmd("speed.downBig", "Slow down selected cuts (large step)",
 	       QKeySequence(Qt::SHIFT | Qt::Key_Down), [this]() { stepSelectedSpeed(-5.0 * speedStep_); });
+	cmd("project.new", "New project", "Project", {QKeySequence::New},
+	    [this]() { onNewProject(); });
 	cmd("project.save", "Save project", "Project", {QKeySequence::Save},
 	    [this]() { onSaveProject(); });
 	cmd("project.export", "Export…", "Export", {QKeySequence(Qt::CTRL | Qt::Key_E)},
@@ -10154,6 +10156,9 @@ void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
 
 	// ---- File ----
 	QMenu *file = menuBar_->addMenu(QStringLiteral("&File"));
+	auto *newProject = keyed(file->addAction(QStringLiteral("New project")), "project.new");
+	newProject->setObjectName(QStringLiteral("newProjectAction"));
+	connect(newProject, &QAction::triggered, this, run("project.new"));
 	connect(file->addAction(QStringLiteral("Load project…")), &QAction::triggered, this,
 		[this]() { openProjBtn_->click(); });
 	connect(keyed(file->addAction(QStringLiteral("Save project")), "project.save"), &QAction::triggered, this,
@@ -14090,6 +14095,30 @@ void VideoEditorWindow::onSceneDetected(const QVector<qint64> &cutMs, const QStr
 	tracks_->addSegments(segs);
 	QMessageBox::information(this, QStringLiteral("Auto-cut"),
 				QStringLiteral("Added %1 cuts from scene changes.").arg(segs.size()));
+}
+
+void VideoEditorWindow::onNewProject()
+{
+	if (deferUntilLoaded([this]() { onNewProject(); }))
+		return;
+	if (exporter_ || batch_ || voRecording_ || voCountdownLeft_ > 0) {
+		QMessageBox::information(this, QStringLiteral("New project"),
+			QStringLiteral("Finish the current export or voiceover recording before starting a new project."));
+		return;
+	}
+	if (!confirmDiscardOnClose())
+		return;
+
+	// Use the project-load reset path so decoders, queued media work,
+	// selection, clipboard and undo history all belong to the new document.
+	lastAutosave_ = QDateTime();
+	pendingExportSpan_ = TlSpan();
+	outPath_.clear();
+	const QJsonObject blank{{QStringLiteral("harpiaProject"), 3},
+			       {QStringLiteral("editMode"), QStringLiteral("full")},
+			       {QStringLiteral("tracks"), QJsonArray()}};
+	applyProjectJson(blank, QString(), /*quiet=*/true);
+	setWindowTitle(QStringLiteral("Video Editor"));
 }
 
 void VideoEditorWindow::onSaveProject()

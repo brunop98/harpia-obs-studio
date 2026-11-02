@@ -170,8 +170,10 @@ Three modes, each one step up from the last:
     installed), proxy media for heavy sources;
   - an **editing console** — a line of JavaScript against the timeline;
   - undo/redo for every edit, including selection.
-- **Projects** save and open with every setting, and autosave. The opening
-  screen offers the three most recent projects to continue with one click.
+- **Projects** save and open with every setting, and autosave. **File → New project**
+  (**Ctrl+N**) starts a blank project in the current window, with Save / Don’t Save /
+  Cancel for existing edits. The new project has its own save path and undo history.
+  The opening screen offers the three most recent projects to continue with one click.
 - **Export:** MP4, MKV, MOV, WebM or GIF; size, quality, 4:4:4 chroma, a
   selected range only, batch export of cuts, and text variations.
   **Full Editing → Export → Spark** exports unique footage orders from copies

@@ -538,7 +538,9 @@ void ExportOptionsDialog::buildSparkTab()
 		"Spark shuffles footage before the end marker into unique orders, with starred blocks first. "
 		"Clips and groups crossing the marker are cut there; exports stop at that marker. "
 		"Without an end marker, all footage is used. Groups and linked media stay together. "
-		"Background sound and separate text keep their times. The editor stays unchanged. "
+		"Each Random Text picks one option per video, without exporting all text combinations. "
+		"Text choices do not increase the video count. Background sound and separate text keep their times. "
+		"The editor stays unchanged. "
 		"Format, quality, size, frame rate, folder and audio come from Single video."), page);
 	hint->setWordWrap(true);
 	layout->addWidget(hint);

@@ -187,6 +187,10 @@ Three modes, each one step up from the last:
   separate voiceover stay at their original times. Event sounds are rebuilt to
   follow the new footage. Locked footage blocks disable Spark with an explanation;
   locked background tracks are fine. Equivalent copies count as the same order.
+  Each **Random Text** independently picks one option (including its current
+  text) per Spark video, held for that clip throughout the video. Spark samples
+  these choices without generating all combinations or multiplying the footage
+  order count. Plain Text clips and Random Clip footage choices stay as edited.
   Request 1–1,000 videos (default 10); Spark shows how many unique orders exist
   and exports at most that many. Format, quality, resolution, frame rate, folder
   and audio come from Single video. Files use a new unique folder and numbered

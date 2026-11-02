@@ -147,6 +147,65 @@ int main(int argc, char **argv)
 	plan = spark::buildPlan(many);
 	ok(plan.uniqueOrders == spark::kOrderCountCap, "large permutation counts cap without overflow");
 	ok(spark::generateOrders(plan, 1200, 14).size() == 1000, "one request is capped at 1000 exports");
+	TimelineModel withTexts;
+	TlTrack pictures;
+	pictures.clips = {clip(1, 0), clip(2, 1000), clip(3, 2000)};
+	pictures.clips[0].clipOptions = {{1, 100}, {2, 200}};
+	TlClip firstText;
+	firstText.type = TlClip::Type::Text;
+	firstText.srcEndMs = 3000;
+	firstText.text.random = true;
+	firstText.text.text = QStringLiteral("Opening A");
+	firstText.text.variations = {QStringLiteral("Opening B"), QStringLiteral(""), QStringLiteral("   "),
+		QStringLiteral("<b>Opening C</b>")};
+	firstText.text.fontPx = 77;
+	firstText.words = {{QStringLiteral("Opening"), 0, 1000}};
+	TlClip secondText = firstText;
+	secondText.text.text = QStringLiteral("Ending A");
+	secondText.text.variations = {QStringLiteral("Ending B")};
+	TlClip plainText = firstText;
+	plainText.text.random = false; // retained alternatives must not vary plain Text
+	TlClip singleText = firstText;
+	singleText.text.variations = {QStringLiteral(""), QStringLiteral("   ")};
+	TlTrack captions;
+	captions.locked = true; // export choices can vary without editing this locked lane
+	captions.clips = {firstText, secondText, plainText, singleText};
+	withTexts.tracks = {pictures, captions};
+	withTexts.videoEndMs = 3000;
+	const auto textPlan = spark::buildPlan(withTexts);
+	ok(textPlan.available() && textPlan.uniqueOrders == 6 &&
+	   spark::generateOrders(textPlan, 100, 42).size() == 6,
+	   "Random Text options do not multiply footage orders or Spark video count");
+	std::mt19937_64 textRng(42), repeatRng(42);
+	ok(spark::pickRandomTexts(textPlan.timeline, textRng) == spark::pickRandomTexts(textPlan.timeline, repeatRng),
+	   "Random Text export choices can be reproduced with a fixed seed");
+	QSet<QString> firstChoices, secondChoices;
+	QSet<QPair<QString, QString>> combinations;
+	bool validChoices = true, preserved = true, timingsValid = true;
+	for (int i = 0; i < 64; ++i) {
+		const auto chosen = spark::pickRandomTexts(textPlan.timeline, textRng);
+		const TlClip &a = chosen.tracks[1].clips[0], &b = chosen.tracks[1].clips[1];
+		firstChoices.insert(a.text.text); secondChoices.insert(b.text.text);
+		combinations.insert({a.text.text, b.text.text});
+		validChoices &= text_variations::optionsOf(firstText.text).contains(a.text.text) &&
+			text_variations::optionsOf(secondText.text).contains(b.text.text);
+		TlClip restoredA = a, restoredB = b;
+		restoredA.text.text = firstText.text.text; restoredA.words = firstText.words;
+		restoredB.text.text = secondText.text.text; restoredB.words = secondText.words;
+		preserved &= restoredA == firstText && restoredB == secondText &&
+			chosen.tracks[0] == withTexts.tracks[0] && chosen.tracks[1].clips[2] == plainText &&
+			chosen.tracks[1].clips[3] == singleText && chosen.videoEndMs == 3000;
+		timingsValid &= (a.text.text == firstText.text.text ? a.words == firstText.words : a.words.isEmpty()) &&
+			(b.text.text == secondText.text.text ? b.words == secondText.words : b.words.isEmpty());
+	}
+	ok(validChoices && firstChoices.size() == 3 && secondChoices.size() == 2,
+	   "each Random Text samples its own current text and nonblank alternatives");
+	ok(combinations.size() > 3, "different Random Text clips pick independently rather than sharing one option index");
+	ok(preserved, "sampling retains text style, placement, alternatives, plain Text, Random Clips and end marker");
+	ok(timingsValid, "changed text drops stale word timings while unchanged text retains them");
+	ok(withTexts.tracks[1].clips[0] == firstText && textPlan.timeline.tracks[1].clips[0] == firstText,
+	   "sampling export copies never changes the editor or the shared Spark plan");
+
 	QVector<QByteArray> repeated;
 	for (int i = 0; i < 20; ++i) repeated.append("same");
 	ok(spark::permutationCount(repeated) == 1, "multiset count divides out equivalent copies");

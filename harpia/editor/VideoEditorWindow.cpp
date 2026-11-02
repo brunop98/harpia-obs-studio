@@ -16664,13 +16664,14 @@ void VideoEditorWindow::onSave()
 
 	if (fullEdit() && dlg.sparkMode()) {
 		const auto orders = spark::generateOrders(sparkPlan, dlg.sparkCount());
+		std::mt19937_64 textRng(QRandomGenerator::system()->generate64());
 		const QString prefix = batch_export::safePrefix(dlg.sparkPrefix());
 		QVector<BatchExporter::Item> items;
 		for (const auto &order : orders) {
 			BatchExporter::Item item;
 			item.name = batch_export::clipName(prefix, items.size() + 1, orders.size());
 			item.useTimeline = true;
-			item.timeline = spark::applyOrder(sparkPlan, order);
+			item.timeline = spark::pickRandomTexts(spark::applyOrder(sparkPlan, order), textRng);
 			SoundRules::apply(item.timeline, [this](int id) { return soundInfoFor(id); });
 			items.append(item);
 		}

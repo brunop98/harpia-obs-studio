@@ -5,6 +5,7 @@
 #include "TimelineJson.hpp"
 #include "TimelineSlice.hpp"
 #include "SparkLimits.hpp"
+#include "TextVariations.hpp"
 
 #include <QJsonDocument>
 #include <QRandomGenerator>
@@ -192,6 +193,28 @@ inline QVector<QVector<int>> generateOrders(const Plan &plan, int requested, qui
 		} while (std::next_permutation(ordinary.begin(), ordinary.end()));
 	} while (std::next_permutation(favorites.begin(), favorites.end()));
 	return out;
+}
+
+// One independent text choice per Random Text clip for this export. This does
+// not enumerate combinations or change the footage-order count. Passing the
+// timeline by value keeps the editor and the shared plan unchanged.
+inline TimelineModel pickRandomTexts(TimelineModel timeline, std::mt19937_64 &rng)
+{
+	for (TlTrack &track : timeline.tracks)
+		for (TlClip &clip : track.clips) {
+			if (clip.type != TlClip::Type::Text || !clip.text.random)
+				continue;
+			const QStringList options = text_variations::optionsOf(clip.text);
+			if (options.size() < 2)
+				continue;
+			std::uniform_int_distribution<int> pick(0, int(options.size()) - 1);
+			const QString selected = options[pick(rng)];
+			if (selected != clip.text.text) {
+				clip.text.text = selected;
+				clip.words.clear(); // spoken word timings belong to the previous text
+			}
+		}
+	return timeline;
 }
 
 inline TimelineModel applyOrder(const Plan &plan, const QVector<int> &order)

@@ -38,7 +38,7 @@ static char colorAt(const QString &file, int ms)
 {
 	QProcess p;
 	p.start(QStringLiteral("ffmpeg"), {"-v", "error", "-ss", QString::number(ms / 1000.0), "-i", file,
-		"-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"});
+		"-frames:v", "1", "-vf", "crop=32:32:0:29,scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"});
 	p.waitForFinished(20000);
 	const QByteArray raw = p.readAllStandardOutput();
 	if (raw.size() < 3) return '?';
@@ -59,7 +59,24 @@ int main(int argc, char **argv)
 		TlClip c; c.sourceId = i + 1; c.srcEndMs = 1000; c.outStartMs = i * 2000;
 		track.clips.append(c);
 	}
-	m.tracks = {track}; // No marker: keep the original all-footage regression.
+	// Two Random Text clips make six text combinations in Variations. Spark
+	// still writes just its two footage orders, with one sampled text per slot.
+	for (int i = 0; i < 2; ++i) {
+		TlClip caption;
+		caption.type = TlClip::Type::Text;
+		caption.srcEndMs = 6000;
+		caption.text.random = true;
+		caption.text.text = QStringLiteral("Caption %1 A").arg(i);
+		caption.text.variations = {QStringLiteral("Caption %1 B").arg(i)};
+		if (i == 0) caption.text.variations.append(QStringLiteral("Caption 0 C"));
+		caption.text.fontPx = 48;
+		caption.posY = i == 0 ? 0.1 : 0.9;
+		TlTrack captions;
+		captions.clips = {caption};
+		m.tracks.append(captions);
+	}
+	m.tracks.append(track); // captions above footage; no end marker in this pass
+	constexpr int footageTrack = 2;
 	QJsonObject root{{"harpiaProject", 3}, {"editMode", "full"}, {"canvasW", 160}, {"canvasH", 90}, {"fps", 10}, {"sources", sources}};
 	timelineToProject(m, root);
 	const QString project = work.filePath("spark.harpia");
@@ -70,15 +87,15 @@ int main(int argc, char **argv)
 	settle(300);
 	auto *view = w.findChild<TimelineView *>();
 	if (!view) return 2;
-	view->toggleFavorite(0, 2); settle(100);
-	ok(view->model().tracks[0].clips[2].favorite && !view->model().tracks[0].clips[0].favorite, "star belongs only to edited blue clip");
+	view->toggleFavorite(footageTrack, 2); settle(100);
+	ok(view->model().tracks[footageTrack].clips[2].favorite && !view->model().tracks[footageTrack].clips[0].favorite, "star belongs only to edited blue clip");
 	auto *undo = shortcut(w, QKeySequence::Undo); auto *redo = shortcut(w, QKeySequence(Qt::CTRL | Qt::Key_Y));
 	if (!undo || !redo) return 2;
 	emit undo->activated(); settle(100);
-	ok(!view->model().tracks[0].clips[2].favorite, "star toggle is one undoable edit");
+	ok(!view->model().tracks[footageTrack].clips[2].favorite, "star toggle is one undoable edit");
 	emit redo->activated(); settle(100);
-	ok(view->model().tracks[0].clips[2].favorite, "star Redo restores favorite");
-	view->selectClip(0, 0); // offer a one-second Selection scope
+	ok(view->model().tracks[footageTrack].clips[2].favorite, "star Redo restores favorite");
+	view->selectClip(footageTrack, 0); // offer a one-second Selection scope
 	const TimelineModel original = view->model();
 	bool accepted = false;
 	QString prefix = QStringLiteral("my_video_spark");
@@ -119,7 +136,7 @@ int main(int argc, char **argv)
 		if (!w.findChild<BatchExporter *>()) break;
 	}
 	const QStringList files = QDir(folder).entryList({"*.mp4"}, QDir::Files, QDir::Name);
-	ok(accepted && files == QStringList{"my_video_spark_01.mp4", "my_video_spark_02.mp4"}, "batch produces two numbered MP4 files in Spark folder");
+	ok(accepted && files == QStringList{"my_video_spark_01.mp4", "my_video_spark_02.mp4"}, "Random Text options still produce only two numbered Spark MP4 files, not every combination");
 	QSet<QByteArray> encoded;
 	for (const QString &file : files) {
 		QByteArray order;
@@ -131,16 +148,16 @@ int main(int argc, char **argv)
 	ok(encoded.contains("BGR") && encoded.size() == 2, "encoded MP4 contains Blue then Green then Red without duplicates");
 	ok(view->model() == original, "export preserves original timeline");
 	TimelineModel marked = original;
-	marked.tracks[0].clips[1].outStartMs = 1000;
+	marked.tracks[footageTrack].clips[1].outStartMs = 1000;
 	marked.videoEndMs = 1500; // cut green in half; exclude starred blue entirely
 	TlSoundRule sound;
 	sound.id = 1;
-	sound.sourceId = marked.tracks[0].clips[0].sourceId;
+	sound.sourceId = marked.tracks[footageTrack].clips[0].sourceId;
 	sound.trigger = TlSoundRule::Trigger::VideoStarts;
 	marked.soundRules.append(sound);
 	view->setModelAndCommit(marked);
 	settle(100);
-	view->selectClip(0, 0);
+	view->selectClip(footageTrack, 0);
 	const TimelineModel markedOriginal = view->model();
 	prefix = QStringLiteral("marker_spark"); markerExport = true; accepted = false;
 	QMetaObject::invokeMethod(&w, "onSave", Qt::DirectConnection);

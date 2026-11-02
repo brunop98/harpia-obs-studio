@@ -495,6 +495,10 @@ static void signal_failure(struct ffmpeg_muxer *stream)
 		error[len] = 0;
 		warn("ffmpeg-mux: %s", error);
 		obs_output_set_last_error(stream->output, error);
+	} else {
+		obs_output_set_last_error(stream->output,
+			"Writing to the FFmpeg muxer helper failed; no diagnostic was available. "
+			"Check free disk space, output permissions, and the recording log.");
 	}
 
 	ret = deactivate(stream, 0);

@@ -513,6 +513,19 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
 	-o "$WORK/gutterspill_test" $LF
 
+# Persistent groups, explicit/expanded selection, speed scaling, stars and
+# unique Spark planning. These use the same GL-free timeline fixture.
+for name in clipgroups spark; do
+ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+  "$HERE/${name}_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
+  "$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
+  "$H/editor/timeline/Transitions.cpp" "$H/editor/shader/SpotlightGl.cpp" \
+  "$H/editor/component/Component.cpp" "$H/editor/component/ComponentRegistry.cpp" \
+  "$H/editor/component/BuiltinComponents.cpp" "$H/editor/component/ComponentStack.cpp" \
+  "$H/ui/UiIcons.cpp" "$H/ui/UiText.cpp" "$WORK/moc_TimelineView.cpp" \
+  -o "$WORK/${name}_test" $LF
+done
+
 # The volume rubber-band on an audio clip: the line's height IS the level, the
 # grab is the line and not the clip, and every step emits clipsChanged -- which
 # is what rebuilds the audio the preview plays.
@@ -1154,6 +1167,12 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$WORK/moc_RecorderControlsOverlay.cpp" -o "$WORK/recordercontrols_test" $LF
 
 rc=0
+bash "$HERE/run_process_pipe.sh" "$WORK/pipe" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/clipgroups_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/spark_test" || rc=1
+if [ -n "${OBS_LIB_DIR:-}" ]; then
+ bash "$HERE/run_recording_stop.sh" "$WORK/recording" || rc=1
+fi
 
 # Every source file of the app is in its build. These checks compile the files
 # they test by name, so a .cpp left out of CMakeLists.txt passes here and then

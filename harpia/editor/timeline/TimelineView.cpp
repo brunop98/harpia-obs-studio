@@ -939,6 +939,18 @@ QString TimelineView::uniqueTrackName(const QString &name) const
 int TimelineView::pasteTrack(const TlTrack &t, int above)
 {
 	TlTrack copy = t;
+	QHash<int, int> groups, links;
+	int nextGroup = model_.nextGroupId(), nextLink = model_.nextLinkId();
+	for (TlClip &c : copy.clips) {
+		if (c.group) {
+			if (!groups.contains(c.group)) groups.insert(c.group, nextGroup++);
+			c.group = groups.value(c.group);
+		}
+		if (c.link) {
+			if (!links.contains(c.link)) links.insert(c.link, nextLink++);
+			c.link = links.value(c.link);
+		}
+	}
 	// A fresh colour, so the duplicate is telling apart from its original at a
 	// glance. An automatic NAME is left to renumberTracks below for the same
 	// reason: two lanes both called V1 is how you lose track of which one you
@@ -2394,6 +2406,18 @@ void TimelineView::drawClip(QPainter &p, int track, int clip, bool silent) const
 			p.restore();
 		}
 	}
+	const QRect star = favoriteRect(track, clip);
+	if (!star.isEmpty()) {
+		p.fillRect(star, QColor(0, 0, 0, 160));
+		p.setPen(c.favorite ? QColor(255, 210, 70) : Qt::white);
+		p.drawText(star, Qt::AlignCenter, c.favorite ? QStringLiteral("★") : QStringLiteral("☆"));
+	}
+	if (c.group && r.width() >= 24) {
+		const QRect badge(r.right() - 17, r.bottom() - 27, 14, 13);
+		p.fillRect(badge, QColor(0, 0, 0, 160));
+		p.setPen(Qt::white);
+		p.drawText(badge, Qt::AlignCenter, QStringLiteral("G"));
+	}
 	// Tags: a coloured dot each along the top-right, so a tagged clip is
 	// visible from the timeline. Only as many as fit; hovering names them.
 	if (!c.tags.isEmpty() && r.width() >= 24 && r.height() >= 14) {
@@ -3065,7 +3089,11 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	// Grab before ruler/marker/header hit testing: navigation must not select
 	// or edit whatever happens to be under the pointer. Middle also works over
 	// the fixed headers; Alt+left keeps its existing content-area behavior.
-	if (canPanFrom(e) && (e->button() == Qt::MiddleButton || pos.x() >= contentRect().x())) {
+	int altTrack = -1;
+	const int altClip = clipAtPoint(pos, &altTrack);
+	const bool altMember = e->button() == Qt::LeftButton && (e->modifiers() & Qt::AltModifier) &&
+		altClip >= 0 && model_.tracks[altTrack].clips[altClip].group != 0;
+	if (!altMember && canPanFrom(e) && (e->button() == Qt::MiddleButton || pos.x() >= contentRect().x())) {
 		mode_ = Mode::Pan;
 		panButton_ = e->button();
 		panStartX_ = pos.x();
@@ -3195,11 +3223,17 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 			// Make the clicked member primary without dropping the old primary
 			// from a multi-selection. A click outside it starts a new selection.
 			if (isSelected(track, clip)) {
-				if (selTrack_ >= 0 && selClip_ >= 0 && (selTrack_ != track || selClip_ != clip))
+				const auto members = selectedPairs(false).contains({track, clip})
+					? QVector<QPair<int, int>>() : model_.relatedClips({{track, clip}});
+				if (selTrack_ >= 0 && selClip_ >= 0 && (selTrack_ != track || selClip_ != clip) &&
+				    !members.contains({selTrack_, selClip_}))
 					extraSel_.insert({selTrack_, selClip_});
+				for (const auto &p : members)
+					extraSel_.remove(p);
 				extraSel_.remove({track, clip});
 			} else {
 				extraSel_.clear();
+				individualSelection_ = false;
 			}
 			selTrack_ = track;
 			selClip_ = clip;
@@ -3218,10 +3252,40 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	if (e->button() != Qt::LeftButton)
 		return;
 
+	if (clip >= 0 && (e->modifiers() & Qt::ControlModifier) && !(e->modifiers() & Qt::ShiftModifier)) {
+		const bool remove = isSelected(track, clip);
+		const auto members = model_.relatedClips({{track, clip}});
+		QVector<QPair<int, int>> explicitClips = selectedPairs(false);
+		if (remove) {
+			for (const auto &p : members) explicitClips.removeAll(p);
+		} else {
+			explicitClips.prepend({track, clip});
+		}
+		individualSelection_ = false;
+		selTransition_ = false;
+		extraSel_.clear();
+		selTrack_ = selClip_ = -1;
+		for (const auto &p : explicitClips) {
+			if (selTrack_ < 0) { selTrack_ = p.first; selClip_ = p.second; }
+			else extraSel_.insert(p);
+		}
+		mode_ = Mode::None;
+		emit selectionChanged(selTrack_, selClip_);
+		update();
+		return;
+	}
+	if (clip >= 0 && favoriteRect(track, clip).contains(pos) && !altMember) {
+		toggleFavorite(track, clip);
+		return;
+	}
+	if (clip >= 0)
+		individualSelection_ = altMember;
+
 	// Shift+drag draws a selection box. Anywhere in the tracks -- over a clip
 	// too, which then neither moves nor trims -- so the gesture is the same
 	// wherever it starts. Ctrl as well adds to what was already selected.
 	if (e->modifiers() & Qt::ShiftModifier) {
+		individualSelection_ = false;
 		mode_ = Mode::Marquee;
 		marqueeStart_ = pos;
 		marqueeRect_ = QRect(pos, QSize(0, 0));
@@ -3243,7 +3307,7 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 	// An overlap belongs to neither clip: clicking it selects the TRANSITION.
 	// Ctrl-click still falls through to the clips, so a group selection can
 	// still be built across an overlap.
-	if (!(e->modifiers() & Qt::ControlModifier)) {
+	if (!altMember && !(e->modifiers() & Qt::ControlModifier)) {
 		int trTrack = -1;
 		const int trIncoming = transitionAtPoint(pos, &trTrack);
 		if (trIncoming >= 0) {
@@ -3339,52 +3403,27 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 		return;
 	}
 
-	// Ctrl-click adds to (or removes from) the selection instead of replacing it.
-	if (e->modifiers() & Qt::ControlModifier) {
-		if (track == selTrack_ && clip == selClip_) {
-			// Dropping the primary promotes one of the extras, so a selection
-			// never ends up with members but no primary.
-			selTrack_ = selClip_ = -1;
-			if (!extraSel_.isEmpty()) {
-				const auto it = extraSel_.constBegin();
-				selTrack_ = it->first;
-				selClip_ = it->second;
-				extraSel_.erase(extraSel_.constBegin());
-			}
-		} else if (extraSel_.contains({track, clip})) {
-			extraSel_.remove({track, clip});
-		} else {
-			if (selTrack_ >= 0)
-				extraSel_.insert({selTrack_, selClip_});
-			selTrack_ = track;
-			selClip_ = clip;
-		}
-		mode_ = Mode::None;
-		emit selectionChanged(selTrack_, selClip_);
-		update();
-		return;
-	}
 	// A plain click on something already selected keeps the group, so a
 	// multi-selection can be dragged; otherwise it replaces the selection.
-	if (!isSelected(track, clip)) {
+	if (altMember || !isSelected(track, clip)) {
 		extraSel_.clear();
 	} else if (track != selTrack_ || clip != selClip_) {
 		// Grabbing a member that is not the primary: the old primary joins
 		// the extras rather than falling out of the group. It used to be
 		// dropped here, so a two-clip selection dragged by its second clip
 		// moved one clip.
-		if (selTrack_ >= 0 && selClip_ >= 0)
+		const bool explicitMember = selectedPairs(false).contains({track, clip});
+		const auto members = explicitMember ? QVector<QPair<int, int>>() : model_.relatedClips({{track, clip}});
+		if (selTrack_ >= 0 && selClip_ >= 0 && !members.contains({selTrack_, selClip_}))
 			extraSel_.insert({selTrack_, selClip_});
+		// Promoting an implicit group member changes the explicit target,
+		// without turning the group's previous representative into an edit target.
+		for (const auto &p : members)
+			extraSel_.remove(p);
 		extraSel_.remove({track, clip});
 	}
 	selTrack_ = track;
 	selClip_ = clip;
-	// A linked clip brings its group (TlClip::link): a narration and its
-	// subtitles. The drag below then moves every one of them by the same
-	// amount, and so does a nudge -- move one, move all.
-	for (const auto &p : model_.linkedClips(model_.tracks[track].clips[clip].link))
-		if (p != QPair<int, int>(track, clip))
-			extraSel_.insert(p);
 	emit selectionChanged(selTrack_, selClip_);
 	// A locked track still selects (so you can inspect it) but never edits.
 	if (model_.tracks[track].locked) {
@@ -3477,6 +3516,7 @@ TlSelection TimelineView::selectionState() const
 	s.track = selTrack_;
 	s.clip = selClip_;
 	s.transition = selTransition_;
+	s.individual = individualSelection_;
 	for (const auto &p : extraSel_)
 		s.extras.push_back(p);
 	std::sort(s.extras.begin(), s.extras.end());
@@ -3494,6 +3534,7 @@ void TimelineView::setSelectionState(const TlSelection &s)
 	selTrack_ = valid(s.track, s.clip) ? s.track : -1;
 	selClip_ = selTrack_ >= 0 ? s.clip : -1;
 	selTransition_ = selTrack_ >= 0 && s.transition;
+	individualSelection_ = s.individual;
 	extraSel_.clear();
 	for (const auto &p : s.extras)
 		if (valid(p.first, p.second))
@@ -3737,29 +3778,19 @@ void TimelineView::mouseMoveEvent(QMouseEvent *e)
 				useEnd = true;
 			if (hit)
 				ns = useEnd ? snapEnd : snapStart;
-			c.outStartMs = std::max<qint64>(0, ns);
-			// Only claim a snap if the clamp to 0 didn't move the edge away again.
-			snapLineMs_ = (hit && c.outStartMs == ns)
-					      ? (useEnd ? c.outStartMs + dur : c.outStartMs)
-					      : -1;
-			// Carry the rest of the selection along by the same delta. Only the
-			// clip under the cursor changes lane; the others keep theirs, which
-			// keeps a cross-track group predictable.
-			if (dragStarts_.size() > 1) {
-				const qint64 delta = c.outStartMs - dragOrig_.outStartMs;
-				for (auto it = dragStarts_.constBegin(); it != dragStarts_.constEnd(); ++it) {
-					if (it.key() == qMakePair(dragTrack_, dragClip_))
-						continue;
-					TlTrack &ot = model_.tracks[it.key().first];
-					if (ot.locked || it.key().second >= ot.clips.size())
-						continue;
-					ot.clips[it.key().second].outStartMs =
-						std::max<qint64>(0, it.value() + delta);
-				}
+			qint64 earliest = dragOrig_.outStartMs;
+			bool persistent = false;
+			for (auto it = dragStarts_.constBegin(); it != dragStarts_.constEnd(); ++it) {
+				const TlTrack &t = model_.tracks[it.key().first];
+				if (t.locked) return;
+				earliest = std::min(earliest, it.value());
+				persistent |= !individualSelection_ && t.clips[it.key().second].group != 0;
 			}
-			// Vertical position picks the landing lane — or, past a lane edge,
-			// a brand-new track (drawn as the "+ New track here" bar).
-			drop_ = dropTargetAt(pos.y(), model_.tracks[dragTrack_].kind);
+			const qint64 delta = std::max(ns - dragOrig_.outStartMs, -earliest);
+			for (auto it = dragStarts_.constBegin(); it != dragStarts_.constEnd(); ++it)
+				model_.tracks[it.key().first].clips[it.key().second].outStartMs = it.value() + delta;
+			snapLineMs_ = hit && c.outStartMs == ns ? (useEnd ? ns + dur : ns) : -1;
+			drop_ = persistent ? DropTarget() : dropTargetAt(pos.y(), model_.tracks[dragTrack_].kind);
 			emitScrubAt(c.outStartMs);
 			setCursor(Qt::ClosedHandCursor);
 		} else if (mode_ == Mode::ResizeLeft) {
@@ -4299,7 +4330,7 @@ void TimelineView::leaveEvent(QEvent *)
 int TimelineView::shuffleClips(const ShuffleOptions &opt, quint64 seed)
 {
 	// Which lanes take part.
-	const QVector<QPair<int, int>> sel = selectedPairs();
+	const QVector<QPair<int, int>> sel = selectedPairs(false);
 	QVector<int> lanes;
 	if (opt.selectedOnly) {
 		for (const auto &p : sel)
@@ -4382,15 +4413,101 @@ int TimelineView::shuffleClips(const ShuffleOptions &opt, quint64 seed)
 	return moved;
 }
 
+void TimelineView::toggleSelectionGroup()
+{
+	const auto selected = selectedPairs(false);
+	if (selected.isEmpty() || selTransition_) return;
+	const auto members = model_.relatedClips(selected);
+	for (const auto &p : members)
+		if (model_.tracks[p.first].locked) return;
+	const int first = model_.tracks[selected[0].first].clips[selected[0].second].group;
+	bool oneGroup = first != 0;
+	for (const auto &p : selected)
+		oneGroup &= model_.tracks[p.first].clips[p.second].group == first;
+	if (oneGroup) {
+		for (const auto &p : model_.groupedClips(first))
+			model_.tracks[p.first].clips[p.second].group = 0;
+	} else {
+		if (members.size() < 2) return;
+		const int group = model_.nextGroupId();
+		for (const auto &p : members)
+			model_.tracks[p.first].clips[p.second].group = group;
+	}
+	individualSelection_ = false;
+	update();
+	emit selectionChanged(selTrack_, selClip_);
+	commitEdit();
+}
+
+void TimelineView::setSelectionSpeed(double speed)
+{
+	const TlClip *primary = selectedClipPtr();
+	if (!primary || !std::isfinite(speed) || speed <= 0) return;
+	const auto members = selectedPairs();
+	bool grouped = false;
+	for (const auto &p : members)
+		grouped |= model_.tracks[p.first].clips[p.second].group != 0;
+	if (individualSelection_ || !grouped) {
+		applyToSelection([speed](TlClip &c) { c.speed = std::clamp(speed, 0.1, 20.0); });
+		return;
+	}
+	double lo = 0, hi = std::numeric_limits<double>::max();
+	qint64 anchor = std::numeric_limits<qint64>::max();
+	for (const auto &p : members) {
+		const TlTrack &t = model_.tracks[p.first];
+		if (t.locked) return;
+		const TlClip &c = t.clips[p.second];
+		if (!std::isfinite(c.speed) || c.speed <= 0) return;
+		lo = std::max(lo, 0.1 / c.speed);
+		hi = std::min(hi, 20.0 / c.speed);
+		anchor = std::min(anchor, c.outStartMs);
+	}
+	if (lo > hi) return;
+	const double factor = std::clamp(speed / primary->speed, lo, hi);
+	if (qFuzzyCompare(factor, 1.0)) return;
+	for (const auto &p : members) {
+		TlClip &c = model_.tracks[p.first].clips[p.second];
+		c.speed *= factor;
+		c.outStartMs = anchor + qint64(std::llround((c.outStartMs - anchor) / factor));
+		c.clampFades();
+	}
+	clampView();
+	update();
+	emit clipsChanged(); // Inspector coalesces continuous edits into one undo step
+}
+
+QRect TimelineView::favoriteRect(int track, int clip) const
+{
+	if (track < 0 || track >= model_.tracks.size() || clip < 0 ||
+	    clip >= model_.tracks[track].clips.size()) return {};
+	const TlClip &c = model_.tracks[track].clips[clip];
+	if (model_.tracks[track].kind != TlTrack::Kind::Video ||
+	    (c.type != TlClip::Type::Video && c.type != TlClip::Type::Image)) return {};
+	const QRect r = clipPaintRect(track, clip);
+	return r.width() >= 40 && r.height() >= 26 ? QRect(r.left() + 10, r.top() + 5, 18, 18) : QRect();
+}
+
+void TimelineView::toggleFavorite(int track, int clip)
+{
+	if (track < 0 || track >= model_.tracks.size() || model_.tracks[track].locked ||
+	    clip < 0 || clip >= model_.tracks[track].clips.size()) return;
+	TlClip &c = model_.tracks[track].clips[clip];
+	if (model_.tracks[track].kind != TlTrack::Kind::Video ||
+	    (c.type != TlClip::Type::Video && c.type != TlClip::Type::Image)) return;
+	c.favorite = !c.favorite;
+	update();
+	commitEdit();
+}
+
 void TimelineView::applyToSelection(const std::function<void(TlClip &)> &fn)
 {
-	editClips(selectedPairs(), fn);
+	editClips(selectedPairs(false), fn);
 }
 
 QVector<QPair<int, int>> TimelineView::selectedVideoClips() const
 {
 	QVector<QPair<int, int>> videos;
-	for (const auto &p : selectedPairs()) {
+	for (const auto &p : selectedPairs(false)) {
 		const TlTrack &track = model_.tracks[p.first];
 		const TlClip &c = track.clips[p.second];
 		// Detached audio uses Type::Video too, but has no video to trim here.
@@ -4434,7 +4551,7 @@ int TimelineView::trimSelectedVideosToDuration(qint64 durationMs)
 	return changed;
 }
 
-QVector<QPair<int, int>> TimelineView::selectedPairs() const
+QVector<QPair<int, int>> TimelineView::selectedPairs(bool includeGroups) const
 {
 	// A selection can outlive the clips it names -- undo swaps the whole model
 	// underneath it, and a shorter track leaves indices pointing past the end.
@@ -4450,6 +4567,8 @@ QVector<QPair<int, int>> TimelineView::selectedPairs() const
 	for (const auto &p : extraSel_)
 		if (p != qMakePair(selTrack_, selClip_) && live(p))
 			out.append(p);
+	if (includeGroups && !individualSelection_ && !selTransition_)
+		out = model_.relatedClips(out);
 	// Sorted by track then time so callers can rely on a stable order.
 	std::sort(out.begin(), out.end(), [this](const auto &a, const auto &b) {
 		if (a.first != b.first)
@@ -4473,11 +4592,12 @@ TlSpan TimelineView::selectionSpan() const
 
 bool TimelineView::isSelected(int track, int clip) const
 {
-	return (track == selTrack_ && clip == selClip_) || extraSel_.contains({track, clip});
+	return selectedPairs().contains({track, clip});
 }
 
 void TimelineView::selectClip(int track, int clip)
 {
+	individualSelection_ = false;
 	selHeaderTrack_ = -1;
 	selectedMarkerMs_ = -1;
 	selectedEndMarker_ = false;
@@ -4496,6 +4616,7 @@ void TimelineView::selectClip(int track, int clip)
 
 void TimelineView::addToSelection(int track, int clip)
 {
+	individualSelection_ = false;
 	selHeaderTrack_ = -1;
 	selectedMarkerMs_ = -1;
 	selectedEndMarker_ = false;
@@ -4519,6 +4640,7 @@ void TimelineView::addToSelection(int track, int clip)
 
 void TimelineView::selectAllClips()
 {
+	individualSelection_ = false;
 	selHeaderTrack_ = -1;
 	selectedMarkerMs_ = -1;
 	selectedEndMarker_ = false;
@@ -4539,13 +4661,18 @@ void TimelineView::selectAllClips()
 QVector<TimelineView::ClipboardEntry> TimelineView::copySelection() const
 {
 	QVector<ClipboardEntry> out;
-	for (const auto &p : selectedPairs())
-		out.append({model_.tracks[p.first].clips[p.second], p.first});
+	for (const auto &p : selectedPairs()) {
+		TlClip copy = model_.tracks[p.first].clips[p.second];
+		if (individualSelection_)
+			copy.group = 0;
+		out.append({copy, p.first});
+	}
 	return out;
 }
 
 void TimelineView::pasteAt(const QVector<ClipboardEntry> &entries, qint64 atMs)
 {
+	individualSelection_ = false;
 	if (entries.isEmpty())
 		return;
 	qint64 earliest = std::numeric_limits<qint64>::max();
@@ -4556,7 +4683,7 @@ void TimelineView::pasteAt(const QVector<ClipboardEntry> &entries, qint64 atMs)
 	selTrack_ = selClip_ = -1;
 	// Pasted linked clips are linked to each other, not to the clips they were
 	// copied from: each group copied gets a new id.
-	QHash<int, int> relink;
+	QHash<int, int> relink, regroup;
 	for (const ClipboardEntry &e : entries) {
 		// Back onto its own track when that still exists and accepts it,
 		// otherwise the nearest track of the right kind.
@@ -4577,6 +4704,11 @@ void TimelineView::pasteAt(const QVector<ClipboardEntry> &entries, qint64 atMs)
 			if (!relink.contains(c.link))
 				relink.insert(c.link, model_.nextLinkId());
 			c.link = relink.value(c.link);
+		}
+		if (c.group != 0) {
+			if (!regroup.contains(c.group))
+				regroup.insert(c.group, model_.nextGroupId());
+			c.group = regroup.value(c.group);
 		}
 		model_.tracks[track].clips.append(c);
 		const int idx = int(model_.tracks[track].clips.size()) - 1;
@@ -4808,7 +4940,7 @@ void TimelineView::splitAtPlayhead()
 	// nothing selected, everything under the playhead is split, as before.
 	QSet<QPair<int, int>> only;
 	if (!selTransition_)
-		for (const auto &p : selectedPairs())
+		for (const auto &p : selectedPairs(false))
 			only.insert(p);
 	bool any = false;
 	for (int ti = 0; ti < model_.tracks.size(); ++ti) {
@@ -4874,7 +5006,7 @@ void TimelineView::deleteSelected()
 		removeSelectedTransition();
 		return;
 	}
-	const auto sel = selectedPairs();
+	const auto sel = selectedPairs(false);
 	if (sel.isEmpty())
 		return;
 	// Remove from the highest index down so earlier indices stay valid.
@@ -5091,7 +5223,7 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	// would be a click nobody asked for -- so the span is worked out here
 	// rather than read off selectionSpan().
 	const bool inSel = isSelected(track, clip);
-	const auto sel = selectedPairs();
+	const auto sel = selectedPairs(false);
 	TlSpan exportSpan;
 	if (inSel && sel.size() > 1) {
 		exportSpan = selectionSpan();
@@ -5199,6 +5331,15 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 							  : QStringLiteral("A narration's captions are timed to its "
 									   "words, so it cannot swap in other "
 									   "footage."));
+	}
+	QAction *favorite = nullptr;
+	if (model_.tracks[track].kind == TlTrack::Kind::Video &&
+	    (menuClip.type == TlClip::Type::Video || menuClip.type == TlClip::Type::Image)) {
+		favorite = menu.addAction(QStringLiteral("Favorite for Spark"));
+		favorite->setObjectName(QStringLiteral("timelineFavoriteSpark"));
+		favorite->setCheckable(true);
+		favorite->setChecked(menuClip.favorite);
+		disableBecause(favorite, !locked, lockedWhy);
 	}
 	QAction *dup = menu.addAction(QStringLiteral("Duplicate"));
 	disableBecause(dup, !locked, lockedWhy);
@@ -5520,6 +5661,10 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		fitClipToTimeline(track, clip);
 		return;
 	}
+	if (favorite && chosen == favorite) {
+		toggleFavorite(track, clip);
+		return;
+	}
 	if (chosen == split) {
 		splitClip(track, clip, atOutMs);
 	} else if (unlinkAct && chosen == unlinkAct) {
@@ -5537,6 +5682,7 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		TlClip copy = model_.tracks[track].clips[clip];
 		copy.outStartMs = copy.outEndMs();
 		copy.link = 0; // a copy of one member is not a member
+		copy.group = 0;
 		model_.tracks[track].clips.insert(clip + 1, copy);
 		extraSel_.clear(); // the insert moved the indices after it
 		selClip_ = clip + 1;

@@ -113,6 +113,7 @@ private:
 	QLabel *bitrateGuide_ = nullptr;
 	QLineEdit *folderEdit_ = nullptr;
 	QCheckBox *gpuCheck_ = nullptr;
+	QWidget *gpuCompressionRow_ = nullptr;
 	QSpinBox *idleSpin_ = nullptr;
 	QComboBox *countdownCombo_ = nullptr;
 	QSpinBox *minLengthSpin_ = nullptr;

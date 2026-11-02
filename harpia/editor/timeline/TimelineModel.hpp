@@ -397,6 +397,8 @@ struct TlClip {
 	// "Unlink" on any of them sets it back to 0 on the whole group. An id, not
 	// an index: it survives clips being reordered, added and removed around it.
 	int link = 0;
+	int group = 0; // persistent editing group; zero means ungrouped
+	bool favorite = false; // this edited clip is a favorite opening for Spark
 
 	// A text-to-speech narration's audio clip: how it was made (TtsSpec, as
 	// compact JSON), so "Re-speak this sentence" can make a new take of one
@@ -742,7 +744,8 @@ struct TlClip {
 		       rotation == o.rotation && opacity == o.opacity &&
 		       crop == o.crop && keys == o.keys && text == o.text && words == o.words &&
 		       scripts == o.scripts && fx == o.fx && components == o.components &&
-		       transition == o.transition && soundRule == o.soundRule && link == o.link && tts == o.tts && tags == o.tags &&
+		       transition == o.transition && soundRule == o.soundRule && link == o.link &&
+		       group == o.group && favorite == o.favorite && tts == o.tts && tags == o.tags &&
 		       clipOptions == o.clipOptions && clipShown == o.clipShown &&
 		       volume == o.volume && fadeInMs == o.fadeInMs &&
 		       fadeOutMs == o.fadeOutMs && fadeInCurve == o.fadeInCurve &&
@@ -1344,6 +1347,45 @@ struct TimelineModel {
 				if (tracks[ti].clips[ci].link == link)
 					out.append({ti, ci});
 		return out;
+	}
+
+	int nextGroupId() const
+	{
+		int n = 1;
+		for (const TlTrack &t : tracks)
+			for (const TlClip &c : t.clips)
+				n = std::max(n, c.group + 1);
+		return n;
+	}
+	QVector<QPair<int, int>> groupedClips(int group) const
+	{
+		QVector<QPair<int, int>> out;
+		if (group <= 0)
+			return out;
+		for (int ti = 0; ti < tracks.size(); ++ti)
+			for (int ci = 0; ci < tracks[ti].clips.size(); ++ci)
+				if (tracks[ti].clips[ci].group == group)
+					out.append({ti, ci});
+		return out;
+	}
+	// Closure over persistent groups and media links. Used by grouping and
+	// Spark, so a linked partner's group is never left behind.
+	QVector<QPair<int, int>> relatedClips(QVector<QPair<int, int>> seeds,
+					     bool groups = true, bool links = true) const
+	{
+		for (int i = 0; i < seeds.size(); ++i) {
+			const auto p = seeds[i];
+			const TlClip &c = tracks[p.first].clips[p.second];
+			QVector<QPair<int, int>> more;
+			if (groups)
+				more += groupedClips(c.group);
+			if (links)
+				more += linkedClips(c.link);
+			for (const auto &q : more)
+				if (!seeds.contains(q))
+					seeds.append(q);
+		}
+		return seeds;
 	}
 
 	// The project's tags (see TlTag). Saved, part of equality.

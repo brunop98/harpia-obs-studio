@@ -242,38 +242,30 @@ size_t os_process_pipe_read(os_process_pipe_t *pp, uint8_t *data, size_t len)
 
 size_t os_process_pipe_read_err(os_process_pipe_t *pp, uint8_t *data, size_t len)
 {
-	DWORD bytes_read;
-	bool success;
-
-	if (!pp || !pp->handle_err) {
+	DWORD available = 0, bytes_read = 0;
+	if (!pp || !pp->handle_err || !len)
 		return 0;
-	}
-
-	success = !!ReadFile(pp->handle_err, data, (DWORD)len, &bytes_read, NULL);
-	if (success && bytes_read) {
-		return bytes_read;
-	} else
-		bytes_read = GetLastError();
-
-	return 0;
+	if (!PeekNamedPipe(pp->handle_err, NULL, 0, NULL, &available, NULL) || !available)
+		return 0;
+	DWORD request = len < available ? (DWORD)len : available;
+	return ReadFile(pp->handle_err, data, request, &bytes_read, NULL) ? bytes_read : 0;
 }
 
 size_t os_process_pipe_write(os_process_pipe_t *pp, const uint8_t *data, size_t len)
 {
-	DWORD bytes_written;
-	bool success;
-
-	if (!pp) {
+	if (!pp || pp->read_pipe)
 		return 0;
+	size_t written = 0;
+	while (written < len) {
+		DWORD bytes_written = 0;
+		DWORD request = len - written > MAXDWORD ? MAXDWORD : (DWORD)(len - written);
+		if (!WriteFile(pp->handle, data + written, request, &bytes_written, NULL)) {
+			blog(LOG_ERROR, "os_process_pipe_write: WriteFile failed: %lu", GetLastError());
+			break;
+		}
+		if (!bytes_written)
+			break;
+		written += bytes_written;
 	}
-	if (pp->read_pipe) {
-		return 0;
-	}
-
-	success = !!WriteFile(pp->handle, data, (DWORD)len, &bytes_written, NULL);
-	if (success && bytes_written) {
-		return bytes_written;
-	}
-
-	return 0;
+	return written;
 }

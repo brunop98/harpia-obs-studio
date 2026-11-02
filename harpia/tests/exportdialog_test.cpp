@@ -600,6 +600,39 @@ int main(int argc, char **argv)
 		}
 	}
 
+	std::printf("\n-- Spark is separate from Variations and Selection scope --\n");
+	{
+		auto ctx = ctx1080();
+		ctx.allowSpark = true;
+		ctx.sparkBlocks = 3; ctx.sparkFavorites = 1; ctx.sparkUniqueOrders = 2; ctx.sparkSeconds = 12;
+		ctx.rangeSeconds = 1; ctx.rangeLabel = QStringLiteral("Selection"); ctx.rangeDefault = true;
+		ExportOptionsDialog dlg(ctx);
+		dlg.setSparkTabForTest(true);
+		ok(dlg.sparkMode() && !dlg.batchMode(), "Spark-only tab is not treated as a Variations batch");
+		ok(dlg.sparkCount() == 2, "default request of ten is limited to two unique orders");
+		ok(!dlg.exportRange() && dlg.exportSeconds() == 24, "Spark uses full timeline even when Single video chose Selection");
+		ok(dlg.sparkPrefix() == QStringLiteral("myclip_spark"), "Spark has its own file prefix");
+		auto *requested = dlg.findChild<QSpinBox *>(QStringLiteral("sparkRequested"));
+		ok(requested && requested->minimum() == 1 && requested->maximum() == 1000 && requested->value() == 10,
+		   "request defaults to ten and is bounded from one to one thousand");
+		requested->setValue(100);
+		ok(dlg.findChild<QLabel *>(QStringLiteral("sparkActualCount"))->text().contains(QStringLiteral("Fewer unique")),
+		   "over-request explains the limited actual export count");
+		requested->setValue(1); ok(dlg.sparkCount() == 1, "actual count follows smaller requests");
+		dlg.setSparkTabForTest(false); ok(dlg.exportRange(), "Single video retains Selection scope");
+		ctx.variantLabels = {QStringLiteral("A"), QStringLiteral("B")};
+		ExportOptionsDialog both(ctx);
+		both.setSparkTabForTest(true); ok(both.sparkMode() && !both.batchMode(), "Spark and Variations have distinct indices");
+		both.setBatchTabForTest(true); ok(both.batchMode() && !both.sparkMode(), "Variations still selects its actual tab");
+		ctx.sparkError = QStringLiteral("Unlock track V1");
+		ExportOptionsDialog blocked(ctx); blocked.setSparkTabForTest(true);
+		ok(blocked.sparkCount() == 0, "locked footage blocks disable Spark exports");
+		bool enabledExport = false;
+		for (auto *b : blocked.findChildren<QPushButton *>())
+			if (b->text().startsWith(QStringLiteral("Export"))) enabledExport |= b->isEnabled();
+		ok(!enabledExport, "disabled Spark cannot be submitted from Export button");
+	}
+
 	QSettings().clear();
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;

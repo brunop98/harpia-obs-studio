@@ -80,6 +80,12 @@ public:
 		// whole project, so each lasts `seconds`. Never set together with
 		// batchCuts -- the two tabs belong to different modes.
 		QStringList variantLabels;
+		bool allowSpark = false;
+		int sparkBlocks = 0;
+		int sparkFavorites = 0;
+		qint64 sparkUniqueOrders = 0;
+		double sparkSeconds = 0.0; // one sequenced full-timeline export
+		QString sparkError;
 	};
 
 	explicit ExportOptionsDialog(const Context &ctx, QWidget *parent = nullptr);
@@ -117,6 +123,11 @@ public:
 	// The Batch tab (Multi-Cut only): true when it was the one showing on
 	// Export. The selection is indices into Context::batchCuts, in order.
 	bool batchMode() const;
+	bool sparkMode() const;
+	int sparkCount() const;
+	QString sparkPrefix() const;
+	bool sparkOpenFolder() const;
+	void setSparkTabForTest(bool on);
 	QVector<int> batchSelection() const;
 	QString batchPrefix() const;
 	bool batchOpenFolder() const;
@@ -169,6 +180,13 @@ private:
 	QCheckBox *batchOpen_ = nullptr;
 	QLabel *batchCount_ = nullptr;
 	void buildBatchTab();
+	void buildSparkTab();
+	int batchTabIndex_ = -1;
+	int sparkTabIndex_ = -1;
+	QSpinBox *sparkRequested_ = nullptr;
+	QLineEdit *sparkPrefix_ = nullptr;
+	QCheckBox *sparkOpen_ = nullptr;
+	QLabel *sparkCount_ = nullptr;
 
 	QLabel *summary_ = nullptr;
 	QLabel *sizeValue_ = nullptr;

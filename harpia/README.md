@@ -63,6 +63,12 @@ needs (see [The OBS tree](#the-obs-tree)).
   take. Splits wait for video keyframes; file sizes also include container
   overhead, so limits are approximate. For a strict Discord upload cap,
   use **Optimize for sharing → Discord** after recording.
+- **GPU compression:** **Preset Settings → Advanced → Use GPU compression
+  while recording** keeps each preset's saved preference. GIF hides this option.
+  Stop requests are idempotent; pause automation is suspended while stopping.
+  Muxer error recovery reads only available helper diagnostics, so an empty
+  stderr pipe cannot block shutdown. Windows writes also handle partial progress
+  and report the OS error code.
 - **Multi-monitor** with per-preset display choice, and per-monitor DPI.
   The recorder and editor each reopen on their last monitor, with a fallback
   to an available screen when that monitor is disconnected.
@@ -116,6 +122,19 @@ Three modes, each one step up from the last:
     enter **Source start** in seconds with millisecond precision. Options share
     one timeline position, duration, speed and look, while their source times
     stay independent. Cancel leaves the option unchanged; OK is one undo step;
+  - **persistent groups:** select clips and press **G** to group them, including
+    linked partners and every member of touched groups. Groups merge flat; **G**
+    on one existing group ungroups it without breaking media/narration links.
+    Click a member to select its group, **Ctrl-click** to add/remove a group,
+    **Alt-click** to select one member. Groups move only in time, keeping their
+    tracks and offsets, including at time zero; any locked member blocks moving.
+    Speed scales the whole arrangement and gaps around its earliest start,
+    retaining relative speeds within 0.1×–20×. Other Inspector edits, splitting,
+    trimming and deletion affect only explicitly selected clips. Alt-selection
+    is preserved by Undo/Redo. Copies get new group and media-link IDs;
+  - **Spark favorites:** click **☆ / ★** on a video/image clip, or use its
+    **Favorite for Spark** menu action. Stars belong to individual edited clips,
+    persist in projects, respect locks and are undoable;
   - **keyframes** per channel (position, scale, rotation, opacity) with easing
     curves, and **curved motion paths** with Bezier handles on the preview;
   - **components** stacked on any clip: transform and speed, ShaderToy-style
@@ -154,7 +173,20 @@ Three modes, each one step up from the last:
 - **Projects** save and open with every setting, and autosave. The opening
   screen offers the three most recent projects to continue with one click.
 - **Export:** MP4, MKV, MOV, WebM or GIF; size, quality, 4:4:4 chroma, a
-  selected range only, batch export of cuts, and text variations. Render
+  selected range only, batch export of cuts, and text variations.
+  **Full Editing → Export → Spark** exports unique footage orders from copies
+  of the whole timeline, even if Single video's scope is Selection. Groups and
+  media links form blocks that keep their internal timing, tracks, trims and
+  speeds. Starred blocks shuffle first, followed by ordinary blocks. Independent
+  blocks start end to end at zero; unrelated background audio, text/effects and
+  separate voiceover stay at their original times. Event sounds are rebuilt to
+  follow the new footage. Locked footage blocks disable Spark with an explanation;
+  locked background tracks are fine. Equivalent copies count as the same order.
+  Request 1–1,000 videos (default 10); Spark shows how many unique orders exist
+  and exports at most that many. Format, quality, resolution, frame rate, folder
+  and audio come from Single video. Files use a new unique folder and numbered
+  names such as `my_video_spark/my_video_spark_01.mp4`. Exporting leaves the
+  editor unchanged and expands an early video-end marker in export copies. Render
   failures include [error codes and copyable diagnostic details](EXPORT_ERRORS.md).
 
 ### Library and sharing
@@ -312,7 +344,24 @@ pwsh -File harpia/tests/windowspackage_test.ps1             # Windows package-la
 Each prints `ALL PASSED (0 failures)` per program and exits non-zero on any
 failure. The editor window tests drive the real `VideoEditorWindow` with mouse
 and keyboard events. The recorder's libobs-facing code (`core/`,
-`MainWindow`) is not covered here — it is checked on a Windows build.
+`MainWindow`) still needs native Windows validation. Pipe tests also run the
+production Windows I/O code against controlled API responses on Linux:
+
+```sh
+harpia/tests/run_process_pipe.sh [work-dir]
+OBS_LIB_DIR=/path/to/build/libobs harpia/tests/run_recording_stop.sh [work-dir]
+# With a built libobs, run_avsync.sh also checks the real GPU settings dialog.
+# On Linux this additional OBS test needs DISPLAY (xvfb-run works in CI).
+OBS_LIB_DIR=/path/to/build/libobs xvfb-run -a harpia/tests/run_avsync.sh [work-dir]
+```
+
+Spark's end-to-end test opens red, green and blue footage in the real editor,
+stars blue, requests 100 videos, and inspects the only two unique encoded orders:
+Blue → Red → Green and Blue → Green → Red. It also checks star Undo/Redo,
+numbered output names, and preservation of the original timeline. For recording
+validation, build with NVENC enabled on Windows and repeat record/stop on the
+RTX 3050; the Linux test build does not validate NVIDIA hardware or establish
+why a muxer helper originally failed.
 
 ## Project layout
 

@@ -354,6 +354,39 @@ int main(int argc, char **argv)
 		}
 	}
 
+	std::printf("\n-- persistent groups and individual selection survive undo --\n");
+	{
+		tv->setModelAndCommit(m); settle(100);
+		tv->selectClip(0, 0); tv->addToSelection(0, 1); settle(100);
+		QShortcut *group = shortcutFor(w, QKeySequence(Qt::Key_G));
+		ok(group && group->isEnabled(), "G is available through shortcut registry in Full Editing");
+		if (group) {
+			tv->setFocus(); emit group->activated(); settle(100);
+			const TimelineModel grouped = tv->model();
+			ok(grouped.tracks[0].clips[0].group != 0 && grouped.tracks[0].clips[0].group == grouped.tracks[0].clips[1].group,
+			   "G creates a persistent group");
+			undo(); ok(tv->model() == m, "Undo restores pre-group model");
+			redo(); ok(tv->model() == grouped, "Redo restores persistent membership");
+			QLineEdit text(&w); text.show(); text.setFocus(); settle(30);
+			emit group->activated();
+			ok(tv->model() == grouped, "group command cannot edit timeline while typing in text field");
+			QKeyEvent g(QEvent::KeyPress, Qt::Key_G, Qt::NoModifier, QStringLiteral("g"));
+			QApplication::sendEvent(&text, &g);
+			ok(text.text() == QStringLiteral("g"), "typing G remains available in text fields");
+			text.hide(); tv->setFocus();
+			click(tv, centre(0), Qt::AltModifier); settle(100);
+			const TlSelection individual = tv->selectionState();
+			ok(individual.individual && tv->selectedPairs().size() == 1, "Alt selects only one persistent member");
+			tv->nudgeSelection(100); settle(400);
+			undo();
+			ok(tv->model() == grouped && tv->selectionState() == individual,
+			   "Undo of individual move restores Alt-selection override");
+			redo();
+			ok(tv->selectionState().individual && tv->selectedPairs().size() == 1,
+			   "Redo keeps individual selection");
+		}
+	}
+
 	std::printf("\n%s\n", failures ? "FAILURES" : "ALL PASSED (0 failures)");
 	return failures ? 1 : 0;
 }

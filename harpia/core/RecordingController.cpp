@@ -116,6 +116,7 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 	const AutoSplitSettings split = auto_split_settings::validated(requestedSplit);
 
 	teardown(); // release any previous session's objects
+	stopRequested_.store(false);
 
 	lastStopCode_ = 0;
 	lastStopError_.clear();
@@ -155,6 +156,7 @@ bool RecordingController::start(const Preset &preset, const std::string &fullFil
 		blog(LOG_INFO, "[harpia] recording backend: audio tap, stereo PCM capture with AAC finalization");
 		tap_ = std::make_unique<AudioOnlyRecorder>();
 		tap_->onFinished = [this](const std::string &path, bool ok, const std::string &why) {
+			stopRequested_.store(true);
 			lastStopCode_ = ok ? 0 : -1;
 			lastStopError_ = ok ? std::string() : why;
 			// The path can differ from the one asked for: a failed encode
@@ -379,6 +381,8 @@ void RecordingController::onFileChangedSignal(void *data, calldata_t *cd)
 
 void RecordingController::stop()
 {
+	if (stopRequested_.exchange(true))
+		return;
 	if (tap_) {
 		tap_->requestStop(); // asynchronous; onFinished fires once encoded
 		return;
@@ -389,6 +393,7 @@ void RecordingController::stop()
 
 void RecordingController::forceStop()
 {
+	stopRequested_.store(true);
 	if (tap_) {
 		// There is nothing to abort: the tap's stop path is a drain and an
 		// encode, both bounded. Asking it to stop is the fastest exit there is.
@@ -412,6 +417,8 @@ bool RecordingController::canPause() const
 
 bool RecordingController::pause(bool paused)
 {
+	if (stopRequested_.load())
+		return isPaused();
 	if (tap_) {
 		tap_->setPaused(paused);
 		return tap_->paused();
@@ -469,6 +476,7 @@ void RecordingController::onStartSignal(void *data, calldata_t *)
 void RecordingController::onStopSignal(void *data, calldata_t *cd)
 {
 	auto *self = static_cast<RecordingController *>(data);
+	self->stopRequested_.store(true);
 
 	// Capture WHY the output stopped. 0 == OBS_OUTPUT_SUCCESS; anything else
 	// (disk full, write error, encoder failure) must not be reported to the

@@ -188,6 +188,20 @@ mkdir -p "$WORK/win/obj" "$WORK/win/moc"
 	"$H" "$WCF" "$WORK" )
 rm -f "$WORK/win/libeditor.a"
 ar rcs "$WORK/win/libeditor.a" "$WORK"/win/obj/*.o
+# Spark goes through the real Export dialog, batch runner, and encoded frames.
+g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
+ "$HERE/sparkexport_test.cpp" \
+ -Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
+ -o "$WORK/sparkexport_test" $WLF
+if [ -n "${OBS_LIB_DIR:-}" ]; then
+ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT/libobs" -I"$OBS_LIB_DIR/../config" $WCF \
+  "$HERE/presetgpu_test.cpp" "$H/core/AudioManager.cpp" "$H/core/WebcamRecorder.cpp" \
+  "$H/core/EncoderFactory.cpp" "$H/model/Preset.cpp" "$H/model/FileNameTemplate.cpp" \
+  "$H/platform/nix/NixCameraAccess.cpp" \
+  -Wl,--start-group "$WORK/win/libeditor.a" "$QJSLIB/libqjs.a" -Wl,--end-group \
+  -L"$OBS_LIB_DIR" -Wl,-rpath,"$OBS_LIB_DIR" -lobs -o "$WORK/presetgpu_test" $WLF
+fi
+
 # Discord's progress/summary, complete-file clipboard, and ordinary sharing.
 g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	"$HERE/shareexportdialog_test.cpp" \
@@ -334,6 +348,10 @@ g++ -std=c++17 -O1 -fPIC -w -DHARPIA_HAVE_QJS=1 -I"$H" -I"$QJS" -I"$ROOT" $WCF \
 	-o "$WORK/cliplibrarydelete_test" $WLF
 
 rc=0
+QT_QPA_PLATFORM=offscreen "$WORK/sparkexport_test" "$WORK" || rc=1
+if [ -n "${OBS_LIB_DIR:-}" ]; then
+ QT_QPA_PLATFORM=offscreen "$WORK/presetgpu_test" || rc=1
+fi
 QT_QPA_PLATFORM=offscreen "$WORK/avsync_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportpaths_test" "$WORK" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/exportcolor_test" "$WORK" || rc=1

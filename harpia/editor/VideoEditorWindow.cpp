@@ -42,6 +42,7 @@
 #include "EditorDialogScope.hpp"
 #include "EditorFileDialog.hpp"
 #include "ExportOptionsDialog.hpp"
+#include "timeline/Spark.hpp"
 #include "BatchExport.hpp"
 #include "FlowLayout.hpp"
 #include "InspectorSection.hpp"
@@ -2045,8 +2046,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(componentPanel_, &ComponentPanel::pinnedEdited, this,
 		[this](const QString &typeId, const QString &key, double v) {
 			if (typeId == QStringLiteral("harpia.speed")) {
-				timelineView_->applyToSelection(
-					[v](TlClip &c) { c.speed = std::clamp(v, 0.1, 20.0); });
+				timelineView_->setSelectionSpeed(v);
 				afterComponentEdit();
 				return;
 			}
@@ -2453,6 +2453,22 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	tlCmd("timeline.split", "Split clip at playhead", "Timeline",
 	      {QKeySequence(Qt::Key_S), QKeySequence(Qt::CTRL | Qt::Key_K)},
 	      [this]() { timelineView_->splitAtPlayhead(); });
+	{
+		ShortcutCommand group;
+		group.id = QStringLiteral("selection.group");
+		group.label = QStringLiteral("Group / ungroup clips");
+		group.category = QStringLiteral("Selection");
+		group.defaults = {QKeySequence(Qt::Key_G)};
+		group.when = [this]() { return fullEdit(); };
+		group.run = [this]() {
+			QWidget *focus = QApplication::focusWidget();
+			if (focus && (qobject_cast<QLineEdit *>(focus) || qobject_cast<QTextEdit *>(focus) ||
+				      qobject_cast<QPlainTextEdit *>(focus) || qobject_cast<QAbstractSpinBox *>(focus)))
+				return;
+			if (fullEdit()) timelineView_->toggleSelectionGroup();
+		};
+		shortcuts_->addCommand(group);
+	}
 	tlCmd("selection.all", "Select all clips", "Selection",
 	      {QKeySequence(Qt::CTRL | Qt::Key_A)}, [this]() { timelineView_->selectAllClips(); });
 	tlCmd("edit.copy", "Copy clips", "Editing", {QKeySequence::Copy},
@@ -4878,7 +4894,7 @@ void VideoEditorWindow::tagSelection(int tagId, bool on)
 {
 	if (!timelineView_ || tagId <= 0)
 		return;
-	const auto sel = timelineView_->selectedPairs();
+	const auto sel = timelineView_->selectedPairs(false);
 	if (sel.isEmpty())
 		return;
 	timelineView_->editModel([&](TimelineModel &m) {
@@ -4894,7 +4910,7 @@ void VideoEditorWindow::syncClipTags()
 	if (!clipTagChips_ || !timelineView_)
 		return;
 	const TimelineModel &m = timelineView_->model();
-	const auto sel = timelineView_->selectedPairs();
+	const auto sel = timelineView_->selectedPairs(false);
 	// A tag every selected clip carries is a bright chip; one only some carry
 	// is faded, so a mixed selection says so instead of pretending.
 	QMap<int, int> count;
@@ -7106,7 +7122,7 @@ ComponentPanel::View VideoEditorWindow::buildComponentView() const
 		return v;
 	const TimelineModel &m = timelineView_->model();
 	QVector<const TlClip *> clips;
-	for (const auto &p : timelineView_->selectedPairs())
+	for (const auto &p : timelineView_->selectedPairs(false))
 		if (p.first >= 0 && p.first < m.tracks.size() && p.second >= 0 &&
 		    p.second < m.tracks[p.first].clips.size())
 			clips.append(&m.tracks[p.first].clips[p.second]);
@@ -7298,7 +7314,7 @@ void VideoEditorWindow::syncComponentPanel()
 	// applies to all of them.
 	unsigned kinds = 0;
 	const TimelineModel &m = timelineView_->model();
-	for (const auto &p : timelineView_->selectedPairs())
+	for (const auto &p : timelineView_->selectedPairs(false))
 		if (p.first >= 0 && p.first < m.tracks.size() && p.second >= 0 &&
 		    p.second < m.tracks[p.first].clips.size())
 			switch (m.tracks[p.first].clips[p.second].type) {
@@ -7391,7 +7407,7 @@ void VideoEditorWindow::saveComponentPreset(const QString &typeId, int ordinal)
 	bool accepted = false;
 	const QString name = QInputDialog::getText(
 		this, QStringLiteral("Save component preset"),
-		timelineView_->selectedPairs().size() > 1
+		timelineView_->selectedPairs(false).size() > 1
 			? QStringLiteral("Preset name (uses the primary clip's settings and animation):")
 			: QStringLiteral("Preset name (includes settings and animation):"),
 		QLineEdit::Normal, type ? type->displayName : typeId, &accepted).trimmed();
@@ -7479,7 +7495,7 @@ void VideoEditorWindow::applyComponentPreset(const QString &presetId, const QStr
 	// sound assets or creating an undo entry.
 	bool applicable = false;
 	const TimelineModel &model = timelineView_->model();
-	for (const auto &pair : timelineView_->selectedPairs()) {
+	for (const auto &pair : timelineView_->selectedPairs(false)) {
 		const TlTrack &track = model.tracks[pair.first];
 		const TlClip &clip = track.clips[pair.second];
 		if (track.locked)
@@ -7767,7 +7783,7 @@ void VideoEditorWindow::buildClipInspector(QVBoxLayout *into)
 				id = t->id;
 			if (!id) {
 				// Made and applied in one edit, so it is one undo step.
-				const auto sel = timelineView_->selectedPairs();
+				const auto sel = timelineView_->selectedPairs(false);
 				timelineView_->editModel([&](TimelineModel &m) {
 					const int nid = m.ensureTag(name, TimelineView::randomPastel());
 					for (const auto &p : sel)
@@ -8676,7 +8692,7 @@ QVector<QPair<int, int>> VideoEditorWindow::selectedTextBatch() const
 	if (!primary || primary->type != TlClip::Type::Text)
 		return out;
 	const TimelineModel &m = timelineView_->model();
-	for (const auto &p : timelineView_->selectedPairs())
+	for (const auto &p : timelineView_->selectedPairs(false))
 		if (m.tracks[p.first].clips[p.second].type == TlClip::Type::Text)
 			out.append(p);
 	if (out.size() < 2)
@@ -10073,7 +10089,7 @@ void VideoEditorWindow::openSubtitles()
 	// plays. Captions, stills and effects have no speech.
 	QVector<SubtitleDialog::Target> targets;
 	const TimelineModel &m = timelineView_->model();
-	for (const auto &p : timelineView_->selectedPairs()) {
+	for (const auto &p : timelineView_->selectedPairs(false)) {
 		const TlClip &c = m.tracks[p.first].clips[p.second];
 		if (c.type != TlClip::Type::Video)
 			continue;
@@ -10392,7 +10408,7 @@ void VideoEditorWindow::openSilenceTrim()
 	SilenceTrimDialog dialog(original, [this](int id) {
 		const EditorSource *source = sourceById(id);
 		return source ? source->path : QString();
-	}, timelineView_->selectedPairs(), this);
+	}, timelineView_->selectedPairs(false), this);
 	connect(&dialog, &SilenceTrimDialog::previewStopped, this, restorePreview);
 	connect(&dialog, &SilenceTrimDialog::previewRequested, this, [&](const QVector<TlSpan> &cuts) {
 		const auto result = silence_trim::apply(original, cuts);
@@ -10540,7 +10556,7 @@ void VideoEditorWindow::updateTtsFitTarget()
 {
 	if (!ttsDialog_ || !timelineView_)
 		return;
-	const TlSpan span = timelineView_->selectedPairs().isEmpty() ? TlSpan() : timelineView_->selectionSpan();
+	const TlSpan span = timelineView_->selectedPairs(false).isEmpty() ? TlSpan() : timelineView_->selectionSpan();
 	ttsDialog_->setFitTarget(span.fromMs, span.toMs);
 }
 
@@ -11281,7 +11297,7 @@ void VideoEditorWindow::applySelectedClipTransform(const TlTransform &tf)
 	};
 	TlClip c = *sel;
 	pose(c, timelineEditMs(), tf);
-	const QVector<QPair<int, int>> selection = timelineView_->selectedPairs();
+	const QVector<QPair<int, int>> selection = timelineView_->selectedPairs(false);
 	if (selection.size() < 2) {
 		timelineView_->updateSelectedClip(c);
 	} else {
@@ -11942,7 +11958,7 @@ void VideoEditorWindow::runConsoleLine(const QString &lineIn)
 
 	EditConsole::Input in;
 	in.model = timelineView_->model();
-	in.selection = timelineView_->selectedPairs();
+	in.selection = timelineView_->selectedPairs(false);
 	in.canvas = timelineCanvasSize();
 	in.playheadMs = timelinePlayheadMs();
 	in.sourceName = [this](int id) {
@@ -16398,6 +16414,8 @@ void VideoEditorWindow::onSave()
 		return;
 	}
 
+	const TimelineModel sparkOriginal = fullEdit() ? timelineView_->model() : TimelineModel{};
+	const spark::Plan sparkPlan = fullEdit() ? spark::buildPlan(sparkOriginal) : spark::Plan{};
 	const bool cuts = multiCut();
 	if (cuts && tracks_->segments().isEmpty()) {
 		QMessageBox::information(
@@ -16416,6 +16434,14 @@ void VideoEditorWindow::onSave()
 	ec.defaultFolder = QFileInfo(inPath_).absolutePath();
 	ec.allowGif = !cuts;
 	if (fullEdit()) {
+		ec.allowSpark = true;
+		ec.sparkBlocks = sparkPlan.blocks.size();
+		ec.sparkFavorites = sparkPlan.favoriteCount;
+		ec.sparkUniqueOrders = sparkPlan.uniqueOrders;
+		ec.sparkError = sparkPlan.error;
+		QVector<int> originalOrder(sparkPlan.blocks.size());
+		std::iota(originalOrder.begin(), originalOrder.end(), 0);
+		ec.sparkSeconds = spark::applyOrder(sparkOriginal, sparkPlan, originalOrder).durationMs() / 1000.0;
 		ec.sourceSize = timelineCanvasSize();
 		ec.fps = timelineFps();
 		ec.seconds = timelineView_->durationMs() / 1000.0;
@@ -16565,7 +16591,7 @@ void VideoEditorWindow::onSave()
 		// timeline that has been cut down to the chosen window and rebased to
 		// zero. Nothing downstream — the compositor, the audio mix, the
 		// progress arithmetic — has to know a range was involved.
-		o.timeline = (dlg.exportRange() && span.isValid())
+		o.timeline = (!dlg.sparkMode() && !dlg.batchMode() && dlg.exportRange() && span.isValid())
 				     ? sliceTimeline(timelineView_->model(), span.fromMs, span.toMs)
 				     : timelineView_->model();
 		for (const EditorSource &es : sources_)
@@ -16605,6 +16631,25 @@ void VideoEditorWindow::onSave()
 						vc.volume, vc.fadeInMs, vc.fadeOutMs});
 		o.originalVolume = voOrigVol_->value() / 100.0;
 		o.duckOriginal = voDuck_->isChecked();
+	}
+
+	if (fullEdit() && dlg.sparkMode()) {
+		const auto orders = spark::generateOrders(sparkPlan, dlg.sparkCount());
+		const QString prefix = batch_export::safePrefix(dlg.sparkPrefix());
+		QVector<BatchExporter::Item> items;
+		for (const auto &order : orders) {
+			BatchExporter::Item item;
+			item.name = batch_export::clipName(prefix, items.size() + 1, orders.size());
+			item.useTimeline = true;
+			item.timeline = spark::applyOrder(sparkOriginal, sparkPlan, order);
+			SoundRules::apply(item.timeline, [this](int id) { return soundInfoFor(id); });
+			if (item.timeline.hasVideoEnd())
+				item.timeline.videoEndMs = std::max(item.timeline.videoEndMs, item.timeline.contentDurationMs());
+			items.append(item);
+		}
+		o.timeline = sparkOriginal;
+		startBatchItems(o, items, prefix, dlg.folder(), dlg.sparkOpenFolder());
+		return;
 	}
 
 	// Text variations: the same render, once per ticked version, with only the

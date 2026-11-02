@@ -1,0 +1,124 @@
+// Drive the real editor's Export dialog, then inspect the encoded MP4 frames.
+#include "editor/VideoEditorWindow.hpp"
+#include "editor/ExportOptionsDialog.hpp"
+#include "editor/timeline/TimelineJson.hpp"
+#include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QElapsedTimer>
+#include <QFile>
+#include <QJsonDocument>
+#include <QLineEdit>
+#include <QMessageBox>
+#include <QProcess>
+#include <QPushButton>
+#include <QSet>
+#include <QShortcut>
+#include <QSpinBox>
+#include <QTemporaryDir>
+#include <QThread>
+#include <QTimer>
+#include <cstdio>
+
+using namespace harpia;
+static int failures;
+static void ok(bool pass, const char *why) { std::printf("%s %s\n", pass ? "PASS" : "FAIL", why); failures += !pass; }
+static void settle(int ms)
+{
+	QElapsedTimer timer; timer.start();
+	while (timer.elapsed() < ms) { QApplication::processEvents(); QThread::msleep(5); }
+}
+static QShortcut *shortcut(VideoEditorWindow &w, QKeySequence key)
+{
+	for (auto *s : w.findChildren<QShortcut *>()) if (s->key() == key) return s;
+	return nullptr;
+}
+static char colorAt(const QString &file, int ms)
+{
+	QProcess p;
+	p.start(QStringLiteral("ffmpeg"), {"-v", "error", "-ss", QString::number(ms / 1000.0), "-i", file,
+		"-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"});
+	p.waitForFinished(20000);
+	const QByteArray raw = p.readAllStandardOutput();
+	if (raw.size() < 3) return '?';
+	const auto r = uchar(raw[0]), g = uchar(raw[1]), b = uchar(raw[2]);
+	return b > r + 30 && b > g + 30 ? 'B' : g > r + 30 && g > b + 30 ? 'G' : r > g + 30 && r > b + 30 ? 'R' : '?';
+}
+int main(int argc, char **argv)
+{
+	std::setvbuf(stdout, nullptr, _IONBF, 0);
+	QApplication app(argc, argv);
+	QTemporaryDir work;
+	const QString media = argc > 1 ? QString::fromLocal8Bit(argv[1]) : QStringLiteral(".");
+	TimelineModel m; TlTrack track; track.kind = TlTrack::Kind::Video;
+	QJsonArray sources;
+	for (int i = 0; i < 3; ++i) {
+		const QString name = QStringList{"red", "green", "blue"}[i];
+		sources.append(QJsonObject{{"id", i + 1}, {"path", media + "/av_" + name + ".mp4"}});
+		TlClip c; c.sourceId = i + 1; c.srcEndMs = 1000; c.outStartMs = i * 2000;
+		track.clips.append(c);
+	}
+	m.tracks = {track}; m.videoEndMs = 1000; // Spark must expand this early end.
+	QJsonObject root{{"harpiaProject", 3}, {"editMode", "full"}, {"canvasW", 160}, {"canvasH", 90}, {"fps", 10}, {"sources", sources}};
+	timelineToProject(m, root);
+	const QString project = work.filePath("spark.harpia");
+	QFile f(project); f.open(QIODevice::WriteOnly); f.write(QJsonDocument(root).toJson()); f.close();
+	VideoEditorWindow w(QString{});
+	w.resize(1400, 900); w.show();
+	ok(w.openProjectAt(project), "loaded red, green and blue footage in real editor");
+	settle(300);
+	auto *view = w.findChild<TimelineView *>();
+	if (!view) return 2;
+	view->toggleFavorite(0, 2); settle(100);
+	ok(view->model().tracks[0].clips[2].favorite && !view->model().tracks[0].clips[0].favorite, "star belongs only to edited blue clip");
+	auto *undo = shortcut(w, QKeySequence::Undo); auto *redo = shortcut(w, QKeySequence(Qt::CTRL | Qt::Key_Y));
+	if (!undo || !redo) return 2;
+	emit undo->activated(); settle(100);
+	ok(!view->model().tracks[0].clips[2].favorite, "star toggle is one undoable edit");
+	emit redo->activated(); settle(100);
+	ok(view->model().tracks[0].clips[2].favorite, "star Redo restores favorite");
+	view->selectClip(0, 0); // offer a one-second Selection scope
+	const TimelineModel original = view->model();
+	bool accepted = false;
+	QTimer dialogs;
+	dialogs.setInterval(20);
+	QObject::connect(&dialogs, &QTimer::timeout, [&]() {
+		for (QWidget *top : QApplication::topLevelWidgets()) {
+			if (auto *dlg = qobject_cast<ExportOptionsDialog *>(top); dlg && dlg->isVisible() && !accepted) {
+				dlg->setSparkTabForTest(true);
+				dlg->findChild<QSpinBox *>(QStringLiteral("sparkRequested"))->setValue(100);
+				dlg->findChild<QLineEdit *>(QStringLiteral("sparkPrefix"))->setText("my_video_spark");
+				dlg->findChild<QLineEdit *>(QStringLiteral("exportFolder"))->setText(work.path());
+				dlg->findChild<QCheckBox *>(QStringLiteral("sparkOpenFolder"))->setChecked(false);
+				for (auto *combo : dlg->findChildren<QComboBox *>())
+					if (combo->findText(QStringLiteral("MP4 (H.264)")) >= 0)
+						combo->setCurrentIndex(combo->findText(QStringLiteral("MP4 (H.264)")));
+				ok(dlg->sparkCount() == 2 && !dlg->batchMode() && !dlg->exportRange(), "requesting 100 chooses only two unique full-timeline Spark exports");
+				accepted = true; dlg->accept();
+			} else if (auto *box = qobject_cast<QMessageBox *>(top); box && box->isVisible()) {
+				std::printf("Dialog: %s\n", qPrintable(box->text())); box->accept();
+			}
+		}
+	});
+	dialogs.start();
+	QMetaObject::invokeMethod(&w, "onSave", Qt::DirectConnection);
+	const QString folder = work.filePath("my_video_spark");
+	QElapsedTimer deadline; deadline.start();
+	while (deadline.elapsed() < 60000) {
+		settle(50);
+		if (!w.findChild<BatchExporter *>()) break;
+	}
+	const QStringList files = QDir(folder).entryList({"*.mp4"}, QDir::Files, QDir::Name);
+	ok(accepted && files == QStringList{"my_video_spark_01.mp4", "my_video_spark_02.mp4"}, "batch produces two numbered MP4 files in Spark folder");
+	QSet<QByteArray> encoded;
+	for (const QString &file : files) {
+		QByteArray order;
+		for (int ms : {500, 1500, 2500}) order.append(colorAt(QDir(folder).filePath(file), ms));
+		encoded.insert(order);
+		std::printf("Encoded order: %s\n", order.constData());
+	}
+	ok(encoded.contains("BRG"), "encoded MP4 contains Blue then Red then Green");
+	ok(encoded.contains("BGR") && encoded.size() == 2, "encoded MP4 contains Blue then Green then Red without duplicates");
+	ok(view->model() == original, "export preserves original timeline and early end marker");
+	return failures ? 1 : 0;
+}

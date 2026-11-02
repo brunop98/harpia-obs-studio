@@ -5300,6 +5300,8 @@ bool MainWindow::autoResumeBlocked() const
 
 void MainWindow::tickIdle()
 {
+	if (stopping_)
+		return;
 	if (!recorder_.isRecording() || !idle_)
 		return;
 
@@ -5328,6 +5330,8 @@ void MainWindow::tickIdle()
 
 void MainWindow::tickFocus(uint64_t foregroundPid)
 {
+	if (stopping_)
+		return;
 	// Focus-driven pause is enabled by "Record only one application"; targetExe_
 	// is set (to the chosen app) only then, so this is inactive for a plain
 	// monitor/region recording.

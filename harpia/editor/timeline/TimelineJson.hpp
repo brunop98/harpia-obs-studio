@@ -294,6 +294,8 @@ inline QJsonObject clipToJson(const TlClip &c)
 	}
 	if (c.soundRule != 0)
 		co[QStringLiteral("soundRule")] = c.soundRule;
+	co[QStringLiteral("group")] = c.group;
+	co[QStringLiteral("favorite")] = c.favorite;
 	if (c.link != 0)
 		co[QStringLiteral("link")] = c.link;
 	if (!c.tts.isEmpty())
@@ -338,6 +340,8 @@ inline TlClip clipFromJson(const QJsonObject &co)
 	c.outStartMs = qint64(co.value(QStringLiteral("outStart")).toDouble());
 	c.soundRule = co.value(QStringLiteral("soundRule")).toInt(0);
 	c.link = std::max(0, co.value(QStringLiteral("link")).toInt(0));
+	c.group = std::max(0, co.value(QStringLiteral("group")).toInt(0));
+	c.favorite = co.value(QStringLiteral("favorite")).toBool(false);
 	c.tts = co.value(QStringLiteral("tts")).toString();
 	for (const QJsonValue &ov : co.value(QStringLiteral("clipOptions")).toArray()) {
 		const QJsonObject oo = ov.toObject();

@@ -4,6 +4,7 @@
 #include "AutoSplitSettings.hpp"
 #include "model/Preset.hpp"
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -102,6 +103,7 @@ private:
 	// vice versa, which is what every branch below tests on.
 	std::unique_ptr<AudioOnlyRecorder> tap_;
 
+	std::atomic<bool> stopRequested_{false};
 	obs_output_t *output_ = nullptr;
 	obs_encoder_t *videoEncoder_ = nullptr;
 	obs_encoder_t *audioEncoder_ = nullptr;

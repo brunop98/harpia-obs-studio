@@ -62,10 +62,11 @@ struct TimelineViewParams {
 struct TlSelection {
 	int track = -1, clip = -1;
 	bool transition = false;
+	bool individual = false; // Alt-selection bypasses persistent groups
 	QVector<QPair<int, int>> extras; // sorted
 	bool operator==(const TlSelection &o) const
 	{
-		return track == o.track && clip == o.clip && transition == o.transition && extras == o.extras;
+		return track == o.track && clip == o.clip && transition == o.transition && individual == o.individual && extras == o.extras;
 	}
 	bool operator!=(const TlSelection &o) const { return !(*this == o); }
 };
@@ -253,7 +254,11 @@ public:
 	// setModelQuiet, then a finished edit: one clipsChanged, one undo step.
 	void setModelAndCommit(const TimelineModel &m);
 	// Every selected clip as (track, clip), primary first, in timeline order.
-	QVector<QPair<int, int>> selectedPairs() const;
+	QVector<QPair<int, int>> selectedPairs(bool includeGroups = true) const;
+	void toggleSelectionGroup();
+	void setSelectionSpeed(double speed);
+	void toggleFavorite(int track, int clip);
+	QRect favoriteRectForTest(int track, int clip) const { return favoriteRect(track, clip); }
 	// Edit EVERY selected clip in one go, emitting clipsChanged once at the end.
 	// One signal, so the window takes one undo snapshot however many clips the
 	// edit touched — which is what makes a multi-clip change one Ctrl-Z.
@@ -573,6 +578,7 @@ private:
 	// side -- the shape actually drawn. Keeping them apart is the whole reason
 	// the gap can exist without turning into a strip that swallows clicks.
 	QRect clipRect(int track, int clip) const;
+	QRect favoriteRect(int track, int clip) const;
 	QRect clipPaintRect(int track, int clip) const;
 	void clampView();
 	// Fonts used by the paint path, built once instead of per track and per clip
@@ -763,6 +769,7 @@ private:
 	// True when the click landed in an overlap: the same (track, clip) pair, but
 	// meaning "the transition arriving on this clip" rather than the clip.
 	bool selTransition_ = false;
+	bool individualSelection_ = false;
 	// The overlap under the cursor, for the hover highlight. {-1,-1} = none.
 	int hoverTrTrack_ = -1, hoverTrClip_ = -1;
 	// Clips selected ALONGSIDE the primary. The primary is what the Inspector

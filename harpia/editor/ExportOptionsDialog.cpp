@@ -1,4 +1,5 @@
 #include "ExportOptionsDialog.hpp"
+#include "timeline/SparkLimits.hpp"
 #include "EditorFileDialog.hpp"
 
 #include "ExportEstimate.hpp"
@@ -115,12 +116,15 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	auto *single = new QWidget(this);
 	auto *columns = new QHBoxLayout(single);
 	columns->setContentsMargins(0, 0, 0, 0);
-	if (ctx_.batchCuts.isEmpty() && ctx_.variantLabels.isEmpty()) {
+	if (ctx_.batchCuts.isEmpty() && ctx_.variantLabels.isEmpty() && !ctx_.allowSpark) {
 		root->addWidget(single);
 	} else {
 		tabs_ = new QTabWidget(this);
 		tabs_->addTab(single, QStringLiteral("Single video"));
-		buildBatchTab();
+		if (!ctx_.batchCuts.isEmpty() || !ctx_.variantLabels.isEmpty())
+			buildBatchTab();
+		if (ctx_.allowSpark)
+			buildSparkTab();
 		root->addWidget(tabs_);
 	}
 
@@ -163,6 +167,7 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	auto *fl = new QHBoxLayout(folderRow);
 	fl->setContentsMargins(0, 0, 0, 0);
 	folderEdit_ = new QLineEdit(QDir::toNativeSeparators(ctx_.defaultFolder), folderRow);
+	folderEdit_->setObjectName(QStringLiteral("exportFolder"));
 	fl->addWidget(folderEdit_, 1);
 	auto *browse = new QPushButton(QStringLiteral("Browse…"), folderRow);
 	connect(browse, &QPushButton::clicked, this, &ExportOptionsDialog::browseFolder);
@@ -391,8 +396,10 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	connect(this, &QDialog::accepted, this, &ExportOptionsDialog::saveRemembered);
 	if (tabs_) {
 		connect(tabs_, &QTabWidget::currentChanged, this, &ExportOptionsDialog::refresh);
-		connect(batchList_, &QListWidget::itemChanged, this, &ExportOptionsDialog::refresh);
-		connect(batchPrefix_, &QLineEdit::textChanged, this, &ExportOptionsDialog::refresh);
+		if (batchList_) {
+			connect(batchList_, &QListWidget::itemChanged, this, &ExportOptionsDialog::refresh);
+			connect(batchPrefix_, &QLineEdit::textChanged, this, &ExportOptionsDialog::refresh);
+		}
 	}
 
 	onFormatChanged();
@@ -418,11 +425,13 @@ void ExportOptionsDialog::onFormatChanged()
 
 bool ExportOptionsDialog::exportRange() const
 {
-	return scopeCombo_ && scopeCombo_->currentData().toInt() == 1;
+	return !sparkMode() && scopeCombo_ && scopeCombo_->currentData().toInt() == 1;
 }
 
 double ExportOptionsDialog::exportSeconds() const
 {
+	if (sparkMode())
+		return ctx_.sparkSeconds * sparkCount();
 	if (batchMode())
 		return batchSeconds();
 	return exportRange() ? ctx_.rangeSeconds : ctx_.seconds;
@@ -517,19 +526,89 @@ void ExportOptionsDialog::buildBatchTab()
 	form->addRow(QString(), batchOpen_);
 	v->addLayout(form);
 
-	tabs_->addTab(page, variants ? QStringLiteral("Variations  (%1 versions)").arg(n)
+	batchTabIndex_ = tabs_->addTab(page, variants ? QStringLiteral("Variations  (%1 versions)").arg(n)
 				     : QStringLiteral("Batch  (%1 cuts)").arg(n));
+}
+
+void ExportOptionsDialog::buildSparkTab()
+{
+	auto *page = new QWidget(this);
+	auto *layout = new QVBoxLayout(page);
+	auto *hint = new QLabel(QStringLiteral(
+		"Spark exports the whole timeline in unique footage orders, with starred blocks first. "
+		"Groups and linked media stay together. Background sound and separate text stay at their original times. "
+		"The editor stays unchanged. Format, quality, size, frame rate, folder and audio come from Single video."), page);
+	hint->setWordWrap(true);
+	layout->addWidget(hint);
+	auto *form = new QFormLayout;
+	sparkRequested_ = new QSpinBox(page);
+	sparkRequested_->setObjectName(QStringLiteral("sparkRequested"));
+	sparkRequested_->setRange(1, spark::kMaxExports);
+	sparkRequested_->setValue(10);
+	form->addRow(QStringLiteral("Videos requested"), sparkRequested_);
+	sparkPrefix_ = new QLineEdit(ctx_.defaultName + QStringLiteral("_spark"), page);
+	sparkPrefix_->setObjectName(QStringLiteral("sparkPrefix"));
+	form->addRow(QStringLiteral("File prefix"), sparkPrefix_);
+	sparkOpen_ = new QCheckBox(QStringLiteral("Open the folder when finished"), page);
+	sparkOpen_->setChecked(true);
+	sparkOpen_->setObjectName(QStringLiteral("sparkOpenFolder"));
+	form->addRow(QString(), sparkOpen_);
+	layout->addLayout(form);
+	const QString unique = ctx_.sparkUniqueOrders >= spark::kOrderCountCap
+		? QStringLiteral("more than 1,000,000,000") : QString::number(ctx_.sparkUniqueOrders);
+	auto *stats = new QLabel(QStringLiteral("%1 footage blocks · %2 favorites · %3 unique orders")
+		.arg(ctx_.sparkBlocks).arg(ctx_.sparkFavorites).arg(unique), page);
+	stats->setObjectName(QStringLiteral("sparkStats"));
+	layout->addWidget(stats);
+	sparkCount_ = new QLabel(page);
+	sparkCount_->setObjectName(QStringLiteral("sparkActualCount"));
+	sparkCount_->setWordWrap(true);
+	layout->addWidget(sparkCount_);
+	if (!ctx_.sparkError.isEmpty()) {
+		auto *error = new QLabel(ctx_.sparkError, page);
+		error->setWordWrap(true);
+		layout->addWidget(error);
+	}
+	layout->addStretch();
+	sparkTabIndex_ = tabs_->addTab(page, QStringLiteral("Spark"));
+	connect(sparkRequested_, &QSpinBox::valueChanged, this, &ExportOptionsDialog::refresh);
+}
+
+bool ExportOptionsDialog::sparkMode() const
+{
+	return tabs_ && sparkTabIndex_ >= 0 && tabs_->currentIndex() == sparkTabIndex_;
+}
+
+int ExportOptionsDialog::sparkCount() const
+{
+	return sparkRequested_ && ctx_.sparkError.isEmpty()
+		? int(std::min<qint64>(sparkRequested_->value(), ctx_.sparkUniqueOrders)) : 0;
+}
+
+QString ExportOptionsDialog::sparkPrefix() const
+{
+	return sparkPrefix_ ? sparkPrefix_->text() : QString();
+}
+
+bool ExportOptionsDialog::sparkOpenFolder() const
+{
+	return sparkOpen_ && sparkOpen_->isChecked();
+}
+
+void ExportOptionsDialog::setSparkTabForTest(bool on)
+{
+	if (tabs_ && sparkTabIndex_ >= 0) tabs_->setCurrentIndex(on ? sparkTabIndex_ : 0);
 }
 
 bool ExportOptionsDialog::batchMode() const
 {
-	return tabs_ && tabs_->currentIndex() == 1;
+	return tabs_ && batchTabIndex_ >= 0 && tabs_->currentIndex() == batchTabIndex_;
 }
 
 void ExportOptionsDialog::setBatchTabForTest(bool on)
 {
-	if (tabs_)
-		tabs_->setCurrentIndex(on ? 1 : 0);
+	if (tabs_ && batchTabIndex_ >= 0)
+		tabs_->setCurrentIndex(on ? batchTabIndex_ : 0);
 }
 
 QVector<int> ExportOptionsDialog::batchSelection() const
@@ -612,7 +691,7 @@ void ExportOptionsDialog::refresh()
 	if (tabs_) {
 		const int sel = batchSelection().size();
 		const bool variants = !ctx_.variantLabels.isEmpty();
-		batchCount_->setText(QStringLiteral("%1 of %2 selected · %3 s in all")
+		if (batchCount_) batchCount_->setText(QStringLiteral("%1 of %2 selected · %3 s in all")
 					     .arg(sel)
 					     .arg(variants ? ctx_.variantLabels.size() : ctx_.batchCuts.size())
 					     .arg(batchSeconds(), 0, 'f', 1));
@@ -627,6 +706,16 @@ void ExportOptionsDialog::refresh()
 		}
 	}
 
+	if (sparkCount_) {
+		QString count = QStringLiteral("%1 videos will export.").arg(sparkCount());
+		if (sparkRequested_->value() > ctx_.sparkUniqueOrders && ctx_.sparkError.isEmpty())
+			count += QStringLiteral(" Fewer unique orders exist than requested; equivalent copies count as the same order.");
+		sparkCount_->setText(count);
+	}
+	if (sparkMode()) {
+		exportBtn_->setText(QStringLiteral("Export %1 Spark videos").arg(sparkCount()));
+		exportBtn_->setEnabled(sparkCount() > 0);
+	}
 	const QSize out = outputSize().isValid() ? outputSize() : ctx_.sourceSize;
 	if (qualityLabel_)
 		qualityLabel_->setText(

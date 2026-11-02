@@ -550,11 +550,6 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 		 QStringLiteral("30 suits most screen capture. 60 is smoother, but may need a higher bitrate for similar quality."),
 		 fpsCombo_);
 
-	gpuCheck_ = new QCheckBox(QStringLiteral("Use GPU compression while recording"), this);
-	gpuCheck_->setChecked(preset.gpuCompression);
-	addCheck(v, gpuCheck_,
-		 QStringLiteral("Encodes on the graphics card. Much lighter on the system."));
-
 	validationLabel_ = new QLabel(this);
 	validationLabel_->setWordWrap(true);
 	validationLabel_->setStyleSheet(QStringLiteral("color:#d29922;"));
@@ -1316,6 +1311,11 @@ PresetEditorDialog::PresetEditorDialog(const Preset &preset, AudioManager &audio
 
 	// ===== Advanced =====
 	QWidget *advancedPage = makePage(v);
+	gpuCheck_ = new QCheckBox(QStringLiteral("Use GPU compression while recording"), this);
+	gpuCheck_->setObjectName(QStringLiteral("recordingGpuCompression"));
+	gpuCheck_->setChecked(preset.gpuCompression);
+	gpuCompressionRow_ = addCheck(v, gpuCheck_,
+		QStringLiteral("Encodes on the graphics card. Much lighter on the system."));
 	frameRateModeCombo_ = new QComboBox(this);
 	frameRateModeCombo_->addItem(QStringLiteral("Constant (CFR)"), int(FrameRateMode::CFR));
 	frameRateModeCombo_->addItem(QStringLiteral("Variable (VFR)"), int(FrameRateMode::VFR));
@@ -1617,7 +1617,6 @@ template <class F> void forEachPageField(const QString &page, F &&f)
 		f(&Preset::format);
 		f(&Preset::codec);
 		f(&Preset::fps);
-		f(&Preset::gpuCompression);
 	} else if (page == QStringLiteral("Audio")) {
 		f(&Preset::recordDesktopAudio);
 		f(&Preset::micDeviceIds);
@@ -1672,6 +1671,7 @@ template <class F> void forEachPageField(const QString &page, F &&f)
 		f(&Preset::webcamUseCustomFolder);
 		f(&Preset::webcamFolder);
 	} else if (page == QStringLiteral("Advanced")) {
+		f(&Preset::gpuCompression);
 		f(&Preset::frameRateMode);
 		f(&Preset::videoBitrateKbps);
 	}
@@ -2041,6 +2041,7 @@ void PresetEditorDialog::updateValidation()
 			row->setVisible(on);
 	};
 	showRow(codecRow_, !isGif);
+	showRow(gpuCompressionRow_, !isGif);
 	showRow(bitrateRow_, !isGif);
 	showRow(frameRateModeRow_, !isGif);
 	showRow(audioSection_, !isGif);

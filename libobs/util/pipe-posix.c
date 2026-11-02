@@ -20,6 +20,7 @@
 #include <errno.h>
 #include <spawn.h>
 #include <fcntl.h>
+#include <poll.h>
 
 #include "bmem.h"
 #include "pipe.h"
@@ -183,7 +184,13 @@ size_t os_process_pipe_read_err(os_process_pipe_t *pp, uint8_t *data, size_t len
 		return 0;
 	}
 
-	return fread(data, 1, len, pp->err_file);
+	if (!len)
+		return 0;
+	struct pollfd fd = {.fd = fileno(pp->err_file), .events = POLLIN};
+	if (poll(&fd, 1, 0) <= 0 || !(fd.revents & (POLLIN | POLLHUP)))
+		return 0;
+	ssize_t count = read(fd.fd, data, len);
+	return count > 0 ? (size_t)count : 0;
 }
 
 size_t os_process_pipe_write(os_process_pipe_t *pp, const uint8_t *data, size_t len)

@@ -1,5 +1,6 @@
 // Set a common duration through the real clip menu and its dialog. Durations
 // are in output time: every video keeps its source in-point and playback rate.
+#include "support/ContextMenu.hpp"
 #include "editor/timeline/TimelineView.hpp"
 
 #include <QApplication>
@@ -82,6 +83,7 @@ static DialogResult chooseDuration(TimelineView &v, int clip, double seconds, bo
 	watchdog.setSingleShot(true);
 	QObject::connect(&driver, &QTimer::timeout, [&]() {
 		if (auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget())) {
+			menu = test_menu::openSubmenu(menu, QStringLiteral("Timing"));
 			for (QAction *a : menu->actions()) {
 				if (!a->text().startsWith(QStringLiteral("Set duration…")))
 					continue;
@@ -93,7 +95,7 @@ static DialogResult chooseDuration(TimelineView &v, int clip, double seconds, bo
 					return;
 				}
 			}
-			menu->close();
+			test_menu::dismiss(menu);
 			return;
 		}
 		for (QWidget *widget : QApplication::topLevelWidgets()) {
@@ -119,7 +121,7 @@ static DialogResult chooseDuration(TimelineView &v, int clip, double seconds, bo
 			if (auto *dialog = qobject_cast<QInputDialog *>(widget))
 				dialog->reject();
 			if (auto *menu = qobject_cast<QMenu *>(widget))
-				menu->close();
+				test_menu::dismiss(menu);
 		}
 	});
 	driver.start();

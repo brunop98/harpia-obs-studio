@@ -776,15 +776,16 @@ void ComponentPanel::pushValues()
 void ComponentPanel::componentMenu(const QString &typeId, int ordinal)
 {
 	QMenu menu(this);
+	menu.setObjectName(QStringLiteral("componentContextMenu"));
 	// Spelling out "on all 5 clips" rather than leaving it implied: a batch
 	// operation that quietly touched more than you meant is not undoable in the
 	// user's head even when it is in the program's.
 	const QString all = view_.clipCount > 1
 				    ? QStringLiteral(" on all %1 clips").arg(view_.clipCount)
 				    : QString();
+	QAction *reset = nullptr;
 	if (ordinal >= 0) {
-		QAction *reset = menu.addAction(QStringLiteral("Reset to defaults") + all);
-		menu.addSeparator();
+		reset = new QAction(QStringLiteral("Reset to defaults") + all, &menu);
 		QAction *copy = menu.addAction(QStringLiteral("Copy component"));
 		QAction *paste = menu.addAction(QStringLiteral("Paste values") + all);
 		QAction *dup = menu.addAction(QStringLiteral("Duplicate") + all);
@@ -798,40 +799,49 @@ void ComponentPanel::componentMenu(const QString &typeId, int ordinal)
 			[this, typeId, ordinal] { emit componentDuplicated(typeId, ordinal); });
 		menu.addSeparator();
 	}
-	auto *save = menu.addAction(QStringLiteral("Save as preset…"));
+	auto *presetMenu = menu.addMenu(QStringLiteral("Presets"));
+	presetMenu->setObjectName(QStringLiteral("componentPresetsMenu"));
+	auto *save = presetMenu->addAction(QStringLiteral("Save as preset…"));
 	save->setObjectName(QStringLiteral("saveComponentPreset"));
 	save->setToolTip(view_.clipCount > 1
 		? QStringLiteral("Save the primary clip's settings and animation for use in any project.")
 		: QStringLiteral("Save these settings and animation for use in any project."));
 	connect(save, &QAction::triggered, this,
 		[this, typeId, ordinal] { emit componentPresetSaveRequested(typeId, ordinal); });
-	auto *apply = menu.addMenu(QStringLiteral("Apply preset") + all);
-	apply->setObjectName(QStringLiteral("applyComponentPreset"));
-	auto *remove = menu.addMenu(QStringLiteral("Delete preset"));
-	remove->setObjectName(QStringLiteral("deleteComponentPreset"));
 	QString error;
-	const auto presets = component_presets::Store().load(&error);
-	int count = 0;
+	QVector<component_presets::Preset> presets;
+	for (const auto &preset : component_presets::Store().load(&error))
+		if (preset.component.value(QStringLiteral("type")).toString() == typeId)
+			presets.append(preset);
+	// Apply and delete are flat sections, not another pair of nested menus.
+	// Every context-menu command stays within one submenu of the root.
+	presetMenu->addSection(QStringLiteral("Apply preset") + all);
 	for (const auto &preset : presets) {
-		if (preset.component.value(QStringLiteral("type")).toString() != typeId)
-			continue;
-		++count;
-		auto *use = apply->addAction(preset.name);
+		auto *use = presetMenu->addAction(preset.name);
+		use->setObjectName(QStringLiteral("applyComponentPreset"));
 		use->setData(preset.id);
 		connect(use, &QAction::triggered, this,
 			[this, id = preset.id, typeId, ordinal] {
 				emit componentPresetApplied(id, typeId, ordinal);
 			});
-		auto *del = remove->addAction(preset.name);
-		del->setData(preset.id);
-		connect(del, &QAction::triggered, this,
-			[this, id = preset.id] { emit componentPresetDeleteRequested(id); });
 	}
-	if (!count) {
-		apply->addAction(error.isEmpty() ? QStringLiteral("No saved presets")
-					       : QStringLiteral("Could not read presets"))->setEnabled(false);
-		apply->setToolTip(error);
-		remove->menuAction()->setVisible(false);
+	if (presets.isEmpty()) {
+		presetMenu->addAction(error.isEmpty() ? QStringLiteral("No saved presets")
+						    : QStringLiteral("Could not read presets"))->setEnabled(false);
+		presetMenu->setToolTip(error);
+	} else {
+		presetMenu->addSection(QStringLiteral("Delete preset"));
+		for (const auto &preset : presets) {
+			auto *del = presetMenu->addAction(QStringLiteral("Delete “%1”…").arg(preset.name));
+			del->setObjectName(QStringLiteral("deleteComponentPreset"));
+			del->setData(preset.id);
+			connect(del, &QAction::triggered, this,
+				[this, id = preset.id] { emit componentPresetDeleteRequested(id); });
+		}
+	}
+	if (reset) {
+		menu.addSeparator();
+		menu.addAction(reset);
 	}
 	menu.exec(QCursor::pos());
 }

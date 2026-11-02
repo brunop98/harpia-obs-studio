@@ -1,5 +1,6 @@
 // Real right-click workflow: names and shared quality reach encoded files;
 // unrelated layers/music/voiceover stay out and the editor stays untouched.
+#include "support/ContextMenu.hpp"
 #include "editor/VideoEditorWindow.hpp"
 #include "editor/ExportOptionsDialog.hpp"
 #include "editor/VoiceoverTrack.hpp"
@@ -116,6 +117,7 @@ int main(int argc, char **argv)
 	QTimer driver; driver.setInterval(10);
 	QObject::connect(&driver, &QTimer::timeout, [&]() {
 		if (auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget())) {
+			menu = test_menu::openSubmenu(menu, QStringLiteral("Export"));
 			for (QAction *action : menu->actions())
 				if (action->objectName() == QStringLiteral("exportClipsSeparatelyAction")) {
 					menuFound = action->isEnabled() && action->text().contains(QStringLiteral("2 clips"));
@@ -124,7 +126,7 @@ int main(int argc, char **argv)
 					QApplication::sendEvent(menu, &enter);
 					return;
 				}
-			menu->close();
+			test_menu::dismiss(menu);
 		}
 		for (QWidget *top : QApplication::topLevelWidgets()) {
 			if (auto *dlg = qobject_cast<ExportOptionsDialog *>(top); dlg && dlg->isVisible() && !accepted) {

@@ -14,6 +14,7 @@
 //
 // The source numbers its own frames (eight black or white bands, one per
 // bit), so "the preview shows frame 60" is something the test can read.
+#include "support/ContextMenu.hpp"
 #include "editor/AudioPreview.hpp"
 #include "editor/FrameSeeker.hpp"
 #include "editor/SlipDialog.hpp"
@@ -472,6 +473,7 @@ int main(int argc, char **argv)
 		QObject::connect(&driver, &QTimer::timeout, [&]() {
 			// The clip's menu: choose Slip..., as a user would.
 			if (auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget())) {
+				menu = test_menu::openSubmenu(menu, QStringLiteral("Timing"));
 				for (QAction *a : menu->actions())
 					if (a->text() == QStringLiteral("Slip\u2026") && a->isEnabled()) {
 						menuHadSlip = true;
@@ -480,7 +482,7 @@ int main(int argc, char **argv)
 						QApplication::sendEvent(menu, &ret);
 						return;
 					}
-				menu->close();
+				test_menu::dismiss(menu);
 				return;
 			}
 			for (QWidget *top : QApplication::topLevelWidgets()) {

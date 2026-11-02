@@ -148,7 +148,7 @@ bool choosePresetFromAdd(ComponentPanel *panel, const QString &name)
 	return chosen;
 }
 bool choosePresetFromComponentMenu(ComponentPanel *panel, const QString &type, int ordinal,
-				   const QString &submenuName, const QString &id,
+				   const QString &actionName, const QString &id,
 				   QMessageBox::StandardButton confirmation = QMessageBox::No)
 {
 	bool chosen = false, timedOut = false;
@@ -174,13 +174,12 @@ bool choosePresetFromComponentMenu(ComponentPanel *panel, const QString &type, i
 		if (chosen)
 			return;
 		if (auto *menu = visibleMenu())
-			if (auto *submenu = menu->findChild<QMenu *>(submenuName))
-				for (auto *action : submenu->actions())
-					if (action->data().toString() == id) {
-						chosen = true;
-						QTimer::singleShot(0, menu, [menu, action]() { action->trigger(); menu->close(); });
-						return;
-					}
+			for (auto *action : menu->findChildren<QAction *>(actionName))
+				if (action->data().toString() == id) {
+					chosen = true;
+					QTimer::singleShot(0, menu, [menu, action]() { action->trigger(); menu->close(); });
+					return;
+				}
 	});
 	responder.start(10);
 	panel->componentMenu(type, ordinal);
@@ -255,7 +254,7 @@ int main(int argc, char **argv)
 		track.clips = {primary, peer};
 		TimelineModel timeline;
 		timeline.tracks = {track};
-		model(source, timeline, TlSelection{0, 0, false, {{0, 1}}});
+		model(source, timeline, TlSelection{0, 0, false, false, {{0, 1}}});
 		check(saveThroughPanel(source, type, 1, QStringLiteral("Slow animated spin")),
 		      "Save as preset opens a naming dialog through the component panel");
 		id = presetId(QStringLiteral("Slow animated spin"));
@@ -269,7 +268,7 @@ int main(int argc, char **argv)
 		      "saving a preset leaves project components untouched");
 		TimelineModel changed = source.timelineView_->model();
 		changed.tracks[0].clips[0].components[1].props[QStringLiteral("degreesPerSecond")] = 99;
-		model(source, changed, TlSelection{0, 0, false, {}});
+		model(source, changed, TlSelection{0, 0, false, false, {}});
 		check(saveThroughPanel(source, type, 1, QStringLiteral("Slow animated spin"), QMessageBox::No) &&
 		      componentFromJson(component_presets::Store().load().front().component, ComponentRegistry::instance()).props == saved.props,
 		      "canceling replacement keeps the existing named preset unchanged");
@@ -293,7 +292,7 @@ int main(int argc, char **argv)
 		locked.locked = true;
 		TimelineModel timeline;
 		timeline.tracks = {track, locked};
-		model(destination, timeline, TlSelection{0, 0, false, {{0, 1}, {1, 0}}});
+		model(destination, timeline, TlSelection{0, 0, false, false, {{0, 1}, {1, 0}}});
 		bool menuContainsSaved = false;
 		QTimer menuRescue;
 		menuRescue.setSingleShot(true);
@@ -304,11 +303,10 @@ int main(int argc, char **argv)
 			if (!menu)
 				return;
 			const auto *save = menu->findChild<QAction *>(QStringLiteral("saveComponentPreset"));
-			const auto *apply = menu->findChild<QMenu *>(QStringLiteral("applyComponentPreset"));
-			const auto *remove = menu->findChild<QMenu *>(QStringLiteral("deleteComponentPreset"));
-			menuContainsSaved = save && apply && remove && !apply->actions().isEmpty() &&
-				apply->actions().front()->data().toString() == id &&
-				remove->actions().front()->data().toString() == id;
+			const auto *apply = menu->findChild<QAction *>(QStringLiteral("applyComponentPreset"));
+			const auto *remove = menu->findChild<QAction *>(QStringLiteral("deleteComponentPreset"));
+			menuContainsSaved = save && apply && remove &&
+				apply->data().toString() == id && remove->data().toString() == id;
 			menu->close();
 		});
 		destination.componentPanel_->componentMenu(type, 1);
@@ -347,7 +345,7 @@ int main(int argc, char **argv)
 		freshTrack.clips = {existing, emptyA, emptyB};
 		TimelineModel fresh;
 		fresh.tracks = {freshTrack};
-		model(destination, fresh, TlSelection{0, 0, false, {{0, 1}, {0, 2}}});
+		model(destination, fresh, TlSelection{0, 0, false, false, {{0, 1}, {0, 2}}});
 		check(choosePresetFromAdd(destination.componentPanel_, QStringLiteral("Slow animated spin")),
 		      "saved presets are searchable and selectable in the real Add Component popup");
 		const auto add = destination.timelineView_->model();
@@ -387,7 +385,7 @@ int main(int argc, char **argv)
 		track.clips = {source, destination};
 		TimelineModel timeline;
 		timeline.tracks = {track};
-		model(window, timeline, TlSelection{0, 0, false, {}});
+		model(window, timeline, TlSelection{0, 0, false, false, {}});
 		check(saveThroughPanel(window, QStringLiteral("harpia.transform"), -1, QStringLiteral("Animated pose")),
 		      "pinned Transform can be saved as a preset");
 		const QString poseId = presetId(QStringLiteral("Animated pose"));
@@ -414,7 +412,7 @@ int main(int argc, char **argv)
 		videos.clips = {fast, other, tail};
 		TimelineModel speedTimeline;
 		speedTimeline.tracks = {videos};
-		model(window, speedTimeline, TlSelection{0, 0, false, {}});
+		model(window, speedTimeline, TlSelection{0, 0, false, false, {}});
 		check(saveThroughPanel(window, QStringLiteral("harpia.speed"), -1, QStringLiteral("Double speed")),
 		      "pinned Speed can be saved as a preset");
 		window.timelineView_->selectClip(0, 1);
@@ -444,7 +442,7 @@ int main(int argc, char **argv)
 		track.clips = {clip};
 		TimelineModel timeline;
 		timeline.tracks = {track};
-		model(window, timeline, TlSelection{0, 0, false, {}});
+		model(window, timeline, TlSelection{0, 0, false, false, {}});
 		check(oldSoundId >= 0 && saveThroughPanel(window, sound.typeId, 0, QStringLiteral("Reusable sound")),
 		      "Sound component saves its selected audio for reuse in another project");
 		soundPreset = presetId(QStringLiteral("Reusable sound"));
@@ -458,7 +456,7 @@ int main(int argc, char **argv)
 		track.clips = {caption()};
 		TimelineModel timeline;
 		timeline.tracks = {track};
-		model(window, timeline, TlSelection{0, 0, false, {}});
+		model(window, timeline, TlSelection{0, 0, false, false, {}});
 		emit window.componentPanel_->componentPresetApplied(soundPreset, QString(), -1);
 		const auto components = window.timelineView_->model().tracks[0].clips[0].components;
 		const int inId = components.isEmpty() ? -1 : components[0].props.value(QStringLiteral("inSound")).toInt();
@@ -527,7 +525,7 @@ int main(int argc, char **argv)
 		track.clips = {clip};
 		TimelineModel timeline;
 		timeline.tracks = {track};
-		model(window, timeline, TlSelection{0, 0, false, {}});
+		model(window, timeline, TlSelection{0, 0, false, false, {}});
 		const QString removeId = component_presets::Store().save(QStringLiteral("Temporary remove"), saved, ComponentRegistry::instance());
 		const auto before = window.timelineView_->model();
 		check(choosePresetFromComponentMenu(window.componentPanel_, type, 0,

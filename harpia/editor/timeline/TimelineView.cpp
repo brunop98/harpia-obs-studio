@@ -1515,6 +1515,11 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 	const bool canMute = TlTrack::kindCanMute(t.kind);
 
 	QMenu menu(this);
+	menu.setObjectName(QStringLiteral("timelineTrackMenu"));
+	auto *audio = new QMenu(QStringLiteral("Audio and captions"), &menu);
+	auto *rippleMenu = new QMenu(QStringLiteral("Ripple"), &menu);
+	auto *appearance = new QMenu(QStringLiteral("Appearance"), &menu);
+	auto *arrange = new QMenu(QStringLiteral("Arrange tracks"), &menu);
 	// An effect track's whole purpose is to carry effects, so putting one on it
 	// is the first thing its menu should offer. The entry opens the same
 	// searchable picker as the Inspector's Add Component: type a few letters,
@@ -1523,43 +1528,42 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 	QAction *addFxClip = nullptr;
 	if (t.kind == TlTrack::Kind::Effect && !t.locked) {
 		addFxClip = menu.addAction(QStringLiteral("Add effect…"));
-		menu.addSeparator();
 	}
 	QAction *subsTrack = nullptr;
 	if (t.kind == TlTrack::Kind::Audio && !t.autoSounds && !t.clips.isEmpty()) {
-		subsTrack = menu.addAction(QStringLiteral("Generate subtitles for this track…"));
+		subsTrack = audio->addAction(QStringLiteral("Generate subtitles for this track…"));
 		subsTrack->setToolTip(QStringLiteral("Transcribe every clip on this lane into caption clips."));
-		menu.addSeparator();
 	}
 	QAction *freezeSounds = nullptr;
 	if (t.autoSounds) {
-		freezeSounds = menu.addAction(QStringLiteral("Convert to normal clips"));
+		freezeSounds = audio->addAction(QStringLiteral("Convert to normal clips"));
 		freezeSounds->setToolTip(QStringLiteral(
 			"This is the Sounds lane: its clips are made by the sound rules and remade on "
 			"every change, so they cannot be moved by hand. Converting hands them to you as "
 			"ordinary audio clips and removes the rules."));
 		menu.setToolTipsVisible(true);
-		menu.addSeparator();
 	}
 	QAction *lock = menu.addAction(t.locked ? QStringLiteral("Unlock track")
 						: QStringLiteral("Lock track"));
 	QAction *hide = canHide ? menu.addAction(t.hidden ? QStringLiteral("Show track")
 							  : QStringLiteral("Hide track"))
 				: nullptr;
-	QAction *mute = canMute ? menu.addAction(t.muted ? QStringLiteral("Unmute track")
+	if (!audio->isEmpty())
+		audio->addSeparator();
+	QAction *mute = canMute ? audio->addAction(t.muted ? QStringLiteral("Unmute track")
 							 : QStringLiteral("Mute track"))
 				: nullptr;
 	// Solo and gain sit with Mute: the three sound controls, in the order the
 	// header chips have them.
 	const bool hasSound = TlTrack::kindHasSound(t.kind);
-	QAction *solo = hasSound ? menu.addAction(t.solo ? QStringLiteral("Unsolo track")
+	QAction *solo = hasSound ? audio->addAction(t.solo ? QStringLiteral("Unsolo track")
 							 : QStringLiteral("Solo track"))
 				 : nullptr;
-	QAction *gainAct = hasSound ? menu.addAction(QStringLiteral("Track gain… (%1%)")
+	QAction *gainAct = hasSound ? audio->addAction(QStringLiteral("Track gain… (%1%)")
 							     .arg(gainPercent(t.gain)))
 				    : nullptr;
-	QAction *ripple = menu.addAction(QStringLiteral("Auto ripple on delete"));
-	QAction *speedRipple = menu.addAction(QStringLiteral("Auto ripple on speed change"));
+	QAction *ripple = rippleMenu->addAction(QStringLiteral("Auto ripple on delete"));
+	QAction *speedRipple = rippleMenu->addAction(QStringLiteral("Auto ripple on speed change"));
 	speedRipple->setObjectName(QStringLiteral("timelineTrackRippleSpeed"));
 	speedRipple->setCheckable(true);
 	speedRipple->setChecked(t.rippleSpeed);
@@ -1568,7 +1572,7 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 		"Faster playback pulls them earlier; slower playback pushes them later. Existing gaps and overlaps are kept."));
 	menu.setToolTipsVisible(true);
 	// Close every gap now, rather than only as clips are deleted.
-	QAction *forceRip = menu.addAction(QStringLiteral("Force ripple (remove gaps)"));
+	QAction *forceRip = rippleMenu->addAction(QStringLiteral("Force ripple (remove gaps)"));
 	{
 		TlTrack probe = t;
 		disableBecause(forceRip, !t.locked && closeTrackGaps(probe) > 0,
@@ -1577,12 +1581,10 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 	}
 	ripple->setCheckable(true);
 	ripple->setChecked(t.ripple);
-	menu.addSeparator();
-	QAction *rename = menu.addAction(QStringLiteral("Rename track…"));
-	QAction *colour = menu.addAction(QStringLiteral("Track colour…"));
-	QAction *reroll = menu.addAction(QStringLiteral("Random colour"));
+	QAction *rename = appearance->addAction(QStringLiteral("Rename track…"));
+	QAction *colour = appearance->addAction(QStringLiteral("Track colour…"));
+	QAction *reroll = appearance->addAction(QStringLiteral("Random colour"));
 	QAction *moveUp = nullptr, *moveDown = nullptr;
-	menu.addSeparator();
 	// Move up / down, for the keyboard-and-menu route to what dragging the
 	// header does. Greyed at the edge of the lane's own group rather than
 	// hidden, so the edge is visible as an edge.
@@ -1591,23 +1593,29 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 		const int np = model_.pictureTrackCount();
 		const int lo = picture ? 0 : np;
 		const int hi = picture ? np : int(model_.tracks.size());
-		moveUp = menu.addAction(QStringLiteral("Move track up"));
+		moveUp = arrange->addAction(QStringLiteral("Move track up"));
 		disableBecause(moveUp, track > lo,
 			       QStringLiteral("This lane is already the top one of its group. Picture "
 					      "lanes stay above audio lanes."));
-		moveDown = menu.addAction(QStringLiteral("Move track down"));
+		moveDown = arrange->addAction(QStringLiteral("Move track down"));
 		disableBecause(moveDown, track < hi - 1,
 			       QStringLiteral("This lane is already the bottom one of its group. Picture "
 					      "lanes stay above audio lanes."));
 	}
-	menu.addSeparator();
-	QAction *addAbove = menu.addAction(QStringLiteral("Add track above"));
-	QAction *addBelow = menu.addAction(QStringLiteral("Add track below"));
+	QAction *addAbove = arrange->addAction(QStringLiteral("Add track above"));
+	QAction *addBelow = arrange->addAction(QStringLiteral("Add track below"));
 	// An effect track can only go among the picture tracks: where it sits is
 	// what decides which tracks it grades.
 	QAction *addFx = TimelineModel::isPictureKind(t.kind)
-				 ? menu.addAction(QStringLiteral("Add effect track above"))
+				 ? arrange->addAction(QStringLiteral("Add effect track above"))
 				 : nullptr;
+	menu.addSeparator();
+	for (QMenu *submenu : {audio, rippleMenu, appearance, arrange})
+		if (!submenu->isEmpty()) {
+			menu.addMenu(submenu);
+			explainDisabled(submenu);
+		}
+	menu.addSeparator();
 	QAction *del = menu.addAction(QStringLiteral("Delete track"));
 	explainDisabled(&menu);
 
@@ -5213,6 +5221,11 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		"This lane is locked, so its clips cannot change. Right-click the lane header "
 		"(or the lock icon) and choose Unlock track.");
 	QMenu menu(this);
+	menu.setObjectName(QStringLiteral("timelineClipMenu"));
+	auto *timing = new QMenu(QStringLiteral("Timing"), &menu);
+	auto *organize = new QMenu(QStringLiteral("Organize"), &menu);
+	auto *audio = new QMenu(QStringLiteral("Audio and captions"), &menu);
+	auto *exports = new QMenu(QStringLiteral("Export"), &menu);
 	const TlClip &menuClip = model_.tracks[track].clips[clip];
 	const bool isFx = menuClip.type == TlClip::Type::Effect;
 
@@ -5232,7 +5245,7 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		exportSpan.fromMs = menuClip.outStartMs;
 		exportSpan.toMs = menuClip.outEndMs();
 	}
-	QAction *exportSel = menu.addAction(
+	QAction *exportSel = exports->addAction(
 		(inSel && sel.size() > 1)
 			? QStringLiteral("Export selection…  (%1 clips)").arg(sel.size())
 			: QStringLiteral("Export this clip…"));
@@ -5240,7 +5253,7 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		"Opens the usual Export window for just this stretch of the timeline — every "
 		"track inside it, so the excerpt looks like what you were watching."));
 	const auto separate = separate_clips::targets(model_, selectedPairs());
-	auto *exportSeparate = menu.addAction(QStringLiteral("Export clips separately…  (%1 clips)").arg(separate.size()));
+	auto *exportSeparate = exports->addAction(QStringLiteral("Export clips separately…  (%1 clips)").arg(separate.size()));
 	exportSeparate->setObjectName(QStringLiteral("exportClipsSeparatelyAction"));
 	exportSeparate->setEnabled(!separate.isEmpty());
 	exportSeparate->setToolTip(QStringLiteral(
@@ -5252,7 +5265,7 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	// the menu is the fast route to the panel's most common setting.
 	QAction *randomSel = nullptr;
 	if (inSel && sel.size() > 1) {
-		randomSel = menu.addAction(
+		randomSel = organize->addAction(
 			QStringLiteral("Randomize order of selected clips  (%1)").arg(sel.size()));
 		randomSel->setToolTip(QStringLiteral(
 			"Shuffle these clips among their own slots. Everything else stays put; "
@@ -5264,7 +5277,7 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	const qint64 durationLimit = selectedVideoDurationLimitMs();
 	if (inSel && menuClip.type == TlClip::Type::Video &&
 	    model_.tracks[track].kind == TlTrack::Kind::Video && videos.size() > 1) {
-		setDuration = menu.addAction(QStringLiteral("Set duration…  (%1 video clips)").arg(videos.size()));
+		setDuration = timing->addAction(QStringLiteral("Set duration…  (%1 video clips)").arg(videos.size()));
 		setDuration->setToolTip(QStringLiteral(
 			"Trim the selected videos to the same duration, up to the shortest selected clip. "
 			"Their start times and playback speeds stay the same. Locked tracks are not changed."));
@@ -5278,17 +5291,16 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		       locked ? lockedWhy
 			      : QStringLiteral("An effect clip has no position or scale to key. Its own "
 					       "settings are animated from the Inspector."));
-	QAction *fxToggle = isFx ? menu.addAction(menuClip.fx.enabled
+	QAction *fxToggle = isFx ? organize->addAction(menuClip.fx.enabled
 							  ? QStringLiteral("Disable effect")
 							  : QStringLiteral("Enable effect"))
 				 : nullptr;
-	QAction *fxRename = isFx ? menu.addAction(QStringLiteral("Rename effect…")) : nullptr;
+	QAction *fxRename = isFx ? organize->addAction(QStringLiteral("Rename effect…")) : nullptr;
 	disableBecause(fxToggle, !locked, lockedWhy);
 	disableBecause(fxRename, !locked, lockedWhy);
-	menu.addSeparator();
 	// "Stay on for the whole video": start at 0, end where the last media
 	// clip ends. Greyed when there is no media to measure against.
-	QAction *fitAll = menu.addAction(QStringLiteral("Fit to whole timeline"));
+	QAction *fitAll = timing->addAction(QStringLiteral("Fit to whole timeline"));
 	fitAll->setToolTip(QStringLiteral(
 		"Start at 0 and end where the last video or audio clip ends, so this is on screen for "
 		"the whole video. A media clip is re-timed (its speed changes) to fit."));
@@ -5309,7 +5321,7 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 					       "Right-click further inside the clip.")
 					.arg(kMinClipMs));
 	// Slip: another moment of the same footage, without trimming or moving.
-	QAction *slip = menu.addAction(QStringLiteral("Slip…"));
+	QAction *slip = timing->addAction(QStringLiteral("Slip…"));
 	{
 		QString why;
 		const bool can = canSlip(track, clip, &why);
@@ -5321,7 +5333,7 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	// (Export > Variations), the way a Random text has several texts.
 	QAction *randomAct = nullptr;
 	if (menuClip.type == TlClip::Type::Video) {
-		randomAct = menu.addAction(menuClip.isRandomClip()
+		randomAct = organize->addAction(menuClip.isRandomClip()
 						   ? QStringLiteral("Make normal clip  (keep the one shown)")
 						   : QStringLiteral("Make random clip"));
 		randomAct->setToolTip(
@@ -5343,7 +5355,7 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	QAction *favorite = nullptr;
 	if (model_.tracks[track].kind == TlTrack::Kind::Video &&
 	    (menuClip.type == TlClip::Type::Video || menuClip.type == TlClip::Type::Image)) {
-		favorite = menu.addAction(QStringLiteral("Favorite for Spark"));
+		favorite = organize->addAction(QStringLiteral("Favorite for Spark"));
 		favorite->setObjectName(QStringLiteral("timelineFavoriteSpark"));
 		favorite->setCheckable(true);
 		favorite->setChecked(menuClip.favorite);
@@ -5356,13 +5368,13 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	QAction *unlinkAct = nullptr, *linkAct = nullptr;
 	if (menuClip.link != 0) {
 		const int n = int(model_.linkedClips(menuClip.link).size());
-		unlinkAct = menu.addAction(QStringLiteral("Unlink  (%1 linked clips)").arg(n));
+		unlinkAct = organize->addAction(QStringLiteral("Unlink  (%1 linked clips)").arg(n));
 		unlinkAct->setToolTip(QStringLiteral(
 			"These clips stop moving together: each one can then be dragged on its own. "
 			"Ctrl+Z links them again."));
 		disableBecause(unlinkAct, !locked, lockedWhy);
 	} else if (inSel && sel.size() > 1) {
-		linkAct = menu.addAction(QStringLiteral("Link selected clips  (%1)").arg(sel.size()));
+		linkAct = organize->addAction(QStringLiteral("Link selected clips  (%1)").arg(sel.size()));
 		linkAct->setToolTip(QStringLiteral(
 			"From now on, clicking any of them selects all of them, so they move as one."));
 		disableBecause(linkAct, !locked, lockedWhy);
@@ -5376,7 +5388,7 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	const int nextClip = clipAfter(track, clip);
 	if (TimelineModel::isPictureKind(model_.tracks[track].kind)) {
 		const bool already = overlapWith(track, clip, nextClip) > 0;
-		mkTr = menu.addAction(already ? QStringLiteral("Transition already here")
+		mkTr = timing->addAction(already ? QStringLiteral("Transition already here")
 					      : QStringLiteral("Make transition with next clip"));
 		mkTr->setToolTip(QStringLiteral(
 			"Slides the next clip back so the two overlap. The overlap IS the "
@@ -5390,7 +5402,7 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 							 "the next clip on the same lane, then make the "
 							 "transition."));
 	}
-	QAction *mute = menu.addAction(model_.tracks[track].muted ? QStringLiteral("Unmute track")
+	QAction *mute = audio->addAction(model_.tracks[track].muted ? QStringLiteral("Unmute track")
 								 : QStringLiteral("Mute track"));
 	// Sounds for events. On a picture clip: a sound for this one, or a rule
 	// for every clip of its kind. Right-clicked inside an overlap, the
@@ -5407,10 +5419,9 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	QMenu *tagMenu = nullptr;
 	QAction *newTag = nullptr;
 	if (menuClip.soundRule == 0) {
-		menu.addSeparator();
-		tagMenu = menu.addMenu(tagTargets.size() > 1
+		tagMenu = new QMenu(tagTargets.size() > 1
 					       ? QStringLiteral("Tags (%1 clips)").arg(tagTargets.size())
-					       : QStringLiteral("Tags"));
+					       : QStringLiteral("Tags"), &menu);
 		for (const TlTag &tg : model_.tags) {
 			bool all = true;
 			for (const auto &p : tagTargets)
@@ -5440,21 +5451,20 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	QAction *sndRules = nullptr;
 	const bool onPicture = TimelineModel::isPictureKind(model_.tracks[track].kind);
 	if (menuClip.soundRule == kSoundFromComponent) {
-		menu.addSeparator();
-		QAction *why = menu.addAction(QStringLiteral("Placed by a Sound component"));
+		QAction *why = audio->addAction(QStringLiteral("Placed by a Sound component"));
 		disableBecause(why, false,
 			       QStringLiteral("A Sound component on another clip placed this, and places it again "
 					      "whenever that clip moves. Select that clip and edit its Sound "
 					      "component in the inspector to change or remove it."));
 	} else if (menuClip.soundRule > 0) {
-		menu.addSeparator();
-		sndRules = menu.addAction(QStringLiteral("Sound rules…"));
+		sndRules = audio->addAction(QStringLiteral("Sound rules…"));
 		sndRules->setToolTip(QStringLiteral(
 			"A sound rule placed this clip, and places it again whenever the timeline "
 			"changes. Edit the rule to change the sound, its volume or timing."));
 	} else if (onPicture && !isFx) {
-		menu.addSeparator();
-		QMenu *snd = menu.addMenu(QStringLiteral("Sound when this appears"));
+		QMenu *snd = audio;
+		snd->addSeparator();
+		snd->addSection(QStringLiteral("Sound when this appears"));
 		const TlSoundRule natural = SoundRules::ruleForClip(menuClip, true);
 		sndThis = snd->addAction(QStringLiteral("For this clip only…"));
 		sndThis->setToolTip(QStringLiteral("One audio clip, placed at this clip's start. Yours to move."));
@@ -5479,8 +5489,8 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	// or locked: adding timeline markers does not change the clip itself.
 	QAction *beats = nullptr;
 	if (menuClip.type == TlClip::Type::Video && menuClip.sourceId > 0) {
-		menu.addSeparator();
-		beats = menu.addAction(QStringLiteral("Detect beats…"));
+		audio->addSeparator();
+		beats = audio->addAction(QStringLiteral("Detect beats…"));
 		beats->setObjectName(QStringLiteral("detectClipBeatsAction"));
 		beats->setToolTip(QStringLiteral(
 			"Find the rhythm in this clip's audio and review beat markers for snapping across the timeline."));
@@ -5489,8 +5499,7 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	// media clip into captions. Stills and effects have no soundtrack.
 	QAction *subs = nullptr;
 	if (menuClip.type == TlClip::Type::Video && menuClip.soundRule == 0 && menuClip.sourceId > 0) {
-		menu.addSeparator();
-		subs = menu.addAction(inSel && sel.size() > 1
+		subs = audio->addAction(inSel && sel.size() > 1
 					      ? QStringLiteral("Generate subtitles for %1 clips…").arg(sel.size())
 					      : QStringLiteral("Generate subtitles…"));
 		subs->setToolTip(QStringLiteral("Transcribe what is said into caption clips above it."));
@@ -5503,8 +5512,7 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		for (const auto &p : model_.linkedClips(menuClip.link))
 			narrated = narrated || !model_.tracks[p.first].clips[p.second].tts.isEmpty();
 		if (narrated) {
-			menu.addSeparator();
-			respeak = menu.addAction(QStringLiteral("Re-speak this sentence…"));
+			respeak = audio->addAction(QStringLiteral("Re-speak this sentence…"));
 			respeak->setToolTip(QStringLiteral(
 				"A new take of just this sentence, in the same voice, with the captions' words as "
 				"they are now (edit them first to change what is said). The rest of the narration "
@@ -5512,6 +5520,12 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 			disableBecause(respeak, !locked, lockedWhy);
 		}
 	}
+	menu.addSeparator();
+	for (QMenu *submenu : {timing, organize, tagMenu, audio, exports})
+		if (submenu && !submenu->isEmpty()) {
+			menu.addMenu(submenu);
+			explainDisabled(submenu);
+		}
 	menu.addSeparator();
 	QAction *del = menu.addAction(QStringLiteral("Delete clip"));
 	disableBecause(del, !locked, lockedWhy);

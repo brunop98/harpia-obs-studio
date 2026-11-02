@@ -97,7 +97,7 @@ Three modes, each one step up from the last:
   - video, image, text, effect and audio clips; overlapping clips become
     **transitions**; marquee selection, groups, ripple, snapping;
   - **Auto ripple on speed change:** enable it in a track header's right-click
-    menu to move following clips when a clip gets faster or slower, preserving
+    **Ripple** menu to move following clips when a clip gets faster or slower, preserving
     existing spacing. The option saves per track; undo restores the speed and
     shifted positions together;
   - **Add → Add from Library…** opens your recorded videos beside the current
@@ -174,9 +174,16 @@ Three modes, each one step up from the last:
   (**Ctrl+N**) starts a blank project in the current window, with Save / Don’t Save /
   Cancel for existing edits. The new project has its own save path and undo history.
   The opening screen offers the three most recent projects to continue with one click.
+- **Right-click menus:** common clip actions stay at the top. Timing, Organize,
+  Tags, Audio and captions, and Export collect related commands in one level of
+  submenus for video, image, text and effect clips. Track menus group audio,
+  ripple, appearance and arrangement controls. Component menus keep Copy, Paste
+  and Duplicate handy, with Save / Apply / Delete presets together in one flat
+  Presets submenu. Short menus remain direct; there are no submenus inside these
+  submenus.
 - **Export:** MP4, MKV, MOV, WebM or GIF; size, quality, 4:4:4 chroma, a
   selected range only, batch export of cuts, and text variations.
-  **Full Editing → right-click selected clips → Export clips separately…**
+  **Full Editing → right-click selected clips → Export → Export clips separately…**
   writes one file for each selected video, image or text clip, with that clip's
   trims, speed, crop, transforms, effects and linked audio. Each file starts at
   zero and uses the clip's full trimmed duration, including beyond the project

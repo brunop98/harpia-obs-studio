@@ -1,5 +1,6 @@
 // A speed change can ripple its own lane without compacting pre-existing gaps
 // or overlaps. Exercise the same edit paths used by the Inspector and track menu.
+#include "support/ContextMenu.hpp"
 #include "editor/timeline/TimelineView.hpp"
 
 #include <QApplication>
@@ -83,6 +84,7 @@ MenuResult toggleMenu(TimelineView &view)
 		auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
 		if (!menu)
 			return;
+		menu = test_menu::openSubmenu(menu, QStringLiteral("Ripple"));
 		for (QAction *action : menu->actions()) {
 			if (action->objectName() != QStringLiteral("timelineTrackRippleSpeed"))
 				continue;
@@ -96,13 +98,13 @@ MenuResult toggleMenu(TimelineView &view)
 			QApplication::sendEvent(menu, &enter);
 			return;
 		}
-		menu->close();
+		test_menu::dismiss(menu);
 	});
 	QObject::connect(&watchdog, &QTimer::timeout, [&]() {
 		result.timedOut = true;
 		for (QWidget *widget : QApplication::topLevelWidgets())
 			if (auto *menu = qobject_cast<QMenu *>(widget))
-				menu->close();
+				test_menu::dismiss(menu);
 	});
 	driver.start();
 	watchdog.start(3000);

@@ -578,7 +578,9 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # One duration for selected videos: trim at each clip's speed, cap at the
 # shortest clip, preserve the selection, and accept/cancel through the menu.
 # Speed changes ripple later clips only on tracks that opted in.
-for name in clipduration speedripple; do
+# Set image time: one length for selected images and texts, later clips
+# closing up or making room, from quick picks or a typed value.
+for name in clipduration speedripple imagetime; do
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/${name}_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
 	"$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
@@ -1335,6 +1337,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/captionlane_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/tracks_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/slip_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/clipduration_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/imagetime_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/speedripple_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/soundrules_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/soundlibrary_test" || rc=1

@@ -4560,6 +4560,98 @@ int TimelineView::trimSelectedVideosToDuration(qint64 durationMs)
 	return changed;
 }
 
+QVector<QPair<int, int>> TimelineView::imageTimeTargets(int track, int clip) const
+{
+	const auto still = [this](const QPair<int, int> &p) {
+		const TlTrack &t = model_.tracks[p.first];
+		const TlClip &c = t.clips[p.second];
+		return !t.locked && t.kind == TlTrack::Kind::Video &&
+		       (c.type == TlClip::Type::Image || c.type == TlClip::Type::Text);
+	};
+	QVector<QPair<int, int>> out;
+	if (track < 0 || track >= model_.tracks.size() || clip < 0 || clip >= model_.tracks[track].clips.size() ||
+	    !still({track, clip}))
+		return out;
+	// Right-clicking a clip outside the selection means THAT clip, as the
+	// rest of this menu reads it.
+	if (!isSelected(track, clip))
+		return {{track, clip}};
+	for (const auto &p : selectedPairs(false))
+		if (still(p))
+			out.append(p);
+	return out;
+}
+
+int TimelineView::setImageTime(const QVector<QPair<int, int>> &clips, qint64 durationMs)
+{
+	if (durationMs < kMinImageTimeMs || durationMs > kMaxImageTimeMs || clips.isEmpty())
+		return 0;
+	// How much each target grows (or shrinks), per lane. Worked out on the
+	// untouched model so every shift below is measured against where the clips
+	// were, not against a lane half-way through changing.
+	QHash<int, QVector<QPair<int, qint64>>> growth; // track -> (clip, change)
+	int changed = 0;
+	for (const auto &p : clips) {
+		if (p.first < 0 || p.first >= model_.tracks.size() || p.second < 0 ||
+		    p.second >= model_.tracks[p.first].clips.size() || model_.tracks[p.first].locked)
+			continue;
+		const TlClip &c = model_.tracks[p.first].clips[p.second];
+		if (c.type != TlClip::Type::Image && c.type != TlClip::Type::Text)
+			continue;
+		const qint64 delta = durationMs - c.outDurationMs();
+		if (delta == 0)
+			continue;
+		growth[p.first].append({p.second, delta});
+		++changed;
+	}
+	if (!changed)
+		return 0;
+
+	// Every clip that starts at or after a changed clip's old end moves by that
+	// clip's change: a run of pictures stays back to back, a gap after one
+	// stays the gap it was. A clip overlapping the changed one (a transition)
+	// is left where it is.
+	QHash<QPair<int, int>, qint64> shift;
+	for (auto it = growth.cbegin(); it != growth.cend(); ++it) {
+		const TlTrack &t = model_.tracks[it.key()];
+		for (int i = 0; i < t.clips.size(); ++i) {
+			qint64 by = 0;
+			for (const auto &g : it.value()) {
+				const TlClip &target = t.clips[g.first];
+				if (g.first != i && t.clips[i].outStartMs >= target.outEndMs())
+					by += g.second;
+			}
+			if (by != 0)
+				shift.insert({it.key(), i}, by);
+		}
+	}
+	// Linked captions and grouped clips on other lanes go with what they
+	// belong to. A lane being retimed itself already has its own answer.
+	QHash<QPair<int, int>, qint64> partners;
+	for (auto it = shift.cbegin(); it != shift.cend(); ++it)
+		for (const auto &q : model_.relatedClips({it.key()}))
+			if (!growth.contains(q.first) && !model_.tracks[q.first].locked && !partners.contains(q))
+				partners.insert(q, it.value());
+
+	for (auto it = growth.cbegin(); it != growth.cend(); ++it)
+		for (const auto &g : it.value()) {
+			TlClip &c = model_.tracks[it.key()].clips[g.first];
+			// Through the clip's own speed, so it lasts exactly what was asked.
+			const double sp = c.speed > 0.01 ? c.speed : 1.0;
+			c.srcEndMs = c.srcStartMs + std::max<qint64>(1, qint64(std::llround(double(durationMs) * sp)));
+			c.clampFades();
+		}
+	for (auto it = shift.cbegin(); it != shift.cend(); ++it)
+		model_.tracks[it.key().first].clips[it.key().second].outStartMs += it.value();
+	for (auto it = partners.cbegin(); it != partners.cend(); ++it)
+		model_.tracks[it.key().first].clips[it.key().second].outStartMs += it.value();
+	clampView();
+	updateGeometry();
+	update();
+	commitEdit();
+	return changed;
+}
+
 QVector<QPair<int, int>> TimelineView::selectedPairs(bool includeGroups) const
 {
 	// A selection can outlive the clips it names -- undo swaps the whole model
@@ -5521,6 +5613,42 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		}
 	}
 	menu.addSeparator();
+	// How long pictures and texts stay on screen: a few quick lengths and a
+	// box for any other. Flat in Timing -- these menus have no submenus inside
+	// their submenus.
+	QVector<QAction *> imageTimeActs;
+	QAction *imageTimeCustom = nullptr;
+	const auto imageTimeClips = imageTimeTargets(track, clip);
+	if (model_.tracks[track].kind == TlTrack::Kind::Video &&
+	    (menuClip.type == TlClip::Type::Image || menuClip.type == TlClip::Type::Text)) {
+		qint64 common = -1; // the length every target already has, if they share one
+		for (const auto &p : imageTimeClips) {
+			const qint64 d = model_.tracks[p.first].clips[p.second].outDurationMs();
+			common = common < 0 ? d : (common == d ? d : 0);
+		}
+		const QString count = imageTimeClips.size() > 1
+					      ? QStringLiteral("  (%1 clips)").arg(imageTimeClips.size())
+					      : QString();
+		const QString tip = QStringLiteral(
+			"How long the selected images and texts stay on screen. Clips after them on the same "
+			"track move along, so a slideshow stays back to back; linked clips move with them.");
+		if (!timing->isEmpty())
+			timing->addSeparator();
+		for (const qint64 ms : {500, 1000, 2000, 3000, 5000}) {
+			QAction *a = timing->addAction(
+				QStringLiteral("Set image time: %1 s").arg(ms / 1000.0) + count);
+			a->setData(ms);
+			a->setCheckable(true);
+			a->setChecked(common == ms);
+			a->setToolTip(tip);
+			disableBecause(a, !imageTimeClips.isEmpty(), lockedWhy);
+			imageTimeActs.append(a);
+		}
+		imageTimeCustom = timing->addAction(QStringLiteral("Set image time: Custom…") + count);
+		imageTimeCustom->setObjectName(QStringLiteral("setImageTimeCustomAction"));
+		imageTimeCustom->setToolTip(tip);
+		disableBecause(imageTimeCustom, !imageTimeClips.isEmpty(), lockedWhy);
+	}
 	for (QMenu *submenu : {timing, organize, tagMenu, audio, exports})
 		if (submenu && !submenu->isEmpty()) {
 			menu.addMenu(submenu);
@@ -5531,6 +5659,29 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	disableBecause(del, !locked, lockedWhy);
 	explainDisabled(&menu);
 	QAction *chosen = menu.exec(globalPos);
+	if (chosen && imageTimeActs.contains(chosen)) {
+		setImageTime(imageTimeClips, chosen->data().toLongLong());
+		return;
+	}
+	if (imageTimeCustom && chosen == imageTimeCustom) {
+		QInputDialog dialog(this);
+		dialog.setObjectName(QStringLiteral("setImageTimeDialog"));
+		dialog.setWindowTitle(QStringLiteral("Set image time"));
+		dialog.setInputMode(QInputDialog::DoubleInput);
+		dialog.setLabelText(
+			QStringLiteral("Seconds on screen for %1:\n"
+				       "Later clips on the same track move along to stay back to back.")
+				.arg(imageTimeClips.size() > 1 ? QStringLiteral("%1 clips").arg(imageTimeClips.size())
+							      : QStringLiteral("this clip")));
+		dialog.setDoubleDecimals(2);
+		dialog.setDoubleRange(kMinImageTimeMs / 1000.0, kMaxImageTimeMs / 1000.0);
+		dialog.setDoubleStep(0.5);
+		dialog.setDoubleValue(menuClip.outDurationMs() / 1000.0);
+		dialog.setOkButtonText(QStringLiteral("Set time"));
+		if (dialog.exec() == QDialog::Accepted)
+			setImageTime(imageTimeClips, qint64(std::llround(dialog.doubleValue() * 1000.0)));
+		return;
+	}
 	if (setDuration && chosen == setDuration) {
 		QInputDialog dialog(this);
 		dialog.setObjectName(QStringLiteral("setClipDurationDialog"));

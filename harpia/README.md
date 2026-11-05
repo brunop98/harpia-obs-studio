@@ -100,6 +100,11 @@ Three modes, each one step up from the last:
     **Ripple** menu to move following clips when a clip gets faster or slower, preserving
     existing spacing. The option saves per track; undo restores the speed and
     shifted positions together;
+  - **Set image time:** right-click an image or text clip → **Timing** →
+    **Set image time: 0.5 s / 1 s / 2 s / 3 s / 5 s**, or **Custom…** to type any
+    length. It applies to every selected image and text clip on unlocked tracks.
+    Later clips on the same track move along so a slideshow stays back to back,
+    and clips linked to them move too; one undo step;
   - **Add → Add from Library…** opens your recorded videos beside the current
     project. Drag a recording onto a timeline lane, or double-click to add it
     at the playhead;

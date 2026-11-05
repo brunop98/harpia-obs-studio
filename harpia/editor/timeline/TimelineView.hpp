@@ -167,6 +167,20 @@ public:
 	// Output milliseconds, at least 100 and no longer than that limit. Returns
 	// the number changed and commits the whole edit as one undo step.
 	int trimSelectedVideosToDuration(qint64 durationMs);
+	// "Set image time": the image and text clips a right-click on (track,
+	// clip) means -- every selected one on an unlocked lane when that clip is
+	// part of the selection, else that clip alone. Empty when it is on a
+	// locked lane, or is not an image or text clip.
+	QVector<QPair<int, int>> imageTimeTargets(int track, int clip) const;
+	// Give each of `clips` (images and text) `durationMs` on screen, from
+	// kMinImageTimeMs to kMaxImageTimeMs. Later clips on the same lane move by
+	// the change, so a run of pictures stays back to back, and clips linked or
+	// grouped with a moved clip on other unlocked lanes move with it. One undo
+	// step; returns how many clips changed length (0, and nothing touched, for
+	// a duration out of range or one every clip already has).
+	int setImageTime(const QVector<QPair<int, int>> &clips, qint64 durationMs);
+	static constexpr qint64 kMinImageTimeMs = 100;
+	static constexpr qint64 kMaxImageTimeMs = 3600 * 1000;
 	// Shift every selected clip in time (arrow-key nudge). Locked tracks ignore it.
 	void nudgeSelection(qint64 deltaMs);
 	// Cut every unlocked clip the playhead runs through, on every track.

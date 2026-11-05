@@ -205,11 +205,13 @@ Three modes, each one step up from the last:
   is created instead. Export progress, cancellation and optional opening of the
   finished folder use the normal batch workflow. The editor remains unchanged.
   **Full Editing → Export → Spark** exports unique footage orders from copies
-  of the timeline before its end marker, even if Single video's scope is Selection.
-  Clips and groups crossing that marker are cut there before shuffling; footage
-  and stars at or after it are excluded from the block and unique-order counts.
-  Every export stops at the unchanged marker. Without an end marker, Spark uses
-  all footage. Groups and media links form blocks that keep their internal timing,
+  of the whole timeline, even if Single video's scope is Selection. Every
+  footage block is shuffled, including clips and stars after the end marker;
+  every export still stops at the unchanged marker, so whatever lands past it is
+  cut. Two orders that differ only past the marker are the same video, so the
+  unique-order count is the number of different videos up to the marker (shown
+  as "at least" when there are too many to count exactly). Without an end
+  marker, videos run the full length. Groups and media links form blocks that keep their internal timing,
   tracks, trims and speeds. Starred blocks shuffle first, followed by ordinary blocks. Independent
   blocks start end to end at zero; unrelated background audio, text/effects and
   separate voiceover stay at their original times. Event sounds are rebuilt to
@@ -395,7 +397,8 @@ Spark's end-to-end test opens red, green and blue footage in the real editor,
 stars blue, requests 100 videos, and inspects the only two unique encoded orders:
 Blue → Red → Green and Blue → Green → Red. It also checks star Undo/Redo,
 numbered output names, preservation of the original timeline, and a 1.5-second
-marked range that cuts green, excludes starred blue, and caps event-sound tails. For recording
+end marker with starred blue placed after it: blue still opens both videos, red or
+green follows until the marker cuts it, and event-sound tails are capped. For recording
 validation, build with NVENC enabled on Windows and repeat record/stop on the
 RTX 3050; the Linux test build does not validate NVIDIA hardware or establish
 why a muxer helper originally failed.

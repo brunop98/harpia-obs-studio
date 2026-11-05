@@ -66,68 +66,99 @@ int main(int argc, char **argv)
 	m.tracks[0].hidden = true; ok(!spark::buildPlan(m).available(), "hidden footage is excluded");
 	m.tracks[0].hidden = false; m.videoEndMs = 100;
 	plan = spark::buildPlan(m);
-	ok(!plan.available() && plan.blocks.isEmpty() && plan.uniqueOrders == 0,
-	   "no footage before the marker disables Spark instead of expanding the end");
-	TimelineModel bounded;
+	ok(plan.available() && plan.blocks.size() == 2 && plan.uniqueOrders == 1,
+	   "footage after an early marker still takes part; with the star first, one video can be seen");
+
+	// Every clip is shuffled, before the end marker and after it; each export
+	// stops at the marker. Red and green before it, starred blue and yellow
+	// after: blue opens every video, and the second second is red, green OR
+	// yellow -- three different videos.
+	TimelineModel pastMarker;
 	TlTrack footage;
-	footage.clips = {clip(1, 0, 5, 9), clip(2, 1200, 5), clip(3, 1500, 5), clip(4, 500)};
-	footage.clips[1].speed = 2;
-	footage.clips[2].favorite = true; // starts exactly at the marker: excluded
-	footage.clips[3].type = TlClip::Type::Image;
-	footage.clips[3].speed = 0.5;
-	TlTrack linked;
-	linked.kind = TlTrack::Kind::Audio;
-	linked.clips = {clip(1, 300, 0, 9)};
-	TlTrack past;
-	past.locked = true;
-	past.clips = {clip(3, 1700, 5)};
+	footage.clips = {clip(1, 0), clip(2, 1000), clip(3, 2000), clip(4, 3000)};
+	footage.clips[2].favorite = true;
+	TlClip caption = clip(0, 2500);
+	caption.type = TlClip::Type::Text;
+	TlTrack captionLane;
+	captionLane.clips = {caption};
 	TlTrack music;
 	music.kind = TlTrack::Kind::Audio;
-	music.locked = true;
+	music.locked = true; // background on a locked lane does not block Spark
 	music.clips = {clip(99, 0)};
 	music.clips[0].srcEndMs = 5100;
-	bounded.tracks = {footage, linked, past, music};
-	bounded.videoEndMs = 1500;
-	bounded.tags = {{1, QStringLiteral("Keep my sound rule")}};
+	pastMarker.tracks = {footage, captionLane, music};
+	pastMarker.videoEndMs = 2000;
+	pastMarker.tags = {{1, QStringLiteral("Keep my sound rule")}};
 	TlSoundRule rule;
 	rule.id = 1; rule.sourceId = 99; rule.trigger = TlSoundRule::Trigger::VideoStarts;
-	bounded.soundRules = {rule};
-	bounded.markers = {500, 1600};
-	const TimelineModel unchanged = bounded;
-	plan = spark::buildPlan(bounded);
-	ok(plan.available() && plan.blocks.size() == 2 && plan.favoriteCount == 0 && plan.uniqueOrders == 2,
-	   "marker excludes later footage, stars and locked members before counting orders");
-	ok(plan.timeline.tracks[0].clips.size() == 3 && plan.timeline.tracks[2].clips.isEmpty(),
-	   "clips at or beyond the marker are removed from the export snapshot");
-	ok(plan.timeline.tracks[0].clips[1].srcEndMs == 700 &&
-	   plan.timeline.tracks[0].clips[1].outDurationMs() == 300,
-	   "group member crossing the marker is cut in source time at its playback speed");
-	ok(plan.timeline.tracks[0].clips[2].outDurationMs() == 1000,
-	   "image crossing the marker is cut rather than excluded");
-	ok(plan.blocks[0].members.size() == 3 && plan.blocks[0].durationMs == 1500,
-	   "cut group retains surviving linked partners and internal timing");
-	ok(plan.timeline.tags == bounded.tags && plan.timeline.soundRules == bounded.soundRules,
-	   "clipped snapshot retains tags and event-sound rules");
-	ok(plan.timeline.tracks[3].clips[0].outStartMs == 0 &&
-	   plan.timeline.tracks[3].clips[0].outDurationMs() == 1500,
-	   "background music keeps its position and is cut at the same boundary");
-	ok(plan.timeline.markers == QVector<qint64>{500}, "markers beyond the export boundary are excluded");
-	for (const auto &order : spark::generateOrders(plan, 10, 42)) {
+	pastMarker.soundRules = {rule};
+	pastMarker.markers = {500, 2600};
+	const TimelineModel unchanged = pastMarker;
+	plan = spark::buildPlan(pastMarker);
+	ok(plan.available() && plan.blocks.size() == 4 && plan.favoriteCount == 1,
+	   "every footage block takes part, after the marker as well, stars included");
+	ok(plan.uniqueOrders == 3 && !plan.uniqueOrdersAtLeast,
+	   "counted up to the marker: blue, then one of three -- three different videos");
+	ok(plan.timeline == pastMarker, "the export snapshot is the whole timeline, marker, tags and sound rules included");
+	const auto pastOrders = spark::generateOrders(plan, 100, 42);
+	QSet<int> seconds;
+	bool blueFirst = true;
+	for (const auto &order : pastOrders) {
+		blueFirst &= order.first() == 2;
+		seconds.insert(order.value(1));
+	}
+	ok(pastOrders.size() == 3 && blueFirst, "three videos, each opening with starred blue");
+	ok(seconds == QSet<int>({0, 1, 3}), "and yellow, from after the marker, is shuffled in like red and green");
+	for (const auto &order : pastOrders) {
 		auto copy = spark::applyOrder(plan, order);
-		ok(copy.videoEndMs == 1500 && copy.durationMs() == 1500,
-		   "overlapping blocks sequenced end to end never extend the end marker");
+		ok(copy.videoEndMs == 2000 && copy.durationMs() == 2000, "every export stops at the unchanged marker");
+		ok(copy.tracks[1].clips[0].outStartMs == 2500 && copy.tracks[2].clips[0].outStartMs == 0,
+		   "text and background sound keep their times");
 		SoundRules::apply(copy, [](int) { return SoundInfo{3000, {}}; });
-		ok(copy.durationMs() == 1500 && copy.contentDurationMs() > 1500,
+		ok(copy.durationMs() == 2000 && copy.contentDurationMs() > 2000,
 		   "rebuilt event sounds cannot lengthen the export past the marker");
 	}
-	ok(bounded == unchanged, "cutting and shuffling leave the editor timeline and marker unchanged");
-	TimelineModel bridges;
-	TlTrack bridgeTrack;
-	bridgeTrack.clips = {clip(1, 0, 11), clip(2, 500, 12), clip(3, 2000, 11, 99), clip(4, 3000, 12, 99)};
-	bridges.tracks = {bridgeTrack}; bridges.videoEndMs = 1000;
-	const auto bridgePlan = spark::buildPlan(bridges);
-	ok(bridgePlan.blocks.size() == 1 && bridgePlan.blocks[0].members.size() == 2,
-	   "cutting off link bridges does not split surviving members of the original block");
+	ok(pastMarker == unchanged, "planning and shuffling leave the editor timeline and marker unchanged");
+
+	TimelineModel lockedPast = pastMarker;
+	TlTrack lockedLane;
+	lockedLane.locked = true;
+	lockedLane.clips = {clip(5, 3500, 6)};
+	lockedPast.tracks[0].clips[3].group = 6; // yellow, after the marker, grouped with a locked clip
+	lockedPast.tracks.append(lockedLane);
+	ok(!spark::buildPlan(lockedPast).available() && spark::buildPlan(lockedPast).error.contains(QStringLiteral("Unlock")),
+	   "a locked member after the marker blocks Spark too: it is shuffled like the rest");
+
+	TimelineModel crossing;
+	TlTrack longAndShort;
+	longAndShort.clips = {clip(1, 0), clip(2, 1000)};
+	longAndShort.clips[1].srcEndMs = 2100; // two seconds
+	crossing.tracks = {longAndShort};
+	crossing.videoEndMs = 1500;
+	ok(spark::buildPlan(crossing).uniqueOrders == 2, "a block reaching past the marker counts as what is seen of it");
+
+	TimelineModel many30;
+	many30.tracks = {TlTrack{}};
+	for (int i = 0; i < 30; ++i) many30.tracks[0].clips.append(clip(i + 1, i * 1000));
+	many30.videoEndMs = 3500; // four blocks start before it
+	plan = spark::buildPlan(many30);
+	std::printf("     30 one-second blocks, marker at 3.5 s: %lld videos\n", (long long)plan.uniqueOrders);
+	ok(plan.uniqueOrders == 30LL * 29 * 28 * 27 && !plan.uniqueOrdersAtLeast,
+	   "only the first four blocks are seen: 30 x 29 x 28 x 27 videos, counted exactly");
+	ok(spark::generateOrders(plan, 1000, 7).size() == 1000, "and 1000 different ones are found");
+
+	TimelineModel tiny;
+	tiny.tracks = {TlTrack{}};
+	for (int i = 0; i < 60; ++i) {
+		TlClip c = clip(i + 1, i * 100);
+		c.srcEndMs = 200; // 0.1 s each
+		tiny.tracks[0].clips.append(c);
+	}
+	tiny.videoEndMs = 5000; // fifty of sixty seen: far too many to count
+	plan = spark::buildPlan(tiny);
+	std::printf("     60 tenth-second blocks, marker at 5 s: at least %lld videos\n", (long long)plan.uniqueOrders);
+	ok(plan.uniqueOrdersAtLeast && plan.uniqueOrders >= 1, "too many to count: a lower bound, said to be one");
+	ok(spark::generateOrders(plan, 50, 3).size() == 50, "and it does not cap the export: 50 asked, 50 made");
 	TimelineModel equivalentCuts;
 	TlTrack cutTrack;
 	cutTrack.clips = {clip(1, 0), clip(1, 0)};

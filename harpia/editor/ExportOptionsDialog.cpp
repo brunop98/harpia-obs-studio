@@ -655,9 +655,9 @@ void ExportOptionsDialog::buildSparkTab()
 	auto *page = new QWidget(this);
 	auto *layout = new QVBoxLayout(page);
 	auto *hint = new QLabel(QStringLiteral(
-		"Spark shuffles footage before the end marker into unique orders, with starred blocks first. "
-		"Clips and groups crossing the marker are cut there; exports stop at that marker. "
-		"Without an end marker, all footage is used. Groups and linked media stay together. "
+		"Spark shuffles all the footage into unique orders, with starred blocks first, including clips "
+		"after the end marker. Each video stops at the end marker, so whatever lands past it is cut; "
+		"without an end marker, videos run the whole length. Groups and linked media stay together. "
 		"Each Random Text picks one option per video, without exporting all text combinations. "
 		"Text choices do not increase the video count. Background sound and separate text keep their times. "
 		"The editor stays unchanged. "
@@ -679,7 +679,9 @@ void ExportOptionsDialog::buildSparkTab()
 	form->addRow(QString(), sparkOpen_);
 	layout->addLayout(form);
 	const QString unique = ctx_.sparkUniqueOrders >= spark::kOrderCountCap
-		? QStringLiteral("more than 1,000,000,000") : QString::number(ctx_.sparkUniqueOrders);
+		? QStringLiteral("more than 1,000,000,000")
+		: ctx_.sparkUniqueOrdersAtLeast ? QStringLiteral("at least %1").arg(ctx_.sparkUniqueOrders)
+						: QString::number(ctx_.sparkUniqueOrders);
 	auto *stats = new QLabel(QStringLiteral("%1 footage blocks · %2 favorites · %3 unique orders")
 		.arg(ctx_.sparkBlocks).arg(ctx_.sparkFavorites).arg(unique), page);
 	stats->setObjectName(QStringLiteral("sparkStats"));
@@ -705,8 +707,11 @@ bool ExportOptionsDialog::sparkMode() const
 
 int ExportOptionsDialog::sparkCount() const
 {
-	return sparkRequested_ && ctx_.sparkError.isEmpty()
-		? int(std::min<qint64>(sparkRequested_->value(), ctx_.sparkUniqueOrders)) : 0;
+	if (!sparkRequested_ || !ctx_.sparkError.isEmpty())
+		return 0;
+	// A lower bound is not a limit: there may well be enough.
+	return ctx_.sparkUniqueOrdersAtLeast ? sparkRequested_->value()
+					     : int(std::min<qint64>(sparkRequested_->value(), ctx_.sparkUniqueOrders));
 }
 
 QString ExportOptionsDialog::sparkPrefix() const
@@ -832,7 +837,8 @@ void ExportOptionsDialog::refresh()
 
 	if (sparkCount_) {
 		QString count = QStringLiteral("%1 videos will export.").arg(sparkCount());
-		if (sparkRequested_->value() > ctx_.sparkUniqueOrders && ctx_.sparkError.isEmpty())
+		if (sparkRequested_->value() > ctx_.sparkUniqueOrders && !ctx_.sparkUniqueOrdersAtLeast &&
+		    ctx_.sparkError.isEmpty())
 			count += QStringLiteral(" Fewer unique orders exist than requested; equivalent copies count as the same order.");
 		sparkCount_->setText(count);
 	}

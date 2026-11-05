@@ -16483,6 +16483,7 @@ void VideoEditorWindow::onSave()
 		ec.sparkBlocks = sparkPlan.blocks.size();
 		ec.sparkFavorites = sparkPlan.favoriteCount;
 		ec.sparkUniqueOrders = sparkPlan.uniqueOrders;
+		ec.sparkUniqueOrdersAtLeast = sparkPlan.uniqueOrdersAtLeast;
 		ec.sparkError = sparkPlan.error;
 		QVector<int> originalOrder(sparkPlan.blocks.size());
 		std::iota(originalOrder.begin(), originalOrder.end(), 0);

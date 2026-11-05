@@ -85,7 +85,8 @@ public:
 		bool allowSpark = false;
 		int sparkBlocks = 0;
 		int sparkFavorites = 0;
-		qint64 sparkUniqueOrders = 0;
+		qint64 sparkUniqueOrders = 0;  // different videos, up to the end marker
+		bool sparkUniqueOrdersAtLeast = false; // too many to count: a lower bound
 		double sparkSeconds = 0.0; // one sequenced full-timeline export
 		QString sparkError;
 		struct SeparateClip {

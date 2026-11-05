@@ -118,8 +118,8 @@ int main(int argc, char **argv)
 					ok(std::abs(dlg->exportSeconds() - 3.0) < 0.001,
 					   "Spark estimate uses two exports of the 1.5-second marked range");
 					ok(dlg->findChild<QLabel *>(QStringLiteral("sparkStats"))->text().startsWith(
-					   QStringLiteral("2 footage blocks · 0 favorites")),
-					   "dialog excludes starred footage beyond the end marker");
+					   QStringLiteral("3 footage blocks · 1 favorites · 2 unique orders")),
+					   "dialog counts every block, starred blue after the marker included, and the videos the marker leaves");
 				}
 				accepted = true; dlg->accept();
 			} else if (auto *box = qobject_cast<QMessageBox *>(top); box && box->isVisible()) {
@@ -149,7 +149,9 @@ int main(int argc, char **argv)
 	ok(view->model() == original, "export preserves original timeline");
 	TimelineModel marked = original;
 	marked.tracks[footageTrack].clips[1].outStartMs = 1000;
-	marked.videoEndMs = 1500; // cut green in half; exclude starred blue entirely
+	// Starred blue sits after the marker: it is shuffled like the rest, opens
+	// every video, and red or green follows until the marker cuts it.
+	marked.videoEndMs = 1500;
 	TlSoundRule sound;
 	sound.id = 1;
 	sound.sourceId = marked.tracks[footageTrack].clips[0].sourceId;
@@ -185,8 +187,8 @@ int main(int argc, char **argv)
 		for (int ms : {250, 750, 1250}) order.append(colorAt(path, ms));
 		markedOrders.insert(order);
 	}
-	ok(markedOrders == QSet<QByteArray>{"RRG", "GRR"},
-	   "only pre-marker red and trimmed green are shuffled; blue never enters an export");
+	ok(markedOrders == QSet<QByteArray>{"BBR", "BBG"},
+	   "every clip is shuffled, starred blue from after the marker first; each video stops at the marker");
 	ok(view->model() == markedOriginal, "marked-range export preserves original uncut clips and marker");
 	return failures ? 1 : 0;
 }

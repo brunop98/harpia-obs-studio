@@ -716,11 +716,13 @@ void ExportOptionsDialog::buildSparkTab()
 	sparkPlacement_->addItem(QStringLiteral("Always first"), int(TlSparkSettings::Placement::First));
 	sparkPlacement_->addItem(QStringLiteral("Spread out"), int(TlSparkSettings::Placement::Spread));
 	sparkPlacement_->addItem(QStringLiteral("At the beginning and the end"), int(TlSparkSettings::Placement::Ends));
+	sparkPlacement_->addItem(QStringLiteral("Anywhere (random)"), int(TlSparkSettings::Placement::Random));
 	sparkPlacement_->setCurrentIndex(std::max(0, sparkPlacement_->findData(int(st.placement))));
 	sparkPlacement_->setEnabled(pool > 0);
 	sparkPlacement_->setToolTip(QStringLiteral(
 		"Spread out: evenly through the part that is seen, starting with one. Beginning and end: half "
-		"of them open the video (after any opening clip), the rest finish it before the end marker."));
+		"of them open the video (after any opening clip), the rest finish it before the end marker. "
+		"Anywhere: shuffled in with the other clips, at random places in each video."));
 	form->addRow(QStringLiteral("Favorites go"), sparkPlacement_);
 
 	sparkPrefix_ = new QLineEdit(ctx_.defaultName + QStringLiteral("_spark"), page);

@@ -270,6 +270,11 @@ int main(int argc, char **argv)
 		timelineToProject(withSettings, root);
 		const TimelineModel reopened = timelineFromProject(root);
 		ok(reopened.spark == withSettings.spark, "the Spark settings are saved with the project");
+		withSettings.spark.placement = TlSparkSettings::Placement::Random;
+		QJsonObject randomRoot;
+		timelineToProject(withSettings, randomRoot);
+		ok(timelineFromProject(randomRoot).spark.placement == TlSparkSettings::Placement::Random,
+		   "and Anywhere (random) is saved too");
 		TimelineModel defaults = withSettings;
 		defaults.spark = TlSparkSettings{};
 		QJsonObject plain;
@@ -438,6 +443,33 @@ int main(int argc, char **argv)
 		for (const auto &order : spark::generateOrders(plan, 20, 6))
 			both &= favoriteSlots(plan, order, 10) == QVector<int>({0, 1, 5, 6});
 		ok(both, "with an end marker at 7 s, the last two finish exactly at the marker");
+	}
+	TimelineModel anywhere = footageOf(2, 3);
+	anywhere.spark.placement = TlSparkSettings::Placement::Random;
+	plan = spark::buildPlan(anywhere);
+	{
+		const auto orders4 = spark::generateOrders(plan, 200, 11);
+		QSet<int> places;
+		bool ordinaryFirst = false;
+		for (const auto &order : orders4) {
+			for (int at : favoriteSlots(plan, order, 5))
+				places.insert(at);
+			ordinaryFirst |= !plan.blocks[order.first()].favorite;
+		}
+		ok(plan.uniqueOrders == 120 && orders4.size() == 120,
+		   "Anywhere: two favourites and three others in any order -- all 120 videos");
+		ok(places == QSet<int>({0, 1, 2, 3, 4}) && ordinaryFirst,
+		   "a favourite turns up in every place, and some videos open with an ordinary clip");
+	}
+	anywhere.spark.favoritesMin = anywhere.spark.favoritesMax = 1;
+	plan = spark::buildPlan(anywhere);
+	{
+		bool one = true;
+		const auto orders5 = spark::generateOrders(plan, 200, 12);
+		for (const auto &order : orders5)
+			one &= order.size() == 4 && favoriteSlots(plan, order, 4).size() == 1;
+		ok(plan.uniqueOrders == 2 * 24 && orders5.size() == 48 && one,
+		   "with one favourite a video, anywhere: either one, in any of four places -- 48 videos");
 	}
 
 	// What a video leaves out takes its linked media along; the rest stays.

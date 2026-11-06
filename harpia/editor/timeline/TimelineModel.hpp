@@ -1281,7 +1281,8 @@ struct TlTag {
 // project. The defaults are Spark's original behaviour: every favorite, all
 // of them first.
 struct TlSparkSettings {
-	enum class Placement { First = 0, Spread = 1, Ends = 2 };
+	// Random: shuffled in with the other clips, anywhere.
+	enum class Placement { First = 0, Spread = 1, Ends = 2, Random = 3 };
 	int favoritesMin = -1; // favorites per video, from..to; -1 = all of them
 	int favoritesMax = -1;
 	Placement placement = Placement::First;

@@ -12,7 +12,7 @@
 // The project's Spark settings (TlSparkSettings) and clip marks shape each
 // video: an opener clip starts every video (several take turns), a range
 // says how many favourites a video gets -- the ones left out are not in that
-// video at all -- and a placement puts them first, spread out, or at the
+// video at all -- and a placement puts them first, spread out, anywhere, or at the
 // beginning and the end. Always-included clips are favourites every video
 // picks. With none of that set, Spark behaves as it always has.
 #include "TimelineJson.hpp"
@@ -340,6 +340,9 @@ struct Walk {
 					fits.append(c);
 			return fits.isEmpty() ? fav : fits;
 		}
+		case TlSparkSettings::Placement::Random:
+			// Anywhere: favourites and the rest shuffled together.
+			return fav + ord;
 		case TlSparkSettings::Placement::First:
 			break;
 		}

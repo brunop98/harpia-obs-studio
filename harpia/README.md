@@ -231,7 +231,9 @@ Three modes, each one step up from the last:
     marker when its footage reaches it.
   - **Favorites go:** **Always first**; **Spread out**, evenly through the
     part that is seen, starting with one; or **At the beginning and the end**:
-    half open the video, the rest finish it before the end marker.
+    half open the video, the rest finish it before the end marker; or
+    **Anywhere (random)**: shuffled in with the other clips, so a video may
+    open with an ordinary clip.
   - **Must include** clips are favorites every video picks; they count toward
     the range. An **Opening clip** starts every video ahead of the favorites;
     several opening clips take turns, and the others are left out of that

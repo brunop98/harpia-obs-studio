@@ -792,6 +792,7 @@ inline TimelineModel timelineFromProject(const QJsonObject &root)
 	const int placement = sp.value(QStringLiteral("placement")).toInt(0);
 	m.spark.placement = placement == 1   ? TlSparkSettings::Placement::Spread
 			    : placement == 2 ? TlSparkSettings::Placement::Ends
+			    : placement == 3 ? TlSparkSettings::Placement::Random
 					     : TlSparkSettings::Placement::First;
 	return m;
 }

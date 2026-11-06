@@ -217,9 +217,9 @@ int main(int argc, char **argv)
 	withTexts.tracks = {pictures, captions};
 	withTexts.videoEndMs = 3000;
 	const auto textPlan = spark::buildPlan(withTexts);
-	ok(textPlan.available() && textPlan.uniqueOrders == 6 &&
-	   spark::generateOrders(textPlan, 100, 42).size() == 6,
-	   "Random Text options do not multiply footage orders or Spark video count");
+	ok(textPlan.available() && textPlan.uniqueOrders == 12 && textPlan.uniqueFootageOrders == 6 &&
+		   spark::generateOrders(textPlan, 100, 42).size() == 6,
+	   "Random Text options do not multiply the count; the existing Random Clip doubles six orders to twelve videos");
 	std::mt19937_64 textRng(42), repeatRng(42);
 	ok(spark::pickRandomTexts(textPlan.timeline, textRng) == spark::pickRandomTexts(textPlan.timeline, repeatRng),
 	   "Random Text export choices can be reproduced with a fixed seed");

@@ -19,10 +19,13 @@
 #include "TimelineSlice.hpp"
 #include "SparkLimits.hpp"
 #include "TextVariations.hpp"
+#include "ClipVariations.hpp"
 
 #include <QJsonDocument>
 #include <QRandomGenerator>
 #include <QSet>
+#include <QCryptographicHash>
+#include <QElapsedTimer>
 
 #include <functional>
 #include <numeric>
@@ -43,13 +46,19 @@ struct Plan {
 	QVector<Block> blocks;
 	int favoriteCount = 0; // always-included ones counted; openers are not
 	int mustCount = 0, openerCount = 0;
-	qint64 uniqueOrders = 0; // different videos, up to the end marker
+	qint64 uniqueOrders = 0; // different videos (orders + Random Clip choices), up to the end marker
 	// Too many to count exactly within a sensible time: uniqueOrders is then
 	// a lower bound, and exports are not capped by it.
 	bool uniqueOrdersAtLeast = false;
+	// Legacy order generation remains available separately from full videos.
+	qint64 uniqueFootageOrders = 0;
+	bool footageOrdersAtLeast = false;
+	bool randomClips = false;
 	QString error;
 	bool available() const { return error.isEmpty() && !blocks.isEmpty(); }
 };
+
+inline void countRandomClipVideos(Plan &plan);
 
 inline QByteArray fingerprint(const TimelineModel &m, const Block &b)
 {
@@ -635,6 +644,19 @@ inline Plan buildPlan(const TimelineModel &original)
 	}
 	if (plan.blocks.isEmpty())
 		plan.error = QStringLiteral("Add visible video or image clips to use Spark.");
+	plan.uniqueFootageOrders = plan.uniqueOrders;
+	plan.footageOrdersAtLeast = plan.uniqueOrdersAtLeast;
+	for (const TlTrack &track : plan.timeline.tracks) {
+		if (track.kind == TlTrack::Kind::Audio ? plan.timeline.trackAudible(track)
+						       : !track.hidden || plan.timeline.trackAudible(track)) {
+			for (const TlClip &clip : track.clips) {
+				plan.randomClips |= clip.type == TlClip::Type::Video && clip.clipOptions.size() > 1;
+			}
+		}
+	}
+	if (plan.available() && plan.randomClips) {
+		countRandomClipVideos(plan);
+	}
 	return plan;
 }
 
@@ -644,7 +666,9 @@ inline QVector<QVector<int>> generateOrders(const Plan &plan, int requested, qui
 	if (!plan.available()) return out;
 	// A lower bound does not cap the request: as many as exist are made.
 	const int wanted = std::clamp(requested, 0, kMaxExports);
-	const int target = plan.uniqueOrdersAtLeast ? wanted : int(std::min<qint64>(wanted, plan.uniqueOrders));
+	const bool atLeast = plan.randomClips ? plan.footageOrdersAtLeast : plan.uniqueOrdersAtLeast;
+	const qint64 count = plan.randomClips ? plan.uniqueFootageOrders : plan.uniqueOrders;
+	const int target = atLeast ? wanted : int(std::min<qint64>(wanted, count));
 	if (!target) return out;
 	if (detail::configured(plan)) {
 		std::mt19937_64 rng(seed ? seed : QRandomGenerator::system()->generate64());
@@ -830,6 +854,241 @@ inline TimelineModel applyOrder(const Plan &plan, const QVector<int> &order)
 	if (shorter > 0 && shorter < endMs)
 		copy.videoEndMs = shorter;
 	return copy;
+}
+
+struct ClipChoice {
+	int track = -1, clip = -1, option = 0; // indices AFTER block placement/filtering
+	bool operator==(const ClipChoice &other) const
+	{
+		return track == other.track && clip == other.clip && option == other.option;
+	}
+};
+struct Video {
+	QVector<int> order;
+	QVector<ClipChoice> choices;
+	bool operator==(const Video &other) const { return order == other.order && choices == other.choices; }
+};
+
+inline TimelineModel applyVideo(const Plan &plan, const Video &video)
+{
+	TimelineModel copy = applyOrder(plan, video.order);
+	for (const ClipChoice &choice : video.choices) {
+		if (choice.track >= 0 && choice.track < copy.tracks.size() && choice.clip >= 0 &&
+		    choice.clip < copy.tracks[choice.track].clips.size()) {
+			clip_variations::show(copy.tracks[choice.track].clips[choice.clip], choice.option);
+		}
+	}
+	return copy;
+}
+
+namespace detail {
+struct ClipSlot {
+	int track, clip;
+	QVector<int> options;
+};
+
+inline QVector<ClipSlot> clipSlots(const TimelineModel &model)
+{
+	QVector<ClipSlot> slotsOut;
+	const qint64 end = model.durationMs();
+	for (int ti = 0; ti < model.tracks.size(); ++ti) {
+		const TlTrack &track = model.tracks[ti];
+		if (track.kind == TlTrack::Kind::Audio ? !model.trackAudible(track)
+						       : track.hidden && !model.trackAudible(track)) {
+			continue;
+		}
+		for (int ci = 0; ci < track.clips.size(); ++ci) {
+			const TlClip &clip = track.clips[ci];
+			if (clip.type != TlClip::Type::Video || clip.soundRule || clip.clipOptions.size() < 2 ||
+			    clip.outStartMs >= end || clip.outEndMs() <= 0) {
+				continue;
+			}
+			ClipSlot slot{ti, ci, {}};
+			QSet<QByteArray> seen;
+			for (int k = 0; k < clip.clipOptions.size(); ++k) {
+				const TlClipOption o = clip.clipOptionAt(k);
+				const QByteArray key =
+					QByteArray::number(o.sourceId) + ':' + QByteArray::number(o.srcStartMs) + ':' +
+					QByteArray::number(
+						track.kind == TlTrack::Kind::Audio || track.hidden ? 0.0 : o.offsetX,
+						'g', 17) +
+					':' +
+					QByteArray::number(
+						track.kind == TlTrack::Kind::Audio || track.hidden ? 0.0 : o.offsetY,
+						'g', 17);
+				if (!seen.contains(key)) {
+					seen.insert(key);
+					slot.options.append(k);
+				}
+			}
+			slotsOut.append(slot);
+		}
+	}
+	return slotsOut;
+}
+
+// Compare what the export actually contains. Unused alternatives, preview
+// selection, group IDs, omitted favorites and content past the marker cannot
+// make an otherwise identical video unique. Sorting by time also identifies
+// equivalent results produced by swapping identical footage blocks.
+inline QByteArray videoKey(const TimelineModel &model)
+{
+	const TimelineModel visible = sliceTimeline(model, 0, model.durationMs());
+	QCryptographicHash hash(QCryptographicHash::Sha256);
+	hash.addData(QByteArray::number(model.durationMs()) + '|');
+	for (const TlTrack &track : visible.tracks) {
+		if (track.kind == TlTrack::Kind::Audio ? !model.trackAudible(track)
+						       : track.hidden && !model.trackAudible(track)) {
+			continue;
+		}
+		hash.addData(QByteArray::number(int(track.kind)) + '|');
+		QVector<TlClip> clips = track.clips;
+		std::stable_sort(clips.begin(), clips.end(),
+				 [](const TlClip &a, const TlClip &b) { return a.outStartMs < b.outStartMs; });
+		for (TlClip &clip : clips) {
+			clip.group = clip.link = 0;
+			clip.favorite = clip.sparkMust = clip.sparkOpener = false;
+			if (clip.type == TlClip::Type::Video) {
+				TlClipOption chosen = clip.clipOptionAt(clip.clipShown);
+				if (track.kind == TlTrack::Kind::Audio || track.hidden) {
+					chosen.offsetX = chosen.offsetY = 0;
+				}
+				clip.clipOptions = {chosen};
+				clip.clipShown = 0;
+			}
+			const QByteArray json = QJsonDocument(clipToJson(clip)).toJson(QJsonDocument::Compact);
+			hash.addData(QByteArray::number(json.size()) + ':' + json);
+		}
+		hash.addData(QByteArray(";"));
+	}
+	return hash.result();
+}
+
+struct ChoiceBudget {
+	qint64 steps;
+	int maxMs;
+	QElapsedTimer clock;
+	bool exhausted = false;
+	ChoiceBudget(qint64 n, int ms) : steps(n), maxMs(ms) { clock.start(); }
+	bool spend()
+	{
+		exhausted |= --steps < 0 || clock.elapsed() >= maxMs;
+		return !exhausted;
+	}
+};
+
+inline bool enumerateChoices(TimelineModel &model, const QVector<ClipSlot> &slotsIn, int at, Video &video,
+			     ChoiceBudget &budget,
+			     const std::function<bool(const TimelineModel &, const Video &)> &leaf)
+{
+	if (!budget.spend()) {
+		return true;
+	}
+	if (at == slotsIn.size()) {
+		return leaf(model, video);
+	}
+	const auto &slot = slotsIn[at];
+	const TlClip original = model.tracks[slot.track].clips[slot.clip];
+	for (int option : slot.options) {
+		clip_variations::show(model.tracks[slot.track].clips[slot.clip], option);
+		video.choices.append({slot.track, slot.clip, option});
+		const bool stop = enumerateChoices(model, slotsIn, at + 1, video, budget, leaf);
+		video.choices.removeLast();
+		model.tracks[slot.track].clips[slot.clip] = original;
+		if (stop) {
+			return true;
+		}
+	}
+	return false;
+}
+
+inline void enumerateVideos(const Plan &plan, ChoiceBudget &budget,
+			    const std::function<bool(const TimelineModel &, const Video &)> &leaf)
+{
+	const Setup setup = setupOf(plan);
+	bool stop = false, gaveUp = false;
+	forEachOpener(setup, [&](int, int opener) {
+		if (stop || gaveUp) {
+			return;
+		}
+		enumerate(
+			setup, opener,
+			[&](const Walk &walk) {
+				Video video{walk.order(), {}};
+				TimelineModel model = applyOrder(plan, video.order);
+				stop = enumerateChoices(model, clipSlots(model), 0, video, budget, leaf);
+				return stop;
+			},
+			budget.steps, &gaveUp);
+	});
+	budget.exhausted |= gaveUp;
+}
+} // namespace detail
+
+inline void countRandomClipVideos(Plan &plan)
+{
+	QSet<QByteArray> keys;
+	detail::ChoiceBudget budget(200000, 300);
+	detail::enumerateVideos(plan, budget, [&](const TimelineModel &model, const Video &) {
+		keys.insert(detail::videoKey(model));
+		return keys.size() >= detail::kConfiguredCountLimit;
+	});
+	plan.uniqueOrders = std::max<qint64>(1, keys.size());
+	plan.uniqueOrdersAtLeast = budget.exhausted || keys.size() >= detail::kConfiguredCountLimit;
+}
+
+// One selected option per surviving Random Clip, plus a block order. Choose
+// both together: selecting footage only AFTER deduplicating orders would cap
+// exports too early and could create repeated videos.
+inline QVector<Video> generateVideos(const Plan &plan, int requested, quint64 seed = 0)
+{
+	QVector<Video> out;
+	if (!plan.available()) {
+		return out;
+	}
+	if (!plan.randomClips) {
+		for (const auto &order : generateOrders(plan, requested, seed)) {
+			out.append({order, {}});
+		}
+		return out;
+	}
+	const int wanted = std::clamp(requested, 0, kMaxExports);
+	const int target = plan.uniqueOrdersAtLeast ? wanted : int(std::min<qint64>(wanted, plan.uniqueOrders));
+	if (!target) {
+		return out;
+	}
+	std::mt19937_64 rng(seed ? seed : QRandomGenerator::system()->generate64());
+	const detail::Setup setup = detail::setupOf(plan);
+	QSet<QByteArray> seen;
+	const auto add = [&](const TimelineModel &model, const Video &video) {
+		const auto key = detail::videoKey(model);
+		if (!seen.contains(key)) {
+			seen.insert(key);
+			out.append(video);
+		}
+		return out.size() >= target;
+	};
+	detail::ChoiceBudget budget(2000000, 5000);
+	int misses = 0;
+	for (int tries = 0; tries < target * 20 + 100 && out.size() < target && budget.spend(); ++tries) {
+		const int opener =
+			setup.openers.isEmpty() ? -1 : setup.openers[(int(out.size()) + misses) % setup.openers.size()];
+		Video video{detail::randomWalk(setup, opener, rng).order(), {}};
+		TimelineModel model = applyOrder(plan, video.order);
+		for (const auto &slot : detail::clipSlots(model)) {
+			const int index = std::uniform_int_distribution<int>(0, int(slot.options.size()) - 1)(rng);
+			const int option = slot.options[index];
+			clip_variations::show(model.tracks[slot.track].clips[slot.clip], option);
+			video.choices.append({slot.track, slot.clip, option});
+		}
+		const int before = int(out.size());
+		add(model, video);
+		misses = out.size() == before ? misses + 1 : 0;
+	}
+	if (out.size() < target && !budget.exhausted) {
+		detail::enumerateVideos(plan, budget, add);
+	}
+	return out;
 }
 
 } // namespace harpia::spark

@@ -5456,16 +5456,22 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	// (Export > Variations), the way a Random text has several texts.
 	QAction *randomAct = nullptr;
 	if (menuClip.type == TlClip::Type::Video) {
-		randomAct = organize->addAction(menuClip.isRandomClip()
-						   ? QStringLiteral("Make normal clip  (keep the one shown)")
-						   : QStringLiteral("Make random clip"));
+		const bool directConversion = !menuClip.isRandomClip() &&
+					      model_.tracks[track].kind == TlTrack::Kind::Video;
+		randomAct =
+			directConversion
+				? menu.addAction(QStringLiteral("Convert to Random Clip"))
+				: organize->addAction(menuClip.isRandomClip()
+							      ? QStringLiteral("Make normal clip  (keep the one shown)")
+							      : QStringLiteral("Make random clip"));
+		randomAct->setObjectName(QStringLiteral("timelineConvertRandomClip"));
 		randomAct->setToolTip(
 			menuClip.isRandomClip()
 				? QStringLiteral("Back to one clip: the one showing now stays, the others are dropped. "
 						 "Ctrl+Z brings them back.")
-				: QStringLiteral("Give this slot other clips to choose from. Each one becomes a version "
-						 "of the video on export; they all share this clip's place, length "
-						 "and look. Add them in the Inspector."));
+				: QStringLiteral("Keep this clip as option 1 and add alternatives in the Inspector. "
+						 "Variations can export each choice; Spark picks one per video. "
+						 "Timing, effects and animation stay intact."));
 		disableBecause(randomAct, !locked && menuClip.soundRule == 0 && menuClip.tts.isEmpty(),
 			       locked			  ? lockedWhy
 			       : menuClip.soundRule != 0 ? QStringLiteral("A sound rule places this sound. Choose "

@@ -94,6 +94,9 @@ Three modes, each one step up from the last:
   Select a video to load it without removing cuts. **Import from folder…**
   at the bottom opens the system file picker for another video.
 - **Full Editing** — a multi-track timeline:
+  - **Convert to Random Clip:** right-click a normal video clip and choose this
+    direct menu action. Its footage and source time become option 1; framing,
+    effects, timing and animation are preserved. Add alternatives in the Inspector.
   - video, image, text, effect and audio clips; overlapping clips become
     **transitions**; marquee selection, groups, ripple, snapping;
   - **Auto ripple on speed change:** enable it in a track header's right-click
@@ -223,7 +226,13 @@ Three modes, each one step up from the last:
   Each **Random Text** independently picks one option (including its current
   text) per Spark video, held for that clip throughout the video. Spark samples
   these choices without generating all combinations or multiplying the footage
-  order count. Plain Text clips and Random Clip footage choices stay as edited.
+  order count. Plain Text clips stay as edited. Each **Random Clip** also picks
+  one option independently per video, preserving that option's source time and
+  position. These footage choices multiply the available unique exports along
+  with block orders: two orders and three distinct options can make six videos.
+  Duplicate choices, omitted favorites and footage beyond the end marker do not
+  create extra videos. Counting large choice spaces is bounded and reported as
+  a lower bound; generation still tries to fill the requested count.
   **Spark settings**, on the Spark tab and saved with the project:
   - **Favorites per video:** all of them (the default), or a random number
     from–to. A video leaves the favorites it does not pick out entirely, linked
@@ -240,7 +249,7 @@ Three modes, each one step up from the last:
     video. Opening clips do not count toward the range.
   The count updates as you change the settings. With many favorites it may read
   "at least 10000".
-  Request 1–1,000 videos (default 10); Spark shows how many unique orders exist
+  Request 1–1,000 videos (default 10); Spark shows how many unique videos exist
   and exports at most that many. Format, quality, resolution, frame rate, folder
   and audio come from Single video. Files use a new unique folder and numbered
   names such as `my_video_spark/my_video_spark_01.mp4`. Exporting leaves the

@@ -16730,16 +16730,16 @@ void VideoEditorWindow::onSave()
 		TimelineModel configured = sparkOriginal;
 		configured.spark = sparkSettings;
 		const spark::Plan plan = sparkSettings == sparkOriginal.spark ? sparkPlan : spark::buildPlan(configured);
-		const auto orders = spark::generateOrders(plan, dlg.sparkCount());
+		const auto videos = spark::generateVideos(plan, dlg.sparkCount());
 		std::mt19937_64 textRng(QRandomGenerator::system()->generate64());
 		const QString prefix = batch_export::safePrefix(dlg.sparkPrefix());
 		QVector<BatchExporter::Item> items;
-		for (const auto &order : orders) {
+		for (const auto &video : videos) {
 			BatchExporter::Item item;
-			item.name = batch_export::clipName(prefix, items.size() + 1, orders.size());
+			item.name = batch_export::clipName(prefix, items.size() + 1, videos.size());
 			item.coverText = cover.textFor(int(items.size()) + 1);
 			item.useTimeline = true;
-			item.timeline = spark::pickRandomTexts(spark::applyOrder(plan, order), textRng);
+			item.timeline = spark::pickRandomTexts(spark::applyVideo(plan, video), textRng);
 			SoundRules::apply(item.timeline, [this](int id) { return soundInfoFor(id); });
 			items.append(item);
 		}

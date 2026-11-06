@@ -515,7 +515,7 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 
 # Persistent groups, explicit/expanded selection, speed scaling, stars and
 # unique Spark planning. These use the same GL-free timeline fixture.
-for name in clipgroups spark; do
+for name in clipgroups spark sparkclips; do
  g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
   "$HERE/${name}_test.cpp" "$H/editor/timeline/TimelineView.cpp" "$H/editor/timeline/SoundRules.cpp" "$H/ui/SearchPicker.cpp" \
   "$H/editor/timeline/Spotlight.cpp" "$H/editor/timeline/EffectClip.cpp" \
@@ -1172,6 +1172,7 @@ rc=0
 bash "$HERE/run_process_pipe.sh" "$WORK/pipe" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/clipgroups_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/spark_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/sparkclips_test" || rc=1
 if [ -n "${OBS_LIB_DIR:-}" ]; then
  bash "$HERE/run_recording_stop.sh" "$WORK/recording" || rc=1
 fi

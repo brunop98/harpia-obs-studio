@@ -819,17 +819,21 @@ void ExportOptionsDialog::buildSparkTab()
 {
 	auto *page = new QWidget(this);
 	auto *layout = new QVBoxLayout(page);
-	auto *hint = new QLabel(QStringLiteral(
-		"Spark shuffles all the footage into unique orders, including clips after the end marker. "
-		"Each video stops at the end marker, so whatever lands past it is cut; without an end marker, "
-		"videos run the whole length. Starred favorites go where you choose below, and a video leaves "
-		"out the favorites it does not pick. A clip marked Must include is always one of them; an "
-		"Opening clip starts every video, and several take turns. Mark clips from the clip menu, "
-		"under Organize. Groups and linked media stay together. "
-		"Each Random Text picks one option per video, without exporting all text combinations. "
-		"Text choices do not increase the video count. Background sound and separate text keep their times. "
-		"The editor stays unchanged. "
-		"Format, quality, size, frame rate, folder and audio come from Single video."), page);
+	auto *hint = new QLabel(
+		QStringLiteral(
+			"Spark shuffles all the footage into unique orders, including clips after the end marker. "
+			"Each video stops at the end marker, so whatever lands past it is cut; without an end marker, "
+			"videos run the whole length. Starred favorites go where you choose below, and a video leaves "
+			"out the favorites it does not pick. A clip marked Must include is always one of them; an "
+			"Opening clip starts every video, and several take turns. Mark clips from the clip menu, "
+			"under Organize. Groups and linked media stay together. "
+			"Each Random Clip independently picks one option per video, keeping its source time and framing. "
+			"These choices increase the unique-video count alongside footage orders. "
+			"Each Random Text picks one option per video, without exporting all text combinations. "
+			"Text choices do not increase the video count. Background sound and separate text keep their times. "
+			"The editor stays unchanged. "
+			"Format, quality, size, frame rate, folder and audio come from Single video."),
+		page);
 	hint->setWordWrap(true);
 	layout->addWidget(hint);
 	auto *form = new QFormLayout;
@@ -987,7 +991,7 @@ void ExportOptionsDialog::updateSparkStats()
 	if (ctx_.sparkOpeners)
 		text += ctx_.sparkOpeners == 1 ? QStringLiteral(" · 1 opening clip")
 					       : QStringLiteral(" · %1 opening clips").arg(ctx_.sparkOpeners);
-	sparkStats_->setText(text + QStringLiteral(" · %1 unique orders").arg(unique));
+	sparkStats_->setText(text + QStringLiteral(" · %1 unique videos").arg(unique));
 }
 
 bool ExportOptionsDialog::sparkMode() const
@@ -1131,7 +1135,8 @@ void ExportOptionsDialog::refresh()
 		QString count = QStringLiteral("%1 videos will export.").arg(sparkCount());
 		if (sparkRequested_->value() > ctx_.sparkUniqueOrders && !ctx_.sparkUniqueOrdersAtLeast &&
 		    ctx_.sparkError.isEmpty())
-			count += QStringLiteral(" Fewer unique orders exist than requested; equivalent copies count as the same order.");
+			count += QStringLiteral(
+				" Fewer unique videos exist than requested; equivalent footage and choices count as the same video.");
 		sparkCount_->setText(count);
 	}
 	if (sparkMode()) {

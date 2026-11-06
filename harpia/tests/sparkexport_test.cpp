@@ -125,15 +125,18 @@ int main(int argc, char **argv)
 					std::printf("Spark stats: %s\n",
 						    qPrintable(dlg->findChild<QLabel *>(QStringLiteral("sparkStats"))->text()));
 					ok(dlg->findChild<QLabel *>(QStringLiteral("sparkStats"))->text() ==
-						   QStringLiteral("3 footage blocks · 1 favorites · 1 opening clip · 2 unique orders"),
+						   QStringLiteral(
+							   "3 footage blocks · 1 favorites · 1 opening clip · 2 unique videos"),
 					   "the Spark tab counts again for the settings: red, then blue or not, then green");
 				}
 				ok(dlg->sparkCount() == 2 && !dlg->batchMode() && !dlg->exportRange(), "requesting 100 chooses only two unique Spark exports");
 				if (markerExport) {
 					ok(std::abs(dlg->exportSeconds() - 3.0) < 0.001,
 					   "Spark estimate uses two exports of the 1.5-second marked range");
-					ok(dlg->findChild<QLabel *>(QStringLiteral("sparkStats"))->text().startsWith(
-					   QStringLiteral("3 footage blocks · 1 favorites · 2 unique orders")),
+					ok(dlg->findChild<QLabel *>(QStringLiteral("sparkStats"))
+						   ->text()
+						   .startsWith(QStringLiteral(
+							   "3 footage blocks · 1 favorites · 2 unique videos")),
 					   "dialog counts every block, starred blue after the marker included, and the videos the marker leaves");
 				}
 				accepted = true; dlg->accept();
@@ -185,7 +188,7 @@ int main(int argc, char **argv)
 	}
 	const QDir markedFolder(work.filePath(prefix));
 	const QStringList markedFiles = markedFolder.entryList({"*.mp4"}, QDir::Files, QDir::Name);
-	ok(accepted && markedFiles.size() == 2, "marked-range export writes only its two unique orders");
+	ok(accepted && markedFiles.size() == 2, "marked-range export writes only its two unique videos");
 	QSet<QByteArray> markedOrders;
 	for (const QString &file : markedFiles) {
 		const QString path = markedFolder.filePath(file);

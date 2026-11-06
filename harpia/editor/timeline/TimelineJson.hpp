@@ -296,6 +296,10 @@ inline QJsonObject clipToJson(const TlClip &c)
 		co[QStringLiteral("soundRule")] = c.soundRule;
 	co[QStringLiteral("group")] = c.group;
 	co[QStringLiteral("favorite")] = c.favorite;
+	if (c.sparkMust)
+		co[QStringLiteral("sparkMust")] = true;
+	if (c.sparkOpener)
+		co[QStringLiteral("sparkOpener")] = true;
 	if (c.link != 0)
 		co[QStringLiteral("link")] = c.link;
 	if (!c.tts.isEmpty())
@@ -342,6 +346,8 @@ inline TlClip clipFromJson(const QJsonObject &co)
 	c.link = std::max(0, co.value(QStringLiteral("link")).toInt(0));
 	c.group = std::max(0, co.value(QStringLiteral("group")).toInt(0));
 	c.favorite = co.value(QStringLiteral("favorite")).toBool(false);
+	c.sparkMust = co.value(QStringLiteral("sparkMust")).toBool(false);
+	c.sparkOpener = co.value(QStringLiteral("sparkOpener")).toBool(false);
 	c.tts = co.value(QStringLiteral("tts")).toString();
 	for (const QJsonValue &ov : co.value(QStringLiteral("clipOptions")).toArray()) {
 		const QJsonObject oo = ov.toObject();
@@ -689,9 +695,11 @@ inline void timelineToProject(const TimelineModel &m, QJsonObject &root)
 	root.remove(QStringLiteral("tracks"));
 	root.remove(QStringLiteral("tags"));
 	root.remove(QStringLiteral("soundRules"));
+	root.remove(QStringLiteral("spark"));
 	// Tags and sound rules count too: a project set up before any clip is on
 	// it keeps its tag list.
-	if (m.tracks.isEmpty() && m.tags.isEmpty() && m.soundRules.isEmpty() && m.markers.isEmpty() && !m.hasVideoEnd())
+	if (m.tracks.isEmpty() && m.tags.isEmpty() && m.soundRules.isEmpty() && m.markers.isEmpty() &&
+	    !m.hasVideoEnd() && m.spark.isDefault())
 		return;
 	QJsonArray trackArr;
 	for (const TlTrack &t : m.tracks)
@@ -722,6 +730,13 @@ inline void timelineToProject(const TimelineModel &m, QJsonObject &root)
 		for (const TlTag &t : m.tags)
 			ta.append(tagToJson(t));
 		root[QStringLiteral("tags")] = ta;
+	}
+	if (!m.spark.isDefault()) {
+		QJsonObject sp;
+		sp[QStringLiteral("favoritesMin")] = m.spark.favoritesMin;
+		sp[QStringLiteral("favoritesMax")] = m.spark.favoritesMax;
+		sp[QStringLiteral("placement")] = int(m.spark.placement);
+		root[QStringLiteral("spark")] = sp;
 	}
 	root[QStringLiteral("harpiaProject")] = 3; // timelines need a v3 reader
 }
@@ -771,6 +786,13 @@ inline TimelineModel timelineFromProject(const QJsonObject &root)
 		if (r.id > 0)
 			m.soundRules.append(r);
 	}
+	const QJsonObject sp = root.value(QStringLiteral("spark")).toObject();
+	m.spark.favoritesMin = std::max(-1, sp.value(QStringLiteral("favoritesMin")).toInt(-1));
+	m.spark.favoritesMax = std::max(-1, sp.value(QStringLiteral("favoritesMax")).toInt(-1));
+	const int placement = sp.value(QStringLiteral("placement")).toInt(0);
+	m.spark.placement = placement == 1   ? TlSparkSettings::Placement::Spread
+			    : placement == 2 ? TlSparkSettings::Placement::Ends
+					     : TlSparkSettings::Placement::First;
 	return m;
 }
 

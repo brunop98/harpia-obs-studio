@@ -16485,6 +16485,16 @@ void VideoEditorWindow::onSave()
 		ec.sparkUniqueOrders = sparkPlan.uniqueOrders;
 		ec.sparkUniqueOrdersAtLeast = sparkPlan.uniqueOrdersAtLeast;
 		ec.sparkError = sparkPlan.error;
+		ec.sparkMusts = sparkPlan.mustCount;
+		ec.sparkOpeners = sparkPlan.openerCount;
+		ec.sparkSettings = sparkOriginal.spark;
+		if (!separateExport)
+			ec.sparkRecount = [sparkOriginal](const TlSparkSettings &settings) {
+				TimelineModel m = sparkOriginal;
+				m.spark = settings;
+				const spark::Plan p = spark::buildPlan(m);
+				return ExportOptionsDialog::Context::SparkCount{p.uniqueOrders, p.uniqueOrdersAtLeast};
+			};
 		QVector<int> originalOrder(sparkPlan.blocks.size());
 		std::iota(originalOrder.begin(), originalOrder.end(), 0);
 		ec.sparkSeconds = spark::applyOrder(sparkPlan, originalOrder).durationMs() / 1000.0;
@@ -16568,6 +16578,14 @@ void VideoEditorWindow::onSave()
 	ExportOptionsDialog dlg(ec, this);
 	if (dlg.exec() != QDialog::Accepted)
 		return;
+	// Spark settings live in the project: an export keeps what was set, as one
+	// undo step, and the next Spark starts from it.
+	const TlSparkSettings sparkSettings = fullEdit() && !separateExport ? dlg.sparkSettings() : sparkOriginal.spark;
+	if (fullEdit() && sparkSettings != timelineView_->model().spark) {
+		TimelineModel m = timelineView_->model();
+		m.spark = sparkSettings;
+		timelineView_->setModelAndCommit(m);
+	}
 
 	const ClipExporter::Format fmt = dlg.format();
 	outPath_ = dlg.outputPath();
@@ -16707,7 +16725,10 @@ void VideoEditorWindow::onSave()
 	}
 
 	if (fullEdit() && dlg.sparkMode()) {
-		const auto orders = spark::generateOrders(sparkPlan, dlg.sparkCount());
+		TimelineModel configured = sparkOriginal;
+		configured.spark = sparkSettings;
+		const spark::Plan plan = sparkSettings == sparkOriginal.spark ? sparkPlan : spark::buildPlan(configured);
+		const auto orders = spark::generateOrders(plan, dlg.sparkCount());
 		std::mt19937_64 textRng(QRandomGenerator::system()->generate64());
 		const QString prefix = batch_export::safePrefix(dlg.sparkPrefix());
 		QVector<BatchExporter::Item> items;
@@ -16715,7 +16736,7 @@ void VideoEditorWindow::onSave()
 			BatchExporter::Item item;
 			item.name = batch_export::clipName(prefix, items.size() + 1, orders.size());
 			item.useTimeline = true;
-			item.timeline = spark::pickRandomTexts(spark::applyOrder(sparkPlan, order), textRng);
+			item.timeline = spark::pickRandomTexts(spark::applyOrder(plan, order), textRng);
 			SoundRules::apply(item.timeline, [this](int id) { return soundInfoFor(id); });
 			items.append(item);
 		}

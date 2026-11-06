@@ -2417,9 +2417,17 @@ void TimelineView::drawClip(QPainter &p, int track, int clip, bool silent) const
 	}
 	const QRect star = favoriteRect(track, clip);
 	if (!star.isEmpty()) {
+		// The strongest Spark mark shows: an opening clip (a play sign), one
+		// every video must include (an orange star), a favourite (gold).
 		p.fillRect(star, QColor(0, 0, 0, 160));
-		p.setPen(c.favorite ? QColor(255, 210, 70) : Qt::white);
-		p.drawText(star, Qt::AlignCenter, c.favorite ? QStringLiteral("★") : QStringLiteral("☆"));
+		p.setPen(c.sparkOpener ? QColor(110, 220, 140)
+			 : c.sparkMust ? QColor(255, 140, 40)
+			 : c.favorite  ? QColor(255, 210, 70)
+				       : QColor(Qt::white));
+		p.drawText(star, Qt::AlignCenter,
+			   c.sparkOpener ? QStringLiteral("▶")
+			   : c.sparkMust || c.favorite ? QStringLiteral("★")
+						       : QStringLiteral("☆"));
 	}
 	if (c.group && r.width() >= 24) {
 		const QRect badge(r.right() - 17, r.bottom() - 27, 14, 13);
@@ -3284,7 +3292,7 @@ void TimelineView::mousePressEvent(QMouseEvent *e)
 		return;
 	}
 	if (clip >= 0 && favoriteRect(track, clip).contains(pos) && !altMember) {
-		toggleFavorite(track, clip);
+		clickSparkStar(track, clip);
 		return;
 	}
 	if (clip >= 0)
@@ -4498,12 +4506,35 @@ QRect TimelineView::favoriteRect(int track, int clip) const
 
 void TimelineView::toggleFavorite(int track, int clip)
 {
+	toggleSparkMark(track, clip, SparkMark::Favorite);
+}
+
+void TimelineView::toggleSparkMark(int track, int clip, SparkMark mark)
+{
 	if (track < 0 || track >= model_.tracks.size() || model_.tracks[track].locked ||
 	    clip < 0 || clip >= model_.tracks[track].clips.size()) return;
 	TlClip &c = model_.tracks[track].clips[clip];
 	if (model_.tracks[track].kind != TlTrack::Kind::Video ||
 	    (c.type != TlClip::Type::Video && c.type != TlClip::Type::Image)) return;
-	c.favorite = !c.favorite;
+	bool &flag = mark == SparkMark::Must ? c.sparkMust : mark == SparkMark::Opener ? c.sparkOpener : c.favorite;
+	flag = !flag;
+	update();
+	commitEdit();
+}
+
+void TimelineView::clickSparkStar(int track, int clip)
+{
+	if (track < 0 || track >= model_.tracks.size() || clip < 0 || clip >= model_.tracks[track].clips.size())
+		return;
+	const TlClip &c = model_.tracks[track].clips[clip];
+	if (!c.sparkMust && !c.sparkOpener) {
+		toggleSparkMark(track, clip, SparkMark::Favorite);
+		return;
+	}
+	if (model_.tracks[track].locked)
+		return;
+	TlClip &lit = model_.tracks[track].clips[clip];
+	lit.favorite = lit.sparkMust = lit.sparkOpener = false;
 	update();
 	commitEdit();
 }
@@ -5444,7 +5475,7 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 									   "words, so it cannot swap in other "
 									   "footage."));
 	}
-	QAction *favorite = nullptr;
+	QAction *favorite = nullptr, *mustInclude = nullptr, *opener = nullptr;
 	if (model_.tracks[track].kind == TlTrack::Kind::Video &&
 	    (menuClip.type == TlClip::Type::Video || menuClip.type == TlClip::Type::Image)) {
 		favorite = organize->addAction(QStringLiteral("Favorite for Spark"));
@@ -5452,6 +5483,18 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		favorite->setCheckable(true);
 		favorite->setChecked(menuClip.favorite);
 		disableBecause(favorite, !locked, lockedWhy);
+		mustInclude = organize->addAction(QStringLiteral("Must include in Spark"));
+		mustInclude->setObjectName(QStringLiteral("timelineSparkMust"));
+		mustInclude->setToolTip(QStringLiteral("Every Spark video picks this clip as one of its favorites."));
+		mustInclude->setCheckable(true);
+		mustInclude->setChecked(menuClip.sparkMust);
+		disableBecause(mustInclude, !locked, lockedWhy);
+		opener = organize->addAction(QStringLiteral("Opening clip for Spark"));
+		opener->setObjectName(QStringLiteral("timelineSparkOpener"));
+		opener->setToolTip(QStringLiteral("Every Spark video starts with this clip; several opening clips take turns."));
+		opener->setCheckable(true);
+		opener->setChecked(menuClip.sparkOpener);
+		disableBecause(opener, !locked, lockedWhy);
 	}
 	QAction *dup = menu.addAction(QStringLiteral("Duplicate"));
 	disableBecause(dup, !locked, lockedWhy);
@@ -5840,6 +5883,14 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	}
 	if (favorite && chosen == favorite) {
 		toggleFavorite(track, clip);
+		return;
+	}
+	if (mustInclude && chosen == mustInclude) {
+		toggleSparkMark(track, clip, SparkMark::Must);
+		return;
+	}
+	if (opener && chosen == opener) {
+		toggleSparkMark(track, clip, SparkMark::Opener);
 		return;
 	}
 	if (chosen == split) {

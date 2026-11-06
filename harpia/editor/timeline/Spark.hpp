@@ -8,6 +8,13 @@
 // export stops there, so a block placed past it is cut off. Two orders that
 // differ only past the marker are then the same video, and "unique" means
 // unique up to the marker: that is what is counted and what is exported.
+//
+// The project's Spark settings (TlSparkSettings) and clip marks shape each
+// video: an opener clip starts every video (several take turns), a range
+// says how many favourites a video gets -- the ones left out are not in that
+// video at all -- and a placement puts them first, spread out, or at the
+// beginning and the end. Always-included clips are favourites every video
+// picks. With none of that set, Spark behaves as it always has.
 #include "TimelineJson.hpp"
 #include "TimelineSlice.hpp"
 #include "SparkLimits.hpp"
@@ -26,13 +33,16 @@ namespace harpia::spark {
 struct Block {
 	QVector<QPair<int, int>> members;
 	qint64 startMs = 0, durationMs = 0;
-	bool favorite = false;
+	bool favorite = false; // a favourite, or always included
+	bool must = false;     // always included: every video picks it
+	bool opener = false;   // opens the videos, in turn with any other openers
 	QByteArray fingerprint;
 };
 struct Plan {
 	TimelineModel timeline; // export snapshot: the whole timeline, end marker included
 	QVector<Block> blocks;
-	int favoriteCount = 0;
+	int favoriteCount = 0; // always-included ones counted; openers are not
+	int mustCount = 0, openerCount = 0;
 	qint64 uniqueOrders = 0; // different videos, up to the end marker
 	// Too many to count exactly within a sensible time: uniqueOrders is then
 	// a lower bound, and exports are not capped by it.
@@ -49,7 +59,7 @@ inline QByteArray fingerprint(const TimelineModel &m, const Block &b)
 		TlClip c = m.tracks[p.first].clips[p.second];
 		c.outStartMs -= b.startMs;
 		c.group = c.link = 0;
-		c.favorite = false;
+		c.favorite = c.sparkMust = c.sparkOpener = false;
 		QJsonObject o = clipToJson(c);
 		o[QStringLiteral("track")] = p.first;
 		members.append({p.first, c.outStartMs, QJsonDocument(o).toJson(QJsonDocument::Compact)});
@@ -181,6 +191,365 @@ inline qint64 visibleOrderCount(const QVector<VisibleClass> &classes, qint64 end
 	return n;
 }
 
+namespace detail {
+
+// Spark with settings: openers, a range of favourites, a placement.
+inline bool configured(const Plan &plan)
+{
+	return plan.openerCount > 0 || !plan.timeline.spark.isDefault();
+}
+
+// The blocks as classes of interchangeable ones, by role.
+struct Setup {
+	QVector<QVector<int>> members; // the blocks of each class
+	QVector<qint64> durationMs;
+	QVector<int> look;  // shared by classes that look the same, whatever their role
+	QVector<char> role; // 'S' opener, 'M' always included, 'F' favourite, 'O' ordinary
+	QVector<int> openers, favorites; // classes; favorites: the ones a video may leave out
+	int mustBlocks = 0, optionalBlocks = 0;
+	int lo = 0, hi = 0; // favourites in each video, always-included ones counted
+	TlSparkSettings::Placement placement = TlSparkSettings::Placement::First;
+	qint64 endMs = 0; // where each video stops: the end marker, or 0 for none
+};
+
+inline Setup setupOf(const Plan &plan)
+{
+	Setup s;
+	QHash<QByteArray, int> classOf, lookOf;
+	for (int i = 0; i < plan.blocks.size(); ++i) {
+		const Block &b = plan.blocks[i];
+		const char role = b.opener ? 'S' : b.must ? 'M' : b.favorite ? 'F' : 'O';
+		const QByteArray key = QByteArray(1, role) + b.fingerprint;
+		auto it = classOf.find(key);
+		if (it == classOf.end()) {
+			it = classOf.insert(key, int(s.members.size()));
+			s.members.append(QVector<int>());
+			s.durationMs.append(b.durationMs);
+			if (!lookOf.contains(b.fingerprint))
+				lookOf.insert(b.fingerprint, int(lookOf.size()));
+			s.look.append(lookOf.value(b.fingerprint));
+			s.role.append(role);
+			if (role == 'S')
+				s.openers.append(it.value());
+			else if (role == 'F')
+				s.favorites.append(it.value());
+		}
+		s.members[it.value()].append(i);
+		s.mustBlocks += role == 'M' ? 1 : 0;
+		s.optionalBlocks += role == 'F' ? 1 : 0;
+	}
+	const TlSparkSettings &st = plan.timeline.spark;
+	const int pool = s.mustBlocks + s.optionalBlocks;
+	if (st.favoritesMin < 0) {
+		s.lo = s.hi = pool; // every favourite
+	} else {
+		s.lo = std::min(st.favoritesMin, pool);
+		s.hi = st.favoritesMax < 0 ? pool : std::clamp(st.favoritesMax, s.lo, pool);
+	}
+	// The always-included ones are in every video, whatever the range says.
+	s.lo = std::max(s.lo, s.mustBlocks);
+	s.hi = std::max(s.hi, s.lo);
+	s.placement = st.placement;
+	s.endMs = plan.timeline.hasVideoEnd() ? plan.timeline.videoEndMs : 0;
+	return s;
+}
+
+// One video being put together, block by block, following the placement.
+struct Walk {
+	const Setup *s = nullptr;
+	QVector<int> left;    // blocks of each class still to place in this video
+	QVector<int> classes; // placed so far, in order
+	qint64 at = 0;
+	int opener = -1;
+	int favorites = 0, placedFavorites = 0, front = 0;
+	qint64 spreadFrom = 0, spreadTo = 0;
+
+	bool isFavorite(int c) const { return s->role[c] == 'M' || s->role[c] == 'F'; }
+
+	// `pick`: how many of each optional favourite class this video has.
+	void start(const Setup &setup, int openerClass, const QVector<int> &pick)
+	{
+		s = &setup;
+		opener = openerClass;
+		left = QVector<int>(s->members.size(), 0);
+		classes.clear();
+		at = 0;
+		favorites = placedFavorites = 0;
+		qint64 total = 0;
+		for (int c = 0; c < left.size(); ++c) {
+			const char r = s->role[c];
+			left[c] = r == 'S' ? 0 : r == 'F' ? pick.value(c) : int(s->members[c].size());
+			favorites += isFavorite(c) ? left[c] : 0;
+			total += left[c] * s->durationMs[c];
+		}
+		front = (favorites + 1) / 2;
+		if (opener >= 0) {
+			classes.append(opener);
+			at = s->durationMs[opener];
+			total += at;
+		}
+		spreadFrom = at;
+		spreadTo = s->endMs > 0 ? std::min(s->endMs, total) : total;
+	}
+	void place(int c)
+	{
+		--left[c];
+		classes.append(c);
+		at += s->durationMs[c];
+		placedFavorites += isFavorite(c) ? 1 : 0;
+	}
+	void unplace(int c)
+	{
+		++left[c];
+		classes.removeLast();
+		at -= s->durationMs[c];
+		placedFavorites -= isFavorite(c) ? 1 : 0;
+	}
+	// The classes that may come next; none once the video is done -- all of
+	// it placed, or the end marker reached (what is left is never seen).
+	QVector<int> next() const
+	{
+		if (s->endMs > 0 && at >= s->endMs)
+			return {};
+		QVector<int> fav, ord;
+		qint64 favoritesMs = 0;
+		for (int c = 0; c < left.size(); ++c) {
+			if (!left[c])
+				continue;
+			if (isFavorite(c)) {
+				fav.append(c);
+				favoritesMs += left[c] * s->durationMs[c];
+			} else {
+				ord.append(c);
+			}
+		}
+		if (fav.isEmpty() || ord.isEmpty())
+			return fav.isEmpty() ? ord : fav;
+		switch (s->placement) {
+		case TlSparkSettings::Placement::Spread:
+			// Favourite n is due n/k of the way through what is seen.
+			return at >= spreadFrom + (spreadTo - spreadFrom) * placedFavorites / favorites ? fav : ord;
+		case TlSparkSettings::Placement::Ends: {
+			if (placedFavorites < front)
+				return fav;
+			// In between: footage that still leaves the last favourites room
+			// to finish before the end marker.
+			QVector<int> fits;
+			for (int c : ord)
+				if (s->endMs <= 0 || at + s->durationMs[c] + favoritesMs <= s->endMs)
+					fits.append(c);
+			return fits.isEmpty() ? fav : fits;
+		}
+		case TlSparkSettings::Placement::First:
+			break;
+		}
+		return fav;
+	}
+	// The blocks in timeline order: the ones placed, then whatever the end
+	// marker cuts off. Blocks this video left out are not in it.
+	QVector<int> order() const
+	{
+		QVector<int> used(s->members.size(), 0), out;
+		for (int c : classes)
+			out.append(s->members[c][used[c]++]);
+		for (int c = 0; c < left.size(); ++c)
+			for (int n = 0; n < left[c]; ++n)
+				out.append(s->members[c][used[c]++]);
+		return out;
+	}
+};
+
+// What a viewer gets from a video: the blocks starting before the marker,
+// the one reaching it compared by the part that is seen.
+struct SeenKey {
+	const Plan &plan;
+	const Setup &s;
+	QHash<QPair<int, qint64>, QByteArray> cache;
+	QByteArray operator()(const Walk &w)
+	{
+		QByteArray key;
+		qint64 t = 0;
+		for (int c : w.classes) {
+			const qint64 d = s.durationMs[c];
+			if (s.endMs > 0 && t + d >= s.endMs) {
+				const QPair<int, qint64> k{s.look[c], s.endMs - t};
+				if (!cache.contains(k))
+					cache.insert(k, seenFingerprint(plan.timeline, plan.blocks[s.members[c].first()], k.second));
+				key += '|' + cache.value(k);
+				break;
+			}
+			key += QByteArray::number(s.look[c]) + ',';
+			t += d;
+		}
+		return key;
+	}
+};
+
+// Every video one opener (-1: none) can start, each choice of favourites and
+// each placing in turn: leaf() sees each finished walk and returns true to
+// stop. Each step spends one of `budget`; running out sets *gaveUp.
+inline void enumerate(const Setup &s, int opener, const std::function<bool(const Walk &)> &leaf, qint64 &budget,
+		      bool *gaveUp)
+{
+	bool stop = false;
+	QVector<int> pick(s.members.size(), 0), room(s.favorites.size() + 1, 0);
+	for (int i = int(s.favorites.size()) - 1; i >= 0; --i)
+		room[i] = room[i + 1] + int(s.members[s.favorites[i]].size());
+	Walk w;
+	std::function<void()> walk = [&]() {
+		if (stop)
+			return;
+		if (--budget < 0) {
+			stop = true;
+			*gaveUp = true;
+			return;
+		}
+		const QVector<int> next = w.next();
+		if (next.isEmpty()) {
+			stop = leaf(w);
+			return;
+		}
+		for (int c : next) {
+			w.place(c);
+			walk();
+			w.unplace(c);
+			if (stop)
+				return;
+		}
+	};
+	std::function<void(int, int)> choose = [&](int i, int need) {
+		if (stop || need > room[i])
+			return;
+		if (i == s.favorites.size()) {
+			w.start(s, opener, pick);
+			walk();
+			return;
+		}
+		const int c = s.favorites[i];
+		for (int n = 0; n <= std::min(need, int(s.members[c].size())) && !stop; ++n) {
+			pick[c] = n;
+			choose(i + 1, need - n);
+		}
+		pick[c] = 0;
+	};
+	for (int k = s.lo; k <= s.hi && !stop; ++k)
+		choose(0, k - s.mustBlocks);
+}
+
+inline void forEachOpener(const Setup &s, const std::function<void(int index, int opener)> &f)
+{
+	if (s.openers.isEmpty())
+		f(0, -1);
+	for (int i = 0; i < s.openers.size(); ++i)
+		f(i, s.openers[i]);
+}
+
+// More different videos than this is reported as "at least".
+constexpr int kConfiguredCountLimit = 10000;
+
+inline void countConfigured(Plan &plan)
+{
+	const Setup s = setupOf(plan);
+	SeenKey keyOf{plan, s, {}};
+	QSet<QByteArray> keys;
+	qint64 budget = 200000;
+	bool gaveUp = false;
+	forEachOpener(s, [&](int, int opener) {
+		if (gaveUp || keys.size() >= kConfiguredCountLimit)
+			return;
+		enumerate(s, opener, [&](const Walk &w) {
+			keys.insert(keyOf(w));
+			return keys.size() >= kConfiguredCountLimit;
+		}, budget, &gaveUp);
+	});
+	plan.uniqueOrders = std::max<qint64>(1, keys.size());
+	plan.uniqueOrdersAtLeast = gaveUp || keys.size() >= kConfiguredCountLimit;
+}
+
+// A random video: how many favourites and which, then each next block among
+// the ones the placement allows.
+inline Walk randomWalk(const Setup &s, int opener, std::mt19937_64 &rng)
+{
+	const int k = std::uniform_int_distribution<int>(s.lo, s.hi)(rng);
+	QVector<int> bag;
+	for (int c : s.favorites)
+		for (int n = 0; n < s.members[c].size(); ++n)
+			bag.append(c);
+	std::shuffle(bag.begin(), bag.end(), rng);
+	QVector<int> pick(s.members.size(), 0);
+	for (int i = 0; i < k - s.mustBlocks && i < bag.size(); ++i)
+		++pick[bag[i]];
+	Walk w;
+	w.start(s, opener, pick);
+	for (QVector<int> next = w.next(); !next.isEmpty(); next = w.next()) {
+		int total = 0;
+		for (int c : next)
+			total += w.left[c];
+		int r = std::uniform_int_distribution<int>(0, total - 1)(rng);
+		for (int c : next) {
+			if (r < w.left[c]) {
+				w.place(c);
+				break;
+			}
+			r -= w.left[c];
+		}
+	}
+	return w;
+}
+
+inline QVector<QVector<int>> configuredOrders(const Plan &plan, int target, std::mt19937_64 &rng)
+{
+	QVector<QVector<int>> out;
+	const Setup s = setupOf(plan);
+	SeenKey keyOf{plan, s, {}};
+	QSet<QByteArray> seen;
+	// Openers take turns; one with nothing new left hands over to the next.
+	const int openers = std::max(1, int(s.openers.size()));
+	int misses = 0;
+	for (int tries = 0; tries < target * 20 + 100 && out.size() < target; ++tries) {
+		const int turn = (int(out.size()) + misses) % openers;
+		const Walk w = randomWalk(s, s.openers.isEmpty() ? -1 : s.openers[turn], rng);
+		const QByteArray key = keyOf(w);
+		if (seen.contains(key)) {
+			++misses;
+			continue;
+		}
+		seen.insert(key);
+		out.append(w.order());
+		misses = 0;
+	}
+	if (out.size() >= target)
+		return out;
+	// Few videos exist: go through them all, still taking the openers in turn.
+	QVector<QVector<QVector<int>>> byOpener(openers);
+	qint64 budget = 2000000;
+	bool gaveUp = false;
+	const int wanted = target - int(out.size());
+	forEachOpener(s, [&](int index, int opener) {
+		enumerate(s, opener, [&](const Walk &w) {
+			const QByteArray key = keyOf(w);
+			if (!seen.contains(key)) {
+				seen.insert(key);
+				byOpener[index].append(w.order());
+			}
+			return byOpener[index].size() >= wanted;
+		}, budget, &gaveUp);
+	});
+	for (int round = 0; out.size() < target; ++round) {
+		bool any = false;
+		for (const auto &list : byOpener)
+			if (round < list.size() && out.size() < target) {
+				out.append(list[round]);
+				any = true;
+			}
+		if (!any)
+			break;
+	}
+	return out;
+}
+
+} // namespace detail
+
 inline Plan buildPlan(const TimelineModel &original)
 {
 	Plan plan;
@@ -206,14 +575,21 @@ inline Plan buildPlan(const TimelineModel &original)
 				const TlClip &c = t.clips[p.second];
 				b.startMs = std::min(b.startMs, c.outStartMs);
 				end = std::max(end, c.outEndMs());
-				b.favorite |= c.favorite;
+				b.favorite |= c.favorite || c.sparkMust;
+				b.must |= c.sparkMust;
+				b.opener |= c.sparkOpener;
 				if (t.locked && plan.error.isEmpty())
 					plan.error = QStringLiteral("Unlock track %1 before using Spark: it contains a footage block member.")
 						.arg(t.name.isEmpty() ? QString::number(p.first + 1) : t.name);
 			}
 			b.durationMs = end - b.startMs;
 			b.fingerprint = fingerprint(m, b);
-			plan.favoriteCount += b.favorite ? 1 : 0;
+			if (b.opener) {
+				++plan.openerCount;
+			} else {
+				plan.favoriteCount += b.favorite ? 1 : 0;
+				plan.mustCount += b.must ? 1 : 0;
+			}
 			plan.blocks.append(b);
 		}
 	}
@@ -223,7 +599,11 @@ inline Plan buildPlan(const TimelineModel &original)
 		(b.favorite ? favorites : ordinary).append(b.fingerprint);
 		totalMs += b.durationMs;
 	}
-	if (!plan.blocks.isEmpty() && m.hasVideoEnd() && totalMs > m.videoEndMs) {
+	if (plan.blocks.isEmpty()) {
+		// nothing to count
+	} else if (detail::configured(plan)) {
+		detail::countConfigured(plan);
+	} else if (m.hasVideoEnd() && totalMs > m.videoEndMs) {
 		// The marker cuts the sequence: count the videos, not the orders.
 		QMap<QByteArray, int> classOf;
 		QVector<VisibleClass> classes;
@@ -263,6 +643,10 @@ inline QVector<QVector<int>> generateOrders(const Plan &plan, int requested, qui
 	const int wanted = std::clamp(requested, 0, kMaxExports);
 	const int target = plan.uniqueOrdersAtLeast ? wanted : int(std::min<qint64>(wanted, plan.uniqueOrders));
 	if (!target) return out;
+	if (detail::configured(plan)) {
+		std::mt19937_64 rng(seed ? seed : QRandomGenerator::system()->generate64());
+		return detail::configuredOrders(plan, target, rng);
+	}
 	// Each class appears as many times as its equivalent blocks. Swapping
 	// copies within a class is the same order, including during enumeration.
 	QMap<QByteArray, QVector<int>> classes;
@@ -406,13 +790,42 @@ inline TimelineModel applyOrder(const Plan &plan, const QVector<int> &order)
 {
 	TimelineModel copy = plan.timeline;
 	qint64 at = 0;
+	QVector<bool> placed(plan.blocks.size(), false);
 	for (int index : order) {
 		const Block &b = plan.blocks[index];
 		for (const auto &p : b.members)
 			copy.tracks[p.first].clips[p.second].outStartMs =
 				plan.timeline.tracks[p.first].clips[p.second].outStartMs - b.startMs + at;
 		at += b.durationMs;
+		placed[index] = true;
 	}
+	// Blocks this video leaves out (favourites it did not pick, the other
+	// openers) are not in it at all, linked media included.
+	QVector<QVector<int>> drop(copy.tracks.size());
+	bool dropped = false;
+	for (int i = 0; i < plan.blocks.size(); ++i)
+		if (!placed[i])
+			for (const auto &p : plan.blocks[i].members) {
+				drop[p.first].append(p.second);
+				dropped = true;
+			}
+	if (!dropped)
+		return copy;
+	for (int ti = 0; ti < drop.size(); ++ti) {
+		std::sort(drop[ti].begin(), drop[ti].end(), std::greater<int>());
+		for (int ci : drop[ti])
+			copy.tracks[ti].clips.removeAt(ci);
+	}
+	// Less footage, a shorter video: it loses the time of what it left out,
+	// so what ran on after the footage (music, captions) still does, by as
+	// much as before -- and it never runs past the end marker.
+	qint64 footageMs = 0;
+	for (const Block &b : plan.blocks)
+		footageMs += b.durationMs;
+	const qint64 endMs = plan.timeline.durationMs();
+	const qint64 shorter = std::min(endMs, at + std::max<qint64>(0, endMs - footageMs));
+	if (shorter > 0 && shorter < endMs)
+		copy.videoEndMs = shorter;
 	return copy;
 }
 

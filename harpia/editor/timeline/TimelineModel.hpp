@@ -399,6 +399,11 @@ struct TlClip {
 	int link = 0;
 	int group = 0; // persistent editing group; zero means ungrouped
 	bool favorite = false; // this edited clip is a favorite opening for Spark
+	// Spark: in every video, picked as one of its favorites (it counts toward
+	// the favorites range and follows the favorite position).
+	bool sparkMust = false;
+	// Spark: every video opens with this clip; several are taken in turn.
+	bool sparkOpener = false;
 
 	// A text-to-speech narration's audio clip: how it was made (TtsSpec, as
 	// compact JSON), so "Re-speak this sentence" can make a new take of one
@@ -745,7 +750,8 @@ struct TlClip {
 		       crop == o.crop && keys == o.keys && text == o.text && words == o.words &&
 		       scripts == o.scripts && fx == o.fx && components == o.components &&
 		       transition == o.transition && soundRule == o.soundRule && link == o.link &&
-		       group == o.group && favorite == o.favorite && tts == o.tts && tags == o.tags &&
+		       group == o.group && favorite == o.favorite && sparkMust == o.sparkMust &&
+		       sparkOpener == o.sparkOpener && tts == o.tts && tags == o.tags &&
 		       clipOptions == o.clipOptions && clipShown == o.clipShown &&
 		       volume == o.volume && fadeInMs == o.fadeInMs &&
 		       fadeOutMs == o.fadeOutMs && fadeInCurve == o.fadeInCurve &&
@@ -1271,6 +1277,22 @@ struct TlTag {
 	bool operator!=(const TlTag &o) const { return !(*this == o); }
 };
 
+// How a Spark export uses the favorites (see Spark.hpp). Saved with the
+// project. The defaults are Spark's original behaviour: every favorite, all
+// of them first.
+struct TlSparkSettings {
+	enum class Placement { First = 0, Spread = 1, Ends = 2 };
+	int favoritesMin = -1; // favorites per video, from..to; -1 = all of them
+	int favoritesMax = -1;
+	Placement placement = Placement::First;
+	bool operator==(const TlSparkSettings &o) const
+	{
+		return favoritesMin == o.favoritesMin && favoritesMax == o.favoritesMax && placement == o.placement;
+	}
+	bool operator!=(const TlSparkSettings &o) const { return !(*this == o); }
+	bool isDefault() const { return *this == TlSparkSettings{}; }
+};
+
 struct TlSoundRule {
 	enum class Trigger {
 		AnyTransition = 0, // every enabled transition, whatever its type
@@ -1453,6 +1475,9 @@ struct TimelineModel {
 	// Sounds for events (see TlSoundRule). Saved with the project, part of
 	// equality so a rule change is an undo step.
 	QVector<TlSoundRule> soundRules;
+	// How Spark uses the favorites. Saved with the project; part of equality,
+	// so changing it is an undo step like any other project edit.
+	TlSparkSettings spark;
 	int nextSoundRuleId() const
 	{
 		int n = 1;
@@ -1543,7 +1568,8 @@ struct TimelineModel {
 	bool operator==(const TimelineModel &o) const
 	{
 		return tracks == o.tracks && markers == o.markers && markerLabels == o.markerLabels &&
-		       videoEndMs == o.videoEndMs && soundRules == o.soundRules && tags == o.tags;
+		       videoEndMs == o.videoEndMs && soundRules == o.soundRules && tags == o.tags &&
+		       spark == o.spark;
 	}
 	bool operator!=(const TimelineModel &o) const { return !(*this == o); }
 };

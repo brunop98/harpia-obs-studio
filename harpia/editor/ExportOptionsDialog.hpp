@@ -3,6 +3,7 @@
 #include "ClipExporter.hpp"
 
 #include <QDialog>
+#include <functional>
 #include <QImage>
 #include <QSize>
 #include <QString>
@@ -18,6 +19,7 @@ class QVBoxLayout;
 class QPushButton;
 class QSlider;
 class QSpinBox;
+class QTimer;
 class QWidget;
 
 namespace harpia {
@@ -89,6 +91,16 @@ public:
 		bool sparkUniqueOrdersAtLeast = false; // too many to count: a lower bound
 		double sparkSeconds = 0.0; // one sequenced full-timeline export
 		QString sparkError;
+		int sparkMusts = 0;   // favorites every video must include (in sparkFavorites)
+		int sparkOpeners = 0; // opening clips: every video starts with one of them
+		TlSparkSettings sparkSettings; // the project's; the Spark tab edits a copy
+		// Counts the different videos again for edited settings. Unset: the
+		// count shown stays as it was.
+		struct SparkCount {
+			qint64 uniqueOrders = 0;
+			bool atLeast = false;
+		};
+		std::function<SparkCount(const TlSparkSettings &)> sparkRecount;
 		struct SeparateClip {
 			QString label;
 			qint64 startMs = 0;
@@ -141,6 +153,10 @@ public:
 	QString sparkPrefix() const;
 	bool sparkOpenFolder() const;
 	void setSparkTabForTest(bool on);
+	// The settings on the Spark tab (the Context's when there is no tab).
+	TlSparkSettings sparkSettings() const;
+	// After an edit the count waits a moment for the next one; this counts now.
+	void recountSparkNow();
 	QVector<int> batchSelection() const;
 	QString batchPrefix() const;
 	bool batchOpenFolder() const;
@@ -206,6 +222,14 @@ private:
 	QLineEdit *sparkPrefix_ = nullptr;
 	QCheckBox *sparkOpen_ = nullptr;
 	QLabel *sparkCount_ = nullptr;
+	QLabel *sparkStats_ = nullptr;
+	QCheckBox *sparkFavAll_ = nullptr;
+	QSpinBox *sparkFavMin_ = nullptr;
+	QSpinBox *sparkFavMax_ = nullptr;
+	QComboBox *sparkPlacement_ = nullptr;
+	QTimer *sparkRecountTimer_ = nullptr;
+	void sparkSettingsEdited();
+	void updateSparkStats();
 
 	QLabel *summary_ = nullptr;
 	QLabel *sizeValue_ = nullptr;

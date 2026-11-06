@@ -29,6 +29,7 @@
 #include <QShortcut>
 #include <QSlider>
 #include <QSpinBox>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -562,6 +563,9 @@ QString ExportOptionsDialog::separateNameError() const
 
 void ExportOptionsDialog::accept()
 {
+	// A count still waiting for the editing to pause: the export uses it.
+	if (sparkRecountTimer_ && sparkRecountTimer_->isActive())
+		recountSparkNow();
 	if (separateTable_ && !separateNameError().isEmpty()) {
 		refresh();
 		separateTable_->setFocus();
@@ -655,9 +659,12 @@ void ExportOptionsDialog::buildSparkTab()
 	auto *page = new QWidget(this);
 	auto *layout = new QVBoxLayout(page);
 	auto *hint = new QLabel(QStringLiteral(
-		"Spark shuffles all the footage into unique orders, with starred blocks first, including clips "
-		"after the end marker. Each video stops at the end marker, so whatever lands past it is cut; "
-		"without an end marker, videos run the whole length. Groups and linked media stay together. "
+		"Spark shuffles all the footage into unique orders, including clips after the end marker. "
+		"Each video stops at the end marker, so whatever lands past it is cut; without an end marker, "
+		"videos run the whole length. Starred favorites go where you choose below, and a video leaves "
+		"out the favorites it does not pick. A clip marked Must include is always one of them; an "
+		"Opening clip starts every video, and several take turns. Mark clips from the clip menu, "
+		"under Organize. Groups and linked media stay together. "
 		"Each Random Text picks one option per video, without exporting all text combinations. "
 		"Text choices do not increase the video count. Background sound and separate text keep their times. "
 		"The editor stays unchanged. "
@@ -670,6 +677,52 @@ void ExportOptionsDialog::buildSparkTab()
 	sparkRequested_->setRange(1, spark::kMaxExports);
 	sparkRequested_->setValue(10);
 	form->addRow(QStringLiteral("Videos requested"), sparkRequested_);
+
+	// How the favorites are used: how many in each video, and where.
+	const TlSparkSettings &st = ctx_.sparkSettings;
+	const int pool = ctx_.sparkFavorites;
+	auto *range = new QWidget(page);
+	auto *rangeRow = new QHBoxLayout(range);
+	rangeRow->setContentsMargins(0, 0, 0, 0);
+	sparkFavAll_ = new QCheckBox(QStringLiteral("All of them"), range);
+	sparkFavAll_->setObjectName(QStringLiteral("sparkFavAll"));
+	sparkFavAll_->setChecked(st.favoritesMin < 0);
+	sparkFavMin_ = new QSpinBox(range);
+	sparkFavMin_->setObjectName(QStringLiteral("sparkFavMin"));
+	sparkFavMin_->setRange(0, pool);
+	sparkFavMax_ = new QSpinBox(range);
+	sparkFavMax_->setObjectName(QStringLiteral("sparkFavMax"));
+	sparkFavMax_->setRange(0, pool);
+	if (st.favoritesMin < 0) {
+		// A starting point for when "All of them" is switched off.
+		sparkFavMin_->setValue(std::min(1, pool));
+		sparkFavMax_->setValue(std::min(3, pool));
+	} else {
+		sparkFavMin_->setValue(st.favoritesMin);
+		sparkFavMax_->setValue(st.favoritesMax < 0 ? pool : std::max(st.favoritesMax, st.favoritesMin));
+	}
+	rangeRow->addWidget(sparkFavAll_);
+	rangeRow->addWidget(new QLabel(QStringLiteral("or from"), range));
+	rangeRow->addWidget(sparkFavMin_);
+	rangeRow->addWidget(new QLabel(QStringLiteral("to"), range));
+	rangeRow->addWidget(sparkFavMax_);
+	rangeRow->addStretch();
+	range->setEnabled(pool > 0);
+	range->setToolTip(QStringLiteral("Each video picks a random number of favorites in this range; the "
+					 "ones it does not pick are left out of it."));
+	form->addRow(QStringLiteral("Favorites per video"), range);
+	sparkPlacement_ = new QComboBox(page);
+	sparkPlacement_->setObjectName(QStringLiteral("sparkPlacement"));
+	sparkPlacement_->addItem(QStringLiteral("Always first"), int(TlSparkSettings::Placement::First));
+	sparkPlacement_->addItem(QStringLiteral("Spread out"), int(TlSparkSettings::Placement::Spread));
+	sparkPlacement_->addItem(QStringLiteral("At the beginning and the end"), int(TlSparkSettings::Placement::Ends));
+	sparkPlacement_->setCurrentIndex(std::max(0, sparkPlacement_->findData(int(st.placement))));
+	sparkPlacement_->setEnabled(pool > 0);
+	sparkPlacement_->setToolTip(QStringLiteral(
+		"Spread out: evenly through the part that is seen, starting with one. Beginning and end: half "
+		"of them open the video (after any opening clip), the rest finish it before the end marker."));
+	form->addRow(QStringLiteral("Favorites go"), sparkPlacement_);
+
 	sparkPrefix_ = new QLineEdit(ctx_.defaultName + QStringLiteral("_spark"), page);
 	sparkPrefix_->setObjectName(QStringLiteral("sparkPrefix"));
 	form->addRow(QStringLiteral("File prefix"), sparkPrefix_);
@@ -678,14 +731,11 @@ void ExportOptionsDialog::buildSparkTab()
 	sparkOpen_->setObjectName(QStringLiteral("sparkOpenFolder"));
 	form->addRow(QString(), sparkOpen_);
 	layout->addLayout(form);
-	const QString unique = ctx_.sparkUniqueOrders >= spark::kOrderCountCap
-		? QStringLiteral("more than 1,000,000,000")
-		: ctx_.sparkUniqueOrdersAtLeast ? QStringLiteral("at least %1").arg(ctx_.sparkUniqueOrders)
-						: QString::number(ctx_.sparkUniqueOrders);
-	auto *stats = new QLabel(QStringLiteral("%1 footage blocks · %2 favorites · %3 unique orders")
-		.arg(ctx_.sparkBlocks).arg(ctx_.sparkFavorites).arg(unique), page);
-	stats->setObjectName(QStringLiteral("sparkStats"));
-	layout->addWidget(stats);
+	sparkStats_ = new QLabel(page);
+	sparkStats_->setObjectName(QStringLiteral("sparkStats"));
+	sparkStats_->setWordWrap(true);
+	layout->addWidget(sparkStats_);
+	updateSparkStats();
 	sparkCount_ = new QLabel(page);
 	sparkCount_->setObjectName(QStringLiteral("sparkActualCount"));
 	sparkCount_->setWordWrap(true);
@@ -698,6 +748,78 @@ void ExportOptionsDialog::buildSparkTab()
 	layout->addStretch();
 	sparkTabIndex_ = tabs_->addTab(page, QStringLiteral("Spark"));
 	connect(sparkRequested_, &QSpinBox::valueChanged, this, &ExportOptionsDialog::refresh);
+
+	// Counting can take a moment on a big timeline: it waits for a pause in
+	// the editing rather than running on every click of a spin box.
+	sparkRecountTimer_ = new QTimer(this);
+	sparkRecountTimer_->setSingleShot(true);
+	sparkRecountTimer_->setInterval(250);
+	connect(sparkRecountTimer_, &QTimer::timeout, this, &ExportOptionsDialog::recountSparkNow);
+	connect(sparkFavAll_, &QCheckBox::toggled, this, &ExportOptionsDialog::sparkSettingsEdited);
+	connect(sparkFavMin_, &QSpinBox::valueChanged, this, [this](int v) {
+		if (sparkFavMax_->value() < v)
+			sparkFavMax_->setValue(v);
+		sparkSettingsEdited();
+	});
+	connect(sparkFavMax_, &QSpinBox::valueChanged, this, [this](int v) {
+		if (sparkFavMin_->value() > v)
+			sparkFavMin_->setValue(v);
+		sparkSettingsEdited();
+	});
+	connect(sparkPlacement_, &QComboBox::currentIndexChanged, this, &ExportOptionsDialog::sparkSettingsEdited);
+	sparkFavMin_->setEnabled(!sparkFavAll_->isChecked());
+	sparkFavMax_->setEnabled(!sparkFavAll_->isChecked());
+}
+
+TlSparkSettings ExportOptionsDialog::sparkSettings() const
+{
+	TlSparkSettings s = ctx_.sparkSettings;
+	if (!sparkFavAll_)
+		return s;
+	const bool all = sparkFavAll_->isChecked();
+	s.favoritesMin = all ? -1 : sparkFavMin_->value();
+	s.favoritesMax = all ? -1 : sparkFavMax_->value();
+	s.placement = TlSparkSettings::Placement(sparkPlacement_->currentData().toInt());
+	return s;
+}
+
+void ExportOptionsDialog::sparkSettingsEdited()
+{
+	sparkFavMin_->setEnabled(!sparkFavAll_->isChecked());
+	sparkFavMax_->setEnabled(!sparkFavAll_->isChecked());
+	if (ctx_.sparkRecount && ctx_.sparkError.isEmpty())
+		sparkRecountTimer_->start();
+}
+
+void ExportOptionsDialog::recountSparkNow()
+{
+	if (sparkRecountTimer_)
+		sparkRecountTimer_->stop();
+	if (!ctx_.sparkRecount || !ctx_.sparkError.isEmpty())
+		return;
+	const Context::SparkCount c = ctx_.sparkRecount(sparkSettings());
+	ctx_.sparkUniqueOrders = c.uniqueOrders;
+	ctx_.sparkUniqueOrdersAtLeast = c.atLeast;
+	updateSparkStats();
+	refresh();
+}
+
+void ExportOptionsDialog::updateSparkStats()
+{
+	if (!sparkStats_)
+		return;
+	const QString unique = ctx_.sparkUniqueOrders >= spark::kOrderCountCap
+		? QStringLiteral("more than 1,000,000,000")
+		: ctx_.sparkUniqueOrdersAtLeast ? QStringLiteral("at least %1").arg(ctx_.sparkUniqueOrders)
+						: QString::number(ctx_.sparkUniqueOrders);
+	QString favorites = QStringLiteral("%1 favorites").arg(ctx_.sparkFavorites);
+	if (ctx_.sparkMusts)
+		favorites += QStringLiteral(" (%1 must include)").arg(ctx_.sparkMusts);
+	QString text = QStringLiteral("%1 footage blocks · %2").arg(ctx_.sparkBlocks).arg(favorites);
+	if (ctx_.sparkOpeners)
+		text += ctx_.sparkOpeners == 1 ? QStringLiteral(" · 1 opening clip")
+					       : QStringLiteral(" · %1 opening clips").arg(ctx_.sparkOpeners);
+	sparkStats_->setText(text + QStringLiteral(" · %1 unique orders").arg(unique));
 }
 
 bool ExportOptionsDialog::sparkMode() const

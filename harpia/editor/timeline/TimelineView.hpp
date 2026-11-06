@@ -272,6 +272,13 @@ public:
 	void toggleSelectionGroup();
 	void setSelectionSpeed(double speed);
 	void toggleFavorite(int track, int clip);
+	// Spark marks on a footage clip: a favourite, one every video must
+	// include, or an opening clip every video starts with. One undo step.
+	enum class SparkMark { Favorite, Must, Opener };
+	void toggleSparkMark(int track, int clip, SparkMark mark);
+	// The star on the clip: a lit one (any mark) switches off, else it
+	// becomes a favourite.
+	void clickSparkStar(int track, int clip);
 	QRect favoriteRectForTest(int track, int clip) const { return favoriteRect(track, clip); }
 	// Edit EVERY selected clip in one go, emitting clipsChanged once at the end.
 	// One signal, so the window takes one undo snapshot however many clips the

@@ -138,8 +138,11 @@ Three modes, each one step up from the last:
     trimming and deletion affect only explicitly selected clips. Alt-selection
     is preserved by Undo/Redo. Copies get new group and media-link IDs;
   - **Spark favorites:** click **☆ / ★** on a video/image clip, or use its
-    **Favorite for Spark** menu action. Stars belong to individual edited clips,
-    persist in projects, respect locks and are undoable;
+    **Favorite for Spark** menu action. Under **Organize**, **Must include in
+    Spark** (orange ★) puts a clip in every Spark video, and **Opening clip for
+    Spark** (▶) starts every video with it. Clicking a lit badge clears its
+    marks. Marks belong to individual edited clips, persist in projects, respect
+    locks and are undoable;
   - **keyframes** per channel (position, scale, rotation, opacity) with easing
     curves, and **curved motion paths** with Bezier handles on the preview;
   - **components** stacked on any clip: transform and speed, ShaderToy-style
@@ -221,6 +224,20 @@ Three modes, each one step up from the last:
   text) per Spark video, held for that clip throughout the video. Spark samples
   these choices without generating all combinations or multiplying the footage
   order count. Plain Text clips and Random Clip footage choices stay as edited.
+  **Spark settings**, on the Spark tab and saved with the project:
+  - **Favorites per video:** all of them (the default), or a random number
+    from–to. A video leaves the favorites it does not pick out entirely, linked
+    media included, and gets shorter by their time; it still stops at the end
+    marker when its footage reaches it.
+  - **Favorites go:** **Always first**; **Spread out**, evenly through the
+    part that is seen, starting with one; or **At the beginning and the end**:
+    half open the video, the rest finish it before the end marker.
+  - **Must include** clips are favorites every video picks; they count toward
+    the range. An **Opening clip** starts every video ahead of the favorites;
+    several opening clips take turns, and the others are left out of that
+    video. Opening clips do not count toward the range.
+  The count updates as you change the settings. With many favorites it may read
+  "at least 10000".
   Request 1–1,000 videos (default 10); Spark shows how many unique orders exist
   and exports at most that many. Format, quality, resolution, frame rate, folder
   and audio come from Single video. Files use a new unique folder and numbered
@@ -398,7 +415,10 @@ stars blue, requests 100 videos, and inspects the only two unique encoded orders
 Blue → Red → Green and Blue → Green → Red. It also checks star Undo/Redo,
 numbered output names, preservation of the original timeline, and a 1.5-second
 end marker with starred blue placed after it: blue still opens both videos, red or
-green follows until the marker cuts it, and event-sound tails are capped. For recording
+green follows until the marker cuts it, and event-sound tails are capped. A third
+pass marks red as the opening clip and sets 0–1 favorites per video: the two
+videos are Red → Green and Red → Blue, and the settings are kept with the
+project as one undo step. For recording
 validation, build with NVENC enabled on Windows and repeat record/stop on the
 RTX 3050; the Linux test build does not validate NVIDIA hardware or establish
 why a muxer helper originally failed.

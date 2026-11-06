@@ -1,6 +1,7 @@
 #include "editor/timeline/Spark.hpp"
 #include "editor/timeline/SoundRules.hpp"
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <cstdio>
 
 using namespace harpia;
@@ -10,6 +11,18 @@ static TlClip clip(int id, qint64 start, int group = 0, int link = 0)
 {
 	TlClip c; c.sourceId = id; c.srcStartMs = 100; c.srcEndMs = 1100; c.outStartMs = start; c.group = group; c.link = link;
 	return c;
+}
+// One-second clips back to back on one lane, the first `favorites` starred.
+static TimelineModel footageOf(int favorites, int ordinary)
+{
+	TimelineModel m;
+	m.tracks = {TlTrack{}};
+	for (int i = 0; i < favorites + ordinary; ++i) {
+		TlClip c = clip(i + 1, i * 1000);
+		c.favorite = i < favorites;
+		m.tracks[0].clips.append(c);
+	}
+	return m;
 }
 int main(int argc, char **argv)
 {
@@ -236,6 +249,253 @@ int main(int argc, char **argv)
 	ok(timingsValid, "changed text drops stale word timings while unchanged text retains them");
 	ok(withTexts.tracks[1].clips[0] == firstText && textPlan.timeline.tracks[1].clips[0] == firstText,
 	   "sampling export copies never changes the editor or the shared Spark plan");
+
+	// ---- Spark settings: openers, a range of favourites, a placement ----
+	std::printf("\n-- Spark settings --\n");
+	{
+		TlClip markedClip = clip(1, 0);
+		markedClip.sparkMust = markedClip.sparkOpener = true;
+		const TlClip back = clipFromJson(clipToJson(markedClip));
+		ok(back.sparkMust && back.sparkOpener && !clipFromJson(clipToJson(clip(1, 0))).sparkMust &&
+		   !clipToJson(clip(1, 0)).contains(QStringLiteral("sparkMust")),
+		   "Must include and Opening clip round trip through project JSON; unmarked clips save no keys");
+		TlClip other = markedClip;
+		other.sparkOpener = false;
+		ok(!(other == markedClip), "clip equality includes the marks");
+		TimelineModel withSettings = footageOf(1, 1);
+		withSettings.spark.favoritesMin = 2;
+		withSettings.spark.favoritesMax = 4;
+		withSettings.spark.placement = TlSparkSettings::Placement::Ends;
+		QJsonObject root;
+		timelineToProject(withSettings, root);
+		const TimelineModel reopened = timelineFromProject(root);
+		ok(reopened.spark == withSettings.spark, "the Spark settings are saved with the project");
+		TimelineModel defaults = withSettings;
+		defaults.spark = TlSparkSettings{};
+		QJsonObject plain;
+		timelineToProject(defaults, plain);
+		ok(!plain.contains(QStringLiteral("spark")) && timelineFromProject(plain).spark.isDefault(),
+		   "default settings save nothing, and older projects open with them");
+		ok(!(reopened == defaults), "timeline equality includes the settings, so an undo step carries them");
+		ok(!spark::detail::configured(spark::buildPlan(footageOf(2, 2))),
+		   "with no settings and no opening clip, Spark takes its original path");
+		TimelineModel same = footageOf(0, 2);
+		same.tracks[0].clips[1] = clip(1, 1000);
+		same.tracks[0].clips[1].sparkMust = true;
+		same.tracks[0].clips[0].sparkOpener = true;
+		const auto samePlan = spark::buildPlan(same);
+		ok(samePlan.blocks[0].fingerprint == samePlan.blocks[1].fingerprint, "the marks are not part of how a block looks");
+	}
+
+	// A range: 1 to 3 of 6 favourites, always first, then 4 others.
+	TimelineModel ranged = footageOf(6, 4);
+	ranged.spark.favoritesMin = 1;
+	ranged.spark.favoritesMax = 3;
+	plan = spark::buildPlan(ranged);
+	std::printf("     6 favourites, 1 to 3 a video, 4 others: %lld videos\n", (long long)plan.uniqueOrders);
+	ok(plan.uniqueOrders == (6 + 30 + 120) * 24 && !plan.uniqueOrdersAtLeast,
+	   "1, 2 or 3 of 6 favourites in order, then 4 others in any order: 3744 videos, counted exactly");
+	const auto rangedOrders = spark::generateOrders(plan, 60, 5);
+	{
+		QSet<int> sizes;
+		bool inRange = true, favoritesFirst = true, leftOut = true, shorter = true;
+		for (const auto &order : rangedOrders) {
+			int k = 0;
+			for (int i : order)
+				k += plan.blocks[i].favorite ? 1 : 0;
+			sizes.insert(k);
+			inRange &= k >= 1 && k <= 3 && order.size() == k + 4;
+			for (int i = 0; i < order.size(); ++i)
+				favoritesFirst &= plan.blocks[order[i]].favorite == (i < k);
+			const auto copy = spark::applyOrder(plan, order);
+			int starred = 0;
+			for (const TlClip &c : copy.tracks[0].clips)
+				starred += c.favorite ? 1 : 0;
+			leftOut &= copy.tracks[0].clips.size() == k + 4 && starred == k;
+			shorter &= copy.durationMs() == (k + 4) * 1000;
+		}
+		ok(rangedOrders.size() == 60, "60 different videos");
+		ok(inRange && sizes == QSet<int>({1, 2, 3}), "each has 1 to 3 favourites, and every number in the range turns up");
+		ok(favoritesFirst, "Always first: the favourites open each video");
+		ok(leftOut, "the favourites a video does not pick are not in it at all");
+		ok(shorter, "and the video ends with its footage, not on a blank picture");
+		ok(rangedOrders == spark::generateOrders(plan, 60, 5), "a fixed seed gives the same videos");
+	}
+	TimelineModel few = footageOf(2, 1);
+	few.spark.favoritesMin = few.spark.favoritesMax = 1;
+	ok(spark::buildPlan(few).uniqueOrders == 2 && spark::generateOrders(spark::buildPlan(few), 100, 1).size() == 2,
+	   "one of two favourites, then the other clip: exactly two videos, both found");
+
+	// Must include: in every video, counted in the range.
+	TimelineModel must = footageOf(6, 4);
+	must.tracks[0].clips[0].sparkMust = true;
+	must.spark.favoritesMin = 1;
+	must.spark.favoritesMax = 2;
+	plan = spark::buildPlan(must);
+	ok(plan.mustCount == 1 && plan.favoriteCount == 6 && plan.uniqueOrders == 24 + 5 * 2 * 24,
+	   "Must include counts in the range: alone, or with one of the other five -- 264 videos");
+	{
+		bool always = true;
+		for (const auto &order : spark::generateOrders(plan, 100, 9))
+			always &= order.contains(0);
+		ok(always, "and it is in every video");
+	}
+	must.spark.favoritesMin = must.spark.favoritesMax = 0;
+	plan = spark::buildPlan(must);
+	{
+		bool always = true;
+		const auto orders0 = spark::generateOrders(plan, 100, 9);
+		for (const auto &order : orders0)
+			always &= order.size() == 5 && order.first() == 0;
+		ok(plan.uniqueOrders == 24 && orders0.size() == 24 && always,
+		   "a range of none still has it, first; the other favourites are left out");
+	}
+	TimelineModel unstarred = footageOf(0, 3);
+	unstarred.tracks[0].clips[2].sparkMust = true;
+	plan = spark::buildPlan(unstarred);
+	{
+		bool first = true;
+		for (const auto &order : spark::generateOrders(plan, 100, 2))
+			first &= order.first() == 2;
+		ok(plan.favoriteCount == 1 && plan.uniqueOrders == 2 && first,
+		   "a Must include clip without a star is a favourite too");
+	}
+
+	// Opening clips.
+	TimelineModel opening = footageOf(2, 4);
+	opening.tracks[0].clips[5].sparkOpener = true;
+	plan = spark::buildPlan(opening);
+	{
+		const auto orders1 = spark::generateOrders(plan, 30, 3);
+		bool first = true;
+		for (const auto &order : orders1)
+			first &= order.first() == 5 && order.size() == 6;
+		ok(plan.openerCount == 1 && plan.favoriteCount == 2 && plan.uniqueOrders == 12 && orders1.size() == 12 && first,
+		   "one opening clip: all 12 videos start with it, the favourites after it");
+	}
+	opening.tracks[0].clips[4].sparkOpener = true;
+	plan = spark::buildPlan(opening);
+	{
+		const auto orders2 = spark::generateOrders(plan, 8, 3);
+		int byFour = 0, byFive = 0;
+		bool alone = true, atZero = true;
+		for (const auto &order : orders2) {
+			byFour += order.first() == 4 ? 1 : 0;
+			byFive += order.first() == 5 ? 1 : 0;
+			alone &= !order.mid(1).contains(4) && !order.mid(1).contains(5);
+			const auto copy = spark::applyOrder(plan, order);
+			atZero &= copy.tracks[0].clips.size() == 5;
+			for (const TlClip &c : copy.tracks[0].clips)
+				if (c.sparkOpener)
+					atZero &= c.outStartMs == 0;
+		}
+		ok(plan.uniqueOrders == 8 && orders2.size() == 8 && byFour == 4 && byFive == 4,
+		   "two opening clips take turns: each opens 4 of the 8 videos");
+		ok(orders2.size() >= 2 && orders2[0].first() != orders2[1].first(), "one after the other");
+		ok(alone && atZero, "and the other opening clip is not in that video");
+	}
+
+	// Placement.
+	const auto favoriteSlots = [](const spark::Plan &p, const QVector<int> &order, int upTo) {
+		QVector<int> at;
+		for (int i = 0; i < std::min<int>(upTo, order.size()); ++i)
+			if (p.blocks[order[i]].favorite)
+				at.append(i);
+		return at;
+	};
+	TimelineModel spread = footageOf(3, 6);
+	spread.spark.placement = TlSparkSettings::Placement::Spread;
+	plan = spark::buildPlan(spread);
+	{
+		bool even = true;
+		const auto orders3 = spark::generateOrders(plan, 20, 4);
+		for (const auto &order : orders3)
+			even &= favoriteSlots(plan, order, 9) == QVector<int>({0, 3, 6});
+		ok(plan.uniqueOrders == 6 * 720 && orders3.size() == 20 && even,
+		   "Spread out: three favourites in nine seconds come at 0, 3 and 6 s");
+	}
+	spread.videoEndMs = 6000;
+	plan = spark::buildPlan(spread);
+	{
+		bool even = true;
+		for (const auto &order : spark::generateOrders(plan, 20, 4))
+			even &= favoriteSlots(plan, order, 9) == QVector<int>({0, 2, 4}) && order.size() == 9;
+		ok(even, "with an end marker at 6 s, they spread over what is seen: 0, 2 and 4 s");
+	}
+	TimelineModel ends = footageOf(4, 6);
+	ends.spark.placement = TlSparkSettings::Placement::Ends;
+	plan = spark::buildPlan(ends);
+	{
+		bool both = true;
+		for (const auto &order : spark::generateOrders(plan, 20, 6))
+			both &= favoriteSlots(plan, order, 10) == QVector<int>({0, 1, 8, 9});
+		ok(both, "Beginning and end: two favourites open the video and two finish it");
+	}
+	ends.videoEndMs = 7000;
+	plan = spark::buildPlan(ends);
+	{
+		bool both = true;
+		for (const auto &order : spark::generateOrders(plan, 20, 6))
+			both &= favoriteSlots(plan, order, 10) == QVector<int>({0, 1, 5, 6});
+		ok(both, "with an end marker at 7 s, the last two finish exactly at the marker");
+	}
+
+	// What a video leaves out takes its linked media along; the rest stays.
+	TimelineModel linked = footageOf(2, 2);
+	linked.tracks[0].clips[0].link = 4;
+	TlTrack voice;
+	voice.kind = TlTrack::Kind::Audio;
+	voice.clips = {clip(50, 0, 0, 4), clip(60, 0)};
+	voice.clips[1].srcEndMs = 10100; // ten seconds of music
+	linked.tracks.append(voice);
+	linked.spark.favoritesMin = linked.spark.favoritesMax = 1;
+	plan = spark::buildPlan(linked);
+	{
+		bool with = false, without = false, right = true, nineSeconds = true;
+		for (const auto &order : spark::generateOrders(plan, 10, 2)) {
+			const auto copy = spark::applyOrder(plan, order);
+			if (order.contains(0)) {
+				with = true;
+				right &= copy.tracks[1].clips.size() == 2;
+			} else {
+				without = true;
+				right &= copy.tracks[1].clips.size() == 1 && copy.tracks[1].clips[0].sourceId == 60;
+			}
+			nineSeconds &= copy.durationMs() == 9000;
+		}
+		ok(with && without && right, "a favourite left out takes its linked sound with it; the music stays");
+		ok(nineSeconds, "the video is a second shorter, and the music still runs on after the footage as before");
+	}
+	TimelineModel marked = footageOf(2, 6);
+	marked.videoEndMs = 4000;
+	marked.spark.favoritesMin = marked.spark.favoritesMax = 0;
+	plan = spark::buildPlan(marked);
+	{
+		bool atMarker = true;
+		for (const auto &order : spark::generateOrders(plan, 10, 2))
+			atMarker &= spark::applyOrder(plan, order).durationMs() == 4000;
+		ok(atMarker, "with footage enough to reach the end marker, every video still stops there");
+	}
+
+	// Many favourites, a range, spread out, a marker: too many to count.
+	TimelineModel big = footageOf(30, 20);
+	big.spark.favoritesMin = 3;
+	big.spark.favoritesMax = 5;
+	big.spark.placement = TlSparkSettings::Placement::Spread;
+	big.videoEndMs = 15000;
+	{
+		QElapsedTimer took;
+		took.start();
+		plan = spark::buildPlan(big);
+		const qint64 countMs = took.elapsed();
+		const auto bigOrders = spark::generateOrders(plan, 300, 8);
+		std::printf("     30 favourites (3 to 5), 20 others, spread, marker at 15 s: at least %lld videos; "
+			    "counted in %lld ms, 300 made in %lld ms\n",
+			    (long long)plan.uniqueOrders, (long long)countMs, (long long)(took.elapsed() - countMs));
+		ok(plan.uniqueOrdersAtLeast && bigOrders.size() == 300, "too many to count: a lower bound, and 300 are made");
+		ok(took.elapsed() < 20000, "counting and making them stays quick");
+	}
+
 
 	QVector<QByteArray> repeated;
 	for (int i = 0; i < 20; ++i) repeated.append("same");

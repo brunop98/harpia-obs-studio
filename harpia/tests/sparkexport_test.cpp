@@ -100,6 +100,7 @@ int main(int argc, char **argv)
 	bool accepted = false;
 	QString prefix = QStringLiteral("my_video_spark");
 	bool markerExport = false;
+	bool configuredExport = false;
 	QTimer dialogs;
 	dialogs.setInterval(20);
 	QObject::connect(&dialogs, &QTimer::timeout, [&]() {
@@ -113,6 +114,20 @@ int main(int argc, char **argv)
 				for (auto *combo : dlg->findChildren<QComboBox *>())
 					if (combo->findText(QStringLiteral("MP4 (H.264)")) >= 0)
 						combo->setCurrentIndex(combo->findText(QStringLiteral("MP4 (H.264)")));
+				if (configuredExport) {
+					// Each video gets none or one of the favourites (starred blue).
+					dlg->findChild<QCheckBox *>(QStringLiteral("sparkFavAll"))->setChecked(false);
+					dlg->findChild<QSpinBox *>(QStringLiteral("sparkFavMin"))->setValue(0);
+					dlg->findChild<QSpinBox *>(QStringLiteral("sparkFavMax"))->setValue(1);
+					auto *placement = dlg->findChild<QComboBox *>(QStringLiteral("sparkPlacement"));
+					placement->setCurrentIndex(placement->findData(int(TlSparkSettings::Placement::First)));
+					dlg->recountSparkNow();
+					std::printf("Spark stats: %s\n",
+						    qPrintable(dlg->findChild<QLabel *>(QStringLiteral("sparkStats"))->text()));
+					ok(dlg->findChild<QLabel *>(QStringLiteral("sparkStats"))->text() ==
+						   QStringLiteral("3 footage blocks · 1 favorites · 1 opening clip · 2 unique orders"),
+					   "the Spark tab counts again for the settings: red, then blue or not, then green");
+				}
 				ok(dlg->sparkCount() == 2 && !dlg->batchMode() && !dlg->exportRange(), "requesting 100 chooses only two unique Spark exports");
 				if (markerExport) {
 					ok(std::abs(dlg->exportSeconds() - 3.0) < 0.001,
@@ -190,5 +205,44 @@ int main(int argc, char **argv)
 	ok(markedOrders == QSet<QByteArray>{"BBR", "BBG"},
 	   "every clip is shuffled, starred blue from after the marker first; each video stops at the marker");
 	ok(view->model() == markedOriginal, "marked-range export preserves original uncut clips and marker");
+
+	// Spark settings: red is the opening clip, and a video has none or one of
+	// the favourites -- RG and RBG.
+	view->setModelAndCommit(original);
+	settle(100);
+	view->toggleSparkMark(footageTrack, 0, TimelineView::SparkMark::Opener);
+	settle(100);
+	ok(view->model().tracks[footageTrack].clips[0].sparkOpener, "red marked as the opening clip");
+	emit undo->activated(); settle(100);
+	ok(!view->model().tracks[footageTrack].clips[0].sparkOpener, "marking an opening clip is one undoable edit");
+	emit redo->activated(); settle(100);
+	view->selectClip(footageTrack, 0);
+	const TimelineModel beforeSettings = view->model();
+	prefix = QStringLiteral("settings_spark"); markerExport = false; configuredExport = true; accepted = false;
+	QMetaObject::invokeMethod(&w, "onSave", Qt::DirectConnection);
+	deadline.restart();
+	while (deadline.elapsed() < 60000) {
+		settle(50);
+		if (!w.findChild<BatchExporter *>()) break;
+	}
+	const QDir settingsFolder(work.filePath(prefix));
+	const QStringList settingsFiles = settingsFolder.entryList({"*.mp4"}, QDir::Files, QDir::Name);
+	QSet<QByteArray> settingsOrders;
+	for (const QString &file : settingsFiles) {
+		QByteArray order;
+		for (int ms : {500, 1500}) order.append(colorAt(settingsFolder.filePath(file), ms));
+		settingsOrders.insert(order);
+		std::printf("Encoded order: %s\n", order.constData());
+	}
+	ok(accepted && settingsFiles.size() == 2 && settingsOrders == QSet<QByteArray>{"RG", "RB"},
+	   "both videos open with red; one leaves blue out, the other has it next");
+	const TlSparkSettings kept = view->model().spark;
+	ok(kept.favoritesMin == 0 && kept.favoritesMax == 1 && kept.placement == TlSparkSettings::Placement::First,
+	   "the settings are kept with the project");
+	TimelineModel expected = beforeSettings;
+	expected.spark = kept;
+	ok(view->model() == expected, "and nothing else in the timeline changed");
+	emit undo->activated(); settle(100);
+	ok(view->model() == beforeSettings, "keeping them is one undo step");
 	return failures ? 1 : 0;
 }

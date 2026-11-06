@@ -98,6 +98,22 @@ inline int add(TlClip &c, int sourceId, qint64 totalMs, QString *why = nullptr)
 	return int(c.clipOptions.size()) - 1;
 }
 
+// Copy one choice beside itself without losing a shown choice's latest slip.
+// Keep the preview on the same footage until the caller selects the copy.
+inline int duplicate(TlClip &c, int k)
+{
+	if (!c.isRandomClip() || k < 0 || k >= c.clipOptions.size()) {
+		return -1;
+	}
+	syncShown(c);
+	const TlClipOption option = c.clipOptionAt(k);
+	c.clipOptions.insert(k + 1, option);
+	if (c.clipShown > k) {
+		++c.clipShown;
+	}
+	return k + 1;
+}
+
 // Replace one choice's source and moment without changing which choice is
 // showing. A known source length lets the Slip picker keep the entire shared
 // window inside the file. All validation happens before syncShown mutates the

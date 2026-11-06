@@ -9194,7 +9194,8 @@ void VideoEditorWindow::buildRandomClipSection(QVBoxLayout *clipOuter)
 		QStringLiteral("Each clip is one version of the video (Export \u2192 Variations). "
 			       "They share this slot's place, length and look. "
 			       "Click the thumbnail or video name to preview a choice, its arrow to change the source, "
-			       "Slip\u2026 to choose its start time, or XY to position only this choice."));
+			       "Slip\u2026 to choose its start time, or XY to position only this choice. "
+			       "Right-click a choice to duplicate it."));
 	auto *rows = new QWidget(randomClipBox_);
 	randomClipRows_ = new QVBoxLayout(rows);
 	randomClipRows_->setContentsMargins(0, 0, 0, 0);
@@ -9275,6 +9276,10 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 		randomClipTimes_.clear();
 		for (int k = 0; k < n; ++k) {
 			auto *row = new QWidget(randomClipBox_);
+			row->setContextMenuPolicy(Qt::CustomContextMenu);
+			connect(row, &QWidget::customContextMenuRequested, this, [this, row, k](const QPoint &pos) {
+				showRandomClipOptionMenu(k, row->mapToGlobal(pos));
+			});
 			auto *layout = new QHBoxLayout(row);
 			layout->setContentsMargins(0, 0, 0, 0);
 			layout->setSpacing(7);
@@ -9556,6 +9561,44 @@ void VideoEditorWindow::refreshRandomClipSourceIcons(int sourceId)
 						       32));
 		}
 	}
+}
+
+void VideoEditorWindow::showRandomClipOptionMenu(int option, const QPoint &position)
+{
+	if (!fullEdit() || !timelineView_) {
+		return;
+	}
+	const int track = timelineView_->selectedTrack(), index = timelineView_->selectedClip();
+	const auto &tracks = timelineView_->model().tracks;
+	const TlClip *clip = timelineView_->selectedClipPtr();
+	if (!clip || clip->type != TlClip::Type::Video || !clip->isRandomClip() || option < 0 ||
+	    option >= clip->clipOptions.size() || track < 0 || track >= tracks.size()) {
+		return;
+	}
+	const TlClip expected = *clip;
+	const bool audioLane = tracks[track].kind == TlTrack::Kind::Audio;
+	QMenu menu(this);
+	menu.setObjectName(QStringLiteral("randomClipOptionMenu"));
+	auto *duplicate = menu.addAction(QStringLiteral("Duplicate"));
+	duplicate->setEnabled(!tracks[track].locked);
+	if (menu.exec(position) != duplicate) {
+		return;
+	}
+	clip = timelineView_->selectedClipPtr();
+	if (!fullEdit() || timelineView_->selectedTrack() != track || timelineView_->selectedClip() != index || !clip ||
+	    !(*clip == expected)) {
+		return;
+	}
+	commitSnapshot();
+	editSelectedClip([this, option, audioLane](TlClip &c) {
+		const int copy = clip_variations::duplicate(c, option);
+		if (copy >= 0 && clip_variations::show(c, copy) && audioLane) {
+			if (const EditorSource *source = sourceById(c.sourceId)) {
+				c.peaks = randomClipPeaks(source->path);
+			}
+		}
+	});
+	commitSnapshot();
 }
 
 void VideoEditorWindow::showRandomClipPositionMenu(int option, const QPoint &position)

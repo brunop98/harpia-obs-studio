@@ -66,6 +66,35 @@ QAction *sourceAction(QAbstractButton *button, int source)
 			return action;
 	return nullptr;
 }
+bool duplicateFrom(QWidget *target, bool enabled = true)
+{
+	bool found = false;
+	QTimer driver;
+	QObject::connect(&driver, &QTimer::timeout, [&]() {
+		auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+		if (!menu || menu->objectName() != QStringLiteral("randomClipOptionMenu")) {
+			return;
+		}
+		for (QAction *action : menu->actions()) {
+			if (action->text() == QStringLiteral("Duplicate")) {
+				found = action->isEnabled() == enabled;
+				if (enabled && action->isEnabled()) {
+					menu->setActiveAction(action);
+					QTest::keyClick(menu, Qt::Key_Return);
+				} else {
+					menu->close();
+				}
+				return;
+			}
+		}
+		menu->close();
+	});
+	driver.start(10);
+	QContextMenuEvent event(QContextMenuEvent::Mouse, target->rect().center(),
+				target->mapToGlobal(target->rect().center()));
+	QApplication::sendEvent(target, &event);
+	return found;
+}
 struct SlipRun {
 	bool seen = false;
 	bool hasTimeInput = false;
@@ -548,6 +577,33 @@ int main(int argc, char **argv)
 	check(current(window).clipShown == 0 && optionButton(window, "randomClipThumbnail", 0)->isChecked(),
 	      "thumbnail choices also support keyboard activation");
 	optionButton(window, "randomClipThumbnail", 1)->click();
+	window.commitSnapshot();
+	const TimelineModel beforeDuplicate = window.timelineView_->model();
+	const TlClipOption originalChoice = current(window).clipOptionAt(0);
+	const int historyBeforeDuplicate = window.histIndex_;
+	check(duplicateFrom(optionButton(window, "randomClipThumbnail", 0)),
+	      "right-clicking an option thumbnail offers Duplicate");
+	const TlClip copied = current(window);
+	check(copied.clipOptions.size() == 4 && copied.clipShown == 1 && copied.clipOptionAt(1) == originalChoice &&
+		      copied.clipOptionAt(0) == originalChoice &&
+		      copied.clipOptionAt(2) == beforeDuplicate.tracks[0].clips[0].clipOptionAt(1) &&
+		      copied.srcStartMs == originalChoice.srcStartMs && copied.sourceId == originalChoice.sourceId &&
+		      copied.keys == beforeDuplicate.tracks[0].clips[0].keys &&
+		      copied.outDurationMs() == beforeDuplicate.tracks[0].clips[0].outDurationMs() &&
+		      window.timelineView_->model().tracks[1] == beforeDuplicate.tracks[1],
+	      "duplicating a hidden option inserts and selects its exact source time and position without overwriting the previously shown option");
+	check(window.histIndex_ == historyBeforeDuplicate + 1, "duplicating commits exactly one undo step");
+	window.undo();
+	check(window.timelineView_->model() == beforeDuplicate, "Undo restores the full project before duplication");
+	window.redo();
+	check(current(window) == copied, "Redo restores the selected duplicate");
+	window.undo();
+	const TlClipOption shownChoice = current(window).clipOptionAt(1);
+	check(duplicateFrom(optionButton(window, "randomClipVideo", 1)) && current(window).clipShown == 2 &&
+		      current(window).clipOptionAt(2) == shownChoice &&
+		      current(window).srcStartMs == shownChoice.srcStartMs,
+	      "right-clicking the source name also duplicates the shown choice with its current source window");
+	window.undo();
 	TimelineModel locked = window.timelineView_->model();
 	locked.tracks[0].locked = true;
 	install(window, locked);
@@ -558,6 +614,9 @@ int main(int argc, char **argv)
 	      "locked tracks disable source, timestamp and independent position controls");
 	QTest::mouseClick(optionButton(window, "randomClipThumbnail", 0), Qt::LeftButton);
 	check(window.timelineView_->model() == locked, "thumbnail selection respects the track lock");
+	check(duplicateFrom(optionButton(window, "randomClipThumbnail", 0)->parentWidget(), false) &&
+		      window.timelineView_->model() == locked,
+	      "the option context menu disables duplication on locked tracks");
 	window.showRandomClipPositionMenu(1, QPoint(100, 100));
 	settle();
 	check(window.timelineView_->model() == locked &&

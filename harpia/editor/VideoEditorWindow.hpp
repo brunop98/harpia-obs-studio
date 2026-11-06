@@ -961,6 +961,7 @@ private:
 	void syncRandomClipInspector(const TlClip &c);
 	void refreshRandomClipThumbnails(int sourceId = -1);
 	void refreshRandomClipSourceIcons(int sourceId = -1);
+	void showRandomClipOptionMenu(int option, const QPoint &position);
 	void showRandomClipPositionMenu(int option, const QPoint &position);
 	void showRandomClipOption(int k);
 	// A file's waveform (loadPeaks at 600), kept: flipping through a Random

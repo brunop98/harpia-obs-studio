@@ -84,6 +84,11 @@ public:
 		// good-looking file, not a mediocre one it never chose.
 		int videoCrf = 12;    // x264/vp9 constant quality (lower = better; 0 = lossless)
 		bool keepAudio = true; // MP4/MKV/MOV keep the (trimmed) audio; GIF/WebM silent
+		// Optional batch cover label, embedded in MP4 without changing playback.
+		QString coverText;
+		// Explicit compatibility fallback: replace ONLY frame zero, never insert
+		// a card or change the duration/audio. Ignored when coverText is empty.
+		bool coverFirstFrame = false;
 		// Give this thread's GL back when run() returns. A batch runs several
 		// exports on one thread and sets this false, keeping one context for
 		// all of them and releasing it once at the end itself: making and

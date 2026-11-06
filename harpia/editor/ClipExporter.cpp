@@ -120,25 +120,30 @@ struct VideoState {
 	// the header, and the frames it may come from.
 	AVStream *coverOut = nullptr;
 	std::unique_ptr<cover::Picker> cover;
+	QString coverText;
+	bool coverFirstFrame = false;
+	AVFrame *labelledFirst = nullptr;
 	bool headerWritten = false;
 
 	// The chosen cover, into the file. Before the trailer, after the last
 	// frame (the picker needs them all to know where the middle is).
-	void writeCover()
+	bool writeCover()
 	{
 		if (!coverOut || !cover)
-			return;
+			return coverText.isEmpty();
 		const QByteArray jpg = cover->pick();
 		cover.reset();
 		AVPacket *p = av_packet_alloc();
+		bool ok = coverText.isEmpty();
 		if (p && !jpg.isEmpty() && av_new_packet(p, int(jpg.size())) >= 0) {
 			std::memcpy(p->data, jpg.constData(), size_t(jpg.size()));
 			p->stream_index = coverOut->index;
 			p->flags |= AV_PKT_FLAG_KEY;
 			p->pts = p->dts = 0;
-			av_interleaved_write_frame(ofmt, p);
+			ok = av_interleaved_write_frame(ofmt, p) >= 0;
 		}
 		av_packet_free(&p);
+		return ok;
 	}
 
 	// The decoded frame in the encoder's pixel format, converting once and
@@ -214,6 +219,7 @@ struct VideoState {
 
 	~VideoState()
 	{
+		av_frame_free(&labelledFirst);
 		if (toYuv)
 			sws_freeContext(toYuv);
 		if (toOut)
@@ -399,6 +405,11 @@ QString openVideoEncoder(VideoState &s, const ClipExporter::Options &opts, const
 // did not, which is precisely the kind of difference that survives in copies.
 QString openOutputFile(VideoState &s, const ClipExporter::Options &opts, const QByteArray &outPath)
 {
+	if (!opts.coverText.isEmpty() && opts.format != ClipExporter::Format::Mp4) {
+		return QStringLiteral("Numbered cover thumbnails require MP4.");
+	}
+	s.coverText = opts.coverText;
+	s.coverFirstFrame = opts.coverFirstFrame && !opts.coverText.isEmpty();
 	// The cover (see CoverArt.hpp). Its stream has to exist before the
 	// header; its one picture is written at the end, once it is chosen. Last,
 	// so the video and the audio keep their places.
@@ -412,8 +423,12 @@ QString openOutputFile(VideoState &s, const ClipExporter::Options &opts, const Q
 			s.coverOut->codecpar->height = size.height();
 			s.coverOut->disposition = AV_DISPOSITION_ATTACHED_PIC;
 			s.coverOut->time_base = AVRational{1, 90000};
-			s.cover = std::make_unique<cover::Picker>(size, s.venc->colorspace, s.venc->color_range);
+			s.cover = std::make_unique<cover::Picker>(size, s.venc->colorspace, s.venc->color_range, 24,
+								  opts.coverText);
 		}
+	}
+	if (!opts.coverText.isEmpty() && !s.cover) {
+		return QStringLiteral("Could not create the numbered cover stream.");
 	}
 	if (!(s.ofmt->oformat->flags & AVFMT_NOFILE) &&
 	    avio_open(&s.ofmt->pb, outPath.constData(), AVIO_FLAG_WRITE) < 0)
@@ -663,6 +678,17 @@ struct VideoSink {
 		// The finished frame, as it is encoded: a candidate for the cover.
 		if (f && s.cover)
 			s.cover->offer(f, double(f->pts) * av_q2d(s.venc->time_base));
+		if (f && framesSubmitted == 0 && s.coverFirstFrame) {
+			// Never stamp the source/held frame itself: a CFR speed-up/slowdown
+			// may reuse its pixels on later frames. Only this private copy changes.
+			s.labelledFirst = av_frame_clone(f);
+			if (!s.labelledFirst ||
+			    !cover::labelFrame(s.labelledFirst, s.coverText, s.venc->colorspace, s.venc->color_range)) {
+				shader.error = QStringLiteral("Could not render the numbered first frame.");
+				return false;
+			}
+			f = s.labelledFirst;
+		}
 		if (avcodec_send_frame(s.venc, f) < 0)
 			return false;
 		if (f)
@@ -681,8 +707,10 @@ struct VideoSink {
 		}
 		// The flush (every path's last call before the trailer): every frame
 		// has been offered, so the cover can be chosen and written.
-		if (!f)
-			s.writeCover();
+		if (!f && !s.writeCover()) {
+			shader.error = QStringLiteral("Could not embed the cover thumbnail.");
+			return false;
+		}
 		return true;
 	}
 };

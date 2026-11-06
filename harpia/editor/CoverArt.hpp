@@ -15,6 +15,7 @@
 // last frame is in.
 
 #include <QByteArray>
+#include <QImage>
 #include <QPair>
 #include <QSize>
 #include <QVector>
@@ -35,11 +36,16 @@ QSize sizeFor(QSize video);
 // `f` as a JPEG at `size`. `cs` and `range` say what the frame's YUV means (the
 // encoder's tags: what the file says); the JPEG is standard JFIF, BT.601 full
 // range, as every viewer reads it. Empty on failure.
-QByteArray jpeg(const AVFrame *f, QSize size, AVColorSpace cs, AVColorRange range);
+QByteArray jpeg(const AVFrame *f, QSize size, AVColorSpace cs, AVColorRange range, const QString &label = {});
+
+// The same centered, outlined text for the dialog preview and exported cover.
+void drawLabel(QImage &image, const QString &label);
+// Replace pixels in a writable encoder frame, retaining its timing and tags.
+bool labelFrame(AVFrame *frame, const QString &label, AVColorSpace cs, AVColorRange range);
 
 class Picker {
 public:
-	Picker(QSize size, AVColorSpace cs, AVColorRange range, int keep = 24);
+	Picker(QSize size, AVColorSpace cs, AVColorRange range, int keep = 24, const QString &label = {});
 
 	// Every frame on its way to the encoder, at its time in seconds.
 	void offer(const AVFrame *f, double t);
@@ -50,6 +56,7 @@ public:
 
 private:
 	QSize size_;
+	QString label_;
 	AVColorSpace cs_;
 	AVColorRange range_;
 	int keep_;

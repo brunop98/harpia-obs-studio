@@ -2,6 +2,7 @@
 #include "timeline/SparkLimits.hpp"
 #include "timeline/SeparateClips.hpp"
 #include "BatchExport.hpp"
+#include "CoverArt.hpp"
 #include "EditorFileDialog.hpp"
 
 #include "ExportEstimate.hpp"
@@ -29,6 +30,7 @@
 #include <QShortcut>
 #include <QSlider>
 #include <QSpinBox>
+#include <QScrollArea>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -563,6 +565,10 @@ QString ExportOptionsDialog::separateNameError() const
 
 void ExportOptionsDialog::accept()
 {
+	if (!coverError().isEmpty()) {
+		refresh();
+		return;
+	}
 	// A count still waiting for the editing to pause: the export uses it.
 	if (sparkRecountTimer_ && sparkRecountTimer_->isActive())
 		recountSparkNow();
@@ -649,9 +655,164 @@ void ExportOptionsDialog::buildBatchTab()
 	batchOpen_->setChecked(true);
 	form->addRow(QString(), batchOpen_);
 	v->addLayout(form);
+	if (variants) {
+		buildCoverOptions(v, variationCover_, QStringLiteral("variationCover"));
+	}
 
 	batchTabIndex_ = tabs_->addTab(page, variants ? QStringLiteral("Variations  (%1 versions)").arg(n)
 				     : QStringLiteral("Batch  (%1 cuts)").arg(n));
+}
+
+void ExportOptionsDialog::buildCoverOptions(QVBoxLayout *layout, CoverControls &c, const QString &key)
+{
+	c.key = key;
+	c.box = new QGroupBox(QStringLiteral("Numbered cover thumbnail"), layout->parentWidget());
+	c.box->setObjectName(key + QStringLiteral("Enabled"));
+	c.box->setCheckable(true);
+	c.box->setChecked(false);
+	auto *outer = new QVBoxLayout(c.box);
+	c.details = new QWidget(c.box);
+	auto *row = new QHBoxLayout(c.details);
+	row->setContentsMargins(0, 0, 0, 0);
+	auto *form = new QFormLayout;
+	c.prefix = new QLineEdit(c.details);
+	c.prefix->setObjectName(key + QStringLiteral("Prefix"));
+	c.prefix->setMaxLength(80);
+	c.prefix->setPlaceholderText(QStringLiteral("Optional, e.g. Day "));
+	c.suffix = new QLineEdit(c.details);
+	c.suffix->setObjectName(key + QStringLiteral("Suffix"));
+	c.suffix->setMaxLength(80);
+	c.suffix->setPlaceholderText(QStringLiteral("Optional, e.g.  — Devlog"));
+	form->addRow(QStringLiteral("Prefix"), c.prefix);
+	form->addRow(QStringLiteral("Suffix"), c.suffix);
+	c.number = new QCheckBox(QStringLiteral("Include number"), c.details);
+	c.number->setObjectName(key + QStringLiteral("Number"));
+	c.number->setChecked(true);
+	form->addRow(c.number);
+	auto *numbers = new QHBoxLayout;
+	c.start = new QSpinBox(c.details);
+	c.start->setObjectName(key + QStringLiteral("Start"));
+	c.start->setRange(0, 999999);
+	c.start->setValue(1);
+	c.start->setPrefix(QStringLiteral("Start: "));
+	c.start->setToolTip(QStringLiteral(
+		"The first version's number. Variations keep their list numbers when only some versions are selected."));
+	c.digits = new QSpinBox(c.details);
+	c.digits->setObjectName(key + QStringLiteral("Digits"));
+	c.digits->setRange(1, 6);
+	c.digits->setSuffix(QStringLiteral(" digits"));
+	c.digits->setToolTip(QStringLiteral("Minimum number of digits: 3 shows 001, 002, 003…"));
+	numbers->addWidget(c.start);
+	numbers->addWidget(c.digits);
+	form->addRow(numbers);
+	c.firstFrame = new QCheckBox(QStringLiteral("Also use as first video frame"), c.details);
+	c.firstFrame->setObjectName(key + QStringLiteral("FirstFrame"));
+	c.firstFrame->setToolTip(QStringLiteral(
+		"For galleries that ignore embedded covers. Replaces only the first frame; no extra card, duration or audio change."));
+	form->addRow(c.firstFrame);
+	row->addLayout(form, 1);
+	c.preview = new QLabel(c.details);
+	c.preview->setObjectName(key + QStringLiteral("Preview"));
+	c.preview->setFixedSize(176, 112);
+	c.preview->setAlignment(Qt::AlignCenter);
+	c.preview->setStyleSheet(QStringLiteral("background:#151619; border:1px solid #464a52;"));
+	c.preview->setToolTip(QStringLiteral(
+		"Preview over the current editor frame. Each exported cover uses a frame from that version's own finished video."));
+	row->addWidget(c.preview);
+	outer->addWidget(c.details);
+	c.hint = new QLabel(c.box);
+	c.hint->setWordWrap(true);
+	outer->addWidget(c.hint);
+	layout->addWidget(c.box);
+	connect(c.box, &QGroupBox::toggled, this, &ExportOptionsDialog::refresh);
+	for (auto *edit : {c.prefix, c.suffix}) {
+		connect(edit, &QLineEdit::textChanged, this, &ExportOptionsDialog::refresh);
+	}
+	for (auto *spin : {c.start, c.digits}) {
+		connect(spin, &QSpinBox::valueChanged, this, &ExportOptionsDialog::refresh);
+	}
+	connect(c.number, &QCheckBox::toggled, this, &ExportOptionsDialog::refresh);
+	connect(c.firstFrame, &QCheckBox::toggled, this, &ExportOptionsDialog::refresh);
+}
+
+cover::Numbering ExportOptionsDialog::readCoverOptions(const CoverControls &c) const
+{
+	cover::Numbering out;
+	if (!c.box) {
+		return out;
+	}
+	out.enabled = c.box->isChecked();
+	out.includeNumber = c.number->isChecked();
+	out.prefix = c.prefix->text();
+	out.suffix = c.suffix->text();
+	out.start = c.start->value();
+	out.digits = c.digits->value();
+	out.firstFrame = c.firstFrame->isChecked();
+	return out;
+}
+
+cover::Numbering ExportOptionsDialog::numberedCover() const
+{
+	if (sparkMode()) {
+		return readCoverOptions(sparkCover_);
+	}
+	if (batchMode() && !ctx_.variantLabels.isEmpty()) {
+		return readCoverOptions(variationCover_);
+	}
+	return {};
+}
+
+QString ExportOptionsDialog::coverError() const
+{
+	const auto settings = numberedCover();
+	if (!settings.enabled) {
+		return {};
+	}
+	if (format() != ClipExporter::Format::Mp4) {
+		return QStringLiteral("Choose MP4, or turn off numbered covers.");
+	}
+	if (settings.textFor(1).trimmed().isEmpty()) {
+		return QStringLiteral("Enter a prefix/suffix or enable numbering.");
+	}
+	return {};
+}
+
+void ExportOptionsDialog::refreshCoverOptions(CoverControls &c)
+{
+	if (!c.box) {
+		return;
+	}
+	const bool supported = format() == ClipExporter::Format::Mp4;
+	c.details->setVisible(c.box->isChecked());
+	c.hint->setVisible(c.box->isChecked());
+	c.details->setEnabled(supported);
+	c.start->setEnabled(c.number->isChecked());
+	c.digits->setEnabled(c.number->isChecked());
+	const auto settings = readCoverOptions(c);
+	const QString label = settings.textFor(1);
+	c.hint->setText(
+		!supported
+			? QStringLiteral(
+				  "Numbered covers require MP4. Choose it on the Single video tab, or turn this option off.")
+		: settings.enabled && label.trimmed().isEmpty()
+			? QStringLiteral("Enter text or enable numbering.")
+			: QStringLiteral(
+				  "Cover only. Windows and iPhone galleries may choose their own video frame; the first-frame option is an optional fallback."));
+	QSize size = outputSize().isEmpty() ? ctx_.sourceSize : outputSize();
+	if (size.isEmpty()) {
+		size = QSize(320, 180);
+	}
+	size.scale(176, 112, Qt::KeepAspectRatio);
+	QImage image;
+	if (!ctx_.previewFrame.isNull()) {
+		image = ctx_.previewFrame.scaled(size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+	} else {
+		image = QImage(size, QImage::Format_RGB32);
+		image.fill(QColor(40, 44, 50));
+	}
+	cover::drawLabel(image, label);
+	c.preview->setPixmap(QPixmap::fromImage(image));
+	c.preview->setAccessibleName(QStringLiteral("Cover preview: %1").arg(label));
 }
 
 void ExportOptionsDialog::buildSparkTab()
@@ -733,6 +894,7 @@ void ExportOptionsDialog::buildSparkTab()
 	sparkOpen_->setObjectName(QStringLiteral("sparkOpenFolder"));
 	form->addRow(QString(), sparkOpen_);
 	layout->addLayout(form);
+	buildCoverOptions(layout, sparkCover_, QStringLiteral("sparkCover"));
 	sparkStats_ = new QLabel(page);
 	sparkStats_->setObjectName(QStringLiteral("sparkStats"));
 	sparkStats_->setWordWrap(true);
@@ -748,7 +910,11 @@ void ExportOptionsDialog::buildSparkTab()
 		layout->addWidget(error);
 	}
 	layout->addStretch();
-	sparkTabIndex_ = tabs_->addTab(page, QStringLiteral("Spark"));
+	auto *scroll = new QScrollArea(tabs_);
+	scroll->setFrameShape(QFrame::NoFrame);
+	scroll->setWidgetResizable(true);
+	scroll->setWidget(page);
+	sparkTabIndex_ = tabs_->addTab(scroll, QStringLiteral("Spark"));
 	connect(sparkRequested_, &QSpinBox::valueChanged, this, &ExportOptionsDialog::refresh);
 
 	// Counting can take a moment on a big timeline: it waits for a pause in
@@ -940,6 +1106,8 @@ QSize ExportOptionsDialog::outputSize() const
 
 void ExportOptionsDialog::refresh()
 {
+	refreshCoverOptions(variationCover_);
+	refreshCoverOptions(sparkCover_);
 	customRow_->setVisible(resCombo_->currentData().toInt() < 0);
 	if (tabs_) {
 		const int sel = batchSelection().size();
@@ -1002,6 +1170,17 @@ void ExportOptionsDialog::refresh()
 	// a deliberate excerpt rather than as something having gone wrong.
 	if (exportRange())
 		text += QStringLiteral("\nScope:       Selection only");
+	const auto cover = numberedCover();
+	if (cover.enabled) {
+		text += QStringLiteral("\nCover:       %1%2")
+				.arg(cover.textFor(1),
+				     cover.firstFrame ? QStringLiteral(" (also first frame)") : QString());
+	}
+	const QString coverWhy = coverError();
+	if (!coverWhy.isEmpty()) {
+		exportBtn_->setEnabled(false);
+		text += QLatin1Char('\n') + coverWhy;
+	}
 	summary_->setText(text);
 
 	sizeValue_->setText(QStringLiteral("≈ %1").arg(humanFileSize(estimatedBytes())));
@@ -1027,6 +1206,19 @@ qint64 ExportOptionsDialog::estimatedBytes() const
 void ExportOptionsDialog::loadRemembered()
 {
 	QSettings s;
+	for (CoverControls *c : {&variationCover_, &sparkCover_}) {
+		if (!c->box) {
+			continue;
+		}
+		const QString key = QLatin1String(kGroup) + c->key + QLatin1Char('/');
+		c->prefix->setText(s.value(key + QStringLiteral("prefix")).toString());
+		c->suffix->setText(s.value(key + QStringLiteral("suffix")).toString());
+		c->start->setValue(s.value(key + QStringLiteral("start"), 1).toInt());
+		c->digits->setValue(s.value(key + QStringLiteral("digits"), 1).toInt());
+		c->number->setChecked(s.value(key + QStringLiteral("number"), true).toBool());
+		c->firstFrame->setChecked(s.value(key + QStringLiteral("firstFrame"), false).toBool());
+		c->box->setChecked(s.value(key + QStringLiteral("enabled"), false).toBool());
+	}
 	const QString fld = s.value(QLatin1String(kGroup) + QStringLiteral("folder")).toString();
 	if (!fld.isEmpty() && QDir(fld).exists())
 		folderEdit_->setText(QDir::toNativeSeparators(fld));
@@ -1084,6 +1276,20 @@ void ExportOptionsDialog::loadRemembered()
 void ExportOptionsDialog::saveRemembered() const
 {
 	QSettings s;
+	for (const CoverControls *c : {&variationCover_, &sparkCover_}) {
+		if (!c->box) {
+			continue;
+		}
+		const QString key = QLatin1String(kGroup) + c->key + QLatin1Char('/');
+		const auto cover = readCoverOptions(*c);
+		s.setValue(key + QStringLiteral("prefix"), cover.prefix);
+		s.setValue(key + QStringLiteral("suffix"), cover.suffix);
+		s.setValue(key + QStringLiteral("start"), cover.start);
+		s.setValue(key + QStringLiteral("digits"), cover.digits);
+		s.setValue(key + QStringLiteral("number"), cover.includeNumber);
+		s.setValue(key + QStringLiteral("firstFrame"), cover.firstFrame);
+		s.setValue(key + QStringLiteral("enabled"), cover.enabled);
+	}
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("folder"), folder());
 	s.setValue(QLatin1String(kGroup) + QStringLiteral("format"), int(format()));
 	if (batchOpen_)

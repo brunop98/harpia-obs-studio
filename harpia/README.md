@@ -246,6 +246,16 @@ Three modes, each one step up from the last:
   names such as `my_video_spark/my_video_spark_01.mp4`. Exporting leaves the
   editor unchanged and respects its video-end marker. Render failures include [error codes and copyable diagnostic details](EXPORT_ERRORS.md).
 
+- **Numbered cover thumbnails:** Spark and Variations have an optional
+  **Numbered cover thumbnail** toggle for MP4 exports. Center a prefix, an
+  optional number (with a starting value and zero-padding), and a suffix over
+  a frame from each finished video. Playback stays unchanged by default.
+  **Also use as first video frame** replaces only frame zero, with no extra
+  duration or audio change. Windows and phone galleries may choose their own
+  poster frame instead of the embedded cover; this is an optional fallback.
+  The dialog previews the label and remembers Spark and Variations settings
+  separately. Variation numbers follow their list positions even for a subset.
+
 ### Library and sharing
 
 - A strip of recent recordings and a **Clip Library** window, with

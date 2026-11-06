@@ -2,6 +2,10 @@
 
 #include "SwsColor.hpp"
 
+#include <QFont>
+#include <QPainter>
+#include <QPainterPath>
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/frame.h>
@@ -22,7 +26,67 @@ QSize sizeFor(QSize video)
 	return QSize(even(video.width() * k), even(video.height() * k));
 }
 
-QByteArray jpeg(const AVFrame *f, QSize size, AVColorSpace cs, AVColorRange range)
+void drawLabel(QImage &image, const QString &label)
+{
+	if (image.isNull() || label.trimmed().isEmpty()) {
+		return;
+	}
+	QFont font;
+	font.setBold(true);
+	font.setPixelSize(100);
+	QPainterPath path;
+	path.addText(0, 0, font, label);
+	const QRectF bounds = path.boundingRect();
+	if (bounds.isEmpty()) {
+		return;
+	}
+	const double fit = std::min(image.width() * 0.85 / bounds.width(), image.height() * 0.25 / bounds.height());
+	QTransform transform;
+	transform.translate(image.width() / 2.0, image.height() / 2.0);
+	transform.scale(fit, fit);
+	transform.translate(-bounds.center().x(), -bounds.center().y());
+	path = transform.map(path);
+	QPainter painter(&image);
+	painter.setRenderHint(QPainter::Antialiasing);
+	painter.setPen(QPen(Qt::black, std::max(1.0, std::min(image.width(), image.height()) * 0.012), Qt::SolidLine,
+			    Qt::RoundCap, Qt::RoundJoin));
+	painter.setBrush(Qt::white);
+	painter.drawPath(path);
+}
+
+bool labelFrame(AVFrame *frame, const QString &label, AVColorSpace cs, AVColorRange range)
+{
+	if (!frame || frame->width <= 0 || frame->height <= 0 || av_frame_make_writable(frame) < 0) {
+		return false;
+	}
+	QImage image(frame->width, frame->height, QImage::Format_RGB888);
+	if (image.isNull()) {
+		return false;
+	}
+	const auto format = AVPixelFormat(frame->format);
+	SwsContext *decode = sws_getContext(frame->width, frame->height, format, frame->width, frame->height,
+					    AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
+	SwsContext *encode = sws_getContext(frame->width, frame->height, AV_PIX_FMT_RGB24, frame->width, frame->height,
+					    format, SWS_BILINEAR, nullptr, nullptr, nullptr);
+	bool ok = decode && encode;
+	if (ok) {
+		swsDecodeColors(decode, format, cs, range, frame->height);
+		swsEncodeColorsLike(encode, format, cs, range, frame->height);
+		uint8_t *planes[] = {image.bits(), nullptr, nullptr, nullptr};
+		int strides[] = {int(image.bytesPerLine()), 0, 0, 0};
+		ok = sws_scale(decode, frame->data, frame->linesize, 0, frame->height, planes, strides) > 0;
+		if (ok) {
+			drawLabel(image, label);
+			const uint8_t *pixels[] = {image.constBits(), nullptr, nullptr, nullptr};
+			ok = sws_scale(encode, pixels, strides, 0, frame->height, frame->data, frame->linesize) > 0;
+		}
+	}
+	sws_freeContext(decode);
+	sws_freeContext(encode);
+	return ok;
+}
+
+QByteArray jpeg(const AVFrame *f, QSize size, AVColorSpace cs, AVColorRange range, const QString &label)
 {
 	if (!f || f->width <= 0 || f->height <= 0 || size.isEmpty())
 		return {};
@@ -61,6 +125,10 @@ QByteArray jpeg(const AVFrame *f, QSize size, AVColorSpace cs, AVColorRange rang
 		if (av_frame_get_buffer(rgb, 0) >= 0 && av_frame_get_buffer(yuv, 0) >= 0 &&
 		    avcodec_open2(enc, codec, nullptr) >= 0) {
 			sws_scale(toRgb, f->data, f->linesize, 0, f->height, rgb->data, rgb->linesize);
+			if (!label.isEmpty()) {
+				QImage image(rgb->data[0], w, h, rgb->linesize[0], QImage::Format_RGB888);
+				drawLabel(image, label);
+			}
 			sws_scale(toJpeg, rgb->data, rgb->linesize, 0, h, yuv->data, yuv->linesize);
 			yuv->quality = enc->global_quality;
 			yuv->pts = 0;
@@ -78,8 +146,12 @@ QByteArray jpeg(const AVFrame *f, QSize size, AVColorSpace cs, AVColorRange rang
 	return out;
 }
 
-Picker::Picker(QSize size, AVColorSpace cs, AVColorRange range, int keep)
-	: size_(size), cs_(cs), range_(range), keep_(std::max(2, keep))
+Picker::Picker(QSize size, AVColorSpace cs, AVColorRange range, int keep, const QString &label)
+	: size_(size),
+	  label_(label),
+	  cs_(cs),
+	  range_(range),
+	  keep_(std::max(2, keep))
 {
 }
 
@@ -92,7 +164,7 @@ void Picker::offer(const AVFrame *f, double t)
 	last_ = std::max(last_, t);
 	if (t < next_)
 		return;
-	const QByteArray j = jpeg(f, size_, cs_, range_);
+	const QByteArray j = jpeg(f, size_, cs_, range_, label_);
 	if (j.isEmpty())
 		return;
 	shots_.push_back({t, j});

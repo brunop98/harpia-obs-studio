@@ -272,6 +272,7 @@ target_sources(
     editor/ExportEstimate.hpp
     editor/FrameSeeker.hpp
     editor/ClipExporter.cpp
+    editor/NumberedCover.hpp
     # Text to speech: the window, the services, the narration's audio and its
     # linked place on the timeline.
     editor/tts/TtsDialog.cpp

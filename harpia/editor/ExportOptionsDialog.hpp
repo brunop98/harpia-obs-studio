@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ClipExporter.hpp"
+#include "NumberedCover.hpp"
 
 #include <QDialog>
 #include <functional>
@@ -12,6 +13,7 @@ class QCheckBox;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QGroupBox;
 class QListWidget;
 class QTabWidget;
 class QTableWidget;
@@ -152,6 +154,7 @@ public:
 	int sparkCount() const;
 	QString sparkPrefix() const;
 	bool sparkOpenFolder() const;
+	cover::Numbering numberedCover() const;
 	void setSparkTabForTest(bool on);
 	// The settings on the Spark tab (the Context's when there is no tab).
 	TlSparkSettings sparkSettings() const;
@@ -172,6 +175,20 @@ private slots:
 	void refresh(); // summary + estimate, after any change
 
 private:
+	struct CoverControls {
+		QGroupBox *box = nullptr;
+		QWidget *details = nullptr;
+		QCheckBox *number = nullptr, *firstFrame = nullptr;
+		QLineEdit *prefix = nullptr, *suffix = nullptr;
+		QSpinBox *start = nullptr, *digits = nullptr;
+		QLabel *preview = nullptr, *hint = nullptr;
+		QString key;
+	};
+	CoverControls variationCover_, sparkCover_;
+	void buildCoverOptions(QVBoxLayout *layout, CoverControls &controls, const QString &key);
+	cover::Numbering readCoverOptions(const CoverControls &controls) const;
+	void refreshCoverOptions(CoverControls &controls);
+	QString coverError() const;
 	void browseFolder();
 	void loadRemembered();
 	void saveRemembered() const;

@@ -16725,6 +16725,8 @@ void VideoEditorWindow::onSave()
 	}
 
 	if (fullEdit() && dlg.sparkMode()) {
+		const auto cover = dlg.numberedCover();
+		o.coverFirstFrame = cover.enabled && cover.firstFrame;
 		TimelineModel configured = sparkOriginal;
 		configured.spark = sparkSettings;
 		const spark::Plan plan = sparkSettings == sparkOriginal.spark ? sparkPlan : spark::buildPlan(configured);
@@ -16735,6 +16737,7 @@ void VideoEditorWindow::onSave()
 		for (const auto &order : orders) {
 			BatchExporter::Item item;
 			item.name = batch_export::clipName(prefix, items.size() + 1, orders.size());
+			item.coverText = cover.textFor(int(items.size()) + 1);
 			item.useTimeline = true;
 			item.timeline = spark::pickRandomTexts(spark::applyOrder(plan, order), textRng);
 			SoundRules::apply(item.timeline, [this](int id) { return soundInfoFor(id); });
@@ -16749,6 +16752,8 @@ void VideoEditorWindow::onSave()
 	// words swapped. Built from the WHOLE project (the Selection scope is a
 	// Single-video choice); voiceover and everything else as set above.
 	if (fullEdit() && dlg.batchMode()) {
+		const auto cover = dlg.numberedCover();
+		o.coverFirstFrame = cover.enabled && cover.firstFrame;
 		const TimelineModel whole = timelineView_->model();
 		const QVector<text_variations::Slot> vs =
 			text_variations::slotsOf(whole, [this](int id) { return sourceLabel(id); });
@@ -16771,6 +16776,7 @@ void VideoEditorWindow::onSave()
 			it.name = text_variations::fileName(prefix, k + 1, int(std::min<qint64>(total, 1 << 30)),
 							    text_variations::textsAt(vs, pick));
 			it.useTimeline = true;
+			it.coverText = cover.textFor(k + 1);
 			it.timeline = text_variations::applyCombination(whole, vs, pick);
 			items.push_back(it);
 		}

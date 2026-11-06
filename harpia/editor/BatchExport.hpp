@@ -94,6 +94,7 @@ public:
 		ClipExporter::Cut cut; // source index, range, speed
 		bool useTimeline = false;
 		TimelineModel timeline;
+		QString coverText; // already formatted for this version, independent of its filename
 	};
 	struct Result {
 		QString name;

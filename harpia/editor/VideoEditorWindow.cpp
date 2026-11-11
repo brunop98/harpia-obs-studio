@@ -1043,6 +1043,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// "Show in inspector" from a clip's right-click menu (any mode).
 	connect(timelineView_, &TimelineView::filesDropped, this,
 		&VideoEditorWindow::onFilesDroppedOnTimeline);
+	connect(timelineView_, &TimelineView::locateSourceRequested, this, &VideoEditorWindow::locateProjectSource);
 	connect(timelineView_, &TimelineView::randomizeSelectionRequested, this,
 		[this]() { randomizeClips(/*selectedOnly=*/true); });
 	// Sounds for events, from the clip and lane menus.
@@ -2605,6 +2606,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(tracks_, &TrackEditor::segmentsChanged, this, &VideoEditorWindow::scheduleSnapshot);
 	connect(tracks_, &TrackEditor::selectionChanged, this, &VideoEditorWindow::onSegmentSelected);
 	connect(tracks_, &TrackEditor::autoCutRequested, this, &VideoEditorWindow::onAutoCut);
+	connect(tracks_, &TrackEditor::locateSourceRequested, this, &VideoEditorWindow::locateProjectSource);
 	connect(tracks_, &TrackEditor::inspectRequested, this, &VideoEditorWindow::revealInspector);
 	connect(trimModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(EditMode::Trim); });
 	connect(cutModeBtn_, &QPushButton::clicked, this, [this]() { setEditMode(EditMode::MultiCut); });
@@ -2868,8 +2870,34 @@ bool VideoEditorWindow::sourceInUse(int id) const
 	return false;
 }
 
-int VideoEditorWindow::addSource(const QString &path)
+int VideoEditorWindow::sourceImportId(int replaceMissingId)
 {
+	if (replaceMissingId < 0) {
+		return nextSourceId_++;
+	}
+	const EditorSource *source = sourceById(replaceMissingId);
+	return source && source->missing ? replaceMissingId : -1;
+}
+
+void VideoEditorWindow::storeSource(EditorSource &&source)
+{
+	// Relinking repairs the binding in place: clips, Random options, cuts,
+	// sound rules and undo snapshots all retain the same source ID.
+	if (EditorSource *previous = sourceById(source.id)) {
+		source.name = previous->name;
+		source.librarySlot = previous->librarySlot;
+		*previous = std::move(source);
+	} else {
+		sources_.push_back(std::move(source));
+	}
+}
+
+int VideoEditorWindow::addSource(const QString &path, int replaceMissingId)
+{
+	const int id = sourceImportId(replaceMissingId);
+	if (id < 0) {
+		return -1;
+	}
 	LoadingScope loading(*this, QStringLiteral("Loading video"));
 	loading.stage(QStringLiteral("Opening video…"), path);
 	auto seeker = runLoadingTask([path]() {
@@ -2895,7 +2923,7 @@ int VideoEditorWindow::addSource(const QString &path)
 		return -1;
 	}
 	EditorSource src;
-	src.id = nextSourceId_++;
+	src.id = id;
 	src.path = path;
 	src.name = QFileInfo(path).fileName();
 	src.durationMs = seeker->durationMs();
@@ -2904,7 +2932,6 @@ int VideoEditorWindow::addSource(const QString &path)
 	src.fps = seeker->fps();
 	const QString codecName = seeker->codecName();
 	src.seeker = std::move(seeker);
-	const int id = src.id;
 	if (previewDecoder_) {
 		previewDecoder_->setSource(id, path);
 		// Only files that actually scrub badly: above 1080p, or one of the
@@ -2919,7 +2946,7 @@ int VideoEditorWindow::addSource(const QString &path)
 	}
 	auto *thumbs = new TimelineThumbs(this);
 	src.thumbs = thumbs;
-	sources_.push_back(std::move(src));
+	storeSource(std::move(src));
 	// The filmstrip streams in on a worker thread; cache it per source and, if
 	// this is the active source, push it live to the timeline/tracks widgets.
 	connect(thumbs, &TimelineThumbs::updated, this, [this, id, thumbs]() {
@@ -3045,6 +3072,18 @@ void VideoEditorWindow::refreshMultiCutSources()
 
 void VideoEditorWindow::refreshSourceList()
 {
+	QHash<int, QString> missing;
+	for (const EditorSource &source : sources_) {
+		if (source.missing) {
+			missing.insert(source.id, source.name);
+		}
+	}
+	if (timelineView_) {
+		timelineView_->setMissingSources(missing);
+	}
+	if (tracks_) {
+		tracks_->setMissingSources(missing);
+	}
 	refreshMultiCutSources();
 	if (!sourceList_)
 		return;
@@ -3059,13 +3098,17 @@ void VideoEditorWindow::refreshSourceList()
 				.arg(s.height));
 		item->setData(Qt::UserRole, s.id);
 		item->setData(UrlDragList::PathRole, s.path); // what a drag of this row carries
-		if (!s.thumbCache.isEmpty() && !s.thumbCache.front().isNull())
+		if (s.missing) {
+			item->setIcon(uiIcon(Glyph::Warning, 24));
+		} else if (!s.thumbCache.isEmpty() && !s.thumbCache.front().isNull()) {
 			item->setIcon(QIcon(QPixmap::fromImage(s.thumbCache.front())));
-		item->setToolTip(QStringLiteral("%1  ·  %2×%3  ·  %4s")
-					 .arg(s.name)
-					 .arg(s.width)
-					 .arg(s.height)
-					 .arg(s.durationMs / 1000.0, 0, 'f', 1));
+		}
+		item->setToolTip(s.missing ? QStringLiteral("Missing: %1\nRight-click to find this file.").arg(s.path)
+					   : QStringLiteral("%1  ·  %2×%3  ·  %4s")
+						     .arg(s.name)
+						     .arg(s.width)
+						     .arg(s.height)
+						     .arg(s.durationMs / 1000.0, 0, 'f', 1));
 		sourceList_->addItem(item);
 		if (s.id == activeSourceId_)
 			sourceList_->setCurrentItem(item);
@@ -3179,7 +3222,7 @@ void VideoEditorWindow::buildEmptyPanel()
 			"border-radius:4px; padding:6px 10px; text-align:left;}"
 			"QPushButton:hover{background:#303946; border-color:#5286b2;}"));
 		connect(button, &QPushButton::clicked, this, [this, button]() {
-			// Keep the normal open path's validation and missing-media relinking,
+			// Keep the normal open path's validation and missing-media placeholders,
 			// without a confirmation box after a successful one-click reopen.
 			const QString path = button->property("projectPath").toString();
 			if (!path.isEmpty())
@@ -3356,6 +3399,19 @@ void VideoEditorWindow::showSourceFileMenu(QListWidget *list, const QPoint &pos)
 	const QListWidgetItem *item = list ? list->itemAt(pos) : nullptr;
 	if (!item)
 		return;
+	if (list == sourceList_) {
+		const int sourceId = item->data(Qt::UserRole).toInt();
+		if (const EditorSource *source = sourceById(sourceId); source && source->missing) {
+			QMenu menu(sourcesPanel_);
+			menu.setObjectName(QStringLiteral("editorMediaFileMenu"));
+			auto *find = menu.addAction(QStringLiteral("Find missing file…"));
+			find->setObjectName(QStringLiteral("findMissingMediaAction"));
+			if (menu.exec(list->viewport()->mapToGlobal(pos)) == find) {
+				locateProjectSource(sourceId);
+			}
+			return;
+		}
+	}
 	QString path = item->data(UrlDragList::PathRole).toString();
 	if (list == sourceList_)
 		if (const EditorSource *source = sourceById(item->data(Qt::UserRole).toInt()))
@@ -3578,8 +3634,12 @@ void VideoEditorWindow::warnHeavyStill(const QString &path, QSize px, qint64 byt
 		st.setValue(QStringLiteral("editor/quietLargeImages"), true);
 }
 
-int VideoEditorWindow::addImageSource(const QString &path)
+int VideoEditorWindow::addImageSource(const QString &path, int replaceMissingId)
 {
+	const int id = sourceImportId(replaceMissingId);
+	if (id < 0) {
+		return -1;
+	}
 	LoadingScope loading(*this, QStringLiteral("Loading image"));
 	loading.stage(QStringLiteral("Reading image…"), path);
 	struct PreparedImage { QImage pixels; QSize fullSize; QString error; };
@@ -3619,7 +3679,7 @@ int VideoEditorWindow::addImageSource(const QString &path)
 	const QSize fullSize = prepared.fullSize;
 	const qint64 fileBytes = QFileInfo(path).size();
 	EditorSource s;
-	s.id = nextSourceId_++;
+	s.id = id;
 	s.path = path;
 	s.name = QFileInfo(path).fileName();
 	s.durationMs = 5000; // a still has no length of its own; 5s is the default
@@ -3641,9 +3701,8 @@ int VideoEditorWindow::addImageSource(const QString &path)
 	// Scaled here rather than on a worker: a still is already decoded, and one
 	// smooth scale of an image in memory is not work worth a thread.
 	s.thumbCache = {img.scaled(128, 72, Qt::KeepAspectRatio, Qt::SmoothTransformation)};
-	const int id = s.id;
 	const QVector<QImage> strip = s.thumbCache;
-	sources_.push_back(std::move(s));
+	storeSource(std::move(s));
 	// Duration 0: a still has no source timeline to space tiles along, and the
 	// timeline's image path repeats the one tile instead of asking. Nothing
 	// consults srcThumbDur_ for a still -- its clip is freeDuration(), so a trim
@@ -3893,7 +3952,7 @@ QString VideoEditorWindow::audioProxyFor(int sourceId)
 	return wav;
 }
 
-int VideoEditorWindow::addAudioSource(const QString &path)
+int VideoEditorWindow::addAudioSource(const QString &path, int replaceMissingId)
 {
 	// Audio-only files have no video stream, so FrameSeeker can't open them.
 	// Decode to a session WAV and register that as the source: the waveform,
@@ -3901,7 +3960,10 @@ int VideoEditorWindow::addAudioSource(const QString &path)
 	const QString dir = sessionAudioDir();
 	if (dir.isEmpty())
 		return -1;
-	const int id = nextSourceId_++;
+	const int id = sourceImportId(replaceMissingId);
+	if (id < 0) {
+		return -1;
+	}
 	const QString wav = dir + QStringLiteral("/import_%1.wav").arg(id);
 	LoadingScope loading(*this, QStringLiteral("Loading audio"));
 	loading.stage(QStringLiteral("Preparing audio…"), path);
@@ -3929,7 +3991,7 @@ int VideoEditorWindow::addAudioSource(const QString &path)
 	s.name = QFileInfo(path).fileName();
 	s.durationMs = VoiceoverTrack::wavDurationMs(wav);
 	s.width = s.height = 0; // audio-only: no seeker, no filmstrip
-	sources_.push_back(std::move(s));
+	storeSource(std::move(s));
 	audioProxy_.insert(id, wav);
 	refreshSourceList();
 	return id;
@@ -9387,8 +9449,10 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 	for (int k = 0; k < n; ++k) {
 		const TlClipOption o = c.clipOptionAt(k);
 		const EditorSource *source = sourceById(o.sourceId);
-		const QString full =
-			QStringLiteral("%1.  %2").arg(k + 1).arg(source ? sourceLabel(o.sourceId) : QStringLiteral("Missing source"));
+		const QString full = QStringLiteral("%1.  %2%3")
+					     .arg(k + 1)
+					     .arg(!source || source->missing ? QStringLiteral("Missing — ") : QString())
+					     .arg(source ? sourceLabel(o.sourceId) : QStringLiteral("source"));
 		QToolButton *pick = randomClipPicks_[k];
 		pick->setText(full);
 		pick->setAccessibleName(full);
@@ -9581,7 +9645,19 @@ void VideoEditorWindow::showRandomClipOptionMenu(int option, const QPoint &posit
 	menu.setObjectName(QStringLiteral("randomClipOptionMenu"));
 	auto *duplicate = menu.addAction(QStringLiteral("Duplicate"));
 	duplicate->setEnabled(!tracks[track].locked);
-	if (menu.exec(position) != duplicate) {
+	const int sourceId = clip->clipOptionAt(option).sourceId;
+	const EditorSource *source = sourceById(sourceId);
+	QAction *find = nullptr;
+	if (source && source->missing) {
+		find = menu.addAction(QStringLiteral("Find missing file…"));
+		find->setObjectName(QStringLiteral("findMissingMediaAction"));
+	}
+	const QAction *chosen = menu.exec(position);
+	if (find && chosen == find) {
+		locateProjectSource(sourceId);
+		return;
+	}
+	if (chosen != duplicate) {
 		return;
 	}
 	clip = timelineView_->selectedClipPtr();
@@ -14575,6 +14651,95 @@ int VideoEditorWindow::addMissingProjectSource(const QJsonObject &source, const 
 	return id;
 }
 
+void VideoEditorWindow::locateProjectSource(int sourceId)
+{
+	const EditorSource *source = sourceById(sourceId);
+	if (!source || !source->missing) {
+		return;
+	}
+	const int generation = projectLoadGeneration_;
+	const QString savedPath = source->origPath.isEmpty() ? source->path : source->origPath;
+	QString filter;
+	switch (sourceKindFor(savedPath)) {
+	case SourceKind::Image:
+		filter = imageOpenFilter();
+		break;
+	case SourceKind::Audio:
+		filter = audioOpenFilter();
+		break;
+	case SourceKind::Video:
+		filter = QStringLiteral(
+			"Video files (*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.gif *.wmv *.flv *.ts);;All files (*)");
+		break;
+	}
+	const QString picked = editor_dialogs::getOpenFileName(
+		this, QStringLiteral("Find missing file — %1").arg(source->name),
+		QFileInfo(savedPath).absoluteDir().exists() ? QFileInfo(savedPath).absolutePath()
+							    : QFileInfo(projectPath_).absolutePath(),
+		filter);
+	if (!picked.isEmpty() && generation == projectLoadGeneration_) {
+		relinkProjectSource(sourceId, picked);
+	}
+}
+
+bool VideoEditorWindow::relinkProjectSource(int sourceId, const QString &path)
+{
+	const EditorSource *source = sourceById(sourceId);
+	if (!source || !source->missing || path.isEmpty()) {
+		return false;
+	}
+	const QString previousPath = source->path;
+	const SourceKind kind = sourceKindFor(previousPath);
+	const qint64 trimStart = timeline_->start(), trimEnd = timeline_->end();
+	stopPlayback();
+	int opened = -1;
+	switch (kind) {
+	case SourceKind::Image:
+		opened = addImageSource(path, sourceId);
+		break;
+	case SourceKind::Audio:
+		opened = addAudioSource(path, sourceId);
+		break;
+	case SourceKind::Video:
+		opened = addSource(path, sourceId);
+		break;
+	}
+	if (opened < 0) {
+		return false; // a refused replacement leaves the original reference recoverable
+	}
+	soundPeaks_.remove(sourceId);
+	randomClipPeaks_.clear();
+	playSeekers_.clear();
+	if (kind != SourceKind::Audio) {
+		audioProxy_.remove(sourceId);
+	}
+	if (inPath_ == previousPath) {
+		inPath_ = path;
+	}
+	invalidatePreviewCache();
+	invalidateAudioMix();
+	if (activeSourceId_ == sourceId) {
+		const QSignalBlocker block(timeline_);
+		setActiveSource(sourceId);
+		timeline_->setEnd(trimEnd);
+		timeline_->setStart(trimStart);
+	}
+	applySoundRules();
+	refreshProjectInspector();
+	timelineView_->setFrameRate(timelineFps());
+	const QSize preview = previewCanvasSize();
+	canvas_->setVideoSize(preview.width(), preview.height());
+	rebuildSoundsTab();
+	syncClipInspector();
+	updateInspector();
+	if (fullEdit()) {
+		showTimelineFrame(timelinePlayheadMs());
+	} else {
+		showPlayheadFrame();
+	}
+	return true;
+}
+
 void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString &path, bool quiet,
 					 bool showSuccess)
 {
@@ -14599,7 +14764,7 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	if (replaceMedia)
 		clearProjectMedia();
 
-	// v2 projects carry their own list of sources — open (or relink) each and
+	// v2 projects carry their own list of sources — open each available file and
 	// map its saved id onto the editor's live source id. v1 projects (single
 	// source) fall back to the primary source and the "different file" hint.
 	QHash<int, int> srcMap; // project source id -> editor source id
@@ -14662,31 +14827,9 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 				continue; // nothing needs it and it is not there: let it go
 			const EditorSource *known = sourceByPath(spath);
 			int eid = known ? known->id : -1;
-			if (eid < 0) {
-				// A quiet open never puts a dialog up: a missing file is
-				// left missing rather than stopping an automated caller.
-				if (!quiet && !QFileInfo::exists(spath)) {
-					loading.hide();
-					const QString picked = editor_dialogs::getOpenFileName(
-						this,
-						QStringLiteral("Locate \"%1\"")
-							.arg(sname.isEmpty() ? QFileInfo(spath).fileName()
-									     : sname),
-						QFileInfo(path).absolutePath(),
-						// The filter follows what went missing. A video
-						// filter on an image source made the file you
-						// needed unselectable, which reads as the
-						// relink being broken.
-						isImageFile(spath) ? imageOpenFilter()
-						: isAudioFile(spath)
-							? audioOpenFilter()
-							: QStringLiteral(
-								  "Video files (*.mp4 *.mov *.mkv *.webm "
-								  "*.avi *.m4v *.gif *.wmv *.flv "
-								  "*.ts);;All files (*)"));
-					if (!picked.isEmpty())
-						spath = picked;
-				}
+			if (eid < 0 && QFileInfo(spath).isFile()) {
+				// Missing files stay as placeholders. Locating them is an
+				// explicit clip-menu action, never part of opening a project.
 				// A still comes back as a STILL. Every source used to be
 				// reopened through addSource, which builds a video source
 				// around a FrameSeeker -- so a reopened project had no
@@ -15043,25 +15186,13 @@ void VideoEditorWindow::applyProjectJson(const QJsonObject &root, const QString 
 	else
 		showPlayheadFrame();
 	loading.hide();
-	if (!quiet) {
-		// One message, whatever went wrong, and only once the editor is whole
-		// again. A project whose media has moved still OPENS -- its timeline,
-		// its captions and its edits are all there -- so this says what is
-		// missing rather than pretending the load failed.
-		if (loadFailures_.isEmpty()) {
-			if (showSuccess)
-				QMessageBox::information(this, QStringLiteral("Open project"),
-							 QStringLiteral("Project loaded."));
-		} else {
-			warnAndLog(
-				this, QStringLiteral("Open project"),
-				QStringLiteral("The project opened, but %1 of its files could not "
-					       "be read:\n\n%2\n\nIts clips are still on the "
-					       "timeline. Restore the files at their original locations, or reopen "
-					       "the project and locate them when prompted.")
-					.arg(loadFailures_.size())
-					.arg(loadFailures_.join(QStringLiteral("\n"))));
-		}
+	if (!loadFailures_.isEmpty()) {
+		editorLog(EditorLogLevel::Warning, QStringLiteral("Open project"),
+			  QStringLiteral(
+				  "Project opened with missing media: %1. Right-click a missing clip to find its file.")
+				  .arg(loadFailures_.join(QStringLiteral(", "))));
+	} else if (!quiet && showSuccess) {
+		QMessageBox::information(this, QStringLiteral("Open project"), QStringLiteral("Project loaded."));
 	}
 	loadFailures_.clear();
 }

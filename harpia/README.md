@@ -185,6 +185,9 @@ Three modes, each one step up from the last:
   (**Ctrl+N**) starts a blank project in the current window, with Save / Don’t Save /
   Cancel for existing edits. The new project has its own save path and undo history.
   The opening screen offers the three most recent projects to continue with one click.
+  Missing media never interrupts opening: affected clips display **Missing**.
+  Right-click a clip, Random Clip option, or source and choose **Find missing file…**
+  to restore all references to that file while retaining trims, effects and animation.
 - **Right-click menus:** common clip actions stay at the top. Timing, Organize,
   Tags, Audio and captions, and Export collect related commands in one level of
   submenus for video, image, text and effect clips. Track menus group audio,

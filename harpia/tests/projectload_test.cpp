@@ -10,10 +10,12 @@
 #undef private
 #include "editor/PreviewDecoder.hpp"
 #include "editor/TrackEditor.hpp"
+#include "editor/EditorWidgets.hpp"
 #include "editor/timeline/TimelineJson.hpp"
 #include "editor/timeline/TimelineView.hpp"
 
 #include <cstdio>
+#include <QTest>
 
 using namespace harpia;
 namespace {
@@ -73,6 +75,56 @@ EditorSource *byName(VideoEditorWindow &window, const QString &name)
 		if (source.name == name)
 			return &source;
 	return nullptr;
+}
+bool findFile(const std::function<void()> &open, const QString &replacement)
+{
+	bool sawPicker = false;
+	QElapsedTimer elapsed;
+	elapsed.start();
+	QTimer driver;
+	QObject::connect(&driver, &QTimer::timeout, [&]() {
+		if (elapsed.elapsed() > 5000) {
+			if (auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget())) {
+				dialog->reject();
+			}
+			if (auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget())) {
+				menu->close();
+			}
+			return;
+		}
+		if (auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget())) {
+			for (auto *action : menu->actions()) {
+				if (action->objectName() == QStringLiteral("findMissingMediaAction")) {
+					menu->setActiveAction(action);
+					QTest::keyClick(menu, Qt::Key_Return);
+					return;
+				}
+			}
+			menu->close();
+		} else if (auto *picker = qobject_cast<QFileDialog *>(QApplication::activeModalWidget())) {
+			if (sawPicker) {
+				return;
+			}
+			sawPicker = true;
+			if (replacement.isEmpty()) {
+				picker->reject();
+			} else {
+				picker->setDirectory(QFileInfo(replacement).absolutePath());
+				QTimer::singleShot(50, picker, [picker, replacement]() {
+					if (auto *name =
+						    picker->findChild<QLineEdit *>(QStringLiteral("fileNameEdit"))) {
+						name->setText(replacement);
+					} else {
+						picker->selectFile(replacement);
+					}
+					QMetaObject::invokeMethod(picker, "accept", Qt::DirectConnection);
+				});
+			}
+		}
+	});
+	driver.start(10);
+	open();
+	return sawPicker;
 }
 }
 
@@ -198,7 +250,22 @@ int main(int argc, char **argv)
 		source(101, "unused/no-longer-used.mp4", 640, 360, 60)}, missingModel, 88, "multicut");
 	missingRoot["segments"] = QJsonArray{QJsonObject{{"srcStart", 100}, {"srcEnd", 900}, {"source", 88}, {"speed", 1.0}}};
 	write(missingPath, missingRoot);
-	check(window.openProjectAt(missingPath), "a project still opens when several referenced media files are missing");
+	bool prompted = false;
+	QTimer closePrompts;
+	QObject::connect(&closePrompts, &QTimer::timeout, [&]() {
+		if (auto *picker = qobject_cast<QFileDialog *>(QApplication::activeModalWidget())) {
+			prompted = true;
+			picker->reject();
+		} else if (auto *message = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+			prompted = true;
+			message->accept();
+		}
+	});
+	closePrompts.start(10);
+	window.openProjectWithDialogs(missingPath, false);
+	closePrompts.stop();
+	check(window.projectPath_ == missingPath && !prompted,
+	      "the interactive project-open path never asks to locate or acknowledge missing media");
 	EditorSource *missing = byName(window, "missing.mp4"), *alternative = byName(window, "alternative.mov");
 	EditorSource *sound = byName(window, "missing.wav"), *available = byName(window, "blue.mp4");
 	check(missing && alternative && sound && available && window.sources_.size() == 4 && missing->missing &&
@@ -230,6 +297,60 @@ int main(int argc, char **argv)
 		}
 		check(saved.size() == 4 && keptPath && keptAlternative && keptSlot,
 		      "save after a missing-media load retains recoverable paths and metadata");
+		const int missingId = missing->id, audioId = sound->id, alternativeId = alternative->id;
+		check(window.timelineView_->missingSources_.contains(missingId) &&
+			      window.tracks_->missingSources_.contains(missingId) &&
+			      window.timelineView_->missingSources_.contains(alternativeId),
+		      "Full Editing and Multi-Cut receive missing-source labels, including hidden Random alternatives");
+		const TimelineModel beforeRelink = window.timelineView_->model();
+		const auto cutsBeforeRelink = window.tracks_->segments();
+		const int historyBeforeRelink = window.histIndex_;
+		check(findFile(
+			      [&]() {
+				      window.tracks_->showSegmentMenu(0, QPoint(100, 100),
+								      window.tracks_->segmentRects().front().center());
+			      },
+			      {}) &&
+			      window.sourceById(missingId)->missing && window.timelineView_->model() == beforeRelink &&
+			      window.histIndex_ == historyBeforeRelink,
+		      "cancelling Find missing file leaves every edit and recoverable path unchanged");
+		window.setEditMode(VideoEditorWindow::EditMode::Full);
+		check(findFile([&]() { window.timelineView_->showClipMenu(0, 0, QPoint(100, 100), 0); }, blue),
+		      "a missing timeline clip's right-click action opens the file picker on demand");
+		check(window.sources_.size() == 4 && !window.sourceById(missingId)->missing &&
+			      window.sourceById(missingId)->path == blue && window.sourceById(missingId)->seeker &&
+			      window.timelineView_->model() == beforeRelink &&
+			      window.tracks_->segments() == cutsBeforeRelink &&
+			      window.histIndex_ == historyBeforeRelink &&
+			      !window.timelineView_->missingSources_.contains(missingId) &&
+			      !window.tracks_->missingSources_.contains(missingId),
+		      "relinking restores the original source ID for all clips and cuts without changing edits or undo history");
+		check(QTest::qWaitFor(
+			      [&]() {
+				      const QImage &frame = window.canvas_->currentFrame();
+				      return !frame.isNull() &&
+					     frame.pixelColor(frame.width() / 2, frame.height() / 2).blue() > 180;
+			      },
+			      3000),
+		      "the recovered clip renders immediately instead of leaving its missing frame cached");
+		window.timelineView_->selectClip(0, 1);
+		check(findFile([&]() { window.showRandomClipOptionMenu(1, QPoint(100, 100)); }, red) &&
+			      window.sourceById(alternativeId)->seeker && window.timelineView_->model() == beforeRelink,
+		      "finding a missing Random alternative repairs its existing option binding without replacing its timestamp");
+		check(window.relinkProjectSource(audioId, tone) && !window.sourceById(audioId)->missing &&
+			      window.sourceById(audioId)->origPath == tone &&
+			      QFileInfo(window.sourceById(audioId)->path).isFile() &&
+			      window.sourceById(audioId)->librarySlot == "Unconfigured test sound slot" &&
+			      window.timelineView_->model() == beforeRelink,
+		      "missing audio recovers through the audio decoder while clips and sound rules keep their stable references");
+		const QString relinkedPath = dir.filePath("relinked.harpiaproj");
+		check(window.saveProjectTo(relinkedPath, true).isEmpty() && window.openProjectAt(relinkedPath),
+		      "recovered source paths survive saving and reopening the project");
+		bool relinked = true;
+		for (const EditorSource &entry : window.sources_) {
+			relinked &= !entry.missing;
+		}
+		check(relinked, "reopening the repaired project needs no missing placeholders");
 		QDir().mkpath(dir.filePath("moved"));
 		check(QFile::copy(blue, dir.filePath("moved/missing.mp4")) && QFile::copy(blue, dir.filePath("moved/alternative.mov")) &&
 		      QFile::copy(tone, dir.filePath("moved/missing.wav")), "the missing fixture media can be restored to disk");
@@ -241,6 +362,22 @@ int main(int argc, char **argv)
 			recovered &= !entry.missing;
 		check(recovered, "restoring the files recovers all original references on the next project open");
 	}
+
+	TimelineModel missingImageModel;
+	TlTrack imageTrack;
+	TlClip missingImage = clip(7);
+	missingImage.type = TlClip::Type::Image;
+	imageTrack.clips = {missingImage};
+	missingImageModel.tracks = {imageTrack};
+	const QString missingImageProject = dir.filePath("missing-image.harpiaproj");
+	write(missingImageProject, project({source(7, "missing/picture.png", 37, 25)}, missingImageModel, 7));
+	check(window.openProjectAt(missingImageProject), "a missing-image project opens normally");
+	const int imageId = window.activeSourceId_;
+	const TimelineModel imageBeforeRelink = window.timelineView_->model();
+	check(window.relinkProjectSource(imageId, still) && window.stillImages_.contains(imageId) &&
+		      !window.sourceById(imageId)->missing && window.timelineView_->model() == imageBeforeRelink &&
+		      !window.timelineView_->missingSources_.contains(imageId),
+	      "an image replacement is decoded as a still and repairs the existing image clip without rewriting it");
 
 	TimelineModel emptyLayout;
 	TlTrack authored;

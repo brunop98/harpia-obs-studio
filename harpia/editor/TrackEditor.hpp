@@ -90,6 +90,14 @@ public:
 	// Per-source filmstrip so Output cuts render from their OWN source (a mix can
 	// hold cuts from several videos). Fed for every source as its strip decodes.
 	void setSourceThumbs(int sourceId, const QVector<QImage> &thumbs, qint64 durationMs);
+	void setMissingSources(const QHash<int, QString> &sources)
+	{
+		if (missingSources_ == sources) {
+			return;
+		}
+		missingSources_ = sources;
+		update();
+	}
 
 	const QVector<CutSegment> &segments() const { return segs_; }
 	// Replace the whole cut list (undo/redo restore). Clears selection; does NOT
@@ -148,6 +156,7 @@ public:
 	QRect outputRectForTest() const { return outputRect(); }
 
 signals:
+	void locateSourceRequested(int sourceId);
 	// The window being LOOKED AT moved on one of the two lanes -- a zoom, a
 	// scroll, a hover. Carries that lane's own numbers, because the Source and
 	// Output tracks zoom independently and the overview shows whichever one you
@@ -230,6 +239,7 @@ private:
 	int lastScrubSourceId_ = 0; // source of the most recent scrub/hover emit
 	// Per-source filmstrips for rendering Output cuts (keyed by source id).
 	QHash<int, QVector<QImage>> srcThumbs_;
+	QHash<int, QString> missingSources_;
 	// Output-lane tiles pre-scaled to their painted size (see scaledOutStrip).
 	QHash<int, QVector<QPixmap>> outStripPix_;
 	QHash<int, QPair<int, int>> outStripPixSize_;

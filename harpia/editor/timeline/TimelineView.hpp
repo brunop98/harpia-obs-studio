@@ -87,6 +87,14 @@ public:
 	// Per-source filmstrip for video clips (keyed by EditorSource id), same feed
 	// as TrackEditor::setSourceThumbs.
 	void setSourceThumbs(int sourceId, const QVector<QImage> &thumbs, qint64 durationMs);
+	void setMissingSources(const QHash<int, QString> &sources)
+	{
+		if (missingSources_ == sources) {
+			return;
+		}
+		missingSources_ = sources;
+		update();
+	}
 
 	// Append a clip to a track (creating a default track of the right kind when
 	// the timeline is empty). Emits clipsChanged + selects it.
@@ -455,6 +463,7 @@ public:
 	}
 
 signals:
+	void locateSourceRequested(int sourceId);
 	void clipsChanged();
 	// Media files dropped straight onto the lanes. The view knows WHERE they
 	// landed; it does not know how to read a PNG or an MP4, and the media pool
@@ -774,6 +783,7 @@ private:
 	// ---- data ----
 	TimelineModel model_;
 	QHash<int, QVector<QImage>> srcThumbs_;
+	QHash<int, QString> missingSources_; // live media status, independent of undoable edits
 	// Filmstrip tiles pre-scaled to their painted size, so playback repaints
 	// blit instead of rescaling every visible tile 30 times a second.
 	mutable QHash<int, QVector<QPixmap>> stripPix_;

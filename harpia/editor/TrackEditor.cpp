@@ -730,9 +730,11 @@ void TrackEditor::paintEvent(QPaintEvent *)
 
 	// ---- Captions --------------------------------------------------------
 	p.setPen(cl_.caption);
-	p.drawText(QRect(src.x(), lp_.margin, src.width(), lp_.captionH),
-		   Qt::AlignVCenter | Qt::AlignLeft,
-		   QStringLiteral("Source — press and drag to select a section to keep"));
+	p.drawText(QRect(src.x(), lp_.margin, src.width(), lp_.captionH), Qt::AlignVCenter | Qt::AlignLeft,
+		   missingSources_.contains(activeSourceId_)
+			   ? QStringLiteral("Source — Missing: %1 (right-click to find)")
+				     .arg(missingSources_.value(activeSourceId_))
+			   : QStringLiteral("Source — press and drag to select a section to keep"));
 	QString outCaption = QStringLiteral("Output — %1 cut%2, %3s")
 				     .arg(segs_.size())
 				     .arg(segs_.size() == 1 ? QString() : QStringLiteral("s"))
@@ -857,19 +859,30 @@ void TrackEditor::paintEvent(QPaintEvent *)
 			p.restore();
 		}
 
+		const bool missing = missingSources_.contains(segs_[i].sourceId);
+		if (missing) {
+			p.fillRect(r, QColor(100, 30, 35, 190));
+			p.setFont(segFont);
+			p.setPen(QColor(255, 190, 190));
+			p.drawText(r.adjusted(3, 2, -3, -14), Qt::AlignCenter,
+				   p.fontMetrics().elidedText(QStringLiteral("Missing"), Qt::ElideRight,
+							      r.width() - 6));
+		}
 		// Label overlay: a dark bar along the bottom with cut #, speed, duration.
 		if (r.width() >= 26) {
-			const QString label = QStringLiteral("#%1 · %2× · %3s")
-						      .arg(i + 1)
-						      .arg(segs_[i].speed, 0, 'g', 3)
-						      .arg(segs_[i].outDurationMs() / 1000.0, 0, 'f', 1);
+			const QString label =
+				missing ? QStringLiteral("Missing — %1").arg(missingSources_.value(segs_[i].sourceId))
+					: QStringLiteral("#%1 · %2× · %3s")
+						  .arg(i + 1)
+						  .arg(segs_[i].speed, 0, 'g', 3)
+						  .arg(segs_[i].outDurationMs() / 1000.0, 0, 'f', 1);
 			p.setFont(segFont);
 			QPainterPath segClip;
 			segClip.addRoundedRect(r, 4, 4);
 			p.save();
 			p.setClipPath(segClip);
 			p.fillRect(QRect(r.x(), r.bottom() - 12, r.width(), 13), QColor(0, 0, 0, 160));
-			p.setPen(QColor(0xe6, 0xe6, 0xe6));
+			p.setPen(missing ? QColor(255, 190, 190) : QColor(0xe6, 0xe6, 0xe6));
 			p.drawText(QRect(r.x() + 3, r.bottom() - 12, r.width() - 5, 13),
 				   Qt::AlignVCenter | Qt::AlignLeft,
 				   p.fontMetrics().elidedText(label, Qt::ElideRight, r.width() - 5));
@@ -1024,9 +1037,18 @@ void TrackEditor::mousePressEvent(QMouseEvent *e)
 		} else if (duration_ > 0 && sourceRect().contains(pos)) {
 			// Source-track menu: auto-populate cuts from scene changes.
 			QMenu menu(this);
-			QAction *autoCut = menu.addAction(QStringLiteral("Auto-cut on scene changes…"));
-			if (menu.exec(e->globalPosition().toPoint()) == autoCut)
-				emit autoCutRequested();
+			if (missingSources_.contains(activeSourceId_)) {
+				const int source = activeSourceId_;
+				QAction *find = menu.addAction(QStringLiteral("Find missing file…"));
+				if (menu.exec(e->globalPosition().toPoint()) == find) {
+					emit locateSourceRequested(source);
+				}
+			} else {
+				QAction *autoCut = menu.addAction(QStringLiteral("Auto-cut on scene changes…"));
+				if (menu.exec(e->globalPosition().toPoint()) == autoCut) {
+					emit autoCutRequested();
+				}
+			}
 		}
 		return;
 	}
@@ -1461,6 +1483,12 @@ void TrackEditor::showSegmentMenu(int index, const QPoint &globalPos, const QPoi
 
 	QMenu menu(this);
 	QAction *inspect = menu.addAction(QStringLiteral("Show in inspector"));
+	const int sourceId = seg.sourceId;
+	QAction *findMissing = nullptr;
+	if (missingSources_.contains(sourceId)) {
+		findMissing = menu.addAction(QStringLiteral("Find missing file…"));
+		findMissing->setObjectName(QStringLiteral("findMissingMediaAction"));
+	}
 	menu.addSeparator();
 	QAction *del = menu.addAction(group ? QStringLiteral("Delete %1 cuts").arg(n)
 					    : QStringLiteral("Delete cut"));
@@ -1492,6 +1520,10 @@ void TrackEditor::showSegmentMenu(int index, const QPoint &globalPos, const QPoi
 	}
 	explainDisabled(&menu);
 	QAction *chosen = menu.exec(globalPos);
+	if (findMissing && chosen == findMissing) {
+		emit locateSourceRequested(sourceId);
+		return;
+	}
 	if (shuffleSel && chosen == shuffleSel) {
 		shuffleSelected();
 		return;

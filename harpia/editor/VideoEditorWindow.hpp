@@ -575,7 +575,7 @@ private:
 	// ---- Audio on the timeline (Full editing) ----
 	// Register an audio-only file as a source (decoded to a session WAV so the
 	// waveform, trimming and the export mix all work uniformly). -1 on failure.
-	int addAudioSource(const QString &path);
+	int addAudioSource(const QString &path, int replaceMissingId = -1);
 	// The 48k WAV proxy for a source's audio, decoding it on first use. Empty if
 	// that source has no audio. Used for clip waveforms.
 	QString audioProxyFor(int sourceId);
@@ -585,7 +585,7 @@ private:
 	// ---- Still images as clips ----
 	// Registered as sources with no decoder; the frame providers serve the cached
 	// QImage for every timestamp. -1 on failure.
-	int addImageSource(const QString &path);
+	int addImageSource(const QString &path, int replaceMissingId = -1);
 	// Built from what can actually be opened, so the dialog never offers a
 	// format the editor would then refuse.
 	// ---- Finished preview frames -----------------------------------------
@@ -782,7 +782,11 @@ private:
 	EditorSource *sourceByPath(const QString &path);
 	EditorSource *activeSource();
 	FrameSeeker *seekerFor(int id); // nullptr if unknown
-	int addSource(const QString &path); // opens + starts filmstrip; -1 on failure
+	int addSource(const QString &path, int replaceMissingId = -1); // opens + starts filmstrip; -1 on failure
+	int sourceImportId(int replaceMissingId);
+	void storeSource(EditorSource &&source);
+	void locateProjectSource(int sourceId);
+	bool relinkProjectSource(int sourceId, const QString &path);
 	void setActiveSource(int id);       // swap what the Source track/preview shows
 	void refreshSourceList();           // rebuild the sidebar rows
 	bool sourceInUse(int id) const;     // any cut references this source?
@@ -1145,8 +1149,8 @@ private:
 	void onNewProject();
 	void onSaveProjectAs();
 	void openProjectWithDialogs(const QString &path, bool showSuccess = true);
-	// `quiet` suppresses every dialog: the relink picker, the wrong-source
-	// question and the "Project loaded" confirmation. openProjectAt() is quiet.
+	// `quiet` suppresses the legacy wrong-source question and the "Project loaded"
+	// confirmation. Missing media never blocks opening. openProjectAt() is quiet.
 	void applyProjectJson(const QJsonObject &root, const QString &path, bool quiet,
 			      bool showSuccess = true);
 	void clearProjectMedia();

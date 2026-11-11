@@ -2181,6 +2181,7 @@ void TimelineView::drawClip(QPainter &p, int track, int clip, bool silent) const
 	const bool isText = c.type == TlClip::Type::Text;
 	const bool isImage = c.type == TlClip::Type::Image;
 	const bool isFx = c.type == TlClip::Type::Effect;
+	const bool missing = !isText && !isFx && missingSources_.contains(c.sourceId);
 	const bool video = t.kind == TlTrack::Kind::Video && !isText && !isImage && !isFx;
 	const bool sel = isSelected(track, clip);
 	const QRect r = clipPaintRect(track, clip);
@@ -2367,12 +2368,21 @@ void TimelineView::drawClip(QPainter &p, int track, int clip, bool silent) const
 		drawFades(p, track, clip);
 
 	// Label bar along the bottom.
+	if (missing) {
+		p.fillRect(r, QColor(100, 30, 35, 190));
+		p.setFont(clipFont_);
+		p.setPen(QColor(255, 190, 190));
+		p.drawText(r.adjusted(3, 2, -3, -14), Qt::AlignCenter,
+			   p.fontMetrics().elidedText(QStringLiteral("Missing"), Qt::ElideRight, r.width() - 6));
+	}
 	if (!dragging && !isFx && r.width() >= 28) {
 		p.setFont(clipFont_);
 		p.fillRect(QRect(r.x(), r.bottom() - 12, r.width(), 13), QColor(0, 0, 0, 150));
-		p.setPen(QColor(0xe6, 0xe6, 0xe6));
+		p.setPen(missing ? QColor(255, 190, 190) : QColor(0xe6, 0xe6, 0xe6));
 		QString what;
-		if (isText) {
+		if (missing) {
+			what = QStringLiteral("Missing — %1").arg(missingSources_.value(c.sourceId));
+		} else if (isText) {
 			// The cased text, so the strip's label reads the way the
 			// canvas does rather than showing what was typed.
 			// A Random text says how many texts it has: "T ×3".
@@ -2383,9 +2393,9 @@ void TimelineView::drawClip(QPainter &p, int track, int clip, bool silent) const
 							.arg(firstLine)
 							.arg(text_variations::optionsOf(c.text).size())
 					      : QStringLiteral("T  %1").arg(firstLine));
-		} else if (isImage)
+		} else if (isImage) {
 			what = QStringLiteral("IMG #%1").arg(c.sourceId);
-		else if (c.isRandomClip())
+		} else if (c.isRandomClip())
 			// A Random clip says how many clips it has, and which one shows.
 			what = QStringLiteral("\u00D7%1  #%2  (%3 of %1)")
 				       .arg(c.clipOptions.size())
@@ -5354,6 +5364,13 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 
 	QAction *inspect = menu.addAction(QStringLiteral("Show in inspector"));
 	QAction *keys = menu.addAction(QStringLiteral("Keyframes…"));
+	QAction *findMissing = nullptr;
+	const int menuSource = menuClip.sourceId;
+	if ((menuClip.type == TlClip::Type::Video || menuClip.type == TlClip::Type::Image) &&
+	    missingSources_.contains(menuSource)) {
+		findMissing = menu.addAction(QStringLiteral("Find missing file…"));
+		findMissing->setObjectName(QStringLiteral("findMissingMediaAction"));
+	}
 
 	// Export just this stretch. Right-clicking a clip that is not part of the
 	// current selection means THAT clip -- picking it up as a selection first
@@ -5708,6 +5725,10 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	disableBecause(del, !locked, lockedWhy);
 	explainDisabled(&menu);
 	QAction *chosen = menu.exec(globalPos);
+	if (findMissing && chosen == findMissing) {
+		emit locateSourceRequested(menuSource);
+		return;
+	}
 	if (chosen && imageTimeActs.contains(chosen)) {
 		setImageTime(imageTimeClips, chosen->data().toLongLong());
 		return;

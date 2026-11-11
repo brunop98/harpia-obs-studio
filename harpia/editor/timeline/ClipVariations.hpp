@@ -55,6 +55,7 @@ inline void makeOrdinary(TlClip &c)
 	}
 	c.clipOptions.clear();
 	c.clipShown = 0;
+	c.randomClipFamily.clear();
 }
 
 // Play choice `k`: same place, same length, its file from its start.

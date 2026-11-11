@@ -476,6 +476,7 @@ private:
 	// selection changes and outlives any one clip.
 	void copySelectedClips(bool cut);
 	void pasteClips();
+	void pasteClipInstances(qint64 atMs = -1);
 	QVector<TimelineView::ClipboardEntry> clipboard_;
 	// True if the system clipboard holds something this editor could place
 	// (ClipboardPaste.hpp: files, sound, a picture, a link or words).
@@ -960,6 +961,7 @@ private:
 	QPushButton *randomClipNext_ = nullptr;
 	QPushButton *randomClipAdd_ = nullptr;
 	QPushButton *randomClipCompare_ = nullptr;
+	QPushButton *randomClipIndependent_ = nullptr;
 	std::optional<TlClipOption> randomClipClipboard_; // source IDs belong to this project's media pool
 	quint64 randomClipCopySeq_ = 0;
 	void buildRandomClipSection(QVBoxLayout *clipOuter);
@@ -984,6 +986,7 @@ private:
 	void editRandomClipOption(int k, int sourceId = -1);
 	void importRandomClipOptionSource(int k);
 	QString sourceLabel(int sourceId) const; // its file name, no folder
+	QString sourceMomentIdentity(int sourceId) const;
 	QLabel *textMainCap_ = nullptr;  // "Text 1", over the main text of a Random text
 	QVBoxLayout *variantListLayout_ = nullptr;
 	QVector<QWidget *> variantRows_;

@@ -68,6 +68,7 @@ inline QByteArray fingerprint(const TimelineModel &m, const Block &b)
 		TlClip c = m.tracks[p.first].clips[p.second];
 		c.outStartMs -= b.startMs;
 		c.group = c.link = 0;
+		c.randomClipFamily.clear();
 		c.favorite = c.sparkMust = c.sparkOpener = false;
 		QJsonObject o = clipToJson(c);
 		o[QStringLiteral("track")] = p.first;
@@ -947,6 +948,7 @@ inline QByteArray videoKey(const TimelineModel &model)
 				 [](const TlClip &a, const TlClip &b) { return a.outStartMs < b.outStartMs; });
 		for (TlClip &clip : clips) {
 			clip.group = clip.link = 0;
+			clip.randomClipFamily.clear();
 			clip.favorite = clip.sparkMust = clip.sparkOpener = false;
 			if (clip.type == TlClip::Type::Video) {
 				TlClipOption chosen = clip.clipOptionAt(clip.clipShown);

@@ -875,6 +875,15 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	timeline_ = new Timeline(this);
 	tracks_ = new TrackEditor(this);
 	timelineView_ = new TimelineView(this);
+	connect(timelineView_, &TimelineView::pasteInstanceRequested, this, &VideoEditorWindow::pasteClipInstances);
+	connect(timelineView_, &TimelineView::instanceEditRejected, this, [this](const QString &reason) {
+		// Defer until the ordinary preview/Inspector refresh has finished.
+		QTimer::singleShot(0, this, [this, reason]() {
+			if (infoLabel_) {
+				infoLabel_->setText(reason);
+			}
+		});
+	});
 	multiCutSourceRow_ = new QWidget(bottomPane);
 	multiCutSourceRow_->setVisible(false);
 	auto *sourcePickerLayout = new QHBoxLayout(multiCutSourceRow_);
@@ -2486,6 +2495,8 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	// Full editing to place it), so this one must not no-op outside the timeline.
 	cmd("edit.paste", "Paste clips, or what you copied elsewhere", "Editing", {QKeySequence::Paste},
 	    [this]() { pasteFromClipboard(); });
+	tlCmd("edit.pasteInstance", "Paste Random Clip as instance", "Editing",
+	      {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_V)}, [this]() { pasteClipInstances(); });
 	// NOT tlCmd: Delete has to work on whatever is selected in whatever mode you
 	// are in. It was bound to the Full-editing timeline alone, and because a
 	// window-level QShortcut is consulted BEFORE the focused widget's
@@ -2882,6 +2893,11 @@ int VideoEditorWindow::sourceImportId(int replaceMissingId)
 
 void VideoEditorWindow::storeSource(EditorSource &&source)
 {
+	// Source lengths are needed for linked-copy validation before asynchronous
+	// thumbnails arrive (and even when proxy generation delays the filmstrip).
+	if (timelineView_) {
+		timelineView_->setSourceThumbs(source.id, source.thumbCache, source.durationMs);
+	}
 	// Relinking repairs the binding in place: clips, Random options, cuts,
 	// sound rules and undo snapshots all retain the same source ID.
 	if (EditorSource *previous = sourceById(source.id)) {
@@ -9245,6 +9261,25 @@ QString VideoEditorWindow::sourceLabel(int sourceId) const
 	return QString();
 }
 
+QString VideoEditorWindow::sourceMomentIdentity(int sourceId) const
+{
+	for (const EditorSource &source : sources_) {
+		if (source.id != sourceId) {
+			continue;
+		}
+		const QFileInfo file(source.path);
+		QString path = file.canonicalFilePath();
+		if (path.isEmpty()) {
+			path = file.absoluteFilePath();
+		}
+#ifdef Q_OS_WIN
+		path = path.toCaseFolded();
+#endif
+		return QDir::cleanPath(path);
+	}
+	return QStringLiteral("source:%1").arg(sourceId);
+}
+
 void VideoEditorWindow::buildRandomClipSection(QVBoxLayout *clipOuter)
 {
 	auto *sec = new InspectorSection(QStringLiteral("Random clip"), QStringLiteral("clip/random"), true, clipBox_);
@@ -9283,6 +9318,15 @@ void VideoEditorWindow::buildRandomClipSection(QVBoxLayout *clipOuter)
 		QStringLiteral("Play this clip's options together in a low-resolution comparison grid."));
 	connect(randomClipCompare_, &QPushButton::clicked, this, &VideoEditorWindow::compareRandomClipOptions);
 	v->addWidget(randomClipCompare_);
+	randomClipIndependent_ = new QPushButton(randomClipBox_);
+	randomClipIndependent_->setObjectName(QStringLiteral("makeRandomClipIndependentButton"));
+	randomClipIndependent_->setToolTip(QStringLiteral(
+		"Video choices, source start times and XY offsets are linked in both directions, including on locked tracks. "
+		"Each copy keeps its timeline position, duration and effects. Make this copy independent to stop sharing."));
+	connect(randomClipIndependent_, &QPushButton::clicked, this, [this]() {
+		timelineView_->makeRandomClipIndependent(timelineView_->selectedTrack(), timelineView_->selectedClip());
+	});
+	v->addWidget(randomClipIndependent_);
 
 	auto *row = new QHBoxLayout;
 	randomClipPrev_ = new QPushButton(randomClipBox_);
@@ -9486,6 +9530,17 @@ void VideoEditorWindow::syncRandomClipInspector(const TlClip &c)
 	}
 	refreshRandomClipThumbnails();
 	randomClipCount_->setText(QStringLiteral("Clip %1 of %2").arg(c.clipShown + 1).arg(n));
+	randomClipIndependent_->setVisible(!c.randomClipFamily.isEmpty());
+	randomClipIndependent_->setEnabled(!locked);
+	if (!c.randomClipFamily.isEmpty()) {
+		int linked = 0;
+		for (const TlTrack &track : timelineView_->model().tracks) {
+			for (const TlClip &clip : track.clips) {
+				linked += clip.randomClipFamily == c.randomClipFamily;
+			}
+		}
+		randomClipIndependent_->setText(QStringLiteral("%1 linked copies · Make independent").arg(linked));
+	}
 	randomClipPrev_->setEnabled(n > 1);
 	randomClipNext_->setEnabled(n > 1);
 }
@@ -10374,6 +10429,8 @@ void VideoEditorWindow::buildMenuBar(QVBoxLayout *root)
 	connect(keyed(fullOnly(edit->addAction(QStringLiteral("Copy clips"))), "edit.copy"), &QAction::triggered, this,
 		run("edit.copy"));
 	connect(keyed(edit->addAction(QStringLiteral("Paste")), "edit.paste"), &QAction::triggered, this, run("edit.paste"));
+	connect(keyed(fullOnly(edit->addAction(QStringLiteral("Paste as instance"))), "edit.pasteInstance"),
+		&QAction::triggered, this, run("edit.pasteInstance"));
 	connect(keyed(edit->addAction(QStringLiteral("Delete selection")), "edit.delete"), &QAction::triggered, this,
 		run("edit.delete"));
 	connect(keyed(fullOnly(edit->addAction(QStringLiteral("Select all clips"))), "selection.all"), &QAction::triggered,
@@ -12678,6 +12735,7 @@ void VideoEditorWindow::copySelectedClips(bool cut)
 		haveTrackClipboard_ = true;
 		trackCopiedFrom_ = hdr;
 		trackCopySeq_ = ++seqCounter_;
+		timelineView_->setCanPasteInstances(false);
 		if (cut)
 			timelineView_->deleteTrack(hdr);
 		return;
@@ -12686,6 +12744,10 @@ void VideoEditorWindow::copySelectedClips(bool cut)
 	if (sel.isEmpty())
 		return;
 	clipboard_ = sel;
+	timelineView_->setCanPasteInstances(
+		std::any_of(sel.cbegin(), sel.cend(), [](const TimelineView::ClipboardEntry &entry) {
+			return entry.clip.type == TlClip::Type::Video && entry.clip.isRandomClip();
+		}));
 	copySeq_ = ++seqCounter_; // for Ctrl+V's newest-wins rule
 	if (cut)
 		timelineView_->deleteSelected();
@@ -12697,6 +12759,22 @@ void VideoEditorWindow::pasteClips()
 		return;
 	// Land at the playhead, the one place the user is definitely looking.
 	timelineView_->pasteAt(clipboard_, timelinePlayheadMs());
+}
+
+void VideoEditorWindow::pasteClipInstances(qint64 atMs)
+{
+	if (!timelineView_ || !fullEdit()) {
+		return;
+	}
+	if (trackCopySeq_ > copySeq_) {
+		infoLabel_->setText(
+			QStringLiteral("Copy a Random Clip rather than a whole track to paste an instance."));
+		return;
+	}
+	QString why;
+	if (!timelineView_->pasteInstancesAt(clipboard_, atMs < 0 ? timelinePlayheadMs() : atMs, &why)) {
+		infoLabel_->setText(why);
+	}
 }
 
 // Somewhere to put a picture that arrived without a file behind it.
@@ -14652,6 +14730,9 @@ void VideoEditorWindow::clearProjectMedia()
 	histIndex_ = -1;
 	histJustPushed_ = false;
 	clipboard_.clear();
+	if (timelineView_) {
+		timelineView_->setCanPasteInstances(false);
+	}
 	trackClipboard_ = TlTrack();
 	haveTrackClipboard_ = false;
 	trackCopiedFrom_ = -1;
@@ -16780,10 +16861,10 @@ void VideoEditorWindow::onSave()
 			// Text variations: every combination is a version (Variations tab).
 			{
 				const QVector<text_variations::Slot> vs = text_variations::slotsOf(
-					timelineView_->model(), [this](int id) { return sourceLabel(id); });
-				for (const auto &slot : vs) {
-					ec.variantOptionCounts.append(int(slot.options.size()));
-				}
+					timelineView_->model(), [this](int id) { return sourceLabel(id); },
+					[this](int id) { return sourceMomentIdentity(id); });
+				ec.variantOptionCounts = text_variations::choiceSizes(vs);
+				ec.variantError = text_variations::instanceError(vs);
 				ec.variantLabel = [vs](const QVector<int> &pick) {
 					QStringList parts;
 					for (const QString &t : text_variations::textsAt(vs, pick)) {
@@ -17011,14 +17092,17 @@ void VideoEditorWindow::onSave()
 		const auto cover = dlg.numberedCover();
 		o.coverFirstFrame = cover.enabled && cover.firstFrame;
 		const TimelineModel whole = timelineView_->model();
-		const QVector<text_variations::Slot> vs =
-			text_variations::slotsOf(whole, [this](int id) { return sourceLabel(id); });
+		const QVector<text_variations::Slot> vs = text_variations::slotsOf(
+			whole, [this](int id) { return sourceLabel(id); },
+			[this](int id) { return sourceMomentIdentity(id); });
 		const qint64 total = text_variations::combinationCount(vs);
 		const auto picked = dlg.variationSelection();
-		QVector<int> sizes;
-		for (const auto &slot : vs) {
-			sizes.append(int(slot.options.size()));
+		const QString instanceError = text_variations::instanceError(vs);
+		if (!instanceError.isEmpty()) {
+			infoLabel_->setText(instanceError);
+			return;
 		}
+		const auto sizes = text_variations::choiceSizes(vs);
 		const bool overflow = variation_sampling::count(sizes).overflow;
 		if (picked.size() > 50 &&
 		    QMessageBox::question(this, QStringLiteral("Export variations"),

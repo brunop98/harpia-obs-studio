@@ -567,6 +567,10 @@ QString ExportOptionsDialog::separateNameError() const
 
 void ExportOptionsDialog::accept()
 {
+	if (batchMode() && hasVariations() && !ctx_.variantError.isEmpty()) {
+		refresh();
+		return;
+	}
 	if (!coverError().isEmpty()) {
 		refresh();
 		return;
@@ -597,7 +601,8 @@ void ExportOptionsDialog::buildBatchTab()
 				  "clips changed: one file per combination of their options, in a new folder under the "
 				  "folder chosen on the Single video tab, with that tab's format, quality, "
 				  "size and audio. Choose Random selection to export only the number you pick, "
-				  "without repeating a combination.")
+				  "without repeating a combination. Linked Random Clip copies use different source moments "
+				  "within each video. Repeated video/start choices count once, using the first choice's XY.")
 			: QStringLiteral("Each cut becomes its own file, in a new folder under the folder chosen on "
 					 "the Single video tab, with that tab's format, quality, size, crop and "
 					 "audio. Each cut keeps its own speed."),
@@ -606,6 +611,13 @@ void ExportOptionsDialog::buildBatchTab()
 	hint->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 	v->addWidget(hint);
 	if (variants) {
+		if (!ctx_.variantError.isEmpty()) {
+			auto *error = new QLabel(ctx_.variantError, page);
+			error->setObjectName(QStringLiteral("variationInstanceError"));
+			error->setWordWrap(true);
+			error->setStyleSheet(QStringLiteral("color:#f2a0a0;"));
+			v->addWidget(error);
+		}
 		auto *selection = new QHBoxLayout;
 		variationMode_ = new QComboBox(page);
 		variationMode_->setObjectName(QStringLiteral("variationSelectionMode"));
@@ -733,7 +745,9 @@ void ExportOptionsDialog::rebuildVariationList()
 	const QVector<int> sizes = variationSizes();
 	const auto population = variation_sampling::count(sizes);
 	QVector<QVector<int>> picks;
-	if (random) {
+	if (!ctx_.variantError.isEmpty()) {
+		// Keep the tab visible so the user can see what needs fixing.
+	} else if (random) {
 		picks = variation_sampling::sample(sizes, variationCount_->value());
 	} else {
 		for (qint64 i = 0; i < std::min<qint64>(population.value, variation_sampling::kListLimit); ++i) {
@@ -1241,7 +1255,7 @@ void ExportOptionsDialog::refresh()
 			const QString unit = variants ? QStringLiteral("video") : QStringLiteral("clip");
 			exportBtn_->setText(sel == 1 ? QStringLiteral("Export 1 %1").arg(unit)
 						     : QStringLiteral("Export %1 %2s").arg(sel).arg(unit));
-			exportBtn_->setEnabled(sel > 0);
+			exportBtn_->setEnabled(sel > 0 && (!variants || ctx_.variantError.isEmpty()));
 		} else {
 			exportBtn_->setText(QStringLiteral("Export"));
 			exportBtn_->setEnabled(true);

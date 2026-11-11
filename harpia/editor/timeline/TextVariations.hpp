@@ -23,6 +23,7 @@
 #include "TimelineModel.hpp"
 
 #include <QRegularExpression>
+#include <QSet>
 #include <QStringList>
 #include <QVector>
 
@@ -42,6 +43,10 @@ struct Slot {
 	int clip = -1;
 	QStringList options;
 	QVector<TlClipOption> clips;
+	QString family;
+	// Equal file/start pairs are one moment, even with different XY offsets.
+	QVector<int> moments;
+	QVector<QString> sourceKeys;
 	bool isClip() const { return !clips.isEmpty(); }
 };
 
@@ -74,16 +79,24 @@ inline int optionIndexOfEntry(const TlText &t, int entry)
 // where they start. Random texts with more than one text, Random clips with
 // more than one clip. `nameOf` names a Random clip's file by source id (the
 // window knows the files; without it, "clip 2" and so on).
-inline QVector<Slot> slotsOf(const TimelineModel &m, const std::function<QString(int)> &nameOf = {})
+inline QVector<Slot> slotsOf(const TimelineModel &m, const std::function<QString(int)> &nameOf = {},
+			     const std::function<QString(int)> &sourceKeyOf = {})
 {
 	QVector<Slot> out;
+	QHash<int, QString> sourceKeys;
+	const qint64 duration = m.durationMs();
 	for (int ti = 0; ti < m.tracks.size(); ++ti) {
 		const TlTrack &t = m.tracks[ti];
 		QVector<int> order;
 		for (int ci = 0; ci < t.clips.size(); ++ci) {
 			const TlClip &c = t.clips[ci];
 			const bool text = c.type == TlClip::Type::Text && c.text.random && optionsOf(c.text).size() > 1;
-			const bool footage = c.type == TlClip::Type::Video && c.clipOptions.size() > 1;
+			const bool participates =
+				c.outStartMs < duration && c.outEndMs() > 0 &&
+				(t.kind == TlTrack::Kind::Audio ? m.trackAudible(t) : (!t.hidden || m.trackAudible(t)));
+			const bool footage = c.type == TlClip::Type::Video &&
+					     (c.randomClipFamily.isEmpty() ? c.clipOptions.size() > 1
+									   : c.isRandomClip() && participates);
 			if (text || footage)
 				order.push_back(ci);
 		}
@@ -96,8 +109,21 @@ inline QVector<Slot> slotsOf(const TimelineModel &m, const std::function<QString
 				continue;
 			}
 			Slot s{ti, ci, {}, {}};
+			s.family = c.randomClipFamily;
+			QSet<QPair<QString, qint64>> moments;
 			for (int k = 0; k < c.clipOptions.size(); ++k) {
 				const TlClipOption o = c.clipOptionAt(k);
+				if (!sourceKeys.contains(o.sourceId)) {
+					sourceKeys.insert(o.sourceId, sourceKeyOf ? sourceKeyOf(o.sourceId)
+										  : QString::number(o.sourceId));
+				}
+				const QString key = sourceKeys.value(o.sourceId);
+				s.sourceKeys.append(key);
+				const QPair<QString, qint64> moment{key, o.srcStartMs};
+				if (!moments.contains(moment)) {
+					s.moments.append(k);
+				}
+				moments.insert(moment);
 				s.clips << o;
 				const QString file = nameOf ? nameOf(o.sourceId) : QString();
 				s.options << QStringLiteral("%1 @ %2s")
@@ -110,6 +136,71 @@ inline QVector<Slot> slotsOf(const TimelineModel &m, const std::function<QString
 	return out;
 }
 
+// Linked occurrences draw without replacement: three moments used by two
+// copies yield 3 * 2 versions, rather than 3 * 3 including repeated footage.
+inline QVector<int> choiceSizes(const QVector<Slot> &vs)
+{
+	QHash<QString, int> used;
+	QVector<int> sizes;
+	for (const Slot &slot : vs) {
+		sizes.append(slot.family.isEmpty() ? int(slot.options.size())
+						   : std::max(0, int(slot.moments.size()) - used[slot.family]++));
+	}
+	return sizes;
+}
+
+inline QString instanceError(const QVector<Slot> &vs)
+{
+	QHash<QString, int> counts;
+	for (const Slot &slot : vs) {
+		if (!slot.family.isEmpty()) {
+			++counts[slot.family];
+		}
+	}
+	for (const Slot &slot : vs) {
+		if (!slot.family.isEmpty() && counts.value(slot.family) > slot.moments.size()) {
+			return QStringLiteral(
+				       "%1 linked Random Clips have only %2 distinct source moments. "
+				       "Add more source moments or make a copy independent before exporting Variations. "
+				       "Choices with the same video and start time count once, regardless of XY.")
+				.arg(counts.value(slot.family))
+				.arg(slot.moments.size());
+		}
+	}
+	return {};
+}
+
+// Expand the compact mixed-radix decisions into each clip's actual option.
+inline QVector<int> optionIndices(const QVector<Slot> &vs, const QVector<int> &pick)
+{
+	QHash<QString, QVector<QPair<QString, qint64>>> used;
+	QVector<int> indices;
+	for (int i = 0; i < vs.size() && i < pick.size(); ++i) {
+		const Slot &slot = vs[i];
+		if (slot.family.isEmpty()) {
+			indices.append(std::clamp(pick[i], 0, int(slot.options.size()) - 1));
+			continue;
+		}
+		QVector<int> available;
+		const auto sourceKey = [&slot](int k) {
+			return slot.sourceKeys.value(k, QString::number(slot.clips[k].sourceId));
+		};
+		for (int k : slot.moments) {
+			const auto &option = slot.clips[k];
+			if (!used[slot.family].contains({sourceKey(k), option.srcStartMs})) {
+				available.append(k);
+			}
+		}
+		if (available.isEmpty()) {
+			return {}; // invalid plans cannot silently repeat a moment
+		}
+		const int k = available[std::clamp(pick[i], 0, int(available.size()) - 1)];
+		indices.append(k);
+		used[slot.family].append({sourceKey(k), slot.clips[k].srcStartMs});
+	}
+	return indices;
+}
+
 // How many videos: the product of the option counts. Saturates instead of
 // overflowing. Large products can still be sampled by their option vectors.
 inline qint64 combinationCount(const QVector<Slot> &vs)
@@ -117,8 +208,15 @@ inline qint64 combinationCount(const QVector<Slot> &vs)
 	if (vs.isEmpty())
 		return 0;
 	qint64 n = 1;
-	for (const Slot &s : vs) {
-		const qint64 k = s.options.size();
+	const auto sizes = choiceSizes(vs);
+	if (sizes.contains(0)) {
+		return 0;
+	}
+	for (int size : sizes) {
+		const qint64 k = size;
+		if (k <= 0) {
+			return 0;
+		}
 		if (n > std::numeric_limits<qint64>::max() / std::max<qint64>(1, k))
 			return std::numeric_limits<qint64>::max();
 		n *= k;
@@ -131,8 +229,9 @@ inline qint64 combinationCount(const QVector<Slot> &vs)
 inline QVector<int> combinationAt(const QVector<Slot> &vs, qint64 index)
 {
 	QVector<int> pick(vs.size(), 0);
+	const auto sizes = choiceSizes(vs);
 	for (int i = vs.size() - 1; i >= 0; --i) {
-		const qint64 k = std::max<qint64>(1, vs[i].options.size());
+		const qint64 k = std::max<qint64>(1, sizes[i]);
 		pick[i] = int(index % k);
 		index /= k;
 	}
@@ -145,12 +244,13 @@ inline QVector<int> combinationAt(const QVector<Slot> &vs, qint64 index)
 inline TimelineModel applyCombination(const TimelineModel &m, const QVector<Slot> &vs, const QVector<int> &pick)
 {
 	TimelineModel out = m;
-	for (int i = 0; i < vs.size() && i < pick.size(); ++i) {
+	const auto indices = optionIndices(vs, pick);
+	for (int i = 0; i < vs.size() && i < indices.size(); ++i) {
 		const Slot &s = vs[i];
 		if (s.track < 0 || s.track >= out.tracks.size() || s.clip < 0 ||
 		    s.clip >= out.tracks[s.track].clips.size())
 			continue;
-		const int k = std::clamp(pick[i], 0, int(s.options.size()) - 1);
+		const int k = indices[i];
 		TlClip &c = out.tracks[s.track].clips[s.clip];
 		if (s.isClip()) {
 			// The slot plays this choice: its file from its start, for the
@@ -177,8 +277,10 @@ inline TimelineModel applyCombination(const TimelineModel &m, const QVector<Slot
 inline QStringList textsAt(const QVector<Slot> &vs, const QVector<int> &pick)
 {
 	QStringList out;
-	for (int i = 0; i < vs.size() && i < pick.size(); ++i)
-		out << vs[i].options.value(pick[i]);
+	const auto indices = optionIndices(vs, pick);
+	for (int i = 0; i < vs.size() && i < indices.size(); ++i) {
+		out << vs[i].options.value(indices[i]);
+	}
 	return out;
 }
 

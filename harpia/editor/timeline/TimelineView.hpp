@@ -3,6 +3,7 @@
 #include "TimelineModel.hpp"
 #include "TimelineSlice.hpp" // TlSpan (what "the selected portion" is)
 #include "ClipShuffle.hpp"   // ShuffleOptions
+#include "RandomClipInstances.hpp"
 #include "../EditorColors.hpp"
 
 #include <QCursor>
@@ -163,6 +164,9 @@ public:
 	// Place `entries` with the earliest landing at `atMs`, keeping their relative
 	// times and tracks. The pasted clips become the new selection.
 	void pasteAt(const QVector<ClipboardEntry> &entries, qint64 atMs);
+	bool pasteInstancesAt(QVector<ClipboardEntry> &entries, qint64 atMs, QString *why = nullptr);
+	void setCanPasteInstances(bool on) { canPasteInstances_ = on; }
+	bool makeRandomClipIndependent(int track, int clip);
 	bool hasSelection() const { return selClip_ >= 0 || !extraSel_.isEmpty(); }
 	void selectAllClips();
 	// Select one clip as the primary, dropping any other selection.
@@ -463,6 +467,8 @@ public:
 	}
 
 signals:
+	void pasteInstanceRequested(qint64 atMs);
+	void instanceEditRejected(const QString &reason);
 	void locateSourceRequested(int sourceId);
 	void clipsChanged();
 	// Media files dropped straight onto the lanes. The view knows WHERE they
@@ -534,6 +540,9 @@ protected:
 	QSize minimumSizeHint() const override; // the ruler and one lane; the rest scrolls
 
 private:
+	random_clip_instances::Synchronizer instances_;
+	bool canPasteInstances_ = false;
+	void pastePrepared(const QVector<ClipboardEntry> &entries, qint64 atMs);
 	// ---- geometry / axis ----
 	QRect contentRect() const;
 	// The gutter's width, never less than its contents need. See the .cpp: a

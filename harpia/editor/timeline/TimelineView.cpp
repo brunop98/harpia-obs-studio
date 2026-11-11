@@ -41,6 +41,7 @@
 #include <QScrollBar>
 #include <QTimer>
 #include <QWheelEvent>
+#include <QUuid>
 
 #include <limits>
 
@@ -143,6 +144,16 @@ void applySpeedRipple(TimelineModel &model, const SpeedRippleSnapshot &snapshot)
 
 TimelineView::TimelineView(QWidget *parent) : QWidget(parent)
 {
+	// Connect first: preview, Inspector, saves and undo must all see the
+	// propagated pool rather than one changed member and several stale copies.
+	connect(this, &TimelineView::clipsChanged, this, [this]() {
+		const TlClip *selected = selectedClipPtr();
+		const QString error = instances_.sync(
+			model_, [this](int id) { return sourceDurationMs(id); }, selected ? selected->objectId : 0);
+		if (!error.isEmpty()) {
+			emit instanceEditRejected(error);
+		}
+	});
 	setFocusPolicy(Qt::ClickFocus);
 	setMouseTracking(true);
 	// Drop a video or an image straight onto the lanes.
@@ -240,6 +251,7 @@ void TimelineView::setModelQuiet(const TimelineModel &m)
 	for (int i = 0; !lanesChanged && i < m.tracks.size(); ++i)
 		lanesChanged = m.tracks[i].kind != model_.tracks[i].kind;
 	model_ = m;
+	instances_.reset(model_);
 	if (selHeaderTrack_ >= model_.tracks.size())
 		selHeaderTrack_ = -1;
 	auto valid = [this](int t, int c) {
@@ -261,7 +273,12 @@ void TimelineView::setModelQuiet(const TimelineModel &m)
 
 void TimelineView::setModelAndCommit(const TimelineModel &m)
 {
-	setModelQuiet(m);
+	TimelineModel next = m;
+	const QString error = instances_.sync(next, [this](int id) { return sourceDurationMs(id); });
+	setModelQuiet(next);
+	if (!error.isEmpty()) {
+		emit instanceEditRejected(error);
+	}
 	commitEdit();
 }
 
@@ -346,6 +363,7 @@ void TimelineView::setModel(const TimelineModel &m)
 	selectedMarkerMs_ = -1;
 	selectedEndMarker_ = false;
 	model_ = m;
+	instances_.reset(model_);
 	selHeaderTrack_ = -1;
 	selTrack_ = selClip_ = -1;
 	// The extras are indices into the OLD model; a new one makes them meaningless
@@ -943,6 +961,8 @@ int TimelineView::pasteTrack(const TlTrack &t, int above)
 	QHash<int, int> groups, links;
 	int nextGroup = model_.nextGroupId(), nextLink = model_.nextLinkId();
 	for (TlClip &c : copy.clips) {
+		c.objectId = TlClip::nextObjectId();
+		c.randomClipFamily.clear();
 		if (c.group) {
 			if (!groups.contains(c.group)) groups.insert(c.group, nextGroup++);
 			c.group = groups.value(c.group);
@@ -1516,6 +1536,9 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 
 	QMenu menu(this);
 	menu.setObjectName(QStringLiteral("timelineTrackMenu"));
+	auto *pasteInstance = menu.addAction(QStringLiteral("Paste as instance"));
+	pasteInstance->setObjectName(QStringLiteral("pasteRandomClipInstanceAction"));
+	disableBecause(pasteInstance, canPasteInstances_, QStringLiteral("Copy a Random Clip first."));
 	auto *audio = new QMenu(QStringLiteral("Audio and captions"), &menu);
 	auto *rippleMenu = new QMenu(QStringLiteral("Ripple"), &menu);
 	auto *appearance = new QMenu(QStringLiteral("Appearance"), &menu);
@@ -1622,6 +1645,10 @@ void TimelineView::showTrackMenu(int track, const QPoint &globalPos, qint64 atOu
 	QAction *chosen = menu.exec(globalPos);
 	if (!chosen)
 		return;
+	if (chosen == pasteInstance) {
+		emit pasteInstanceRequested(atOutMs);
+		return;
+	}
 	if (addFxClip && chosen == addFxClip) {
 		addEffectClipAt(track, atOutMs);
 		return;
@@ -4814,6 +4841,116 @@ QVector<TimelineView::ClipboardEntry> TimelineView::copySelection() const
 
 void TimelineView::pasteAt(const QVector<ClipboardEntry> &entries, qint64 atMs)
 {
+	auto independent = entries;
+	for (auto &entry : independent) {
+		entry.clip.objectId = TlClip::nextObjectId();
+		entry.clip.randomClipFamily.clear();
+	}
+	pastePrepared(independent, atMs);
+}
+
+bool TimelineView::pasteInstancesAt(QVector<ClipboardEntry> &entries, qint64 atMs, QString *why)
+{
+	if (why) {
+		why->clear();
+	}
+	const auto no = [why](const QString &reason) {
+		if (why) {
+			*why = reason;
+		}
+		return false;
+	};
+	if (std::none_of(model_.tracks.cbegin(), model_.tracks.cend(), [](const TlTrack &t) { return !t.locked; })) {
+		return no(QStringLiteral("Unlock a track before pasting an instance."));
+	}
+	auto prepared = entries;
+	QHash<quint64, QString> families;
+	bool any = false;
+	for (int i = 0; i < prepared.size(); ++i) {
+		TlClip &copy = prepared[i].clip;
+		copy.objectId = TlClip::nextObjectId();
+		copy.randomClipFamily.clear();
+		if (copy.type != TlClip::Type::Video || !copy.isRandomClip()) {
+			continue;
+		}
+		const auto &original = entries[i].clip;
+		const TlClip *source = nullptr;
+		for (const TlTrack &track : std::as_const(model_.tracks)) {
+			for (const TlClip &clip : track.clips) {
+				if (clip.type == TlClip::Type::Video && clip.isRandomClip() &&
+				    (clip.objectId == original.objectId ||
+				     (!original.randomClipFamily.isEmpty() &&
+				      clip.randomClipFamily == original.randomClipFamily))) {
+					if (!source || clip.objectId == original.objectId) {
+						source = &clip;
+					}
+				}
+			}
+		}
+		if (!source) {
+			return no(QStringLiteral(
+				"The copied Random Clip is no longer in this project. Copy a live Random Clip first."));
+		}
+		const auto pool = random_clip_instances::options(*source);
+		qint64 longest = std::max(copy.srcLenMs(), source->srcLenMs());
+		if (!source->randomClipFamily.isEmpty()) {
+			for (const TlTrack &track : std::as_const(model_.tracks)) {
+				for (const TlClip &clip : track.clips) {
+					if (clip.randomClipFamily == source->randomClipFamily) {
+						longest = std::max(longest, clip.srcLenMs());
+					}
+				}
+			}
+		}
+		const QString error =
+			random_clip_instances::fitError(pool, longest, [this](int id) { return sourceDurationMs(id); });
+		if (!error.isEmpty()) {
+			return no(error);
+		}
+		QString family = source->randomClipFamily;
+		if (family.isEmpty()) {
+			family = families.value(source->objectId);
+			if (family.isEmpty()) {
+				family = QUuid::createUuid().toString(QUuid::WithoutBraces);
+			}
+			families.insert(source->objectId, family);
+		}
+		copy.randomClipFamily = family;
+		random_clip_instances::applyOptions(copy, pool, copy.clipShown);
+		any = true;
+	}
+	if (!any) {
+		return no(QStringLiteral("Copy a Random Clip, then choose Paste as instance."));
+	}
+	// All validation is complete. Tag originals and insert copies as one edit.
+	for (TlTrack &track : model_.tracks) {
+		for (TlClip &clip : track.clips) {
+			if (families.contains(clip.objectId)) {
+				clip.randomClipFamily = families.value(clip.objectId);
+			}
+		}
+	}
+	for (int i = 0; i < entries.size(); ++i) {
+		entries[i].clip.randomClipFamily = prepared[i].clip.randomClipFamily;
+	}
+	pastePrepared(prepared, atMs);
+	return true;
+}
+
+bool TimelineView::makeRandomClipIndependent(int track, int clip)
+{
+	if (track < 0 || track >= model_.tracks.size() || model_.tracks[track].locked || clip < 0 ||
+	    clip >= model_.tracks[track].clips.size() || model_.tracks[track].clips[clip].randomClipFamily.isEmpty()) {
+		return false;
+	}
+	model_.tracks[track].clips[clip].randomClipFamily.clear();
+	update();
+	commitEdit();
+	return true;
+}
+
+void TimelineView::pastePrepared(const QVector<ClipboardEntry> &entries, qint64 atMs)
+{
 	individualSelection_ = false;
 	if (entries.isEmpty())
 		return;
@@ -5102,6 +5239,8 @@ void TimelineView::splitAtPlayhead()
 			if (cut < kMinClipMs || c.outDurationMs() - cut < kMinClipMs)
 				continue; // too close to an edge to leave usable halves
 			TlClip right = c;
+			right.objectId = TlClip::nextObjectId();
+			right.randomClipFamily.clear();
 			const qint64 srcCut = c.srcAtOutput(playheadMs_);
 			if (right.isRandomClip()) // the second half of every choice
 				clip_variations::shiftOthers(right, srcCut - c.srcStartMs);
@@ -5196,6 +5335,8 @@ void TimelineView::splitClip(int track, int clip, qint64 atOutMs)
 		return;
 	const qint64 splitSrc = a.srcAtOutput(atOutMs);
 	TlClip b = a;
+	b.objectId = TlClip::nextObjectId();
+	b.randomClipFamily.clear();
 	b.srcStartMs = splitSrc;
 	if (b.isRandomClip()) // the second half of every choice
 		clip_variations::shiftOthers(b, splitSrc - a.srcStartMs);
@@ -5361,6 +5502,17 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	auto *exports = new QMenu(QStringLiteral("Export"), &menu);
 	const TlClip &menuClip = model_.tracks[track].clips[clip];
 	const bool isFx = menuClip.type == TlClip::Type::Effect;
+	auto *pasteInstance = menu.addAction(QStringLiteral("Paste as instance"));
+	pasteInstance->setObjectName(QStringLiteral("pasteRandomClipInstanceAction"));
+	disableBecause(pasteInstance, canPasteInstances_, QStringLiteral("Copy a Random Clip first."));
+	pasteInstance->setToolTip(QStringLiteral(
+		"Link footage choices, start times and XY offsets. Each copy keeps its own duration and effects."));
+	QAction *independent = nullptr;
+	if (!menuClip.randomClipFamily.isEmpty()) {
+		independent = organize->addAction(QStringLiteral("Make Random Clip independent"));
+		independent->setObjectName(QStringLiteral("makeRandomClipIndependentAction"));
+		disableBecause(independent, !locked, lockedWhy);
+	}
 
 	QAction *inspect = menu.addAction(QStringLiteral("Show in inspector"));
 	QAction *keys = menu.addAction(QStringLiteral("Keyframes…"));
@@ -5922,6 +6074,10 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 	}
 	if (chosen == split) {
 		splitClip(track, clip, atOutMs);
+	} else if (chosen == pasteInstance) {
+		emit pasteInstanceRequested(atOutMs);
+	} else if (independent && chosen == independent) {
+		makeRandomClipIndependent(track, clip);
 	} else if (unlinkAct && chosen == unlinkAct) {
 		for (const auto &p : model_.linkedClips(menuClip.link))
 			model_.tracks[p.first].clips[p.second].link = 0;
@@ -5935,6 +6091,8 @@ void TimelineView::showClipMenu(int track, int clip, const QPoint &globalPos, qi
 		commitEdit();
 	} else if (chosen == dup) {
 		TlClip copy = model_.tracks[track].clips[clip];
+		copy.objectId = TlClip::nextObjectId();
+		copy.randomClipFamily.clear();
 		copy.outStartMs = copy.outEndMs();
 		copy.link = 0; // a copy of one member is not a member
 		copy.group = 0;

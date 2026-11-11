@@ -91,6 +91,7 @@ public:
 		// remain empty. Prelisted labels above still work for simple callers.
 		QVector<int> variantOptionCounts;
 		std::function<QString(const QVector<int> &)> variantLabel;
+		QString variantError;
 		bool allowSpark = false;
 		int sparkBlocks = 0;
 		int sparkFavorites = 0;

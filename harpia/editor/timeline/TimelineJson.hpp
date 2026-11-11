@@ -317,6 +317,9 @@ inline QJsonObject clipToJson(const TlClip &c)
 		}
 		co[QStringLiteral("clipOptions")] = opts;
 		co[QStringLiteral("clipShown")] = c.clipShown;
+		if (!c.randomClipFamily.isEmpty()) {
+			co[QStringLiteral("randomClipFamily")] = c.randomClipFamily;
+		}
 	}
 	if (!c.tags.isEmpty()) {
 		QJsonArray ta;
@@ -360,6 +363,9 @@ inline TlClip clipFromJson(const QJsonObject &co)
 	c.clipShown = c.clipOptions.isEmpty()
 			      ? 0
 			      : std::clamp(co.value(QStringLiteral("clipShown")).toInt(0), 0, int(c.clipOptions.size()) - 1);
+	if (c.type == TlClip::Type::Video && c.isRandomClip()) {
+		c.randomClipFamily = co.value(QStringLiteral("randomClipFamily")).toString();
+	}
 	for (const QJsonValue &tv : co.value(QStringLiteral("tags")).toArray())
 		if (const int id = tv.toInt(0); id > 0 && !c.tags.contains(id))
 			c.tags.append(id);

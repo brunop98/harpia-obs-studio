@@ -30,6 +30,7 @@
 #include <QVector>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <limits>
 
@@ -297,6 +298,14 @@ struct TlClipOption {
 };
 
 struct TlClip {
+	// Session identity for locating a copied object after it moves. Undo keeps it;
+	// a physical copy gets a fresh one. It is neither project data nor appearance.
+	static quint64 nextObjectId()
+	{
+		static std::atomic<quint64> next{1};
+		return next.fetch_add(1, std::memory_order_relaxed);
+	}
+	quint64 objectId = nextObjectId();
 	// Video = a decoded media clip (also used for audio-track clips); Image = a
 	// still whose duration is free; Text = a rendered caption; Effect = a grade
 	// applied to everything composited below its track, for its own duration.
@@ -420,6 +429,9 @@ struct TlClip {
 	// length, scale, rotation, effects, keys, fades and speed are shared.
 	QVector<TlClipOption> clipOptions;
 	int clipShown = 0;
+	// Random Clip instances share only this family's footage choices. Each
+	// member still owns its timeline duration, transform, animation and effects.
+	QString randomClipFamily;
 	bool isRandomClip() const { return !clipOptions.isEmpty(); }
 	// Choice `k` as it stands: the shown one read from the clip itself.
 	TlClipOption clipOptionAt(int k) const
@@ -744,18 +756,15 @@ struct TlClip {
 	bool operator==(const TlClip &o) const
 	{
 		return type == o.type && sourceId == o.sourceId && srcStartMs == o.srcStartMs &&
-		       srcEndMs == o.srcEndMs && speed == o.speed && outStartMs == o.outStartMs &&
-		       posX == o.posX && posY == o.posY && scale == o.scale &&
-		       rotation == o.rotation && opacity == o.opacity &&
-		       crop == o.crop && keys == o.keys && text == o.text && words == o.words &&
-		       scripts == o.scripts && fx == o.fx && components == o.components &&
-		       transition == o.transition && soundRule == o.soundRule && link == o.link &&
-		       group == o.group && favorite == o.favorite && sparkMust == o.sparkMust &&
-		       sparkOpener == o.sparkOpener && tts == o.tts && tags == o.tags &&
+		       srcEndMs == o.srcEndMs && speed == o.speed && outStartMs == o.outStartMs && posX == o.posX &&
+		       posY == o.posY && scale == o.scale && rotation == o.rotation && opacity == o.opacity &&
+		       crop == o.crop && keys == o.keys && text == o.text && words == o.words && scripts == o.scripts &&
+		       fx == o.fx && components == o.components && transition == o.transition &&
+		       soundRule == o.soundRule && link == o.link && group == o.group && favorite == o.favorite &&
+		       sparkMust == o.sparkMust && sparkOpener == o.sparkOpener && tts == o.tts && tags == o.tags &&
 		       clipOptions == o.clipOptions && clipShown == o.clipShown &&
-		       volume == o.volume && fadeInMs == o.fadeInMs &&
-		       fadeOutMs == o.fadeOutMs && fadeInCurve == o.fadeInCurve &&
-		       fadeOutCurve == o.fadeOutCurve;
+		       randomClipFamily == o.randomClipFamily && volume == o.volume && fadeInMs == o.fadeInMs &&
+		       fadeOutMs == o.fadeOutMs && fadeInCurve == o.fadeInCurve && fadeOutCurve == o.fadeOutCurve;
 	}
 };
 

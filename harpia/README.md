@@ -313,8 +313,12 @@ Harpia builds as part of this CMake project (`ENABLE_HARPIA`, on by default).
 
 ### Prerequisites (install once)
 
-- **Visual Studio 2022** with the **Desktop development with C++** workload
-- **CMake ≥ 3.28** — `winget install Kitware.CMake`, then **reopen the terminal**
+- **Visual Studio 2022 or 2026** with the **Desktop development with C++** workload
+- **CMake ≥ 3.28** (**≥ 4.2 for VS 2026**) — `winget install Kitware.CMake`, then **reopen the terminal**
+- A complete **Windows SDK ≥ 10.0.20348.0** with x64 libraries and build tools.
+  The newest installed version is preferred, including SDKs newer than
+  10.0.26100.0. Install through Visual Studio Installer, or download the
+  [latest Windows SDK](https://developer.microsoft.com/windows/downloads/windows-sdk/).
 - **Git**
 - *Optional, for webcam and Intel QSV:* the **C++ ATL for latest v143 build
   tools (x86 & x64)** Visual Studio component. `win-dshow` (webcam) and
@@ -341,6 +345,15 @@ install them by hand.
 This configures (fetching dependencies on first run), builds `harpia-recorder`
 and prints the path to `harpia.exe`. Options: `-Configuration Release`,
 `-Reconfigure`, `-Target all`, `-Run`, `-Package`.
+
+The script and **build-and-run-harpia.bat** locate SDKs through environment
+variables, both Windows registry views, and standard Windows Kits folders.
+They check the headers, x64 libraries, resource compiler and manifest tool.
+If no compatible installation is complete, the error includes the official
+download link and Visual Studio Installer instructions. A cached SDK/platform
+pin is refreshed automatically when it differs from the detected SDK; existing
+build output is retained. SDK environment overrides apply only while the script
+runs, including builds from a terminal configured for an older SDK.
 
 ### Manual build
 

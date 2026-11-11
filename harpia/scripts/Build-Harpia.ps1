@@ -12,6 +12,7 @@
       * Visual Studio 2022 or 2026 with the "Desktop development with C++" workload
       * CMake >= 3.28 (>= 4.2 for VS 2026) (winget install Kitware.CMake) — then reopen the terminal
       * Git
+      * A Windows SDK (the newest complete installed SDK is selected automatically)
 
 .PARAMETER Configuration
     Build configuration. Default: RelWithDebInfo.
@@ -54,6 +55,7 @@ if ($Package -and $Configuration -eq 'Debug') {
 # Repo root is two levels up from this script (harpia/scripts -> repo root).
 $RepoRoot = Resolve-Path -Path "$PSScriptRoot/../.."
 $BuildDir = Join-Path $RepoRoot 'build_x64'
+. "$PSScriptRoot/WindowsSdk.ps1"
 
 function Assert-Cmake {
     if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
@@ -62,11 +64,20 @@ function Assert-Cmake {
         Write-Host ''
         Write-Host 'Install it, then open a NEW terminal so PATH refreshes:'
         Write-Host '    winget install Kitware.CMake'
+        Write-Host '    https://cmake.org/download/'
         Write-Host ''
         Write-Host 'You also need Visual Studio 2022 or 2026 with the'
         Write-Host '"Desktop development with C++" workload.'
         Write-Host ''
         exit 1
+    }
+    $versionLines = @(& cmake --version)
+    if ($LASTEXITCODE -ne 0 -or $versionLines.Count -eq 0 -or
+        $versionLines[0] -notmatch '^cmake version (\d+\.\d+\.\d+)') {
+        throw 'Could not determine the installed CMake version. Install CMake from https://cmake.org/download/'
+    }
+    if ([version]$Matches[1] -lt [version]'3.28.0') {
+        throw 'CMake 3.28 or newer is required (4.2 for VS 2026). Download: https://cmake.org/download/'
     }
 }
 
@@ -74,7 +85,7 @@ function Assert-Cmake {
 function Select-VisualStudioGenerator([string] $Requested, [string] $Cached) {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
     if (-not (Test-Path -LiteralPath $vswhere)) {
-        throw 'Visual Studio Installer was not found. Install Desktop development with C++.'
+        throw 'Visual Studio Installer was not found. Install Desktop development with C++: https://visualstudio.microsoft.com/downloads/'
     }
     # Assign the JSON array directly: Windows PowerShell 5.1 otherwise nests it.
     $installs = & $vswhere -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -format json | ConvertFrom-Json
@@ -99,22 +110,30 @@ function Select-VisualStudioGenerator([string] $Requested, [string] $Cached) {
     }
     if ($Cached -and $available -contains $Cached) { return $Cached }
     if ($available.Count -gt 0) { return $available[0] }
-    throw 'No compatible VS 2022/2026 C++ installation found. Finish Visual Studio setup with Desktop development with C++ and a Windows SDK. VS 2026 requires CMake 4.2 or newer.'
+    throw 'No compatible VS 2022/2026 C++ installation found. Finish Visual Studio setup with Desktop development with C++ and a Windows SDK: https://visualstudio.microsoft.com/downloads/ . VS 2026 requires CMake 4.2 or newer.'
 }
 
 Assert-Cmake
 
+$sdkEnvironment = @{}
+foreach ($name in @('CMAKE_WINDOWS_KITS_10_DIR', 'WindowsSdkDir', 'WindowsSDKVersion')) {
+    $sdkEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+}
 Push-Location $RepoRoot
 try {
     $cachePath = Join-Path $BuildDir 'CMakeCache.txt'
-    $cacheExists = Test-Path -LiteralPath $cachePath
-    $cachedGenerator = ''
-    if ($cacheExists) {
-        $match = Select-String -LiteralPath $cachePath -Pattern '^CMAKE_GENERATOR:INTERNAL=(.*)$'
-        if ($match) { $cachedGenerator = $match.Matches[0].Groups[1].Value }
-    }
+    $cacheExists = Test-Path -LiteralPath $cachePath -PathType Leaf
+    $cache = Read-HarpiaBuildCache $cachePath
+    $cachedGenerator = [string]$cache['CMAKE_GENERATOR']
     $selectedGenerator = Select-VisualStudioGenerator $Generator $cachedGenerator
     Write-Host "==> Using $selectedGenerator (x64)" -ForegroundColor Cyan
+    $sdk = Find-HarpiaWindowsSdk
+    Write-Host "==> Found Windows SDK $($sdk.Version): $($sdk.Root)" -ForegroundColor Cyan
+    # CMake and MSBuild must agree, including SDKs installed outside Program Files
+    # and terminals whose developer environment still names an uninstalled SDK.
+    $env:CMAKE_WINDOWS_KITS_10_DIR = $sdk.Root
+    $env:WindowsSdkDir = $sdk.Root.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    $env:WindowsSDKVersion = "$($sdk.Version)\"
 
     if ($cacheExists -and $cachedGenerator -ne $selectedGenerator) {
         # CMake cannot switch generators in place. Preserve all previous output.
@@ -130,14 +149,16 @@ try {
         $cacheExists = $false
     }
 
-    if ($Reconfigure -or -not $cacheExists) {
+    $plan = Get-HarpiaWindowsConfigurePlan -SourceRoot $RepoRoot -BuildDir $BuildDir `
+        -Generator $selectedGenerator -Sdk $sdk -Cache $cache -CacheExists $cacheExists -Reconfigure:$Reconfigure
+    if ($plan.Fresh) {
+        Write-Host '==> Refreshing the cached SDK/platform selection; existing build output is preserved.' -ForegroundColor Yellow
+    }
+    if ($plan.Configure) {
         Write-Host '==> Configuring (downloads Qt6/obs-deps on first run)...' -ForegroundColor Cyan
         # No feature flags needed: the SRT/RIST output and the browser source
         # these used to switch off are no longer in the tree.
-        $cfgArgs = @('-S', $RepoRoot, '-B', $BuildDir)
-        if (-not $cacheExists) {
-            $cfgArgs += @('-G', $selectedGenerator, '-A', 'x64')
-        }
+        $cfgArgs = $plan.Arguments
         & cmake @cfgArgs
         if ($LASTEXITCODE -ne 0) { throw "CMake configure failed ($LASTEXITCODE)" }
     }
@@ -212,5 +233,8 @@ try {
     }
 }
 finally {
+    foreach ($name in $sdkEnvironment.Keys) {
+        [Environment]::SetEnvironmentVariable($name, $sdkEnvironment[$name])
+    }
     Pop-Location
 }

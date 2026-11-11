@@ -170,6 +170,7 @@ int main(int argc, char **argv)
 	window.copySeq_ = 1;
 	window.trackCopySeq_ = 2;
 	window.componentClipboardValid_ = true;
+	window.randomClipClipboard_ = TlClipOption{oldVideoId, 0};
 	window.componentClipboard_.typeId = QStringLiteral("harpia.blur");
 	check(window.timelineFps() == 60 && window.timelineCanvasSize() == QSize(64, 48),
 	      "the original document follows its own video dimensions and frame rate");
@@ -200,7 +201,8 @@ int main(int argc, char **argv)
 	check(window.history_.size() == 1 && window.histIndex_ == 0 && !window.undoBtn_->isEnabled(),
 	      "opening a new document cannot undo into clips whose old media pool was released");
 	check(window.clipboard_.isEmpty() && !window.haveTrackClipboard_ && window.trackClipboard_.clips.isEmpty() &&
-	      window.copySeq_ == 0 && window.trackCopySeq_ == 0 && window.componentClipboardValid_,
+		      window.copySeq_ == 0 && window.trackCopySeq_ == 0 && window.componentClipboardValid_ &&
+		      !window.randomClipClipboard_,
 	      "document replacement drops clip and track clipboard source IDs while retaining reusable component styles");
 	check(window.stillImages_.size() == 1 && !window.stillImages_.contains(oldStillId) &&
 	      window.audioProxy_.size() == 1 && !window.audioProxy_.contains(oldAudioId),

@@ -9257,7 +9257,8 @@ void VideoEditorWindow::buildRandomClipSection(QVBoxLayout *clipOuter)
 			       "They share this slot's place, length and look. "
 			       "Click the thumbnail or video name to preview a choice, its arrow to change the source, "
 			       "Slip\u2026 to choose its start time, or XY to position only this choice. "
-			       "Right-click a choice to duplicate it."));
+			       "Right-click a choice to duplicate it, or copy and paste it into another Random Clip. "
+			       "Pasting keeps the destination's duration and effects."));
 	auto *rows = new QWidget(randomClipBox_);
 	randomClipRows_ = new QVBoxLayout(rows);
 	randomClipRows_->setContentsMargins(0, 0, 0, 0);
@@ -9645,6 +9646,12 @@ void VideoEditorWindow::showRandomClipOptionMenu(int option, const QPoint &posit
 	menu.setObjectName(QStringLiteral("randomClipOptionMenu"));
 	auto *duplicate = menu.addAction(QStringLiteral("Duplicate"));
 	duplicate->setEnabled(!tracks[track].locked);
+	auto *copy = menu.addAction(QStringLiteral("Copy"));
+	auto *paste = menu.addAction(QStringLiteral("Paste"));
+	paste->setToolTip(QStringLiteral(
+		"Add the copied option after this one, keeping this Random Clip's duration and effects."));
+	const QString pasteError = randomClipPasteError(expected, track);
+	disableBecause(paste, pasteError.isEmpty(), pasteError);
 	const int sourceId = clip->clipOptionAt(option).sourceId;
 	const EditorSource *source = sourceById(sourceId);
 	QAction *find = nullptr;
@@ -9652,12 +9659,18 @@ void VideoEditorWindow::showRandomClipOptionMenu(int option, const QPoint &posit
 		find = menu.addAction(QStringLiteral("Find missing file…"));
 		find->setObjectName(QStringLiteral("findMissingMediaAction"));
 	}
+	explainDisabled(&menu);
 	const QAction *chosen = menu.exec(position);
 	if (find && chosen == find) {
 		locateProjectSource(sourceId);
 		return;
 	}
-	if (chosen != duplicate) {
+	if (chosen == copy) {
+		randomClipClipboard_ = expected.clipOptionAt(option);
+		randomClipCopySeq_ = ++seqCounter_;
+		return; // copying never changes the preview or undo history
+	}
+	if (chosen != duplicate && chosen != paste) {
 		return;
 	}
 	clip = timelineView_->selectedClipPtr();
@@ -9665,10 +9678,62 @@ void VideoEditorWindow::showRandomClipOptionMenu(int option, const QPoint &posit
 	    !(*clip == expected)) {
 		return;
 	}
+	if (chosen == paste) {
+		pasteRandomClipOption(option);
+		return;
+	}
 	commitSnapshot();
 	editSelectedClip([this, option, audioLane](TlClip &c) {
 		const int copy = clip_variations::duplicate(c, option);
 		if (copy >= 0 && clip_variations::show(c, copy) && audioLane) {
+			if (const EditorSource *source = sourceById(c.sourceId)) {
+				c.peaks = randomClipPeaks(source->path);
+			}
+		}
+	});
+	commitSnapshot();
+}
+
+QString VideoEditorWindow::randomClipPasteError(const TlClip &clip, int track)
+{
+	if (!randomClipClipboard_) {
+		return QStringLiteral("Copy an option from a Random Clip in this project first.");
+	}
+	if (!timelineView_ || track < 0 || track >= timelineView_->model().tracks.size()) {
+		return QStringLiteral("Select a Random Clip first.");
+	}
+	const TlTrack &lane = timelineView_->model().tracks[track];
+	if (lane.locked) {
+		return QStringLiteral("This track is locked. Unlock it before pasting an option.");
+	}
+	const EditorSource *source = sourceById(randomClipClipboard_->sourceId);
+	if (!source) {
+		return QStringLiteral("The copied source is no longer in this project. Copy an option again.");
+	}
+	if (lane.kind != TlTrack::Kind::Audio &&
+	    sourceKindFor(source->origPath.isEmpty() ? source->path : source->origPath) == SourceKind::Audio) {
+		return QStringLiteral("An audio-only option can be pasted into an audio track's Random Clip.");
+	}
+	return clip_variations::optionFitError(clip, *randomClipClipboard_, source->durationMs);
+}
+
+void VideoEditorWindow::pasteRandomClipOption(int after)
+{
+	if (!fullEdit() || !timelineView_) {
+		return;
+	}
+	const TlClip *clip = timelineView_->selectedClipPtr();
+	const int track = timelineView_->selectedTrack();
+	if (!clip || !randomClipPasteError(*clip, track).isEmpty()) {
+		return;
+	}
+	const TlClipOption copied = *randomClipClipboard_;
+	const qint64 total = sourceById(copied.sourceId)->durationMs;
+	const bool audioLane = timelineView_->model().tracks[track].kind == TlTrack::Kind::Audio;
+	commitSnapshot();
+	editSelectedClip([this, copied, total, after, audioLane](TlClip &c) {
+		const int inserted = clip_variations::insertOption(c, copied, after, total);
+		if (inserted >= 0 && clip_variations::show(c, inserted) && audioLane) {
 			if (const EditorSource *source = sourceById(c.sourceId)) {
 				c.peaks = randomClipPeaks(source->path);
 			}
@@ -9852,6 +9917,11 @@ void VideoEditorWindow::fillRandomClipAddMenu(QMenu *menu)
 		menu->addSeparator();
 	connect(menu->addAction(QStringLiteral("Import a file…")), &QAction::triggered, this,
 		&VideoEditorWindow::importRandomClipOption);
+	auto *paste = menu->addAction(QStringLiteral("Paste copied option"));
+	paste->setObjectName(QStringLiteral("pasteRandomClipOption"));
+	const QString pasteError = randomClipPasteError(*sel, track);
+	disableBecause(paste, pasteError.isEmpty(), pasteError);
+	connect(paste, &QAction::triggered, this, [this]() { pasteRandomClipOption(); });
 }
 
 void VideoEditorWindow::importRandomClipOption()
@@ -12857,6 +12927,20 @@ void VideoEditorWindow::pasteLink(const QUrl &url, qint64 atMs)
 // expects from every other editor.
 void VideoEditorWindow::pasteFromClipboard()
 {
+	if (fullEdit() && timelineView_ && randomClipClipboard_ &&
+	    randomClipCopySeq_ > std::max(copySeq_, trackCopySeq_) &&
+	    (randomClipCopySeq_ > systemCopySeq_ ||
+	     (systemCopyHere_ && readPaste(QApplication::clipboard()->mimeData()).kind == PasteContent::Kind::Text))) {
+		const TlClip *clip = timelineView_->selectedClipPtr();
+		const QString error = clip ? randomClipPasteError(*clip, timelineView_->selectedTrack())
+					   : QStringLiteral("Select another Random Clip to paste this option.");
+		if (error.isEmpty()) {
+			pasteRandomClipOption();
+		} else if (infoLabel_) {
+			infoLabel_->setText(error);
+		}
+		return;
+	}
 	// A copied track wins when it is the most recent copy, by the same
 	// newest-wins rule that already settles clips against the system clipboard.
 	// Landing ABOVE the track it came from makes Ctrl+C, Ctrl+V read as
@@ -14598,6 +14682,8 @@ void VideoEditorWindow::clearProjectMedia()
 	seeker_ = nullptr;
 	activeSourceId_ = -1;
 	sources_.clear();
+	randomClipClipboard_.reset();
+	randomClipCopySeq_ = 0;
 	inPath_.clear();
 	stillImages_.clear();
 	stillSizes_.clear();

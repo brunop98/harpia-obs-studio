@@ -114,6 +114,37 @@ inline int duplicate(TlClip &c, int k)
 	return k + 1;
 }
 
+// Pasting retains the destination's shared duration. Keep the copied moment
+// exact rather than silently slipping it to fit a longer destination slot.
+inline QString optionFitError(const TlClip &c, const TlClipOption &option, qint64 totalMs)
+{
+	if (!c.isRandomClip() || c.type != TlClip::Type::Video || c.srcLenMs() <= 0) {
+		return QStringLiteral("Select a Random Clip with a duration first.");
+	}
+	if (option.sourceId < 0 || option.srcStartMs < 0) {
+		return QStringLiteral("The copied option has no valid source moment.");
+	}
+	if (totalMs > 0 && (option.srcStartMs > totalMs || c.srcLenMs() > totalMs - option.srcStartMs)) {
+		return QStringLiteral(
+			"There is not enough footage after the copied start time to fill this Random Clip's duration.");
+	}
+	return {};
+}
+
+inline int insertOption(TlClip &c, const TlClipOption &option, int after, qint64 totalMs)
+{
+	if (!optionFitError(c, option, totalMs).isEmpty()) {
+		return -1;
+	}
+	const int at = after < 0 ? int(c.clipOptions.size()) : std::clamp(after + 1, 0, int(c.clipOptions.size()));
+	syncShown(c);
+	c.clipOptions.insert(at, option);
+	if (c.clipShown >= at) {
+		++c.clipShown;
+	}
+	return at;
+}
+
 // Replace one choice's source and moment without changing which choice is
 // showing. A known source length lets the Slip picker keep the entire shared
 // window inside the file. All validation happens before syncShown mutates the

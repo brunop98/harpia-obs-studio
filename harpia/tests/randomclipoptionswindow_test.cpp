@@ -66,7 +66,7 @@ QAction *sourceAction(QAbstractButton *button, int source)
 			return action;
 	return nullptr;
 }
-bool duplicateFrom(QWidget *target, bool enabled = true)
+bool optionMenuAction(QWidget *target, const QString &label, bool enabled = true)
 {
 	bool found = false;
 	QTimer driver;
@@ -76,7 +76,7 @@ bool duplicateFrom(QWidget *target, bool enabled = true)
 			return;
 		}
 		for (QAction *action : menu->actions()) {
-			if (action->text() == QStringLiteral("Duplicate")) {
+			if (action->text() == label) {
 				found = action->isEnabled() == enabled;
 				if (enabled && action->isEnabled()) {
 					menu->setActiveAction(action);
@@ -94,6 +94,10 @@ bool duplicateFrom(QWidget *target, bool enabled = true)
 				target->mapToGlobal(target->rect().center()));
 	QApplication::sendEvent(target, &event);
 	return found;
+}
+bool duplicateFrom(QWidget *target, bool enabled = true)
+{
+	return optionMenuAction(target, QStringLiteral("Duplicate"), enabled);
 }
 struct SlipRun {
 	bool seen = false;
@@ -604,6 +608,101 @@ int main(int argc, char **argv)
 		      current(window).srcStartMs == shownChoice.srcStartMs,
 	      "right-clicking the source name also duplicates the shown choice with its current source window");
 	window.undo();
+	window.commitSnapshot();
+	window.copySelectedClips(false);
+	const TimelineModel beforeCopy = window.timelineView_->model();
+	const int historyBeforeCopy = window.histIndex_;
+	check(optionMenuAction(optionButton(window, "randomClipVideo", 1), QStringLiteral("Paste"), false),
+	      "Paste is disabled until a Random Clip option has been copied");
+	const TlClipOption copiedChoice = current(window).clipOptionAt(1);
+	check(optionMenuAction(optionButton(window, "randomClipThumbnail", 1), QStringLiteral("Copy")) &&
+		      window.randomClipClipboard_ && *window.randomClipClipboard_ == copiedChoice &&
+		      window.timelineView_->model() == beforeCopy && window.histIndex_ == historyBeforeCopy,
+	      "Copy captures an option's current source time and position without changing the project or history");
+	TimelineModel twoObjects = beforeCopy;
+	TlClip destination = slot;
+	destination.sourceId = green;
+	destination.srcStartMs = 0;
+	destination.srcEndMs = 1000;
+	destination.outStartMs = 5000;
+	destination.speed = 0.5;
+	destination.posX = 0.7;
+	destination.clipOptions = {{green, 0, -0.1, 0.2}};
+	destination.clipShown = 0;
+	twoObjects.tracks[0].clips.append(destination);
+	install(window, twoObjects);
+	window.timelineView_->selectClip(0, 1);
+	window.syncClipInspector();
+	window.commitSnapshot();
+	const int historyBeforePaste = window.histIndex_;
+	check(optionMenuAction(optionButton(window, "randomClipVideo", 0), QStringLiteral("Paste")),
+	      "another Random Clip object's Inspector offers Paste");
+	const TlClip pasted = *window.timelineView_->selectedClipPtr();
+	check(pasted.clipOptions.size() == 2 && pasted.clipShown == 1 && pasted.clipOptionAt(1) == copiedChoice &&
+		      pasted.sourceId == copiedChoice.sourceId && pasted.srcStartMs == copiedChoice.srcStartMs &&
+		      pasted.srcLenMs() == destination.srcLenMs() && pasted.outStartMs == destination.outStartMs &&
+		      pasted.outDurationMs() == destination.outDurationMs() && pasted.speed == destination.speed &&
+		      pasted.crop == destination.crop && pasted.keys == destination.keys &&
+		      pasted.components == destination.components && pasted.posX == destination.posX &&
+		      window.timelineView_->model().tracks[0].clips[0] == twoObjects.tracks[0].clips[0] &&
+		      window.timelineView_->model().tracks[1] == twoObjects.tracks[1],
+	      "pasting selects a new option with the copied moment and offset while retaining the destination's duration, effects and animation");
+	check(QTest::qWaitFor(
+		      [&]() {
+			      const QImage &frame = window.canvas_->currentFrame();
+			      if (frame.isNull()) {
+				      return false;
+			      }
+			      const auto pose = pasted.positionedTransformAt(window.timelinePlayheadMs());
+			      const QColor colour = frame.pixelColor(
+				      std::clamp(int(pose.posX * frame.width()), 0, frame.width() - 1),
+				      std::clamp(int(pose.posY * frame.height()), 0, frame.height() - 1));
+			      return colour.blue() > 180 && colour.red() < 50;
+		      },
+		      2000),
+	      "pasting immediately renders the copied footage in the destination's preview");
+	check(window.histIndex_ == historyBeforePaste + 1, "pasting an option commits one undo step");
+	window.undo();
+	check(window.timelineView_->model() == twoObjects, "Undo removes only the pasted option");
+	window.redo();
+	check(*window.timelineView_->selectedClipPtr() == pasted,
+	      "Redo restores the pasted option and its selected preview");
+	emit window.randomClipAdd_->menu()->aboutToShow();
+	auto *appendPaste =
+		window.randomClipAdd_->menu()->findChild<QAction *>(QStringLiteral("pasteRandomClipOption"));
+	check(appendPaste && appendPaste->isEnabled(), "Add clip also offers Paste copied option");
+	if (appendPaste) {
+		appendPaste->trigger();
+	}
+	check(window.timelineView_->selectedClipPtr()->clipOptions.size() == 3 &&
+		      window.timelineView_->selectedClipPtr()->clipShown == 2 &&
+		      window.timelineView_->selectedClipPtr()->clipOptionAt(2) == copiedChoice,
+	      "Add clip's Paste appends and previews the copied option");
+	window.pasteFromClipboard();
+	check(window.timelineView_->selectedClipPtr()->clipOptions.size() == 4 &&
+		      window.timelineView_->selectedClipPtr()->clipShown == 3 &&
+		      window.timelineView_->selectedClipPtr()->clipOptionAt(3) == copiedChoice &&
+		      window.timelineView_->model().tracks[0].clips.size() == 2,
+	      "the timeline Paste command adds the copied option to the selected Random Clip instead of inserting another object");
+	window.show();
+	window.activateWindow();
+	settle();
+	QApplication::clipboard()->setText(QStringLiteral("a name copied inside the Inspector"));
+	window.pasteFromClipboard();
+	check(window.timelineView_->selectedClipPtr()->clipOptions.size() == 5 &&
+		      window.timelineView_->model().tracks[0].clips.size() == 2,
+	      "words copied inside Harpia do not replace the newer copied Random Clip option with an older whole-clip paste");
+	TimelineModel tooLong = twoObjects;
+	tooLong.tracks[0].clips[1].srcEndMs = 7000;
+	install(window, tooLong);
+	window.timelineView_->selectClip(0, 1);
+	window.syncClipInspector();
+	check(optionMenuAction(optionButton(window, "randomClipVideo", 0), QStringLiteral("Paste"), false) &&
+		      window.timelineView_->model() == tooLong &&
+		      window.randomClipPasteError(*window.timelineView_->selectedClipPtr(), 0)
+			      .contains(QStringLiteral("not enough")),
+	      "Paste refuses insufficient footage with an explanation instead of silently moving the copied moment");
+	install(window, beforeCopy);
 	TimelineModel locked = window.timelineView_->model();
 	locked.tracks[0].locked = true;
 	install(window, locked);
@@ -617,6 +716,12 @@ int main(int argc, char **argv)
 	check(duplicateFrom(optionButton(window, "randomClipThumbnail", 0)->parentWidget(), false) &&
 		      window.timelineView_->model() == locked,
 	      "the option context menu disables duplication on locked tracks");
+	check(optionMenuAction(optionButton(window, "randomClipThumbnail", 0)->parentWidget(), QStringLiteral("Paste"),
+			       false) &&
+		      optionMenuAction(optionButton(window, "randomClipThumbnail", 0)->parentWidget(),
+				       QStringLiteral("Copy")) &&
+		      window.timelineView_->model() == locked,
+	      "locked tracks allow copying but block pasting options");
 	window.showRandomClipPositionMenu(1, QPoint(100, 100));
 	settle();
 	check(window.timelineView_->model() == locked &&

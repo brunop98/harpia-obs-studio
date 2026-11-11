@@ -960,12 +960,16 @@ private:
 	QPushButton *randomClipNext_ = nullptr;
 	QPushButton *randomClipAdd_ = nullptr;
 	QPushButton *randomClipCompare_ = nullptr;
+	std::optional<TlClipOption> randomClipClipboard_; // source IDs belong to this project's media pool
+	quint64 randomClipCopySeq_ = 0;
 	void buildRandomClipSection(QVBoxLayout *clipOuter);
 	void compareRandomClipOptions();
 	void syncRandomClipInspector(const TlClip &c);
 	void refreshRandomClipThumbnails(int sourceId = -1);
 	void refreshRandomClipSourceIcons(int sourceId = -1);
 	void showRandomClipOptionMenu(int option, const QPoint &position);
+	QString randomClipPasteError(const TlClip &clip, int track);
+	void pasteRandomClipOption(int after = -1);
 	void showRandomClipPositionMenu(int option, const QPoint &position);
 	void showRandomClipOption(int k);
 	// A file's waveform (loadPeaks at 600), kept: flipping through a Random

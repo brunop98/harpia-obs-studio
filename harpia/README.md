@@ -97,6 +97,11 @@ Three modes, each one step up from the last:
   - **Convert to Random Clip:** right-click a normal video clip and choose this
     direct menu action. Its footage and source time become option 1; framing,
     effects, timing and animation are preserved. Add alternatives in the Inspector.
+    Right-click an Inspector option to **Copy**, then select another Random Clip
+    in the same project and **Paste** into its Inspector. Pasting adds a choice
+    with the copied source, start time and position; the destination keeps its
+    duration and effects. **Ctrl+V** with another Random Clip selected, or
+    **Add clip → Paste copied option**, appends it instead.
   - video, image, text, effect and audio clips; overlapping clips become
     **transitions**; marquee selection, groups, ripple, snapping;
   - **Auto ripple on speed change:** enable it in a track header's right-click

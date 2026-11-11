@@ -373,6 +373,8 @@ int main(int argc, char **argv)
 		// newer than the copy, but they were a side effect of editing, not a
 		// thing to place -- so they do not take the place of the clips. (This
 		// test is Harpia: its clipboard writes are Harpia's own.)
+		w.activateWindow(); // loading dialogs may have taken focus in the offscreen platform
+		settle(50);
 		cb->setText(QStringLiteral("copied some words by accident"));
 		settle(200);
 		before = clipCount(tv);

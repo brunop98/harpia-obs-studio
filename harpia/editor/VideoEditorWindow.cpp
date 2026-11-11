@@ -49,6 +49,7 @@
 #include "InspectorSection.hpp"
 #include "ToolbarLayout.hpp"
 #include "timeline/TextVariations.hpp"
+#include "VariationSampling.hpp"
 #include "timeline/ClipVariations.hpp"
 #include "timeline/VariationPresets.hpp"
 #include "FrameSeeker.hpp"
@@ -16780,21 +16781,16 @@ void VideoEditorWindow::onSave()
 			{
 				const QVector<text_variations::Slot> vs = text_variations::slotsOf(
 					timelineView_->model(), [this](int id) { return sourceLabel(id); });
-				const qint64 n = text_variations::combinationCount(vs);
-				constexpr qint64 kListMax = 2000;
-				if (n > kListMax)
-					QMessageBox::information(
-						this, QStringLiteral("Variations"),
-						QStringLiteral("The Random texts and clips make %1 versions; the Variations tab "
-							       "lists the first %2.")
-							.arg(n)
-							.arg(kListMax));
-				for (qint64 i = 0; i < std::min(n, kListMax); ++i) {
-					QStringList parts;
-					for (const QString &t : text_variations::textsAt(vs, text_variations::combinationAt(vs, i)))
-						parts << rich_text::plainText(t).simplified();
-					ec.variantLabels << parts.join(QStringLiteral("  ·  "));
+				for (const auto &slot : vs) {
+					ec.variantOptionCounts.append(int(slot.options.size()));
 				}
+				ec.variantLabel = [vs](const QVector<int> &pick) {
+					QStringList parts;
+					for (const QString &t : text_variations::textsAt(vs, pick)) {
+						parts << rich_text::plainText(t).simplified();
+					}
+					return parts.join(QStringLiteral("  ·  "));
+				};
 			}
 			if (span.isValid() && (span.fromMs != 0 || span.toMs != timelineView_->durationMs())) {
 				ec.rangeSeconds = span.durationMs() / 1000.0;
@@ -17018,7 +17014,12 @@ void VideoEditorWindow::onSave()
 		const QVector<text_variations::Slot> vs =
 			text_variations::slotsOf(whole, [this](int id) { return sourceLabel(id); });
 		const qint64 total = text_variations::combinationCount(vs);
-		const QVector<int> picked = dlg.batchSelection();
+		const auto picked = dlg.variationSelection();
+		QVector<int> sizes;
+		for (const auto &slot : vs) {
+			sizes.append(int(slot.options.size()));
+		}
+		const bool overflow = variation_sampling::count(sizes).overflow;
 		if (picked.size() > 50 &&
 		    QMessageBox::question(this, QStringLiteral("Export variations"),
 					  QStringLiteral("This renders %1 videos of %2 s each. Continue?")
@@ -17028,15 +17029,16 @@ void VideoEditorWindow::onSave()
 			return;
 		const QString prefix = batch_export::safePrefix(dlg.batchPrefix());
 		QVector<BatchExporter::Item> items;
-		for (int k : picked) {
-			const QVector<int> pick = text_variations::combinationAt(vs, k);
+		for (const auto &version : picked) {
+			const QVector<int> &pick = version.choices;
 			BatchExporter::Item it;
 			// Numbered as listed, so a file's number is its version whichever
 			// others were ticked.
-			it.name = text_variations::fileName(prefix, k + 1, int(std::min<qint64>(total, 1 << 30)),
+			it.name = text_variations::fileName(prefix, version.number,
+							    overflow ? qint64(picked.size()) : total,
 							    text_variations::textsAt(vs, pick));
 			it.useTimeline = true;
-			it.coverText = cover.textFor(k + 1);
+			it.coverText = cover.textFor(version.number);
 			it.timeline = text_variations::applyCombination(whole, vs, pick);
 			items.push_back(it);
 		}

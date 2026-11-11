@@ -86,6 +86,11 @@ public:
 		// whole project, so each lasts `seconds`. Never set together with
 		// batchCuts -- the two tabs belong to different modes.
 		QStringList variantLabels;
+		// Prefer these for combinatorial projects: sizes + a label callback.
+		// Only displayed/exported choices are materialized; variantLabels may
+		// remain empty. Prelisted labels above still work for simple callers.
+		QVector<int> variantOptionCounts;
+		std::function<QString(const QVector<int> &)> variantLabel;
 		bool allowSpark = false;
 		int sparkBlocks = 0;
 		int sparkFavorites = 0;
@@ -161,6 +166,11 @@ public:
 	// After an edit the count waits a moment for the next one; this counts now.
 	void recountSparkNow();
 	QVector<int> batchSelection() const;
+	struct Variation {
+		QVector<int> choices;
+		qint64 number = 1; // original version number, or sample-local when the product overflows
+	};
+	QVector<Variation> variationSelection() const;
 	QString batchPrefix() const;
 	bool batchOpenFolder() const;
 	// Output seconds of the selected cuts (each at its own speed).
@@ -231,6 +241,13 @@ private:
 	QLineEdit *batchPrefix_ = nullptr;
 	QCheckBox *batchOpen_ = nullptr;
 	QLabel *batchCount_ = nullptr;
+	bool hasVariations() const;
+	QVector<int> variationSizes() const;
+	QComboBox *variationMode_ = nullptr;
+	QSpinBox *variationCount_ = nullptr;
+	QPushButton *variationAgain_ = nullptr;
+	QVector<Variation> displayedVariations_;
+	void rebuildVariationList();
 	void buildBatchTab();
 	void buildSparkTab();
 	int batchTabIndex_ = -1;

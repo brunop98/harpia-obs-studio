@@ -14,12 +14,12 @@ struct Numbering {
 	int digits = 1;
 	bool firstFrame = false;
 
-	QString textFor(int version1) const
+	QString textFor(qint64 version1) const
 	{
 		if (!enabled) {
 			return {};
 		}
-		const qint64 number = qint64(std::max(0, start)) + std::max<qint64>(0, qint64(version1) - 1);
+		const quint64 number = quint64(std::max(0, start)) + quint64(version1 > 1 ? version1 - 1 : 0);
 		return prefix +
 		       (includeNumber
 				? QString::number(number).rightJustified(std::clamp(digits, 1, 8), QLatin1Char('0'))

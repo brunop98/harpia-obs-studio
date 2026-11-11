@@ -380,6 +380,8 @@ g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 # Text variations: counting, order, substitution and file names (header-only).
 g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
 	"$HERE/textvariations_test.cpp" -o "$WORK/textvariations_test" $LF
+g++ -std=c++17 -O1 -fPIC -I"$H" -I"$ROOT" $CF \
+	"$HERE/variationsampling_test.cpp" -o "$WORK/variationsampling_test" $LF
 
 # Random clips: the shown clip and the list in step, what may be added and
 # removed, trims applied to every clip, and versions counted in with texts.
@@ -1285,6 +1287,7 @@ QT_QPA_PLATFORM=offscreen "$WORK/previewwarning_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/opaqueframe_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/batchplan_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/textvariations_test" || rc=1
+QT_QPA_PLATFORM=offscreen "$WORK/variationsampling_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/clipvariations_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/richtext_test" || rc=1
 QT_QPA_PLATFORM=offscreen "$WORK/captionanimation_test" || rc=1

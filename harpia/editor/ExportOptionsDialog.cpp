@@ -1,4 +1,5 @@
 #include "ExportOptionsDialog.hpp"
+#include "VariationSampling.hpp"
 #include "timeline/SparkLimits.hpp"
 #include "timeline/SeparateClips.hpp"
 #include "BatchExport.hpp"
@@ -125,13 +126,14 @@ ExportOptionsDialog::ExportOptionsDialog(const Context &ctx, QWidget *parent)
 	auto *single = new QWidget(this);
 	auto *columns = new QHBoxLayout(single);
 	columns->setContentsMargins(0, 0, 0, 0);
-	if (ctx_.batchCuts.isEmpty() && ctx_.variantLabels.isEmpty() && !ctx_.allowSpark) {
+	if (ctx_.batchCuts.isEmpty() && !hasVariations() && !ctx_.allowSpark) {
 		root->addWidget(single);
 	} else {
 		tabs_ = new QTabWidget(this);
 		tabs_->addTab(single, QStringLiteral("Single video"));
-		if (!ctx_.batchCuts.isEmpty() || !ctx_.variantLabels.isEmpty())
+		if (!ctx_.batchCuts.isEmpty() || hasVariations()) {
 			buildBatchTab();
+		}
 		if (ctx_.allowSpark)
 			buildSparkTab();
 		root->addWidget(tabs_);
@@ -586,30 +588,54 @@ void ExportOptionsDialog::buildBatchTab()
 	auto *v = new QVBoxLayout(page);
 	// One tab, two lists: Multi-Cut's cuts, or Full editing's versions (its
 	// Random texts and Random clips).
-	const bool variants = !ctx_.variantLabels.isEmpty();
+	const bool variants = hasVariations();
+	const auto population = variation_sampling::count(variationSizes());
 	auto *hint = new QLabel(
-		variants ? QStringLiteral("Every version is the whole video with only the Random texts and Random "
-					  "clips changed: one file per combination of their options, in a new folder under the "
-					  "folder chosen on the Single video tab, with that tab's format, quality, "
-					  "size and audio.")
-			 : QStringLiteral("Each cut becomes its own file, in a new folder under the folder chosen on "
-					  "the Single video tab, with that tab's format, quality, size, crop and "
-					  "audio. Each cut keeps its own speed."),
+		variants
+			? QStringLiteral(
+				  "Every version is the whole video with only the Random texts and Random "
+				  "clips changed: one file per combination of their options, in a new folder under the "
+				  "folder chosen on the Single video tab, with that tab's format, quality, "
+				  "size and audio. Choose Random selection to export only the number you pick, "
+				  "without repeating a combination.")
+			: QStringLiteral("Each cut becomes its own file, in a new folder under the folder chosen on "
+					 "the Single video tab, with that tab's format, quality, size, crop and "
+					 "audio. Each cut keeps its own speed."),
 		page);
 	hint->setWordWrap(true);
 	hint->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 	v->addWidget(hint);
+	if (variants) {
+		auto *selection = new QHBoxLayout;
+		variationMode_ = new QComboBox(page);
+		variationMode_->setObjectName(QStringLiteral("variationSelectionMode"));
+		if (population.value <= variation_sampling::kListLimit) {
+			variationMode_->addItem(QStringLiteral("Choose variations"), false);
+		}
+		variationMode_->addItem(QStringLiteral("Random selection"), true);
+		variationCount_ = new QSpinBox(page);
+		variationCount_->setObjectName(QStringLiteral("variationRandomCount"));
+		variationCount_->setRange(
+			1,
+			int(std::max<qint64>(1, std::min<qint64>(population.value, variation_sampling::kListLimit))));
+		variationCount_->setValue(std::min(10, variationCount_->maximum()));
+		variationCount_->setSuffix(QStringLiteral(" variations"));
+		variationCount_->setKeyboardTracking(false);
+		variationAgain_ = new QPushButton(QStringLiteral("Pick again"), page);
+		variationAgain_->setObjectName(QStringLiteral("variationPickAgain"));
+		variationAgain_->setToolTip(
+			QStringLiteral("Draw a fresh sample from all combinations. Nothing is rendered until Export."));
+		selection->addWidget(variationMode_, 1);
+		selection->addWidget(variationCount_);
+		selection->addWidget(variationAgain_);
+		v->addLayout(selection);
+	}
 
 	batchList_ = new QListWidget(page);
 	batchList_->setSelectionMode(QAbstractItemView::NoSelection);
-	const int n = variants ? ctx_.variantLabels.size() : ctx_.batchCuts.size();
-	for (int i = 0; i < n && variants; ++i) {
-		auto *item = new QListWidgetItem(
-			QStringLiteral("%1    %2").arg(i + 1, 2, 10, QLatin1Char('0')).arg(ctx_.variantLabels[i]),
-			batchList_);
-		item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-		item->setCheckState(Qt::Checked);
-		item->setToolTip(ctx_.variantLabels[i]);
+	const int n = ctx_.batchCuts.size();
+	if (variants) {
+		rebuildVariationList();
 	}
 	for (int i = 0; i < n && !variants; ++i) {
 		const Context::BatchCut &c = ctx_.batchCuts[i];
@@ -631,13 +657,26 @@ void ExportOptionsDialog::buildBatchTab()
 	auto *all = new QPushButton(QStringLiteral("All"), page);
 	auto *none = new QPushButton(QStringLiteral("None"), page);
 	connect(all, &QPushButton::clicked, this, [this]() {
-		for (int i = 0; i < batchList_->count(); ++i)
-			batchList_->item(i)->setCheckState(Qt::Checked);
+		{
+			const QSignalBlocker block(batchList_);
+			for (int i = 0; i < batchList_->count(); ++i) {
+				batchList_->item(i)->setCheckState(Qt::Checked);
+			}
+		}
+		refresh();
 	});
 	connect(none, &QPushButton::clicked, this, [this]() {
-		for (int i = 0; i < batchList_->count(); ++i)
-			batchList_->item(i)->setCheckState(Qt::Unchecked);
+		{
+			const QSignalBlocker block(batchList_);
+			for (int i = 0; i < batchList_->count(); ++i) {
+				batchList_->item(i)->setCheckState(Qt::Unchecked);
+			}
+		}
+		refresh();
 	});
+	if (variants) {
+		all->setText(QStringLiteral("All shown"));
+	}
 	row->addWidget(all);
 	row->addWidget(none);
 	batchCount_ = new QLabel(page);
@@ -646,21 +685,81 @@ void ExportOptionsDialog::buildBatchTab()
 
 	auto *form = new QFormLayout;
 	batchPrefix_ = new QLineEdit(ctx_.defaultName, page);
+	batchPrefix_->setObjectName(QStringLiteral("batchPrefix"));
 	batchPrefix_->setToolTip(variants ? QStringLiteral("Files are named Prefix_01_the-text, Prefix_02_… and "
 							   "the folder is named after the prefix too.")
 					  : QStringLiteral("Files are named Prefix_01, Prefix_02… and the folder is "
 							   "named after the prefix too."));
 	form->addRow(QStringLiteral("Name prefix"), batchPrefix_);
 	batchOpen_ = new QCheckBox(QStringLiteral("Open the folder when done"), page);
+	batchOpen_->setObjectName(QStringLiteral("batchOpenFolder"));
 	batchOpen_->setChecked(true);
 	form->addRow(QString(), batchOpen_);
 	v->addLayout(form);
 	if (variants) {
 		buildCoverOptions(v, variationCover_, QStringLiteral("variationCover"));
+		connect(variationMode_, &QComboBox::currentIndexChanged, this, [this]() { rebuildVariationList(); });
+		connect(variationCount_, &QSpinBox::valueChanged, this, [this]() { rebuildVariationList(); });
+		connect(variationAgain_, &QPushButton::clicked, this, &ExportOptionsDialog::rebuildVariationList);
 	}
 
-	batchTabIndex_ = tabs_->addTab(page, variants ? QStringLiteral("Variations  (%1 versions)").arg(n)
-				     : QStringLiteral("Batch  (%1 cuts)").arg(n));
+	batchTabIndex_ = tabs_->addTab(
+		page, variants ? (population.value <= variation_sampling::kListLimit
+					  ? QStringLiteral("Variations  (%1 versions)").arg(population.value)
+					  : QStringLiteral("Variations"))
+			       : QStringLiteral("Batch  (%1 cuts)").arg(n));
+}
+
+bool ExportOptionsDialog::hasVariations() const
+{
+	return !ctx_.variantLabels.isEmpty() || !ctx_.variantOptionCounts.isEmpty();
+}
+
+QVector<int> ExportOptionsDialog::variationSizes() const
+{
+	return !ctx_.variantOptionCounts.isEmpty() ? ctx_.variantOptionCounts
+	       : ctx_.variantLabels.isEmpty()      ? QVector<int>()
+						   : QVector<int>{int(ctx_.variantLabels.size())};
+}
+
+void ExportOptionsDialog::rebuildVariationList()
+{
+	if (!variationMode_ || !batchList_) {
+		return;
+	}
+	const bool random = variationMode_->currentData().toBool();
+	variationCount_->setEnabled(random);
+	variationAgain_->setEnabled(random);
+	const QVector<int> sizes = variationSizes();
+	const auto population = variation_sampling::count(sizes);
+	QVector<QVector<int>> picks;
+	if (random) {
+		picks = variation_sampling::sample(sizes, variationCount_->value());
+	} else {
+		for (qint64 i = 0; i < std::min<qint64>(population.value, variation_sampling::kListLimit); ++i) {
+			picks.append(variation_sampling::at(sizes, i));
+		}
+	}
+	{
+		const QSignalBlocker block(batchList_);
+		batchList_->clear();
+		displayedVariations_.clear();
+		for (const QVector<int> &pick : picks) {
+			const qint64 number = population.overflow ? qint64(displayedVariations_.size()) + 1
+								  : variation_sampling::indexOf(sizes, pick) + 1;
+			const QString label = ctx_.variantLabel ? ctx_.variantLabel(pick)
+								: ctx_.variantLabels.value(int(number - 1));
+			displayedVariations_.append({pick, number});
+			auto *item = new QListWidgetItem(
+				QStringLiteral("%1    %2").arg(number, 2, 10, QLatin1Char('0')).arg(label), batchList_);
+			item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+			item->setCheckState(Qt::Checked);
+			item->setToolTip(label);
+		}
+	}
+	if (exportBtn_) {
+		refresh();
+	}
 }
 
 void ExportOptionsDialog::buildCoverOptions(QVBoxLayout *layout, CoverControls &c, const QString &key)
@@ -756,7 +855,7 @@ cover::Numbering ExportOptionsDialog::numberedCover() const
 	if (sparkMode()) {
 		return readCoverOptions(sparkCover_);
 	}
-	if (batchMode() && !ctx_.variantLabels.isEmpty()) {
+	if (batchMode() && hasVariations()) {
 		return readCoverOptions(variationCover_);
 	}
 	return {};
@@ -1045,6 +1144,17 @@ QVector<int> ExportOptionsDialog::batchSelection() const
 	return out;
 }
 
+QVector<ExportOptionsDialog::Variation> ExportOptionsDialog::variationSelection() const
+{
+	QVector<Variation> out;
+	for (int row : batchSelection()) {
+		if (row >= 0 && row < displayedVariations_.size()) {
+			out.append(displayedVariations_[row]);
+		}
+	}
+	return out;
+}
+
 QString ExportOptionsDialog::batchPrefix() const
 {
 	return batchPrefix_ ? batchPrefix_->text() : QString();
@@ -1058,8 +1168,9 @@ bool ExportOptionsDialog::batchOpenFolder() const
 double ExportOptionsDialog::batchSeconds() const
 {
 	double total = 0.0;
-	if (!ctx_.variantLabels.isEmpty())
+	if (hasVariations()) {
 		return ctx_.seconds * batchSelection().size(); // every version is the whole video
+	}
 	for (int i : batchSelection()) {
 		const Context::BatchCut &c = ctx_.batchCuts[i];
 		const double sp = c.speed > 0.01 ? c.speed : 1.0;
@@ -1115,11 +1226,17 @@ void ExportOptionsDialog::refresh()
 	customRow_->setVisible(resCombo_->currentData().toInt() < 0);
 	if (tabs_) {
 		const int sel = batchSelection().size();
-		const bool variants = !ctx_.variantLabels.isEmpty();
-		if (batchCount_) batchCount_->setText(QStringLiteral("%1 of %2 selected · %3 s in all")
-					     .arg(sel)
-					     .arg(variants ? ctx_.variantLabels.size() : ctx_.batchCuts.size())
-					     .arg(batchSeconds(), 0, 'f', 1));
+		const bool variants = hasVariations();
+		const auto population = variation_sampling::count(variationSizes());
+		const QString total = variants ? (population.overflow
+							  ? QStringLiteral("at least %1").arg(population.value)
+							  : QString::number(population.value))
+					       : QString::number(ctx_.batchCuts.size());
+		if (batchCount_)
+			batchCount_->setText(QStringLiteral("%1 of %2 selected · %3 s in all")
+						     .arg(sel)
+						     .arg(total)
+						     .arg(batchSeconds(), 0, 'f', 1));
 		if (batchMode()) {
 			const QString unit = variants ? QStringLiteral("video") : QStringLiteral("clip");
 			exportBtn_->setText(sel == 1 ? QStringLiteral("Export 1 %1").arg(unit)

@@ -111,7 +111,7 @@ inline QVector<Slot> slotsOf(const TimelineModel &m, const std::function<QString
 }
 
 // How many videos: the product of the option counts. Saturates instead of
-// overflowing (the tab refuses anything that large long before it matters).
+// overflowing. Large products can still be sampled by their option vectors.
 inline qint64 combinationCount(const QVector<Slot> &vs)
 {
 	if (vs.isEmpty())
@@ -208,12 +208,13 @@ inline QString slug(const QString &text, int maxLen = 24)
 // batch's width, at least two digits), then each varying clip's text shortened.
 // The whole name stays within `maxLen`; texts are dropped from the end first,
 // so the number -- which keeps names unique -- is never cut.
-inline QString fileName(const QString &safePrefixText, int index1, int count, const QStringList &texts,
+inline QString fileName(const QString &safePrefixText, qint64 index1, qint64 count, const QStringList &texts,
 			int maxLen = 120)
 {
 	int digits = 1;
-	for (int n = std::max(1, count); n >= 10; n /= 10)
+	for (qint64 n = std::max<qint64>(1, count); n >= 10; n /= 10) {
 		++digits;
+	}
 	digits = std::max(2, digits);
 	QString name = QStringLiteral("%1_%2").arg(safePrefixText).arg(index1, digits, 10, QLatin1Char('0'));
 	for (const QString &t : texts) {

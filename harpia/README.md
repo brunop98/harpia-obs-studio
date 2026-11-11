@@ -202,6 +202,14 @@ Three modes, each one step up from the last:
   submenus.
 - **Export:** MP4, MKV, MOV, WebM or GIF; size, quality, 4:4:4 chroma, a
   selected range only, batch export of cuts, and text variations.
+  **Variations → Random selection** exports only the number you choose, with
+  no repeated combination. **Pick again** draws another sample; changing the
+  count updates the list and duration/size estimate. Sampling covers the full
+  set of Random Text and Random Clip options without building every version.
+  Up to 2,000 variations can be picked at once. Small pools retain their full
+  checklist; larger pools open in random-selection mode. File and cover numbers
+  retain the original variation numbers; products too large for 64-bit numbering
+  use the sample's list numbers instead.
   **Full Editing → right-click selected clips → Export → Export clips separately…**
   writes one file for each selected video, image or text clip, with that clip's
   trims, speed, crop, transforms, effects and linked audio. Each file starts at

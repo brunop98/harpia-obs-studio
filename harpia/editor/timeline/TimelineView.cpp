@@ -1046,7 +1046,7 @@ QStringList TimelineView::droppableFiles(const QMimeData *mime)
 
 void TimelineView::dragEnterEvent(QDragEnterEvent *e)
 {
-	if (droppableFiles(e->mimeData()).isEmpty())
+	if (!dynamic_cast<const AudioLibRemoteServerSoundDrag *>(e->mimeData()) && droppableFiles(e->mimeData()).isEmpty())
 		return;
 	fileDrag_ = true;
 	e->acceptProposedAction();
@@ -1060,9 +1060,9 @@ void TimelineView::dragMoveEvent(QDragMoveEvent *e)
 	// group -- the same call an internal drag makes, so the indicator means the
 	// same thing. Pointing a music file at a video lane and highlighting it
 	// would have promised a landing place the drop cannot honour.
-	drop_ = dropTargetAt(int(e->position().y()),
-			     allAudio(droppableFiles(e->mimeData())) ? TlTrack::Kind::Audio
-								     : TlTrack::Kind::Video);
+	const bool audio = dynamic_cast<const AudioLibRemoteServerSoundDrag *>(e->mimeData()) ||
+			   allAudio(droppableFiles(e->mimeData()));
+	drop_ = dropTargetAt(int(e->position().y()), audio ? TlTrack::Kind::Audio : TlTrack::Kind::Video);
 	update();
 	e->acceptProposedAction();
 }
@@ -1076,18 +1076,22 @@ void TimelineView::dragLeaveEvent(QDragLeaveEvent *)
 
 void TimelineView::dropEvent(QDropEvent *e)
 {
+	const auto *remoteSound = dynamic_cast<const AudioLibRemoteServerSoundDrag *>(e->mimeData());
 	const QStringList files = droppableFiles(e->mimeData());
 	fileDrag_ = false;
-	const DropTarget d = drop_;
+	const DropTarget d = remoteSound ? dropTargetAt(int(e->position().y()), TlTrack::Kind::Audio) : drop_;
 	drop_ = DropTarget();
 	update();
-	if (files.isEmpty())
+	if (!remoteSound && files.isEmpty())
 		return;
 	// Where along the timeline it was dropped, not the playhead: the pointer is
 	// the whole point of dropping onto the lanes rather than pressing Add.
 	const qint64 at = std::max<qint64>(0, xToMs(int(e->position().x())));
 	e->acceptProposedAction();
-	emit filesDropped(files, d.track, d.newTrackAt, at);
+	if (remoteSound)
+		emit remoteAudioDropped(remoteSound->sound, d.track, d.newTrackAt, at);
+	else
+		emit filesDropped(files, d.track, d.newTrackAt, at);
 }
 
 const TlClip *TimelineView::selectedClipPtr() const

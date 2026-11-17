@@ -341,6 +341,11 @@ target_sources(
     editor/FadeCurve.hpp
     editor/AudioPreview.cpp
     editor/AudioPreview.hpp
+    editor/audio_lib_remote_server/AudioLibRemoteServerBrowser.cpp
+    editor/audio_lib_remote_server/AudioLibRemoteServerBrowser.hpp
+    editor/audio_lib_remote_server/AudioLibRemoteServer.cpp
+    editor/audio_lib_remote_server/AudioLibRemoteServer.hpp
+    editor/audio_lib_remote_server/AudioLibRemoteServerSound.hpp
     editor/TimelineAudio.cpp
     editor/TimelineAudio.hpp
     editor/TimelineOverview.cpp
@@ -461,6 +466,8 @@ target_sources(
 # Platform-specific idle detection + foreground-window backends.
 if(OS_WINDOWS)
   target_sources(harpia-recorder PRIVATE
+    editor/audio_lib_remote_server/AudioLibRemoteServerWindowsTrust.cpp
+    editor/audio_lib_remote_server/AudioLibRemoteServerWindowsTrust.hpp
     platform/win/WinIdleMonitor.cpp
     platform/win/WinForegroundWatcher.cpp
     platform/win/WinWindowList.cpp

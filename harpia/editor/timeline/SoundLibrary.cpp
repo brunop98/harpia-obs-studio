@@ -68,13 +68,15 @@ QByteArray SoundLibrary::toJson(const QVector<SoundSlot> &entries)
 
 QVector<SoundSlot> SoundLibrary::load()
 {
-	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings st(QSettings::defaultFormat(), QSettings::UserScope,
+		     QStringLiteral("Harpia"), QStringLiteral("Recorder"));
 	return fromJson(st.value(QString::fromLatin1(kKey)).toByteArray());
 }
 
 void SoundLibrary::save(const QVector<SoundSlot> &entries)
 {
-	QSettings st(QStringLiteral("Harpia"), QStringLiteral("Recorder"));
+	QSettings st(QSettings::defaultFormat(), QSettings::UserScope,
+		     QStringLiteral("Harpia"), QStringLiteral("Recorder"));
 	st.setValue(QString::fromLatin1(kKey), toJson(entries));
 }
 

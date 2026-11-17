@@ -94,18 +94,12 @@ bool SecretStore::saveNamedKey(const QString &settingsName, const QString &displ
 bool SecretStore::storeSealed(QSettings &s, const QString &kKey, const QString &kKind, const QByteArray &plain)
 {
 #ifdef Q_OS_WIN
-	DATA_BLOB in;
-	in.pbData = reinterpret_cast<BYTE *>(const_cast<char *>(plain.constData()));
-	in.cbData = DWORD(plain.size());
-	DATA_BLOB out{};
-	if (CryptProtectData(&in, L"Harpia transcription key", nullptr, nullptr, nullptr,
-			     CRYPTPROTECT_UI_FORBIDDEN, &out)) {
+	const QByteArray sealed = sealForUser(plain);
+	if (!sealed.isEmpty()) {
 		// Plain base64 text, not a QByteArray: the registry keeps a string as a
 		// string, where a byte array goes through Qt's @ByteArray() wrapping.
-		s.setValue(kKey, QString::fromLatin1(
-					 QByteArray(reinterpret_cast<const char *>(out.pbData), int(out.cbData)).toBase64()));
+		s.setValue(kKey, QString::fromLatin1(sealed.toBase64()));
 		s.setValue(kKind, QStringLiteral("dpapi"));
-		LocalFree(out.pbData);
 		return true;
 	}
 	// DPAPI refused (rare): keep nothing rather than keep it in the clear.
@@ -116,6 +110,47 @@ bool SecretStore::storeSealed(QSettings &s, const QString &kKey, const QString &
 	s.setValue(kKey, QString::fromLatin1(scramble(plain).toBase64()));
 	s.setValue(kKind, QStringLiteral("scrambled"));
 	return true;
+#endif
+}
+
+QByteArray SecretStore::sealForUser(const QByteArray &plain)
+{
+#ifdef Q_OS_WIN
+	DATA_BLOB in{DWORD(plain.size()), reinterpret_cast<BYTE *>(const_cast<char *>(plain.constData()))};
+	DATA_BLOB out{};
+	if (!CryptProtectData(&in, L"Harpia credential", nullptr, nullptr, nullptr,
+			      CRYPTPROTECT_UI_FORBIDDEN, &out))
+		return {};
+	const QByteArray sealed(reinterpret_cast<const char *>(out.pbData), out.cbData);
+	LocalFree(out.pbData);
+	return sealed;
+#else
+	Q_UNUSED(plain)
+	return {};
+#endif
+}
+
+QByteArray SecretStore::unsealForUser(const QByteArray &sealed, quint32 *error)
+{
+	if (error)
+		*error = 0;
+#ifdef Q_OS_WIN
+	if (sealed.isEmpty())
+		return {};
+	DATA_BLOB in{DWORD(sealed.size()), reinterpret_cast<BYTE *>(const_cast<char *>(sealed.constData()))};
+	DATA_BLOB out{};
+	if (!CryptUnprotectData(&in, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out)) {
+		if (error)
+			*error = GetLastError();
+		return {};
+	}
+	const QByteArray plain(reinterpret_cast<const char *>(out.pbData), out.cbData);
+	SecureZeroMemory(out.pbData, out.cbData);
+	LocalFree(out.pbData);
+	return plain;
+#else
+	Q_UNUSED(sealed)
+	return {};
 #endif
 }
 
@@ -130,21 +165,17 @@ QString SecretStore::loadNamedKey(const QString &settingsName, const QString &di
 	const QString kind = s.value(kKind).toString();
 #ifdef Q_OS_WIN
 	if (kind == QLatin1String("dpapi")) {
-		DATA_BLOB in;
-		in.pbData = reinterpret_cast<BYTE *>(const_cast<char *>(stored.constData()));
-		in.cbData = DWORD(stored.size());
-		DATA_BLOB out{};
-		if (!CryptUnprotectData(&in, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out)) {
+		quint32 error;
+		const QByteArray plain = unsealForUser(stored, &error);
+		if (plain.isEmpty()) {
 			editorLog(EditorLogLevel::Error, QStringLiteral("Subtitles"),
 				  QStringLiteral("the saved %1 API key could not be unsealed (Windows error %2); "
 						 "it was saved by another Windows user or machine. Save it again.")
 					  .arg(display)
-					  .arg(qulonglong(GetLastError())));
+					  .arg(error));
 			return QString();
 		}
-		const QString key = QString::fromUtf8(reinterpret_cast<const char *>(out.pbData), int(out.cbData));
-		LocalFree(out.pbData);
-		return key;
+		return QString::fromUtf8(plain);
 	}
 	return QString(); // a scrambled key from another OS is not ours to read
 #else

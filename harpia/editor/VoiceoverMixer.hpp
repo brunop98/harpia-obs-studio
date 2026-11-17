@@ -58,6 +58,9 @@ public:
 	// atempo), matching a clip played faster. Returns true on success.
 	static bool decodeToWav(const QString &inPath, const QString &outWav, double speed = 1.0);
 
+	// Decode only the start of a sound for a short catalog audition.
+	static std::vector<float> decodePreview(const QString &path, qint64 maxMs);
+
 	// Exposed for unit testing: apply gain + shaped fades to one take and add it
 	// into `mix` (interleaved stereo) at `startFrame`; and build the ducking gain
 	// envelope. Pure math, no libav.

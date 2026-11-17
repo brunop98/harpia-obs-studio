@@ -51,15 +51,25 @@ inline bool isImageFile(const QString &path)
 // rather than a video one. A container that can hold video too (mp4, mkv, webm)
 // is deliberately NOT here -- isVideoFile claims those, and dropping a video
 // should give you the video. Only formats that are audio and nothing else.
-inline bool isAudioFile(const QString &path)
+inline const QStringList &audioFileExtensions()
 {
 	static const QStringList kExts = {QStringLiteral("mp3"),  QStringLiteral("wav"),
 					  QStringLiteral("m4a"),  QStringLiteral("aac"),
 					  QStringLiteral("flac"), QStringLiteral("ogg"),
 					  QStringLiteral("oga"),  QStringLiteral("opus"),
 					  QStringLiteral("wma"),  QStringLiteral("aiff"),
-					  QStringLiteral("aif"),  QStringLiteral("mka")};
-	return kExts.contains(QFileInfo(path).suffix().toLower());
+					  QStringLiteral("aif"),  QStringLiteral("mka"),
+					  QStringLiteral("mp2"),  QStringLiteral("m4b"),
+					  QStringLiteral("weba"), QStringLiteral("alac"),
+					  QStringLiteral("amr"),  QStringLiteral("ape"),
+					  QStringLiteral("3ga"),  QStringLiteral("ac3"),
+					  QStringLiteral("dts")};
+	return kExts;
+}
+
+inline bool isAudioFile(const QString &path)
+{
+	return audioFileExtensions().contains(QFileInfo(path).suffix().toLower());
 }
 
 // The one list the file dialogs offer, built from the one list the drop path
@@ -68,14 +78,8 @@ inline bool isAudioFile(const QString &path)
 // not the other for no reason anybody can find.
 inline QString audioOpenFilter()
 {
-	static const QStringList kExts = {QStringLiteral("mp3"),  QStringLiteral("wav"),
-					  QStringLiteral("m4a"),  QStringLiteral("aac"),
-					  QStringLiteral("flac"), QStringLiteral("ogg"),
-					  QStringLiteral("oga"),  QStringLiteral("opus"),
-					  QStringLiteral("wma"),  QStringLiteral("aiff"),
-					  QStringLiteral("aif"),  QStringLiteral("mka")};
 	QStringList globs;
-	for (const QString &e : kExts)
+	for (const QString &e : audioFileExtensions())
 		globs << QStringLiteral("*.") + e;
 	return QStringLiteral("Audio files (%1);;All files (*)").arg(globs.join(QChar(' ')));
 }

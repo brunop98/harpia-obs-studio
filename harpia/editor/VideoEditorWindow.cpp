@@ -77,6 +77,7 @@
 #include "MediaFiles.hpp"
 #include "ClipboardPaste.hpp"
 #include "LinkDownload.hpp"
+#include "audio_lib_remote_server/AudioLibRemoteServerBrowser.hpp"
 #include "../ui/WheelGuard.hpp"
 #include "script/TransformScript.hpp"
 #include "component/ShaderComponent.hpp"
@@ -1054,6 +1055,14 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(timelineView_, &TimelineView::filesDropped, this,
 		&VideoEditorWindow::onFilesDroppedOnTimeline);
 	connect(timelineView_, &TimelineView::locateSourceRequested, this, &VideoEditorWindow::locateProjectSource);
+	connect(timelineView_, &TimelineView::remoteAudioDropped, this,
+		[this](const AudioLibRemoteServerSound &sound, int track, int newTrackAt, qint64 outMs) {
+			const quint64 generation = projectLoadGeneration_;
+			QTimer::singleShot(0, this, [this, sound, track, newTrackAt, outMs, generation]() {
+				if (generation == projectLoadGeneration_)
+					importRemoteTimelineSound(sound, track, newTrackAt, outMs);
+			});
+		});
 	connect(timelineView_, &TimelineView::randomizeSelectionRequested, this,
 		[this]() { randomizeClips(/*selectedOnly=*/true); });
 	// Sounds for events, from the clip and lane menus.
@@ -1485,6 +1494,7 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 		"Put audio on its own timeline track \u2014 a source's own audio, an imported file, "
 		"or an empty track"));
 	connect(addAudioAct_, &QAction::triggered, this, &VideoEditorWindow::onAddAudioClicked);
+	addMenu->addAction(QStringLiteral("XA1 Audio…"), this, &VideoEditorWindow::openRemoteAudio);
 	addImageAct_ = addMenu->addAction(QStringLiteral("Image\u2026"));
 	addImageAct_->setToolTip(
 		QStringLiteral("Place a still image (logo, arrow, callout) on the timeline"));
@@ -2282,6 +2292,17 @@ VideoEditorWindow::VideoEditorWindow(const QString &inPath, const QStringList &l
 	connect(libraryList_, &QListWidget::itemDoubleClicked, this,
 		&VideoEditorWindow::onLibraryDoubleClicked);
 	srcTabs->addTab(libTab, QStringLiteral("Library"));
+	remoteAudioBrowser_ = new AudioLibRemoteServerBrowser(QStringLiteral("Add at Playhead"), true, srcTabs);
+	connect(remoteAudioBrowser_, &AudioLibRemoteServerBrowser::soundChosen, this, [this](const AudioLibRemoteServerSound &sound) {
+		importRemoteTimelineSound(sound, -1, -1, timelinePlayheadMs());
+	});
+	connect(remoteAudioBrowser_, &AudioLibRemoteServerBrowser::previewStarted, this, [this]() {
+		if (playing_)
+			stopPlayback();
+		if (soundPreview_)
+			soundPreview_->stop();
+	});
+	srcTabs->addTab(remoteAudioBrowser_, QStringLiteral("XA1 Audio"));
 
 	sideLayout->addWidget(srcTabs, 1);
 	sideLayout->addWidget(
@@ -2826,14 +2847,15 @@ EditorSource *VideoEditorWindow::sourceById(int id)
 	return nullptr;
 }
 
-EditorSource *VideoEditorWindow::sourceByPath(const QString &path)
+EditorSource *VideoEditorWindow::sourceByPath(const QString &path, bool includeLibrarySlots)
 {
 	if (path.isEmpty())
 		return nullptr;
 	const QString want = QFileInfo(path).absoluteFilePath();
 	for (auto &s : sources_)
-		if (!s.missing && (QFileInfo(s.path).absoluteFilePath() == want ||
-			(!s.origPath.isEmpty() && QFileInfo(s.origPath).absoluteFilePath() == want)))
+		if (!s.missing && (includeLibrarySlots || s.librarySlot.isEmpty()) &&
+		    (QFileInfo(s.path).absoluteFilePath() == want ||
+		     (!s.origPath.isEmpty() && QFileInfo(s.origPath).absoluteFilePath() == want)))
 			return &s;
 	return nullptr;
 }
@@ -3411,6 +3433,19 @@ void VideoEditorWindow::openRecordingLibrary()
 	libraryList_->setFocus(Qt::OtherFocusReason);
 }
 
+void VideoEditorWindow::openRemoteAudio()
+{
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	sourcesTabs_->setCurrentWidget(remoteAudioBrowser_);
+	sourcesBtn_->setChecked(true);
+	if (!sourcesPanel_->isVisible() || sourcesPanel_->isMinimized())
+		showSourcesPanel();
+	sourcesPanel_->raise();
+	sourcesPanel_->activateWindow();
+	remoteAudioBrowser_->focusSearch();
+}
+
 void VideoEditorWindow::showSourceFileMenu(QListWidget *list, const QPoint &pos)
 {
 	const QListWidgetItem *item = list ? list->itemAt(pos) : nullptr;
@@ -3823,6 +3858,29 @@ void VideoEditorWindow::onFilesDroppedOnTimeline(const QStringList &paths, int t
 	showTimelineFrame(timelinePlayheadMs());
 }
 
+void VideoEditorWindow::importRemoteTimelineSound(const AudioLibRemoteServerSound &sound, int track, int newTrackAt, qint64 outMs)
+{
+	if (deferUntilLoaded([this, sound, track, newTrackAt, outMs]() {
+		    importRemoteTimelineSound(sound, track, newTrackAt, outMs);
+	    }))
+		return;
+	remoteAudioBrowser_->stopPreview();
+	if (playing_)
+		stopPlayback();
+	const quint64 generation = projectLoadGeneration_;
+	const QString file = AudioLibRemoteServerBrowser::importSound(this, sound);
+	if (file.isEmpty() || generation != projectLoadGeneration_)
+		return;
+	if (!fullEdit())
+		setEditMode(EditMode::Full);
+	// XA1 timeline clips refer to the imported file independently of a named
+	// slot that might later be pointed at a different sound.
+	const EditorSource *existing = sourceByPath(file, false);
+	const int id = existing ? existing->id : addAudioSource(file);
+	if (id >= 0)
+		addAudioClipFromSource(id, outMs, track, newTrackAt);
+}
+
 std::optional<TlClip> VideoEditorWindow::mediaClipForFile(const QString &f, bool *isAudio)
 {
 	if (isAudio)
@@ -4014,9 +4072,11 @@ int VideoEditorWindow::addAudioSource(const QString &path, int replaceMissingId)
 	return id;
 }
 
-void VideoEditorWindow::addAudioClipFromSource(int sourceId)
+void VideoEditorWindow::addAudioClipFromSource(int sourceId, qint64 outMs, int track, int newTrackAt)
 {
-	if (deferUntilLoaded([this, sourceId]() { addAudioClipFromSource(sourceId); }))
+	if (deferUntilLoaded([this, sourceId, outMs, track, newTrackAt]() {
+		    addAudioClipFromSource(sourceId, outMs, track, newTrackAt);
+	    }))
 		return;
 	EditorSource *s = sourceById(sourceId);
 	if (!s || !timelineView_)
@@ -4043,10 +4103,10 @@ void VideoEditorWindow::addAudioClipFromSource(int sourceId)
 	c.sourceId = sourceId;
 	c.srcStartMs = 0;
 	c.srcEndMs = dur;
-	c.outStartMs = timelinePlayheadMs();
+	c.outStartMs = outMs >= 0 ? outMs : timelinePlayheadMs();
 	loading.stage(QStringLiteral("Building audio waveforms…"), wav);
 	c.peaks = runLoadingTask([wav]() { return VoiceoverTrack::loadPeaks(wav, 600); });
-	timelineView_->addClip(TlTrack::Kind::Audio, c);
+	timelineView_->addClipAt(TlTrack::Kind::Audio, c, track, newTrackAt);
 	if (!fullEdit())
 		setEditMode(EditMode::Full);
 	updateInfoLabel();
@@ -4188,6 +4248,7 @@ int VideoEditorWindow::pickSound(const QPoint &at, QString *name)
 		a->setData(QStringLiteral("s:%1").arg(es.id));
 	}
 	menu.addSeparator();
+	QAction *remoteAudio = menu.addAction(QStringLiteral("Browse XA1 Audio…"));
 	QAction *file = menu.addAction(QStringLiteral("Audio file…"));
 	file->setToolTip(QStringLiteral("Any mp3, wav, ogg, m4a or flac on this computer."));
 	QAction *edit = menu.addAction(QStringLiteral("Edit sound library…"));
@@ -4199,12 +4260,15 @@ int VideoEditorWindow::pickSound(const QPoint &at, QString *name)
 		openSoundLibrary();
 		return -1;
 	}
-	if (chosen == file) {
-		const QString f = editor_dialogs::getOpenFileName(this, QStringLiteral("Choose a sound"),
-							       QFileInfo(inPath_).absolutePath(), audioOpenFilter());
+	if (chosen == file || chosen == remoteAudio) {
+		const QString f = chosen == remoteAudio
+			? AudioLibRemoteServerBrowser::chooseSound(this, QStringLiteral("Use Sound"))
+			: editor_dialogs::getOpenFileName(this, QStringLiteral("Choose a sound"),
+							  QFileInfo(inPath_).absolutePath(), audioOpenFilter());
 		if (f.isEmpty())
 			return -1;
-		const int id = addAudioSource(f);
+		const EditorSource *have = chosen == remoteAudio ? sourceByPath(f, false) : nullptr;
+		const int id = have ? have->id : addAudioSource(f);
 		if (id >= 0 && name)
 			*name = QFileInfo(f).fileName();
 		return id;
@@ -4231,6 +4295,7 @@ void VideoEditorWindow::openSoundLibrary()
 	QDialog dlg(this);
 	dlg.setWindowTitle(QStringLiteral("Sound library"));
 	dlg.setMinimumWidth(560);
+	dlg.resize(650, 480);
 	auto *v = new QVBoxLayout(&dlg);
 	auto *intro = new QLabel(
 		QStringLiteral("The sounds every rule and Sound component picks from. Point a slot at a file "
@@ -4240,13 +4305,18 @@ void VideoEditorWindow::openSoundLibrary()
 	intro->setWordWrap(true);
 	intro->setStyleSheet(QStringLiteral("color:#9a9fa8;"));
 	v->addWidget(intro);
-	auto *list = new QWidget(&dlg);
+	auto *scroll = new QScrollArea(&dlg);
+	scroll->setWidgetResizable(true);
+	scroll->setFrameShape(QFrame::NoFrame);
+	auto *list = new QWidget(scroll);
 	auto *grid = new QGridLayout(list);
 	grid->setContentsMargins(0, 6, 0, 6);
 	grid->setHorizontalSpacing(8);
 	grid->setVerticalSpacing(4);
 	grid->setColumnStretch(1, 1);
-	v->addWidget(list);
+	grid->setAlignment(Qt::AlignTop);
+	scroll->setWidget(list);
+	v->addWidget(scroll, 1);
 
 	QVector<SoundSlot> lib = SoundLibrary::load();
 	std::function<void()> rebuild;
@@ -4263,11 +4333,13 @@ void VideoEditorWindow::openSoundLibrary()
 		for (int i = 0; i < lib.size(); ++i) {
 			const SoundSlot ss = lib[i];
 			auto *nm = new QLabel(ss.name, list);
+			nm->setTextFormat(Qt::PlainText);
 			nm->setStyleSheet(QStringLiteral("color:#e8eaed; font-weight:bold;"));
 			grid->addWidget(nm, i, 0);
 			const bool mine = !ss.file.isEmpty();
 			const bool gone = mine && !QFileInfo(ss.file).isFile();
 			auto *fl = new QLabel(list);
+			fl->setTextFormat(Qt::PlainText);
 			fl->setText(!mine ? (ss.builtin ? QStringLiteral("Built-in sound") : QStringLiteral("No file"))
 					  : gone ? QStringLiteral("Missing: %1").arg(QFileInfo(ss.file).fileName())
 						 : QFileInfo(ss.file).fileName());
@@ -4323,16 +4395,26 @@ void VideoEditorWindow::openSoundLibrary()
 	auto *btns = new QHBoxLayout;
 	auto *add = new QPushButton(QStringLiteral("Add sound…"), &dlg);
 	add->setToolTip(QStringLiteral("A new named slot with a file of yours, e.g. Riser or Notification."));
-	connect(add, &QPushButton::clicked, &dlg, [&]() {
-		const QString f = editor_dialogs::getOpenFileName(&dlg, QStringLiteral("Add a sound"), QString(), audioOpenFilter());
+	const auto addFile = [&](const QString &f, bool fromRemote) {
 		if (f.isEmpty())
 			return;
+		const QString base = QFileInfo(f).completeBaseName();
+		QString suggestedName = base;
+		if (fromRemote) {
+			lib = SoundLibrary::load();
+			for (int n = 2; const SoundSlot *slot = SoundLibrary::find(lib, suggestedName); ++n) {
+				if (slot->file == f)
+					break;
+				suggestedName = QStringLiteral("%1 (%2)").arg(base).arg(n);
+			}
+		}
 		bool okName = false;
 		QString n = QInputDialog::getText(&dlg, QStringLiteral("Add a sound"), QStringLiteral("Name:"),
-						  QLineEdit::Normal, QFileInfo(f).completeBaseName(), &okName)
+						  QLineEdit::Normal, suggestedName, &okName)
 				    .trimmed();
 		if (!okName || n.isEmpty())
 			return;
+		lib = SoundLibrary::load();
 		if (SoundSlot *ex = const_cast<SoundSlot *>(SoundLibrary::find(lib, n))) {
 			ex->file = f; // same name: that slot gets the file
 		} else {
@@ -4342,8 +4424,17 @@ void VideoEditorWindow::openSoundLibrary()
 			lib.append(ss);
 		}
 		commit();
+	};
+	connect(add, &QPushButton::clicked, &dlg, [&]() {
+		addFile(editor_dialogs::getOpenFileName(&dlg, QStringLiteral("Add a sound"), {}, audioOpenFilter()),
+			false);
+	});
+	auto *addRemote = new QPushButton(QStringLiteral("Add from XA1…"), &dlg);
+	connect(addRemote, &QPushButton::clicked, &dlg, [&]() {
+		addFile(AudioLibRemoteServerBrowser::chooseSound(&dlg, QStringLiteral("Add to Sound Library")), true);
 	});
 	btns->addWidget(add);
+	btns->addWidget(addRemote);
 	btns->addStretch(1);
 	auto *close = new QPushButton(QStringLiteral("Close"), &dlg);
 	close->setDefault(true);
@@ -14747,6 +14838,8 @@ void VideoEditorWindow::clearProjectMedia()
 		audioPreview_->clear();
 	if (soundPreview_)
 		soundPreview_->stop();
+	if (remoteAudioBrowser_)
+		remoteAudioBrowser_->stopPreview();
 	if (previewDecoder_)
 		previewDecoder_->clear();
 	if (proxyBuilder_)
@@ -15820,6 +15913,7 @@ void VideoEditorWindow::startPlayback()
 {
 	if (!valid_)
 		return;
+	remoteAudioBrowser_->stopPreview();
 	// Playback owns the picture; discard a prior mode's queued hover/scrub.
 	previewTimer_->stop();
 	pendingMs_ = -1;

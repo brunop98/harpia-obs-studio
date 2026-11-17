@@ -116,6 +116,22 @@ Three modes, each one step up from the last:
   - **Add → Add from Library…** opens your recorded videos beside the current
     project. Drag a recording onto a timeline lane, or double-click to add it
     at the playhead;
+  - **Add → XA1 Audio…** opens the live Servidor XA1 catalog in the Sources
+    panel. Search by name or folder and open **Filters** to narrow by file
+    name, path, extension, duration range, or XA1 player support. **Order by**
+    sorts by name, duration, or path in either direction. Preview the first 15
+    seconds, then click **Add at Playhead** or drag the sound to an audio lane.
+    Use **Sound library… → Add from XA1…** to save a reusable sound, or
+    **Browse XA1 Audio…** when choosing a sound for a rule or component.
+    In **Connection…**, enter the HTTPS address shown on the XA1, select
+    `certificado-rede-xa1.cer`, and enter the server password if enabled.
+    Harpia remembers the server and certificate. On Windows, Harpia protects
+    the saved password with your Windows account.
+    If a request fails, use **Copy error details** for a report with the
+    server, certificate, HTTP status, and network error. The same report
+    appears in **Help → Error Logs**.
+    Imported files stay in Harpia's local app data, so projects and saved
+    sounds work when the XA1 is offline.
   - **markers** in the ruler above the tracks: double-click to add one,
     drag to move it, or right-click to rename/delete it. Named markers draw
     dotted guides across every track and provide snap points. Drag the

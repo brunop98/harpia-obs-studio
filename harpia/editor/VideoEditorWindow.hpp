@@ -135,6 +135,7 @@ class TransformEvaluator;
 class KeyList;
 class ParamSlider;
 class AudioPreview;
+class AudioLibRemoteServerBrowser;
 
 // One video the editor can cut from. The first source is the file the editor
 // was launched on; more are added via the sidebar / drag-and-drop. Each owns
@@ -363,6 +364,7 @@ private slots:
 	void onSourceDoubleClicked(QListWidgetItem *item); // append whole clip as a cut
 	void onRemoveSource();       // remove the selected source (if unused)
 	void openRecordingLibrary(); // Add > Add from Library (Full editing only)
+	void openRemoteAudio();
 	void refreshLibrary();       // rescan the library folders into the Library tab
 	void onLibraryDoubleClicked(QListWidgetItem *item); // add a library clip as a source
 	void onThumbReady(const QString &path);             // library thumbnail decoded
@@ -631,6 +633,8 @@ private:
 	// A video or image dropped from the desktop onto the timeline lanes.
 	void onFilesDroppedOnTimeline(const QStringList &paths, int track, int newTrackAt,
 				      qint64 outMs);
+	void importRemoteTimelineSound(const AudioLibRemoteServerSound &sound, int track, int newTrackAt,
+				   qint64 outMs);
 	void addEffectClip(); // toolbar: drop an effect clip on an effect track
 
 	// The effect-clip Inspector used to be here: a type combo, a parameter form
@@ -638,7 +642,7 @@ private:
 	// edited in the component list like anything else — and can hold several at
 	// once, which the single-type panel could not express.
 
-	void addAudioClipFromSource(int sourceId); // put a source's audio on an audio lane
+	void addAudioClipFromSource(int sourceId, qint64 outMs = -1, int track = -1, int newTrackAt = -1);
 	void onAddAudioClicked();                  // "Add audio ▾" menu
 	// The Add menu (Full editing): one button, everything that puts something
 	// new on the timeline as its entries.
@@ -740,6 +744,7 @@ private:
 	QListWidget *sourceList_ = nullptr;      // "Sources" tab of the floating panel
 	QListWidget *libraryList_ = nullptr;     // "Library" tab (existing recordings)
 	QTabWidget *sourcesTabs_ = nullptr;
+	AudioLibRemoteServerBrowser *remoteAudioBrowser_ = nullptr;
 	QWidget *multiCutSourceRow_ = nullptr;  // source picker above the Multi-Cut tracks
 	QComboBox *multiCutSourceCombo_ = nullptr;
 	void refreshMultiCutSources();
@@ -780,7 +785,7 @@ private:
 	// The source already open for this file, or nullptr. Two callers were
 	// writing this loop themselves and both rebuilt a QFileInfo for the SEARCH
 	// path on every iteration; here it is built once.
-	EditorSource *sourceByPath(const QString &path);
+	EditorSource *sourceByPath(const QString &path, bool includeLibrarySlots = true);
 	EditorSource *activeSource();
 	FrameSeeker *seekerFor(int id); // nullptr if unknown
 	int addSource(const QString &path, int replaceMissingId = -1); // opens + starts filmstrip; -1 on failure

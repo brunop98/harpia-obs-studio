@@ -5,6 +5,7 @@
 #include "ClipShuffle.hpp"   // ShuffleOptions
 #include "RandomClipInstances.hpp"
 #include "../EditorColors.hpp"
+#include "../audio_lib_remote_server/AudioLibRemoteServerSound.hpp"
 
 #include <QCursor>
 #include <QFont>
@@ -478,6 +479,7 @@ signals:
 	// between lanes (or past the last one) and asked for a track to be made
 	// there; otherwise `track` is the lane it landed on.
 	void filesDropped(const QStringList &paths, int track, int newTrackAt, qint64 outMs);
+	void remoteAudioDropped(const AudioLibRemoteServerSound &sound, int track, int newTrackAt, qint64 outMs);
 	// A finished, discrete edit (drag released, split, delete, paste, track op).
 	// Always paired with clipsChanged; the window uses it to close an undo entry
 	// immediately instead of waiting out the coalescing timer.

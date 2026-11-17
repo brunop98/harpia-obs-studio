@@ -32,6 +32,11 @@ public:
 	// what the log calls it.
 	static bool saveNamedKey(const QString &settingsName, const QString &display, const QString &key);
 	static QString loadNamedKey(const QString &settingsName, const QString &display);
+
+	// DPAPI for credentials stored alongside their own settings. Operates on
+	// the exact bytes and returns an empty array when protection is unavailable.
+	static QByteArray sealForUser(const QByteArray &plain);
+	static QByteArray unsealForUser(const QByteArray &sealed, quint32 *error = nullptr);
 	// Where each key lives in the settings. Exposed for the test.
 	static QString settingsName(SpeechProvider p);
 

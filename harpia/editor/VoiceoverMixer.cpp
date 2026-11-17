@@ -44,7 +44,7 @@ std::optional<long long> outputFrameLimit(qint64 ms)
 
 // Decode any audio file to interleaved stereo float @ 48 kHz. Empty vector if the
 // file has no audio stream or can't be decoded (caller treats that as silence).
-std::vector<float> decodeToFloat(const QString &path)
+std::vector<float> decodeToFloat(const QString &path, size_t sampleLimit = std::vector<float>().max_size())
 {
 	std::vector<float> out;
 	AVFormatContext *fmt = nullptr;
@@ -106,17 +106,22 @@ std::vector<float> decodeToFloat(const QString &path)
 			out.resize(base);
 	};
 
-	while (av_read_frame(fmt, pkt) >= 0) {
+	while (out.size() < sampleLimit && av_read_frame(fmt, pkt) >= 0) {
 		if (pkt->stream_index == aIdx && avcodec_send_packet(dc, pkt) >= 0) {
-			while (avcodec_receive_frame(dc, fr) >= 0)
+			while (out.size() < sampleLimit && avcodec_receive_frame(dc, fr) >= 0)
 				convert(fr, false);
 		}
 		av_packet_unref(pkt);
 	}
-	avcodec_send_packet(dc, nullptr);
-	while (avcodec_receive_frame(dc, fr) >= 0)
-		convert(fr, false);
-	convert(fr, true); // flush the resampler
+	if (out.size() < sampleLimit) {
+		avcodec_send_packet(dc, nullptr);
+		while (out.size() < sampleLimit && avcodec_receive_frame(dc, fr) >= 0)
+			convert(fr, false);
+		if (out.size() < sampleLimit)
+			convert(fr, true); // flush the resampler
+	}
+	if (out.size() > sampleLimit)
+		out.resize(sampleLimit);
 
 	av_frame_free(&fr);
 	av_packet_free(&pkt);
@@ -300,6 +305,12 @@ std::vector<float> atempoStretch(const std::vector<float> &in, double speed)
 	return out.empty() ? in : out;
 }
 } // namespace
+
+std::vector<float> VoiceoverMixer::decodePreview(const QString &path, qint64 maxMs)
+{
+	const auto frames = outputFrameLimit(maxMs);
+	return frames && *frames > 0 ? decodeToFloat(path, size_t(*frames) * kCh) : std::vector<float>();
+}
 
 bool VoiceoverMixer::decodeToWav(const QString &inPath, const QString &outWav, double speed)
 {
